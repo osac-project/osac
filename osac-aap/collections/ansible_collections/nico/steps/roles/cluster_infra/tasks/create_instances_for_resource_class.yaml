@@ -38,7 +38,10 @@
 # Determine SSH key group: use override if provided, otherwise use default
 - name: "Resolve SSH key group ID - {{ node_request.bareMetal.instanceType }}"
   ansible.builtin.set_fact:
-    nico_effective_ssh_key_group_id: "{{ nico_infra_ssh_key_group_id if (nico_infra_ssh_key_group_id is defined and nico_infra_ssh_key_group_id | length > 0) else nico_default_ssh_key_group_id }}"
+    nico_effective_ssh_key_group_id: >-
+      {{ nico_infra_ssh_key_group_id
+         if (nico_infra_ssh_key_group_id is defined and nico_infra_ssh_key_group_id | length > 0)
+         else nico_default_ssh_key_group_id }}
 
 - name: "Display SSH key group - {{ node_request.bareMetal.instanceType }}"
   ansible.builtin.debug:
@@ -113,7 +116,10 @@
 - name: "Collect new instance IDs - {{ node_request.bareMetal.instanceType }}"
   when: instance_results.results is defined and instance_results.results | length > 0
   ansible.builtin.set_fact:
-    nico_all_instance_ids: "{{ nico_all_instance_ids | default([]) + (instance_results.results | selectattr('resource', 'defined') | map(attribute='resource') | map(attribute='id') | list) }}"
+    nico_all_instance_ids: >-
+      {{ nico_all_instance_ids | default([])
+         + (instance_results.results | selectattr('resource', 'defined')
+            | map(attribute='resource') | map(attribute='id') | list) }}
 
 - name: "Collect existing instance IDs - {{ node_request.bareMetal.instanceType }}"
   ansible.builtin.set_fact:

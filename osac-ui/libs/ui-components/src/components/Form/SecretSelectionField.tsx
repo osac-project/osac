@@ -11,18 +11,22 @@ interface SecretSelectionFieldProps {
   name: string;
   label: string;
   filter: string | undefined;
+  fieldId?: string;
   isRequired?: boolean;
   isDisabled?: boolean;
-  allowEmptySelection?: boolean;
+  placeholder?: string;
+  asFormGroup?: boolean;
 }
 
 const SecretSelectionField = ({
   name,
   label,
   filter,
+  fieldId = name.replace(/\./g, '-'),
   isRequired,
   isDisabled,
-  allowEmptySelection = false,
+  placeholder,
+  asFormGroup = true,
 }: SecretSelectionFieldProps) => {
   const { data, isLoading, error } = useListResource(Secrets, { filter });
   const { t } = useTranslation();
@@ -32,14 +36,14 @@ const SecretSelectionField = ({
       <SelectField
         name={name}
         label={label}
-        fieldId="secret-selection"
+        fieldId={fieldId}
         isRequired={isRequired}
         isLoading={isLoading}
         isDisabled={isDisabled || !!error}
+        placeholder={placeholder}
         options={
           data?.items.length
             ? [
-                ...(allowEmptySelection ? [{ value: '', label: t('None') }] : []),
                 ...(data?.items || []).map((d) => ({
                   value: d.metadata?.name || '',
                   label: d.metadata?.name || '',
@@ -53,6 +57,7 @@ const SecretSelectionField = ({
                 },
               ]
         }
+        asFormGroup={asFormGroup}
       />
       {error && (
         <Alert variant="danger" isInline title={t('Failed to fetch secrets')}>

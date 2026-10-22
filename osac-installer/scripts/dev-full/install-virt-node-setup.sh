@@ -10,6 +10,11 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
+KIND_PROFILE="${KIND_PROFILE:-dev-full}"
+# shellcheck source=./kind-runtime.sh
+source "${SCRIPT_DIR}/kind-runtime.sh"
+
 CLUSTER_NAME="${1:-osac-dev}"
 BRIDGE_CNI_VERSION="${2:-v1.6.2}"
 
@@ -21,52 +26,13 @@ case "$ARCH" in
     *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
-log() { echo "[+] $*"; }
 die() { echo "[!] $*" >&2; exit 1; }
 
-use_podman() {
-  command -v podman >/dev/null 2>&1 || die "podman is required by KIND_EXPERIMENTAL_PROVIDER=podman"
-
-  RUNTIME=podman
-  # Podman Desktop on macOS is user-scoped. Avoid an unnecessary sudo prompt
-  # there; Linux retains the rootful-first compatibility path for clusters
-  # created with sudo.
-  if [[ "$(uname -s)" != "Darwin" ]] && \
-    sudo podman ps --filter "name=${CLUSTER_NAME}-control-plane" --format '{{.Names}}' 2>/dev/null | grep -q "${CLUSTER_NAME}-control-plane"; then
-    RUNTIME="sudo podman"
-  elif podman ps --filter "name=${CLUSTER_NAME}-control-plane" --format '{{.Names}}' 2>/dev/null | grep -q "${CLUSTER_NAME}-control-plane"; then
-    RUNTIME=podman
-  else
-    die "Kind cluster '${CLUSTER_NAME}' not found in podman"
-  fi
-}
-
-use_docker() {
-  command -v docker >/dev/null 2>&1 || die "docker is required by KIND_EXPERIMENTAL_PROVIDER=docker"
-
-  RUNTIME=docker
-  # Verify cluster exists
-  $RUNTIME ps --filter "name=${CLUSTER_NAME}-control-plane" --format '{{.Names}}' | grep -q "${CLUSTER_NAME}-control-plane" \
-    || die "Kind cluster '${CLUSTER_NAME}' not found"
-}
-
-# Honor an explicit Kind provider before falling back to the existing Podman-first
-# detection used for local development.
-case "${KIND_EXPERIMENTAL_PROVIDER:-}" in
+case "$KIND_PROVIDER" in
   podman)
-    use_podman
+    detect_podman_mode
     ;;
   docker)
-    use_docker
-    ;;
-  "")
-    if command -v podman >/dev/null 2>&1; then
-      use_podman
-    elif command -v docker >/dev/null 2>&1; then
-      use_docker
-    else
-      die "Neither podman nor docker found"
-    fi
     ;;
   *)
     die "Unsupported KIND_EXPERIMENTAL_PROVIDER: ${KIND_EXPERIMENTAL_PROVIDER}"
@@ -74,9 +40,11 @@ case "${KIND_EXPERIMENTAL_PROVIDER:-}" in
 esac
 
 NODE_NAME="${CLUSTER_NAME}-control-plane"
+container_cmd inspect "${NODE_NAME}" >/dev/null 2>&1 \
+  || die "Kind cluster '${CLUSTER_NAME}' not found in ${KIND_PROVIDER}"
 
 log "Installing bridge CNI plugin into ${NODE_NAME}..."
-$RUNTIME exec "${NODE_NAME}" bash -c \
+container_cmd exec "${NODE_NAME}" bash -c \
   "curl -sL https://github.com/containernetworking/plugins/releases/download/${BRIDGE_CNI_VERSION}/cni-plugins-linux-${ARCH}-${BRIDGE_CNI_VERSION}.tgz | tar -C /opt/cni/bin -xz" \
   || die "Failed to install bridge CNI plugin"
 

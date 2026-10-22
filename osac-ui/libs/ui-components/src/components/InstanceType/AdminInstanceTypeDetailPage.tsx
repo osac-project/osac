@@ -24,6 +24,7 @@ import {
   type InstanceType as PrivateInstanceType,
 } from '@osac/types/private';
 import { useGetResource } from '@osac/ui-components/api/use-resource';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import InstanceTypeDeleteConfirmModal from './InstanceTypeDeleteConfirmModal';
 import InstanceTypeLifecycleLabel from './InstanceTypeLifecycleLabel';
@@ -89,9 +90,7 @@ const InstanceTypeDetailActions = ({ instanceType, onDeleted }: InstanceTypeDeta
           )}
           {canDelete && (
             <ActionListItem>
-              <Button variant="danger" onClick={() => setDeleteOpen(true)}>
-                {t('Delete')}
-              </Button>
+              <DeleteResourceButton onClick={() => setDeleteOpen(true)} />
             </ActionListItem>
           )}
         </ActionListGroup>

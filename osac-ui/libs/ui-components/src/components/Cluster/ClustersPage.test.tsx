@@ -91,7 +91,6 @@ describe('ClustersPage version join', () => {
     expect(await screen.findByText('4.15.0')).toBeInTheDocument();
     expect(screen.getByText('4.17.0')).toBeInTheDocument();
     expect(screen.getByText('Obsolete')).toBeInTheDocument();
-    expect(screen.getByText('Services').closest('.pf-v6-c-label')).not.toBeNull();
     expect(screen.getByRole('link', { name: 'Create cluster' })).toHaveAttribute(
       'href',
       '/clusters/create',

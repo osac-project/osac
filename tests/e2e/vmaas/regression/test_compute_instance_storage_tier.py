@@ -50,7 +50,7 @@ def test_compute_instance_explicit_boot_disk_tier(
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
     vm_template: str,
-    default_subnet: str,
+    default_network_attachment: dict[str, object],
     default_storage_tier: str,
     default_instance_type: str,
 ) -> None:
@@ -60,7 +60,7 @@ def test_compute_instance_explicit_boot_disk_tier(
         name=name,
         template=vm_template,
         instance_type=default_instance_type,
-        network_attachments=[{"subnet": default_subnet}],
+        network_attachments=[default_network_attachment],
         boot_disk_storage_tier=default_storage_tier,
     )
 
@@ -94,7 +94,7 @@ def test_compute_instance_multiple_disks_different_tiers(
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
     vm_template: str,
-    default_subnet: str,
+    default_network_attachment: dict[str, object],
     default_storage_tier: str,
     additional_storage_tiers: dict[str, dict[str, str]],
     default_instance_type: str,
@@ -108,7 +108,7 @@ def test_compute_instance_multiple_disks_different_tiers(
         name=name,
         template=vm_template,
         instance_type=default_instance_type,
-        network_attachments=[{"subnet": default_subnet}],
+        network_attachments=[default_network_attachment],
         boot_disk_storage_tier=fast_tier,
         additional_disks=[
             {"size_gib": 1, "storage_tier": {"name": default_storage_tier}},
@@ -142,7 +142,12 @@ def test_compute_instance_multiple_disks_different_tiers(
 
 
 def test_compute_instance_nonexistent_tier_rejected(
-    grpc: GRPCClient, vm_template: str, default_subnet: str, default_instance_type: str, default_disk_image: str
+    grpc: GRPCClient,
+    vm_template: str,
+    default_subnet: str,
+    default_security_group: str,
+    default_instance_type: str,
+    default_disk_image: str,
 ) -> None:
     """Verify that requesting a nonexistent storage tier returns INVALID_ARGUMENT."""
     nonexistent_tier = f"nonexistent-tier-{unique_name('test')}"
@@ -157,7 +162,9 @@ def test_compute_instance_nonexistent_tier_rejected(
                         "template": {"name": vm_template, "shared": True},
                         "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20, "storage_tier": {"name": nonexistent_tier}},
-                        "network_attachments": [{"subnet": {"id": default_subnet}}],
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
                         "disk_image": {"name": default_disk_image},
                         "run_strategy": "Always",
                     },
@@ -178,7 +185,7 @@ def test_compute_instance_tier_immutability(
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
     vm_template: str,
-    default_subnet: str,
+    default_network_attachment: dict[str, object],
     default_storage_tier: str,
     additional_storage_tiers: dict[str, dict[str, str]],
     default_instance_type: str,
@@ -191,7 +198,7 @@ def test_compute_instance_tier_immutability(
         name=name,
         template=vm_template,
         instance_type=default_instance_type,
-        network_attachments=[{"subnet": default_subnet}],
+        network_attachments=[default_network_attachment],
         boot_disk_storage_tier=default_storage_tier,
     )
 
@@ -235,6 +242,7 @@ def test_compute_instance_boot_disk_tier_required(
     grpc: GRPCClient,
     vm_template: str,
     default_subnet: str,
+    default_security_group: str,
     default_instance_type: str,
     default_disk_image: str,
     storage_tier: dict[str, str] | None,
@@ -254,7 +262,9 @@ def test_compute_instance_boot_disk_tier_required(
                         "template": {"name": vm_template, "shared": True},
                         "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": boot_disk,
-                        "network_attachments": [{"subnet": {"id": default_subnet}}],
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
                         "disk_image": {"name": default_disk_image},
                         "run_strategy": "Always",
                     },
@@ -276,6 +286,7 @@ def test_compute_instance_additional_disk_tier_required(
     grpc: GRPCClient,
     vm_template: str,
     default_subnet: str,
+    default_security_group: str,
     default_storage_tier: str,
     default_instance_type: str,
     default_disk_image: str,
@@ -296,8 +307,10 @@ def test_compute_instance_additional_disk_tier_required(
                         "template": {"name": vm_template, "shared": True},
                         "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
-                        "additional_disks": [additional_disk],
-                        "network_attachments": [{"subnet": {"id": default_subnet}}],
+                        "additional_disks": {"items": [additional_disk]},
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
                         "disk_image": {"name": default_disk_image},
                         "run_strategy": "Always",
                     },
@@ -320,6 +333,7 @@ def test_compute_instance_boot_disk_tier_from_catalog_item_default(
     k8s_virt_client: K8sClient,
     vm_template: str,
     default_subnet: str,
+    default_security_group: str,
     default_storage_tier: str,
     default_instance_type: str,
     default_disk_image: str,
@@ -350,7 +364,9 @@ def test_compute_instance_boot_disk_tier_from_catalog_item_default(
                         "catalog_item": {"id": catalog_item_id},
                         "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20},  # No storage_tier
-                        "network_attachments": [{"subnet": {"id": default_subnet}}],
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
                         "disk_image": {"name": default_disk_image},
                         "run_strategy": "Always",
                     },
@@ -400,9 +416,9 @@ def test_compute_instance_boot_disk_tier_from_template_default() -> None:
     Why skipped: a custom template cannot drive real VM provisioning in e2e. Its spec.templateID
     is written verbatim into the CR and used by AAP as the role name to include
     (playbook_osac_create_compute_instance.yml), and only AAP-published templates have a backing
-    role, so the CI can neither provision nor delete. This constraint is documented on the sibling
-    test tests/e2e/vmaas/test_compute_instance_disk_image.py::test_template_disk_image_default, which
-    hit the same limitation and works around it by asserting on the template object only.
+    role, so the CI can neither provision nor delete. API-only template DiskImage default resolution
+    is covered in fulfillment-service/it/it_disk_images_api_test.go; it does not establish custom
+    template provisioning.
     """
 
 
@@ -412,6 +428,7 @@ def test_compute_instance_user_tier_overrides_catalog_item_default(
     k8s_virt_client: K8sClient,
     vm_template: str,
     default_subnet: str,
+    default_security_group: str,
     default_storage_tier: str,
     additional_storage_tiers: dict[str, dict[str, str]],
     default_instance_type: str,
@@ -445,7 +462,9 @@ def test_compute_instance_user_tier_overrides_catalog_item_default(
                         "catalog_item": {"id": catalog_item_id},
                         "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20, "storage_tier": {"name": fast_tier}},  # Override
-                        "network_attachments": [{"subnet": {"id": default_subnet}}],
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
                         "disk_image": {"name": default_disk_image},
                         "run_strategy": "Always",
                     },
@@ -484,6 +503,7 @@ def test_compute_instance_explicit_additional_disks_without_catalog_item_default
     k8s_virt_client: K8sClient,
     vm_template: str,
     default_subnet: str,
+    default_security_group: str,
     default_storage_tier: str,
     additional_storage_tiers: dict[str, dict[str, str]],
     default_instance_type: str,
@@ -520,11 +540,15 @@ def test_compute_instance_explicit_additional_disks_without_catalog_item_default
                         "catalog_item": {"id": catalog_item_id},
                         "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20},  # Uses CatalogItem default tier
-                        "additional_disks": [
-                            {"size_gib": 5, "storage_tier": {"name": fast_tier}},
-                            {"size_gib": 10, "storage_tier": {"name": archive_tier}},
+                        "additional_disks": {
+                            "items": [
+                                {"size_gib": 5, "storage_tier": {"name": fast_tier}},
+                                {"size_gib": 10, "storage_tier": {"name": archive_tier}},
+                            ]
+                        },
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
                         ],
-                        "network_attachments": [{"subnet": {"id": default_subnet}}],
                         "disk_image": {"name": default_disk_image},
                         "run_strategy": "Always",
                     },
@@ -567,6 +591,7 @@ def test_compute_instance_additional_disks_from_catalog_item_default(
     k8s_virt_client: K8sClient,
     vm_template: str,
     default_subnet: str,
+    default_security_group: str,
     default_storage_tier: str,
     additional_storage_tiers: dict[str, dict[str, str]],
     default_instance_type: str,
@@ -601,7 +626,9 @@ def test_compute_instance_additional_disks_from_catalog_item_default(
                         "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
                         # No additional_disks specified
-                        "network_attachments": [{"subnet": {"id": default_subnet}}],
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
                         "disk_image": {"name": default_disk_image},
                         "run_strategy": "Always",
                     },
@@ -641,6 +668,7 @@ def test_compute_instance_additional_disks_from_catalog_item_typed_name_default(
     k8s_virt_client: K8sClient,
     vm_template: str,
     default_subnet: str,
+    default_security_group: str,
     default_storage_tier: str,
     additional_storage_tiers: dict[str, dict[str, str]],
     default_instance_type: str,
@@ -676,7 +704,9 @@ def test_compute_instance_additional_disks_from_catalog_item_typed_name_default(
                         "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
                         # No additional_disks specified
-                        "network_attachments": [{"subnet": {"id": default_subnet}}],
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
                         "disk_image": {"name": default_disk_image},
                         "run_strategy": "Always",
                     },
@@ -707,6 +737,7 @@ def test_compute_instance_user_additional_disks_override_catalog_item_default(
     k8s_virt_client: K8sClient,
     vm_template: str,
     default_subnet: str,
+    default_security_group: str,
     default_storage_tier: str,
     additional_storage_tiers: dict[str, dict[str, str]],
     default_instance_type: str,
@@ -741,10 +772,12 @@ def test_compute_instance_user_additional_disks_override_catalog_item_default(
                         "catalog_item": {"id": catalog_item_id},
                         "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
-                        "additional_disks": [  # Override
-                            {"size_gib": 10, "storage_tier": {"name": archive_tier}}
+                        "additional_disks": {  # Override
+                            "items": [{"size_gib": 10, "storage_tier": {"name": archive_tier}}]
+                        },
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
                         ],
-                        "network_attachments": [{"subnet": {"id": default_subnet}}],
                         "disk_image": {"name": default_disk_image},
                         "run_strategy": "Always",
                     },
@@ -778,18 +811,19 @@ def test_compute_instance_user_additional_disks_override_catalog_item_default(
         grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 
 
-def test_compute_instance_empty_additional_disks_uses_catalog_item_default(
+def test_compute_instance_empty_additional_disks_disables_catalog_item_default(
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
     vm_template: str,
     default_subnet: str,
+    default_security_group: str,
     default_storage_tier: str,
     additional_storage_tiers: dict[str, dict[str, str]],
     default_instance_type: str,
     default_disk_image: str,
 ) -> None:
-    """Verify that an explicit empty additional-disks list uses the Catalog Item default."""
+    """Verify that an explicit empty additional-disks wrapper disables the Catalog Item default."""
     fast_tier = additional_storage_tiers["fast"]["name"]
 
     fields = {
@@ -807,7 +841,6 @@ def test_compute_instance_empty_additional_disks_uses_catalog_item_default(
     )
 
     try:
-        # Repeated fields have no wire presence, so an explicit empty list is treated as unset.
         ci_obj = grpc.call(
             service="osac.public.v1.ComputeInstances/Create",
             data={
@@ -817,8 +850,10 @@ def test_compute_instance_empty_additional_disks_uses_catalog_item_default(
                         "catalog_item": {"id": catalog_item_id},
                         "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
-                        "additional_disks": [],  # Explicit empty array
-                        "network_attachments": [{"subnet": {"id": default_subnet}}],
+                        "additional_disks": {"items": []},  # Explicit empty list
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
                         "disk_image": {"name": default_disk_image},
                         "run_strategy": "Always",
                     },
@@ -832,11 +867,9 @@ def test_compute_instance_empty_additional_disks_uses_catalog_item_default(
             ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
             wait_for_provision(k8s=k8s_hub_client, name=ci_name)
 
-            # Verify the Catalog Item default was materialized.
+            # An explicit empty list suppresses the Catalog Item default.
             cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
-            assert len(cr["spec"]["additionalDisks"]) == 1
-            assert cr["spec"]["additionalDisks"][0]["sizeGiB"] == 10
-            assert cr["spec"]["additionalDisks"][0]["storageTier"] == fast_tier
+            assert cr["spec"].get("additionalDisks", []) == []
 
             # E2E: Verify DataVolume StorageClass (commented out until osac PR #257)
             # verify_datavolume_storage_classes(

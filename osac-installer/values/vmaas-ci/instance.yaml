@@ -17,15 +17,14 @@ global:
   networking:
     fabricManager: ""
     k8sManager: k8s_only
+    netris:
+      # Keep CI safe for any shared Netris configuration.
+      validateCerts: false
     networkClass:
       title: "K8s-only networking"
       description: >-
         VMaaS overlay without a physical fabric. VirtualNetwork/Subnet use CUDN,
         SecurityGroup uses NetworkPolicy, ExternalIP uses MetalLB L2.
-
-# --- CSI Driver ---
-csiDriver:
-  enabled: true
 
 # --- Operator ---
 operator:
@@ -44,7 +43,10 @@ operator:
       key: token
   fulfillment:
     serverAddress: "fulfillment-internal-api:8001"
-    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    credentials:
+      secretName: fulfillment-controller-credentials
+      clientIdKey: client-id
+      clientSecretKey: client-secret
   controllers:
     tenant: true
     networking: true
@@ -81,8 +83,6 @@ service:
     # install-osac sets --set global.clusterDomain=$(DOMAIN).
     emergencyServiceAccounts:
     - admin
-    - osac-operator
-    - osac-operator-controller-manager
     - template-publisher
     - osac-metering
     controllerCredentials:
@@ -146,7 +146,7 @@ service:
 ui:
   enabled: true
   images:
-    ui: ghcr.io/osac-project/osac-ui:v0.0.5
+    ui: ghcr.io/osac-project/osac-ui:latest
   api:
     fulfillment:
       certs:

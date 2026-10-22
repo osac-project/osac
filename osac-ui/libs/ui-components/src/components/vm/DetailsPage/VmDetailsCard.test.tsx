@@ -69,13 +69,11 @@ describe('VmDetailsCard', () => {
     expect(screen.getByText('web-01')).toBeInTheDocument();
     expect(screen.getByText('tenant-ssh-key')).toBeInTheDocument();
     expect(screen.getByText('40 GB, balanced')).toBeInTheDocument();
-    expect(screen.getByText('alice')).toBeInTheDocument();
     expect(screen.queryByText('User Data')).not.toBeInTheDocument();
     expect(screen.queryByText('Run strategy')).not.toBeInTheDocument();
     expect(screen.queryByText('Tenants')).not.toBeInTheDocument();
     expect(screen.queryByText('Version')).not.toBeInTheDocument();
-    expect(screen.queryByText('Creators')).not.toBeInTheDocument();
-    expect(screen.getByText('Creator')).toBeInTheDocument();
+    expect(screen.queryByText('Creator')).not.toBeInTheDocument();
   });
 
   it('still shows spec fields when catalog item is missing', () => {

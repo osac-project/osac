@@ -49,8 +49,8 @@ const (
 	// Owned by the OSAC Storage Controller.
 	TenantConditionStorageBackendReady TenantConditionType = "StorageBackendReady"
 
-	// TenantConditionClusterStorageReady indicates whether StorageClasses and CSI
-	// drivers are installed on the target cluster for this tenant.
+	// TenantConditionClusterStorageReady indicates whether StorageClasses
+	// are installed on the target cluster for this tenant.
 	// Owned by the OSAC Storage Controller.
 	TenantConditionClusterStorageReady TenantConditionType = "ClusterStorageReady"
 )

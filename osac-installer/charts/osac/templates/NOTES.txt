@@ -35,6 +35,6 @@ The AAP bootstrap job runs as a post-install hook. To monitor its progress:
   kubectl logs -f job/{{ .Release.Name }}-aap-bootstrap -n {{ .Release.Namespace }}
 {{- end }}
 
-To upgrade the deployment:
+To upgrade the deployment (Helm 4; omit --force-conflicts on Helm 3):
 
-  helm upgrade {{ .Release.Name }} <chart-path> -n {{ .Release.Namespace }} -f <values-file>
+  helm upgrade {{ .Release.Name }} <chart-path> -n {{ .Release.Namespace }} -f <values-file> --force-conflicts

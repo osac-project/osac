@@ -1,0 +1,21 @@
+---
+- name: Validate AgentlessNet BMI host-port inventory contract
+  hosts: localhost
+  gather_facts: false
+  vars:
+    host_name: host-a
+    network_attachment:
+      logical_interface_name: eth0
+  tasks:
+    - name: Resolve and validate the AgentlessNet host-port mapping
+      ansible.builtin.include_role:
+        name: osac.templates.agentless_net
+        tasks_from: _resolve_attachment_configuration
+
+    - name: Verify the expected mapped switch access port
+      ansible.builtin.assert:
+        that:
+          - _agentless_net_attachment_port.switch == 'switch1'
+          - _agentless_net_attachment_port.port == 'swp2'
+          - _agentless_net_provisioning_network.name == 'agentless-provisioning'
+          - _agentless_net_provisioning_network.vlan_id | int == 1

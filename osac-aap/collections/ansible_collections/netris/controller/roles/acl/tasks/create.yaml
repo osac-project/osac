@@ -24,14 +24,14 @@
       established: "{{ acl_established | default(1) }}"
       reverse: "{{ acl_reverse | default('yes') }}"
       comment: "{{ acl_comment | default('') }}"
-      valid_until: null
+      valid_until:
 
 - name: Display ACL rule body
   ansible.builtin.debug:
     var: _acl_body
 
 - name: Get existing ACL rules
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/acl"
     method: GET
     headers:
@@ -40,6 +40,7 @@
     status_code: 200
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _acl_list_resp
   no_log: true
 
@@ -55,7 +56,7 @@
   when: _existing_acl_list | default([]) | length > 0
 
 - name: Create ACL rule
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/acl"
     method: POST
     headers:
@@ -67,6 +68,7 @@
     status_code: [200, 201, 400, 500]
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _acl_create_resp
   when: _existing_acl_list | default([]) | length == 0
   no_log: true
@@ -79,7 +81,9 @@
   ansible.builtin.fail:
     msg: >-
       Failed to create ACL rule '{{ acl_name }}'.
-      Netris responded with status {{ _acl_create_resp.status }}: {{ _acl_create_resp.json.message | default(_acl_create_resp.content | default('unknown error')) }}
+      Netris responded with status {{ _acl_create_resp.status }}:
+      {{ _acl_create_resp.json.message
+         | default(_acl_create_resp.content | default('unknown error')) }}
 
 - name: Set ACL facts from create response
   ansible.builtin.set_fact:

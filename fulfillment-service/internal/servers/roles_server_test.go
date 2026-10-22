@@ -16,6 +16,8 @@ package servers
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -95,6 +97,34 @@ var _ = Describe("Public roles server", func() {
 
 			listResponse, err := rolesServer.List(ctx, publicv1.RolesListRequest_builder{
 				Filter: new("this.metadata.name == 'test-role'"),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(listResponse.GetSize()).To(Equal(int32(1)))
+			Expect(listResponse.GetItems()).To(HaveLen(1))
+			Expect(listResponse.GetItems()[0].GetMetadata().GetName()).To(Equal("test-role"))
+		})
+
+		It("Lists roles and ignores cloud-provider roles", func() {
+			_, err := rolesServer.Create(ctx, publicv1.RolesCreateRequest_builder{
+				Object: publicv1.Role_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-role",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = rolesServer.Create(ctx, publicv1.RolesCreateRequest_builder{
+				Object: publicv1.Role_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "cloud-provider-role",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			listResponse, err := rolesServer.List(ctx, publicv1.RolesListRequest_builder{
+				Filter: new("this.metadata.name == 'test-role' || this.metadata.name == 'cloud-provider-role'"),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(listResponse.GetSize()).To(Equal(int32(1)))
@@ -198,6 +228,23 @@ var _ = Describe("Public roles server", func() {
 				Id: createResponse.GetObject().GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("Returns error when getting cloud-provider role", func() {
+			createResponse, err := rolesServer.Create(ctx, publicv1.RolesCreateRequest_builder{
+				Object: publicv1.Role_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "cloud-provider-role",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = rolesServer.Get(ctx, publicv1.RolesGetRequest_builder{
+				Id: createResponse.GetObject().GetId(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			Expect(status.Code(err)).To(Equal(codes.NotFound))
 		})
 
 		It("Returns error when creating with nil object", func() {

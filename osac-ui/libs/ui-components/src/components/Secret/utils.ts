@@ -6,6 +6,7 @@ export const TYPE_FILTER_VALUES = [
   'kubeconfig',
   'opaque',
   'pullsecret',
+  'sshpublickey',
   'userdata',
   'value',
 ] as const;
@@ -19,6 +20,7 @@ export const TYPE_FILTER_TO_ENUM: Record<TypeFilterValue, SecretType> = {
   kubeconfig: SecretType.KUBECONFIG,
   opaque: SecretType.OPAQUE,
   pullsecret: SecretType.PULL_SECRET,
+  sshpublickey: SecretType.SSH_PUBLIC_KEY,
   userdata: SecretType.USER_DATA,
   value: SecretType.VALUE,
 };
@@ -33,6 +35,23 @@ export const getSecretType = (t: TFunction): Record<SecretType, string> => {
     [SecretType.VALUE]: t('Value'),
     [SecretType.SSH_PUBLIC_KEY]: t('SSH public key'),
   };
+};
+
+export const getSecretTypeDataKeys = (type: SecretType): string | undefined => {
+  switch (type) {
+    case SecretType.PULL_SECRET:
+      return '.dockerconfigjson';
+    case SecretType.KUBECONFIG:
+      return 'kubeconfig';
+    case SecretType.USER_DATA:
+      return 'userdata';
+    case SecretType.VALUE:
+      return 'value';
+    case SecretType.SSH_PUBLIC_KEY:
+      return 'public_key';
+    default:
+      return undefined;
+  }
 };
 
 export const downloadSecretBytes = (bytes: Uint8Array, filename: string) => {

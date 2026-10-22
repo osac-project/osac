@@ -182,13 +182,13 @@ var _ = Describe("BCM Inventory Adapter", func() {
 		var (
 			ctrl    *gomock.Controller
 			mockAPI *MockBCMAPI
-			bmhMgr  *MockBMHLifecycleManager
+			bmhMgr  *baremetalhost.MockBMHLifecycleManager
 		)
 
 		BeforeEach(func() {
 			ctrl = gomock.NewController(GinkgoT())
 			mockAPI = NewMockBCMAPI(ctrl)
-			bmhMgr = NewMockBMHLifecycleManager(ctrl)
+			bmhMgr = baremetalhost.NewMockBMHLifecycleManager(ctrl)
 			bmhMgr.EXPECT().Namespace().Return(bmhNamespace).AnyTimes()
 		})
 
@@ -312,13 +312,13 @@ var _ = Describe("BCM Inventory Adapter", func() {
 		var (
 			ctrl    *gomock.Controller
 			mockAPI *MockBCMAPI
-			bmhMgr  *MockBMHLifecycleManager
+			bmhMgr  *baremetalhost.MockBMHLifecycleManager
 		)
 
 		BeforeEach(func() {
 			ctrl = gomock.NewController(GinkgoT())
 			mockAPI = NewMockBCMAPI(ctrl)
-			bmhMgr = NewMockBMHLifecycleManager(ctrl)
+			bmhMgr = baremetalhost.NewMockBMHLifecycleManager(ctrl)
 			bmhMgr.EXPECT().Namespace().Return(bmhNamespace).AnyTimes()
 		})
 
@@ -723,13 +723,13 @@ var _ = Describe("BCM Inventory Adapter", func() {
 		var (
 			ctrl    *gomock.Controller
 			mockAPI *MockBCMAPI
-			bmhMgr  *MockBMHLifecycleManager
+			bmhMgr  *baremetalhost.MockBMHLifecycleManager
 		)
 
 		BeforeEach(func() {
 			ctrl = gomock.NewController(GinkgoT())
 			mockAPI = NewMockBCMAPI(ctrl)
-			bmhMgr = NewMockBMHLifecycleManager(ctrl)
+			bmhMgr = baremetalhost.NewMockBMHLifecycleManager(ctrl)
 			bmhMgr.EXPECT().Namespace().Return(bmhNamespace).AnyTimes()
 		})
 
@@ -847,7 +847,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 	Describe("FindFreeHost", func() {
 		var (
 			ctx        context.Context
-			bmhMgr     *MockBMHLifecycleManager
+			bmhMgr     *baremetalhost.MockBMHLifecycleManager
 			bcmDevices func(w http.ResponseWriter, r *http.Request)
 		)
 
@@ -872,7 +872,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 		BeforeEach(func() {
 			ctx = context.Background()
 			ctrl := gomock.NewController(GinkgoT())
-			bmhMgr = NewMockBMHLifecycleManager(ctrl)
+			bmhMgr = baremetalhost.NewMockBMHLifecycleManager(ctrl)
 			bmhMgr.EXPECT().Namespace().Return("osac-baremetal").AnyTimes()
 		})
 

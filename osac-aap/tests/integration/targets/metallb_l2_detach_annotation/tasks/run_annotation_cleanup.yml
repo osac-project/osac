@@ -1,0 +1,39 @@
+---
+- name: Remove a stale ExternalIP annotation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Read the ComputeInstance before synchronizing cleanup
+      kubernetes.core.k8s_info:
+        api_version: osac.openshift.io/v1alpha1
+        kind: ComputeInstance
+        name: "{{ compute_instance_name }}"
+        namespace: "{{ fixture_namespace }}"
+      register: stale_compute_instance
+
+    - name: Verify both cleanup workers read the original annotation
+      ansible.builtin.assert:
+        that:
+          - stale_compute_instance.resources | length == 1
+          - >-
+            'osac.openshift.io/external-ip-address'
+            in stale_compute_instance.resources[0].metadata.annotations
+
+    - name: Wait until both workers hold the stale annotation snapshot
+      ansible.builtin.uri:
+        url: "{{ barrier_url }}"
+        method: POST
+        status_code: 204
+      changed_when: false
+
+    - name: Run the same idempotent annotation cleanup task as detach
+      ansible.builtin.include_tasks:
+        file: >-
+          {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/templates/roles/metallb_l2/tasks/patch_external_ip_annotation.yaml
+      vars:
+        detach_compute_instance_name: "{{ compute_instance_name }}"
+        external_ip_attachment:
+          metadata:
+            namespace: "{{ fixture_namespace }}"
+        ci_info: "{{ stale_compute_instance }}"

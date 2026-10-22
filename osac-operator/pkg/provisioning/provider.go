@@ -93,6 +93,28 @@ type ProvisioningProviderWithProvisionOutputs interface {
 	GetProvisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (ProvisionStatusWithExtraVars, error)
 }
 
+// ProvisioningProviderWithDeprovisionOutputs can retrieve deprovision job artifacts.
+type ProvisioningProviderWithDeprovisionOutputs interface {
+	GetDeprovisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (ProvisionStatusWithExtraVars, error)
+}
+
+// ProvisioningJobCanceler can cancel a running provisioning job during resource deletion.
+// Providers that cannot cancel jobs may omit this interface; callers must then wait for the
+// job to reach a terminal state before continuing deletion.
+type ProvisioningJobCanceler interface {
+	CancelJob(ctx context.Context, jobID string) error
+}
+
+// ProvisioningJobLaunchRecoverer finds a provider job whose launch response was not persisted.
+type ProvisioningJobLaunchRecoverer interface {
+	FindJobByLaunchID(
+		ctx context.Context,
+		resource client.Object,
+		jobType v1alpha1.JobType,
+		launchID string,
+	) (ProvisionStatus, bool, error)
+}
+
 // ProvisionStatus represents the current state of a provisioning or deprovisioning job.
 type ProvisionStatus struct {
 	// JobID is the unique identifier for this job.
@@ -121,11 +143,19 @@ type ProvisionStatus struct {
 
 	// ErrorDetails contains detailed error information when State is JobStateFailed.
 	ErrorDetails string
+
+	// Outputs contains structured artifacts returned by the provisioning job.
+	// Provider-specific controllers use these values to populate backend identifiers.
+	Outputs map[string]any
 }
 
-// ProvisionStatusWithExtraVars contains the provisioning status and returned output variables.
+// ProvisionStatusWithExtraVars contains the provisioning status, the inputs submitted to the job,
+// and the output artifacts returned by the job.
 type ProvisionStatusWithExtraVars struct {
 	ProvisionStatus
+	// InputExtraVars contains the job's submitted extra_vars input.
+	InputExtraVars map[string]any
+	// ExtraVars contains the job's returned artifacts.
 	ExtraVars map[string]any
 }
 

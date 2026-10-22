@@ -2,18 +2,13 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from tests.e2e.core.helpers import (
-    unique_name,
-    wait_for_cr,
-    wait_for_deletion,
-    wait_for_provision,
-    wait_for_running,
-)
+from tests.e2e.core.helpers import unique_name, wait_for_cr, wait_for_deletion, wait_for_provision, wait_for_running
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 
@@ -24,9 +19,9 @@ def _cleanup_registered_ssh_key(
     *,
     instance_id: str | None,
     instance_name: str | None,
-    delete_compute_instance: Any,
-    wait_for_compute_instance_deletion: Any,
-    delete_secret: Any,
+    delete_compute_instance: Callable[[str], None],
+    wait_for_compute_instance_deletion: Callable[[str], None],
+    delete_secret: Callable[[], None],
 ) -> None:
     try:
         if instance_id is not None:
@@ -71,10 +66,7 @@ def test_registered_ssh_key_cleanup_deletes_key_when_instance_cleanup_fails() ->
 
 
 def test_compute_instance_resolves_registered_ssh_key(
-    cli: OsacCLI,
-    k8s_hub_client: K8sClient,
-    default_subnet: str,
-    vm_template: str,
+    cli: OsacCLI, k8s_hub_client: K8sClient, default_network_attachment: dict[str, object], vm_template: str
 ) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         private_key = Path(tmpdir) / "compute-instance-key"
@@ -88,18 +80,14 @@ def test_compute_instance_resolves_registered_ssh_key(
 
         key_name = unique_name("e2e-ssh-key")
         public_key_file = private_key.with_suffix(".pub")
-        cli.create_secret(
-            name=key_name,
-            secret_type="ssh-public-key",
-            from_files={"public_key": str(public_key_file)},
-        )
+        cli.create_secret(name=key_name, secret_type="ssh-public-key", from_files={"public_key": str(public_key_file)})
         instance_id: str | None = None
         instance_name: str | None = None
         try:
             instance_id = cli.create_compute_instance(
                 template=vm_template,
                 name=unique_name("e2e-ssh-ci"),
-                network_attachments=[{"subnet": default_subnet}],
+                network_attachments=[default_network_attachment],
                 ssh_key=key_name,
             )
             instance_name = wait_for_cr(k8s=k8s_hub_client, uuid=instance_id)

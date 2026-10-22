@@ -30,7 +30,10 @@ operator:
       key: token
   fulfillment:
     serverAddress: "fulfillment-internal-api:8001"
-    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    credentials:
+      secretName: fulfillment-controller-credentials
+      clientIdKey: client-id
+      clientSecretKey: client-secret
   controllers:
     tenant: true
     networking: true
@@ -47,6 +50,9 @@ service:
     disabled: false
   externalHostname: fulfillment-api.osac.svc.cluster.local
   internalHostname: fulfillment-internal-api.osac.svc.cluster.local
+  mcp:
+    exchangeClientId: https://mcp.osac.localhost:8443/
+    exchangeCredentialsSecret: osac-mcp-exchange-credentials
   images:
     service:
       repository: ghcr.io/osac-project/fulfillment-service
@@ -62,8 +68,6 @@ service:
     issuerUrl: https://keycloak.keycloak.svc.cluster.local:8443/realms/osac
     emergencyServiceAccounts:
       - admin
-      - osac-operator
-      - osac-operator-controller-manager
     controllerCredentials:
       - secret:
           name: fulfillment-controller-credentials

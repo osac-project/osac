@@ -45,7 +45,6 @@ var _ = Describe("Multitenancy authentication error handling", Label("multitenan
 		},
 		Entry("clusters", "/api/fulfillment/v1/clusters"),
 		Entry("Cluster templates", "/api/fulfillment/v1/cluster_templates"),
-		Entry("Host types", "/api/fulfillment/v1/host_types"),
 	)
 
 	DescribeTable(
@@ -73,7 +72,6 @@ var _ = Describe("Multitenancy authentication error handling", Label("multitenan
 		},
 		Entry("Clusters", "/api/fulfillment/v1/clusters"),
 		Entry("Cluster templates", "/api/fulfillment/v1/cluster_templates"),
-		Entry("Host types", "/api/fulfillment/v1/host_types"),
 	)
 })
 
@@ -113,7 +111,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 						}.Build(),
 						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 							Hardware: privatev1.BareMetalHardwareSpec_builder{
-								Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+								Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "amd64", ThreadsPerCore: 2}.Build(),
 								Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
 								NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
 									privatev1.BareMetalNetworkPortSpec_builder{
@@ -406,7 +404,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 						}.Build(),
 						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 							Hardware: privatev1.BareMetalHardwareSpec_builder{
-								Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+								Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "amd64", ThreadsPerCore: 2}.Build(),
 								Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
 								NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
 									privatev1.BareMetalNetworkPortSpec_builder{

@@ -361,18 +361,19 @@ func resolveResourceInScopeWithGet[O referenceResource](
 	return object, nil
 }
 
-// selectedReferenceScope starts with the owner's scope. shared=true selects the shared
-// tenant, and a nonempty project replaces the owner's project. An empty project keeps the
-// owner's project, including when switching to shared. For example, acme/apps plus shared=true
-// selects shared/apps unless a different project is supplied.
+// selectedReferenceScope builds the lookup scope for a global (full) reference.
+// shared=true selects the shared tenant; otherwise the owner's tenant is kept.
+// The reference's project is always used directly: an empty project selects the
+// tenant's default/root project rather than inheriting the owner's project.
+// Code that needs owner-project inheritance (for example, template defaults)
+// must call inheritReferenceScope before resolution so the reference carries
+// the intended project explicitly.
 func selectedReferenceScope(scope referenceScope, shared bool, project string) referenceScope {
 	result := scope
 	if shared {
 		result.tenant = auth.SharedTenant
 	}
-	if project != "" {
-		result.project = project
-	}
+	result.project = project
 	return result
 }
 

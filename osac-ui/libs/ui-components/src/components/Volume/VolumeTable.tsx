@@ -6,12 +6,11 @@ import type { Volume } from '@osac/types';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField.tsx';
 
 import { VolumeAccessModeLabel } from './VolumeAccessModeLabel';
-import VolumeActionsMenu from './VolumeActionsMenu';
 import { VolumeStatusLabel } from './VolumeStatusLabel';
 import { useTranslation } from '../../hooks/useTranslation';
 import { Timestamp } from '../Primitives/Timestamp';
 
-const EMPTY_STATE_COLUMN_SPAN = 7;
+const EMPTY_STATE_COLUMN_SPAN = 6;
 
 interface VolumeTableProps {
   volumes: Volume[];
@@ -37,7 +36,8 @@ export const VolumeTable = ({ volumes }: VolumeTableProps) => {
           <Th>{t('Size')}</Th>
           <Th>{t('Access Mode')}</Th>
           <Th>{t('Created')}</Th>
-          <Th aria-label={t('Actions')} />
+          {/* TODO: re-enable when volume actions are supported after developer preview */}
+          {/* <Th aria-label={t('Actions')} /> */}
         </Tr>
       </Thead>
       <Tbody>
@@ -51,7 +51,7 @@ export const VolumeTable = ({ volumes }: VolumeTableProps) => {
                   icon={SearchIcon}
                   variant={EmptyStateVariant.sm}
                 >
-                  <EmptyStateBody>{t('Create a volume or adjust your filters.')}</EmptyStateBody>
+                  <EmptyStateBody>{t('Adjust your filters to find volumes.')}</EmptyStateBody>
                 </EmptyState>
               </Bullseye>
             </Td>
@@ -73,9 +73,10 @@ export const VolumeTable = ({ volumes }: VolumeTableProps) => {
               <Td dataLabel={t('Created')}>
                 <Timestamp value={volume.metadata?.creationTimestamp} />
               </Td>
-              <Td dataLabel={t('Actions')} isActionCell>
+              {/* TODO: re-enable when volume actions are supported after developer preview */}
+              {/* <Td dataLabel={t('Actions')} isActionCell>
                 <VolumeActionsMenu volume={volume} />
-              </Td>
+              </Td> */}
             </Tr>
           ))
         )}

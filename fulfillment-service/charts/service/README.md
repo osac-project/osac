@@ -29,6 +29,10 @@ The following table lists the configurable parameters of the chart and their def
 | `externalHostname`         | Hostname used to access the public API via the external network                   | Required                                                       |
 | `internalHostname`         | Hostname used to access both the public and private APIs via the internal network | Required                                                       |
 | `auth.issuerUrl`           | OAuth issuer URL for authentication                                               | `https://keycloak.keycloak.svc.cluster.local:8000/realms/osac` |
+| `mcp.enabled`              | Deploy the optional MCP endpoint                                                  | `false`                                                        |
+| `mcp.externalHostname`     | Public DNS hostname of the MCP resource; Kind requires `mcp.<namespace>.localhost` | Empty; required when MCP is enabled                            |
+| `mcp.exchangeClientId`     | Confidential OAuth exchange client ID                                             | Empty; required when MCP is enabled                            |
+| `mcp.exchangeCredentialsSecret` | Secret in the release namespace containing `client-secret`                  | Empty; required when MCP is enabled                            |
 | `log.level`                | Log level for all components (debug, info, warn, error)                           | `info`                                                         |
 | `log.headers`              | Enable logging of HTTP/gRPC headers                                               | `false`                                                        |
 | `log.bodies`               | Enable logging of HTTP/gRPC request and response bodies                           | `false`                                                        |
@@ -49,6 +53,18 @@ API-only deployment that deliberately omits Kafka. Each entry maps keys from a C
 named `brokers`, `user` and `password`. SASL is optional: omit `user` and `password` when the cluster
 does not require it. TLS trust uses `certs.caBundle`; include the broker CA in that ConfigMap when it
 is not already trusted.
+
+When MCP is enabled, register a dedicated confidential OAuth token-exchange
+client with the authorization server. The MCP ingress accepts tokens addressed
+to `https://<mcp.externalHostname>/` (including `:<mcp.externalPort>` before
+the slash when it is not 443). Use that exact URL, including the slash, for
+the exchange client ID and the authorization server's resource URI. The
+exchange client must be allowed to receive those tokens and mint
+a separate `osac-api` access token for the same user. Its default scopes must
+include OSAC's identity claims (`username`, `groups`, `organization`, and
+`roles`) and the `osac-api` audience. Put only its client secret in the
+configured Kubernetes Secret under the `client-secret` key. The MCP deployment
+uses the issuer's Keycloak token endpoint over the configured CA trust bundle.
 
 **Note on hostnames:** Both `externalHostname` and `internalHostname` are required because TLS
 certificates must be generated with the correct host names.

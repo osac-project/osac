@@ -39,6 +39,9 @@ var _ = Describe("Node set removal", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
+		// A persisted tenant-default subnet can be injected into Cluster creates;
+		// keep a ready NetworkClass available for its canonical Hub validation.
+		getOrCreateTenantDefaultNetworkClassFixture(ctx)
 
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
@@ -53,7 +56,7 @@ var _ = Describe("Node set removal", func() {
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 					Hardware: privatev1.BareMetalHardwareSpec_builder{
-						Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+						Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "amd64", ThreadsPerCore: 2}.Build(),
 						Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
 						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
 							privatev1.BareMetalNetworkPortSpec_builder{
@@ -81,7 +84,7 @@ var _ = Describe("Node set removal", func() {
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 					Hardware: privatev1.BareMetalHardwareSpec_builder{
-						Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+						Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "amd64", ThreadsPerCore: 2}.Build(),
 						Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
 						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
 							privatev1.BareMetalNetworkPortSpec_builder{
@@ -125,8 +128,8 @@ var _ = Describe("Node set removal", func() {
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"workers": publicv1.ClusterNodeSet_builder{Size: new(int32(3)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: workerBmitName}.Build()}.Build(),
-						"storage": publicv1.ClusterNodeSet_builder{Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: storageBmitName}.Build()}.Build(),
+						"workers": publicv1.ClusterNodeSet_builder{Size: new(int32(3)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: workerBmitName, Shared: true}.Build()}.Build(),
+						"storage": publicv1.ClusterNodeSet_builder{Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: storageBmitName, Shared: true}.Build()}.Build(),
 					},
 				}.Build(),
 			}.Build(),

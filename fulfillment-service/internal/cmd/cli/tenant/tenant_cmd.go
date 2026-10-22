@@ -175,6 +175,7 @@ func (c *runnerContext) findTenant(cmd *cobra.Command, settings *config.Settings
 		SetConnection(conn).
 		AddPackages(settings.Packages()).
 		SetTenantFunc(config.TenantFromContext).
+		SetProjectFunc(config.ProjectFromContext).
 		Build()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create reflection tool: %w", err)

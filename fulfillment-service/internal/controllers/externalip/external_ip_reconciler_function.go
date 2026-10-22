@@ -24,6 +24,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -197,6 +198,7 @@ func (t *task) update(ctx context.Context) error {
 
 	// Prepare the changes to the spec:
 	spec := t.buildSpec()
+	metadata := t.externalIP.GetMetadata()
 
 	// Create or update the Kubernetes object:
 	if object == nil {
@@ -204,9 +206,9 @@ func (t *task) update(ctx context.Context) error {
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace:    t.hubNamespace,
 				GenerateName: objectPrefix,
-				Labels: map[string]string{
+				Labels: labels.MergeTrustedExternalIPLifecycleLabels(map[string]string{
 					labels.ExternalIPUuid: t.externalIP.GetId(),
-				},
+				}, metadata.GetLabels(), metadata.GetCreator() == "system"),
 				Annotations: map[string]string{
 					annotations.Tenant: t.externalIP.GetMetadata().GetTenant(),
 				},
@@ -226,6 +228,10 @@ func (t *task) update(ctx context.Context) error {
 	} else {
 		update := object.DeepCopy()
 		update.Spec = spec
+		update.Labels = labels.MergeTrustedExternalIPLifecycleLabels(
+			object.GetLabels(), metadata.GetLabels(), metadata.GetCreator() == "system",
+		)
+		update.Labels[labels.ExternalIPUuid] = t.externalIP.GetId()
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
 		if err != nil {
 			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
@@ -247,6 +253,7 @@ func (t *task) setDefaults() {
 	}
 	if t.externalIP.GetStatus().GetState() == privatev1.ExternalIPState_EXTERNAL_IP_STATE_UNSPECIFIED {
 		t.externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
+		t.externalIP.GetStatus().SetStateTransitionTime(timestamppb.Now())
 	}
 }
 
@@ -315,7 +322,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 	}
 
 	// Don't remove finalizer: K8s object still exists with finalizers being processed.
-	return
+	return controllers.RequeueAfterKubernetesDeletion("external IP")
 }
 
 func (t *task) selectHub(ctx context.Context) error {
@@ -404,6 +411,10 @@ func (t *task) setPending(err error) {
 	if !t.externalIP.HasStatus() {
 		t.externalIP.SetStatus(&privatev1.ExternalIPStatus{})
 	}
+	if t.externalIP.GetStatus().GetState() != privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING ||
+		t.externalIP.GetStatus().GetStateTransitionTime() == nil {
+		t.externalIP.GetStatus().SetStateTransitionTime(timestamppb.Now())
+	}
 	t.externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
 	t.externalIP.GetStatus().SetMessage(err.Error())
 }
@@ -411,6 +422,10 @@ func (t *task) setPending(err error) {
 func (t *task) setFailed(err error) {
 	if !t.externalIP.HasStatus() {
 		t.externalIP.SetStatus(&privatev1.ExternalIPStatus{})
+	}
+	if t.externalIP.GetStatus().GetState() != privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED ||
+		t.externalIP.GetStatus().GetStateTransitionTime() == nil {
+		t.externalIP.GetStatus().SetStateTransitionTime(timestamppb.Now())
 	}
 	t.externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
 	t.externalIP.GetStatus().SetMessage(err.Error())

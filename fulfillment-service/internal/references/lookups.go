@@ -40,17 +40,17 @@ func (e *errRefNotFound) IsNotFound() bool {
 // NewDAOLookupFunc creates a ReferenceLookupFunc backed by a GenericDAO. It queries the DAO
 // using a CEL filter that matches by id or metadata.name and returns the resolved reference metadata.
 func NewDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
-	return newDAOLookupFunc(d, false, false)
+	return newDAOLookupFunc(d, false, false, false)
 }
 
 // NewScopedDAOLookupFunc creates a DAO lookup that additionally constrains references to an
 // explicitly supplied tenant/project. If the caller has no explicit tenant, it retains the
 // visibility-based behavior of NewDAOLookupFunc.
 func NewScopedDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
-	return newDAOLookupFunc(d, true, false)
+	return newDAOLookupFunc(d, true, false, false)
 }
 
-func newDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O], scopeExplicitTenant, publishedOnly bool) ReferenceLookupFunc {
+func newDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O], scopeExplicitTenant, scopeNameLookup, publishedOnly bool) ReferenceLookupFunc {
 	return func(ctx context.Context, tenant, project, id, name string) (*ResolvedRef, error) {
 		var filter string
 		switch {
@@ -63,10 +63,15 @@ func newDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O], scopeExplicitTenant, p
 		default:
 			return nil, &errRefNotFound{identifier: "(empty)"}
 		}
-		// When the caller supplies an explicit scope, keep local references inside it. Requests
-		// without metadata retain the existing visibility-based behavior so generic default-tenant
-		// assignment remains compatible.
-		if scopeExplicitTenant && tenant != "" {
+		// scopeExplicitTenant constrains every lookup (name and ID) to the
+		// supplied tenant/project. scopeNameLookup constrains only name-based
+		// lookups (id==""), matching the canonical resolver where names require
+		// scope disambiguation but IDs are globally unique within a tenant.
+		// Requests without metadata retain visibility-based behavior so
+		// default-tenant assignment remains compatible.
+		applyScope := tenant != "" &&
+			(scopeExplicitTenant || (scopeNameLookup && id == ""))
+		if applyScope {
 			filter += fmt.Sprintf(
 				" && this.metadata.tenant == %s && this.metadata.project == %s",
 				strconv.Quote(tenant), strconv.Quote(project),
@@ -110,12 +115,17 @@ func PublishedFilter(filter string) string {
 	return "this.published == true && !has(this.metadata.deletion_timestamp) && (" + filter + ")"
 }
 
-// RegisterDAOLookup is a convenience that instantiates a DAO lookup and registers it on the
-// validator in one call, using the protobuf full name of the reference message type.
+// RegisterDAOLookup instantiates a DAO lookup and registers it on the
+// validator. Name-based lookups are constrained to the tenant/project
+// selected by resolveTenantProject so that a same-named resource in
+// another visible project cannot shadow the intended target. ID-based
+// lookups retain visibility-based behavior because IDs are globally
+// unique within a tenant and the canonical resolver does not scope
+// them by project.
 func RegisterDAOLookup[O dao.Object](
 	v *ReferenceValidator,
 	fullName protoreflect.FullName,
 	d *dao.GenericDAO[O],
 ) {
-	v.Register(fullName, NewDAOLookupFunc(d))
+	v.Register(fullName, newDAOLookupFunc(d, false, true, false))
 }

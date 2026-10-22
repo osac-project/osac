@@ -23,6 +23,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -113,6 +114,10 @@ var _ = Describe("Private NAT gateways server", func() {
 					Tenant: testTenant,
 					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 				}.Build(),
+				Status: privatev1.NetworkClassStatus_builder{
+					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+					Hub:   "network-hub-a",
+				}.Build(),
 			}.Build(),
 		).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
@@ -132,6 +137,10 @@ var _ = Describe("Private NAT gateways server", func() {
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 				}.Build(),
+				Status: privatev1.VirtualNetworkStatus_builder{
+					State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+					Hub:   "network-hub-a",
+				}.Build(),
 			}.Build(),
 		).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
@@ -150,6 +159,9 @@ var _ = Describe("Private NAT gateways server", func() {
 				}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
+				}.Build(),
+				Status: privatev1.VirtualNetworkStatus_builder{
+					State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
 				}.Build(),
 			}.Build(),
 		).Do(ctx)
@@ -413,15 +425,16 @@ var _ = Describe("Private NAT gateways server", func() {
 			object := privatev1.NATGateway_builder{
 				Id: createResponse.GetObject().GetId(),
 				Status: privatev1.NATGatewayStatus_builder{
-					State:   privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED,
-					Message: &message,
-					Hub:     "hub-1",
+					State:               privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED,
+					StateTransitionTime: timestamppb.Now(),
+					Message:             &message,
+					Hub:                 "hub-1",
 				}.Build(),
 			}.Build()
 			response, err := natGatewaysServer.Update(ctx, privatev1.NATGatewaysUpdateRequest_builder{
 				Object: object,
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"status.state", "status.message", "status.hub"},
+					Paths: []string{"status.state", "status.state_transition_time", "status.message", "status.hub"},
 				},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -605,6 +618,43 @@ var _ = Describe("Private NAT gateways server", func() {
 		})
 	})
 
+	Describe("VirtualNetwork readiness", func() {
+		var natGatewaysServer *PrivateNATGatewaysServer
+
+		BeforeEach(func() {
+			var err error
+			natGatewaysServer, err = NewPrivateNATGatewaysServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("rejects Create when the VirtualNetwork is not READY", func() {
+			vnID := createVirtualNetwork()
+			vnResponse, err := vnDao.Get().SetId(vnID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			virtualNetwork := vnResponse.GetObject()
+			virtualNetwork.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING)
+			_, err = vnDao.Update().SetObject(virtualNetwork).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			eip := createAllocatedExternalIP()
+			_, err = natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
+				Object: privatev1.NATGateway_builder{
+					Metadata: privatev1.Metadata_builder{Name: "pending-vn-nat", Tenant: testTenant}.Build(),
+					Spec: privatev1.NATGatewaySpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("must be READY"))
+		})
+	})
+
 	Describe("Fabric manager validation", func() {
 		var natGatewaysServer *PrivateNATGatewaysServer
 
@@ -649,6 +699,35 @@ var _ = Describe("Private NAT gateways server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
+
+		It("rejects Create when VirtualNetwork and ExternalIP belong to different Hubs", func() {
+			vnID := createVirtualNetwork()
+			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
+				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false, "network-hub-b")
+			name := fmt.Sprintf("test-%s", uuid.NewString()[:8])
+
+			response, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
+				Object: privatev1.NATGateway_builder{
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: testTenant}.Build(),
+					Spec: privatev1.NATGatewaySpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(response).To(BeNil())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("different Hub than the canonical networking Hub"))
+			Expect(err.Error()).ToNot(ContainSubstring("network-hub-a"))
+			Expect(err.Error()).ToNot(ContainSubstring("network-hub-b"))
+
+			natGatewaysDao, err := dao.NewGenericDAO[*privatev1.NATGateway]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			stored, err := natGatewaysDao.List().SetFilter(fmt.Sprintf("this.metadata.name == %q", name)).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetItems()).To(BeEmpty())
+		})
 	})
 
 	Describe("Immutable fields", func() {
@@ -690,6 +769,36 @@ var _ = Describe("Private NAT gateways server", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 			Expect(err.Error()).To(ContainSubstring("immutable"))
+		})
+
+		It("rejects moving a stored NATGateway into a reserved tenant and preserves the stored object", func() {
+			vnID := createVirtualNetwork()
+			eip := createAllocatedExternalIP()
+			createResponse, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
+				Object: privatev1.NATGateway_builder{
+					Metadata: privatev1.Metadata_builder{Name: "tenant-immutable-nat", Tenant: testTenant}.Build(),
+					Spec: privatev1.NATGatewaySpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			_, err = natGatewaysServer.Update(ctx, privatev1.NATGatewaysUpdateRequest_builder{
+				Object: privatev1.NATGateway_builder{
+					Id:       id,
+					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+			Expect(err.Error()).To(ContainSubstring("objects cannot be placed in the 'shared' tenant"))
+
+			stored, getErr := natGatewaysServer.Get(ctx, privatev1.NATGatewaysGetRequest_builder{Id: id}.Build())
+			Expect(getErr).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
 		})
 
 		It("rejects update of spec.external_ip", func() {

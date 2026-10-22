@@ -1,0 +1,32 @@
+---
+- name: Invoke the existing ExternalIPPool playbook
+  ansible.builtin.command:
+    argv:
+      - ansible-playbook
+      - -i
+      - localhost,
+      - "{{ playbook_dir }}/../../../../../playbook_osac_{{ agentless_pool_operation }}_external_ip_pool.yml"
+      - -e
+      - "{{ {'osac_job_vars': {'resource': agentless_pool_resource}} | to_json }}"
+      - -e
+      - >-
+        {{ {'ansible_connection': 'local', 'ansible_become': false,
+            'ansible_python_interpreter': ansible_playbook_python} | to_json }}
+  args:
+    chdir: "{{ playbook_dir }}/../../../../../"
+  environment:
+    AGENTLESS_NET_VN_INVENTORY: "{{ agentless_pool_inventory | to_json }}"
+    AGENTLESS_NET_STATE_FILE: "{{ agentless_pool_state_file }}"
+    AGENTLESS_NET_SSH_PRIVATE_KEY: ""
+  register: agentless_pool_playbook_result
+  changed_when: false
+  failed_when: false
+
+- name: Check the ExternalIPPool playbook result
+  ansible.builtin.assert:
+    that:
+      - (agentless_pool_playbook_result.rc == 0) == (agentless_pool_should_succeed | bool)
+    fail_msg: >-
+      The {{ agentless_pool_operation }} ExternalIPPool playbook returned
+      {{ agentless_pool_playbook_result.rc }}; expected success is
+      {{ agentless_pool_should_succeed }}.

@@ -9,7 +9,7 @@ require (
 	github.com/cloudevents/sdk-go/v2 v2.16.2
 	github.com/go-logr/logr v1.4.4
 	github.com/go-logr/stdr v1.2.2
-	github.com/onsi/ginkgo/v2 v2.32.2
+	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.42.1
 	github.com/prometheus/client_golang v1.24.1
 	github.com/xdg-go/scram v1.2.0
@@ -23,7 +23,7 @@ require (
 	github.com/eapache/go-resiliency v1.7.0 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/pprof v0.0.0-20260906184651-6331bc6350fe // indirect
+	github.com/google/pprof v0.0.0-20261008003335-7bae8d8c4c9e // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/go-uuid v1.0.4 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect

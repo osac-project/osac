@@ -16,6 +16,7 @@ package it
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -86,19 +87,20 @@ type ToolBuilder struct {
 // Tool is an instance of the integration test tool that sets up the test environment. Don't create instances of this
 // directly, use the NewTool function instead.
 type Tool struct {
-	logger        *slog.Logger
-	projectDir    string
-	tmpDir        string
-	clusterName   string
-	kubeClient    crclient.Client
-	kubeClientSet *kubernetes.Clientset
-	caPool        *trust.CertPool
-	kcFile        string
-	internalView  *ToolView
-	externalView  *ToolView
-	secret        string
-	jqTool        *jq.Tool
-	cliBinaryPath string
+	logger          *slog.Logger
+	projectDir      string
+	tmpDir          string
+	clusterName     string
+	kubeClient      crclient.Client
+	kubeClientSet   *kubernetes.Clientset
+	caPool          *trust.CertPool
+	kcFile          string
+	internalView    *ToolView
+	externalView    *ToolView
+	secret          string
+	jqTool          *jq.Tool
+	cliBinaryPath   string
+	userTokenSource auth.TokenSource
 }
 
 // ToolView contains the gRPC connections and HTTP clients that can be used to connect to the cluster. This is a
@@ -107,6 +109,7 @@ type ToolView struct {
 	anonymousConn   *grpc.ClientConn
 	emergencyConn   *grpc.ClientConn
 	adminConn       *grpc.ClientConn
+	controllerConn  *grpc.ClientConn
 	userConn        *grpc.ClientConn
 	anonymousClient *http.Client
 	emergencyClient *http.Client
@@ -279,6 +282,11 @@ func (t *Tool) Setup(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if endpoint := os.Getenv("IT_MCP_DEPLOYED_URL"); endpoint != "" {
+		if err := t.waitForMCPReady(ctx, endpoint); err != nil {
+			return err
+		}
+	}
 
 	// Ensure Keycloak trusts the cluster CA so that the OIDC broker can complete
 	// back-channel token exchanges with intra-cluster realm endpoints over TLS.
@@ -366,6 +374,69 @@ func (t *Tool) checkAddress(ctx context.Context, addr string) error {
 				"'/etc/hosts' file: %[2]w",
 			host, err,
 		)
+	}
+	return nil
+}
+
+// waitForMCPReady checks the deployed TLS route before the suite creates test
+// users and resource fixtures. A missing TLSRoute can otherwise go unnoticed
+// until the MCP spec runs after the expensive BeforeSuite setup.
+func (t *Tool) waitForMCPReady(ctx context.Context, rawURL string) error {
+	endpoint := strings.TrimSuffix(rawURL, "/")
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+		parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("IT_MCP_DEPLOYED_URL must be an HTTPS root URL")
+	}
+	t.logger.DebugContext(ctx, "Checking MCP endpoint", "url", endpoint)
+	transport := &http.Transport{TLSClientConfig: &tls.Config{
+		RootCAs: t.caPool.Pool(), MinVersion: tls.VersionTLS12,
+	}}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   5 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var lastErr error
+	for {
+		lastErr = probeMCPMetadata(probeCtx, client, endpoint)
+		if lastErr == nil {
+			return nil
+		}
+		select {
+		case <-probeCtx.Done():
+			return fmt.Errorf("MCP endpoint %s is not ready: %w; check its deployment, route, and TLS certificate in the selected cluster", endpoint, lastErr)
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func probeMCPMetadata(ctx context.Context, client *http.Client, endpoint string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/.well-known/oauth-protected-resource", nil)
+	if err != nil {
+		return err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("OAuth metadata returned HTTP %d", response.StatusCode)
+	}
+	var metadata struct {
+		Resource string `json:"resource"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&metadata); err != nil {
+		return fmt.Errorf("invalid OAuth metadata: %w", err)
+	}
+	if metadata.Resource != endpoint+"/" {
+		return fmt.Errorf("OAuth metadata resource %q does not match %q", metadata.Resource, endpoint+"/")
 	}
 	return nil
 }
@@ -520,10 +591,15 @@ func (t *Tool) createClients(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	controllerTokenSource, err := t.makeControllerTokenSource()
+	if err != nil {
+		return err
+	}
 	userTokenSource, err := t.makeKeycloakTokenSource(ctx, userUsername, usersPassword)
 	if err != nil {
 		return err
 	}
+	t.userTokenSource = userTokenSource
 
 	// Create gRPC clients:
 	t.internalView = &ToolView{}
@@ -536,6 +612,10 @@ func (t *Tool) createClients(ctx context.Context) error {
 		return err
 	}
 	t.internalView.adminConn, err = t.makeGrpcConn(internalServiceAddr, adminTokenSource)
+	if err != nil {
+		return err
+	}
+	t.internalView.controllerConn, err = t.makeGrpcConn(internalServiceAddr, controllerTokenSource)
 	if err != nil {
 		return err
 	}
@@ -1168,6 +1248,23 @@ func (t *Tool) makeKeycloakTokenSource(ctx context.Context, username, password s
 	return
 }
 
+func (t *Tool) makeControllerTokenSource() (result auth.TokenSource, err error) {
+	store, err := auth.NewMemoryTokenStore().SetLogger(t.logger).Build()
+	if err != nil {
+		return nil, err
+	}
+	return oauth.NewTokenSource().
+		SetLogger(t.logger).
+		SetStore(store).
+		SetCaPool(t.caPool).
+		SetIssuer(fmt.Sprintf("https://%s/realms/osac", keycloakAddr)).
+		SetFlow(oauth.CredentialsFlow).
+		SetClientId(controllerClientId).
+		SetClientSecret(t.Secret()).
+		SetScopes("openid", "organization").
+		Build()
+}
+
 // KeycloakAdminRequest makes an authenticated request to the Keycloak admin API for the 'osac' realm.
 // The path is relative to /admin/realms/osac (e.g., "/organizations", "/users/{id}").
 func (t *Tool) KeycloakAdminRequest(ctx context.Context, method, path string, input any) (
@@ -1742,6 +1839,11 @@ func (v *ToolView) AdminConn() *grpc.ClientConn {
 	return v.adminConn
 }
 
+// ControllerConn returns the gRPC connection authenticated as the controller service account.
+func (v *ToolView) ControllerConn() *grpc.ClientConn {
+	return v.controllerConn
+}
+
 // UserConn returns the gRPC connection for the regular user.
 func (v *ToolView) UserConn() *grpc.ClientConn {
 	return v.userConn
@@ -1782,6 +1884,7 @@ func (v *ToolView) Close() error {
 		closeConn(v.anonymousConn),
 		closeConn(v.emergencyConn),
 		closeConn(v.adminConn),
+		closeConn(v.controllerConn),
 		closeConn(v.userConn),
 		closeClient(v.anonymousClient),
 		closeClient(v.emergencyClient),
@@ -1795,6 +1898,16 @@ func (t *Tool) ProjectDir() string {
 	return t.projectDir
 }
 
+// UserTokenSource returns the regular user's token source for another HTTP listener.
+func (t *Tool) UserTokenSource() auth.TokenSource {
+	return t.userTokenSource
+}
+
+// CaPool returns the CA pool used by the integration clients.
+func (t *Tool) CaPool() *trust.CertPool {
+	return t.caPool
+}
+
 // Names of the command line tools:
 const kubectlCmd = "kubectl"
 
@@ -1805,12 +1918,25 @@ var hubNamespace = "osac"
 // userAgent is the user agent string for the integration test tool.
 const userAgent = "fulfillment-it-tool"
 
-// Service host name and address (host-side, via Kind port mapping):
-const (
-	keycloakAddr        = "keycloak.keycloak.svc.cluster.local:8443"
-	externalServiceAddr = "fulfillment-api.osac.svc.cluster.local:8443"
-	internalServiceAddr = "fulfillment-internal-api.osac.svc.cluster.local:8443"
+// Service addresses route through the host-side Kind ingress port. A dedicated
+// port lets concurrent integration runs use separate clusters on the same host.
+// Keycloak's in-cluster broker calls must use the Service port even when the
+// test runner uses a different host-side ingress port.
+const keycloakInternalAddr = "keycloak.keycloak.svc.cluster.local:8443"
+
+var (
+	keycloakAddr        = integrationServiceAddress("keycloak.keycloak.svc.cluster.local")
+	externalServiceAddr = integrationServiceAddress("fulfillment-api.osac.svc.cluster.local")
+	internalServiceAddr = integrationServiceAddress("fulfillment-internal-api.osac.svc.cluster.local")
 )
+
+func integrationServiceAddress(host string) string {
+	port := os.Getenv("IT_HTTPS_PORT")
+	if port == "" {
+		port = "8443"
+	}
+	return net.JoinHostPort(host, port)
+}
 
 // Namespace, name and key of the Kubernetes secret that contains the random secret used for passwords and credentials.
 const (

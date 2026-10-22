@@ -4,7 +4,7 @@
     validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
     follow_redirects: none
     headers:
-      authorization: Bearer {{ osac_fulfillment_service_token }}
+      authorization: "Bearer {{ osac_fulfillment_service_token if osac_fulfillment_service_token is defined else lookup('osac.service.fulfillment_token') }}"
     status_code: [200, 404, 503]
   register: addon_operator_check
   no_log: true
@@ -34,7 +34,7 @@
     follow_redirects: none
     method: PATCH
     headers:
-      authorization: Bearer {{ osac_fulfillment_service_token }}
+      authorization: "Bearer {{ osac_fulfillment_service_token if osac_fulfillment_service_token is defined else lookup('osac.service.fulfillment_token') }}"
     body_format: json
     body: "{{ template }}"
   no_log: true
@@ -54,7 +54,7 @@
     follow_redirects: none
     method: POST
     headers:
-      authorization: Bearer {{ osac_fulfillment_service_token }}
+      authorization: "Bearer {{ osac_fulfillment_service_token if osac_fulfillment_service_token is defined else lookup('osac.service.fulfillment_token') }}"
     body_format: json
     body: "{{ template }}"
   no_log: true

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 
 import pytest
@@ -28,12 +29,12 @@ def test_compute_instance_lifecycle(
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
     vm_template: str,
-    default_subnet: str,
+    default_network_attachment: dict[str, object],
     metering: MeteringCollector,
 ) -> None:
     name = unique_name("e2e-ci")
     uuid: str = cli.create_compute_instance(
-        name=name, template=vm_template, network_attachments=[{"subnet": default_subnet}]
+        name=name, template=vm_template, network_attachments=[default_network_attachment]
     )
     ci_name: str | None = None
 
@@ -69,10 +70,8 @@ def test_compute_instance_lifecycle(
         vmi_ts: str = k8s_virt_client.get_vmi_creation_timestamp(vmi_namespace=vmi_ns, compute_instance_name=ci_name)
         assert vmi_ts != "", f"No VMI found on virt cluster for {ci_name}"
     except BaseException:
-        try:
+        with contextlib.suppress(Exception):
             cleanup()
-        except Exception:
-            pass
         raise
     else:
         cleanup()

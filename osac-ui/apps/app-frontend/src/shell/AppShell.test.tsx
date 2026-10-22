@@ -98,6 +98,13 @@ describe('AppShell', () => {
     expect(await screen.findByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
   });
 
+  it('does not render volume routes for tenant-user — falls through to default', async () => {
+    renderAppShell('/storage/volumes', 'tenant-user');
+
+    expect(screen.queryByRole('heading', { name: /volumes/i })).toBeNull();
+    expect(await screen.findByRole('heading', { name: 'Catalog' })).toBeInTheDocument();
+  });
+
   it.each([
     {
       path: '/vms/vm-1',

@@ -135,6 +135,7 @@ rules:
   - osac.openshift.io
   resources:
   - baremetalinstances
+  - fabricdomains
   verbs:
   - get
   - list
@@ -150,6 +151,7 @@ rules:
   - externalipattachments/finalizers
   - externalippools/finalizers
   - externalips/finalizers
+  - fabricdomains/finalizers
   - natgateways/finalizers
   - securitygroups/finalizers
   - subnets/finalizers
@@ -188,6 +190,7 @@ rules:
   - externalipattachments/status
   - externalippools/status
   - externalips/status
+  - fabricdomains/status
   - natgateways/status
   - securitygroups/status
   - subnets/status

@@ -68,8 +68,13 @@ shared controller connection fields.
 {{- define "osac-aap.netrisConfig" -}}
 {{- $netris := .netris | default dict -}}
 {{- $creds := $netris.credentials | default dict -}}
+{{- $validateCerts := true -}}
+{{- if hasKey $netris "validateCerts" -}}
+{{- $validateCerts = $netris.validateCerts -}}
+{{- end -}}
 {{- $derived := dict
   "NETRIS_CONTROLLER_URL" ($netris.controllerUrl | default "")
+  "NETRIS_VALIDATE_CERTS" ($validateCerts | toString)
   "NETRIS_USERNAME" ($creds.username | default "")
   "NETRIS_SITE_ID" ($netris.siteId | default "" | toString)
   "NETRIS_TENANT_ID" ($netris.tenantId | default "" | toString)
@@ -83,6 +88,20 @@ shared controller connection fields.
 {{- $_ := set $derived "NETRIS_RESOURCE_CLASS_MAP" ($netris.resourceClassMap | default "") -}}
 {{- end -}}
 {{- $derived | toYaml -}}
+{{- end }}
+
+{{/* Return true when a top-level config source attempts to set a protected key. */}}
+{{- define "osac-aap.isProtectedNetrisKey" -}}
+{{- $normalized := .key | lower | replace "_" "" | replace "-" "" | replace "." "" -}}
+{{- $contract := .root.Files.Get "files/netris-protected-inputs.json" | fromJson -}}
+{{- $matched := false -}}
+{{- range $input := $contract.protected_inputs -}}
+  {{- range $alias := $input.aliases -}}
+    {{- if eq $normalized ($alias | lower | replace "_" "" | replace "-" "" | replace "." "") }}{{- $matched = true -}}{{ end -}}
+  {{- end -}}
+  {{- if eq $normalized ($input.canonical_environment | lower | replace "_" "" | replace "-" "" | replace "." "") }}{{- $matched = true -}}{{ end -}}
+{{- end -}}
+{{- if $matched }}true{{ end -}}
 {{- end }}
 
 {{/*

@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -34,6 +35,7 @@ var _ = Describe("Public clusters", func() {
 		clustersClient      publicv1.ClustersClient
 		instanceTypesClient privatev1.BareMetalInstanceTypesClient
 		templatesClient     privatev1.ClusterTemplatesClient
+		networkClassID      string
 		bmitName            string
 		templateId          string
 	)
@@ -41,6 +43,9 @@ var _ = Describe("Public clusters", func() {
 	BeforeEach(func() {
 		// Create a context:
 		ctx = context.Background()
+		// Public cluster requests validate the canonical networking Hub even when
+		// the request does not specify a subnet or SecurityGroup.
+		networkClassID, _ = getOrCreateTenantDefaultNetworkClassFixture(ctx)
 
 		// Create the clients:
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
@@ -56,7 +61,7 @@ var _ = Describe("Public clusters", func() {
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 					Hardware: privatev1.BareMetalHardwareSpec_builder{
-						Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+						Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "amd64", ThreadsPerCore: 2}.Build(),
 						Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
 						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
 							privatev1.BareMetalNetworkPortSpec_builder{
@@ -171,6 +176,45 @@ var _ = Describe("Public clusters", func() {
 		Expect(items).ToNot(BeNil())
 	})
 
+	DescribeTable("rejects shared tenant creation by an administrator without persisting a cluster",
+		func(tenant string) {
+			// Use an administrator so assignable-tenant authorization cannot mask
+			// the resource type's reserved-tenant restriction. An omitted tenant
+			// must also be rejected: administrators default to shared.
+			adminClient := publicv1.NewClustersClient(tool.ExternalView().AdminConn())
+			name := fmt.Sprintf("shared-cluster-%s", uuid.New()[24:32])
+			request := publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{Name: name, Tenant: tenant}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Shared: true}.Build(),
+						NodeSets: testClusterNodeSets(bmitName, 1),
+					}.Build(),
+				}.Build(),
+			}.Build()
+			original := proto.Clone(request)
+			response, err := adminClient.Create(ctx, request)
+			if response.GetObject().GetId() != "" {
+				DeferCleanup(func() {
+					_, err := adminClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: response.GetObject().GetId()}.Build())
+					Expect(err).ToNot(HaveOccurred())
+				})
+			}
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+			Expect(grpcstatus.Convert(err).Message()).To(Equal("objects cannot be placed in the 'shared' tenant"))
+			Expect(response).To(BeNil())
+			Expect(proto.Equal(request, original)).To(BeTrue())
+			listed, err := adminClient.List(ctx, publicv1.ClustersListRequest_builder{
+				Filter: new(fmt.Sprintf("this.metadata.name == %q", name)),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(listed.GetItems()).To(BeEmpty())
+			Expect(listed.GetTotal()).To(BeZero())
+		},
+		Entry("explicit shared tenant", "shared"),
+		Entry("omitted tenant defaults to shared", ""),
+	)
+
 	It("Can create a cluster", func() {
 		// Create the cluster:
 		response, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
@@ -198,6 +242,7 @@ var _ = Describe("Public clusters", func() {
 		Expect(object).ToNot(BeNil())
 		metadata := object.GetMetadata()
 		Expect(metadata).ToNot(BeNil())
+		Expect(metadata.GetTenant()).To(Equal(usersGroup))
 		Expect(metadata.HasCreationTimestamp()).To(BeTrue())
 		Expect(metadata.HasDeletionTimestamp()).To(BeFalse())
 		spec := object.GetSpec()
@@ -235,10 +280,11 @@ var _ = Describe("Public clusters", func() {
 					Name: object.GetMetadata().GetName(),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NetworkAttachment: object.GetSpec().GetNetworkAttachment(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my-node-set": {
-							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName, Shared: true}.Build(),
 							Size:                  proto.Int32(4),
 						},
 					},
@@ -263,7 +309,8 @@ var _ = Describe("Public clusters", func() {
 	})
 
 	It("rejects public updates that change the network attachment", func() {
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		// Reuse the deployment's singleton NetworkClass from BeforeEach.
+		network := createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Metadata: publicv1.Metadata_builder{
@@ -278,9 +325,34 @@ var _ = Describe("Public clusters", func() {
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		object := createResponse.GetObject()
-		DeferCleanup(func() {
-			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: object.GetId()}.Build())
-			Expect(err).NotTo(HaveOccurred())
+		privateClustersClient := privatev1.NewClustersClient(tool.InternalView().AdminConn())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			cleanupErr := cleanupNetworkFixtureResource(cleanupCtx,
+				func(ctx context.Context) error {
+					_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: object.GetId()}.Build())
+					return err
+				},
+				func(ctx context.Context) (*privatev1.Metadata, error) {
+					response, err := privateClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+					if err != nil {
+						return nil, err
+					}
+					return response.GetObject().GetMetadata(), nil
+				},
+				func(ctx context.Context) error {
+					response, err := privateClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+					if err != nil {
+						return err
+					}
+					cluster := response.GetObject()
+					cluster.GetMetadata().SetFinalizers(nil)
+					_, err = privateClustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+						Object: cluster, UpdateMask: catalogItemUpdateMask("metadata.finalizers"), Lock: true,
+					}.Build())
+					return err
+				},
+			)
+			Expect(cleanupErr).NotTo(HaveOccurred())
 		})
 
 		originalAttachment := proto.Clone(object.GetSpec().GetNetworkAttachment()).(*publicv1.ClusterNetworkAttachment)
@@ -372,9 +444,55 @@ var _ = Describe("Public clusters", func() {
 		Expect(status.Code()).To(Equal(grpccodes.NotFound))
 	})
 
+	It("rejects a shared ClusterVersion without a disk image without persisting a cluster", func() {
+		versions := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
+		versionName := catalogItemFixtureName()
+		created, err := versions.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+			Object: privatev1.ClusterVersion_builder{
+				Metadata: privatev1.Metadata_builder{Name: versionName, Tenant: "shared"}.Build(),
+				Spec: privatev1.ClusterVersionSpec_builder{
+					Version: nextCVVersion(), Image: "quay.io/openshift-release-dev/ocp-release:4.22.0-multi",
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			_, err := versions.Delete(ctx, privatev1.ClusterVersionsDeleteRequest_builder{Id: created.GetObject().GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+		})
+		Expect(created.GetObject().GetSpec().GetDiskImage()).To(BeNil())
+
+		name := catalogItemFixtureName()
+		response, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Shared: true}.Build(),
+					Version:  publicv1.ClusterVersionReference_builder{Name: versionName, Shared: true}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 1),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		if response.GetObject().GetId() != "" {
+			DeferCleanup(func() {
+				_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: response.GetObject().GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+			})
+		}
+		expectCatalogItemStatusCode(err, grpccodes.FailedPrecondition)
+		Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(versionName))
+		Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("does not have a disk image attached"))
+		listed, err := clustersClient.List(ctx, publicv1.ClustersListRequest_builder{
+			Filter: new(fmt.Sprintf("this.metadata.name == %q", name)),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listed.GetItems()).To(BeEmpty())
+	})
+
 	It("Can create a cluster with explicit version", func() {
 		// Bare-metal workers require the selected version to have a DiskImage.
 		image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+		network := createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
 		cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
 		version := nextCVVersion()
 		cvResponse, err := cvClient.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
@@ -407,19 +525,42 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					Version:  publicv1.ClusterVersionReference_builder{Name: cvName}.Build(),
-					NodeSets: testClusterNodeSets(bmitName, 3),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Version:           publicv1.ClusterVersionReference_builder{Name: cvName}.Build(),
+					NodeSets:          testClusterNodeSets(bmitName, 3),
+					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		object := createResponse.GetObject()
-		DeferCleanup(func() {
-			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
-				Id: object.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+		privateClustersClient := privatev1.NewClustersClient(tool.InternalView().AdminConn())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			cleanupErr := cleanupNetworkFixtureResource(cleanupCtx,
+				func(ctx context.Context) error {
+					_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: object.GetId()}.Build())
+					return err
+				},
+				func(ctx context.Context) (*privatev1.Metadata, error) {
+					response, err := privateClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+					if err != nil {
+						return nil, err
+					}
+					return response.GetObject().GetMetadata(), nil
+				},
+				func(ctx context.Context) error {
+					response, err := privateClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+					if err != nil {
+						return err
+					}
+					cluster := response.GetObject()
+					cluster.GetMetadata().SetFinalizers(nil)
+					_, err = privateClustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+						Object: cluster, UpdateMask: catalogItemUpdateMask("metadata.finalizers"), Lock: true,
+					}.Build())
+					return err
+				})
+			Expect(cleanupErr).NotTo(HaveOccurred())
 		})
 
 		// Verify the cluster has the correct version:
@@ -430,7 +571,11 @@ var _ = Describe("Public clusters", func() {
 			Id: object.GetId(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(getResponse.GetObject().GetSpec().GetVersion().GetName()).To(Equal(cvName))
+		storedSpec := getResponse.GetObject().GetSpec()
+		Expect(storedSpec.GetVersion().GetName()).To(Equal(cvName))
+		Expect(storedSpec.GetNetworkAttachment().GetSubnet().GetId()).To(Equal(network.subnetID))
+		Expect(storedSpec.GetNetworkAttachment().GetSecurityGroups()).To(HaveLen(1))
+		Expect(storedSpec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID))
 	})
 
 	It("Sets creator to the ID of the user when creating a cluster", func() {

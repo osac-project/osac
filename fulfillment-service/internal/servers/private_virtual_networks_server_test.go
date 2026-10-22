@@ -23,6 +23,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
@@ -117,6 +118,23 @@ var _ = Describe("Private virtual networks server", func() {
 				Build()
 			Expect(err).To(MatchError("tenancy logic is mandatory"))
 			Expect(server).To(BeNil())
+		})
+	})
+
+	Describe("Canonical networking Hub resolution", func() {
+		It("does not expose the NetworkClass ID while Hub assignment is pending", func() {
+			networkClass := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+			networkClassesDAO, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			hubID, err := canonicalNetworkingHubID(ctx, logger, networkClassesDAO)
+			Expect(hubID).To(BeEmpty())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("canonical networking Hub assignment is pending"))
+			Expect(err.Error()).ToNot(ContainSubstring(networkClass.GetId()))
 		})
 	})
 
@@ -450,7 +468,7 @@ var _ = Describe("Private virtual networks server", func() {
 			})
 		})
 
-		Context("NetworkClass readiness is controller-owned", func() {
+		Context("NetworkClass readiness", func() {
 			It("accepts NetworkClass in READY state", func() {
 				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 
@@ -466,7 +484,7 @@ var _ = Describe("Private virtual networks server", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("accepts NetworkClass in PENDING state and leaves readiness to reconciliation", func() {
+			It("rejects NetworkClass in PENDING state", func() {
 				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING)
 
 				vn := privatev1.VirtualNetwork_builder{
@@ -478,10 +496,12 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build()
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(err.Error()).To(ContainSubstring("NetworkClass"))
+				Expect(err.Error()).To(ContainSubstring("PENDING"))
 			})
 
-			It("accepts NetworkClass in FAILED state and leaves recovery to reconciliation", func() {
+			It("rejects NetworkClass in FAILED state", func() {
 				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED)
 
 				vn := privatev1.VirtualNetwork_builder{
@@ -493,7 +513,9 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build()
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(err.Error()).To(ContainSubstring("NetworkClass"))
+				Expect(err.Error()).To(ContainSubstring("FAILED"))
 			})
 		})
 
@@ -1070,6 +1092,39 @@ var _ = Describe("Private virtual networks server", func() {
 				Expect(updated.GetSpec().GetIpv4Cidr()).To(Equal("10.0.0.0/16"))
 			})
 		})
+
+		Context("Metadata tenant immutability on Update", func() {
+			It("rejects moving a stored VirtualNetwork into a reserved tenant and preserves the stored object", func() {
+				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+				createResponse, err := server.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+					Object: privatev1.VirtualNetwork_builder{
+						Metadata: privatev1.Metadata_builder{Name: "tenant-immutable-vn", Tenant: testTenant}.Build(),
+						Spec: privatev1.VirtualNetworkSpec_builder{
+							NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
+							Region:       "us-west-1",
+							Ipv4Cidr:     new("10.0.0.0/16"),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := createResponse.GetObject().GetId()
+
+				_, err = server.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+					Object: privatev1.VirtualNetwork_builder{
+						Id:       id,
+						Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+				Expect(err.Error()).To(ContainSubstring("objects cannot be placed in the 'shared' tenant"))
+
+				stored, getErr := server.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+				Expect(getErr).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
+				Expect(stored.GetObject().GetSpec().GetIpv4Cidr()).To(Equal("10.0.0.0/16"))
+			})
+		})
 	})
 
 	Describe("GenericDAO VirtualNetwork operations", func() {
@@ -1377,7 +1432,7 @@ var _ = Describe("Private virtual networks server", func() {
 			Expect(createResponse.GetObject().GetSpec().GetNetworkClass().GetId()).To(Equal(networkClass.GetId()))
 		})
 
-		It("does not require NetworkClass readiness during API admission", func() {
+		It("requires the singleton NetworkClass to be Ready before admitting a VirtualNetwork", func() {
 			createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING)
 
 			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
@@ -1391,7 +1446,29 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("NetworkClass"))
+			Expect(err.Error()).To(ContainSubstring("must be READY"))
+		})
+
+		It("requires an explicitly referenced NetworkClass to be Ready before admitting a VirtualNetwork", func() {
+			networkClass := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING)
+
+			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.VirtualNetworkSpec_builder{
+						Ipv4Cidr:     new("10.0.0.0/16"),
+						Region:       "us-west-1",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClass.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("NetworkClass"))
+			Expect(err.Error()).To(ContainSubstring("must be READY"))
 		})
 
 		It("Default NC capability mismatch is rejected", func() {
@@ -1740,7 +1817,7 @@ var _ = Describe("Private virtual networks server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("3 Subnet"))
+			Expect(err.Error()).To(ContainSubstring("3 active Subnet"))
 		})
 
 		It("blocks deletion of default-labeled VirtualNetwork", func() {
@@ -1817,6 +1894,54 @@ var _ = Describe("Private virtual networks server", func() {
 			getResp, err := vnServer.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: object.GetId()}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResp.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
+		})
+
+		// Regression: OSAC-6544 — VN cleanup times out when a controller
+		// finalizer prevents archival after Delete.
+		It("remains retrievable after Delete when a finalizer is present and archives on finalizer removal", func() {
+			vn := createVirtualNetwork()
+			id := vn.GetId()
+
+			// Simulate the controller adding its finalizer.
+			tx, err := database.TxFromContext(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = tx.Exec(ctx,
+				`update virtual_networks set finalizers = '{"fulfillment-controller"}' where id = $1`, id)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Delete sets deletion_timestamp but does not archive.
+			_, err = vnServer.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// Get still succeeds — the VN is soft-deleted.
+			getResp, err := vnServer.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResp.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+			Expect(getResp.GetObject().GetMetadata().GetFinalizers()).To(
+				ContainElement("fulfillment-controller"))
+
+			// Signal succeeds on the soft-deleted object.
+			_, err = vnServer.Signal(ctx,
+				privatev1.VirtualNetworksSignalRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// Simulate the reconciler clearing the finalizer.
+			vn = getResp.GetObject()
+			vn.GetMetadata().SetFinalizers(nil)
+			_, err = vnServer.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+				Object: vn,
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"metadata.finalizers"},
+				},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// After the finalizer is removed the object is archived;
+			// Get now returns NotFound.
+			_, err = vnServer.Get(ctx,
+				privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 		})
 	})
 })

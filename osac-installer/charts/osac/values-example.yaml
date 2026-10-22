@@ -26,6 +26,13 @@ global:
     k8sManager: k8s_only
     netris:
       controllerUrl: ""
+      # Verify the Netris HTTPS certificate. Set false only for trusted
+      # non-production endpoints with self-signed certificates.
+      validateCerts: true
+      # Optional customer-created ConfigMap in the AAP namespace. The
+      # ConfigMap must contain the Netris CA chain under bundle.pem.
+      caBundle:
+        configMap: ""
       credentials:
         username: ""
         externalSecret: true
@@ -50,6 +57,16 @@ operatorCrds:
 # OSAC Operator
 # ---------------------
 operator:
+  # Admin onboarding inventory for Phase 1 Netris Ethernet east-west domains.
+  # Keys must exactly match Netris hostnames; values are BareMetalInstanceType
+  # IDs from the private API. Empty means no inventory ConfigMap is created.
+  # Configure spec.fabric_bindings.ethernet_ew on each referenced type through
+  # the private API (for example, netris: "42" for a Netris template ID).
+  fabricDomainInventory: {}
+  # fabricDomainInventory:
+  #   gpu-01.example.com: "gpu-bmit-id"
+  #   gpu-02.example.com: "gpu-bmit-id"
+
   image:
     repository: ghcr.io/osac-project/osac-operator
     # Production: pin to a specific SHA or release tag.
@@ -98,8 +115,12 @@ operator:
     # Internal gRPC address — must use the internal Envoy listener that
     # routes both public and private API methods.
     serverAddress: "fulfillment-internal-api:8001"
-    # Path to the ServiceAccount token file used for authentication.
-    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    # osac-infra provisions this for bundled Keycloak; external Keycloak setups
+    # must provide a matching Secret.
+    credentials:
+      secretName: fulfillment-controller-credentials
+      clientIdKey: client-id
+      clientSecretKey: client-secret
 
   # Enable/disable individual controllers. When all are true (default),
   # the operator manages all resource types. Set to false to disable
@@ -318,7 +339,7 @@ aap:
     clusterFulfillment:
       enabled: false
       config:
-        DNS_CLASS: ""
+        DNS_CLASS: "dns.route53.dns"
         DNS_ZONE: ""
         SERVER_SSH_BASTION_HOST: ""
         SERVER_SSH_BASTION_USER: ""
@@ -332,15 +353,21 @@ aap:
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: ""
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""
       secret:
-        NETRIS_PASSWORD: ""
         AWS_ACCESS_KEY_ID: ""
         AWS_SECRET_ACCESS_KEY: ""
         SERVER_SSH_KEY: ""
         SERVER_SSH_BASTION_KEY: ""
     networkFulfillment:
       enabled: false
-      config: {}
+      # Expert overrides only. Normal installations should use
+      # global.networking.netris so shared values cannot drift.
+      config:
+        NETRIS_USERNAME: ""
+        NETRIS_SITE_ID: ""
+        NETRIS_TENANT_ID: ""
+        NETRIS_TENANT_NAME: ""
       secret:
+        # Prefer global.networking.netris.credentials.externalSecret.
         NETRIS_PASSWORD: ""
     publishTemplates:
       enabled: true
@@ -384,22 +411,55 @@ bmf:
 # ---------------------
 # Bare Metal Fulfillment Operator — Metal3 Backend
 # ---------------------
-# Metal3 inventory and management backend configuration for the BMF operator.
+# Metal3 inventory and management configuration for the BMF operator.
 # When enabled, the chart creates osac-inventory-config and osac-management-config
 # Secrets with Metal3 backend type. The BMF operator mounts these at
 # /etc/osac/inventory/inventory.yaml and /etc/osac/management/management.yaml.
-# NOTE: metal3 nests under the same top-level bmf: key as bcm above — bcm and
-# metal3 are mutually exclusive backends, not separate bmf: blocks.
   metal3:
     # Set to true to create Metal3 config secrets via Helm.
-    # When false (default), secrets must be created manually.
+    # When false (default), the Metal3 inventory config is not created.
     enabled: false
-    # [REQUIRED when enabled] Namespace where BareMetalHost CRs are located.
-    # This is the namespace Metal3 uses for bare metal host management.
+    # [REQUIRED when metal3.enabled] Namespace where BareMetalHost CRs are located.
     # Example: "hardware-inventory"
     namespace: ""
     # Host class identifier written to the inventory config.
     hostClass: "metal3"
+
+# ---------------------
+# Bare Metal Fulfillment Operator — NetBox Backend
+# ---------------------
+# NetBox-backed BMF uses Metal3 for BMH management. Keep metal3.enabled false
+# and set bmf.netbox.bmhNamespace to the BMH namespace.
+# BMF creates a namespaced Role there that can get/create/update/delete Secrets
+# for per-host BMC credentials. Use a dedicated namespace.
+# Override bmf.secrets.netboxToken/netboxCA if custom Secret names are needed.
+  netbox:
+    enabled: false
+    # [REQUIRED when enabled] Namespace containing Metal3 BareMetalHosts and BMC Secrets.
+    bmhNamespace: ""
+    # [REQUIRED when enabled] NetBox API endpoint.
+    url: ""
+    # Secret data key containing the NetBox API token (default: "token").
+    tokenSecretKey: "token"
+    # Used only if bmf.secrets.netboxToken is absent from the BMF release namespace.
+    tokenValue: ""
+    # [OPTIONAL] PEM CA certificate stored in a dedicated Secret and mounted read-only.
+    caCert: ""
+    # HTTP endpoints are disabled unless this explicit opt-in is true.
+    allowInsecureHTTP: false
+
+# ---------------------
+# BMF Secret API client
+# ---------------------
+  secretAPI:
+    # Secret API gRPC endpoint.
+    url: "https://fulfillment-internal-api:8001"
+    # Must match service.auth.issuerUrl.
+    issuerUrl: "https://keycloak.keycloak.svc.cluster.local/realms/osac"
+    caBundle:
+      # Cluster trust-manager ConfigMap. Set empty to omit this CA mount.
+      configMap: "ca-bundle"
+      key: "bundle.pem"
 
 # ---------------------
 # Bundled PostgreSQL (dev/test)

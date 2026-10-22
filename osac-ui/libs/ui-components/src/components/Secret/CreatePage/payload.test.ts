@@ -4,16 +4,17 @@ import { describe, expect, it } from 'vitest';
 import { SecretSchema, SecretType } from '@osac/types';
 
 import { buildSecretCreatePayload, buildSecretUpdatePayload } from './payload';
-import { getSecretValues } from './values';
+import { createSecretDataEntry, getSecretValues } from './values';
 
 const values = (opaque: Array<{ key: string; value: Uint8Array }>) => ({
   metadata: { name: 'my-secret', project: 'my-project', description: 'foo-desc' },
   type: SecretType.OPAQUE,
-  kubeconfig: { key: 'kubeconfig', value: new Uint8Array() },
-  pullsecret: { key: '.dockerconfigjson', value: new Uint8Array() },
-  userData: { key: 'userdata', value: new Uint8Array() },
-  opaque,
-  value: { key: 'value', value: new Uint8Array() },
+  kubeconfig: createSecretDataEntry('kubeconfig', new Uint8Array()),
+  pullsecret: createSecretDataEntry('.dockerconfigjson', new Uint8Array()),
+  userData: createSecretDataEntry('userdata', new Uint8Array()),
+  opaque: opaque.map((e) => createSecretDataEntry(e.key, e.value)),
+  value: createSecretDataEntry('value', new Uint8Array()),
+  sshPublicKey: createSecretDataEntry('public_key', new Uint8Array()),
 });
 
 describe('buildSecretCreatePayload', () => {
@@ -52,6 +53,18 @@ describe('buildSecretCreatePayload', () => {
 
     expect(payload.data?.value).toEqual(binaryValue);
   });
+
+  it('includes public_key data for SSH_PUBLIC_KEY type', () => {
+    const keyBytes = new TextEncoder().encode('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA user@host');
+    const typedValues = values([]);
+    typedValues.type = SecretType.SSH_PUBLIC_KEY;
+    typedValues.sshPublicKey.value = keyBytes;
+
+    const payload = buildSecretCreatePayload(typedValues);
+
+    expect(payload.data).toEqual({ public_key: keyBytes });
+    expect(payload.type).toBe(SecretType.SSH_PUBLIC_KEY);
+  });
 });
 
 describe('buildSecretUpdatePayload', () => {
@@ -78,7 +91,7 @@ describe('buildSecretUpdatePayload', () => {
     });
     const values = getSecretValues(null, secret);
 
-    expect(values.opaque[0]).toEqual({ key: 'certificate', value: originalValue });
+    expect(values.opaque[0]).toMatchObject({ key: 'certificate', value: originalValue });
     expect(buildSecretUpdatePayload(values).data?.certificate).toEqual(originalValue);
   });
 

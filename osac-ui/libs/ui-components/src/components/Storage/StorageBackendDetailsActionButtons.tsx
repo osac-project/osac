@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button, Flex } from '@patternfly/react-core';
-import DumpsterIcon from '@patternfly/react-icons/dist/esm/icons/dumpster-icon';
 import PencilAltIcon from '@patternfly/react-icons/dist/esm/icons/pencil-alt-icon';
 
 import type { StorageBackend } from '@osac/types/private';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import StorageBackendDeleteConfirmModal from './StorageBackendDeleteConfirmModal';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -43,9 +43,7 @@ const StorageBackendDetailsActionButtons = ({
         >
           {t('Edit')}
         </Button>
-        <Button variant="danger" icon={<DumpsterIcon />} onClick={() => setDeleteOpen(true)}>
-          {t('Delete')}
-        </Button>
+        <DeleteResourceButton showIcon onClick={() => setDeleteOpen(true)} />
       </Flex>
     </>
   );

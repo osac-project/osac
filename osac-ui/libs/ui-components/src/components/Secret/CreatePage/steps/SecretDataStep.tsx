@@ -1,4 +1,4 @@
-import { Stack, StackItem, Title } from '@patternfly/react-core';
+import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 
 import { SecretType } from '@osac/types';
@@ -30,6 +30,14 @@ const SecretDataStep = ({ isEdit }: SecretDataStepProps) => {
         );
       case SecretType.USER_DATA:
         return <SecretValueField label={t('User data')} entry={values.userData} name="userData" />;
+      case SecretType.SSH_PUBLIC_KEY:
+        return (
+          <SecretValueField
+            label={t('SSH public key')}
+            entry={values.sshPublicKey}
+            name="sshPublicKey"
+          />
+        );
       case SecretType.VALUE:
         return <SecretValueField label={t('Value')} entry={values.value} name="value" />;
       case SecretType.OPAQUE:
@@ -44,6 +52,9 @@ const SecretDataStep = ({ isEdit }: SecretDataStepProps) => {
         <Title headingLevel="h2" size="lg">
           {t('Secret data')}
         </Title>
+        <Content component="p">
+          {t('Select a secret type, then enter or upload its key(s) and values.')}
+        </Content>
       </StackItem>
       <StackItem>
         <OsacForm>

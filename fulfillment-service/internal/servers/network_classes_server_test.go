@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -176,6 +177,68 @@ var _ = Describe("Network classes server", func() {
 
 			_, err = server.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: created.GetId()}.Build())
 			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("rejects changing the singleton's tenant and preserves the stored object", func() {
+			created := create()
+
+			// Tenant immutability is enforced by the database trigger, which aborts the
+			// current transaction, so the rejected update runs inside a savepoint.
+			tx, txErr := database.TxFromContext(ctx)
+			Expect(txErr).ToNot(HaveOccurred())
+			txErr = tx.Savepoint(ctx, func(savepointCtx context.Context) error {
+				_, updateErr := server.Update(savepointCtx, privatev1.NetworkClassesUpdateRequest_builder{
+					Object: privatev1.NetworkClass_builder{
+						Id:       created.GetId(),
+						Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+				}.Build())
+				return updateErr
+			})
+			Expect(txErr).To(HaveOccurred())
+			Expect(grpcstatus.Code(txErr)).To(Equal(grpccodes.InvalidArgument))
+			Expect(txErr.Error()).To(ContainSubstring("metadata.tenant"))
+			Expect(txErr.Error()).To(ContainSubstring("immutable"))
+
+			stored, getErr := server.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: created.GetId()}.Build())
+			Expect(getErr).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
+
+			_, err := server.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: created.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("blocks deletion while a VirtualNetwork still references the NetworkClass", func() {
+			networkClass := create()
+			networkClass.SetStatus(privatev1.NetworkClassStatus_builder{
+				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+			}.Build())
+			networkClassDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = networkClassDao.Update().SetObject(networkClass).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			virtualNetworks, err := NewPrivateVirtualNetworksServer().
+				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = virtualNetworks.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{Name: "network-class-dependent-vn", Tenant: testTenant}.Build(),
+					Spec: privatev1.VirtualNetworkSpec_builder{
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClass.GetId()}.Build(),
+						Region:       "us-west-1",
+						Ipv4Cidr:     new("10.20.0.0/16"),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: networkClass.GetId()}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("VirtualNetwork"))
+			Expect(err.Error()).To(ContainSubstring(networkClass.GetId()))
 		})
 
 		It("derives a DNS name from the configured manager", func() {

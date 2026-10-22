@@ -28,11 +28,11 @@ pnpm --filter @osac/playwright exec playwright install chromium
 
 Required environment variables:
 
-| Variable           | Description                                                                                        |
-| ------------------ | --------------------------------------------------------------------------------------------------- |
+| Variable           | Description                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------- |
 | `OSAC_UI_BASE_URL` | Full URL of the `osac-ui` deployment to test, e.g. `https://osac-ui-<namespace>.<cluster-domain>` |
 | `OSAC_USERNAME`    | Username of a Keycloak test user on that deployment's realm                                       |
-| `OSAC_PASSWORD`    | Password for that user                                                                             |
+| `OSAC_PASSWORD`    | Password for that user                                                                            |
 
 ```bash
 export OSAC_UI_BASE_URL=https://... OSAC_USERNAME=...
@@ -60,10 +60,49 @@ pnpm playwright:run     # ...repeat as many times as you're iterating
 `pnpm playwright:run` never re-authenticates — if `.auth/user.json` is missing
 or the session has expired, re-run `pnpm playwright:setup` first.
 
+### Tenant flow tests
+
+The tenant create and delete specs require these additional environment
+variables:
+
+| Variable           | Description                                                                                                                                        |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OSAC_TENANT_NAME` | Tenant name used by the create and delete flows. The create flow requires that it does not already exist; the delete flow requires that it exists. |
+
+Set all variables before running the tenant tests:
+
+```bash
+export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
+export OSAC_USERNAME=<keycloak-user>
+read -rs OSAC_PASSWORD && export OSAC_PASSWORD
+export OSAC_TENANT_NAME=tenant1
+```
+
+Run the create and delete flow together. The `vmaas-delete` project depends on
+`vmaas`, so creation runs before deletion:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test --project=vmaas-delete
+```
+
+Run the flows separately:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  create.tenant.spec.ts --project=vmaas
+
+pnpm --filter @osac/playwright exec playwright test \
+  delete.tenant.spec.ts --project=vmaas-delete --no-deps
+```
+
+Use `--headed` when a graphical display is available. Run these commands from
+the repository root; pass only the spec filename because the Playwright
+configuration already defines the tenant spec directory.
+
 Optional:
 
-| Variable                  | Description                                                                                          |
-| -------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Variable              | Description                                                                                                                                                                                                                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `IGNORE_HTTPS_ERRORS` | Set to `true` to trust self-signed/cluster-internal CA certs, common on dev and lab clusters. Off by default because this flow submits a real Keycloak password — it disables TLS verification for the whole browser context, not just `localhost`, so only enable it against clusters you trust. |
 
 Testing against a local `pnpm dev` instance instead of a remote deployment:
@@ -86,6 +125,67 @@ than trusting it by default:
 export OSAC_UI_BASE_URL=http://localhost:5173 OSAC_USERNAME=... IGNORE_HTTPS_ERRORS=true
 read -rs OSAC_PASSWORD && export OSAC_PASSWORD
 pnpm playwright
+```
+
+### Instance type flow tests
+
+The instance type tests read their hard-coded test data from
+`apps/e2e-tests/extravars.yaml`. Change the `instance_type` values there before
+running the flow if you need a different name, description, vCPU/memory values,
+or GPU configuration. The create test fails clearly if that instance type
+already exists.
+
+The tests run in this dependency order:
+
+1. `vmaas-instance-type` creates the instance type and verifies it is `Active`.
+2. `vmaas-instance-type-lifecycle` verifies the `Deprecate`, `Obsolete`, and
+   `Reactivate` transitions.
+3. `vmaas-instance-type-delete` deletes the instance type and waits for its row
+   to disappear.
+
+Set the common variables from the [Running](#running) section, then run the
+complete instance type flow from the repository root:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-instance-type-lifecycle
+```
+
+Playwright runs the create dependency, then runs the create project's teardown
+to delete the instance type after the lifecycle test. Add `--headed` to the
+command when a graphical display is available:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-instance-type-lifecycle --headed
+```
+
+To run the three instance-type tests separately, run them in this order:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  create.instance_type.spec.ts --project=vmaas-instance-type --no-deps
+
+pnpm --filter @osac/playwright exec playwright test \
+  lifecycle.instance_type.spec.ts --project=vmaas-instance-type-lifecycle --no-deps
+
+pnpm --filter @osac/playwright exec playwright test \
+  delete.instance_type.spec.ts --project=vmaas-instance-type-delete --no-deps
+```
+
+The `--no-deps` option is appropriate only for the separate commands because
+the preceding command has already established the required instance type.
+Running the delete test removes the instance type from the deployment. If the
+requested instance type is absent, the standalone delete test creates it from
+`extravars.yaml` first; unrelated instance types already listed in the table
+are not modified.
+
+To run the tenant and instance type flows together, include both terminal
+projects; each terminal project runs its own dependency chain:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-delete --project=vmaas-instance-type-lifecycle
 ```
 
 ## How authentication works

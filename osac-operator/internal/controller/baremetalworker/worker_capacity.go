@@ -5,6 +5,8 @@ package baremetalworker
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -13,7 +15,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -21,6 +25,11 @@ import (
 )
 
 const eventReasonWorkerCreated = "WorkerCreated"
+
+// eventReasonBMICreateRejected is both the rejection checkpoint's failure
+// reason and its warning-event reason, mirroring the registration-timeout
+// reason's dual use.
+const eventReasonBMICreateRejected = "BMICreateRejected"
 
 // reconcileWorkerLifecycle performs the existing-worker lifecycle work that
 // needs no creation inputs: retirement intent and failed incarnation cleanup. A
@@ -125,14 +134,14 @@ func (r *Reconciler) resolveWorkerCreationInputs(
 // unrelated event. A prerequisite wait/error is reported without created so the
 // caller can still converge teardown, Agents and NodePool replicas.
 func (r *Reconciler) reconcileWorkerCreation(
-	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string, observed *workerObservation, infra infraEnvEvidence,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster, observed *workerObservation, infra infraEnvEvidence,
 ) (bool, ctrl.Result, error) {
 	if _, prev := selectDueSlot(co, time.Now()); prev == nil && !workerCreationDue(co) {
 		res, err := r.refreshWorkerReadiness(ctx, co, infra)
 		if err != nil || !res.IsZero() {
 			return false, res, err
 		}
-		res, err = r.reconcileDueWorkerCreation(ctx, co, tenant, workerCreationInputs{}, observed)
+		res, err = r.reconcileDueWorkerCreation(ctx, co, cluster, workerCreationInputs{}, observed)
 		return false, res, err
 	}
 	expected := co.DeepCopy()
@@ -148,7 +157,7 @@ func (r *Reconciler) reconcileWorkerCreation(
 	if !sameCapacityPlan(expected, co) {
 		return false, ctrl.Result{}, errWorkerObservationChanged
 	}
-	return r.reconcileDueWorkerCapacity(ctx, co, tenant, inputs, observed)
+	return r.reconcileDueWorkerCapacity(ctx, co, cluster, inputs, observed)
 }
 
 // refreshWorkerReadiness reports current discovery-ignition evidence for an
@@ -188,7 +197,7 @@ func workerCreationDue(co *v1alpha1.ClusterOrder) bool {
 // selected slot using already resolved inputs. A durable reservation is itself a
 // status mutation, so it ends the invocation before any external create.
 func (r *Reconciler) reconcileDueWorkerCapacity(
-	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 	inputs workerCreationInputs, observed *workerObservation,
 ) (bool, ctrl.Result, error) {
 	added, err := r.reserveWorkerSlots(ctx, co)
@@ -200,10 +209,10 @@ func (r *Reconciler) reconcileDueWorkerCapacity(
 	}
 	nr, prev := selectDueSlot(co, time.Now())
 	if prev == nil {
-		res, err := r.reconcileDueWorkerCreation(ctx, co, tenant, inputs, observed)
+		res, err := r.reconcileDueWorkerCreation(ctx, co, cluster, inputs, observed)
 		return false, res, err
 	}
-	res, err := r.createSelectedWorker(ctx, co, tenant, nr, prev, inputs, observed)
+	res, err := r.createSelectedWorker(ctx, co, cluster, nr, prev, inputs, observed)
 	return true, res, err
 }
 
@@ -211,7 +220,7 @@ func (r *Reconciler) reconcileDueWorkerCapacity(
 // resolved inputs. Without a due slot it only revalidates the capacity plan and
 // clears a recovered fulfillment-service condition.
 func (r *Reconciler) reconcileDueWorkerCreation(
-	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 	inputs workerCreationInputs, observed *workerObservation,
 ) (ctrl.Result, error) {
 	nr, prev := selectDueSlot(co, time.Now())
@@ -227,7 +236,7 @@ func (r *Reconciler) reconcileDueWorkerCreation(
 		}
 		return ctrl.Result{}, nil
 	}
-	return r.createSelectedWorker(ctx, co, tenant, nr, prev, inputs, observed)
+	return r.createSelectedWorker(ctx, co, cluster, nr, prev, inputs, observed)
 }
 
 // selectDueSlot returns the first slot that may create or retry a BMI in
@@ -256,7 +265,7 @@ func selectDueSlot(co *v1alpha1.ClusterOrder, now time.Time) (*v1alpha1.NodeRequ
 // selected slot and persists its identity before returning. It is the only stage
 // that consumes image and ignition bytes.
 func (r *Reconciler) createSelectedWorker(
-	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 	nr *v1alpha1.NodeRequest, prev *v1alpha1.WorkerStatus,
 	inputs workerCreationInputs, observed *workerObservation,
 ) (ctrl.Result, error) {
@@ -287,18 +296,31 @@ func (r *Reconciler) createSelectedWorker(
 		}
 		return workerBoundaryRequeue(), nil
 	}
+	// Only this invocation's Reserved -> Attempted transition can be undone
+	// by its rejected RPC. A later rejection says nothing about an earlier
+	// unknown outcome (including a legacy slot without an explicit journal).
+	wasReserved := prev.BMICreateState == v1alpha1.WorkerBMICreateStateReserved
 	if err := r.recordBMICreateAttempt(ctx, co, prev); err != nil {
 		return ctrl.Result{}, err
 	}
 	if prev.Phase == workerPhaseFailed {
-		res, err = r.retryFailedWorker(ctx, co, tenant, nr, prev, inputs.image, string(inputs.ignition), filter, fabricInterface)
+		res, err = r.retryFailedWorker(ctx, co, cluster, nr, prev, inputs.image, string(inputs.ignition), filter, fabricInterface)
 	} else {
 		var ws v1alpha1.WorkerStatus
-		ws, res, err = r.ensureWorkerBMI(ctx, co, tenant, nr, prev.BareMetalInstance.Name, observed,
+		ws, res, err = r.ensureWorkerBMI(ctx, co, cluster, nr, prev.BareMetalInstance.Name, observed,
 			inputs.image, string(inputs.ignition), filter, fabricInterface)
 		if err == nil && res.IsZero() {
 			workerCreated(prev, ws.BareMetalInstance.Name, ws.BareMetalInstance.ID)
 		}
+	}
+	// A definitive rejection is not an invocation error: record it as the
+	// worker's failure checkpoint so teardown and the retry machinery converge
+	// from durable state instead of an unknown-outcome journal.
+	if wasReserved && errors.Is(err, errBMICreateRejected) {
+		if recErr := r.recordBMICreateRejection(ctx, co, prev, err); recErr != nil {
+			return ctrl.Result{}, recErr
+		}
+		return workerBoundaryRequeue(), nil
 	}
 	if err != nil || !res.IsZero() {
 		return res, err
@@ -338,6 +360,86 @@ func (r *Reconciler) recordBMICreateAttempt(ctx context.Context, co *v1alpha1.Cl
 	*co = *next
 	*worker = *persisted
 	return nil
+}
+
+// recordBMICreateRejection persists a definitive Create rejection as the
+// selected worker's failure checkpoint: Phase=Failed with the journal re-armed
+// to Reserved — re-arming cleanupWorker's cancellable-reservation proof — and
+// NextRetryTime cleared, because handleFailedWorkers owns backoff re-arming.
+// One conditional JSON Patch tests the observed UID and complete worker entry
+// before replacing only that worker. Unrelated updates and deletion tolerate a
+// stale resourceVersion; target drift or object replacement fails atomically.
+// No post-Create read or local retry rebases the completed RPC's evidence.
+// The warning event and failure metric follow only a verified response.
+func (r *Reconciler) recordBMICreateRejection(
+	ctx context.Context, co *v1alpha1.ClusterOrder, worker *v1alpha1.WorkerStatus, createErr error,
+) error {
+	latest := co.DeepCopy()
+	index := -1
+	for i := range latest.Status.Workers {
+		if latest.Status.Workers[i].Name == worker.Name {
+			index = i
+			break
+		}
+	}
+	if co.UID == "" || index < 0 || !reflect.DeepEqual(latest.Status.Workers[index], *worker) {
+		return errWorkerObservationChanged
+	}
+	setBMICreateRejectionCheckpoint(&latest.Status.Workers[index], createErr)
+	if err := r.patchBMICreateRejection(ctx, latest, index, worker); err != nil {
+		return err
+	}
+	// Require the API response to retain the checkpoint: an older CRD may
+	// prune the fields. A successful HTTP status alone cannot authorize
+	// cleanup to treat the reservation as never-attempted.
+	persisted := workerByName(latest.Status.Workers, worker.Name)
+	if persisted == nil || persisted.Phase != workerPhaseFailed ||
+		persisted.BMICreateState != v1alpha1.WorkerBMICreateStateReserved ||
+		persisted.LastFailureReason != eventReasonBMICreateRejected {
+		return fmt.Errorf("BMI Create rejection was not persisted for worker %s", worker.Name)
+	}
+	*co = *latest
+	*worker = *persisted
+	observeProvisioningFailure(tenantOf(co), *persisted)
+	r.recorder.Eventf(co, nil, corev1.EventTypeWarning, eventReasonBMICreateRejected, "CreateWorker",
+		"worker %s: BMI create rejected: %s", worker.Name, createErr)
+	return nil
+}
+
+// setBMICreateRejectionCheckpoint re-arms only the rejected reservation, leaving
+// attempt history intact for handleFailedWorkers to count and schedule retries.
+func setBMICreateRejectionCheckpoint(worker *v1alpha1.WorkerStatus, createErr error) {
+	now := metav1.Now()
+	worker.Phase = workerPhaseFailed
+	worker.BMICreateState = v1alpha1.WorkerBMICreateStateReserved
+	worker.NextRetryTime = nil
+	worker.ReadySince = nil
+	worker.LastFailureReason = eventReasonBMICreateRejected
+	worker.LastFailureMessage = createErr.Error()
+	worker.LastFailureTime = &now
+}
+
+// patchBMICreateRejection replaces the checkpoint at index only if the API still
+// holds the observed UID and complete expected worker. next receives the patch
+// response; the caller must verify it before using it or accounting for success.
+func (r *Reconciler) patchBMICreateRejection(
+	ctx context.Context, next *v1alpha1.ClusterOrder, index int, expected *v1alpha1.WorkerStatus,
+) error {
+	type operation struct {
+		Op    string `json:"op"`
+		Path  string `json:"path"`
+		Value any    `json:"value"`
+	}
+	path := fmt.Sprintf("/status/workers/%d", index)
+	payload, err := json.Marshal([]operation{
+		{Op: "test", Path: "/metadata/uid", Value: next.UID},
+		{Op: "test", Path: path, Value: expected},
+		{Op: "replace", Path: path, Value: next.Status.Workers[index]},
+	})
+	if err != nil {
+		return err
+	}
+	return r.Status().Patch(ctx, next, client.RawPatch(types.JSONPatchType, payload))
 }
 
 // writeSelectedWorker persists one selected slot's status from the invocation's
@@ -405,12 +507,13 @@ func allocateMissingWorkerSlots(co *v1alpha1.ClusterOrder) error {
 // acknowledgement. Ownership and ambiguity checks use the canonical observation
 // index instead of duplicating a second name view.
 func (r *Reconciler) ensureWorkerBMI(
-	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 	nr *v1alpha1.NodeRequest, workerName string,
 	observed *workerObservation,
 	image *privatev1.DiskImageReference, ignitionRaw, filter, fabricInterface string,
 ) (v1alpha1.WorkerStatus, ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
+	tenant := cluster.GetMetadata().GetTenant()
 	bmi, nameErr := observed.exactOwnedName(co, tenant, workerName)
 	if nameErr != nil {
 		return v1alpha1.WorkerStatus{}, ctrl.Result{}, r.rejectWorkerIdentity(co, nameErr.Error())
@@ -422,7 +525,7 @@ func (r *Reconciler) ensureWorkerBMI(
 		log.Info("worker BMI already exists, skipping create", "name", workerName)
 		return newWorkerStatus(nr.NodeSet, nr.BareMetal.InstanceType, workerName, bmi.GetId(), workerPhaseWaitingForAgent), ctrl.Result{}, nil
 	}
-	bmi, res, err := r.ensureBMI(ctx, co, tenant, *nr, workerName, image, ignitionRaw, filter, fabricInterface)
+	bmi, res, err := r.ensureBMI(ctx, co, cluster, *nr, workerName, image, ignitionRaw, filter, fabricInterface)
 	if err != nil || !res.IsZero() {
 		return v1alpha1.WorkerStatus{}, res, err
 	}

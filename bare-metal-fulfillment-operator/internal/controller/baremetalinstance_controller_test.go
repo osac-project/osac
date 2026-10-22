@@ -279,6 +279,52 @@ var _ = Describe("BareMetalInstance Controller", func() {
 		})
 	})
 
+	Describe("updateStatusWithRetry", func() {
+		It("does not publish Ready when a provision update races with deletion", func() {
+			instance := &v1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "late-provision-delete-race",
+					Namespace:  namespace,
+					Finalizers: []string{"test/hold-deletion"},
+				},
+				Spec: v1alpha1.BareMetalInstanceSpec{
+					Selector:   v1alpha1.HostSelectorSpec{HostSelector: map[string]string{"type": hostType}},
+					TemplateID: "test_template",
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func(cleanupCtx context.Context) {
+				latest := &v1alpha1.BareMetalInstance{}
+				if err := k8sClient.Get(cleanupCtx, client.ObjectKeyFromObject(instance), latest); err == nil {
+					latest.Finalizers = nil
+					Expect(k8sClient.Update(cleanupCtx, latest)).To(Succeed())
+				}
+			})
+
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+			latest := &v1alpha1.BareMetalInstance{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), latest)).To(Succeed())
+			Expect(latest.DeletionTimestamp.IsZero()).To(BeFalse())
+
+			// A reconcile that started before Delete can finish provisioning later.
+			// Preserve the provider job history for cleanup, but suppress its stale Ready phase.
+			lateStatus := v1alpha1.BareMetalInstanceStatus{
+				Phase: v1alpha1.BareMetalInstancePhaseReady,
+				ProvisioningJobs: []opv1alpha1.JobStatus{{
+					JobID: "provision-in-flight", Type: opv1alpha1.JobTypeProvision,
+					State: opv1alpha1.JobStateSucceeded, Timestamp: metav1.Now(),
+				}},
+			}
+			reconciler.Client = k8sClient
+			Expect(reconciler.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), lateStatus)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), latest)).To(Succeed())
+			Expect(latest.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseDeleting))
+			Expect(latest.Status.ProvisioningJobs).To(HaveLen(1))
+			Expect(latest.Status.ProvisioningJobs[0].JobID).To(Equal("provision-in-flight"))
+		})
+	})
+
 	Describe("reconcileInventory", func() {
 		BeforeEach(func() {
 			bareMetalInstance = &v1alpha1.BareMetalInstance{
@@ -1464,6 +1510,44 @@ var _ = Describe("BareMetalInstance Controller", func() {
 
 					Expect(err).NotTo(HaveOccurred())
 					Expect(result.RequeueAfter).To(Equal(DefaultProvisionPollIntervalDuration))
+				})
+
+				It("waits for an in-flight provision job to be cancelled before releasing finalizers", func() {
+					bareMetalInstance.Spec.TemplateID = "os-provision"
+					bareMetalInstance.Status.ProvisioningJobs = []opv1alpha1.JobStatus{{
+						JobID: "provision-in-flight", Type: opv1alpha1.JobTypeProvision,
+						State: opv1alpha1.JobStateRunning, Timestamp: metav1.Now(),
+					}}
+					var observedProvisionJobs []opv1alpha1.JobStatus
+					mockProvProvider.triggerDeprovisionFunc = func(_ context.Context, _ client.Object,
+						jobs []opv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+						observedProvisionJobs = append([]opv1alpha1.JobStatus(nil), jobs...)
+						return &provisioning.DeprovisionResult{
+							Action: provisioning.DeprovisionWaiting,
+							ProvisionJobStatus: &provisioning.ProvisionStatus{
+								State: opv1alpha1.JobStateFailed, Message: "cancelled by delete",
+							},
+						}, nil
+					}
+					unassignCalled := false
+					mockInvClient.unassignHostFunc = func(_ context.Context, _ string, _ []string) error {
+						unassignCalled = true
+						return nil
+					}
+
+					result, err := reconciler.handleDeletion(ctx, bareMetalInstance)
+
+					Expect(err).NotTo(HaveOccurred())
+					Expect(result.RequeueAfter).To(Equal(DefaultProvisionPollIntervalDuration))
+					Expect(observedProvisionJobs).To(HaveLen(1))
+					Expect(observedProvisionJobs[0].JobID).To(Equal("provision-in-flight"))
+					Expect(bareMetalInstance.Status.ProvisioningJobs[0].State).To(Equal(opv1alpha1.JobStateFailed))
+					Expect(controllerutil.ContainsFinalizer(bareMetalInstance, BareMetalInstanceManagementFinalizer)).To(BeTrue())
+					Expect(controllerutil.ContainsFinalizer(bareMetalInstance, BareMetalInstanceInventoryFinalizer)).To(BeTrue())
+					Expect(unassignCalled).To(BeFalse(), "host cleanup must wait for provider create cancellation")
+					Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseDeleting))
+					Expect(bareMetalInstance.Status.Phase).NotTo(Equal(v1alpha1.BareMetalInstancePhaseReady))
+					Expect(bareMetalInstance.Status.ProvisioningJobs).To(HaveLen(1), "deletion must retain the create job ID so a later reconcile can clean it up")
 				})
 
 				Context("when ProvisioningProvider is nil for a non-noop template", func() {

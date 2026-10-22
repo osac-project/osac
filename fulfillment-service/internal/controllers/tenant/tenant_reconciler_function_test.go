@@ -29,6 +29,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -142,13 +143,13 @@ var _ = Describe("Finalizer Management", func() {
 
 		added := task.addFinalizer()
 		Expect(added).To(BeTrue())
-		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("should not add finalizer if already present", func() {
 		tenant := privatev1.Tenant_builder{
 			Metadata: privatev1.Metadata_builder{
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 			}.Build(),
 		}.Build()
 
@@ -158,7 +159,7 @@ var _ = Describe("Finalizer Management", func() {
 
 		added := task.addFinalizer()
 		Expect(added).To(BeFalse())
-		Expect(tenant.GetMetadata().GetFinalizers()).To(HaveLen(1))
+		Expect(tenant.GetMetadata().GetFinalizers()).To(HaveLen(2))
 	})
 
 	It("should return immediately after adding finalizer", func() {
@@ -168,14 +169,18 @@ var _ = Describe("Finalizer Management", func() {
 			}.Build(),
 		}.Build()
 
-		task := &task{
-			tenant: tenant,
+		r := &function{
+			maskCalculator: masks.NewCalculator().Build(),
+			tenantsClient: finalizerClient{update: func(req *privatev1.TenantsUpdateRequest) (*privatev1.TenantsUpdateResponse, error) {
+				Expect(req.GetLock()).To(BeTrue())
+				return privatev1.TenantsUpdateResponse_builder{Object: req.GetObject()}.Build(), nil
+			}},
 		}
 
-		err := task.update(context.Background())
+		err := r.Run(context.Background(), tenant)
 		Expect(err).ToNot(HaveOccurred())
 
-		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.TenantLifecycle))
 		Expect(tenant.HasStatus()).To(BeFalse())
 	})
 })
@@ -254,7 +259,7 @@ var _ = Describe("IDP Sync", func() {
 			Id: "org-123",
 			Metadata: privatev1.Metadata_builder{
 				Name:       "test-org",
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -312,7 +317,7 @@ var _ = Describe("IDP Sync", func() {
 		tenant := privatev1.Tenant_builder{
 			Metadata: privatev1.Metadata_builder{
 				Name:       "test-org",
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -354,7 +359,7 @@ var _ = Describe("IDP Sync", func() {
 		tenant := privatev1.Tenant_builder{
 			Metadata: privatev1.Metadata_builder{
 				Name:       "test-org",
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 		}.Build()
@@ -383,7 +388,7 @@ var _ = Describe("IDP Sync", func() {
 		tenant := privatev1.Tenant_builder{
 			Metadata: privatev1.Metadata_builder{
 				Name:       "test-org",
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 		}.Build()
@@ -407,7 +412,7 @@ var _ = Describe("IDP Sync", func() {
 			Id: "org-shared",
 			Metadata: privatev1.Metadata_builder{
 				Name:       auth.SharedTenant,
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -455,7 +460,7 @@ var _ = Describe("IDP Sync", func() {
 			Id: "org-system",
 			Metadata: privatev1.Metadata_builder{
 				Name:       auth.SystemTenant,
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -503,7 +508,7 @@ var _ = Describe("IDP Sync", func() {
 			Id: "org-123",
 			Metadata: privatev1.Metadata_builder{
 				Name:       "test-org",
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -534,7 +539,8 @@ var _ = Describe("IDP Sync", func() {
 			Metadata: privatev1.Metadata_builder{
 				Name: "domain-org",
 				Finalizers: []string{
-					finalizers.Controller,
+					finalizers.TenantLifecycle,
+					finalizers.TenantOnboarding,
 				},
 				Tenant: "tenant-1",
 			}.Build(),
@@ -595,7 +601,8 @@ var _ = Describe("IDP Sync", func() {
 			Metadata: privatev1.Metadata_builder{
 				Name: "update-org",
 				Finalizers: []string{
-					finalizers.Controller,
+					finalizers.TenantLifecycle,
+					finalizers.TenantOnboarding,
 				},
 				Tenant: "tenant-1",
 			}.Build(),
@@ -694,7 +701,7 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 			Id: "org-123",
 			Metadata: privatev1.Metadata_builder{
 				Name:       "test-org",
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Spec: privatev1.TenantSpec_builder{
@@ -741,7 +748,7 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 			Id: "org-123",
 			Metadata: privatev1.Metadata_builder{
 				Name:       "test-org",
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Spec: privatev1.TenantSpec_builder{
@@ -794,7 +801,7 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 		tenant := privatev1.Tenant_builder{
 			Metadata: privatev1.Metadata_builder{
 				Name:       "test-org",
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Spec: privatev1.TenantSpec_builder{
@@ -832,7 +839,7 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 			Id: "org-123",
 			Metadata: privatev1.Metadata_builder{
 				Name:       "test-org",
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -897,7 +904,7 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 			Id: "org-123",
 			Metadata: privatev1.Metadata_builder{
 				Name:       "test-org",
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -947,7 +954,7 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 			Id: "org-123",
 			Metadata: privatev1.Metadata_builder{
 				Name:       "test-org",
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -1051,7 +1058,7 @@ var _ = Describe("Deletion", func() {
 			Id: "org-123",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "test-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: deletionTimestamp,
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -1078,7 +1085,47 @@ var _ = Describe("Deletion", func() {
 
 		err := task.delete(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
+	})
+
+	It("deletes default networking before waiting for tenant projects", func() {
+		deletionTimestamp := timestamppb.New(time.Now())
+		tenant := privatev1.Tenant_builder{
+			Id: "org-123",
+			Metadata: privatev1.Metadata_builder{
+				Name:              "test-org",
+				Finalizers:        []string{finalizers.TenantLifecycle},
+				DeletionTimestamp: deletionTimestamp,
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
+				IdpTenantName: "test-org",
+			}.Build(),
+		}.Build()
+
+		defaultNetworkingDeleted := false
+		reconciler.defaultNetwork = testDefaultNetworkingLifecycleManager{
+			deleteFunc: func(_ context.Context, tenantName string) error {
+				Expect(tenantName).To(Equal("test-org"))
+				defaultNetworkingDeleted = true
+				return nil
+			},
+		}
+
+		projectList := func() *gomock.Call {
+			return mockProjectsClient.EXPECT().List(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(context.Context, *privatev1.ProjectsListRequest, ...grpc.CallOption) (*privatev1.ProjectsListResponse, error) {
+					Expect(defaultNetworkingDeleted).To(BeTrue())
+					return privatev1.ProjectsListResponse_builder{Total: 0}.Build(), nil
+				})
+		}
+		gomock.InOrder(projectList(), projectList())
+		mockClient.EXPECT().DeleteTenant(gomock.Any(), "test-org").Return(nil)
+
+		task := &task{r: reconciler, tenant: tenant}
+		Expect(task.delete(ctx)).To(Succeed())
+		Expect(defaultNetworkingDeleted).To(BeTrue())
+		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("should delete IDP tenant by metadata name when not synced", func() {
@@ -1087,7 +1134,7 @@ var _ = Describe("Deletion", func() {
 			Id: "org-123",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "test-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: deletionTimestamp,
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -1112,7 +1159,7 @@ var _ = Describe("Deletion", func() {
 
 		err := task.delete(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("should delete IDP tenant by metadata name when idp_tenant_name is empty", func() {
@@ -1121,7 +1168,7 @@ var _ = Describe("Deletion", func() {
 			Id: "org-123",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "test-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: deletionTimestamp,
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -1147,7 +1194,7 @@ var _ = Describe("Deletion", func() {
 
 		err := task.delete(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("should delete the break-glass secret before waiting for remaining projects", func() {
@@ -1156,7 +1203,7 @@ var _ = Describe("Deletion", func() {
 			Id: "org-123",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "test-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: deletionTimestamp,
 			}.Build(),
 			Spec: privatev1.TenantSpec_builder{
@@ -1205,7 +1252,7 @@ var _ = Describe("Deletion", func() {
 		Expect(err.Error()).To(ContainSubstring("project(s) pending deletion"))
 		Expect(deleted).To(BeTrue())
 		Expect(tenant.GetSpec().GetBreakGlassCredentialsSecret()).To(BeNil())
-		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("should clear the break-glass secret ref so finalizer removal can persist", func() {
@@ -1214,7 +1261,7 @@ var _ = Describe("Deletion", func() {
 			Id: "org-123",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "test-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: deletionTimestamp,
 			}.Build(),
 			Spec: privatev1.TenantSpec_builder{
@@ -1262,7 +1309,7 @@ var _ = Describe("Deletion", func() {
 		err := task.delete(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(tenant.GetSpec().GetBreakGlassCredentialsSecret()).To(BeNil())
-		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("should return error on IDP deletion failure and keep finalizer", func() {
@@ -1271,7 +1318,7 @@ var _ = Describe("Deletion", func() {
 			Id: "org-123",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "test-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: deletionTimestamp,
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -1300,7 +1347,7 @@ var _ = Describe("Deletion", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("failed to delete IDP tenant"))
 		Expect(err.Error()).To(ContainSubstring("IDP connection timeout"))
-		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("should block deletion when projects remain", func() {
@@ -1309,7 +1356,7 @@ var _ = Describe("Deletion", func() {
 			Id: "org-123",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "test-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: deletionTimestamp,
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -1338,7 +1385,10 @@ var _ = Describe("Deletion", func() {
 		err := task.delete(ctx)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("project(s) pending deletion"))
-		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+		retryable, ok := err.(interface{ RequeueAfter() time.Duration })
+		Expect(ok).To(BeTrue(), "pending project deletion must trigger a tenant retry")
+		Expect(retryable.RequeueAfter()).To(Equal(time.Second))
+		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("should return error when project query fails during deletion", func() {
@@ -1347,7 +1397,7 @@ var _ = Describe("Deletion", func() {
 			Id: "org-123",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "test-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: deletionTimestamp,
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -1374,13 +1424,13 @@ var _ = Describe("Deletion", func() {
 		err := task.delete(ctx)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("failed to query remaining projects"))
-		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("should remove finalizer when called", func() {
 		tenant := privatev1.Tenant_builder{
 			Metadata: privatev1.Metadata_builder{
-				Finalizers: []string{finalizers.Controller, "other-finalizer"},
+				Finalizers: []string{finalizers.TenantLifecycle, "other-finalizer"},
 			}.Build(),
 		}.Build()
 
@@ -1389,7 +1439,7 @@ var _ = Describe("Deletion", func() {
 		}
 
 		task.removeFinalizer()
-		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
 		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement("other-finalizer"))
 	})
 
@@ -1445,7 +1495,7 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 			Id: "org-root-proj",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "test-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: timestamppb.Now(),
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -1484,7 +1534,7 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 		t := &task{r: reconciler, tenant: tenant}
 		err := t.delete(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("should skip root project that already has a deletion timestamp", func() {
@@ -1492,7 +1542,7 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 			Id: "org-root-deleting",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "test-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: timestamppb.Now(),
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -1519,7 +1569,10 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 				}.Build(), nil),
 			mockProjectsClient.EXPECT().
 				List(gomock.Any(), gomock.Any()).
-				Return(privatev1.ProjectsListResponse_builder{Total: 1}.Build(), nil),
+				DoAndReturn(func(_ context.Context, request *privatev1.ProjectsListRequest, _ ...grpc.CallOption) (*privatev1.ProjectsListResponse, error) {
+					Expect(request.GetFilter()).To(Equal(`this.metadata.tenant == "test-org"`))
+					return privatev1.ProjectsListResponse_builder{Total: 1}.Build(), nil
+				}),
 		)
 
 		t := &task{r: reconciler, tenant: tenant}
@@ -1533,7 +1586,7 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 			Id: "org-root-err",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "test-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: timestamppb.Now(),
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -1557,7 +1610,7 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 			Id: "org-root-del-err",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "test-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: timestamppb.Now(),
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -1596,7 +1649,7 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 			Id: "org-root-notfound",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "test-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: timestamppb.Now(),
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -1635,7 +1688,7 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 		t := &task{r: reconciler, tenant: tenant}
 		err := t.delete(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
 	})
 })
 
@@ -1657,7 +1710,7 @@ var _ = Describe("Skip Reconciliation", func() {
 
 		tenant := privatev1.Tenant_builder{
 			Metadata: privatev1.Metadata_builder{
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Spec: privatev1.TenantSpec_builder{
@@ -1693,7 +1746,7 @@ var _ = Describe("Skip Reconciliation", func() {
 		msg := "Previous sync failed"
 		tenant := privatev1.Tenant_builder{
 			Metadata: privatev1.Metadata_builder{
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -1711,14 +1764,43 @@ var _ = Describe("Skip Reconciliation", func() {
 	})
 })
 
+type testDefaultNetworkingManager func(context.Context, string) (*privatev1.NetworkDefaults, error)
+
+func (m testDefaultNetworkingManager) Ensure(ctx context.Context, tenantName string) (*privatev1.NetworkDefaults, error) {
+	return m(ctx, tenantName)
+}
+
+func (testDefaultNetworkingManager) Delete(context.Context, string) error {
+	return fmt.Errorf("unexpected default networking deletion")
+}
+
+type testDefaultNetworkingLifecycleManager struct {
+	deleteFunc func(context.Context, string) error
+}
+
+func (testDefaultNetworkingLifecycleManager) Ensure(context.Context, string) (*privatev1.NetworkDefaults, error) {
+	return nil, nil
+}
+
+func (m testDefaultNetworkingLifecycleManager) Delete(ctx context.Context, tenantName string) error {
+	return m.deleteFunc(ctx, tenantName)
+}
+
 var _ = Describe("Default networking readiness", func() {
 	var (
 		ctx         context.Context
 		ctrl        *gomock.Controller
+		mockNCs     *MockNetworkClassesClient
 		mockVNs     *MockVirtualNetworksClient
 		mockSubnets *MockSubnetsClient
 		mockSGs     *MockSecurityGroupsClient
+		mockEIPs    *MockExternalIPsClient
 		mockNGs     *MockNATGatewaysClient
+		externalIPs []*privatev1.ExternalIP
+		eipCalls    int
+		eipFilter   string
+		defaults    *privatev1.NetworkDefaults
+		ncCalls     int
 		reconciler  *function
 	)
 
@@ -1739,7 +1821,7 @@ var _ = Describe("Default networking readiness", func() {
 			Metadata: privatev1.Metadata_builder{
 				Name:       name,
 				Tenant:     name,
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
 				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
@@ -1759,13 +1841,59 @@ var _ = Describe("Default networking readiness", func() {
 			privatev1.NATGatewaysListResponse_builder{}.Build(), nil)
 	}
 
+	expectReadyCore := func(subnetItems []*privatev1.Subnet) {
+		mockVNs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.VirtualNetworksListResponse_builder{Items: []*privatev1.VirtualNetwork{
+				privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{Name: "default"}.Build(),
+					Status:   privatev1.VirtualNetworkStatus_builder{State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY}.Build(),
+				}.Build(),
+			}}.Build(), nil)
+		mockSubnets.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.SubnetsListResponse_builder{Items: subnetItems}.Build(), nil)
+		mockSGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.SecurityGroupsListResponse_builder{Items: []*privatev1.SecurityGroup{
+				privatev1.SecurityGroup_builder{
+					Metadata: privatev1.Metadata_builder{Name: "default"}.Build(),
+					Status:   privatev1.SecurityGroupStatus_builder{State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY}.Build(),
+				}.Build(),
+			}}.Build(), nil)
+	}
+
 	BeforeEach(func() {
 		ctx = context.Background()
 		ctrl = gomock.NewController(GinkgoT())
+		mockNCs = NewMockNetworkClassesClient(ctrl)
 		mockVNs = NewMockVirtualNetworksClient(ctrl)
 		mockSubnets = NewMockSubnetsClient(ctrl)
 		mockSGs = NewMockSecurityGroupsClient(ctrl)
+		mockEIPs = NewMockExternalIPsClient(ctrl)
 		mockNGs = NewMockNATGatewaysClient(ctrl)
+		externalIPs = nil
+		eipCalls = 0
+		eipFilter = ""
+		defaults = nil
+		ncCalls = 0
+		mockNCs.EXPECT().List(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, request *privatev1.NetworkClassesListRequest, _ ...grpc.CallOption) (*privatev1.NetworkClassesListResponse, error) {
+				ncCalls++
+				Expect(request.GetFilter()).To(Equal("!has(this.metadata.deletion_timestamp)"))
+				Expect(request.GetLimit()).To(Equal(int32(2)))
+				if defaults == nil {
+					return privatev1.NetworkClassesListResponse_builder{}.Build(), nil
+				}
+				return privatev1.NetworkClassesListResponse_builder{Items: []*privatev1.NetworkClass{
+					privatev1.NetworkClass_builder{
+						Spec: privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
+					}.Build(),
+				}, Total: 1}.Build(), nil
+			}).AnyTimes()
+		mockEIPs.EXPECT().List(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, request *privatev1.ExternalIPsListRequest, _ ...grpc.CallOption) (*privatev1.ExternalIPsListResponse, error) {
+				eipCalls++
+				eipFilter = request.GetFilter()
+				return privatev1.ExternalIPsListResponse_builder{Items: externalIPs}.Build(), nil
+			}).AnyTimes()
 
 		mockClient := idp.NewMockClientInterface(ctrl)
 		idpManager, err := idp.NewTenantManager().
@@ -1777,9 +1905,11 @@ var _ = Describe("Default networking readiness", func() {
 		reconciler = &function{
 			logger:                logger,
 			idpManager:            idpManager,
+			networkClassesClient:  mockNCs,
 			virtualNetworksClient: mockVNs,
 			subnetsClient:         mockSubnets,
 			securityGroupsClient:  mockSGs,
+			externalIPsClient:     mockEIPs,
 			natGatewaysClient:     mockNGs,
 		}
 	})
@@ -1790,7 +1920,7 @@ var _ = Describe("Default networking readiness", func() {
 			Metadata: privatev1.Metadata_builder{
 				Name:       "pending-tenant",
 				Tenant:     "pending-tenant",
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
 				State: privatev1.TenantState_TENANT_STATE_PENDING,
@@ -1820,6 +1950,296 @@ var _ = Describe("Default networking readiness", func() {
 		Expect(cond).ToNot(BeNil())
 		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 		Expect(cond.GetReason()).To(Equal("NoDefaultNetworking"))
+	})
+
+	It("keeps readiness pending when defaults are configured but no resources exist", func() {
+		defaults = privatev1.NetworkDefaults_builder{}.Build()
+		tenant := newSyncedTenant("configured-empty-tenant")
+		expectEmptyLists()
+
+		t := &task{r: reconciler, tenant: tenant}
+		t.setDefaults()
+		t.setConditionDefaults()
+		Expect(t.checkDefaultNetworkingReadiness(ctx)).To(Succeed())
+		cond := findCondition(tenant)
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal("ResourcesPending"))
+		Expect(cond.GetMessage()).To(ContainSubstring("VirtualNetwork/default"))
+		Expect(cond.GetMessage()).To(ContainSubstring("SecurityGroup/default"))
+		Expect(ncCalls).To(Equal(1))
+	})
+
+	DescribeTable("keeps readiness pending for a missing configured Subnet",
+		func(ipv4CIDR, ipv6CIDR, missingName string) {
+			defaults = privatev1.NetworkDefaults_builder{
+				SubnetIpv4Cidr: ipv4CIDR, SubnetIpv6Cidr: ipv6CIDR,
+			}.Build()
+			tenant := newSyncedTenant("missing-subnet-tenant")
+			expectReadyCore(nil)
+			mockNGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+				privatev1.NATGatewaysListResponse_builder{}.Build(), nil)
+
+			t := &task{r: reconciler, tenant: tenant}
+			t.setDefaults()
+			t.setConditionDefaults()
+			Expect(t.checkDefaultNetworkingReadiness(ctx)).To(Succeed())
+			cond := findCondition(tenant)
+			Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+			Expect(cond.GetReason()).To(Equal("ResourcesPending"))
+			Expect(cond.GetMessage()).To(ContainSubstring("Subnet/" + missingName))
+			Expect(ncCalls).To(Equal(1))
+		},
+		Entry("IPv4", "10.0.1.0/24", "", "default-ipv4"),
+		Entry("IPv6", "", "fd00::/64", "default-ipv6"),
+	)
+
+	It("keeps readiness pending after ExternalIP allocation until the configured NATGateway exists", func() {
+		defaults = privatev1.NetworkDefaults_builder{
+			SubnetIpv4Cidr: "10.0.1.0/24", EnableNatGateway: true,
+		}.Build()
+		tenant := newSyncedTenant("nat-gap-tenant")
+		expectReadyCore([]*privatev1.Subnet{
+			privatev1.Subnet_builder{
+				Metadata: privatev1.Metadata_builder{Name: "default-ipv4"}.Build(),
+				Status:   privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_READY}.Build(),
+			}.Build(),
+		})
+		externalIPs = []*privatev1.ExternalIP{
+			privatev1.ExternalIP_builder{
+				Metadata: privatev1.Metadata_builder{Name: "default-nat"}.Build(),
+				Status:   privatev1.ExternalIPStatus_builder{State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED}.Build(),
+			}.Build(),
+		}
+		mockNGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.NATGatewaysListResponse_builder{}.Build(), nil)
+
+		t := &task{r: reconciler, tenant: tenant}
+		t.setDefaults()
+		t.setConditionDefaults()
+		Expect(t.checkDefaultNetworkingReadiness(ctx)).To(Succeed())
+		cond := findCondition(tenant)
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal("ResourcesPending"))
+		Expect(cond.GetMessage()).To(ContainSubstring("NATGateway/default"))
+		Expect(ncCalls).To(Equal(1))
+	})
+
+	It("keeps readiness pending when ExternalIP becomes allocated between Ensure and readiness", func() {
+		const tenantName = "allocation-race-tenant"
+		defaults = privatev1.NetworkDefaults_builder{
+			SubnetIpv4Cidr: "10.0.1.0/24", SubnetIpv6Cidr: "fd00::/64", EnableNatGateway: true,
+		}.Build()
+		tenant := newSyncedTenant(tenantName)
+		expectReadyCore([]*privatev1.Subnet{
+			privatev1.Subnet_builder{
+				Metadata: privatev1.Metadata_builder{Name: "default-ipv4"}.Build(),
+				Status:   privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_READY}.Build(),
+			}.Build(),
+			privatev1.Subnet_builder{
+				Metadata: privatev1.Metadata_builder{Name: "default-ipv6"}.Build(),
+				Status:   privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_READY}.Build(),
+			}.Build(),
+		})
+		externalIPs = []*privatev1.ExternalIP{
+			privatev1.ExternalIP_builder{
+				Metadata: privatev1.Metadata_builder{Name: "default-nat"}.Build(),
+				Status:   privatev1.ExternalIPStatus_builder{State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING}.Build(),
+			}.Build(),
+		}
+		mockNGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.NATGatewaysListResponse_builder{}.Build(), nil)
+		reconciler.defaultNetwork = testDefaultNetworkingManager(func(ctx context.Context, name string) (*privatev1.NetworkDefaults, error) {
+			Expect(name).To(Equal(tenantName))
+			response, err := reconciler.externalIPsClient.List(ctx,
+				privatev1.ExternalIPsListRequest_builder{}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetItems()).To(HaveLen(1))
+			Expect(response.GetItems()[0].GetStatus().GetState()).To(Equal(
+				privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
+			return defaults, nil
+		})
+
+		t := &task{r: reconciler, tenant: tenant}
+		t.setDefaults()
+		t.setConditionDefaults()
+		Expect(t.ensureDefaultNetworking(ctx)).To(Succeed())
+		Expect(eipCalls).To(Equal(1))
+		externalIPs[0].SetStatus(privatev1.ExternalIPStatus_builder{
+			State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+		}.Build())
+		Expect(t.checkDefaultNetworkingReadiness(ctx)).To(Succeed())
+		cond := findCondition(tenant)
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal("ResourcesPending"))
+		Expect(cond.GetMessage()).To(ContainSubstring("NATGateway/default"))
+		Expect(eipCalls).To(Equal(2))
+		Expect(ncCalls).To(Equal(0))
+	})
+
+	It("keeps readiness pending until the configured ExternalIP exists", func() {
+		defaults = privatev1.NetworkDefaults_builder{EnableNatGateway: true}.Build()
+		tenant := newSyncedTenant("missing-external-ip-tenant")
+		expectReadyCore(nil)
+		mockNGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.NATGatewaysListResponse_builder{}.Build(), nil)
+
+		t := &task{r: reconciler, tenant: tenant}
+		t.setDefaults()
+		t.setConditionDefaults()
+		Expect(t.checkDefaultNetworkingReadiness(ctx)).To(Succeed())
+		cond := findCondition(tenant)
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal("ResourcesPending"))
+		Expect(cond.GetMessage()).To(ContainSubstring("ExternalIP/default-nat"))
+	})
+
+	It("reports a partial default set as pending when the VirtualNetwork is missing", func() {
+		tenant := newSyncedTenant("partial-tenant")
+		mockVNs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.VirtualNetworksListResponse_builder{}.Build(), nil)
+		mockSubnets.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.SubnetsListResponse_builder{Items: []*privatev1.Subnet{
+				privatev1.Subnet_builder{
+					Metadata: privatev1.Metadata_builder{Name: "default-ipv4"}.Build(),
+					Status:   privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_PENDING}.Build(),
+				}.Build(),
+			}}.Build(), nil)
+		mockSGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.SecurityGroupsListResponse_builder{}.Build(), nil)
+		mockNGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.NATGatewaysListResponse_builder{}.Build(), nil)
+
+		t := &task{r: reconciler, tenant: tenant}
+		t.setDefaults()
+		t.setConditionDefaults()
+		Expect(t.checkDefaultNetworkingReadiness(ctx)).To(Succeed())
+		cond := findCondition(tenant)
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal("ResourcesPending"))
+		Expect(cond.GetMessage()).To(ContainSubstring("Subnet/default-ipv4"))
+	})
+
+	It("keeps a ready partial default set pending until the SecurityGroup exists", func() {
+		tenant := newSyncedTenant("ready-partial-tenant")
+		mockVNs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.VirtualNetworksListResponse_builder{Items: []*privatev1.VirtualNetwork{
+				privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{Name: "default"}.Build(),
+					Status:   privatev1.VirtualNetworkStatus_builder{State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY}.Build(),
+				}.Build(),
+			}}.Build(), nil)
+		mockSubnets.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.SubnetsListResponse_builder{}.Build(), nil)
+		mockSGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.SecurityGroupsListResponse_builder{}.Build(), nil)
+		mockNGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.NATGatewaysListResponse_builder{}.Build(), nil)
+
+		t := &task{r: reconciler, tenant: tenant}
+		t.setDefaults()
+		t.setConditionDefaults()
+		Expect(t.checkDefaultNetworkingReadiness(ctx)).To(Succeed())
+		cond := findCondition(tenant)
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal("ResourcesPending"))
+		Expect(cond.GetMessage()).To(ContainSubstring("SecurityGroup/default"))
+	})
+
+	It("reports a failed resource in a partial default set", func() {
+		tenant := newSyncedTenant("partial-failed-tenant")
+		mockVNs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.VirtualNetworksListResponse_builder{}.Build(), nil)
+		mockSubnets.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.SubnetsListResponse_builder{}.Build(), nil)
+		mockSGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.SecurityGroupsListResponse_builder{}.Build(), nil)
+		mockNGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.NATGatewaysListResponse_builder{Items: []*privatev1.NATGateway{
+				privatev1.NATGateway_builder{
+					Metadata: privatev1.Metadata_builder{Name: "default"}.Build(),
+					Status:   privatev1.NATGatewayStatus_builder{State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED}.Build(),
+				}.Build(),
+			}}.Build(), nil)
+
+		t := &task{r: reconciler, tenant: tenant}
+		t.setDefaults()
+		t.setConditionDefaults()
+		Expect(t.checkDefaultNetworkingReadiness(ctx)).To(Succeed())
+		cond := findCondition(tenant)
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal("ResourceFailed"))
+		Expect(cond.GetMessage()).To(ContainSubstring("NATGateway/default"))
+	})
+
+	DescribeTable("evaluates a partial ExternalIP set",
+		func(state privatev1.ExternalIPState, wantReason string) {
+			tenant := newSyncedTenant("external-only-tenant")
+			externalIPs = []*privatev1.ExternalIP{
+				privatev1.ExternalIP_builder{
+					Metadata: privatev1.Metadata_builder{Name: "default"}.Build(),
+					Status:   privatev1.ExternalIPStatus_builder{State: state}.Build(),
+				}.Build(),
+			}
+			expectEmptyLists()
+
+			t := &task{r: reconciler, tenant: tenant}
+			t.setDefaults()
+			t.setConditionDefaults()
+			Expect(t.checkDefaultNetworkingReadiness(ctx)).To(Succeed())
+			cond := findCondition(tenant)
+			Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+			Expect(cond.GetReason()).To(Equal(wantReason))
+			Expect(cond.GetMessage()).To(ContainSubstring("ExternalIP/default"))
+			Expect(eipCalls).To(Equal(1))
+			Expect(eipFilter).To(Equal("this.metadata.labels['osac.openshift.io/default'] == 'true' && this.metadata.tenant == \"external-only-tenant\""))
+		},
+		Entry("pending allocation", privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING, "ResourcesPending"),
+		Entry("failed allocation", privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED, "ResourceFailed"),
+	)
+
+	It("sets condition TRUE when ExternalIP is allocated and all other defaults are ready", func() {
+		defaults = privatev1.NetworkDefaults_builder{
+			SubnetIpv4Cidr: "10.0.1.0/24", SubnetIpv6Cidr: "fd00::/64", EnableNatGateway: true,
+		}.Build()
+		tenant := newSyncedTenant("allocated-tenant")
+		externalIPs = []*privatev1.ExternalIP{
+			privatev1.ExternalIP_builder{
+				Metadata: privatev1.Metadata_builder{Name: "default-nat"}.Build(),
+				Status:   privatev1.ExternalIPStatus_builder{State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED}.Build(),
+			}.Build(),
+		}
+		mockVNs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.VirtualNetworksListResponse_builder{Items: []*privatev1.VirtualNetwork{
+				privatev1.VirtualNetwork_builder{Metadata: privatev1.Metadata_builder{Name: "default"}.Build(),
+					Status: privatev1.VirtualNetworkStatus_builder{State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY}.Build()}.Build(),
+			}}.Build(), nil)
+		mockSubnets.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.SubnetsListResponse_builder{Items: []*privatev1.Subnet{
+				privatev1.Subnet_builder{Metadata: privatev1.Metadata_builder{Name: "default-ipv4"}.Build(),
+					Status: privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_READY}.Build()}.Build(),
+				privatev1.Subnet_builder{Metadata: privatev1.Metadata_builder{Name: "default-ipv6"}.Build(),
+					Status: privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_READY}.Build()}.Build(),
+			}}.Build(), nil)
+		mockSGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.SecurityGroupsListResponse_builder{Items: []*privatev1.SecurityGroup{
+				privatev1.SecurityGroup_builder{Metadata: privatev1.Metadata_builder{Name: "default"}.Build(),
+					Status: privatev1.SecurityGroupStatus_builder{State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY}.Build()}.Build(),
+			}}.Build(), nil)
+		mockNGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.NATGatewaysListResponse_builder{Items: []*privatev1.NATGateway{
+				privatev1.NATGateway_builder{Metadata: privatev1.Metadata_builder{Name: "default"}.Build(),
+					Status: privatev1.NATGatewayStatus_builder{State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY}.Build()}.Build(),
+			}}.Build(), nil)
+
+		t := &task{r: reconciler, tenant: tenant}
+		t.setDefaults()
+		t.setConditionDefaults()
+		Expect(t.checkDefaultNetworkingReadiness(ctx)).To(Succeed())
+		cond := findCondition(tenant)
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(cond.GetReason()).To(Equal("AllResourcesReady"))
+		Expect(eipCalls).To(Equal(1))
+		Expect(ncCalls).To(Equal(1))
 	})
 
 	It("sets condition TRUE when all default resources are READY", func() {
@@ -2126,7 +2546,7 @@ var _ = Describe("Default networking readiness", func() {
 			Metadata: privatev1.Metadata_builder{
 				Name:              "deleting-tenant",
 				Tenant:            "deleting-tenant",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: timestamppb.Now(),
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -2190,7 +2610,7 @@ var _ = Describe("Vault namespace provisioning", func() {
 			Id: "org-already",
 			Metadata: privatev1.Metadata_builder{
 				Name:       "already-org",
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -2228,7 +2648,7 @@ var _ = Describe("Vault namespace provisioning", func() {
 			Id: "org-no-vault",
 			Metadata: privatev1.Metadata_builder{
 				Name:       "no-vault-org",
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -2260,7 +2680,7 @@ var _ = Describe("Vault namespace provisioning", func() {
 			Id: "org-retry",
 			Metadata: privatev1.Metadata_builder{
 				Name:       "retry-org",
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -2297,7 +2717,7 @@ var _ = Describe("Vault namespace provisioning", func() {
 		tenant := privatev1.Tenant_builder{
 			Metadata: privatev1.Metadata_builder{
 				Name:       "failed-org",
-				Finalizers: []string{finalizers.Controller},
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -2314,7 +2734,7 @@ var _ = Describe("Vault namespace provisioning", func() {
 		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 	})
 
-	It("provisions a vault namespace for the shared tenant", func() {
+	DescribeTable("provisions a vault namespace for built-in tenants", func(tenantName string) {
 		reconciler := &function{
 			logger:         logger,
 			idpManager:     idpManager,
@@ -2324,21 +2744,178 @@ var _ = Describe("Vault namespace provisioning", func() {
 		tenant := privatev1.Tenant_builder{
 			Id: "org-shared",
 			Metadata: privatev1.Metadata_builder{
-				Name:       auth.SharedTenant,
+				Name:       tenantName,
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
+				Tenant:     "tenant-1",
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
+				IdpTenantName: tenantName,
+			}.Build(),
+		}.Build()
+
+		mockIDPClient.EXPECT().
+			GetTenant(gomock.Any(), tenantName).
+			Return(&idp.Tenant{Name: tenantName}, nil)
+		mockVaultClient.EXPECT().
+			EnsureTenantNamespace(gomock.Any(), tenantName).
+			Return(nil)
+
+		t := &task{r: reconciler, tenant: tenant}
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		cond := findCondition(tenant)
+		Expect(cond).ToNot(BeNil())
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+	}, Entry("shared", auth.SharedTenant), Entry("system", auth.SystemTenant))
+
+	It("keeps VAULT_READY false after Transit setup fails and retries provisioning", func() {
+		reconciler := &function{
+			logger: logger, idpManager: idpManager, vaultLifecycle: mockVaultClient,
+		}
+		tenant := privatev1.Tenant_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name: "retry-transit", Finalizers: []string{finalizers.Controller}, Tenant: "tenant-1",
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				State: privatev1.TenantState_TENANT_STATE_SYNCED, IdpTenantName: "retry-transit",
+				Conditions: []*privatev1.TenantCondition{
+					privatev1.TenantCondition_builder{
+						Type:   condType,
+						Status: privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+					}.Build(),
+				},
+			}.Build(),
+		}.Build()
+		mockIDPClient.EXPECT().GetTenant(gomock.Any(), "retry-transit").
+			Return(&idp.Tenant{Name: "retry-transit"}, nil).Times(2)
+		gomock.InOrder(
+			mockVaultClient.EXPECT().EnsureTenantNamespace(gomock.Any(), "retry-transit").
+				Return(fmt.Errorf("failed to mount Transit: permission denied")),
+			mockVaultClient.EXPECT().EnsureTenantNamespace(gomock.Any(), "retry-transit").Return(nil),
+		)
+		t := &task{r: reconciler, tenant: tenant}
+		Expect(t.update(ctx)).To(Succeed())
+		// Failed reconciliation restores a snapshot, so inspect the task's current tenant.
+		Expect(findCondition(t.tenant)).ToNot(BeNil())
+		Expect(findCondition(t.tenant).GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(t.update(ctx)).To(Succeed())
+		Expect(findCondition(t.tenant)).ToNot(BeNil())
+		Expect(findCondition(t.tenant).GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(findCondition(t.tenant).GetReason()).To(Equal("NamespaceReady"))
+	})
+	It("stays PENDING with condition FALSE when vault provisioning fails during initial sync", func() {
+		reconciler := &function{
+			logger:         logger,
+			idpManager:     idpManager,
+			vaultLifecycle: mockVaultClient,
+		}
+
+		tenant := privatev1.Tenant_builder{
+			Id: "org-vault-fail",
+			Metadata: privatev1.Metadata_builder{
+				Name:       "vault-fail-org",
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "tenant-1",
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{
+					Username: "vault-fail-org-osac-break-glass",
+					Password: testPreGeneratedPassword,
+				}.Build(),
+			}.Build(),
+		}.Build()
+
+		mockIDPClient.EXPECT().
+			CreateTenant(gomock.Any(), gomock.Any()).
+			Return(&idp.Tenant{Name: "vault-fail-org", Enabled: true}, nil)
+		mockIDPClient.EXPECT().
+			CreateUser(gomock.Any(), "vault-fail-org", gomock.Any()).
+			Return(&idp.User{ID: "user-fail"}, nil)
+		mockIDPClient.EXPECT().
+			AssignIdpManagerPermissions(gomock.Any(), "user-fail").
+			Return(nil)
+
+		mockVaultClient.EXPECT().
+			EnsureTenantNamespace(gomock.Any(), "vault-fail-org").
+			Return(fmt.Errorf("vault connection refused"))
+
+		t := &task{r: reconciler, tenant: tenant}
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_PENDING))
+		Expect(tenant.GetStatus().GetIdpTenantName()).To(Equal("vault-fail-org"))
+		cond := findCondition(tenant)
+		Expect(cond).ToNot(BeNil())
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal("ProvisionFailed"))
+		Expect(cond.GetMessage()).To(ContainSubstring("vault connection refused"))
+	})
+
+	It("stays SYNCED with condition FALSE when vault provisioning fails for synced tenant", func() {
+		reconciler := &function{
+			logger:         logger,
+			idpManager:     idpManager,
+			vaultLifecycle: mockVaultClient,
+		}
+
+		tenant := privatev1.Tenant_builder{
+			Id: "org-synced-vault-fail",
+			Metadata: privatev1.Metadata_builder{
+				Name:       "synced-vault-fail-org",
 				Finalizers: []string{finalizers.Controller},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
 				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
-				IdpTenantName: auth.SharedTenant,
+				IdpTenantName: "synced-vault-fail-org",
 			}.Build(),
 		}.Build()
 
 		mockIDPClient.EXPECT().
-			GetTenant(gomock.Any(), auth.SharedTenant).
-			Return(&idp.Tenant{Name: auth.SharedTenant}, nil)
+			GetTenant(gomock.Any(), "synced-vault-fail-org").
+			Return(&idp.Tenant{Name: "synced-vault-fail-org"}, nil)
+
 		mockVaultClient.EXPECT().
-			EnsureTenantNamespace(gomock.Any(), auth.SharedTenant).
+			EnsureTenantNamespace(gomock.Any(), "synced-vault-fail-org").
+			Return(fmt.Errorf("dial tcp: no such host"))
+
+		t := &task{r: reconciler, tenant: tenant}
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
+		cond := findCondition(tenant)
+		Expect(cond).ToNot(BeNil())
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal("ProvisionFailed"))
+		Expect(cond.GetMessage()).To(ContainSubstring("dial tcp: no such host"))
+	})
+
+	It("provisions a vault namespace for the system tenant", func() {
+		reconciler := &function{
+			logger:         logger,
+			idpManager:     idpManager,
+			vaultLifecycle: mockVaultClient,
+		}
+
+		tenant := privatev1.Tenant_builder{
+			Id: "org-system",
+			Metadata: privatev1.Metadata_builder{
+				Name:       auth.SystemTenant,
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     auth.SystemTenant,
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
+				IdpTenantName: auth.SystemTenant,
+			}.Build(),
+		}.Build()
+
+		mockIDPClient.EXPECT().
+			GetTenant(gomock.Any(), auth.SystemTenant).
+			Return(&idp.Tenant{Name: auth.SystemTenant}, nil)
+		mockVaultClient.EXPECT().
+			EnsureTenantNamespace(gomock.Any(), auth.SystemTenant).
 			Return(nil)
 
 		t := &task{r: reconciler, tenant: tenant}
@@ -2348,7 +2925,6 @@ var _ = Describe("Vault namespace provisioning", func() {
 		Expect(cond).ToNot(BeNil())
 		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 	})
-
 })
 
 var _ = Describe("Vault namespace cleanup during deletion", func() {
@@ -2388,7 +2964,7 @@ var _ = Describe("Vault namespace cleanup during deletion", func() {
 			Id: "org-vault-del",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "vault-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: timestamppb.Now(),
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -2413,7 +2989,7 @@ var _ = Describe("Vault namespace cleanup during deletion", func() {
 		t := &task{r: reconciler, tenant: tenant}
 		err := t.delete(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("blocks deletion when vault namespace deletion fails", func() {
@@ -2428,7 +3004,7 @@ var _ = Describe("Vault namespace cleanup during deletion", func() {
 			Id: "org-vault-fail",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "vault-fail-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: timestamppb.Now(),
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -2450,7 +3026,7 @@ var _ = Describe("Vault namespace cleanup during deletion", func() {
 		err := t.delete(ctx)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("failed to delete vault namespace"))
-		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("performs idempotent vault deletion even when namespace was never provisioned", func() {
@@ -2465,7 +3041,7 @@ var _ = Describe("Vault namespace cleanup during deletion", func() {
 			Id: "org-no-vault-ns",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "no-vault-ns-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: timestamppb.Now(),
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -2490,7 +3066,7 @@ var _ = Describe("Vault namespace cleanup during deletion", func() {
 		t := &task{r: reconciler, tenant: tenant}
 		err := t.delete(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("skips vault deletion when vault lifecycle is nil", func() {
@@ -2504,7 +3080,7 @@ var _ = Describe("Vault namespace cleanup during deletion", func() {
 			Id: "org-nil-vault",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "nil-vault-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: timestamppb.Now(),
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -2525,7 +3101,7 @@ var _ = Describe("Vault namespace cleanup during deletion", func() {
 		t := &task{r: reconciler, tenant: tenant}
 		err := t.delete(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("deletes vault namespace when idp_tenant_name is empty", func() {
@@ -2540,7 +3116,7 @@ var _ = Describe("Vault namespace cleanup during deletion", func() {
 			Id: "org-vault-only",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "vault-only-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: timestamppb.Now(),
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -2564,7 +3140,7 @@ var _ = Describe("Vault namespace cleanup during deletion", func() {
 		t := &task{r: reconciler, tenant: tenant}
 		err := t.delete(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("cleans up vault namespace when deleting non-SYNCED tenant", func() {
@@ -2579,7 +3155,7 @@ var _ = Describe("Vault namespace cleanup during deletion", func() {
 			Id: "org-failed-vault",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "failed-org",
-				Finalizers:        []string{finalizers.Controller},
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				DeletionTimestamp: timestamppb.Now(),
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
@@ -2603,6 +3179,6 @@ var _ = Describe("Vault namespace cleanup during deletion", func() {
 		t := &task{r: reconciler, tenant: tenant}
 		err := t.delete(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
 	})
 })

@@ -49,6 +49,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-ope
 | Fulfillment client CA parsing, TLS verification, or bundle rotation | Unit with local TLS endpoint; component integration for deployment | `make test`, then [installer Kind target](../docs/INTEGRATION-TESTING.md#osac-operator) and `make -C ../osac-installer fulfillment-trust-render-test` |
 | Controller reconciliation, finalizers, status, or CRD interactions | Envtest | `make test` |
 | Controller deployment, watches (including optional TopoLVM watch), RBAC, console proxy, networking, or Helm wiring | Component integration | Deploy current image/manifests, then `make integration-tests`; [installer alternative](../docs/INTEGRATION-TESTING.md#osac-operator) |
+| Automatic ExternalIP cleanup for ClusterOrder, ComputeInstance, and BareMetalInstance (NET-CLEAN-07) | Kind component integration — DEV | Isolated installer run and coverage boundary: [NET-CLEAN-07](../docs/INTEGRATION-TESTING.md#net-clean-07-deployed-osac-cleanup) |
 | AAP, dispatcher, provisioning-provider, KubeVirt, or fulfillment boundary | Qualifying Contract or E2E | Use a boundary-specific suite; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) when coverage is missing |
 | Generated CRDs or manifests | Envtest plus applicable Kind suite | `make manifests generate helm-crds check-helm-crds`, then the required test command |
 
@@ -73,6 +74,12 @@ Worker coverage is owned by **osac-operator [DEV]**:
   intent-derived counts. `reservation_cleanup_test.go` covers explicit Reserved
   cancellation, both optimistic Create-intent race orderings, attempted/legacy
   empty-List retention, lost acknowledgement recovery and retry-state reset.
+  `bmi_rejection_test.go` covers terminal-code classification, exact rejected-create
+  checkpoint fields and verified response accounting, one status patch without
+  a post-Create ClusterOrder Get, retry-path re-rejection backoff, transport and
+  prior unknown/legacy-outcome conservatism, and AlreadyExists-recovery exclusion.
+  Only an invocation entering with explicit Reserved intent may re-arm its own
+  definitively rejected Create; a later rejection cannot clear earlier uncertainty.
   `metrics_test.go` checks the exact two-instance-type
   desired/zero-ready series before reservations without creating missing series
   through metric accessors.
@@ -80,7 +87,14 @@ Worker coverage is owned by **osac-operator [DEV]**:
   drive public Reconcile through InfraEnv ownership/artifact changes, BMI
   creation/recovery, Agent binding/demotion/handoff, scale-up/down and finalization.
 - `baremetalworker_convergence_test.go` preserves R01–R10 persistence and
-  fault traces: interrupted/lost Create acknowledgement, delayed List/NotFound/
+  fault traces: interrupted/lost Create acknowledgement, definitively rejected
+  creates racing deletion to finalizer removal and minimal Failed/retry/condition
+  convergence. Rejection checkpoint cases exercise real atomic JSON Patch tests
+  on UID and the complete selected worker: target mutation/removal/reordering
+  and same-name object replacement fail without partial writes or success
+  accounting; unrelated other-worker, condition, spec and metadata updates survive
+  a successful checkpoint without a resourceVersion fence. Other traces include
+  delayed List/NotFound/
   outage evidence, conflicts and restart recovery, prerequisite-free progress,
   delayed cleanup and real Agent Delete UID-precondition rejection, selector
   union/ambiguity, stale-ignition classification before UID recording, separate

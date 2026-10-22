@@ -101,6 +101,20 @@ spec:
           {{- end }}
           - name: OSAC_ENABLE_NETWORKING_PROVISIONING
             value: {{ .Values.env.enableNetworkingProvisioning | default "false" | quote }}
+          {{- if .Values.netbox.enabled }}
+          - name: OSAC_SECRET_API_URL
+            value: {{ .Values.secretAPI.url | quote }}
+          - name: OSAC_SECRET_API_ISSUER_URL
+            value: {{ tpl .Values.secretAPI.issuerUrl . | quote }}
+          - name: OSAC_SECRET_API_CLIENT_ID_FILE
+            value: "/etc/osac/secret-api/credentials/client-id"
+          - name: OSAC_SECRET_API_CLIENT_SECRET_FILE
+            value: "/etc/osac/secret-api/credentials/client-secret"
+          {{- if .Values.secretAPI.caBundle.configMap }}
+          - name: OSAC_SECRET_API_CA_FILE
+            value: "/etc/osac/secret-api/ca/bundle.pem"
+          {{- end }}
+          {{- end }}
         volumeMounts:
           - name: inventory-config
             mountPath: /etc/osac/inventory/
@@ -114,6 +128,24 @@ spec:
           - name: bcm-certs
             mountPath: /etc/osac/certs/{{ .Values.secrets.bcmCerts }}/
             readOnly: true
+          {{- end }}
+          {{- if .Values.netbox.enabled }}
+          - name: netbox-token
+            mountPath: /etc/osac/secrets/netbox/
+            readOnly: true
+          {{- if .Values.netbox.caCert }}
+          - name: netbox-ca
+            mountPath: /etc/osac/secrets/netbox-ca/
+            readOnly: true
+          {{- end }}
+          - name: secret-api-client-credentials
+            mountPath: /etc/osac/secret-api/credentials/
+            readOnly: true
+          {{- if .Values.secretAPI.caBundle.configMap }}
+          - name: secret-api-ca
+            mountPath: /etc/osac/secret-api/ca/
+            readOnly: true
+          {{- end }}
           {{- end }}
       volumes:
         - name: inventory-config
@@ -134,6 +166,38 @@ spec:
         - name: bcm-certs
           secret:
             secretName: {{ .Values.secrets.bcmCerts }}
+        {{- end }}
+        {{- if .Values.netbox.enabled }}
+        - name: netbox-token
+          secret:
+            secretName: {{ .Values.secrets.netboxToken }}
+            items:
+              - key: {{ .Values.netbox.tokenSecretKey | quote }}
+                path: token
+        {{- if .Values.netbox.caCert }}
+        - name: netbox-ca
+          secret:
+            secretName: {{ .Values.secrets.netboxCA }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+        {{- end }}
+        - name: secret-api-client-credentials
+          secret:
+            secretName: fulfillment-controller-credentials
+            items:
+              - key: client-id
+                path: client-id
+              - key: client-secret
+                path: client-secret
+        {{- if .Values.secretAPI.caBundle.configMap }}
+        - name: secret-api-ca
+          configMap:
+            name: {{ .Values.secretAPI.caBundle.configMap }}
+            items:
+              - key: {{ .Values.secretAPI.caBundle.key }}
+                path: bundle.pem
+        {{- end }}
         {{- end }}
       serviceAccountName: {{ include "bare-metal-fulfillment-operator.serviceAccountName" . }}
       terminationGracePeriodSeconds: 10

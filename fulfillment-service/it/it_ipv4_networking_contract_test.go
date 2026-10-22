@@ -21,11 +21,15 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -54,6 +58,120 @@ func newIPv4NetworkingContractFixture(ctx context.Context) *ipv4NetworkingContra
 		subnets:         privatev1.NewSubnetsClient(adminConn),
 		securityGroups:  privatev1.NewSecurityGroupsClient(adminConn),
 	}
+	DeferCleanup(func(cleanupCtx context.Context) {
+		var cleanupErrors []error
+		// This suite deploys Fulfillment without the networking operator. Clear any controller
+		// finalizer after Delete so each dependency is archived before its parent is removed.
+		if fixture.securityGroupID != "" {
+			cleanupErrors = appendFixtureCleanupError(cleanupErrors, "security group", fixture.securityGroupID,
+				cleanupNetworkFixtureResource(cleanupCtx,
+					func(ctx context.Context) error {
+						_, err := fixture.securityGroups.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: fixture.securityGroupID}.Build())
+						return err
+					},
+					func(ctx context.Context) (*privatev1.Metadata, error) {
+						response, err := fixture.securityGroups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: fixture.securityGroupID}.Build())
+						if err != nil {
+							return nil, err
+						}
+						return response.GetObject().GetMetadata(), nil
+					},
+					func(ctx context.Context) error {
+						response, err := fixture.securityGroups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: fixture.securityGroupID}.Build())
+						if err != nil {
+							return err
+						}
+						object := response.GetObject()
+						object.GetMetadata().SetFinalizers(nil)
+						_, err = fixture.securityGroups.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+							Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
+						}.Build())
+						return err
+					}))
+		}
+		if fixture.subnetID != "" {
+			cleanupErrors = appendFixtureCleanupError(cleanupErrors, "subnet", fixture.subnetID,
+				cleanupNetworkFixtureResource(cleanupCtx,
+					func(ctx context.Context) error {
+						_, err := fixture.subnets.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: fixture.subnetID}.Build())
+						return err
+					},
+					func(ctx context.Context) (*privatev1.Metadata, error) {
+						response, err := fixture.subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: fixture.subnetID}.Build())
+						if err != nil {
+							return nil, err
+						}
+						return response.GetObject().GetMetadata(), nil
+					},
+					func(ctx context.Context) error {
+						response, err := fixture.subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: fixture.subnetID}.Build())
+						if err != nil {
+							return err
+						}
+						object := response.GetObject()
+						object.GetMetadata().SetFinalizers(nil)
+						_, err = fixture.subnets.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+							Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
+						}.Build())
+						return err
+					}))
+		}
+		if fixture.virtualNetworkID != "" {
+			cleanupErrors = appendFixtureCleanupError(cleanupErrors, "virtual network", fixture.virtualNetworkID,
+				cleanupNetworkFixtureResource(cleanupCtx,
+					func(ctx context.Context) error {
+						_, err := fixture.virtualNetworks.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: fixture.virtualNetworkID}.Build())
+						return err
+					},
+					func(ctx context.Context) (*privatev1.Metadata, error) {
+						response, err := fixture.virtualNetworks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: fixture.virtualNetworkID}.Build())
+						if err != nil {
+							return nil, err
+						}
+						return response.GetObject().GetMetadata(), nil
+					},
+					func(ctx context.Context) error {
+						response, err := fixture.virtualNetworks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: fixture.virtualNetworkID}.Build())
+						if err != nil {
+							return err
+						}
+						object := response.GetObject()
+						object.GetMetadata().SetFinalizers(nil)
+						_, err = fixture.virtualNetworks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+							Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
+						}.Build())
+						return err
+					}))
+		}
+		if fixture.networkClassID != "" {
+			cleanupErrors = appendFixtureCleanupError(cleanupErrors, "NetworkClass", fixture.networkClassID,
+				cleanupNetworkFixtureResource(cleanupCtx,
+					func(ctx context.Context) error {
+						_, err := fixture.networkClasses.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: fixture.networkClassID}.Build())
+						return err
+					},
+					func(ctx context.Context) (*privatev1.Metadata, error) {
+						response, err := fixture.networkClasses.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: fixture.networkClassID}.Build())
+						if err != nil {
+							return nil, err
+						}
+						return response.GetObject().GetMetadata(), nil
+					},
+					func(ctx context.Context) error {
+						response, err := fixture.networkClasses.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: fixture.networkClassID}.Build())
+						if err != nil {
+							return err
+						}
+						object := response.GetObject()
+						object.GetMetadata().SetFinalizers(nil)
+						_, err = fixture.networkClasses.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+							Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
+						}.Build())
+						return err
+					}))
+		}
+		Expect(cleanupErrors).To(BeEmpty())
+	})
 
 	networkClassName := fmt.Sprintf("ipv4-contract-nc-%s", uuid.New()[24:])
 	networkClassResponse, err := fixture.networkClasses.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
@@ -68,6 +186,11 @@ func newIPv4NetworkingContractFixture(ctx context.Context) *ipv4NetworkingContra
 	}.Build())
 	Expect(err).ToNot(HaveOccurred())
 	fixture.networkClassID = networkClassResponse.GetObject().GetId()
+	err = updateNetworkClassStatusWithRetry(ctx, fixture.networkClasses, fixture.networkClassID, privatev1.NetworkClassStatus_builder{
+		State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+		Hub:   hubId,
+	}.Build(), &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.hub"}})
+	Expect(err).ToNot(HaveOccurred())
 
 	fixture.virtualNetworkID = fmt.Sprintf("ipv4-contract-vn-%s", uuid.New())
 	virtualNetworkName := fmt.Sprintf("ipv4-contract-vn-%s", uuid.New()[24:])
@@ -86,57 +209,56 @@ func newIPv4NetworkingContractFixture(ctx context.Context) *ipv4NetworkingContra
 		}.Build(),
 	}.Build())
 	Expect(err).ToNot(HaveOccurred())
-
-	// The fulfillment service starts the resource in PENDING. The integration
-	// environment does not run the operator feedback loop, so promote it via the
-	// private handler after the initial reconciliation pass.
-	Eventually(func(g Gomega) {
-		response, getErr := fixture.virtualNetworks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
-			Id: fixture.virtualNetworkID,
-		}.Build())
-		g.Expect(getErr).ToNot(HaveOccurred())
-		g.Expect(response.GetObject().GetStatus().GetState()).To(
-			Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
-	}, time.Minute, time.Second).Should(Succeed())
-
 	virtualNetworkResponse, err := fixture.virtualNetworks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
 		Id: fixture.virtualNetworkID,
 	}.Build())
 	Expect(err).ToNot(HaveOccurred())
 	virtualNetwork := virtualNetworkResponse.GetObject()
+	// This contract test exercises SecurityGroup validation, not asynchronous Hub selection.
+	// Seed the resource states directly so controller queue delay cannot consume the suite timeout.
 	virtualNetwork.SetStatus(privatev1.VirtualNetworkStatus_builder{
-		State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+		State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING,
+		Hub:   hubId,
 	}.Build())
+	_, err = fixture.virtualNetworks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+		Object:     virtualNetwork,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.hub"}},
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+	Eventually(func() privatev1.VirtualNetworkState {
+		response, getErr := fixture.virtualNetworks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
+			Id: fixture.virtualNetworkID,
+		}.Build())
+		Expect(getErr).ToNot(HaveOccurred())
+		return response.GetObject().GetStatus().GetState()
+	}, time.Minute, time.Second).Should(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
+	waitForNetworkingCR(ctx, listNetworkingCR(
+		tool.KubeClient(),
+		labels.VirtualNetworkUuid,
+		fixture.virtualNetworkID,
+		&osacv1alpha1.VirtualNetworkList{},
+		func(objects *osacv1alpha1.VirtualNetworkList) int { return len(objects.Items) },
+	))
+	virtualNetworkResponse, err = fixture.virtualNetworks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
+		Id: fixture.virtualNetworkID,
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+	virtualNetwork = virtualNetworkResponse.GetObject()
+	virtualNetwork.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY)
 	_, err = fixture.virtualNetworks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
 		Object:     virtualNetwork,
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 	}.Build())
 	Expect(err).ToNot(HaveOccurred())
 
-	DeferCleanup(func() {
-		if fixture.securityGroupID != "" {
-			_, _ = fixture.securityGroups.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{
-				Id: fixture.securityGroupID,
-			}.Build())
-		}
-		if fixture.subnetID != "" {
-			_, _ = fixture.subnets.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{
-				Id: fixture.subnetID,
-			}.Build())
-		}
-		if fixture.virtualNetworkID != "" {
-			_, _ = fixture.virtualNetworks.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: fixture.virtualNetworkID,
-			}.Build())
-		}
-		if fixture.networkClassID != "" {
-			_, _ = fixture.networkClasses.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
-				Id: fixture.networkClassID,
-			}.Build())
-		}
-	})
-
 	return fixture
+}
+
+func appendFixtureCleanupError(errors []error, kind, id string, err error) []error {
+	if err != nil {
+		return append(errors, fmt.Errorf("delete %s %q: %w", kind, id, err))
+	}
+	return errors
 }
 
 func (f *ipv4NetworkingContractFixture) createSubnet(ctx context.Context) *privatev1.Subnet {
@@ -158,10 +280,8 @@ func (f *ipv4NetworkingContractFixture) createSubnet(ctx context.Context) *priva
 	Expect(err).ToNot(HaveOccurred())
 
 	Eventually(func(g Gomega) {
-		getResponse, getErr := f.subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: f.subnetID}.Build())
+		_, getErr := f.subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: f.subnetID}.Build())
 		g.Expect(getErr).ToNot(HaveOccurred())
-		g.Expect(getResponse.GetObject().GetStatus().GetState()).To(
-			Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
 	}, time.Minute, time.Second).Should(Succeed())
 
 	getResponse, err := f.subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: f.subnetID}.Build())
@@ -181,6 +301,14 @@ func (f *ipv4NetworkingContractFixture) createSubnet(ctx context.Context) *priva
 func expectIPv4ContractError(err error, fragments ...string) {
 	Expect(err).To(HaveOccurred())
 	Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+	for _, fragment := range fragments {
+		Expect(err.Error()).To(ContainSubstring(fragment))
+	}
+}
+
+func expectFailedPrecondition(err error, fragments ...string) {
+	Expect(err).To(HaveOccurred())
+	Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
 	for _, fragment := range fragments {
 		Expect(err.Error()).To(ContainSubstring(fragment))
 	}
@@ -244,6 +372,9 @@ var _ = Describe("IPv4-only VirtualNetwork gRPC contract", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		id := response.GetObject().GetId()
+		DeferCleanup(func(cleanupCtx context.Context) {
+			Expect(cleanupVirtualNetworkFixture(cleanupCtx, client, id)).To(Succeed())
+		})
 		Expect(response.GetObject().GetSpec().GetIpv4Cidr()).To(Equal("10.241.0.0/16"))
 
 		getResponse, err := client.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
@@ -271,6 +402,157 @@ var _ = Describe("IPv4-only VirtualNetwork gRPC contract", func() {
 
 		_, err = client.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: id}.Build())
 		Expect(err).ToNot(HaveOccurred())
+	})
+
+	It("rejects creation until the referenced NetworkClass is READY", func() {
+		adminConn := tool.InternalView().AdminConn()
+		networkClasses := privatev1.NewNetworkClassesClient(adminConn)
+		name := fmt.Sprintf("networking-ready-gate-nc-%s", uuid.New()[24:])
+		networkClass, err := networkClasses.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+			Object: privatev1.NetworkClass_builder{
+				Metadata:      privatev1.Metadata_builder{Name: name, Tenant: usersGroup}.Build(),
+				Title:         "NetworkClass readiness gate test",
+				FabricManager: new("unregistered-it-network-manager"),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		networkClassID := networkClass.GetObject().GetId()
+		var virtualNetworkID string
+		DeferCleanup(func(cleanupCtx context.Context) {
+			if virtualNetworkID != "" {
+				cleanupErr := cleanupNetworkFixtureResource(cleanupCtx,
+					func(ctx context.Context) error {
+						_, err := client.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: virtualNetworkID}.Build())
+						return err
+					},
+					func(ctx context.Context) (*privatev1.Metadata, error) {
+						response, err := client.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: virtualNetworkID}.Build())
+						if err != nil {
+							return nil, err
+						}
+						return response.GetObject().GetMetadata(), nil
+					},
+					func(ctx context.Context) error {
+						response, err := client.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: virtualNetworkID}.Build())
+						if err != nil {
+							return err
+						}
+						object := response.GetObject()
+						object.GetMetadata().SetFinalizers(nil)
+						_, err = client.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+							Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
+						}.Build())
+						return err
+					})
+				Expect(cleanupErr).ToNot(HaveOccurred())
+			}
+			cleanupErr := cleanupNetworkFixtureResource(cleanupCtx,
+				func(ctx context.Context) error {
+					_, err := networkClasses.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: networkClassID}.Build())
+					return err
+				},
+				func(ctx context.Context) (*privatev1.Metadata, error) {
+					response, err := networkClasses.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassID}.Build())
+					if err != nil {
+						return nil, err
+					}
+					return response.GetObject().GetMetadata(), nil
+				},
+				func(ctx context.Context) error {
+					response, err := networkClasses.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassID}.Build())
+					if err != nil {
+						return err
+					}
+					object := response.GetObject()
+					object.GetMetadata().SetFinalizers(nil)
+					_, err = networkClasses.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+						Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
+					}.Build())
+					return err
+				})
+			Expect(cleanupErr).ToNot(HaveOccurred())
+		})
+
+		// Fulfillment may resolve the Hub and mark state READY without the operator
+		// manager-discovery controller. Force the state used by this API contract so
+		// the fixture deterministically exercises the non-ready reference guard.
+		err = updateNetworkClassStatusWithRetry(ctx, networkClasses, networkClassID,
+			privatev1.NetworkClassStatus_builder{
+				State:        privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING,
+				ManagerState: privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING,
+			}.Build(),
+			&fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.manager_state"}})
+		Expect(err).ToNot(HaveOccurred())
+		pendingNetworkClass, err := networkClasses.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(pendingNetworkClass.GetObject().GetStatus().GetState()).NotTo(Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
+
+		virtualNetworkName := fmt.Sprintf("networking-ready-gate-vn-%s", uuid.New()[24:])
+		createdVirtualNetwork, err := client.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+			Object: privatev1.VirtualNetwork_builder{
+				Metadata: privatev1.Metadata_builder{Name: virtualNetworkName, Tenant: usersGroup}.Build(),
+				Spec: privatev1.VirtualNetworkSpec_builder{
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassID}.Build(),
+					Region:       "us-east-1",
+					Ipv4Cidr:     new("10.245.0.0/16"),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		if err == nil {
+			virtualNetworkID = createdVirtualNetwork.GetObject().GetId()
+		}
+		expectFailedPrecondition(err, "NetworkClass", "READY")
+		expectNoVirtualNetworkNamed(ctx, client, virtualNetworkName)
+	})
+
+	It("requires a READY VirtualNetwork for Subnet creation and protects referenced parents from deletion", func() {
+		fixture := newIPv4NetworkingContractFixture(ctx)
+		virtualNetworkResponse, err := fixture.virtualNetworks.Get(ctx,
+			privatev1.VirtualNetworksGetRequest_builder{Id: fixture.virtualNetworkID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		virtualNetwork := virtualNetworkResponse.GetObject()
+		virtualNetwork.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING)
+		_, err = fixture.virtualNetworks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+			Object:     virtualNetwork,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		subnetName := fmt.Sprintf("networking-ready-gate-subnet-%s", uuid.New()[24:])
+		_, err = fixture.subnets.Create(ctx, privatev1.SubnetsCreateRequest_builder{
+			Object: privatev1.Subnet_builder{
+				Metadata: privatev1.Metadata_builder{Name: subnetName, Tenant: usersGroup}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: fixture.virtualNetworkID}.Build(),
+					Ipv4Cidr:       new("10.240.1.0/24"),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		expectFailedPrecondition(err, "VirtualNetwork", "READY")
+		expectNoSubnetNamed(ctx, fixture.subnets, subnetName)
+
+		virtualNetwork.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY)
+		_, err = fixture.virtualNetworks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+			Object:     virtualNetwork,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		subnet := fixture.createSubnet(ctx)
+		_, err = fixture.networkClasses.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
+			Id: fixture.networkClassID,
+		}.Build())
+		expectFailedPrecondition(err, "VirtualNetwork")
+		networkClassResponse, err := fixture.networkClasses.Get(ctx, privatev1.NetworkClassesGetRequest_builder{
+			Id: fixture.networkClassID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(networkClassResponse.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
+
+		_, err = fixture.virtualNetworks.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
+			Id: fixture.virtualNetworkID,
+		}.Build())
+		expectFailedPrecondition(err, "Subnet", subnet.GetMetadata().GetName())
 	})
 
 	DescribeTable("rejects invalid IPv4, IPv6, and dual-stack creates before persistence",
@@ -308,7 +590,9 @@ var _ = Describe("IPv4-only VirtualNetwork gRPC contract", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		id := response.GetObject().GetId()
-		DeferCleanup(func() { _, _ = client.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: id}.Build()) })
+		DeferCleanup(func(cleanupCtx context.Context) {
+			Expect(cleanupVirtualNetworkFixture(cleanupCtx, client, id)).To(Succeed())
+		})
 
 		cases := []struct {
 			name  string
@@ -445,13 +729,15 @@ var _ = Describe("IPv4-only Subnet gRPC contract", func() {
 
 var _ = Describe("IPv4-only SecurityGroup gRPC contract", func() {
 	var (
-		ctx    context.Context
-		client privatev1.SecurityGroupsClient
+		ctx          context.Context
+		client       privatev1.SecurityGroupsClient
+		publicClient publicv1.SecurityGroupsClient
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
 		client = privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
+		publicClient = publicv1.NewSecurityGroupsClient(tool.ExternalView().UserConn())
 	})
 
 	It("supports canonical IPv4 ingress and egress rules through CRUD", func() {
@@ -495,9 +781,132 @@ var _ = Describe("IPv4-only SecurityGroup gRPC contract", func() {
 		Expect(getResponse.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("contract", "ipv4-security-group"))
 		Expect(getResponse.GetObject().GetSpec().GetIngress()[0].GetIpv4Cidr()).To(Equal("0.0.0.0/0"))
 
-		_, err = client.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: fixture.securityGroupID}.Build())
-		Expect(err).ToNot(HaveOccurred())
+		Expect(cleanupSecurityGroupFixture(ctx, fixture.securityGroups, fixture.securityGroupID)).To(Succeed())
 		fixture.securityGroupID = ""
+	})
+
+	It("allows tenant users to update rules and reconciles the SecurityGroup CR", func() {
+		fixture := newIPv4NetworkingContractFixture(ctx)
+		name := fmt.Sprintf("ipv4-sg-public-update-%s", uuid.New()[24:])
+		initialRule := privatev1.SecurityRule_builder{
+			Protocol: privatev1.Protocol_PROTOCOL_ALL,
+			Ipv4Cidr: new("0.0.0.0/0"),
+		}.Build()
+		created, err := client.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+			Object: privatev1.SecurityGroup_builder{
+				Metadata: privatev1.Metadata_builder{Name: name, Tenant: usersGroup}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: fixture.virtualNetworkIDRef(),
+					Ingress:        []*privatev1.SecurityRule{initialRule},
+					Egress:         []*privatev1.SecurityRule{initialRule},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		fixture.securityGroupID = created.GetObject().GetId()
+
+		By("waiting for the initial SecurityGroup CR")
+		Eventually(func(g Gomega) {
+			securityGroups := &osacv1alpha1.SecurityGroupList{}
+			g.Expect(tool.KubeClient().List(ctx, securityGroups, crclient.MatchingLabels{
+				labels.SecurityGroupUuid: fixture.securityGroupID,
+			})).To(Succeed())
+			g.Expect(securityGroups.Items).To(HaveLen(1))
+		}, time.Minute, time.Second).Should(Succeed())
+
+		updatedIngress := publicv1.SecurityRule_builder{
+			Protocol: publicv1.Protocol_PROTOCOL_UDP,
+			PortFrom: new(int32(53)),
+			PortTo:   new(int32(53)),
+			Ipv4Cidr: new("10.251.0.0/16"),
+		}.Build()
+		updatedEgress := publicv1.SecurityRule_builder{
+			Protocol: publicv1.Protocol_PROTOCOL_TCP,
+			PortFrom: new(int32(443)),
+			PortTo:   new(int32(443)),
+			Ipv4Cidr: new("192.168.0.0/16"),
+		}.Build()
+
+		By("updating both rule lists through the public API as a tenant user")
+		updated, err := publicClient.Update(ctx, publicv1.SecurityGroupsUpdateRequest_builder{
+			Object: publicv1.SecurityGroup_builder{
+				Id: fixture.securityGroupID,
+				Metadata: publicv1.Metadata_builder{
+					Name: "ignored-name-change",
+				}.Build(),
+				Spec: publicv1.SecurityGroupSpec_builder{
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: fixture.virtualNetworkID}.Build(),
+					Ingress:        []*publicv1.SecurityRule{updatedIngress},
+					Egress:         []*publicv1.SecurityRule{updatedEgress},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(updated.GetObject().GetId()).To(Equal(fixture.securityGroupID))
+		Expect(updated.GetObject().GetMetadata().GetName()).To(Equal(name))
+		Expect(updated.GetObject().GetMetadata().GetAnnotations()).To(HaveKeyWithValue(
+			"osac.openshift.io/owner-reference", fixture.virtualNetworkID,
+		))
+		Expect(updated.GetObject().GetSpec().GetVirtualNetwork().GetId()).To(Equal(fixture.virtualNetworkID))
+		Expect(updated.GetObject().GetSpec().GetIngress()).To(HaveLen(1))
+		Expect(proto.Equal(updated.GetObject().GetSpec().GetIngress()[0], updatedIngress)).To(BeTrue())
+		Expect(updated.GetObject().GetSpec().GetEgress()).To(HaveLen(1))
+		Expect(proto.Equal(updated.GetObject().GetSpec().GetEgress()[0], updatedEgress)).To(BeTrue())
+
+		By("reading the stored rule lists and immutable parent through the public API")
+		stored, err := publicClient.Get(ctx, publicv1.SecurityGroupsGetRequest_builder{
+			Id: fixture.securityGroupID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stored.GetObject().GetMetadata().GetName()).To(Equal(name))
+		Expect(stored.GetObject().GetMetadata().GetAnnotations()).To(HaveKeyWithValue(
+			"osac.openshift.io/owner-reference", fixture.virtualNetworkID,
+		))
+		Expect(stored.GetObject().GetSpec().GetVirtualNetwork().GetId()).To(Equal(fixture.virtualNetworkID))
+		Expect(stored.GetObject().GetSpec().GetIngress()).To(HaveLen(1))
+		Expect(proto.Equal(stored.GetObject().GetSpec().GetIngress()[0], updatedIngress)).To(BeTrue())
+		Expect(stored.GetObject().GetSpec().GetEgress()).To(HaveLen(1))
+		Expect(proto.Equal(stored.GetObject().GetSpec().GetEgress()[0], updatedEgress)).To(BeTrue())
+
+		By("waiting for Fulfillment to patch the existing Kubernetes CR with the new rules")
+		Eventually(func(g Gomega) {
+			securityGroups := &osacv1alpha1.SecurityGroupList{}
+			g.Expect(tool.KubeClient().List(ctx, securityGroups, crclient.MatchingLabels{
+				labels.SecurityGroupUuid: fixture.securityGroupID,
+			})).To(Succeed())
+			g.Expect(securityGroups.Items).To(HaveLen(1))
+			if len(securityGroups.Items) != 1 {
+				return
+			}
+
+			securityGroup := securityGroups.Items[0]
+			g.Expect(securityGroup.Spec.VirtualNetwork).To(Equal(fixture.virtualNetworkID))
+			g.Expect(securityGroup.Spec.IngressRules).To(HaveLen(1))
+			g.Expect(securityGroup.Spec.EgressRules).To(HaveLen(1))
+			if len(securityGroup.Spec.IngressRules) != 1 || len(securityGroup.Spec.EgressRules) != 1 {
+				return
+			}
+			g.Expect(securityGroup.Spec.IngressRules[0].Protocol).To(Equal(osacv1alpha1.SecurityGroupProtocolUDP))
+			g.Expect(securityGroup.Spec.IngressRules[0].PortFrom).ToNot(BeNil())
+			g.Expect(securityGroup.Spec.IngressRules[0].PortTo).ToNot(BeNil())
+			if securityGroup.Spec.IngressRules[0].PortFrom != nil {
+				g.Expect(*securityGroup.Spec.IngressRules[0].PortFrom).To(Equal(int32(53)))
+			}
+			if securityGroup.Spec.IngressRules[0].PortTo != nil {
+				g.Expect(*securityGroup.Spec.IngressRules[0].PortTo).To(Equal(int32(53)))
+			}
+			g.Expect(securityGroup.Spec.IngressRules[0].SourceCIDR).To(Equal("10.251.0.0/16"))
+			g.Expect(securityGroup.Spec.EgressRules[0].Protocol).To(Equal(osacv1alpha1.SecurityGroupProtocolTCP))
+			g.Expect(securityGroup.Spec.EgressRules[0].PortFrom).ToNot(BeNil())
+			g.Expect(securityGroup.Spec.EgressRules[0].PortTo).ToNot(BeNil())
+			if securityGroup.Spec.EgressRules[0].PortFrom != nil {
+				g.Expect(*securityGroup.Spec.EgressRules[0].PortFrom).To(Equal(int32(443)))
+			}
+			if securityGroup.Spec.EgressRules[0].PortTo != nil {
+				g.Expect(*securityGroup.Spec.EgressRules[0].PortTo).To(Equal(int32(443)))
+			}
+			g.Expect(securityGroup.Spec.EgressRules[0].DestinationCIDR).To(Equal("192.168.0.0/16"))
+		}, time.Minute, time.Second).Should(Succeed())
 	})
 
 	DescribeTable("rejects missing, malformed, host-bit, IPv6-only, and dual-stack rules",
@@ -531,7 +940,7 @@ var _ = Describe("IPv4-only SecurityGroup gRPC contract", func() {
 		Entry("dual-stack egress", false, privatev1.SecurityRule_builder{Protocol: privatev1.Protocol_PROTOCOL_ALL, Ipv4Cidr: new("10.246.0.0/24"), Ipv6Cidr: new("2001:db8::/64")}.Build(), "IPv6 and dual-stack"),
 	)
 
-	It("rejects an invalid field-masked ingress update without changing the stored rule", func() {
+	It("rejects a field-masked ingress change without changing the stored rule", func() {
 		fixture := newIPv4NetworkingContractFixture(ctx)
 		rule := privatev1.SecurityRule_builder{Protocol: privatev1.Protocol_PROTOCOL_ALL, Ipv4Cidr: new("0.0.0.0/0")}.Build()
 		response, err := client.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
@@ -551,13 +960,16 @@ var _ = Describe("IPv4-only SecurityGroup gRPC contract", func() {
 				Spec: privatev1.SecurityGroupSpec_builder{
 					Ingress: []*privatev1.SecurityRule{{
 						Protocol: privatev1.Protocol_PROTOCOL_ALL,
-						Ipv4Cidr: new("10.247.0.1/24"),
+						Ipv4Cidr: new("10.247.0.0/24"),
 					}},
 				}.Build(),
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.ingress"}},
 		}.Build())
-		expectIPv4ContractError(err, "canonical")
+		expectIPv4ContractError(err, "spec' is immutable")
+		stored, err := client.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: fixture.securityGroupID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stored.GetObject().GetSpec().GetIngress()[0].GetIpv4Cidr()).To(Equal("0.0.0.0/0"))
 	})
 })
 
@@ -704,7 +1116,7 @@ var _ = Describe("IPv4-only controller endpoint gRPC contract", Label("ipv4-netw
 			for _, value := range invalidCreateValues {
 				object := privatev1.Cluster_builder{
 					Id:       uuid.New(),
-					Metadata: privatev1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						Template: privatev1.ClusterTemplateReference_builder{Id: "missing-template"}.Build(),
 					}.Build(),
@@ -734,7 +1146,7 @@ var _ = Describe("IPv4-only controller endpoint gRPC contract", Label("ipv4-netw
 			NodeSets: map[string]*publicv1.ClusterNodeSet{
 				"workers": publicv1.ClusterNodeSet_builder{
 					Size:                  new(int32(1)),
-					BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit}.Build(),
+					BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
 				}.Build(),
 			},
 			NetworkAttachment: network.clusterAttachment(),

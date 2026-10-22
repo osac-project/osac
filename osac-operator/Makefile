@@ -178,7 +178,7 @@ image-run: ## Run container image locally.
 
 .PHONY: kind-load
 kind-load: image-build
-	$(KIND) load docker-image -n ${KIND_CLUSTER_NAME} ${IMG}
+	$(call kind-load-image,$(IMG))
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:

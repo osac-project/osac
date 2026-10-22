@@ -1,0 +1,134 @@
+---
+- name: Verify AgentlessNet BMI attachment inventory validation
+  hosts: localhost
+  gather_facts: false
+  vars:
+    agentless_attachment_switch_inventory:
+      all:
+        vars:
+          agentless_net_provisioning_network: {name: agentless-provisioning, vlan_id: 1}
+          agentless_net_host_ports:
+            host-a:
+              eth0: {switch: switch1, port: swp2}
+        children:
+          net_nodes:
+            hosts:
+              network-node: {ansible_host: 127.0.0.1, ansible_user: root}
+          switches:
+            hosts:
+              switch1:
+                ansible_host: 127.0.0.1
+                ansible_user: root
+                ansible_network_os: cumulus
+                trunk_ports: [swp1]
+    agentless_attachment_duplicate_inventory:
+      all:
+        vars:
+          agentless_net_provisioning_network: {name: agentless-provisioning, vlan_id: 1}
+          agentless_net_host_ports:
+            host-a:
+              eth0: {switch: switch1, port: swp2}
+            host-b:
+              eth0: {switch: switch1, port: swp2}
+        children:
+          net_nodes:
+            hosts:
+              network-node: {ansible_host: 127.0.0.1, ansible_user: root}
+          switches:
+            hosts:
+              switch1:
+                ansible_host: 127.0.0.1
+                ansible_user: root
+                ansible_network_os: cumulus
+                trunk_ports: [swp1]
+    agentless_attachment_trunk_inventory:
+      all:
+        vars:
+          agentless_net_provisioning_network: {name: agentless-provisioning, vlan_id: 1}
+          agentless_net_host_ports:
+            host-a:
+              eth0: {switch: switch1, port: swp2}
+        children:
+          net_nodes:
+            hosts:
+              network-node: {ansible_host: 127.0.0.1, ansible_user: root}
+          switches:
+            hosts:
+              switch1:
+                ansible_host: 127.0.0.1
+                ansible_user: root
+                ansible_network_os: cumulus
+                trunk_ports: [swp1, swp2]
+  tasks:
+    - name: Validate the allowed host/interface to access-port mapping
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - -i
+          - localhost,
+          - "{{ playbook_dir }}/../files/validate_attachment_inventory.yml"
+          - -e
+          - ansible_connection=local
+      args:
+        chdir: "{{ playbook_dir }}/../../../../../"
+      environment:
+        ANSIBLE_CONFIG: "{{ playbook_dir }}/../../../../../ansible.cfg"
+        AGENTLESS_NET_VN_INVENTORY: "{{ agentless_attachment_switch_inventory | to_json }}"
+        AGENTLESS_NET_SSH_PRIVATE_KEY: ""
+      register: agentless_attachment_valid_result
+      changed_when: false
+      failed_when: false
+
+    - name: Require the allowed mapping to pass
+      ansible.builtin.assert:
+        that:
+          - agentless_attachment_valid_result.rc == 0
+        fail_msg: "Valid AgentlessNet inventory failed: {{ agentless_attachment_valid_result.stderr }}"
+
+    - name: Reject duplicate host interfaces claiming one physical port
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - -i
+          - localhost,
+          - "{{ playbook_dir }}/../files/validate_attachment_inventory.yml"
+          - -e
+          - ansible_connection=local
+      args:
+        chdir: "{{ playbook_dir }}/../../../../../"
+      environment:
+        ANSIBLE_CONFIG: "{{ playbook_dir }}/../../../../../ansible.cfg"
+        AGENTLESS_NET_VN_INVENTORY: "{{ agentless_attachment_duplicate_inventory | to_json }}"
+        AGENTLESS_NET_SSH_PRIVATE_KEY: ""
+      register: agentless_attachment_duplicate_result
+      changed_when: false
+      failed_when: false
+
+    - name: Require duplicate port mapping to be rejected
+      ansible.builtin.assert:
+        that:
+          - agentless_attachment_duplicate_result.rc != 0
+
+    - name: Reject a host interface mapped onto a declared trunk
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - -i
+          - localhost,
+          - "{{ playbook_dir }}/files/validate_attachment_inventory.yml"
+          - -e
+          - ansible_connection=local
+      args:
+        chdir: "{{ playbook_dir }}/../../../../../"
+      environment:
+        ANSIBLE_CONFIG: "{{ playbook_dir }}/../../../../../ansible.cfg"
+        AGENTLESS_NET_VN_INVENTORY: "{{ agentless_attachment_trunk_inventory | to_json }}"
+        AGENTLESS_NET_SSH_PRIVATE_KEY: ""
+      register: agentless_attachment_trunk_result
+      changed_when: false
+      failed_when: false
+
+    - name: Require trunk overlap to be rejected
+      ansible.builtin.assert:
+        that:
+          - agentless_attachment_trunk_result.rc != 0

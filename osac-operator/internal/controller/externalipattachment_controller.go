@@ -98,7 +98,7 @@ type ExternalIPAttachmentReconciler struct {
 	targetCluster              mc.ClusterName
 	// Resolver resolves a NetworkClass to its registered managers. Nil when the
 	// two-manager model isn't configured (no gRPC connection / networking namespace),
-	// in which case the controller always uses the legacy implementation-strategy path.
+	// in which case the controller blocks provisioning until dispatch is available.
 	Resolver *dispatcher.Resolver
 	// networkClassesClient lists NetworkClasses to find the deployment singleton used
 	// as the dispatcher input. Nil when gRPC is not configured.
@@ -306,9 +306,17 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 		return ctrl.Result{}, err
 	}
 	implementationStrategy, err := resolveImplementationStrategy(
-		ctx, r.Resolver, "ExternalIPAttachment", networkClassID, pool.Spec.ImplementationStrategy)
+		ctx, r.Resolver, "ExternalIPAttachment", networkClassID)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if implementationStrategy == "" {
+		setReadyConditionBlocked(&attachment.Status.Conditions, v1alpha1.ReasonNoManagerConfigured,
+			conditionMessageNoManagerConfigured)
+		log.Info("implementation strategy not resolved", "externalIPAttachment", attachment.Name)
+		return ctrl.Result{}, fmt.Errorf(
+			"cannot reconcile ExternalIPAttachment %q: no fabric manager is configured for NetworkClass %q",
+			attachment.Name, networkClassID)
 	}
 
 	// BMI DNAT precondition: wait for primary IP to be discovered
@@ -389,10 +397,16 @@ func (r *ExternalIPAttachmentReconciler) syncAnnotations(
 		attachment.Annotations[osacExternalIPNameAnnotation] = externalIP.Name
 		needsUpdate = true
 	}
-	if ci != nil && ci.Status.VirtualMachineReference != nil {
-		targetNamespace := ci.Status.VirtualMachineReference.Namespace
-		if attachment.Annotations[osacExternalIPTargetNamespaceAnnotation] != targetNamespace {
-			attachment.Annotations[osacExternalIPTargetNamespaceAnnotation] = targetNamespace
+	if ci != nil {
+		if ci.Status.VirtualMachineReference != nil {
+			targetNamespace := ci.Status.VirtualMachineReference.Namespace
+			if attachment.Annotations[osacExternalIPTargetNamespaceAnnotation] != targetNamespace {
+				attachment.Annotations[osacExternalIPTargetNamespaceAnnotation] = targetNamespace
+				needsUpdate = true
+			}
+		}
+		if targetIP := computeInstanceNetworkAttachmentIP(ci); targetIP != "" && attachment.Annotations[osacExternalIPTargetIPAnnotation] != targetIP {
+			attachment.Annotations[osacExternalIPTargetIPAnnotation] = targetIP
 			needsUpdate = true
 		}
 	}
@@ -490,6 +504,17 @@ func primaryBMISubnetRef(bmi *bmfov1alpha1.BareMetalInstance) string {
 	return ""
 }
 
+func computeInstanceNetworkAttachmentIP(ci *v1alpha1.ComputeInstance) string {
+	if ci == nil || len(ci.Status.ComputeNetworkAttachmentStatuses) != 1 {
+		return ""
+	}
+	status := ci.Status.ComputeNetworkAttachmentStatuses[0]
+	if status.SubnetRef == "" {
+		return ""
+	}
+	return status.IPAddress
+}
+
 // resolveComputeInstance looks up the target ComputeInstance by UUID label, handles
 // auto-detach if the CI is being deleted, and adds the detach finalizer.
 // Returns nil CI (with no requeue) when spec.computeInstance is not set.
@@ -559,6 +584,11 @@ func (r *ExternalIPAttachmentReconciler) resolveComputeInstance(
 
 	if ci.Status.VirtualMachineReference == nil {
 		log.Info("ComputeInstance has no VirtualMachineReference yet, requeueing", "computeInstance", ci.Name)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+
+	if computeInstanceNetworkAttachmentIP(ci) == "" {
+		log.Info("ComputeInstance network attachment IP is not reported yet, requeueing", "computeInstance", ci.Name)
 		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 
@@ -1115,10 +1145,57 @@ func (r *ExternalIPAttachmentReconciler) handleDeprovisioning(ctx context.Contex
 		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
 		return ctrl.Result{}, nil
 	}
-	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, attachment,
+	var claim *providerJobLaunchClaim
+	runCtx := ctx
+	if provisioning.DeprovisionJobLaunchNeeded(attachment.Status.ProvisioningJobs, time.Now()) {
+		var acquired, resumed bool
+		var err error
+		claim, acquired, resumed, err = acquireProviderJobLaunchClaim(
+			ctx, r.Client, r.APIReader, attachment, v1alpha1.JobTypeDeprovision, "",
+		)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !acquired {
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
+		if resumed {
+			found, err := recoverProviderJobFromClaim(
+				ctx, r.ProvisioningProvider, attachment, claim, &attachment.Status.ProvisioningJobs, r.MaxJobHistory,
+			)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if found {
+				if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(attachment), attachment.Status); err != nil {
+					return ctrl.Result{}, err
+				}
+				if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, attachment, claim.ID); err != nil {
+					return ctrl.Result{}, err
+				}
+				return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+			}
+		}
+		runCtx = provisioning.WithAAPJobLaunchID(ctx, claim.ID)
+	}
+	beforeStatus := attachment.Status.DeepCopy()
+	result, done, err := provisioning.RunDeprovisioningLifecycle(runCtx, r.ProvisioningProvider, attachment,
 		&attachment.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
-	if err != nil || !done {
+	if err != nil {
 		return result, err
+	}
+	if !equality.Semantic.DeepEqual(attachment.Status, *beforeStatus) {
+		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(attachment), attachment.Status); err != nil {
+			return result, err
+		}
+	}
+	if claim != nil {
+		if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, attachment, claim.ID); err != nil {
+			return result, err
+		}
+	}
+	if !done {
+		return result, nil
 	}
 	return ctrl.Result{}, nil
 }
@@ -1126,7 +1203,11 @@ func (r *ExternalIPAttachmentReconciler) handleDeprovisioning(ctx context.Contex
 func (r *ExternalIPAttachmentReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.ExternalIPAttachmentStatus) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		latest := &v1alpha1.ExternalIPAttachment{}
-		if err := r.Get(ctx, key, latest); err != nil {
+		reader := r.APIReader
+		if reader == nil {
+			reader = r.Client
+		}
+		if err := reader.Get(ctx, key, latest); err != nil {
 			return err
 		}
 		latest.Status = newStatus

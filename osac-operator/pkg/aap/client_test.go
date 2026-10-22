@@ -39,6 +39,27 @@ var _ = Describe("Client", func() {
 	})
 
 	Describe("LaunchJobTemplate", func() {
+		It("rejects protected Netris settings before sending a request", func() {
+			requests := 0
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests++
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			client = aap.NewClient(server.URL, "test-token", false)
+
+			_, err := client.LaunchJobTemplate(ctx, aap.LaunchJobTemplateRequest{
+				TemplateID: 42,
+				ExtraVars: map[string]any{
+					"osac_job_vars": map[string]any{
+						"resource": map[string]any{"NETRIS_CONTROLLER_URL": "https://attacker.example"},
+					},
+				},
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err).To(MatchError(ContainSubstring("protected Netris setting")))
+			Expect(requests).To(Equal(0))
+		})
+
 		Context("when request succeeds", func() {
 			BeforeEach(func() {
 				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -155,6 +176,25 @@ var _ = Describe("Client", func() {
 	})
 
 	Describe("LaunchWorkflowTemplate", func() {
+		It("rejects protected Netris settings before sending a request", func() {
+			requests := 0
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests++
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			client = aap.NewClient(server.URL, "test-token", false)
+
+			_, err := client.LaunchWorkflowTemplate(ctx, aap.LaunchWorkflowTemplateRequest{
+				TemplateName: "protected-workflow",
+				ExtraVars: map[string]any{
+					"nested": []any{map[string]any{"validate-certs": false}},
+				},
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err).To(MatchError(ContainSubstring("protected Netris setting")))
+			Expect(requests).To(Equal(0))
+		})
+
 		Context("when request succeeds", func() {
 			BeforeEach(func() {
 				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -176,6 +216,21 @@ var _ = Describe("Client", func() {
 				})
 				Expect(err).NotTo(HaveOccurred())
 				Expect(resp.JobID).To(Equal(456))
+			})
+
+			It("does not return a sensitive response body", func() {
+				server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					defer GinkgoRecover()
+					w.WriteHeader(http.StatusBadRequest)
+					_, err := w.Write([]byte("workflow response: confidential-response"))
+					Expect(err).NotTo(HaveOccurred())
+				})
+				_, err := client.LaunchWorkflowTemplate(ctx, aap.LaunchWorkflowTemplateRequest{
+					TemplateName: "test-workflow",
+					Sensitive:    true,
+				})
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).NotTo(ContainSubstring("confidential-response"))
 			})
 		})
 	})
@@ -222,6 +277,38 @@ var _ = Describe("Client", func() {
 				_, err := client.GetJob(ctx, "999")
 				Expect(err).To(HaveOccurred())
 			})
+		})
+	})
+
+	Describe("ListJobs", func() {
+		It("filters jobs by template and follows AAP pagination", func() {
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.URL.Path).To(Equal(fmt.Sprintf("/%s/jobs/", aap.APIVersion)))
+				Expect(r.URL.Query().Get("job_template")).To(Equal("77"))
+				Expect(r.URL.Query().Get("page_size")).To(Equal("200"))
+				Expect(r.URL.Query().Get("order_by")).To(Equal("-id"))
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Query().Get("page") == "1" {
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"next":    "/api/v2/jobs/?page=2",
+						"results": []map[string]any{{"id": 20, "status": "running", "extra_vars": `{"a":1}`}},
+					})
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"next":    nil,
+					"results": []map[string]any{{"id": 19, "status": "successful", "extra_vars": `{"a":2}`}},
+				})
+			}))
+			defer server.Close()
+			client = aap.NewClient(server.URL, "test-token", false)
+
+			jobs, err := client.ListJobs(ctx, 77)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(jobs).To(HaveLen(2))
+			Expect(jobs[0].ID).To(Equal(20))
+			Expect(jobs[1].ID).To(Equal(19))
 		})
 	})
 

@@ -113,7 +113,9 @@ func (r *function) run(ctx context.Context, tenant *privatev1.Tenant) error {
 		tenant: tenant,
 	}
 	var err error
-	if tenant.HasMetadata() && tenant.GetMetadata().HasDeletionTimestamp() {
+	if t.addFinalizer() {
+		// Persist both barriers before doing any external work.
+	} else if tenant.HasMetadata() && tenant.GetMetadata().HasDeletionTimestamp() {
 		err = t.delete(ctx)
 	} else {
 		err = t.update(ctx)
@@ -123,6 +125,7 @@ func (r *function) run(ctx context.Context, tenant *privatev1.Tenant) error {
 		_, updateErr := r.tenantsClient.Update(ctx, privatev1.TenantsUpdateRequest_builder{
 			Object:     tenant,
 			UpdateMask: updateMask,
+			Lock:       true,
 		}.Build())
 		if err == nil {
 			err = updateErr
@@ -132,10 +135,6 @@ func (r *function) run(ctx context.Context, tenant *privatev1.Tenant) error {
 }
 
 func (t *task) update(ctx context.Context) error {
-	if t.addFinalizer() {
-		return nil
-	}
-
 	hubs, err := t.listAllHubs(ctx)
 	if err != nil {
 		return err
@@ -242,6 +241,10 @@ func (t *task) ensureNamespaceOnHub(ctx context.Context, hubId string, hubEntry 
 }
 
 func (t *task) delete(ctx context.Context) error {
+	if !slices.Contains(t.tenant.GetMetadata().GetFinalizers(), finalizers.TenantOnboarding) {
+		return nil
+	}
+
 	hubs, err := t.listAllHubs(ctx)
 	if err != nil {
 		return err
@@ -364,36 +367,15 @@ func (t *task) getKubeObject(ctx context.Context, hubEntry *controllers.HubEntry
 }
 
 func (t *task) listAllHubs(ctx context.Context) ([]*privatev1.Hub, error) {
-	var allHubs []*privatev1.Hub
-	var offset int32
-	for {
-		response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{
-			Offset: &offset,
-		}.Build())
-		if err != nil {
-			return nil, fmt.Errorf("failed to list hubs: %w", err)
-		}
-		allHubs = append(allHubs, response.GetItems()...)
-		total := response.GetTotal()
-		if total <= 0 || offset+response.GetSize() >= total {
-			break
-		}
-		offset += response.GetSize()
+	hubs, err := controllers.ListAllHubs(ctx, t.r.hubsClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list hubs: %w", err)
 	}
-	return allHubs, nil
+	return hubs, nil
 }
 
 func (t *task) addFinalizer() bool {
-	if !t.tenant.HasMetadata() {
-		t.tenant.SetMetadata(&privatev1.Metadata{})
-	}
-	list := t.tenant.GetMetadata().GetFinalizers()
-	if !slices.Contains(list, finalizers.Controller) {
-		list = append(list, finalizers.Controller)
-		t.tenant.GetMetadata().SetFinalizers(list)
-		return true
-	}
-	return false
+	return finalizers.PrepareTenant(t.tenant)
 }
 
 func (t *task) removeFinalizer() {
@@ -401,9 +383,9 @@ func (t *task) removeFinalizer() {
 		return
 	}
 	list := t.tenant.GetMetadata().GetFinalizers()
-	if slices.Contains(list, finalizers.Controller) {
+	if slices.Contains(list, finalizers.TenantOnboarding) {
 		list = slices.DeleteFunc(list, func(item string) bool {
-			return item == finalizers.Controller
+			return item == finalizers.TenantOnboarding
 		})
 		t.tenant.GetMetadata().SetFinalizers(list)
 	}

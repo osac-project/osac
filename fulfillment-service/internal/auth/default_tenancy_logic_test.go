@@ -16,7 +16,9 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -460,6 +462,255 @@ var _ = Describe("Default tenancy logic", Ordered, func() {
 				Expect(result.IsProjectVisible("tenant-a", "parent")).To(BeTrue())
 				Expect(result.IsProjectVisible("tenant-a", "parent.child")).To(BeTrue())
 				Expect(result.IsProjectVisible("tenant-a", "other")).To(BeFalse())
+			})
+
+			It("Includes projects from Keycloak groups in JWT token", func(ctx context.Context) {
+				// Create a JWT token with organization claim containing project groups
+				token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+					"preferred_username": "my_user",
+					"organization": map[string]any{
+						"tenant-a": map[string]any{
+							"groups": []any{
+								"/my-project/system:managers",
+								"/other-project/system:viewers",
+							},
+						},
+					},
+					"exp": time.Now().Add(time.Hour).Unix(),
+				})
+
+				subject := &Subject{
+					User:    "my_user",
+					Tenants: collections.NewSet("tenant-a"),
+				}
+				ctx = ContextWithSubject(ctx, subject)
+				ctx = ContextWithToken(ctx, token)
+
+				result, err := logic.DetermineVisibility(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(result.IsProjectVisible("tenant-a", "my-project")).To(BeTrue())
+				Expect(result.IsProjectVisible("tenant-a", "other-project")).To(BeTrue())
+			})
+
+			It("Includes nested projects from Keycloak groups", func(ctx context.Context) {
+				// Create a JWT token with nested project groups (slash notation)
+				token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+					"preferred_username": "my_user",
+					"organization": map[string]any{
+						"tenant-a": map[string]any{
+							"groups": []any{
+								"/parent-project/system:managers",
+								"/parent-project/child-project/system:viewers",
+							},
+						},
+					},
+					"exp": time.Now().Add(time.Hour).Unix(),
+				})
+
+				subject := &Subject{
+					User:    "my_user",
+					Tenants: collections.NewSet("tenant-a"),
+				}
+				ctx = ContextWithSubject(ctx, subject)
+				ctx = ContextWithToken(ctx, token)
+
+				result, err := logic.DetermineVisibility(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				// Parent project should be visible
+				Expect(result.IsProjectVisible("tenant-a", "parent-project")).To(BeTrue())
+				// Nested project should be converted from slash to dot notation
+				Expect(result.IsProjectVisible("tenant-a", "parent-project.child-project")).To(BeTrue())
+			})
+
+			It("Combines Keycloak groups and ProjectMembership objects", func(ctx context.Context) {
+				createTenant(ctx, "tenant-a")
+				createProject(ctx, "tenant-a", "db-project")
+				createMembership(ctx, "pm-1", "tenant-a", "db-project", "my_user")
+
+				// Create a JWT token with additional project groups
+				token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+					"preferred_username": "my_user",
+					"organization": map[string]any{
+						"tenant-a": map[string]any{
+							"groups": []any{
+								"/keycloak-project/system:managers",
+							},
+						},
+					},
+					"exp": time.Now().Add(time.Hour).Unix(),
+				})
+
+				subject := &Subject{
+					User:    "my_user",
+					Tenants: collections.NewSet("tenant-a"),
+				}
+				ctx = ContextWithSubject(ctx, subject)
+				ctx = ContextWithToken(ctx, token)
+
+				result, err := logic.DetermineVisibility(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				// Both sources should be visible
+				Expect(result.IsProjectVisible("tenant-a", "db-project")).To(BeTrue())
+				Expect(result.IsProjectVisible("tenant-a", "keycloak-project")).To(BeTrue())
+			})
+
+			It("Handles multiple tenants in Keycloak groups", func(ctx context.Context) {
+				token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+					"preferred_username": "my_user",
+					"organization": map[string]any{
+						"tenant-a": map[string]any{
+							"groups": []any{
+								"/project-a/system:managers",
+							},
+						},
+						"tenant-b": map[string]any{
+							"groups": []any{
+								"/project-b/system:viewers",
+							},
+						},
+					},
+					"exp": time.Now().Add(time.Hour).Unix(),
+				})
+
+				subject := &Subject{
+					User:    "my_user",
+					Tenants: collections.NewSet("tenant-a", "tenant-b"),
+				}
+				ctx = ContextWithSubject(ctx, subject)
+				ctx = ContextWithToken(ctx, token)
+
+				result, err := logic.DetermineVisibility(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(result.IsProjectVisible("tenant-a", "project-a")).To(BeTrue())
+				Expect(result.IsProjectVisible("tenant-b", "project-b")).To(BeTrue())
+			})
+
+			It("Ignores malformed Keycloak groups", func(ctx context.Context) {
+				token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+					"preferred_username": "my_user",
+					"organization": map[string]any{
+						"tenant-a": map[string]any{
+							"groups": []any{
+								"invalid-group-format",           // No leading slash
+								"/",                              // Too short
+								"/project",                       // Missing role suffix
+								"/valid-project/system:managers", // Valid
+							},
+						},
+					},
+					"exp": time.Now().Add(time.Hour).Unix(),
+				})
+
+				subject := &Subject{
+					User:    "my_user",
+					Tenants: collections.NewSet("tenant-a"),
+				}
+				ctx = ContextWithSubject(ctx, subject)
+				ctx = ContextWithToken(ctx, token)
+
+				result, err := logic.DetermineVisibility(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				// Only the valid group should result in a visible project
+				Expect(result.IsProjectVisible("tenant-a", "valid-project")).To(BeTrue())
+			})
+
+			It("Works without a JWT token in context", func(ctx context.Context) {
+				createTenant(ctx, "tenant-a")
+				createProject(ctx, "tenant-a", "alpha")
+				createMembership(ctx, "pm-1", "tenant-a", "alpha", "my_user")
+
+				subject := &Subject{
+					User:    "my_user",
+					Tenants: collections.NewSet("tenant-a"),
+				}
+				ctx = ContextWithSubject(ctx, subject)
+				// No token in context
+
+				result, err := logic.DetermineVisibility(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				// Should still work with database memberships only
+				Expect(result.IsProjectVisible("tenant-a", "alpha")).To(BeTrue())
+			})
+
+			It("Handles JWT token with malformed organization claim", func(ctx context.Context) {
+				token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+					"preferred_username": "my_user",
+					"organization":       "invalid-string-instead-of-object",
+					"exp":                time.Now().Add(time.Hour).Unix(),
+				})
+
+				subject := &Subject{
+					User:    "my_user",
+					Tenants: collections.NewSet("tenant-a"),
+				}
+				ctx = ContextWithSubject(ctx, subject)
+				ctx = ContextWithToken(ctx, token)
+
+				result, err := logic.DetermineVisibility(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				// Should still succeed, just without Keycloak group projects
+				Expect(result.IsTenantVisible("tenant-a")).To(BeTrue())
+			})
+
+			It("Grants descendant visibility for Keycloak group projects", func(ctx context.Context) {
+				token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+					"preferred_username": "my_user",
+					"organization": map[string]any{
+						"tenant-a": map[string]any{
+							"groups": []any{
+								"/parent/system:managers",
+							},
+						},
+					},
+					"exp": time.Now().Add(time.Hour).Unix(),
+				})
+
+				subject := &Subject{
+					User:    "my_user",
+					Tenants: collections.NewSet("tenant-a"),
+				}
+				ctx = ContextWithSubject(ctx, subject)
+				ctx = ContextWithToken(ctx, token)
+
+				result, err := logic.DetermineVisibility(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				// Parent project and descendants should be visible
+				Expect(result.IsProjectVisible("tenant-a", "parent")).To(BeTrue())
+				Expect(result.IsProjectVisible("tenant-a", "parent.child")).To(BeTrue())
+				Expect(result.IsProjectVisible("tenant-a", "parent.child.grandchild")).To(BeTrue())
+				// Unrelated projects should not be visible
+				Expect(result.IsProjectVisible("tenant-a", "other")).To(BeFalse())
+			})
+
+			It("Does not grant visibility to top-level projects without explicit membership", func(ctx context.Context) {
+				createTenant(ctx, "tenant-a")
+				createProject(ctx, "tenant-a", "alpha")
+				createProject(ctx, "tenant-a", "beta")
+
+				// User with no Keycloak groups and no ProjectMemberships
+				token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+					"preferred_username": "my_user",
+					"organization": map[string]any{
+						"tenant-a": map[string]any{
+							"groups": []any{},
+						},
+					},
+					"exp": time.Now().Add(time.Hour).Unix(),
+				})
+
+				subject := &Subject{
+					User:    "my_user",
+					Tenants: collections.NewSet("tenant-a"),
+				}
+				ctx = ContextWithSubject(ctx, subject)
+				ctx = ContextWithToken(ctx, token)
+
+				result, err := logic.DetermineVisibility(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				// User should only see the default project, not top-level projects
+				Expect(result.IsProjectVisible("tenant-a", "")).To(BeTrue())
+				Expect(result.IsProjectVisible("tenant-a", "alpha")).To(BeFalse())
+				Expect(result.IsProjectVisible("tenant-a", "beta")).To(BeFalse())
 			})
 		})
 	})

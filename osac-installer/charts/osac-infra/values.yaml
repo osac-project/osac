@@ -6,17 +6,22 @@ cliImage: quay.io/openshift/origin-cli:4.20.0
 #   runAsNonRoot: true
 #   runAsUser: 1000
 #   fsGroup: 1000
+# Resources for every cliImage hook Job. These all shell out to `oc`, which
+# performs full API discovery and caches every API group and resource in
+# memory, so peak usage scales with the cluster's CRD count rather than with
+# what the hook itself does -- an `oc` baseline of ~150Mi plus the discovery
+# cache. 256Mi OOMKills on clusters carrying CNV, MCE, MetalLB, Kafka, ACM and
+# ODF CRDs, so the limit is shared across all hooks instead of being raised per
+# hook as each one is observed to fail. Raise it on clusters with unusually
+# large CRD counts.
+hookResources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 200m
+    memory: 1Gi
 osacNamespace: osac
-# Gates creation of the shared CSI credential Secret during infra install.
-csiDriver:
-  enabled: false
-# Fixed hub CSI namespace. The osac chart and CSI credential hook must use the
-# same namespace so the controller can read its ConfigMap and Secret.
-csiNamespace: osac-csi
-# Name of the "osac" umbrella chart's Helm release. The credential hook
-# pre-creates and labels csiNamespace with this release's identity before the
-# umbrella chart renders CSI resources there.
-csiReleaseName: osac
 
 certManager:
   enabled: true
@@ -52,6 +57,7 @@ keycloak:
   # outside Kind/CI -- this chart is also used for real installs.
   devFixtures:
     enabled: false
+    mcpResourceURL: "https://mcp.osac.localhost:8443/"
   images:
     keycloak: quay.io/keycloak/keycloak:26.6.4
     postgres: quay.io/sclorg/postgresql-18-c10s@sha256:6be2c9d855f06fb665257a6b0911676a38d740be7022cc61acee1c99a832b1b2
@@ -70,6 +76,10 @@ lvms:
   enabled: false
   channel: "stable-4.22"
 
+# Optional local LVM CSI provisioning for the Kind dev-full profile.
+topolvm:
+  enabled: false
+
 metallb:
   enabled: false
   channel: "stable"
@@ -79,12 +89,33 @@ cnv:
   channel: "stable"
 
 mce:
+  # Opt in only when this installation owns the multicluster engine lifecycle.
   enabled: false
   channel: "stable-2.17"
   imageService:
+    # Keep enabled until the Assisted discovery-artifact fix is released and
+    # verified.
     enabled: true
   osImages: []
-  imageOverrides: []
+  # Temporary MCE 5.0 operand bridge until a stable MCE 5.0 catalog is
+  # available. These overrides render only when mce.enabled is true.
+  imageOverrides:
+    - image-name: assisted-service
+      image-remote: quay.io/edge-infrastructure
+      image-digest: sha256:c007ecc530f4bb0a43814f4373bdec6e27d1fa3698554b0935a07c086802e479
+      image-key: assisted_service_9
+    - image-name: assisted-installer-agent
+      image-remote: quay.io/edge-infrastructure
+      image-digest: sha256:0f4f6041821d1a03da280090cf8a857e6b081487301de7e37553b0398925b391
+      image-key: assisted_installer_agent
+    - image-name: assisted-installer
+      image-remote: quay.io/edge-infrastructure
+      image-digest: sha256:04fe09dddf10be4fa7dfd91bde7b4c6addb60b3d1291596a9399fe057f5f1f3b
+      image-key: assisted_installer
+    - image-name: assisted-installer-controller
+      image-remote: quay.io/edge-infrastructure
+      image-digest: sha256:54c095c08defc738558948ef1be52dd980642bf0020570435a68384d1d5177a3
+      image-key: assisted_installer_controller
 
 kafka:
   enabled: false
@@ -109,20 +140,19 @@ bundledPostgres:
       memory: 128Mi
 
 # --- Bundled OpenBao (dev/CI only) ---
-# Single-pod ephemeral Vault-compatible secret store. Dev mode -- data is
-# lost on restart. Not for production.
+# Vault-compatible secret store for testing and CI. Not for production.
 bundledVault:
-  enabled: true
-  devRootToken: "dev-root-token"
+  enabled: false
   image: "ghcr.io/openbao/openbao:2.6.2"
-  # podSecurityContext: {}
-  # Leave absent (nil) to use the template's built-in standard-Kubernetes defaults
-  # (runAsNonRoot: true, runAsUser: 100, runAsGroup: 1000, fsGroup: 1000).
-  # On OpenShift with restricted-v2 SCC, set this to just {runAsNonRoot: true}
-  # in the profile's infra.yaml — the SCC allocates UIDs from the namespace
-  # UID range and resolves the named user automatically. Any non-nil value here
-  # FULLY REPLACES the template default (no Helm key-merge), so partial overrides
-  # must include every key you want rendered.
+  # Default podSecurityContext omits a hardcoded UID so that OpenShift's
+  # restricted-v2 SCC can allocate from the namespace UID range. Override
+  # this in a profile's infra.yaml when a specific UID is required (e.g. Kind).
+  # Profile overrides are merged with this chart default; unspecified keys
+  # such as seccompProfile are retained.
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
   resources:
     limits:
       cpu: 500m
@@ -131,9 +161,10 @@ bundledVault:
       cpu: 100m
       memory: 256Mi
   # --- Bootstrap configuration ---
-  # keycloakIssuerUrl: Keycloak OIDC issuer URL for JWT auth bootstrap. On
-  # OpenShift this must be the external route URL (not the internal service URL)
-  # to avoid OIDC discovery issuer mismatch. Leave empty to skip JWT bootstrap.
+  # keycloakIssuerUrl: Keycloak OIDC issuer URL for JWT auth bootstrap.
+  # Required when bundledVault is enabled. On OpenShift this must be the
+  # external route URL (not the internal service URL) to avoid OIDC discovery
+  # issuer mismatch.
   keycloakIssuerUrl: ""
   # keycloakAudience: expected "aud" claim in JWT tokens.
   keycloakAudience: "osac-api"
@@ -141,6 +172,13 @@ bundledVault:
   # The init script creates this as a child namespace inside the OpenBao server
   # and configures JWT auth and policies within it.
   vaultNamespace: "osac"
+
+# --- NetBox (dev/CI only) ---
+# Deploys NetBox via the netbox-community Helm chart as a bare-metal inventory
+# backend for the bmaas_netbox E2E test flavor. Not intended for production.
+# All other netbox.* values are supplied by the profile overlay.
+netbox:
+  enabled: false
 
 # --- TLS certificate configuration for shared infrastructure ---
 certs:

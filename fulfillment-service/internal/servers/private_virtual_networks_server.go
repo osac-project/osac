@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -42,9 +43,12 @@ var _ privatev1.VirtualNetworksServer = (*PrivateVirtualNetworksServer)(nil)
 type PrivateVirtualNetworksServer struct {
 	privatev1.UnimplementedVirtualNetworksServer
 
-	logger          *slog.Logger
-	generic         *GenericServer[*privatev1.VirtualNetwork]
-	networkClassDao *dao.GenericDAO[*privatev1.NetworkClass]
+	logger           *slog.Logger
+	generic          *GenericServer[*privatev1.VirtualNetwork]
+	networkClassDao  *dao.GenericDAO[*privatev1.NetworkClass]
+	subnetDao        *dao.GenericDAO[*privatev1.Subnet]
+	securityGroupDao *dao.GenericDAO[*privatev1.SecurityGroup]
+	natGatewayDao    *dao.GenericDAO[*privatev1.NATGateway]
 }
 
 func NewPrivateVirtualNetworksServer() *PrivateVirtualNetworksServerBuilder {
@@ -100,6 +104,30 @@ func (b *PrivateVirtualNetworksServerBuilder) Build() (result *PrivateVirtualNet
 	if err != nil {
 		return
 	}
+	subnetDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+	securityGroupDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+	natGatewayDao, err := dao.NewGenericDAO[*privatev1.NATGateway]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
 
 	// Create the generic server:
 	generic, err := NewGenericServer[*privatev1.VirtualNetwork]().
@@ -116,9 +144,12 @@ func (b *PrivateVirtualNetworksServerBuilder) Build() (result *PrivateVirtualNet
 
 	// Create and populate the object:
 	result = &PrivateVirtualNetworksServer{
-		logger:          b.logger,
-		generic:         generic,
-		networkClassDao: networkClassDao,
+		logger:           b.logger,
+		generic:          generic,
+		networkClassDao:  networkClassDao,
+		subnetDao:        subnetDao,
+		securityGroupDao: securityGroupDao,
+		natGatewayDao:    natGatewayDao,
 	}
 	return
 }
@@ -159,15 +190,63 @@ func (s *PrivateVirtualNetworksServer) Update(ctx context.Context,
 
 func (s *PrivateVirtualNetworksServer) Delete(ctx context.Context,
 	request *privatev1.VirtualNetworksDeleteRequest) (response *privatev1.VirtualNetworksDeleteResponse, err error) {
-	getRequest := &privatev1.VirtualNetworksGetRequest{}
-	getRequest.SetId(request.GetId())
-	var getResponse *privatev1.VirtualNetworksGetResponse
-	err = s.generic.Get(ctx, getRequest, &getResponse)
+	if request.GetId() == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "identifier is mandatory")
+	}
+	virtualNetwork, err := lockLifecycleResource(ctx, s.generic.dao, request.GetId(), "VirtualNetwork")
+	if err != nil {
+		return nil, err
+	}
+	if err = validateNotDefault(ctx, virtualNetwork.GetMetadata().GetLabels(), "virtual network"); err != nil {
+		return
+	}
+	virtualNetworkID := virtualNetwork.GetId()
+	checks := []func() error{
+		func() error {
+			return rejectDeleteIfReferenced(ctx, s.logger, s.subnetDao, "Subnet", "VirtualNetwork", virtualNetworkID,
+				virtualNetwork.GetMetadata(), func(subnet *privatev1.Subnet) bool {
+					return referenceMatches(subnet.GetSpec().GetVirtualNetwork(), virtualNetworkID, virtualNetwork.GetMetadata())
+				})
+		},
+		func() error {
+			return rejectDeleteIfReferenced(ctx, s.logger, s.securityGroupDao, "SecurityGroup", "VirtualNetwork", virtualNetworkID,
+				virtualNetwork.GetMetadata(), func(group *privatev1.SecurityGroup) bool {
+					return referenceMatches(group.GetSpec().GetVirtualNetwork(), virtualNetworkID, virtualNetwork.GetMetadata())
+				})
+		},
+		func() error {
+			return rejectDeleteIfReferenced(ctx, s.logger, s.natGatewayDao, "NATGateway", "VirtualNetwork", virtualNetworkID,
+				virtualNetwork.GetMetadata(), func(gateway *privatev1.NATGateway) bool {
+					return referenceMatches(gateway.GetSpec().GetVirtualNetwork(), virtualNetworkID, virtualNetwork.GetMetadata())
+				})
+		},
+	}
+	for _, check := range checks {
+		if err = check(); err != nil {
+			return
+		}
+	}
+
+	tx, err := database.TxFromContext(ctx)
 	if err != nil {
 		return
 	}
-	if err = validateNotDefault(ctx, getResponse.GetObject().GetMetadata().GetLabels(), "virtual network"); err != nil {
-		return
+	defer tx.ReportError(&err)
+	// Check all persisted domains, including domains awaiting finalization and those
+	// outside the caller's project visibility. Only archival releases the dependency.
+	var inUse bool
+	err = tx.QueryRow(ctx, `
+		select exists (
+			select 1 from fabric_domains
+			where data->'spec'->>'virtual_network' = $1
+			   or ($2 <> '' and data->'spec'->>'virtual_network' = $2)
+		)`, virtualNetworkID, virtualNetwork.GetMetadata().GetName()).Scan(&inUse)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to check FabricDomain dependencies", slog.Any("error", err))
+		return nil, grpcstatus.Error(grpccodes.Internal, "failed to check FabricDomain dependencies")
+	}
+	if inUse {
+		return nil, grpcstatus.Error(grpccodes.FailedPrecondition, "virtual network is referenced by a FabricDomain")
 	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
@@ -376,6 +455,11 @@ func (s *PrivateVirtualNetworksServer) validateNetworkClassReference(ctx context
 	if networkClass.GetMetadata().HasDeletionTimestamp() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"network_class '%s' does not exist", networkClassKey)
+	}
+	if networkClass.GetStatus().GetState() != privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"NetworkClass '%s' must be READY (current state: %s)",
+			networkClassKey, networkClass.GetStatus().GetState().String())
 	}
 
 	// VN-VAL-05/06: Validate the addressing mode implied by ipv4_cidr/ipv6_cidr against the

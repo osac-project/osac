@@ -150,6 +150,167 @@ http_json() {
     return 1
 }
 
+# Usage: get_fulfillment_access_token <issuer_url> <client_id> <client_secret> [curl_args...]
+get_fulfillment_access_token() {
+    if (($# < 3)); then
+        echo "ERROR: Fulfillment client credentials are not configured." >&2
+        return 1
+    fi
+
+    local issuer_url="$1" client_id="$2" client_secret="$3"
+    shift 3
+    local -a curl_args=("$@")
+
+    if [[ -z "${issuer_url}" || -z "${client_id}" || -z "${client_secret}" ]]; then
+        echo "ERROR: Fulfillment client credentials are not configured." >&2
+        return 1
+    fi
+    if [[ "${issuer_url}" != https://* ]]; then
+        echo "ERROR: Fulfillment token issuer URL must use HTTPS." >&2
+        return 1
+    fi
+
+    local secret_file
+    if ! secret_file=$(mktemp); then
+        echo "ERROR: unable to prepare the Fulfillment token request." >&2
+        return 1
+    fi
+    if ! chmod 600 "${secret_file}" || ! printf '%s' "${client_secret}" > "${secret_file}"; then
+        rm -f "${secret_file}"
+        echo "ERROR: unable to prepare the Fulfillment token request." >&2
+        return 1
+    fi
+
+    local token_url="${issuer_url%/}/protocol/openid-connect/token"
+    local response
+    if ! response=$(curl --silent --show-error --fail \
+        --connect-timeout 5 --max-time 30 \
+        "${curl_args[@]}" \
+        --request POST \
+        --data-urlencode 'grant_type=client_credentials' \
+        --data-urlencode "client_id=${client_id}" \
+        --data-urlencode "client_secret@${secret_file}" \
+        "${token_url}"); then
+        rm -f "${secret_file}"
+        echo "ERROR: Fulfillment token request failed." >&2
+        return 1
+    fi
+    rm -f "${secret_file}"
+
+    local access_token
+    if ! access_token=$(printf '%s' "${response}" | python3 -c '
+import json
+import sys
+
+try:
+    token = json.load(sys.stdin).get("access_token")
+except (json.JSONDecodeError, AttributeError):
+    sys.exit(1)
+
+if not isinstance(token, str) or not token:
+    sys.exit(1)
+
+sys.stdout.write(token)
+'); then
+        echo "ERROR: Fulfillment token response was invalid." >&2
+        return 1
+    fi
+
+    printf '%s\n' "${access_token}"
+}
+
+# Usage: get_fulfillment_service_account_token <namespace> [curl-args...]
+# Resolve the public issuer URL and service-account credentials from the
+# installer's existing ConfigMap and Secret, then exchange them for a token.
+get_fulfillment_service_account_token() {
+    if (($# < 1)) || [[ -z "$1" ]]; then
+        echo "ERROR: Fulfillment client credentials are not configured." >&2
+        return 1
+    fi
+
+    local namespace="$1"
+    shift
+    local auth_config issuer_url client_id_secret_name client_id_secret_key
+    local client_secret_secret_name client_secret_secret_key
+    local encoded_client_id encoded_client_secret client_id client_secret
+    local auth_config_map_output auth_config_map auth_config_map_name auth_config_map_count
+
+    if ! auth_config_map_output=$(kubectl -n "${namespace}" get configmap \
+        -l 'osac.openshift.io/fulfillment-auth-config=true' \
+        -o name \
+        2>/dev/null); then
+        echo "ERROR: Fulfillment issuer configuration is unavailable." >&2
+        return 1
+    fi
+    auth_config_map_name=""
+    auth_config_map_count=0
+    if [[ -n "${auth_config_map_output}" ]]; then
+        while IFS= read -r auth_config_map; do
+            [[ -n "${auth_config_map}" ]] || continue
+            auth_config_map_name="${auth_config_map}"
+            auth_config_map_count=$((auth_config_map_count + 1))
+        done <<< "${auth_config_map_output}"
+    fi
+    if ((auth_config_map_count != 1)); then
+        echo "ERROR: expected exactly one Fulfillment auth ConfigMap, found ${auth_config_map_count}." >&2
+        return 1
+    fi
+    if ! auth_config=$(kubectl -n "${namespace}" get "${auth_config_map_name}" \
+        -o 'jsonpath={.data.OSAC_FULFILLMENT_ISSUER_URL}{"\t"}{.data.OSAC_FULFILLMENT_CLIENT_ID_SECRET_NAME}{"\t"}{.data.OSAC_FULFILLMENT_CLIENT_ID_SECRET_KEY}{"\t"}{.data.OSAC_FULFILLMENT_CLIENT_SECRET_SECRET_NAME}{"\t"}{.data.OSAC_FULFILLMENT_CLIENT_SECRET_SECRET_KEY}' \
+        2>/dev/null); then
+        echo "ERROR: Fulfillment issuer configuration is unavailable." >&2
+        return 1
+    fi
+    IFS=$'\t' read -r issuer_url client_id_secret_name client_id_secret_key \
+        client_secret_secret_name client_secret_secret_key <<< "${auth_config}"
+    if [[ -z "${issuer_url}" || -z "${client_id_secret_name}" || -z "${client_id_secret_key}" \
+        || -z "${client_secret_secret_name}" || -z "${client_secret_secret_key}" ]]; then
+        echo "ERROR: Fulfillment client credentials are unavailable." >&2
+        return 1
+    fi
+    if ! encoded_client_id=$(kubectl -n "${namespace}" get secret "${client_id_secret_name}" \
+        -o "jsonpath={.data['${client_id_secret_key}']}" 2>/dev/null); then
+        echo "ERROR: Fulfillment client credentials are unavailable." >&2
+        return 1
+    fi
+    if ! encoded_client_secret=$(kubectl -n "${namespace}" get secret "${client_secret_secret_name}" \
+        -o "jsonpath={.data['${client_secret_secret_key}']}" 2>/dev/null); then
+        echo "ERROR: Fulfillment client credentials are unavailable." >&2
+        return 1
+    fi
+
+    if ! client_id=$(printf '%s' "${encoded_client_id}" | python3 -c '
+import base64
+import sys
+
+try:
+    value = base64.b64decode(sys.stdin.buffer.read(), validate=True)
+    sys.stdout.buffer.write(value)
+except (ValueError, base64.binascii.Error):
+    sys.exit(1)
+'); then
+        echo "ERROR: Fulfillment client credentials are invalid." >&2
+        return 1
+    fi
+    unset encoded_client_id
+    if ! client_secret=$(printf '%s' "${encoded_client_secret}" | python3 -c '
+import base64
+import sys
+
+try:
+    value = base64.b64decode(sys.stdin.buffer.read(), validate=True)
+    sys.stdout.buffer.write(value)
+except (ValueError, base64.binascii.Error):
+    sys.exit(1)
+'); then
+        echo "ERROR: Fulfillment client credentials are invalid." >&2
+        return 1
+    fi
+    unset encoded_client_secret
+
+    get_fulfillment_access_token "${issuer_url}" "${client_id}" "${client_secret}" "$@"
+}
+
 # Resolve the highest real (non-nightly) component release tag matching
 # "<prefix>/vX.Y.Z" -- scoped by prefix since tags aren't path-scoped.
 #

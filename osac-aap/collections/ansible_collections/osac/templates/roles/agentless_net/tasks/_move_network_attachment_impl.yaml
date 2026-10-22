@@ -1,0 +1,247 @@
+---
+- name: Resolve AgentlessNet attachment direction
+  ansible.builtin.set_fact:
+    _agentless_net_attachment_offboarding: >-
+      {{ (resource.metadata.deletionTimestamp | default(None, true)) is not none }}
+    _agentless_net_attachment_tenant: >-
+      {{ resource.metadata.annotations.get('osac.openshift.io/tenant', '') }}
+    _agentless_net_attachment_subnet: "{{ network_attachment_subnet | default({}) }}"
+  no_log: true
+
+- name: Require a tenant-owned Subnet for onboarding
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_attachment_tenant is string
+      - _agentless_net_attachment_tenant | length > 0
+      - _agentless_net_attachment_offboarding | bool or _agentless_net_attachment_subnet is mapping
+      - _agentless_net_attachment_offboarding | bool or _agentless_net_attachment_subnet.metadata is defined
+      - _agentless_net_attachment_offboarding | bool or _agentless_net_attachment_subnet.metadata.uid is defined
+    fail_msg: AgentlessNet onboarding requires a tenant-owned Subnet CR resolved by the shared move playbook.
+  no_log: true
+
+- name: Load and validate AgentlessNet attachment inventory
+  ansible.builtin.include_tasks: _resolve_attachment_configuration.yaml
+
+- name: Initialize the optional saved Subnet allocation result
+  ansible.builtin.set_fact:
+    _agentless_net_attachment_saved_subnet:
+      found: false
+      subnet: {}
+  no_log: true
+
+- name: Validate the supplied Subnet snapshot
+  ansible.builtin.assert:
+    that:
+      - (_agentless_net_attachment_subnet.metadata.annotations | default({})).get('osac.openshift.io/tenant', '') == _agentless_net_attachment_tenant
+      - (_agentless_net_attachment_subnet.metadata.labels | default({})).get('osac.openshift.io/subnet-uuid', '') == network_attachment.subnet_ref
+      - >-
+        _agentless_net_attachment_offboarding | bool
+        or _agentless_net_attachment_subnet.metadata.deletionTimestamp is not defined
+      - >-
+        _agentless_net_attachment_offboarding | bool
+        or _agentless_net_attachment_subnet.status.phase == 'Ready'
+    fail_msg: >-
+      AgentlessNet attachment Subnet identity, tenant, or readiness does not
+      match the BareMetalInstance request.
+  when: _agentless_net_attachment_subnet.metadata is defined
+  no_log: true
+
+- name: Read the saved Subnet VLAN allocation when its CR is available
+  osac.templates.agentless_net_state:
+    action: get_subnet
+    state_file: "{{ agentless_net_network_state_file }}"
+    uid: "{{ _agentless_net_attachment_subnet.metadata.uid }}"
+    tenant_id: "{{ _agentless_net_attachment_tenant }}"
+  delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+  become: true
+  register: _agentless_net_attachment_saved_subnet
+  when: _agentless_net_attachment_subnet.metadata.uid is defined
+  no_log: true
+
+- name: Require a saved ready allocation for onboarding
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_attachment_saved_subnet.found | default(false) | bool
+      - _agentless_net_attachment_saved_subnet.subnet.phase == 'ready'
+    fail_msg: AgentlessNet cannot attach a machine until its Subnet VLAN allocation is ready.
+  when: not _agentless_net_attachment_offboarding | bool
+  no_log: true
+
+- name: Validate shared playbook source and destination names
+  ansible.builtin.assert:
+    that:
+      - >-
+        _agentless_net_attachment_offboarding | bool
+        or network_attachment.from_vnet_name == _agentless_net_provisioning_network.name
+      - >-
+        _agentless_net_attachment_offboarding | bool
+        or network_attachment.to_vnet_name == _agentless_net_attachment_subnet.metadata.name
+      - >-
+        not (_agentless_net_attachment_offboarding | bool)
+        or not (_agentless_net_attachment_subnet.metadata.name is defined)
+        or network_attachment.from_vnet_name == _agentless_net_attachment_subnet.metadata.name
+      - >-
+        not (_agentless_net_attachment_offboarding | bool)
+        or network_attachment.to_vnet_name == _agentless_net_provisioning_network.name
+    fail_msg: >-
+      AgentlessNet attachment source and destination do not match the resolved
+      provisioning and Subnet network segments.
+  no_log: true
+
+- name: Select source and destination access VLANs
+  ansible.builtin.set_fact:
+    _agentless_net_provisioning_vlan: "{{ _agentless_net_provisioning_network.vlan_id | int }}"
+    _agentless_net_subnet_vlan: >-
+      {{ (_agentless_net_attachment_saved_subnet.subnet.vlan_id
+          if (_agentless_net_attachment_saved_subnet.found | default(false) | bool)
+          else 0) | int }}
+    _agentless_net_source_vlan: >-
+      {{ (_agentless_net_attachment_saved_subnet.subnet.vlan_id
+          if _agentless_net_attachment_offboarding | bool
+             and (_agentless_net_attachment_saved_subnet.found | default(false) | bool)
+          else _agentless_net_provisioning_network.vlan_id) | int }}
+    _agentless_net_target_vlan: >-
+      {{ (_agentless_net_provisioning_network.vlan_id
+          if _agentless_net_attachment_offboarding | bool
+          else _agentless_net_attachment_saved_subnet.subnet.vlan_id) | int }}
+  no_log: true
+
+- name: Inspect the mapped Cumulus access port before moving it
+  ansible.builtin.raw: >-
+    bridge -j vlan show dev
+    {{ hostvars['localhost']['_agentless_net_attachment_port']['port'] }}
+  delegate_to: >-
+    {{ hostvars['localhost']['_agentless_net_attachment_port']['switch'] }}
+  become: true
+  vars:
+    ansible_connection: ssh
+    ansible_host: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_host }}
+    ansible_user: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_user }}
+    ansible_port: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_port | default(22) }}
+    ansible_network_os: cumulus
+  register: _agentless_net_attachment_vlan_before
+  changed_when: false
+  no_log: true
+
+- name: Parse the current Cumulus access port membership
+  ansible.builtin.set_fact:
+    _agentless_net_attachment_port_vlan_state: "{{ _agentless_net_attachment_vlan_before.stdout | from_json }}"
+  no_log: true
+
+- name: Select the mapped port's current VLAN memberships
+  ansible.builtin.set_fact:
+    _agentless_net_attachment_port_entries: >-
+      {{ _agentless_net_attachment_port_vlan_state
+         | selectattr('ifname', 'equalto', _agentless_net_attachment_port.port)
+         | list }}
+  no_log: true
+
+- name: Normalize effective access VLAN state
+  ansible.builtin.set_fact:
+    _agentless_net_attachment_current_vlans: >-
+      {{ (_agentless_net_attachment_port_entries | first | default({})).get('vlans', [])
+         | map(attribute='vlan') | map('int') | unique | list }}
+    _agentless_net_attachment_current_flags: >-
+      {{ (((_agentless_net_attachment_port_entries | first | default({})).get('vlans', []))
+          | first | default({})).get('flags', []) }}
+  no_log: true
+
+- name: Validate the port is on its expected source or already at its destination
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_attachment_port_vlan_state is sequence and _agentless_net_attachment_port_vlan_state is not string
+      - _agentless_net_attachment_port_entries | length <= 1
+      - >-
+        (_agentless_net_attachment_port_entries | length == 0
+         and _agentless_net_attachment_current_vlans | length == 0
+         and not _agentless_net_attachment_offboarding | bool)
+        or
+        (_agentless_net_attachment_port_entries | length == 1
+         and _agentless_net_attachment_current_vlans | length == 1
+         and 'PVID' in _agentless_net_attachment_current_flags
+         and 'Egress Untagged' in _agentless_net_attachment_current_flags
+         and
+         (_agentless_net_attachment_current_vlans == [_agentless_net_target_vlan | int]
+          or _agentless_net_attachment_current_vlans == [_agentless_net_source_vlan | int]
+          or (_agentless_net_attachment_offboarding | bool
+              and not (_agentless_net_attachment_saved_subnet.found | default(false) | bool))))
+    fail_msg: >-
+      AgentlessNet refused to move a switch port whose effective VLAN membership
+      is neither the expected source access VLAN nor the requested destination.
+  no_log: true
+
+- name: Configure the mapped physical port with the shared AgentlessNet port role
+  ansible.builtin.include_role:
+    name: agentless_net.l2.port
+    tasks_from: set_access_port
+    apply:
+      delegate_to: >-
+        {{ hostvars['localhost']['_agentless_net_attachment_port']['switch'] }}
+      become: true
+  vars:
+    ansible_connection: ssh
+    ansible_host: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_host }}
+    ansible_user: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_user }}
+    ansible_port: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_port | default(22) }}
+    ansible_network_os: cumulus
+    port_name: "{{ hostvars['localhost']['_agentless_net_attachment_port']['port'] }}"
+    vlan_id: "{{ _agentless_net_target_vlan | int }}"
+  when: >-
+    _agentless_net_attachment_port_entries | length == 0
+    or
+    (_agentless_net_attachment_port_entries[0].vlans | default([])
+     | map(attribute='vlan') | map('int') | unique | list)
+    != [_agentless_net_target_vlan | int]
+  no_log: true
+
+- name: Verify the mapped Cumulus access port converged to its destination VLAN
+  ansible.builtin.raw: >-
+    bridge -j vlan show dev
+    {{ hostvars['localhost']['_agentless_net_attachment_port']['port'] }}
+  delegate_to: >-
+    {{ hostvars['localhost']['_agentless_net_attachment_port']['switch'] }}
+  become: true
+  vars:
+    ansible_connection: ssh
+    ansible_host: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_host }}
+    ansible_user: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_user }}
+    ansible_port: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_port | default(22) }}
+    ansible_network_os: cumulus
+  register: _agentless_net_attachment_vlan_after
+  changed_when: false
+  until: >-
+    _agentless_net_attachment_vlan_after.rc == 0
+    and
+    ((_agentless_net_attachment_vlan_after.stdout | from_json
+      | selectattr('ifname', 'equalto', _agentless_net_attachment_port.port)
+      | map(attribute='vlans') | first | default([])
+      | map(attribute='vlan') | map('int') | unique | list)
+     == [_agentless_net_target_vlan | int])
+  retries: 30
+  delay: 2
+  no_log: true
+
+- name: Verify the moved port is an untagged PVID access port
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_attachment_vlan_after.stdout | from_json | length == 1
+      - >-
+        (_agentless_net_attachment_vlan_after.stdout | from_json
+        | first).get('ifname') == _agentless_net_attachment_port.port
+      - >-
+        'PVID' in (((_agentless_net_attachment_vlan_after.stdout | from_json
+        | first).vlans | first).flags | default([]))
+      - >-
+        'Egress Untagged' in (((_agentless_net_attachment_vlan_after.stdout | from_json
+        | first).vlans | first).flags | default([]))
+    fail_msg: AgentlessNet switch did not apply the requested VLAN as an untagged access VLAN.
+  no_log: true

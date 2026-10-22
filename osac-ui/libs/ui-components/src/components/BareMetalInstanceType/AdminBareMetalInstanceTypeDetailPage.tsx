@@ -20,6 +20,7 @@ import {
 
 import { BareMetalInstanceType, BareMetalInstanceTypes } from '@osac/types/private';
 import { useGetResource } from '@osac/ui-components/api/use-resource';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 import { displayValue } from '@osac/ui-components/utils/detailFormatters';
 
 import { BAREMETAL_INSTANCE_TYPES_LIST_ROUTE } from './AdminBareMetalInstanceTypeListPage';
@@ -223,9 +224,7 @@ const AdminBareMetalInstanceTypeDetailPage = () => {
                   </Button>
                 </ActionListItem>
                 <ActionListItem>
-                  <Button variant="danger" onClick={() => setDeleteOpen(true)}>
-                    {t('Delete')}
-                  </Button>
+                  <DeleteResourceButton onClick={() => setDeleteOpen(true)} />
                 </ActionListItem>
               </ActionListGroup>
             </ActionList>

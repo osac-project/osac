@@ -175,7 +175,10 @@ func (s *PrivateBareMetalInstanceTypesServer) Update(ctx context.Context,
 
 	// Merge the update into a clone of the existing object:
 	merged := cloneBareMetalInstanceType(existing)
-	applyBareMetalInstanceTypeUpdate(merged, request.GetObject(), request.GetUpdateMask())
+	err = s.applyBareMetalInstanceTypeUpdate(merged, request.GetObject(), request.GetUpdateMask())
+	if err != nil {
+		return
+	}
 
 	// Validate immutable fields:
 	err = validateBareMetalInstanceTypeImmutability(merged, existing)
@@ -216,24 +219,23 @@ func cloneBareMetalInstanceType(bmt *privatev1.BareMetalInstanceType) *privatev1
 // applyBareMetalInstanceTypeUpdate applies the update fields onto the base object, respecting the field mask.
 // If no mask is provided, all fields from the update are applied.
 // Field mask paths use the spec prefix (e.g., "spec.description", "spec.hardware") per API conventions.
-func applyBareMetalInstanceTypeUpdate(base, update *privatev1.BareMetalInstanceType, mask *fieldmaskpb.FieldMask) {
+func (s *PrivateBareMetalInstanceTypesServer) applyBareMetalInstanceTypeUpdate(base, update *privatev1.BareMetalInstanceType, mask *fieldmaskpb.FieldMask) error {
 	if mask == nil || len(mask.GetPaths()) == 0 {
 		proto.Merge(base, update)
-		return
+		return nil
 	}
-	for _, path := range mask.GetPaths() {
-		switch path {
-		case "spec.description":
-			base.GetSpec().SetDescription(update.GetSpec().GetDescription())
-		case "spec.hardware":
-			base.GetSpec().SetHardware(update.GetSpec().GetHardware())
-		case "spec.host_label_selector":
-			base.GetSpec().SetHostLabelSelector(update.GetSpec().GetHostLabelSelector())
-		default:
-			// For unknown paths, fall through - the generic handler will
-			// reject invalid paths if needed.
+	paths, err := s.generic.compilePaths(mask.GetPaths())
+	if err != nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid update mask: %v", err)
+	}
+	for _, path := range paths {
+		if value, ok := path.Get(update); ok {
+			path.Set(base, value)
+		} else {
+			path.Clear(base)
 		}
 	}
+	return nil
 }
 
 // validateBareMetalInstanceTypeImmutability checks that immutable fields have not been changed.

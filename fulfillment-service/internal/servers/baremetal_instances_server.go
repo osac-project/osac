@@ -21,6 +21,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
@@ -94,7 +95,13 @@ func (b *BareMetalInstancesServerBuilder) Build() (result *BareMetalInstancesSer
 	inMapper, err := NewGenericMapper[*publicv1.BareMetalInstance, *privatev1.BareMetalInstance]().
 		SetLogger(b.logger).
 		SetStrict(true).
-		AddIgnoredFields("osac.public.v1.BareMetalInstanceStatus.state_transition_time").
+		AddIgnoredFields(
+			"osac.public.v1.BareMetalInstanceStatus.state_transition_time",
+			// The system sets the worker attribution fields once, at creation; users can read
+			// them but never supply them.
+			"osac.public.v1.BareMetalInstanceStatus.cluster",
+			"osac.public.v1.BareMetalInstanceStatus.node_set",
+		).
 		Build()
 	if err != nil {
 		return
@@ -197,9 +204,13 @@ func (s *BareMetalInstancesServer) Create(ctx context.Context,
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map public bare metal instance to private",
 			slog.Any("error", err))
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance")
+		err = publicInputMappingError(err, "failed to process bare metal instance")
 		return
 	}
+	// The status is output-only: only the system writes it. The metering source contract
+	// is not enforced on inserts, so a caller-supplied status must never reach the
+	// database as a fabricated fact.
+	privateBMI.ClearStatus()
 
 	privateRequest := &privatev1.BareMetalInstancesCreateRequest{}
 	privateRequest.SetObject(privateBMI)
@@ -225,6 +236,11 @@ func (s *BareMetalInstancesServer) Create(ctx context.Context,
 
 func (s *BareMetalInstancesServer) Update(ctx context.Context,
 	request *publicv1.BareMetalInstancesUpdateRequest) (response *publicv1.BareMetalInstancesUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	publicBMI := request.GetObject()
 	if publicBMI == nil {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
@@ -236,8 +252,9 @@ func (s *BareMetalInstancesServer) Update(ctx context.Context,
 		return
 	}
 	for _, path := range request.GetUpdateMask().GetPaths() {
-		if path == "status" || path == "status.state_transition_time" {
-			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "status.state_transition_time is output-only")
+		if path == "status" || path == "status.state_transition_time" ||
+			path == "status.cluster" || path == "status.node_set" {
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is output-only", path)
 			return
 		}
 	}
@@ -245,6 +262,7 @@ func (s *BareMetalInstancesServer) Update(ctx context.Context,
 	// When there's a field mask, copy to a new private object and let the generic server handle the
 	// merge with the database object, which correctly applies field mask semantics.
 	var privateBMI *privatev1.BareMetalInstance
+	var preservedStatus *privatev1.BareMetalInstanceStatus
 	updateMask := request.GetUpdateMask()
 	if len(updateMask.GetPaths()) > 0 {
 		privateBMI = &privatev1.BareMetalInstance{}
@@ -257,14 +275,24 @@ func (s *BareMetalInstancesServer) Update(ctx context.Context,
 			return nil, err
 		}
 		privateBMI = getResponse.GetObject()
+		if privateBMI.GetStatus() != nil {
+			// The mapper merges into the destination's status message, so the stored
+			// status must be cloned before the copy to survive it.
+			preservedStatus = proto.Clone(privateBMI.GetStatus()).(*privatev1.BareMetalInstanceStatus)
+		}
 	}
 	err = s.inMapper.Copy(ctx, publicBMI, privateBMI)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map public bare metal instance to private",
 			slog.Any("error", err))
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance")
+		err = publicInputMappingError(err, "failed to process bare metal instance")
 		return
 	}
+	// The public API has no writable status, and the mapper copies the fields the request
+	// carries. Always restore the stored status, including when the request supplies one:
+	// a maskless update carrying a status must not change output-only fields or fabricate
+	// a state change for the metering source contract.
+	privateBMI.SetStatus(preservedStatus)
 
 	privateRequest := &privatev1.BareMetalInstancesUpdateRequest{}
 	privateRequest.SetObject(privateBMI)

@@ -4,9 +4,10 @@
     validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
     follow_redirects: none
     headers:
-      authorization: Bearer {{ osac_fulfillment_service_token }}
+      authorization: "Bearer {{ osac_fulfillment_service_token if osac_fulfillment_service_token is defined else lookup('osac.service.fulfillment_token') }}"
     status_code: [200, 404, 503]
   register: compute_instance_template_check
+  no_log: true
 
 - name: Skip ComputeInstance templates when service is disabled
   ansible.builtin.debug:
@@ -36,9 +37,10 @@
     follow_redirects: none
     method: PATCH
     headers:
-      authorization: Bearer {{ osac_fulfillment_service_token }}
+      authorization: "Bearer {{ osac_fulfillment_service_token if osac_fulfillment_service_token is defined else lookup('osac.service.fulfillment_token') }}"
     body_format: json
     body: "{{ template }}"
+  no_log: true
 
 - name: Create new ComputeInstance template
   loop: "{{ osac_compute_instance_templates }}"
@@ -54,6 +56,7 @@
     follow_redirects: none
     method: POST
     headers:
-      authorization: Bearer {{ osac_fulfillment_service_token }}
+      authorization: "Bearer {{ osac_fulfillment_service_token if osac_fulfillment_service_token is defined else lookup('osac.service.fulfillment_token') }}"
     body_format: json
     body: "{{ template }}"
+  no_log: true

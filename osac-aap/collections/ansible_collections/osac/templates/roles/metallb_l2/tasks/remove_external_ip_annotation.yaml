@@ -1,0 +1,11 @@
+- name: Fetch ComputeInstance before annotation cleanup
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: osac.openshift.io/v1alpha1
+    kind: ComputeInstance
+    name: "{{ detach_compute_instance_name }}"
+    namespace: "{{ external_ip_attachment.metadata.namespace }}"
+  register: ci_info
+
+- name: Patch the ComputeInstance ExternalIP annotation
+  ansible.builtin.include_tasks: patch_external_ip_annotation.yaml

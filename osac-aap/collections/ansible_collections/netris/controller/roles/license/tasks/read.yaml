@@ -5,12 +5,13 @@
   when: netris_session_cookie is not defined
 
 - name: Get license status
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/license"
     method: GET
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
-    validate_certs: "{{ netris_validate_certs }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
     timeout: "{{ netris_timeout }}"
     status_code: [200, 400, 404]
   register: _license_resp

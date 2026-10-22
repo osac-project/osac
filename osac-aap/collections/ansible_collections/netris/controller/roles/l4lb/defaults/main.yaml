@@ -2,4 +2,4 @@
 l4lb_state: present
 l4lb_protocol: tcp
 l4lb_status: enable
-l4lb_health_check: 'None'
+l4lb_health_check: "None"

@@ -5,6 +5,7 @@ package baremetalworker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"google.golang.org/grpc/codes"
@@ -25,26 +26,57 @@ const (
 	systemBMITemplateID = "osac.templates.bm_host_provisioning"
 )
 
+// errBMICreateRejected marks a BMI Create the fulfillment service definitively
+// rejected with a terminal gRPC status code and a server-side rollback: no BMI
+// record was persisted for the attempt. The underlying error and its status
+// code remain reachable through wrapping.
+var errBMICreateRejected = errors.New("BMI create rejected")
+
+// isDefinitiveCreateRejection reports whether err is a terminal fulfillment
+// rejection of a BMI Create: the server refused the request and rolled back its
+// transaction, so no BMI can exist for the attempt. Transport-class failures
+// (Unavailable, DeadlineExceeded, Canceled) and unknown outcomes (Unknown,
+// Internal, DataLoss) stay conservative — absence is never inferred from them.
+func isDefinitiveCreateRejection(err error) bool {
+	switch status.Code(err) {
+	case codes.InvalidArgument,
+		codes.NotFound,
+		codes.FailedPrecondition,
+		codes.PermissionDenied,
+		codes.ResourceExhausted,
+		codes.OutOfRange,
+		codes.Unimplemented:
+		return true
+	default:
+		return false
+	}
+}
+
 // ensureBMI creates a single BareMetalInstance, handling the AlreadyExists race by re-listing.
 // Returns the BMI, a non-zero result on unavailability backoff, or an error.
 // A successful create is not written back into the invocation's observation:
 // the caller persists the returned identity and the next invocation re-observes.
 func (r *Reconciler) ensureBMI(
-	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string, nodeSet v1alpha1.NodeRequest,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster, nodeSet v1alpha1.NodeRequest,
 	workerName string, image *privatev1.DiskImageReference, ignitionRaw, filter, fabricInterface string,
 ) (*privatev1.BareMetalInstance, ctrl.Result, error) {
-	req := r.buildBMICreateRequest(co, tenant, nodeSet, workerName, image, ignitionRaw, fabricInterface)
+	// The worker lives in its cluster's project and records its cluster in status.cluster.
+	req := r.buildBMICreateRequest(co, cluster.GetMetadata().GetTenant(), cluster, nodeSet, workerName, image, ignitionRaw, fabricInterface)
 	created, err := r.fulfillment.CreateBareMetalInstance(ctx, req)
 	if err == nil {
 		return created, ctrl.Result{}, nil
 	}
 
 	if st, ok := status.FromError(err); ok && st.Code() == codes.AlreadyExists {
-		bmi, listErr := r.findBMIByName(ctx, co, tenant, filter, workerName)
+		bmi, listErr := r.findBMIByName(ctx, co, cluster.GetMetadata().GetTenant(), filter, workerName)
 		if listErr != nil {
 			return nil, ctrl.Result{}, listErr
 		}
 		return bmi, ctrl.Result{}, nil
+	}
+
+	if isDefinitiveCreateRejection(err) {
+		return nil, ctrl.Result{}, fmt.Errorf("%w: creating BMI %s: %w", errBMICreateRejected, workerName, err)
 	}
 
 	return nil, ctrl.Result{}, fmt.Errorf("creating BMI %s: %w", workerName, err)
@@ -83,8 +115,8 @@ func (r *Reconciler) findBMIByName(ctx context.Context, co *v1alpha1.ClusterOrde
 }
 
 func (r *Reconciler) buildBMICreateRequest(
-	co *v1alpha1.ClusterOrder, tenant string, nodeSet v1alpha1.NodeRequest, workerName string,
-	image *privatev1.DiskImageReference, ignitionRaw, fabricInterface string,
+	co *v1alpha1.ClusterOrder, tenant string, cluster *privatev1.Cluster, nodeSet v1alpha1.NodeRequest,
+	workerName string, image *privatev1.DiskImageReference, ignitionRaw, fabricInterface string,
 ) *privatev1.BareMetalInstance {
 	labels := map[string]string{clusterOrderLabel: co.Name}
 	annotations := map[string]string{ownerReferenceAnnotation: fmt.Sprintf("ClusterOrder/%s", co.Name)}
@@ -129,11 +161,18 @@ func (r *Reconciler) buildBMICreateRequest(
 	return privatev1.BareMetalInstance_builder{
 		Metadata: privatev1.Metadata_builder{
 			Tenant:      tenant,
+			Project:     cluster.GetMetadata().GetProject(),
 			Name:        workerName,
 			Labels:      labels,
 			Annotations: annotations,
 		}.Build(),
 		Spec: specBuilder.Build(),
+		Status: privatev1.BareMetalInstanceStatus_builder{
+			Cluster: privatev1.ClusterLocalReference_builder{
+				Id: cluster.GetId(),
+			}.Build(),
+			NodeSet: &nodeSet.NodeSet,
+		}.Build(),
 	}.Build()
 }
 

@@ -14,7 +14,6 @@ const AdminInstanceTypeListPage = () => {
   return (
     <ListPage
       title={t('Instance types')}
-      label={t('Infrastructure')}
       description={t('Manage provider-defined instance types for this cloud platform.')}
       error={error}
       actions={

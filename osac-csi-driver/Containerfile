@@ -1,6 +1,6 @@
 # Build context: mono-repo root (not osac-csi-driver/ alone).
 # Invoke with: podman build -f osac-csi-driver/Containerfile .
-FROM registry.access.redhat.com/ubi10/go-toolset:1.26.7-1788946935 AS builder
+FROM registry.access.redhat.com/ubi10/go-toolset:1.26.7-1791275880 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -19,7 +19,11 @@ COPY --chown=1001:1001 osac-metering/schema/go.mod osac-metering/schema/go.sum o
 COPY --chown=1001:1001 osac-metering/metering-service/go.mod osac-metering/metering-service/go.sum osac-metering/metering-service/
 COPY --chown=1001:1001 osac-metering/adapters/go.mod osac-metering/adapters/go.sum osac-metering/adapters/
 COPY --chown=1001:1001 osac-ui/proxy/go.mod osac-ui/proxy/go.sum osac-ui/proxy/
-RUN cd osac-csi-driver && go mod download
+# [ -f /cachi2/cachi2.env ] && . ... sources Hermeto/Cachi2's generated env
+# (GOPROXY/GOFLAGS pointed at the prefetched module cache) when present --
+# i.e. a hermetic Konflux build. Absent entirely for local/non-hermetic
+# builds, where go mod download falls back to the real network as before.
+RUN cd osac-csi-driver && { [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; GODEBUG=http2client=0 go mod download; }
 
 COPY --chown=1001:1001 proto/ proto/
 COPY --chown=1001:1001 osac-csi-driver/ osac-csi-driver/
@@ -27,12 +31,23 @@ COPY --chown=1001:1001 osac-csi-driver/ osac-csi-driver/
 WORKDIR /opt/app-root/src/osac-csi-driver
 ARG VERSION=0.1.0
 ARG GIT_COMMIT=unknown
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -a -buildvcs=false -ldflags "-X main.version=${VERSION} -X main.gitCommit=${GIT_COMMIT}" \
     -o osac-csi-driver ./cmd/osac-csi-driver
 
 FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
+# Stamped to the real release version on osac-build-and-publish.yaml's
+# temp branch before tagging (same mechanism as Chart.yaml's own
+# version field). Surfaced as a real OCI label so Konflux's release-side
+# {{ oci_version }} tag templating resolves to it instead of silently
+# falling back to the base image's own inherited version label.
+# Separate from the main.version ldflags above (that one is baked into
+# the binary; this is the registry/OCI-level label).
+ARG VERSION=0.1.0
 LABEL name="cloud-extensions/osac-csi-driver-rhel10"
+LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
+LABEL org.opencontainers.image.version="${VERSION}"
 COPY --from=builder /opt/app-root/src/osac-csi-driver/osac-csi-driver /usr/local/bin/
 USER 1001
 ENTRYPOINT ["/usr/local/bin/osac-csi-driver"]

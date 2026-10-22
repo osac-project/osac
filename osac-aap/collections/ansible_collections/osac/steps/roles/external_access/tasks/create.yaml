@@ -29,7 +29,7 @@
     name: osac.esi.floating_ip
   vars:
     floating_ip_state: present
-    floating_ip_name: "{{ external_access_name }}-api"  # noqa:var-naming[no-role-prefix]
+    floating_ip_name: "{{ external_access_name }}-api" # noqa:var-naming[no-role-prefix]
     floating_ip_properties:
       instance: "{{ cluster_order.metadata.namespace }}"
       clusterorder: "{{ external_access_name }}"
@@ -39,7 +39,7 @@
   ansible.builtin.set_fact:
     external_access_api_floating_ip: "{{ allocate_floating_ip_result }}"
 
-- name: Create port forwarding for api endpoint  # noqa:no-changed-when
+- name: Create port forwarding for api endpoint # noqa:no-changed-when
   ansible.builtin.include_role:
     name: osac.esi.floating_ip
     tasks_from: create_port_forwarding
@@ -48,7 +48,7 @@
     floating_ip: "{{ external_access_api_floating_ip }}"
     internal_network: "{{ external_access_api_internal_network }}"
     ports:
-    - "{{ external_access_kube_apiserver_port }}"
+      - "{{ external_access_kube_apiserver_port }}"
     description: "{{ external_access_name }}-api"
 
 - name: Allocate ingress floating ip
@@ -56,7 +56,7 @@
     name: osac.esi.floating_ip
   vars:
     floating_ip_state: present
-    floating_ip_name: "{{ external_access_name }}-ingress"  # noqa:var-naming[no-role-prefix]
+    floating_ip_name: "{{ external_access_name }}-ingress" # noqa:var-naming[no-role-prefix]
     floating_ip_properties:
       instance: "{{ cluster_order.metadata.namespace }}"
       clusterorder: "{{ external_access_name }}"
@@ -87,6 +87,18 @@
     - name: "*.{{ external_access_ingress_domain }}"
       addr: "{{ external_access_ingress_floating_ip }}"
 
+- name: Resolve authoritative nameserver for DNS zone
+  ansible.builtin.command: >-
+    dig +short NS {{ lookup('env', 'DNS_ZONE') | default(external_access_base_domain, true) }}
+  register: _external_access_zone_ns
+  changed_when: false
+  failed_when: false
+  no_log: true
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+    and external_access_dns_wait_use_authoritative | bool
+    and (dns_server | default('') | length == 0)
+
 - name: Wait for DNS records
   when: >-
     external_access_base_domain in external_access_supported_base_domains | default([])
@@ -95,6 +107,14 @@
     tasks_from: wait_for_dns
   vars:
     wait_for_dns_record: "{{ item }}"
+    wait_for_dns_server: >-
+      {{
+        dns_server if (dns_server | default('') | length > 0)
+        else (
+          (_external_access_zone_ns.stdout_lines | default([]))
+          | first | default('') | regex_replace('\.$', '')
+        )
+      }}
   loop:
     - "{{ external_access_api_domain }}"
     - "{{ external_access_api_int_domain }}"
@@ -137,7 +157,7 @@
     metallb_ingress_admin_kubeconfig: "{{ admin_kubeconfig }}"
     metallb_ingress_ip: "{{ external_access_metallb_ingress_ip }}"
 
-- name: Create port forwarding for ingress endpoint  # noqa:no-changed-when
+- name: Create port forwarding for ingress endpoint # noqa:no-changed-when
   ansible.builtin.include_role:
     name: osac.esi.floating_ip
     tasks_from: create_port_forwarding
@@ -146,6 +166,6 @@
     floating_ip: "{{ external_access_ingress_floating_ip }}"
     internal_network: "{{ external_access_ingress_internal_network }}"
     ports:
-    - "80"
-    - "443"
+      - "80"
+      - "443"
     description: "{{ external_access_name }}-ingress"

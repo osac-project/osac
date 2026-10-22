@@ -25,6 +25,8 @@ const buildTypedData = (values: SecretValues) => {
       return { userdata: getEntryBytes(values.userData) };
     case SecretType.VALUE:
       return { value: getEntryBytes(values.value) };
+    case SecretType.SSH_PUBLIC_KEY:
+      return { public_key: getEntryBytes(values.sshPublicKey) };
     case SecretType.OPAQUE:
     case SecretType.UNSPECIFIED:
       return buildOpaqueData(values.opaque);

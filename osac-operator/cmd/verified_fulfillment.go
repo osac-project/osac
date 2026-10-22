@@ -16,6 +16,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"golang.org/x/oauth2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
@@ -33,13 +34,13 @@ var fulfillmentClientBundleObserved = promauto.With(ctrlmetrics.Registry).NewGau
 // verifiedFulfillmentConn routes new RPCs to the last connection that passed
 // a TLS handshake. A failed bundle revision leaves that connection untouched.
 type verifiedFulfillmentConn struct {
-	address   string
-	caFile    string
-	tokenFile string
-	mu        sync.Mutex
-	closed    bool
-	current   atomic.Pointer[grpc.ClientConn]
-	observed  atomic.Value
+	address     string
+	caFile      string
+	tokenSource oauth2.TokenSource
+	mu          sync.Mutex
+	closed      bool
+	current     atomic.Pointer[grpc.ClientConn]
+	observed    atomic.Value
 }
 
 func (v *verifiedFulfillmentConn) Invoke(
@@ -104,9 +105,9 @@ func (v *verifiedFulfillmentConn) reload(ctx context.Context) error {
 		RootCAs: pool, MinVersion: tls.VersionTLS12,
 	})
 	opts := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
-	if v.tokenFile != "" {
+	if v.tokenSource != nil {
 		opts = append(opts, grpc.WithPerRPCCredentials(oauth.TokenSource{
-			TokenSource: &fileTokenSource{tokenFile: v.tokenFile},
+			TokenSource: v.tokenSource,
 		}))
 	}
 	candidate, err := grpc.NewClient(v.address, opts...)

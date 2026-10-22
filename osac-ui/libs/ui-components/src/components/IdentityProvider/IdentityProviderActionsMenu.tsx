@@ -5,6 +5,7 @@ import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v
 
 import { IdentityProvider, IdentityProviders } from '@osac/types';
 import { useDeleteResource } from '@osac/ui-components/api/use-resource';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 import DeleteResourceModal from '@osac/ui-components/components/Resource/DeleteResourceModal';
 
 import IdentityProviderEnableModal from './IdentityProviderEnableModal';
@@ -72,14 +73,13 @@ const IdentityProviderActionsMenu = ({ idp }: IdentityProviderActionsMenuProps) 
           >
             {idp.spec?.enabled ? t('Disable') : t('Enable')}
           </DropdownItem>
-          <DropdownItem
+          <DeleteResourceButton
+            isDropdown
             onClick={() => {
               setDeleteOpen(true);
               setOpen(false);
             }}
-          >
-            {t('Delete')}
-          </DropdownItem>
+          />
         </DropdownList>
       </Dropdown>
     </>

@@ -211,17 +211,6 @@ func registerReferenceLookups(
 	references.RegisterDAOLookup(validator, "osac.private.v1.ClusterCatalogItemReference", clusterCatalogItemsDAO)
 	references.RegisterDAOLookup(validator, "osac.public.v1.ClusterCatalogItemReference", clusterCatalogItemsDAO)
 
-	hostTypesDAO, err := dao.NewGenericDAO[*privatev1.HostType]().
-		SetLogger(logger).
-		SetTenancyLogic(tenancyLogic).
-		SetMetricsRegisterer(metricsRegisterer).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create HostType DAO for reference lookups: %w", err)
-	}
-	references.RegisterDAOLookup(validator, "osac.private.v1.HostTypeReference", hostTypesDAO)
-	references.RegisterDAOLookup(validator, "osac.public.v1.HostTypeReference", hostTypesDAO)
-
 	bareMetalInstancesDAO, err := dao.NewGenericDAO[*privatev1.BareMetalInstance]().
 		SetLogger(logger).
 		SetTenancyLogic(tenancyLogic).

@@ -14,11 +14,15 @@ pytestmark = pytest.mark.regression
 
 
 def test_compute_instance_restart_past_timestamp_ignored(
-    cli: OsacCLI, grpc: GRPCClient, k8s_hub_client: K8sClient, vm_template: str, default_subnet: str
+    cli: OsacCLI,
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    vm_template: str,
+    default_network_attachment: dict[str, object],
 ) -> None:
     name = unique_name("e2e-ci")
     uuid: str = cli.create_compute_instance(
-        template=vm_template, name=name, network_attachments=[{"subnet": default_subnet}]
+        template=vm_template, name=name, network_attachments=[default_network_attachment]
     )
     ci_name: str = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
     wait_for_running(k8s=k8s_hub_client, name=ci_name)

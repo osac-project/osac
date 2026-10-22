@@ -13,7 +13,7 @@ import {
 import type { FormikErrors } from 'formik';
 import { useFormikContext } from 'formik';
 
-import { getErrorMessage } from '@osac/ui-components/utils/error';
+import { getApiErrorMessage } from '@osac/ui-components/utils/error';
 
 import { useTranslation } from '../../hooks/useTranslation';
 import { useFieldValidation } from '../Form/FieldValidationContext';
@@ -122,7 +122,7 @@ export const OSACWizardFooter = ({
                 (isEdit ? t('Failed to edit resource') : t('Failed to create resource'))
               }
             >
-              {getErrorMessage(error)}
+              {getApiErrorMessage(error, t)}
             </Alert>
           </StackItem>
         )}

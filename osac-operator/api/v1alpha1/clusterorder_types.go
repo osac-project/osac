@@ -26,6 +26,7 @@ import (
 
 // ClusterOrderSpec defines the desired state of ClusterOrder
 // +kubebuilder:validation:XValidation:rule="has(self.addOnOperators) == has(oldSelf.addOnOperators) && (!has(self.addOnOperators) || self.addOnOperators == oldSelf.addOnOperators)",message="addOnOperators is immutable"
+// +kubebuilder:validation:XValidation:rule="has(self.networkAttachment) == has(oldSelf.networkAttachment) && (!has(self.networkAttachment) || self.networkAttachment == oldSelf.networkAttachment)",message="networkAttachment is immutable after creation"
 type ClusterOrderSpec struct {
 	// TemplateID is the unique identigier of the cluster template to use when creating this cluster
 	// +kubebuilder:validation:Required
@@ -46,6 +47,7 @@ type ClusterOrderSpec struct {
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=32
 	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:Pattern=`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`
 	AddOnOperators []string `json:"addOnOperators,omitempty"`
 
 	// PullSecret contains credentials for authenticating to container image repositories.
@@ -62,7 +64,7 @@ type ClusterOrderSpec struct {
 	// If not provided, the template's default release image is used.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxLength=512
-	// +kubebuilder:validation:Pattern=`^.+/.+:.+$`
+	// +kubebuilder:validation:Pattern=`^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\[[A-Fa-f0-9:]+\])(?::[0-9]+)?(?:/[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*)+(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}(?:@sha256:[A-Fa-f0-9]{64})?|@sha256:[A-Fa-f0-9]{64})$`
 	ReleaseImage string `json:"releaseImage,omitempty"`
 	// Network contains cluster networking configuration.
 	// +kubebuilder:validation:Optional
@@ -101,7 +103,6 @@ type ClusterNetworkAttachment struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="subnetRef is immutable"
 	SubnetRef string `json:"subnetRef"`
 
 	// SecurityGroupRefs lists SecurityGroup CR names to apply to the cluster's
@@ -131,10 +132,18 @@ type NodeRequest struct {
 	// Resolved from the instance type's fabric network port; may also be set explicitly.
 	// +kubebuilder:validation:Optional
 	FabricInterface string `json:"fabricInterface,omitempty"`
+	// ReleaseImage is the desired OpenShift release image for this node set.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=512
+	// +kubebuilder:validation:Pattern=`^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\[[A-Fa-f0-9:]+\])(?::[0-9]+)?(?:/[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*)+(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}(?:@sha256:[A-Fa-f0-9]{64})?|@sha256:[A-Fa-f0-9]{64})$`
+	ReleaseImage string `json:"releaseImage,omitempty"`
 }
 
-// NodeRequestStatus records the observed node count for an instance type.
-// Unlike the desired count in NodeRequest, the observed count can be zero.
+// NodeRequestStatus records the observed node count for a node set.
+// The count is not updated while the NodePool has zero observed
+// replicas (e.g. during initial provisioning or node drain), so
+// an existing entry retains its last positive value until a new
+// positive observation arrives.
 type NodeRequestStatus struct {
 	// NodeSet identifies the logical group whose observed count is reported.
 	// +kubebuilder:validation:Required
@@ -147,6 +156,9 @@ type NodeRequestStatus struct {
 	BareMetal *BareMetalNodeSpec `json:"bareMetal,omitempty"`
 	// +kubebuilder:validation:Optional
 	FabricInterface string `json:"fabricInterface,omitempty"`
+	// ObservedVersion is the OpenShift version reported by this node pool.
+	// +kubebuilder:validation:Optional
+	ObservedVersion string `json:"observedVersion,omitempty"`
 }
 
 // BareMetalNodeSpec holds configuration specific to bare-metal node requests.
@@ -239,11 +251,24 @@ type AddOnOperatorJobStatus struct {
 
 // ClusterOrderStatus defines the observed state of ClusterOrder
 type ClusterOrderStatus struct {
+	// ObservedVersion is the OpenShift version reported by the hosted control plane.
+	// +kubebuilder:validation:Optional
+	ObservedVersion string `json:"observedVersion,omitempty"`
 	// Phase provides a single-value overview of the state of the ClusterOrder
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Enum=Progressing;Failed;Ready;Deleting
 	Phase ClusterOrderPhaseType `json:"phase,omitempty"`
+
+	// PhaseTransitionTime records when the controller last changed Phase. It moves only
+	// when Phase changes, so metering can bill state changes from the moment they happened
+	// rather than from when feedback noticed them: during a fulfillment outage every
+	// transition would otherwise be dated at recovery. It follows the RunningConfigSince
+	// pattern: stamped once per phase change, kept when unchanged.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	PhaseTransitionTime *metav1.Time `json:"phaseTransitionTime,omitempty"`
 
 	// Conditions holds an array of metav1.Condition that describe the state of the ClusterOrder
 	// +kubebuilder:validation:Optional
@@ -418,6 +443,7 @@ type WorkerStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:validation:XValidation:rule="has(self.spec) == has(oldSelf.spec)",message="spec presence is immutable after creation"
 // +kubebuilder:resource:shortName=cord
 // +kubebuilder:printcolumn:name="Template",type=string,JSONPath=`.spec.templateID`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`

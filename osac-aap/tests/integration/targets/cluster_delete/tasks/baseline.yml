@@ -54,3 +54,175 @@
           - template_id is defined
           - template_id == "osac.templates.ocp_small"
         fail_msg: "Template ID not extracted correctly"
+
+- name: Manage agents - Wait until removed agents are unbound
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+    - ../../../../../group_vars/all/osac_common_labels.yaml
+  vars:
+    default_agent_namespace: hardware-inventory
+    cluster_order_label: osac.openshift.io/clusterorder
+    agent_instance_type_label: osac.openshift.io/instance_type
+
+  tasks:
+    - name: Exercise manage_agents wait_for_agents_to_be_removed with real Kind Agent objects
+      block:
+        - name: Check whether the Agent CRD already exists
+          kubernetes.core.k8s_info:
+            api_version: apiextensions.k8s.io/v1
+            kind: CustomResourceDefinition
+            name: agents.agent-install.openshift.io
+          register: _manage_agents_agent_crd
+
+        - name: Record whether this test creates the Agent CRD
+          ansible.builtin.set_fact:
+            _manage_agents_agent_crd_created: "{{ _manage_agents_agent_crd.resources | length == 0 }}"
+
+        - name: Create a minimal Agent CRD for the wait-role integration test
+          when: _manage_agents_agent_crd_created | bool
+          kubernetes.core.k8s:
+            state: present
+            wait: true
+            definition:
+              apiVersion: apiextensions.k8s.io/v1
+              kind: CustomResourceDefinition
+              metadata:
+                name: agents.agent-install.openshift.io
+              spec:
+                group: agent-install.openshift.io
+                names:
+                  kind: Agent
+                  listKind: AgentList
+                  plural: agents
+                  singular: agent
+                scope: Namespaced
+                versions:
+                  - name: v1beta1
+                    served: true
+                    storage: true
+                    schema:
+                      openAPIV3Schema:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+
+        - name: Wait for the Agent CRD to be established
+          kubernetes.core.k8s_info:
+            api_version: apiextensions.k8s.io/v1
+            kind: CustomResourceDefinition
+            name: agents.agent-install.openshift.io
+          register: _manage_agents_agent_crd_ready
+          retries: 15
+          delay: 1
+          until: >-
+            _manage_agents_agent_crd_ready.resources | length == 1
+            and (
+              (_manage_agents_agent_crd_ready.resources[0].status.conditions | default([]))
+              | selectattr('type', 'equalto', 'Established')
+              | selectattr('status', 'equalto', 'True')
+              | list | length == 1
+            )
+
+        - name: Create the Agent namespace fixture
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: hardware-inventory
+
+        - name: Create an Agent still claimed by a hosted cluster
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: agent-install.openshift.io/v1beta1
+              kind: Agent
+              metadata:
+                name: manage-agents-wait-claimed
+                namespace: hardware-inventory
+                labels:
+                  osac.openshift.io/clusterorder: manage-agents-wait-test
+                  osac.openshift.io/instance_type: test-class
+                  agent-install.openshift.io/clusterdeployment-namespace: cluster-wait-test
+              spec: {}
+
+        - name: Create an unbound Agent without a deployment-namespace label
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: agent-install.openshift.io/v1beta1
+              kind: Agent
+              metadata:
+                name: manage-agents-wait-unbound-null
+                namespace: hardware-inventory
+                labels:
+                  osac.openshift.io/clusterorder: manage-agents-wait-test
+                  osac.openshift.io/instance_type: test-class
+              spec: {}
+
+        - name: Create an unbound Agent with an empty deployment-namespace label
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: agent-install.openshift.io/v1beta1
+              kind: Agent
+              metadata:
+                name: manage-agents-wait-unbound-empty
+                namespace: hardware-inventory
+                labels:
+                  osac.openshift.io/clusterorder: manage-agents-wait-test
+                  osac.openshift.io/instance_type: test-class
+                  agent-install.openshift.io/clusterdeployment-namespace: ""
+              spec: {}
+
+        - name: Wait until the unbound-Agent count confirms the claimed Agent is preserved
+          ansible.builtin.include_role:
+            name: osac.service.manage_agents
+            tasks_from: wait_for_agents_to_be_removed.yml
+          vars:
+            manage_agents_cluster_order_name: manage-agents-wait-test
+            manage_agents_desired_count: 1
+            manage_agents_instance_type: test-class
+
+        - name: Assert the removal wait selected exactly the unbound Agents
+          ansible.builtin.assert:
+            that:
+              - manage_agents_removed_count | int == 2
+              - manage_agents_allocated.resources | length == 3
+              - >-
+                (
+                  manage_agents_allocated.resources
+                  | json_query(
+                      '[?metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==`null` '
+                      ~ '|| metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==``]'
+                    )
+                  | map(attribute='metadata.name') | sort | list
+                ) == [
+                  'manage-agents-wait-unbound-empty',
+                  'manage-agents-wait-unbound-null'
+                ]
+            success_msg: "The removal wait recognized null and empty deployment-namespace labels"
+      always:
+        - name: Remove the Agent fixtures
+          kubernetes.core.k8s:
+            state: absent
+            api_version: agent-install.openshift.io/v1beta1
+            kind: Agent
+            name: "{{ item }}"
+            namespace: hardware-inventory
+          loop:
+            - manage-agents-wait-claimed
+            - manage-agents-wait-unbound-null
+            - manage-agents-wait-unbound-empty
+          failed_when: false
+
+        - name: Remove the Agent CRD created by this test
+          when: _manage_agents_agent_crd_created | default(false) | bool
+          kubernetes.core.k8s:
+            state: absent
+            api_version: apiextensions.k8s.io/v1
+            kind: CustomResourceDefinition
+            name: agents.agent-install.openshift.io
+            wait: true

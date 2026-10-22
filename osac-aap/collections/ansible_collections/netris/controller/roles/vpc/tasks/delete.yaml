@@ -5,7 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Get existing VPCs
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/vpc"
     method: GET
     headers:
@@ -13,6 +13,7 @@
     return_content: true
     status_code: 200
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _vpc_list_resp
   no_log: true
 
@@ -23,14 +24,15 @@
 
 - name: Delete VPC
   when: _existing_vpc is defined and _existing_vpc is not none
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/vpc/{{ _existing_vpc.id }}"
     method: DELETE
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
     return_content: true
-    status_code: [200, 204, 400]
+    status_code: [200, 204, 400, 404]
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _vpc_delete_resp
   no_log: true
 

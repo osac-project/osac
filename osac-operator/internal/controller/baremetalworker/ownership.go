@@ -32,12 +32,12 @@ const (
 	ownerReferenceAnnotation = "osac.openshift.io/owner-reference"
 )
 
-// authoritativeWorkerTenant uses order metadata only to locate/check the fulfillment Cluster.
-// Neither the label nor the order annotation is a source of BMI ownership.
-func (r *Reconciler) authoritativeWorkerTenant(ctx context.Context, co *v1alpha1.ClusterOrder) (string, error) {
+// authoritativeCluster loads the fulfillment Cluster that owns this order's workers. Neither the
+// label nor the order annotation is a source of BMI ownership; the loaded Cluster is.
+func (r *Reconciler) authoritativeCluster(ctx context.Context, co *v1alpha1.ClusterOrder) (*privatev1.Cluster, error) {
 	id := co.Labels[clusterOrderIDLabel]
 	if id == "" {
-		return "", r.rejectWorkerIdentity(co, "missing Cluster ID label")
+		return nil, r.rejectWorkerIdentity(co, "missing Cluster ID label")
 	}
 	cluster, err := r.fulfillment.GetCluster(ctx, id)
 	if err != nil {
@@ -45,18 +45,38 @@ func (r *Reconciler) authoritativeWorkerTenant(ctx context.Context, co *v1alpha1
 		// the real blocker and let the reconciler persist the availability
 		// condition; only semantic failures are reported as ownership rejections.
 		if errors.Is(err, ErrFulfillmentServiceUnavailable) {
-			return "", fmt.Errorf("getting authoritative Cluster %s: %w", id, err)
+			return nil, fmt.Errorf("getting authoritative Cluster %s: %w", id, err)
 		}
-		return "", r.rejectWorkerIdentity(co, fmt.Sprintf("getting authoritative Cluster %s: %v", id, err))
+		return nil, r.rejectWorkerIdentity(co, fmt.Sprintf("getting authoritative Cluster %s: %v", id, err))
 	}
 	if cluster == nil || cluster.GetId() != id {
-		return "", r.rejectWorkerIdentity(co, "authoritative Cluster ID does not match the order")
+		return nil, r.rejectWorkerIdentity(co, "authoritative Cluster ID does not match the order")
+	}
+	return cluster, nil
+}
+
+// authoritativeWorkerCluster loads the fulfillment Cluster that owns this order's workers and
+// validates the order/cluster tenant match. Workers live in its tenant and project and record it
+// in status.cluster; Reconcile fetches it once per invocation and passes it down.
+func (r *Reconciler) authoritativeWorkerCluster(ctx context.Context, co *v1alpha1.ClusterOrder) (*privatev1.Cluster, error) {
+	cluster, err := r.authoritativeCluster(ctx, co)
+	if err != nil {
+		return nil, err
 	}
 	tenant := cluster.GetMetadata().GetTenant()
 	if tenant == "" || co.Annotations["osac.openshift.io/tenant"] != tenant {
-		return "", r.rejectWorkerIdentity(co, "missing or mismatched ClusterOrder/Cluster tenant")
+		return nil, r.rejectWorkerIdentity(co, "missing or mismatched ClusterOrder/Cluster tenant")
 	}
-	return tenant, nil
+	return cluster, nil
+}
+
+// authoritativeWorkerTenant uses order metadata only to locate/check the fulfillment Cluster.
+func (r *Reconciler) authoritativeWorkerTenant(ctx context.Context, co *v1alpha1.ClusterOrder) (string, error) {
+	cluster, err := r.authoritativeWorkerCluster(ctx, co)
+	if err != nil {
+		return "", err
+	}
+	return cluster.GetMetadata().GetTenant(), nil
 }
 
 func (r *Reconciler) rejectWorkerIdentity(co *v1alpha1.ClusterOrder, reason string) error {

@@ -48,7 +48,7 @@ spec:
             echo "Some components (PostgreSQL, Keycloak) may fail to create PVCs."
           fi
 
-          {{- if .Values.bmf.metal3.enabled }}
+          {{- if or .Values.bmf.metal3.enabled .Values.bmf.netbox.enabled }}
           # Check that Metal3 BareMetalHost CRD exists
           echo "Checking for Metal3 BareMetalHost CRD..."
           if kubectl get crd baremetalhosts.metal3.io >/dev/null; then
@@ -110,7 +110,7 @@ rules:
 - apiGroups: ["storage.k8s.io"]
   resources: ["storageclasses"]
   verbs: ["list"]
-{{- if .Values.bmf.metal3.enabled }}
+{{- if or .Values.bmf.metal3.enabled .Values.bmf.netbox.enabled }}
 - apiGroups: ["metal3.io"]
   resources: ["provisionings"]
   verbs: ["list"]

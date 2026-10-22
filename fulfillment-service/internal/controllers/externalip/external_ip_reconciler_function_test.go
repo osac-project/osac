@@ -17,11 +17,13 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -115,6 +117,15 @@ func newExternalIPCR(id, namespace, name string, deletionTimestamp *metav1.Time)
 // hasFinalizer checks if the fulfillment-controller finalizer is present on the external IP.
 func hasFinalizer(externalIP *privatev1.ExternalIP) bool {
 	return slices.Contains(externalIP.GetMetadata().GetFinalizers(), finalizers.Controller)
+}
+
+func expectDeletionRetry(err error) {
+	var retryable interface{ RequeueAfter() time.Duration }
+	Expect(errors.As(err, &retryable)).To(BeTrue())
+	Expect(retryable.RequeueAfter()).To(Equal(time.Second))
+	var backoff interface{ UseExponentialBackoff() bool }
+	Expect(errors.As(err, &backoff)).To(BeTrue())
+	Expect(backoff.UseExponentialBackoff()).To(BeFalse())
 }
 
 // newTaskForDelete creates a task configured for testing delete() with hub-dependent paths.
@@ -211,7 +222,7 @@ var _ = Describe("delete", func() {
 		t := newTaskForDelete(externalIPID, hubID, hubCache)
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		expectDeletionRetry(err)
 		Expect(deleteCalled).To(BeTrue())
 		// Finalizer should NOT be removed: K8s object still exists
 		Expect(hasFinalizer(t.externalIP)).To(BeTrue())
@@ -247,7 +258,7 @@ var _ = Describe("delete", func() {
 		t := newTaskForDelete(externalIPID, hubID, hubCache)
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		expectDeletionRetry(err)
 		Expect(deleteCalled).To(BeFalse())
 		// Finalizer should NOT be removed: K8s object still being deleted
 		Expect(hasFinalizer(t.externalIP)).To(BeTrue())
@@ -406,6 +417,140 @@ var _ = Describe("setDefaults", func() {
 
 		Expect(t.externalIP.HasStatus()).To(BeTrue())
 		Expect(t.externalIP.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
+	})
+
+	It("should stamp the transition time when setting PENDING", func() {
+		externalIP := privatev1.ExternalIP_builder{
+			Id: "eip-defaults-stamp",
+		}.Build()
+
+		t := &task{
+			externalIP: externalIP,
+		}
+
+		t.setDefaults()
+
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).NotTo(BeNil())
+	})
+
+	It("should keep the transition time when the state is already set", func() {
+		stamp := timestamppb.New(time.Unix(1000, 0))
+		externalIP := privatev1.ExternalIP_builder{
+			Id: "eip-existing-stamp",
+			Status: privatev1.ExternalIPStatus_builder{
+				State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+				StateTransitionTime: stamp,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			externalIP: externalIP,
+		}
+
+		t.setDefaults()
+
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).To(Equal(stamp))
+	})
+})
+
+var _ = Describe("setPending", func() {
+	It("should stamp the transition time when moving to PENDING", func() {
+		stamp := timestamppb.New(time.Unix(1000, 0))
+		externalIP := privatev1.ExternalIP_builder{
+			Id: "eip-pending-stamp",
+			Status: privatev1.ExternalIPStatus_builder{
+				State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+				StateTransitionTime: stamp,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			externalIP: externalIP,
+		}
+
+		t.setPending(errors.New("retry"))
+
+		Expect(t.externalIP.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).NotTo(Equal(stamp))
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).NotTo(BeNil())
+	})
+
+	It("should keep the transition time when staying in PENDING", func() {
+		stamp := timestamppb.New(time.Unix(1000, 0))
+		externalIP := privatev1.ExternalIP_builder{
+			Id: "eip-pending-keep",
+			Status: privatev1.ExternalIPStatus_builder{
+				State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
+				StateTransitionTime: stamp,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			externalIP: externalIP,
+		}
+
+		t.setPending(errors.New("retry"))
+
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).To(Equal(stamp))
+	})
+
+	It("should stamp the transition time when PENDING has none", func() {
+		externalIP := privatev1.ExternalIP_builder{
+			Id: "eip-pending-no-stamp",
+			Status: privatev1.ExternalIPStatus_builder{
+				State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			externalIP: externalIP,
+		}
+
+		t.setPending(errors.New("retry"))
+
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).NotTo(BeNil())
+	})
+})
+
+var _ = Describe("setFailed", func() {
+	It("should stamp the transition time when moving to FAILED", func() {
+		stamp := timestamppb.New(time.Unix(1000, 0))
+		externalIP := privatev1.ExternalIP_builder{
+			Id: "eip-failed-stamp",
+			Status: privatev1.ExternalIPStatus_builder{
+				State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+				StateTransitionTime: stamp,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			externalIP: externalIP,
+		}
+
+		t.setFailed(errors.New("boom"))
+
+		Expect(t.externalIP.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED))
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).NotTo(Equal(stamp))
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).NotTo(BeNil())
+	})
+
+	It("should keep the transition time when staying in FAILED", func() {
+		stamp := timestamppb.New(time.Unix(1000, 0))
+		externalIP := privatev1.ExternalIP_builder{
+			Id: "eip-failed-keep",
+			Status: privatev1.ExternalIPStatus_builder{
+				State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED,
+				StateTransitionTime: stamp,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			externalIP: externalIP,
+		}
+
+		t.setFailed(errors.New("boom"))
+
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).To(Equal(stamp))
 	})
 })
 
@@ -795,6 +940,77 @@ var _ = Describe("hub persistence", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(list.Items).To(HaveLen(1))
 		Expect(list.Items[0].Namespace).To(Equal(hubNamespace))
+	})
+})
+
+var _ = Describe("Kubernetes lifecycle label projection", func() {
+	It("projects trusted auto-created ownership labels without arbitrary metadata labels", func() {
+		const (
+			externalIPID = "eip-label-test"
+			poolID       = "pool-label-test"
+			tenantName   = "tenant-label-test"
+		)
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+		resolver := readyNetworkingHubReader("hub-1", "hub-ns", fakeClient)
+
+		externalIPsClient := NewMockExternalIPsClient(ctrl)
+		externalIPsClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.ExternalIPsUpdateRequest, opts ...grpc.CallOption) (*privatev1.ExternalIPsUpdateResponse, error) {
+				return &privatev1.ExternalIPsUpdateResponse{Object: req.GetObject()}, nil
+			}).AnyTimes()
+
+		externalIP := privatev1.ExternalIP_builder{
+			Id: externalIPID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     tenantName,
+				Creator:    "system",
+				Labels: map[string]string{
+					"osac.openshift.io/auto-created":     "true",
+					"osac.openshift.io/auto-created-for": "cluster-123",
+					"example.com/user-label":             "do-not-project",
+				},
+			}.Build(),
+			Spec: privatev1.ExternalIPSpec_builder{
+				Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
+			}.Build(),
+			Status: privatev1.ExternalIPStatus_builder{
+				State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
+				Hub:   "hub-1",
+			}.Build(),
+		}.Build()
+
+		f := &function{
+			logger:              logger,
+			externalIPsClient:   externalIPsClient,
+			networkingHubReader: resolver,
+		}
+		Expect(f.run(ctx, externalIP)).To(Succeed())
+
+		list := &osacv1alpha1.ExternalIPList{}
+		Expect(fakeClient.List(ctx, list)).To(Succeed())
+		Expect(list.Items).To(HaveLen(1))
+		Expect(list.Items[0].Labels).To(HaveKeyWithValue("osac.openshift.io/auto-created", "true"))
+		Expect(list.Items[0].Labels).To(HaveKeyWithValue("osac.openshift.io/auto-created-for", "cluster-123"))
+		Expect(list.Items[0].Labels).To(HaveKeyWithValue(labels.ExternalIPUuid, externalIPID))
+		Expect(list.Items[0].Labels).ToNot(HaveKey("example.com/user-label"))
+
+		// Existing CRs from before these labels were projected must be repaired on reconcile.
+		legacy := list.Items[0].DeepCopy()
+		legacy.Labels = map[string]string{labels.ExternalIPUuid: externalIPID}
+		Expect(fakeClient.Update(ctx, legacy)).To(Succeed())
+		Expect(f.run(ctx, externalIP)).To(Succeed())
+		Expect(fakeClient.List(ctx, list)).To(Succeed())
+		Expect(list.Items).To(HaveLen(1))
+		Expect(list.Items[0].Labels).To(HaveKeyWithValue("osac.openshift.io/auto-created", "true"))
+		Expect(list.Items[0].Labels).To(HaveKeyWithValue("osac.openshift.io/auto-created-for", "cluster-123"))
 	})
 })
 

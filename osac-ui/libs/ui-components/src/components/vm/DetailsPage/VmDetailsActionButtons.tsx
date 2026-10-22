@@ -1,19 +1,23 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Alert, Button, Flex, Stack, StackItem } from '@patternfly/react-core';
-import DumpsterIcon from '@patternfly/react-icons/dist/esm/icons/dumpster-icon';
 import GlobeIcon from '@patternfly/react-icons/dist/esm/icons/globe-icon';
 import PlayIcon from '@patternfly/react-icons/dist/esm/icons/play-icon';
 import StopIcon from '@patternfly/react-icons/dist/esm/icons/stop-icon';
 import SyncAltIcon from '@patternfly/react-icons/dist/esm/icons/sync-alt-icon';
 
 import type { ComputeInstance } from '@osac/types';
-import { ComputeInstanceState, ExternalIPAttachmentState } from '@osac/types';
+import {
+  ComputeInstanceState,
+  ExternalIPAttachmentState,
+  ExternalIPAttachments,
+} from '@osac/types';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import AttachExternalIpModal from './AttachExternalIpModal';
 import DetachExternalIpModal from './DetachExternalIpModal';
 import VmDeleteConfirmModal from './VmDeleteConfirmModal';
-import { useExternalIPAttachments } from '../../../api/v1/external-ip';
+import { useListResource } from '../../../api/use-resource';
 import { computeInstanceAttachmentFilter } from '../../../api/v1/external-ip-data';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
@@ -31,14 +35,16 @@ const VmDetailsActionButtons = ({ vm }: VmDetailsActionButtonsProps) => {
   const [detachExternalIpOpen, setDetachExternalIpOpen] = useState(false);
   const { runPowerAction } = useVmPowerAction();
   const {
-    data: externalIpAttachments = [],
+    data: externalIpAttachmentResponse,
     isLoading: isLoadingExternalIpAttachments,
     isFetching: isFetchingExternalIpAttachments,
     error: externalIpAttachmentsError,
-  } = useExternalIPAttachments(
+  } = useListResource(
+    ExternalIPAttachments,
     { filter: computeInstanceAttachmentFilter(vm.id) },
     { enabled: true },
   );
+  const externalIpAttachments = externalIpAttachmentResponse?.items ?? [];
 
   const state = vm.status?.state;
   const canStart = state === ComputeInstanceState.STOPPED;
@@ -78,16 +84,11 @@ const VmDetailsActionButtons = ({ vm }: VmDetailsActionButtonsProps) => {
         />
       )}
       {attachExternalIpOpen && (
-        <AttachExternalIpModal
-          vm={vm}
-          onClose={() => setAttachExternalIpOpen(false)}
-          onSuccess={() => setAttachExternalIpOpen(false)}
-        />
+        <AttachExternalIpModal vm={vm} onClose={() => setAttachExternalIpOpen(false)} />
       )}
       {detachExternalIpOpen && externalIpAttachment && (
         <DetachExternalIpModal
           attachment={externalIpAttachment}
-          externalIpAddress={vm.status?.externalIpAddress}
           onClose={() => setDetachExternalIpOpen(false)}
         />
       )}
@@ -198,18 +199,15 @@ const VmDetailsActionButtons = ({ vm }: VmDetailsActionButtonsProps) => {
                 {t(isDetachingExternalIp ? 'Detaching external IP' : 'Detach external IP')}
               </Button>
             )}
-            <Button
-              variant="danger"
-              icon={<DumpsterIcon />}
-              isDisabled={!canDelete}
+            <DeleteResourceButton
+              showIcon
+              canDelete={canDelete}
               onClick={() => {
                 if (canDelete) {
                   setDeleteOpen(true);
                 }
               }}
-            >
-              Delete
-            </Button>
+            />
           </Flex>
         </StackItem>
       </Stack>

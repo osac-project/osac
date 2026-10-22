@@ -31,6 +31,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -80,6 +81,8 @@ type FunctionBuilder struct {
 type function struct {
 	logger                *slog.Logger
 	hubCache              controllers.HubCache
+	networkingHubReader   controllers.NetworkingHubReader
+	networkingCleanup     controllers.WorkloadNetworkingCleanup
 	clustersClient        privatev1.ClustersClient
 	hubsClient            privatev1.HubsClient
 	clusterVersionsClient privatev1.ClusterVersionsClient
@@ -137,12 +140,20 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 	// Create and populate the object:
 	object := &function{
 		logger:                b.logger,
+		networkingCleanup:     controllers.NewWorkloadNetworkingCleanup(b.connection),
 		clustersClient:        privatev1.NewClustersClient(b.connection),
 		hubsClient:            privatev1.NewHubsClient(b.connection),
 		clusterVersionsClient: privatev1.NewClusterVersionsClient(b.connection),
 		secretsClient:         privatev1.NewSecretsClient(b.connection),
 		hubCache:              b.hubCache,
 		maskCalculator:        masks.NewCalculator().Build(),
+	}
+	object.networkingHubReader, err = controllers.NewNetworkingHubReader().
+		SetNetworkClassesClient(privatev1.NewNetworkClassesClient(b.connection)).
+		SetHubCache(b.hubCache).
+		Build()
+	if err != nil {
+		return nil, err
 	}
 	result = object.run
 	return
@@ -160,8 +171,18 @@ func (r *function) run(ctx context.Context, cluster *privatev1.Cluster) error {
 	} else {
 		err = t.update(ctx)
 	}
+	var hubResolutionRetryErr error
 	if err != nil {
-		return err
+		handled, retry := controllers.HandleResourceNetworkingHubResolutionError(err, t.setPending, t.setFailed)
+		if !handled {
+			if !controllers.IsRequeueable(err) {
+				return err
+			}
+			hubResolutionRetryErr = err
+		} else if retry {
+			hubResolutionRetryErr = err
+		}
+		err = nil
 	}
 	// Calculate which fields the reconciler actually modified and use a field mask
 	// to update only those fields. This prevents overwriting concurrent user changes
@@ -175,7 +196,10 @@ func (r *function) run(ctx context.Context, cluster *privatev1.Cluster) error {
 			UpdateMask: updateMask,
 		}.Build())
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return hubResolutionRetryErr
 }
 
 func (t *task) update(ctx context.Context) error {
@@ -207,6 +231,9 @@ func (t *task) update(ctx context.Context) error {
 	hubJustSelected := t.cluster.GetStatus().GetHub() == ""
 	err := t.selectHub(ctx)
 	if err != nil {
+		if t.hasNetworkAttachments() {
+			return err
+		}
 		t.r.logger.ErrorContext(
 			ctx,
 			"Failed to select hub",
@@ -299,6 +326,11 @@ func (t *task) update(ctx context.Context) error {
 			slog.String("name", object.GetName()),
 		)
 	} else {
+		if !equalNetworkAttachment(object.Spec.NetworkAttachment, spec.NetworkAttachment) {
+			t.r.logger.WarnContext(ctx, "Private and stored network attachments differ; preserving stored network attachment on existing ClusterOrder",
+				slog.String("namespace", object.GetNamespace()), slog.String("name", object.GetName()))
+		}
+		spec.NetworkAttachment = object.Spec.NetworkAttachment
 		update := object.DeepCopy()
 		update.Spec = spec
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
@@ -387,8 +419,40 @@ func (t *task) buildSpec(ctx context.Context) (osacv1alpha1.ClusterOrderSpec, er
 	if err = t.addExplicitFields(ctx, &spec); err != nil {
 		return osacv1alpha1.ClusterOrderSpec{}, err
 	}
+	if err = t.addNodeReleaseImages(ctx, &spec); err != nil {
+		return osacv1alpha1.ClusterOrderSpec{}, err
+	}
 
 	return spec, nil
+}
+
+func (t *task) addNodeReleaseImages(ctx context.Context, spec *osacv1alpha1.ClusterOrderSpec) error {
+	versionImages := map[string]string{}
+	if versionName := t.cluster.GetSpec().GetVersion().GetName(); versionName != "" {
+		versionImages[versionName] = spec.ReleaseImage
+	}
+	for i := range spec.NodeRequests {
+		request := &spec.NodeRequests[i]
+		versionName := t.cluster.GetSpec().GetNodeSets()[request.NodeSet].GetVersion().GetName()
+		if versionName == "" {
+			continue
+		}
+		image, ok := versionImages[versionName]
+		if !ok {
+			var err error
+			image, err = t.resolveVersionImage(ctx, versionName)
+			if err != nil {
+				return fmt.Errorf("failed to resolve node set %q version: %w", request.NodeSet, err)
+			}
+			versionImages[versionName] = image
+		}
+		request.ReleaseImage = image
+	}
+	return nil
+}
+
+func equalNetworkAttachment(left, right *osacv1alpha1.ClusterNetworkAttachment) bool {
+	return apiequality.Semantic.DeepEqual(left, right)
 }
 
 func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.ClusterOrderSpec) error {
@@ -525,9 +589,10 @@ func (t *task) prepareNodeRequests() []osacv1alpha1.NodeRequest {
 func (t *task) prepareNodeRequest(key string, nodeSet *privatev1.ClusterNodeSet) osacv1alpha1.NodeRequest {
 	bmitName := nodeSet.GetBaremetalInstanceType().GetName()
 	return osacv1alpha1.NodeRequest{
-		NodeSet:       key,
-		NumberOfNodes: int(nodeSet.GetSize()),
-		BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: bmitName},
+		NodeSet:         key,
+		NumberOfNodes:   int(nodeSet.GetSize()),
+		BareMetal:       &osacv1alpha1.BareMetalNodeSpec{InstanceType: bmitName},
+		FabricInterface: nodeSet.GetFabricInterface(),
 	}
 }
 
@@ -535,6 +600,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 	// No hub was assigned, so no ClusterOrder or hub secrets could have been created.
 	t.hubId = t.cluster.GetStatus().GetHub()
 	if t.hubId == "" {
+		if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.cluster.GetId()); err != nil {
+			return err
+		}
 		t.removeFinalizer()
 		return
 	}
@@ -543,6 +611,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 	if err != nil {
 		// Check if the hub has been decommissioned (deleted from database)
 		if errors.Is(err, controllers.ErrHubNotFound) {
+			if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.cluster.GetId()); err != nil {
+				return err
+			}
 			if err = t.deleteClusterSecrets(ctx); err != nil {
 				return err
 			}
@@ -564,6 +635,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 			"Cluster order doesn't exist",
 			slog.String("id", t.cluster.GetId()),
 		)
+		if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.cluster.GetId()); err != nil {
+			return err
+		}
 		if err = t.deleteClusterSecrets(ctx); err != nil {
 			return err
 		}
@@ -589,6 +663,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 		return nil
 	}
 
+	if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.cluster.GetId()); err != nil {
+		return err
+	}
 	if err = t.deleteClusterSecrets(ctx); err != nil {
 		return err
 	}
@@ -598,6 +675,20 @@ func (t *task) delete(ctx context.Context) (err error) {
 
 func (t *task) selectHub(ctx context.Context) error {
 	t.hubId = t.cluster.GetStatus().GetHub()
+	if t.hasNetworkAttachments() {
+		if t.r.networkingHubReader == nil {
+			return controllers.ErrCanonicalHubUnavailable
+		}
+		resolution, err := controllers.ResolveResourceNetworkingHub(ctx, t.r.networkingHubReader, t.hubId)
+		if err != nil {
+			return err
+		}
+		t.hubId = resolution.HubID
+		t.hubNamespace = resolution.Namespace
+		t.hubClient = resolution.Client
+		t.r.logger.DebugContext(ctx, "Selected canonical networking hub", slog.String("id", t.hubId))
+		return nil
+	}
 	if t.hubId == "" {
 		response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
 		if err != nil {
@@ -620,6 +711,10 @@ func (t *task) selectHub(ctx context.Context) error {
 	t.hubNamespace = hubEntry.Namespace
 	t.hubClient = hubEntry.Client
 	return nil
+}
+
+func (t *task) hasNetworkAttachments() bool {
+	return t.cluster.GetSpec().GetNetworkAttachment() != nil
 }
 
 func (t *task) getHub(ctx context.Context) error {
@@ -664,11 +759,27 @@ func (t *task) setFailed(err error) {
 	if !t.cluster.HasStatus() {
 		t.cluster.SetStatus(&privatev1.ClusterStatus{})
 	}
+	if t.cluster.GetStatus().GetState() != privatev1.ClusterState_CLUSTER_STATE_FAILED ||
+		t.cluster.GetStatus().GetStateTransitionTime() == nil {
+		t.cluster.GetStatus().SetStateTransitionTime(timestamppb.Now())
+	}
 	t.cluster.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_FAILED)
 	t.updateCondition(
 		privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING,
 		privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
 		"ValidationFailed",
+		err.Error(),
+	)
+}
+
+func (t *task) setPending(err error) {
+	if !t.cluster.HasStatus() {
+		t.cluster.SetStatus(&privatev1.ClusterStatus{})
+	}
+	t.updateCondition(
+		privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING,
+		privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+		"ResourcesUnavailable",
 		err.Error(),
 	)
 }

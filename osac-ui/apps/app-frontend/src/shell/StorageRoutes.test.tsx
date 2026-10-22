@@ -33,7 +33,7 @@ const renderAt = (path: string, options: RenderWithProvidersOptions = {}) =>
   );
 
 describe('StorageRoutes', () => {
-  it('redirects the bare /admin/infrastructure/storage path to the Backends tab', () => {
+  it('redirects the bare /admin/infrastructure/storage path to the Backends page', () => {
     renderAt('/admin/infrastructure/storage');
 
     expect(screen.getByRole('link', { name: 'Create backend' })).toBeInTheDocument();
@@ -82,7 +82,7 @@ describe('StorageRoutes', () => {
     expect(await screen.findByRole('heading', { name: 'vast-prod-1' })).toBeInTheDocument();
   });
 
-  it('renders the Tiers tab at /admin/infrastructure/storage/tiers', async () => {
+  it('renders the Tiers page at /admin/infrastructure/storage/tiers', async () => {
     renderAt('/admin/infrastructure/storage/tiers');
 
     await waitFor(() => {

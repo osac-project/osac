@@ -27,7 +27,7 @@ const makeTier = (
 const renderField = (
   options: Parameters<typeof renderWithProviders>[1],
   initialTier: ResourceSelectValue = emptyResourceSelectValue(),
-  isLocked = false,
+  isDisabled = false,
   protocol?: StorageProtocol,
 ) =>
   renderWithProviders(
@@ -38,7 +38,7 @@ const renderField = (
             name="tier"
             label="Storage tier"
             fieldId="tier"
-            isLocked={isLocked}
+            isDisabled={isDisabled}
             protocol={protocol}
           />
           <output aria-label="selected-tier">{JSON.stringify(values.tier)}</output>
@@ -204,7 +204,7 @@ describe('StorageTierSelectField', () => {
     expect(screen.queryByText('Locked by catalog')).not.toBeInTheDocument();
   });
 
-  it('shows the catalog value read-only with a lock badge when isLocked', async () => {
+  it('shows the catalog value read-only with a lock badge when locked', async () => {
     renderField(
       { apiFixtures: { publicStorageTiers: [makeTier('fast', 'Fast SSD', 'low latency')] } },
       { id: 'id-fast', name: 'fast' },

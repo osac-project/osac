@@ -1,4 +1,5 @@
 ---
-- name: Report unimplemented AgentlessNet operation
-  ansible.builtin.fail:
-    msg: "NotImplemented: agentless_net resource operations are not implemented."
+- name: Register AgentlessNet ExternalIPPool provider state
+  ansible.builtin.include_tasks: _external_ip_pool.yaml
+  vars:
+    agentless_net_pool_action: ensure_external_ip_pool

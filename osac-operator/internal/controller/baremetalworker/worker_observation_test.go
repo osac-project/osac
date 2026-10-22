@@ -90,7 +90,8 @@ var _ = It("discards the observation snapshot after a mutation", func() {
 	}
 	Expect(r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
 	observed := indexWorkerBMIs(nil)
-	res, err := r.reconcileDueWorkerCreation(context.Background(), co, "tenant", workerCreationInputs{}, observed)
+	res, err := r.reconcileDueWorkerCreation(context.Background(), co,
+		authoritativeTestCluster(context.Background(), r, co), workerCreationInputs{}, observed)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(res.IsZero()).To(BeFalse(), "create did not return at its durable boundary")
 	Expect(fc.names).To(HaveLen(1), "creates=%v, want one", fc.names)

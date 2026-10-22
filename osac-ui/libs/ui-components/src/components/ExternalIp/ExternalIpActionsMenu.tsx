@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Dropdown, DropdownItem, DropdownList, MenuToggle } from '@patternfly/react-core';
+import { Dropdown, DropdownList, MenuToggle } from '@patternfly/react-core';
 import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
 
 import type { ExternalIP } from '@osac/types';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import ExternalIpDeleteModal from './ExternalIpDeleteModal';
 import { deleteDisabledReason } from './utils';
@@ -46,9 +47,9 @@ const ExternalIpActionsMenu = ({ externalIp }: ExternalIpActionsMenuProps) => {
         popperProps={{ position: 'right' }}
       >
         <DropdownList>
-          <DropdownItem
-            isDanger={canDelete}
-            isDisabled={!canDelete}
+          <DeleteResourceButton
+            isDropdown
+            canDelete={canDelete}
             description={deleteDisabledReasonText}
             onClick={() => {
               if (!canDelete) {
@@ -57,9 +58,7 @@ const ExternalIpActionsMenu = ({ externalIp }: ExternalIpActionsMenuProps) => {
               setDeleteOpen(true);
               setOpen(false);
             }}
-          >
-            {t('Delete')}
-          </DropdownItem>
+          />
         </DropdownList>
       </Dropdown>
     </>

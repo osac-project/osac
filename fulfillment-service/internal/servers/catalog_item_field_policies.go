@@ -300,6 +300,58 @@ func validateCatalogItemDiskImagePolicy(
 	return warnings, nil
 }
 
+// validateCatalogItemUserDataSecretPolicy checks a locked user data secret or
+// editable default in the Catalog Item's exact tenant/project, verifies its
+// type, and stores its ID and name. Shared offerings may leave the secret
+// editable but cannot choose a tenant-local secret.
+func validateCatalogItemUserDataSecretPolicy(
+	ctx context.Context,
+	scope referenceScope,
+	policy *privatev1.SecretReferenceFieldPolicy,
+	secretsDao *dao.GenericDAO[*privatev1.Secret],
+) error {
+	if policy == nil {
+		return nil
+	}
+	state, err := decodeSecretReferencePolicy(policy)
+	if err != nil {
+		return catalogItemPolicyError("fields.user_data_secret", err.Error())
+	}
+	if err := validateSharedCatalogItemLocalReferencePolicy(scope, "fields.user_data_secret", state.hasLocked, state.hasDefault); err != nil {
+		return err
+	}
+	resolve := func(ref *privatev1.SecretLocalReference) (*privatev1.SecretLocalReference, error) {
+		if ref == nil {
+			return nil, nil
+		}
+		resolved, resolveErr := resolveLockedResourceInScope(ctx, secretsDao, scope, ref.GetId(), ref.GetName(),
+			"secret", " in fields.user_data_secret", grpccodes.InvalidArgument)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if err := validateResolvedSecretLifecycleAndType(resolved, refKey(ref), "fields.user_data_secret",
+			privatev1.SecretType_SECRET_TYPE_USER_DATA); err != nil {
+			return nil, err
+		}
+		return canonicalSecretLocalReference(resolved), nil
+	}
+	if state.hasLocked {
+		canonical, resolveErr := resolve(state.lockedValue)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		policy.SetLocked(canonical)
+	}
+	if state.hasDefault {
+		canonical, resolveErr := resolve(state.defaultValue)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		policy.GetEditable().SetDefaultValue(canonical)
+	}
+	return nil
+}
+
 // resolveCatalogItemSubnet finds a local subnet in the Catalog Item's exact tenant/project,
 // then rejects it if deletion has started or it is not ready. The caller fills the policy
 // reference from the returned subnet.

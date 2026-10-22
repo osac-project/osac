@@ -57,6 +57,7 @@ spec:
                   for the cluster.
                 items:
                   minLength: 1
+                  pattern: ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$
                   type: string
                 maxItems: 32
                 minItems: 1
@@ -102,9 +103,6 @@ spec:
                     maxLength: 253
                     minLength: 1
                     type: string
-                    x-kubernetes-validations:
-                    - message: subnetRef is immutable
-                      rule: self == oldSelf
                 required:
                 - subnetRef
                 type: object
@@ -146,6 +144,12 @@ spec:
                         of this instance type.
                       minimum: 1
                       type: integer
+                    releaseImage:
+                      description: ReleaseImage is the desired OpenShift release image
+                        for this node set.
+                      maxLength: 512
+                      pattern: ^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\[[A-Fa-f0-9:]+\])(?::[0-9]+)?(?:/[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*)+(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}(?:@sha256:[A-Fa-f0-9]{64})?|@sha256:[A-Fa-f0-9]{64})$
+                      type: string
                   required:
                   - bareMetal
                   - nodeSet
@@ -163,7 +167,7 @@ spec:
                   ReleaseImage is the OCP release image URL that controls the OpenShift version.
                   If not provided, the template's default release image is used.
                 maxLength: 512
-                pattern: ^.+/.+:.+$
+                pattern: ^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\[[A-Fa-f0-9:]+\])(?::[0-9]+)?(?:/[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*)+(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}(?:@sha256:[A-Fa-f0-9]{64})?|@sha256:[A-Fa-f0-9]{64})$
                 type: string
               sshPublicKey:
                 description: |-
@@ -191,6 +195,9 @@ spec:
             - message: addOnOperators is immutable
               rule: has(self.addOnOperators) == has(oldSelf.addOnOperators) && (!has(self.addOnOperators)
                 || self.addOnOperators == oldSelf.addOnOperators)
+            - message: networkAttachment is immutable after creation
+              rule: has(self.networkAttachment) == has(oldSelf.networkAttachment)
+                && (!has(self.networkAttachment) || self.networkAttachment == oldSelf.networkAttachment)
           status:
             description: ClusterOrderStatus defines the observed state of ClusterOrder
             properties:
@@ -443,8 +450,11 @@ spec:
                   with the ClusterOrder
                 items:
                   description: |-
-                    NodeRequestStatus records the observed node count for an instance type.
-                    Unlike the desired count in NodeRequest, the observed count can be zero.
+                    NodeRequestStatus records the observed node count for a node set.
+                    The count is not updated while the NodePool has zero observed
+                    replicas (e.g. during initial provisioning or node drain), so
+                    an existing entry retains its last positive value until a new
+                    positive observation arrives.
                   properties:
                     bareMetal:
                       description: BareMetalNodeSpec holds configuration specific
@@ -469,12 +479,20 @@ spec:
                     numberOfNodes:
                       minimum: 0
                       type: integer
+                    observedVersion:
+                      description: ObservedVersion is the OpenShift version reported
+                        by this node pool.
+                      type: string
                   required:
                   - bareMetal
                   - nodeSet
                   - numberOfNodes
                   type: object
                 type: array
+              observedVersion:
+                description: ObservedVersion is the OpenShift version reported by
+                  the hosted control plane.
+                type: string
               phase:
                 description: Phase provides a single-value overview of the state of
                   the ClusterOrder
@@ -483,6 +501,15 @@ spec:
                 - Failed
                 - Ready
                 - Deleting
+                type: string
+              phaseTransitionTime:
+                description: |-
+                  PhaseTransitionTime records when the controller last changed Phase. It moves only
+                  when Phase changes, so metering can bill state changes from the moment they happened
+                  rather than from when feedback noticed them: during a fulfillment outage every
+                  transition would otherwise be dated at recovery. It follows the RunningConfigSince
+                  pattern: stamped once per phase change, kept when unchanged.
+                format: date-time
                 type: string
               provisioningJobs:
                 description: |-
@@ -675,6 +702,9 @@ spec:
                 x-kubernetes-list-type: map
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: spec presence is immutable after creation
+          rule: has(self.spec) == has(oldSelf.spec)
     served: true
     storage: true
     subresources:

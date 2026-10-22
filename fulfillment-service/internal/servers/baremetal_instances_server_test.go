@@ -15,9 +15,7 @@ package servers
 
 import (
 	"fmt"
-
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"time"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -25,21 +23,16 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Bare metal instances server", func() {
 	BeforeEach(func() {
-		types, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceType]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
-		Expect(err).ToNot(HaveOccurred())
-		_, err = types.Create().SetObject(privatev1.BareMetalInstanceType_builder{
-			Id:       "default-type",
-			Metadata: privatev1.Metadata_builder{Name: "default-type", Tenant: auth.SharedTenant}.Build(),
-			Spec:     privatev1.BareMetalInstanceTypeSpec_builder{}.Build(),
-		}.Build()).Do(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		Expect(createTestBareMetalInstanceType(ctx, "default-type", bareMetalNetworkPort("data-0", "fabric"))).To(Succeed())
 	})
 	Describe("Creation", func() {
 		It("Can be built if all the required parameters are set", func() {
@@ -81,6 +74,7 @@ var _ = Describe("Bare metal instances server", func() {
 			var err error
 			createDiskImageWithLifecycle("default-bmi-disk-image",
 				privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
+			seedTenantDefaultNetworking(testTenant, "", new("netris"))
 
 			// Seed a published catalog item.
 			catalogServer, err := NewPrivateBareMetalInstanceCatalogItemsServer().
@@ -89,7 +83,7 @@ var _ = Describe("Bare metal instances server", func() {
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(seedBareMetalCatalogItemTemplate(ctx, testTenant, "", "test-template")).To(Succeed())
+			Expect(seedBareMetalCatalogItemTemplate(ctx, testTenant, "", "test-template", bareMetalInstanceTypeReference("default-type"))).To(Succeed())
 			catalogResp, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -102,6 +96,9 @@ var _ = Describe("Bare metal instances server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			catalogItemID = catalogResp.GetObject().GetId()
+
+			// Tenant defaults so Creates that omit network_attachments can inject them.
+			seedTenantDefaultNetworking(testTenant, "", new("netris"))
 
 			server, err = NewBareMetalInstancesServer().
 				SetLogger(logger).
@@ -127,6 +124,35 @@ var _ = Describe("Bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetObject().GetId()).ToNot(BeEmpty())
 			Expect(response.GetObject().GetSpec().GetCatalogItem().GetId()).To(Equal(catalogItemID))
+			Expect(response.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal("default-type"))
+		})
+
+		It("Drops a caller-supplied status on create", func() {
+			// The insert is not checked by the metering source contract, so a spoofed state
+			// with a future transition time must never reach the stored object as a
+			// fabricated fact.
+			response, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
+				Object: publicv1.BareMetalInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-baremetal-instance-spoofed-status",
+					}.Build(),
+					Spec: publicv1.BareMetalInstanceSpec_builder{
+						DiskImage:    publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+					Status: publicv1.BareMetalInstanceStatus_builder{
+						State: publicv1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING,
+						StateTransitionTime: timestamppb.New(
+							time.Now().Add(24 * time.Hour)),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := response.GetObject()
+			Expect(object.GetStatus().GetState()).To(
+				Equal(publicv1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_UNSPECIFIED))
+			Expect(object.GetStatus().GetStateTransitionTime()).To(BeNil())
 		})
 
 		It("Returns a warning for a deprecated disk_image", func() {
@@ -235,6 +261,70 @@ var _ = Describe("Bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updateResponse.GetObject().GetSpec().GetRunStrategy()).To(
 				Equal(publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED))
+		})
+
+		It("Keeps the stored status across a maskless update carrying a status", func() {
+			createResponse, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
+				Object: publicv1.BareMetalInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
+					Spec: publicv1.BareMetalInstanceSpec_builder{
+						DiskImage:    publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			// Store a state with its transition time, as the operator feedback would. The time
+			// must be after creation: the source contract clamps a first time on or before it.
+			storedTime := timestamppb.New(time.Now())
+			bmiDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstance]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			stored, err := bmiDao.Get().SetId(id).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			storedObject := stored.GetObject()
+			storedObject.SetStatus(privatev1.BareMetalInstanceStatus_builder{
+				State:               privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING,
+				StateTransitionTime: storedTime,
+			}.Build())
+			_, err = bmiDao.Update().SetObject(storedObject).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Round-trip the public object without a mask, carrying a fabricated state:
+			getResponse, err := server.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{
+				Id: id,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			tampered := getResponse.GetObject()
+			tampered.GetStatus().SetState(publicv1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING)
+			updateResponse, err := server.Update(ctx, publicv1.BareMetalInstancesUpdateRequest_builder{
+				Object: tampered,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// The stored status and its transition time are unchanged:
+			Expect(updateResponse.GetObject().GetStatus().GetState()).To(
+				Equal(publicv1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING))
+			Expect(updateResponse.GetObject().GetStatus().GetStateTransitionTime().AsTime()).To(
+				Equal(storedTime.AsTime()))
+
+			// And they survive a round-trip through the database:
+			after, err := server.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{
+				Id: id,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(after.GetObject().GetStatus().GetState()).To(
+				Equal(publicv1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING))
+			Expect(after.GetObject().GetStatus().GetStateTransitionTime().AsTime()).To(
+				Equal(storedTime.AsTime()))
 		})
 
 		It("Fails to update without an object", func() {

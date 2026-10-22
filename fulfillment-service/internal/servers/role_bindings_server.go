@@ -203,7 +203,7 @@ func (s *RoleBindingsServer) Create(ctx context.Context,
 			"Failed to map public role binding to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process role binding")
+		err = publicInputMappingError(err, "failed to process role binding")
 		return
 	}
 
@@ -234,6 +234,11 @@ func (s *RoleBindingsServer) Create(ctx context.Context,
 
 func (s *RoleBindingsServer) Update(ctx context.Context,
 	request *publicv1.RoleBindingsUpdateRequest) (response *publicv1.RoleBindingsUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	publicRoleBinding := request.GetObject()
 	if publicRoleBinding == nil {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
@@ -252,7 +257,7 @@ func (s *RoleBindingsServer) Update(ctx context.Context,
 			"Failed to map public role binding to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process role binding")
+		err = publicInputMappingError(err, "failed to process role binding")
 		return
 	}
 

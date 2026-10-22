@@ -16,6 +16,7 @@ const validValues = {
   userData: emptyEntry('userdata'),
   opaque: [{ key: 'username', value: new TextEncoder().encode('admin') }],
   value: emptyEntry('value'),
+  sshPublicKey: emptyEntry('public_key'),
 };
 
 describe('getSecretValidationSchema', () => {
@@ -96,6 +97,57 @@ describe('getSecretValidationSchema', () => {
       schema.isValid({
         ...validValues,
         type: SecretType.VALUE,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it('accepts a valid SSH public key', async () => {
+    const key =
+      'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGrRFhQBMYKR1oMYGEQ6oldeLBJiqrGGwBIsNpSfXiqu user@host';
+    await expect(
+      schema.isValid({
+        ...validValues,
+        type: SecretType.SSH_PUBLIC_KEY,
+        sshPublicKey: { key: 'public_key', value: new TextEncoder().encode(key) },
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it('rejects an invalid SSH public key', async () => {
+    await expect(
+      schema.isValid({
+        ...validValues,
+        type: SecretType.SSH_PUBLIC_KEY,
+        sshPublicKey: { key: 'public_key', value: new TextEncoder().encode('not-a-key') },
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it('rejects SSH public key values that are not valid UTF-8', async () => {
+    await expect(
+      schema.isValid({
+        ...validValues,
+        type: SecretType.SSH_PUBLIC_KEY,
+        sshPublicKey: { key: 'public_key', value: new Uint8Array([0xff, 0xfe, 0x00]) },
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it('rejects whitespace-only SSH public key values', async () => {
+    await expect(
+      schema.isValid({
+        ...validValues,
+        type: SecretType.SSH_PUBLIC_KEY,
+        sshPublicKey: { key: 'public_key', value: new TextEncoder().encode('   \n\t  ') },
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it('requires a value when SSH_PUBLIC_KEY is selected', async () => {
+    await expect(
+      schema.isValid({
+        ...validValues,
+        type: SecretType.SSH_PUBLIC_KEY,
       }),
     ).resolves.toBe(false);
   });

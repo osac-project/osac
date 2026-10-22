@@ -1,0 +1,38 @@
+---
+- name: Invoke an AgentlessNet networking playbook
+  ansible.builtin.command:
+    argv:
+      - ansible-playbook
+      - -i
+      - localhost,
+      - "{{ playbook_dir }}/../../../../../playbook_osac_{{ agentless_eip_playbook }}.yml"
+      - -e
+      - "{{ {'osac_job_vars': agentless_eip_job_vars} | to_json }}"
+      - -e
+      - >-
+        {{ {'ansible_connection': 'local', 'ansible_become': false,
+            'ansible_python_interpreter': ansible_playbook_python} | to_json }}
+  args:
+    chdir: "{{ playbook_dir }}/../../../../../"
+  environment:
+    AGENTLESS_NET_VN_INVENTORY: "{{ agentless_eip_inventory | to_json }}"
+    AGENTLESS_NET_STATE_FILE: "{{ agentless_eip_state_file }}"
+    AGENTLESS_NET_SSH_PRIVATE_KEY: ""
+    ANSIBLE_STDOUT_CALLBACK: ansible.posix.json
+    ANSIBLE_SHOW_CUSTOM_STATS: "true"
+    KUBECONFIG: "{{ '/tmp/osac-eip-no-kubeconfig' if agentless_eip_playbook in ['create_external_ip', 'delete_external_ip'] else omit }}"
+    K8S_AUTH_KUBECONFIG: "{{ '/tmp/osac-eip-no-kubeconfig' if agentless_eip_playbook in ['create_external_ip', 'delete_external_ip'] else omit }}"
+    K8S_AUTH_HOST: "{{ 'https://127.0.0.1:1' if agentless_eip_playbook in ['create_external_ip', 'delete_external_ip'] else omit }}"
+  register: agentless_eip_playbook_result
+  changed_when: false
+  failed_when: false
+
+- name: Check the playbook outcome
+  ansible.builtin.assert:
+    that:
+      - (agentless_eip_playbook_result.rc == 0) == (agentless_eip_should_succeed | bool)
+
+- name: Read the playbook result artifact
+  ansible.builtin.set_fact:
+    agentless_eip_result: >-
+      {{ ((agentless_eip_playbook_result.stdout | from_json).global_custom_stats | default({})).osac_result | default({}) }}

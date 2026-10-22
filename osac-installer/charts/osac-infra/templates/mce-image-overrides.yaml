@@ -1,4 +1,4 @@
-{{- if .Values.mce.imageOverrides }}
+{{- if and .Values.mce.enabled .Values.mce.imageOverrides }}
 {{- range $index, $image := .Values.mce.imageOverrides }}
 {{- range $field := list "image-name" "image-remote" "image-digest" "image-key" }}
 {{- if not (index $image $field) }}{{ fail (printf "mce.imageOverrides[%d] is missing %s" $index $field) }}{{ end }}

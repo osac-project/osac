@@ -10,8 +10,9 @@ from tests.e2e.core.helpers import assert_grpc_method_unavailable
 pytestmark = pytest.mark.regression
 
 
+# SecurityGroups.Update is a scoped exception for rule updates (OSAC-5679).
 @pytest.mark.parametrize(
-    "service", ["VirtualNetworks", "Subnets", "SecurityGroups", "ExternalIPs", "ExternalIPAttachments", "NATGateways"]
+    "service", ["VirtualNetworks", "Subnets", "ExternalIPs", "ExternalIPAttachments", "NATGateways"]
 )
 def test_public_networking_update_is_not_exposed(jwt_grpc_tenant1: GRPCClient, service: str) -> None:
     with pytest.raises(subprocess.CalledProcessError) as exc_info:

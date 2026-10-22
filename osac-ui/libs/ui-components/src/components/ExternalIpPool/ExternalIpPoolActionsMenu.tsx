@@ -4,6 +4,7 @@ import { Divider, Dropdown, DropdownItem, DropdownList, MenuToggle } from '@patt
 import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
 
 import type { ExternalIPPool } from '@osac/types/private';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import ExternalIpPoolDeleteConfirmModal from './ExternalIpPoolDeleteConfirmModal';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -54,16 +55,13 @@ const ExternalIpPoolActionsMenu = ({ pool }: ExternalIpPoolActionsMenuProps) => 
             {t('View details')}
           </DropdownItem>
           <Divider component="li" />
-          <DropdownItem
-            value="delete"
-            isDanger
+          <DeleteResourceButton
+            isDropdown
             onClick={() => {
               setDeleteOpen(true);
               setOpen(false);
             }}
-          >
-            {t('Delete')}
-          </DropdownItem>
+          />
         </DropdownList>
       </Dropdown>
     </>

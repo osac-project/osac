@@ -1,0 +1,8 @@
+{
+  "name": "osac-ui-pnpm-bootstrap",
+  "private": true,
+  "description": "Throwaway npm project so Hermeto's npm backend prefetches the pnpm package manager binary as a recognized npm-ecosystem dependency, avoiding the generic-backend allowed_package_sources exception a raw tarball fetch would require.",
+  "dependencies": {
+    "pnpm": "9.15.9"
+  }
+}

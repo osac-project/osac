@@ -21,6 +21,8 @@ import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
 import type { Any } from "../../../google/protobuf/any_pb";
 import { file_google_protobuf_any } from "../../../google/protobuf/any_pb";
+import type { BareMetalInstanceTypeReference } from "./baremetal_instance_type_type_pb";
+import { file_osac_private_v1_baremetal_instance_type_type } from "./baremetal_instance_type_type_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_private_v1_metadata_type } from "./metadata_type_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -29,10 +31,10 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/baremetal_instance_template_type.proto.
  */
 export const file_osac_private_v1_baremetal_instance_template_type: GenFile = /*@__PURE__*/
-  fileDesc("CjZvc2FjL3ByaXZhdGUvdjEvYmFyZW1ldGFsX2luc3RhbmNlX3RlbXBsYXRlX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSLRAgoZQmFyZU1ldGFsSW5zdGFuY2VUZW1wbGF0ZRIuCgJpZBgBIAEoCUIiukgfch0QATIZXlthLXpBLVpfXVthLXpBLVowLTkuX10qJBIrCghtZXRhZGF0YRgCIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5NZXRhZGF0YRINCgV0aXRsZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRJNCg1zcGVjX2RlZmF1bHRzGAUgASgLMjYub3NhYy5wcml2YXRlLnYxLkJhcmVNZXRhbEluc3RhbmNlVGVtcGxhdGVTcGVjRGVmYXVsdHMSUQoKcGFyYW1ldGVycxgGIAMoCzI9Lm9zYWMucHJpdmF0ZS52MS5CYXJlTWV0YWxJbnN0YW5jZVRlbXBsYXRlUGFyYW1ldGVyRGVmaW5pdGlvbhIRCglob3N0X3R5cGUYByABKAkipwEKLEJhcmVNZXRhbEluc3RhbmNlVGVtcGxhdGVQYXJhbWV0ZXJEZWZpbml0aW9uEgwKBG5hbWUYASABKAkSDQoFdGl0bGUYAiABKAkSEwoLZGVzY3JpcHRpb24YAyABKAkSEAoIcmVxdWlyZWQYBCABKAgSDAoEdHlwZRgFIAEoCRIlCgdkZWZhdWx0GAYgASgLMhQuZ29vZ2xlLnByb3RvYnVmLkFueSI0CiVCYXJlTWV0YWxJbnN0YW5jZVRlbXBsYXRlU3BlY0RlZmF1bHRzSgQIARACUgVpbWFnZSJfCiJCYXJlTWV0YWxJbnN0YW5jZVRlbXBsYXRlUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZzaGFyZWQYBCABKAhCFIq1GBASDm9zYWMucHVibGljLnYxYgZwcm90bzM", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_protobuf_any, file_osac_private_v1_metadata_type]);
+  fileDesc("CjZvc2FjL3ByaXZhdGUvdjEvYmFyZW1ldGFsX2luc3RhbmNlX3RlbXBsYXRlX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSKXAwoZQmFyZU1ldGFsSW5zdGFuY2VUZW1wbGF0ZRIuCgJpZBgBIAEoCUIiukgfch0QATIZXlthLXpBLVpfXVthLXpBLVowLTkuX10qJBIrCghtZXRhZGF0YRgCIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5NZXRhZGF0YRINCgV0aXRsZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRJNCg1zcGVjX2RlZmF1bHRzGAUgASgLMjYub3NhYy5wcml2YXRlLnYxLkJhcmVNZXRhbEluc3RhbmNlVGVtcGxhdGVTcGVjRGVmYXVsdHMSUQoKcGFyYW1ldGVycxgGIAMoCzI9Lm9zYWMucHJpdmF0ZS52MS5CYXJlTWV0YWxJbnN0YW5jZVRlbXBsYXRlUGFyYW1ldGVyRGVmaW5pdGlvbhJGCg1pbnN0YW5jZV90eXBlGAggASgLMi8ub3NhYy5wcml2YXRlLnYxLkJhcmVNZXRhbEluc3RhbmNlVHlwZVJlZmVyZW5jZUoECAcQCFIJaG9zdF90eXBlIqcBCixCYXJlTWV0YWxJbnN0YW5jZVRlbXBsYXRlUGFyYW1ldGVyRGVmaW5pdGlvbhIMCgRuYW1lGAEgASgJEg0KBXRpdGxlGAIgASgJEhMKC2Rlc2NyaXB0aW9uGAMgASgJEhAKCHJlcXVpcmVkGAQgASgIEgwKBHR5cGUYBSABKAkSJQoHZGVmYXVsdBgGIAEoCzIULmdvb2dsZS5wcm90b2J1Zi5BbnkiNAolQmFyZU1ldGFsSW5zdGFuY2VUZW1wbGF0ZVNwZWNEZWZhdWx0c0oECAEQAlIFaW1hZ2UiXwoiQmFyZU1ldGFsSW5zdGFuY2VUZW1wbGF0ZVJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEg8KB3Byb2plY3QYAyABKAkSDgoGc2hhcmVkGAQgASgIQhSKtRgQEg5vc2FjLnB1YmxpYy52MWIGcHJvdG8z", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_protobuf_any, file_osac_private_v1_baremetal_instance_type_type, file_osac_private_v1_metadata_type]);
 
 /**
- * A bare metal instance template defines a hardware profile (host type, OS image, network configuration)
+ * A bare metal instance template defines an instance type, OS image, and network configuration
  * that can be used to create bare metal instances via a catalog item.
  *
  * buf:lint:ignore OSAC_OBJECT_SHAPE
@@ -80,11 +82,11 @@ export type BareMetalInstanceTemplate = Message<"osac.private.v1.BareMetalInstan
   parameters: BareMetalInstanceTemplateParameterDefinition[];
 
   /**
-   * Identifier of the HostType that defines the hardware profile for instances created from this template.
+   * BareMetalInstanceType used for hardware placement when the caller does not provide one.
    *
-   * @generated from field: string host_type = 7;
+   * @generated from field: osac.private.v1.BareMetalInstanceTypeReference instance_type = 8;
    */
-  hostType: string;
+  instanceType?: BareMetalInstanceTypeReference | undefined;
 };
 
 /**

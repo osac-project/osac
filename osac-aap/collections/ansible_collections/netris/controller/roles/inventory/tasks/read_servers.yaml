@@ -12,7 +12,7 @@
   when: netris_session_cookie is not defined
 
 - name: Get servers
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     force: true
     url: "{{ netris_controller_url }}/api/v2/hw?type=server"
     method: GET
@@ -24,6 +24,7 @@
     status_code: 200
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _hw_servers_resp
   no_log: true
 

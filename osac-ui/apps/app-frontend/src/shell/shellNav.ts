@@ -57,15 +57,28 @@ const getAdminNav = (t: TFunction): NavRow[] => [
   },
   {
     kind: 'section',
-    id: 'nav-infrastructure',
-    label: t('Infrastructure'),
+    id: 'nav-admin-storage',
+    label: t('Storage'),
     children: [
       {
         kind: 'link',
-        id: 'storage',
-        label: t('Storage'),
-        path: '/admin/infrastructure/storage',
+        id: 'storage-backends',
+        label: t('Storage Backends'),
+        path: '/admin/infrastructure/storage/backends',
       },
+      {
+        kind: 'link',
+        id: 'storage-tiers',
+        label: t('Storage Tiers'),
+        path: '/admin/infrastructure/storage/tiers',
+      },
+    ],
+  },
+  {
+    kind: 'section',
+    id: 'nav-infrastructure',
+    label: t('Infrastructure'),
+    children: [
       {
         kind: 'link',
         id: 'instance-types',
@@ -100,6 +113,7 @@ const getAdminNav = (t: TFunction): NavRow[] => [
 
 const getTenantAdminNav = (t: TFunction): NavRow[] => [
   ...getBaseNav(t),
+  getStorageNav(t),
   ...getIdpLinks(t),
   getNetworkNav(t),
   getSecretsNav(t),
@@ -191,7 +205,6 @@ const getNetworkNav = (t: TFunction): NavRow => ({
 const getBaseNav = (t: TFunction): NavRow[] => [
   getCatalogNav(t),
   getServicesNav(t),
-  getStorageNav(t),
   getProjectsNav(t),
 ];
 

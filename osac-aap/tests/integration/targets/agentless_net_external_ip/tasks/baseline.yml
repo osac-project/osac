@@ -1,0 +1,281 @@
+---
+- name: Verify AgentlessNet ExternalIP allocation and release
+  hosts: localhost
+  gather_facts: false
+  vars:
+    tenant_id: agentless-eip-test
+    pool_id: "44444444-4444-4444-8444-444444444444"
+    external_ip_id: "55555555-5555-4555-8555-555555555555"
+    pool_cidr: 198.51.100.0/30
+    agentless_eip_inventory:
+      all:
+        children:
+          net_nodes:
+            hosts:
+              network-node:
+                ansible_host: 127.0.0.1
+                ansible_user: eip-test
+  tasks:
+    - name: Create isolated ExternalIP test resources
+      block:
+        - name: Create temporary state storage
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: osac-agentless-eip-
+          register: agentless_eip_tempdir
+
+        - name: Set the state path and namespace
+          ansible.builtin.set_fact:
+            agentless_eip_state_file: "{{ agentless_eip_tempdir.path }}/network.sqlite3"
+            agentless_eip_namespace: >-
+              {{ ('osac-eip-' ~ (agentless_eip_tempdir.path | basename))[:63]
+                 | regex_replace('[^a-z0-9-]', '-') | regex_replace('-+$', '') }}
+
+        - name: Create the test namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ agentless_eip_namespace }}"
+            state: present
+
+        - name: Create the ExternalIPPool CR
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIPPool
+              metadata:
+                name: agentless-eip-pool
+                namespace: "{{ agentless_eip_namespace }}"
+                labels:
+                  osac.openshift.io/externalippool-uuid: "{{ pool_id }}"
+                annotations:
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+                  osac.openshift.io/owner-reference: test-owner
+                  osac.openshift.io/implementation-strategy: agentless_net
+              spec:
+                ipFamily: IPv4
+                cidrs:
+                  - "{{ pool_cidr }}"
+
+        - name: Read the pool Kubernetes UID
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIPPool
+            namespace: "{{ agentless_eip_namespace }}"
+            name: agentless-eip-pool
+          register: agentless_eip_pool_read
+
+        - name: Save the pool CR
+          ansible.builtin.set_fact:
+            agentless_eip_pool: "{{ agentless_eip_pool_read.resources[0] }}"
+
+        - name: Register the pool through the existing dispatcher
+          ansible.builtin.set_fact:
+            agentless_eip_playbook: create_external_ip_pool
+            agentless_eip_job_vars:
+              resource: "{{ agentless_eip_pool }}"
+            agentless_eip_should_succeed: true
+
+        - name: Run the pool registration playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Create the ExternalIP CR
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIP
+              metadata:
+                name: agentless-eip
+                namespace: "{{ agentless_eip_namespace }}"
+                labels:
+                  osac.openshift.io/externalip-uuid: "{{ external_ip_id }}"
+                annotations:
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+                  osac.openshift.io/owner-reference: test-owner
+                  osac.openshift.io/implementation-strategy: agentless_net
+                  osac.openshift.io/externalip-contract-version: v1
+                finalizers:
+                  - osac.openshift.io/test-hold
+              spec:
+                pool: "{{ pool_id }}"
+
+        - name: Read the ExternalIP UID and generation
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIP
+            namespace: "{{ agentless_eip_namespace }}"
+            name: agentless-eip
+          register: agentless_eip_read
+
+        - name: Build the allocation input
+          ansible.builtin.set_fact:
+            agentless_eip_resource: "{{ agentless_eip_read.resources[0] }}"
+            agentless_eip_pool_context:
+              fulfillment_id: "{{ pool_id }}"
+              kubernetes_uid: "{{ agentless_eip_pool.metadata.uid }}"
+              tenant_id: "{{ tenant_id }}"
+              cidr: "{{ pool_cidr }}"
+              phase: Ready
+            agentless_eip_job_vars:
+              resource: "{{ agentless_eip_read.resources[0] }}"
+              external_ip_pool:
+                fulfillment_id: "{{ pool_id }}"
+                kubernetes_uid: "{{ agentless_eip_pool.metadata.uid }}"
+                tenant_id: "{{ tenant_id }}"
+                cidr: "{{ pool_cidr }}"
+                phase: Ready
+            agentless_eip_playbook: create_external_ip
+            agentless_eip_should_succeed: true
+
+        - name: Run the allocation playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Verify the allocation result artifact
+          ansible.builtin.assert:
+            that:
+              - agentless_eip_result.schemaVersion == 'v1'
+              - agentless_eip_result.operation == 'external_ip.allocate'
+              - agentless_eip_result.resourceUID == agentless_eip_resource.metadata.uid
+              - agentless_eip_result.observedGeneration | int == agentless_eip_resource.metadata.generation | int
+              - agentless_eip_result.data.address == '198.51.100.1'
+        - name: Save the allocated address
+          ansible.builtin.set_fact:
+            agentless_eip_address: "{{ agentless_eip_result.data.address }}"
+
+        - name: Read the ExternalIP after allocation
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIP
+            namespace: "{{ agentless_eip_namespace }}"
+            name: agentless-eip
+          register: agentless_eip_allocated_read
+
+        - name: Verify AAP returned the address without changing the ExternalIP
+          ansible.builtin.assert:
+            that:
+              - agentless_eip_allocated_read.resources[0].metadata.uid == agentless_eip_resource.metadata.uid
+              - agentless_eip_allocated_read.resources[0].metadata.generation | int == agentless_eip_resource.metadata.generation | int
+              - agentless_eip_allocated_read.resources[0].metadata.annotations == agentless_eip_resource.metadata.annotations
+              - agentless_eip_allocated_read.resources[0].status | default({}) == agentless_eip_resource.status | default({})
+              - "'osac.openshift.io/allocated-address' not in agentless_eip_allocated_read.resources[0].metadata.annotations"
+
+        - name: Retry allocation for the same UID
+          ansible.builtin.set_fact:
+            agentless_eip_job_vars:
+              resource: "{{ agentless_eip_allocated_read.resources[0] }}"
+              external_ip_pool: "{{ agentless_eip_pool_context }}"
+
+        - name: Run the allocation retry
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Verify the retry returns the same address
+          ansible.builtin.assert:
+            that:
+              - agentless_eip_result.data.address == agentless_eip_address
+
+        - name: Build a stale-generation request
+          ansible.builtin.set_fact:
+            agentless_eip_job_vars:
+              resource: >-
+                {{ agentless_eip_allocated_read.resources[0]
+                   | combine({'metadata': agentless_eip_allocated_read.resources[0].metadata
+                     | combine({'generation': agentless_eip_allocated_read.resources[0].metadata.generation + 1})},
+                     recursive=true) }}
+              external_ip_pool: "{{ agentless_eip_pool_context }}"
+            agentless_eip_should_succeed: true
+
+        - name: Run allocation with a supplied newer generation
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Verify the job reports the generation it received
+          ansible.builtin.assert:
+            that:
+              - agentless_eip_result.observedGeneration | int == agentless_eip_resource.metadata.generation | int + 1
+              - agentless_eip_result.data.address == agentless_eip_address
+
+        - name: Request ExternalIP deletion while retaining the test finalizer
+          kubernetes.core.k8s:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIP
+            namespace: "{{ agentless_eip_namespace }}"
+            name: agentless-eip
+            state: absent
+            wait: false
+
+        - name: Read the terminating ExternalIP
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIP
+            namespace: "{{ agentless_eip_namespace }}"
+            name: agentless-eip
+          register: agentless_eip_deleting_read
+          until:
+            - agentless_eip_deleting_read.resources | length == 1
+            - agentless_eip_deleting_read.resources[0].metadata.deletionTimestamp is defined
+          retries: 5
+          delay: 1
+
+        - name: Build the release input
+          ansible.builtin.set_fact:
+            agentless_eip_job_vars:
+              resource: "{{ agentless_eip_deleting_read.resources[0] }}"
+              external_ip_pool: "{{ agentless_eip_pool_context }}"
+            agentless_eip_playbook: delete_external_ip
+            agentless_eip_should_succeed: true
+
+        - name: Run the release playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Verify the release result artifact
+          ansible.builtin.assert:
+            that:
+              - agentless_eip_result.schemaVersion == 'v1'
+              - agentless_eip_result.operation == 'external_ip.release'
+              - agentless_eip_result.resourceUID == agentless_eip_deleting_read.resources[0].metadata.uid
+              - agentless_eip_result.observedGeneration | int == agentless_eip_deleting_read.resources[0].metadata.generation | int
+              - agentless_eip_result.data == {}
+
+        - name: Retry release to verify idempotence
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Build the pool deletion input
+          ansible.builtin.set_fact:
+            agentless_eip_job_vars:
+              resource: "{{ agentless_eip_pool }}"
+            agentless_eip_playbook: delete_external_ip_pool
+
+        - name: Remove the provider pool after release
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+      always:
+        - name: Remove the test finalizer from the ExternalIP
+          kubernetes.core.k8s_json_patch:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIP
+            namespace: "{{ agentless_eip_namespace }}"
+            name: agentless-eip
+            patch:
+              - op: remove
+                path: /metadata/finalizers
+          when: agentless_eip_namespace is defined
+          failed_when: false
+
+        - name: Delete the test namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ agentless_eip_namespace }}"
+            state: absent
+            wait: true
+            wait_timeout: 120
+          when: agentless_eip_namespace is defined
+          failed_when: false
+
+        - name: Remove the temporary state directory
+          ansible.builtin.file:
+            path: "{{ agentless_eip_tempdir.path }}"
+            state: absent
+          when: agentless_eip_tempdir is defined
+          delegate_to: localhost

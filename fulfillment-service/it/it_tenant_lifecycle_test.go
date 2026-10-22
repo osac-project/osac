@@ -45,15 +45,15 @@ func createTenant(ctx context.Context, client privatev1.TenantsClient, name stri
 	}.Build())
 	Expect(err).ToNot(HaveOccurred())
 	id := createResponse.GetObject().GetId()
-	DeferCleanup(func() {
-		_, _ = client.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+	DeferCleanup(func(cleanupCtx context.Context) {
+		_, deleteErr := client.Delete(cleanupCtx, privatev1.TenantsDeleteRequest_builder{
 			Id: id,
 		}.Build())
-		status, ok := grpcstatus.FromError(err)
+		status, ok := grpcstatus.FromError(deleteErr)
 		if ok && status.Code() == grpccodes.NotFound {
 			return
 		}
-		Expect(err).ToNot(HaveOccurred())
+		Expect(deleteErr).ToNot(HaveOccurred())
 	})
 	return id
 }
@@ -118,6 +118,37 @@ func deleteSecrets(ctx context.Context, client privatev1.SecretsClient, tenant s
 	).Should(Succeed())
 }
 
+func deleteTenantUsers(ctx context.Context, tenant string) {
+	usersClient := privatev1.NewUsersClient(tool.InternalView().AdminConn())
+	listFilter := fmt.Sprintf("this.metadata.tenant == %q", tenant)
+	listRequest := privatev1.UsersListRequest_builder{
+		Filter: &listFilter,
+	}.Build()
+	listResponse, err := usersClient.List(ctx, listRequest)
+	Expect(err).ToNot(HaveOccurred())
+	for _, user := range listResponse.GetItems() {
+		_, err := usersClient.Delete(ctx, privatev1.UsersDeleteRequest_builder{
+			Id: user.GetId(),
+		}.Build())
+		if err != nil && !isGRPCCode(err, grpccodes.NotFound) {
+			Expect(err).ToNot(HaveOccurred())
+		}
+		Eventually(func(g Gomega) bool {
+			_, err := usersClient.Get(ctx, privatev1.UsersGetRequest_builder{Id: user.GetId()}.Build())
+			if isGRPCCode(err, grpccodes.NotFound) {
+				return true
+			}
+			g.Expect(err).ToNot(HaveOccurred())
+			_, err = usersClient.Signal(ctx, privatev1.UsersSignalRequest_builder{Id: user.GetId()}.Build())
+			if isGRPCCode(err, grpccodes.NotFound) {
+				return true
+			}
+			g.Expect(err).ToNot(HaveOccurred())
+			return false
+		}, time.Minute, time.Second).Should(BeTrue())
+	}
+}
+
 func deleteTenant(ctx context.Context, tenantsClient privatev1.TenantsClient, projectsClient privatev1.ProjectsClient,
 	id, name string) {
 	// Break-glass secrets are stored against the tenant's default project, so they
@@ -126,8 +157,42 @@ func deleteTenant(ctx context.Context, tenantsClient privatev1.TenantsClient, pr
 	// reconciler persists a secret between cleanup steps.
 	secretsClient := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
 
-	// Before deleting the tenant we need to delete all the projects associated with it:
-	listProjectsFilter := fmt.Sprintf("this.metadata.tenant == %q && !has(this.metadata.deletion_timestamp)", name)
+	// Request tenant deletion first so the tenant reconciler can remove its default
+	// networking resources before project deletion waits on those references.
+	_, err := tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+		Id: id,
+	}.Build())
+	if grpcstatus.Code(err) == grpccodes.FailedPrecondition {
+		// A tenant created immediately before deletion may not have its controller
+		// finalizer yet. Without it, the database correctly rejects deletion while
+		// the auto-created root project exists. Wait for reconciliation to install
+		// the finalizer, then retry so the tenant controller can remove networking
+		// before it deletes that root project.
+		Eventually(func(g Gomega) {
+			getResponse, getErr := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			g.Expect(getResponse.GetObject().GetMetadata().GetFinalizers()).ToNot(BeEmpty())
+		}, time.Minute, time.Second).Should(Succeed())
+		_, err = tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
+	}
+	if err != nil {
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok && status.Code() == grpccodes.NotFound).To(BeTrue(), "tenant deletion failed: %v", err)
+	}
+
+	// Wake the tenant reconciler so default networking cleanup starts before the
+	// project cleanup below. Tolerate NotFound if reconciliation already finished.
+	_, err = tenantsClient.Signal(ctx, privatev1.TenantsSignalRequest_builder{
+		Id: id,
+	}.Build())
+	if err != nil {
+		signalStatus, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(signalStatus.Code()).To(Equal(grpccodes.NotFound))
+	}
+
+	listProjectsFilter := fmt.Sprintf(
+		"this.metadata.tenant == %q && this.metadata.name != '' && !has(this.metadata.deletion_timestamp)", name)
 	listProjectsRequest := privatev1.ProjectsListRequest_builder{
 		Filter: &listProjectsFilter,
 	}.Build()
@@ -145,25 +210,6 @@ func deleteTenant(ctx context.Context, tenantsClient privatev1.TenantsClient, pr
 		}
 	}
 	deleteSecrets(ctx, secretsClient, name)
-
-	// Now we can delete the tenant:
-	_, err := tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
-		Id: id,
-	}.Build())
-	Expect(err).ToNot(HaveOccurred())
-
-	// Wake tenant and onboarding reconcilers so finalizer removal is not delayed
-	// waiting for the next watch/sync cycle. Tolerate NotFound: Delete above starts
-	// asynchronous finalizer processing, so the tenant may already be archived by the
-	// time this best-effort nudge runs, which means the goal state is already reached.
-	_, err = tenantsClient.Signal(ctx, privatev1.TenantsSignalRequest_builder{
-		Id: id,
-	}.Build())
-	if err != nil {
-		signalStatus, ok := grpcstatus.FromError(err)
-		Expect(ok).To(BeTrue())
-		Expect(signalStatus.Code()).To(Equal(grpccodes.NotFound))
-	}
 
 	Eventually(
 		func(g Gomega) {
@@ -218,7 +264,9 @@ func verifyTenantRemovedFromKeycloak(ctx context.Context, name string) {
 			g.Expect(json.Unmarshal(body, &kcTenants)).To(Succeed())
 			g.Expect(kcTenants).To(BeEmpty())
 		},
-		time.Minute,
+		// Keycloak organization deletion can complete asynchronously after the
+		// Fulfillment tenant and its finalizer have already been removed.
+		2*time.Minute,
 		time.Second,
 	).Should(Succeed())
 }
@@ -473,7 +521,7 @@ var _ = Describe("Tenant lifecycle", func() {
 				}.Build())
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(getResponse.GetObject().GetMetadata().GetFinalizers()).To(
-					ContainElement(finalizers.Controller),
+					ContainElements(finalizers.TenantLifecycle, finalizers.TenantOnboarding),
 				)
 				g.Expect(getResponse.GetObject().GetStatus().GetState()).To(
 					Equal(privatev1.TenantState_TENANT_STATE_SYNCED),
@@ -894,9 +942,16 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 		Expect(err).ToNot(HaveOccurred())
 		vnId := createResp.GetObject().GetId()
 		DeferCleanup(func(cleanupCtx context.Context) {
-			_, _ = vnAdminClient.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: vnId,
-			}.Build())
+			deleteAndWaitForNotFound(
+				func() error {
+					_, err := vnAdminClient.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{Id: vnId}.Build())
+					return err
+				},
+				func() error {
+					_, err := vnAdminClient.Get(cleanupCtx, privatev1.VirtualNetworksGetRequest_builder{Id: vnId}.Build())
+					return err
+				},
+			)
 		})
 
 		By("Verifying tenant-A can see their own VirtualNetwork")
@@ -962,9 +1017,16 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 		Expect(err).ToNot(HaveOccurred())
 		vnId := createResp.GetObject().GetId()
 		DeferCleanup(func(cleanupCtx context.Context) {
-			_, _ = vnAdminClient.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: vnId,
-			}.Build())
+			deleteAndWaitForNotFound(
+				func() error {
+					_, err := vnAdminClient.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{Id: vnId}.Build())
+					return err
+				},
+				func() error {
+					_, err := vnAdminClient.Get(cleanupCtx, privatev1.VirtualNetworksGetRequest_builder{Id: vnId}.Build())
+					return err
+				},
+			)
 		})
 
 		By("Verifying tenant-B cannot delete tenant-A's VirtualNetwork")
@@ -1019,9 +1081,16 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 		Expect(err).ToNot(HaveOccurred())
 		vnIdA := createRespA.GetObject().GetId()
 		DeferCleanup(func(cleanupCtx context.Context) {
-			_, _ = vnAdminClient.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: vnIdA,
-			}.Build())
+			deleteAndWaitForNotFound(
+				func() error {
+					_, err := vnAdminClient.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{Id: vnIdA}.Build())
+					return err
+				},
+				func() error {
+					_, err := vnAdminClient.Get(cleanupCtx, privatev1.VirtualNetworksGetRequest_builder{Id: vnIdA}.Build())
+					return err
+				},
+			)
 		})
 
 		By("Tenant-B creates a VirtualNetwork")
@@ -1040,9 +1109,16 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 		Expect(err).ToNot(HaveOccurred())
 		vnIdB := createRespB.GetObject().GetId()
 		DeferCleanup(func(cleanupCtx context.Context) {
-			_, _ = vnAdminClient.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: vnIdB,
-			}.Build())
+			deleteAndWaitForNotFound(
+				func() error {
+					_, err := vnAdminClient.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{Id: vnIdB}.Build())
+					return err
+				},
+				func() error {
+					_, err := vnAdminClient.Get(cleanupCtx, privatev1.VirtualNetworksGetRequest_builder{Id: vnIdB}.Build())
+					return err
+				},
+			)
 		})
 
 		By("Verifying tenant-A's List contains only their network")

@@ -1,14 +1,13 @@
 import type {
+  BareMetalInstanceType,
+  BareMetalInstanceTypeReference,
   ClusterCatalogItem,
   ClusterCatalogItemFields,
+  ClusterCatalogNodeSet,
   ClusterNodeSetMapPolicy,
-  ClusterTemplateNodeSet,
   ClusterVersion,
   ClusterVersionReference,
-  HostType,
-  HostTypeReference,
 } from '@osac/types';
-import { hostTypeDisplayName } from '@osac/ui-components/api/v1/host-types';
 
 import {
   catalogFieldPolicyIsConfigured,
@@ -38,7 +37,7 @@ export const clusterVersionReference = (
 
 export const clusterNodeSetItemsFromPolicy = (
   policy: ClusterNodeSetMapPolicy | undefined,
-): Record<string, ClusterTemplateNodeSet> | undefined => {
+): Record<string, ClusterCatalogNodeSet> | undefined => {
   if (policy?.behavior.case === 'locked') {
     return policy.behavior.value.items;
   }
@@ -49,8 +48,8 @@ export const clusterNodeSetItemsFromPolicy = (
 };
 
 export const primaryClusterCatalogNodeSet = (
-  items: Record<string, ClusterTemplateNodeSet> | undefined,
-): { key: string; nodeSet: ClusterTemplateNodeSet } | undefined => {
+  items: Record<string, ClusterCatalogNodeSet> | undefined,
+): { key: string; nodeSet: ClusterCatalogNodeSet } | undefined => {
   if (!items) {
     return undefined;
   }
@@ -104,9 +103,9 @@ export const formatClusterCatalogVersionLabel = (
 };
 
 export const findHostTypeForReference = (
-  hostTypes: HostType[],
-  reference: HostTypeReference | undefined,
-): HostType | undefined => {
+  hostTypes: BareMetalInstanceType[],
+  reference: BareMetalInstanceTypeReference | undefined,
+): BareMetalInstanceType | undefined => {
   if (!reference) {
     return undefined;
   }
@@ -127,12 +126,9 @@ export const findHostTypeForReference = (
 };
 
 export const formatClusterCatalogHostTypeLabel = (
-  hostType: HostType | undefined,
-  reference: HostTypeReference | undefined,
+  hostType: BareMetalInstanceType | undefined,
+  reference: BareMetalInstanceTypeReference | undefined,
 ): string => {
-  if (hostType?.title?.trim()) {
-    return hostType.title.trim();
-  }
   if (hostType?.metadata?.name) {
     return hostType.metadata.name;
   }
@@ -162,7 +158,7 @@ export const formatClusterCatalogVersionRow = (
 
 export const formatClusterCatalogNodeSetRow = (
   nodeSetsPolicy: ClusterNodeSetMapPolicy | undefined,
-  primaryNodeSet: { key: string; nodeSet: ClusterTemplateNodeSet } | undefined,
+  primaryNodeSet: { key: string; nodeSet: ClusterCatalogNodeSet } | undefined,
 ): string | undefined => {
   if (!catalogFieldPolicyIsConfigured(nodeSetsPolicy)) {
     return undefined;
@@ -175,8 +171,8 @@ export const formatClusterCatalogNodeSetRow = (
 
 export const formatClusterCatalogHostTypeRow = (
   nodeSetsPolicy: ClusterNodeSetMapPolicy | undefined,
-  primaryNodeSet: { key: string; nodeSet: ClusterTemplateNodeSet } | undefined,
-  hostType: HostType | undefined,
+  primaryNodeSet: { key: string; nodeSet: ClusterCatalogNodeSet } | undefined,
+  hostType: BareMetalInstanceType | undefined,
 ): string | undefined => {
   if (!catalogFieldPolicyIsConfigured(nodeSetsPolicy)) {
     return undefined;
@@ -185,8 +181,8 @@ export const formatClusterCatalogHostTypeRow = (
     return undefined;
   }
   const label = hostType
-    ? hostTypeDisplayName(hostType)
-    : formatClusterCatalogHostTypeLabel(hostType, primaryNodeSet.nodeSet.hostType);
+    ? hostType.metadata?.name || ''
+    : formatClusterCatalogHostTypeLabel(hostType, primaryNodeSet.nodeSet.baremetalInstanceType);
   if (!catalogResourceHasDisplayValue(label)) {
     return undefined;
   }

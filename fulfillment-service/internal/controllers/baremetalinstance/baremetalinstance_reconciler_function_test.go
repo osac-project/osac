@@ -14,9 +14,11 @@ language governing permissions and limitations under the License.
 package baremetalinstance
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -81,14 +83,28 @@ func newTaskForDelete(bmiID, hubID string, hubCache controllers.HubCache) *task 
 	}.Build()
 
 	f := &function{
-		logger:   logger,
-		hubCache: hubCache,
+		logger:            logger,
+		hubCache:          hubCache,
+		networkingCleanup: &fakeWorkloadNetworkingCleanup{complete: true},
 	}
 
 	return &task{
 		r:                 f,
 		bareMetalInstance: bmi,
 	}
+}
+
+type fakeWorkloadNetworkingCleanup struct {
+	complete   bool
+	calls      int
+	workloadID string
+	err        error
+}
+
+func (f *fakeWorkloadNetworkingCleanup) Cleanup(_ context.Context, workloadID string) (bool, error) {
+	f.calls++
+	f.workloadID = workloadID
+	return f.complete, f.err
 }
 
 func newFakeScheme() *runtime.Scheme {
@@ -939,6 +955,7 @@ var _ = Describe("mutateBMI", func() {
 		}
 
 		var obj bmfov1alpha1.BareMetalInstance
+		obj.Spec.Selector.HostSelector = map[string]string{"stale": "old-value"}
 		err := t.mutateBMI(ctx, &obj)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(obj.Spec.Selector.HostSelector).To(HaveLen(2))
@@ -1038,21 +1055,11 @@ var _ = Describe("mutateBMI", func() {
 		Expect(err.Error()).To(ContainSubstring("has no host_label_selector"))
 	})
 
-	It("should fall back to the template host_type when instance_type is absent", func() {
-		templatesClient := &fakeBareMetalInstanceTemplatesClient{
-			getResponse: privatev1.BareMetalInstanceTemplatesGetResponse_builder{
-				Object: privatev1.BareMetalInstanceTemplate_builder{
-					Id:       "osac.templates.default",
-					HostType: "gpu_host",
-				}.Build(),
-			}.Build(),
-		}
-
+	It("returns an error when the materialized instance has no instance_type", func() {
 		t := &task{
 			r: &function{
-				logger:                           logger,
-				bareMetalInstanceTypesClient:     defaultFakeBareMetalInstanceTypesClient(),
-				bareMetalInstanceTemplatesClient: templatesClient,
+				logger:                       logger,
+				bareMetalInstanceTypesClient: defaultFakeBareMetalInstanceTypesClient(),
 			},
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
@@ -1065,46 +1072,14 @@ var _ = Describe("mutateBMI", func() {
 
 		var obj bmfov1alpha1.BareMetalInstance
 		err := t.mutateBMI(ctx, &obj)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(obj.Spec.Selector.HostSelector).To(HaveLen(1))
-		Expect(obj.Spec.Selector.HostSelector["hostType"]).To(Equal("gpu_host"))
-	})
-
-	It("should not error when instance_type is absent and the template has no host_type", func() {
-		templatesClient := &fakeBareMetalInstanceTemplatesClient{
-			getResponse: privatev1.BareMetalInstanceTemplatesGetResponse_builder{
-				Object: privatev1.BareMetalInstanceTemplate_builder{
-					Id: "osac.templates.default",
-				}.Build(),
-			}.Build(),
-		}
-
-		t := &task{
-			r: &function{
-				logger:                           logger,
-				bareMetalInstanceTypesClient:     defaultFakeBareMetalInstanceTypesClient(),
-				bareMetalInstanceTemplatesClient: templatesClient,
-			},
-			bareMetalInstance: privatev1.BareMetalInstance_builder{
-				Id: "bmi-test",
-				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
-					Template:    privatev1.BareMetalInstanceTemplateReference_builder{Id: "osac.templates.default"}.Build(),
-				}.Build(),
-			}.Build(),
-		}
-
-		var obj bmfov1alpha1.BareMetalInstance
-		err := t.mutateBMI(ctx, &obj)
-		Expect(err).ToNot(HaveOccurred())
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("instance_type"))
 	})
 })
 
 var _ = Describe("update", func() {
 	It("should preserve operator-managed spec fields when patching an existing CR", func() {
 		ctx := context.Background()
-		ctrl := gomock.NewController(GinkgoT())
-		DeferCleanup(ctrl.Finish)
 
 		const (
 			bmiID        = "bmi-test-id"
@@ -1119,11 +1094,21 @@ var _ = Describe("update", func() {
 				Labels: map[string]string{
 					labels.BareMetalInstanceUuid: bmiID,
 				},
+				Annotations: map[string]string{"osac.openshift.io/owner-reference": "stored-owner-private"},
 			},
 			Spec: bmfov1alpha1.BareMetalInstanceSpec{
 				TemplateID:     "osac.templates.default",
 				ExternalHostID: "host-42",
 				HostClass:      "openstack",
+				RestartTrigger: 1,
+				NetworkAttachments: []bmfov1alpha1.BareMetalNetworkAttachment{{
+					SubnetRef: "stored-subnet-private", SecurityGroupRefs: []string{"stored-security-group-private"}, Primary: true,
+				}},
+			},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				NetworkAttachmentStatuses: []bmfov1alpha1.BareMetalNetworkAttachmentStatus{{
+					Interface: "data-0", SubnetRef: "stored-subnet-private", IPAddress: "192.0.2.10", Primary: true,
+				}},
 			},
 		}
 
@@ -1133,18 +1118,21 @@ var _ = Describe("update", func() {
 			WithObjects(existingCR).
 			Build()
 
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), hubID).
-			Return(&controllers.HubEntry{
-				Namespace: hubNamespace,
-				Client:    fakeClient,
-			}, nil)
-
+		var logOutput bytes.Buffer
 		t := &task{
 			r: &function{
-				logger:                       logger,
-				hubCache:                     hubCache,
+				logger: slog.New(slog.NewTextHandler(&logOutput, nil)),
+				networkingHubReader: &fakeBareMetalNetworkingHubReader{
+					resolution: controllers.NetworkingHubResolution{
+						NetworkingHub: controllers.NetworkingHub{
+							ID:        hubID,
+							Namespace: hubNamespace,
+							Client:    fakeClient,
+						},
+						HubID: hubID,
+						State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+					},
+				},
 				bareMetalInstanceTypesClient: defaultFakeBareMetalInstanceTypesClient(),
 			},
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
@@ -1154,9 +1142,16 @@ var _ = Describe("update", func() {
 					Tenant:     "test-tenant",
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
-					Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: "osac.templates.default"}.Build(),
-					InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+					CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
+					Template:       privatev1.BareMetalInstanceTemplateReference_builder{Id: "osac.templates.default"}.Build(),
+					InstanceType:   privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+					RestartTrigger: 42,
+					NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+						privatev1.BareMetalNetworkAttachment_builder{
+							Subnet:         &privatev1.SubnetLocalReference{Name: "requested-subnet"},
+							SecurityGroups: []*privatev1.SecurityGroupLocalReference{{Name: "requested-security-group"}},
+						}.Build(),
+					},
 				}.Build(),
 				Status: privatev1.BareMetalInstanceStatus_builder{
 					Hub:   hubID,
@@ -1178,6 +1173,14 @@ var _ = Describe("update", func() {
 			"ExternalHostID must be preserved — it is managed by the bare-metal-fulfillment-operator")
 		Expect(updatedCR.Spec.HostClass).To(Equal("openstack"),
 			"HostClass must be preserved — it is managed by the bare-metal-fulfillment-operator")
+		Expect(updatedCR.Spec.RestartTrigger).To(Equal(int64(42)))
+		Expect(updatedCR.Spec.NetworkAttachments).To(Equal(existingCR.Spec.NetworkAttachments))
+		Expect(updatedCR.Annotations).To(HaveKeyWithValue("osac.openshift.io/owner-reference", "stored-owner-private"))
+		Expect(t.bareMetalInstance.GetStatus().GetNetworkAttachmentStatuses()).To(HaveLen(1))
+		Expect(t.bareMetalInstance.GetStatus().GetNetworkAttachmentStatuses()[0].GetIpAddress()).To(Equal("192.0.2.10"))
+		Expect(logOutput.String()).To(ContainSubstring("preserving stored network attachments"))
+		Expect(logOutput.String()).NotTo(ContainSubstring("stored-subnet-private"))
+		Expect(logOutput.String()).NotTo(ContainSubstring("stored-security-group-private"))
 	})
 })
 
@@ -1222,6 +1225,54 @@ var _ = Describe("delete", func() {
 		Expect(hasFinalizer(t.bareMetalInstance)).To(BeFalse())
 	})
 
+	It("should retain the finalizer while automatic networking resources are terminating", func() {
+		scheme := newFakeScheme()
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(&controllers.HubEntry{
+			Namespace: hubNamespace, Client: fake.NewClientBuilder().WithScheme(scheme).Build(),
+		}, nil)
+		t := newTaskForDelete(bmiID, hubID, hubCache)
+		cleanup := &fakeWorkloadNetworkingCleanup{}
+		t.r.networkingCleanup = cleanup
+
+		Expect(t.delete(ctx)).To(MatchError(ContainSubstring("automatic workload networking resources are still terminating")))
+		Expect(cleanup.calls).To(Equal(1))
+		Expect(cleanup.workloadID).To(Equal(bmiID))
+		Expect(hasFinalizer(t.bareMetalInstance)).To(BeTrue())
+	})
+
+	It("should wait for automatic networking cleanup before deleting the workload CR", func() {
+		cr := newBareMetalInstanceCR(bmiID, hubNamespace, crName, nil)
+		scheme := newFakeScheme()
+		deleteCalled := false
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cr).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Delete: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.DeleteOption) error {
+					deleteCalled = true
+					return nil
+				},
+			}).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(&controllers.HubEntry{
+			Namespace: hubNamespace, Client: fakeClient,
+		}, nil)
+
+		t := newTaskForDelete(bmiID, hubID, hubCache)
+		cleanup := &fakeWorkloadNetworkingCleanup{}
+		t.r.networkingCleanup = cleanup
+
+		err := t.delete(ctx)
+		Expect(err).To(MatchError(ContainSubstring("automatic workload networking resources are still terminating")))
+		Expect(cleanup.calls).To(Equal(1))
+		Expect(cleanup.workloadID).To(Equal(bmiID))
+		Expect(deleteCalled).To(BeFalse())
+		Expect(hasFinalizer(t.bareMetalInstance)).To(BeTrue())
+	})
+
 	It("should call hubClient.Delete when K8s object exists without DeletionTimestamp", func() {
 		cr := newBareMetalInstanceCR(bmiID, hubNamespace, crName, nil)
 
@@ -1250,7 +1301,10 @@ var _ = Describe("delete", func() {
 		t := newTaskForDelete(bmiID, hubID, hubCache)
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		Expect(err).To(MatchError("kubernetes bare metal instance deletion is still in progress"))
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(err, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(time.Second))
 		Expect(deleteCalled).To(BeTrue())
 		Expect(hasFinalizer(t.bareMetalInstance)).To(BeTrue())
 	})
@@ -1284,7 +1338,10 @@ var _ = Describe("delete", func() {
 		t := newTaskForDelete(bmiID, hubID, hubCache)
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		Expect(err).To(MatchError("kubernetes bare metal instance deletion is still in progress"))
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(err, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(time.Second))
 		Expect(deleteCalled).To(BeFalse())
 		Expect(hasFinalizer(t.bareMetalInstance)).To(BeTrue())
 	})
@@ -1352,7 +1409,8 @@ var _ = Describe("delete", func() {
 		}.Build()
 
 		f := &function{
-			logger: logger,
+			logger:            logger,
+			networkingCleanup: &fakeWorkloadNetworkingCleanup{complete: true},
 		}
 
 		t := &task{
@@ -2837,7 +2895,7 @@ func defaultFakeBareMetalInstanceTypesClient() *fakeBareMetalInstanceTypesClient
 				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 						MatchLabels: map[string]string{
-							"hostType": "compute",
+							"resourceClass": "compute",
 						},
 					}.Build(),
 				}.Build(),
@@ -2854,16 +2912,5 @@ type fakeBareMetalInstanceTypesClient struct {
 }
 
 func (c *fakeBareMetalInstanceTypesClient) Get(ctx context.Context, req *privatev1.BareMetalInstanceTypesGetRequest, opts ...grpc.CallOption) (*privatev1.BareMetalInstanceTypesGetResponse, error) {
-	return c.getResponse, c.getError
-}
-
-// fakeBareMetalInstanceTemplatesClient is a test double for the BareMetalInstanceTemplatesClient.
-type fakeBareMetalInstanceTemplatesClient struct {
-	privatev1.BareMetalInstanceTemplatesClient
-	getResponse *privatev1.BareMetalInstanceTemplatesGetResponse
-	getError    error
-}
-
-func (c *fakeBareMetalInstanceTemplatesClient) Get(ctx context.Context, req *privatev1.BareMetalInstanceTemplatesGetRequest, opts ...grpc.CallOption) (*privatev1.BareMetalInstanceTemplatesGetResponse, error) {
 	return c.getResponse, c.getError
 }

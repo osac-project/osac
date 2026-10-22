@@ -3,6 +3,7 @@ set -e
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export KUBECONFIG="${SCRIPT_DIR}/kubeconfig-osac-test"
 
 echo "=== Setting up test environment ==="
 
@@ -247,7 +248,7 @@ ENVEOF
       -v "${SCRIPT_DIR}/certs:/certs:ro" \
       -e REGISTRY_HTTP_TLS_CERTIFICATE=/certs/registry.pem \
       -e REGISTRY_HTTP_TLS_KEY=/certs/registry.key \
-      registry:2 > /dev/null
+      ghcr.io/distribution/distribution:3 > /dev/null
 
     echo "Waiting for local OCI registry to be ready..."
     CSI_DRIVER_TEST_REGISTRY_READY="false"

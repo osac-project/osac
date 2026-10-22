@@ -2014,6 +2014,40 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 	})
 })
 
+var _ = ginkgo.Describe("DeprovisionJobLaunchNeeded", func() {
+	ginkgo.It("requests a launch when no deprovision job exists", func() {
+		Expect(DeprovisionJobLaunchNeeded(nil, time.Now())).To(BeTrue())
+	})
+
+	ginkgo.It("does not request a launch while an existing job is running", func() {
+		jobs := []v1alpha1.JobStatus{{
+			JobID: "running-detach", Type: v1alpha1.JobTypeDeprovision,
+			State: v1alpha1.JobStateRunning, Timestamp: metav1.Now(),
+		}}
+		Expect(DeprovisionJobLaunchNeeded(jobs, time.Now())).To(BeFalse())
+	})
+
+	ginkgo.It("requests a retry only after the blocking failure backoff expires", func() {
+		now := time.Now()
+		jobs := []v1alpha1.JobStatus{{
+			JobID: "failed-detach", Type: v1alpha1.JobTypeDeprovision,
+			State: v1alpha1.JobStateFailed, BlockDeletionOnFailure: true,
+			Timestamp: metav1.NewTime(now.Add(-BackoffBaseDelay + time.Second)),
+		}}
+		Expect(DeprovisionJobLaunchNeeded(jobs, now)).To(BeFalse())
+		Expect(DeprovisionJobLaunchNeeded(jobs, now.Add(time.Second))).To(BeTrue())
+	})
+
+	ginkgo.It("does not launch again after a terminal failure that does not block deletion", func() {
+		jobs := []v1alpha1.JobStatus{{
+			JobID: "failed-detach", Type: v1alpha1.JobTypeDeprovision,
+			State: v1alpha1.JobStateFailed, BlockDeletionOnFailure: false,
+			Timestamp: metav1.Now(),
+		}}
+		Expect(DeprovisionJobLaunchNeeded(jobs, time.Now().Add(time.Hour))).To(BeFalse())
+	})
+})
+
 var _ = ginkgo.Describe("IsConfigApplied", func() {
 	ginkgo.It("returns true when a provision job succeeded with matching config version", func() {
 		jobs := []v1alpha1.JobStatus{

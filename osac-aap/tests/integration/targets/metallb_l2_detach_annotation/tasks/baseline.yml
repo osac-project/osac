@@ -1,0 +1,214 @@
+---
+- name: Verify concurrent MetalLB detach annotation cleanup
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    fixture_id: >-
+      {{ lookup('env', 'POD_UID') | default('local', true)
+      | regex_replace('[^a-z0-9]', '') | truncate(8, true, '') }}
+    fixture_namespace: "osac-detach-{{ fixture_id }}"
+    compute_instance_name: "ci-detach-{{ fixture_id }}"
+  tasks:
+    - name: Run concurrent cleanup against the same annotation
+      block:
+        - name: Create the fixture namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ fixture_namespace }}"
+            state: present
+
+        - name: Create a ComputeInstance with an ExternalIP annotation
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ComputeInstance
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: "{{ fixture_namespace }}"
+                annotations:
+                  osac.openshift.io/management-state: unmanaged
+                  osac.openshift.io/tenant: detach-test
+                  osac.openshift.io/owner-reference: detach-test
+                  osac.openshift.io/external-ip-address: 198.51.100.21
+              spec:
+                templateID: osac.templates.ocp_virt_vm
+                vcpus: 1
+                memoryGiB: 1
+                bootDisk:
+                  sizeGiB: 1
+                  storageTier: local
+                image:
+                  sourceType: registry
+                  sourceRef: quay.io/containerdisks/fedora:latest
+                runStrategy: Halted
+
+        - name: Allocate a local barrier port file
+          ansible.builtin.tempfile:
+            state: file
+            prefix: osac-detach-barrier-
+          register: barrier_port_file
+
+        - name: Start the local stale-read barrier
+          ansible.builtin.command:
+            argv:
+              - python3
+              - "{{ playbook_dir }}/../files/annotation_barrier.py"
+              - "{{ barrier_port_file.path }}"
+          async: 600
+          poll: 0
+          register: barrier_server
+          changed_when: true
+
+        - name: Wait for the barrier to publish its port
+          ansible.builtin.wait_for:
+            path: "{{ barrier_port_file.path }}"
+            timeout: 15
+
+        - name: Read the barrier port
+          ansible.builtin.slurp:
+            src: "{{ barrier_port_file.path }}"
+          register: barrier_port_content
+
+        - name: Save the barrier URLs
+          ansible.builtin.set_fact:
+            barrier_base_url: >-
+              http://127.0.0.1:{{ barrier_port_content.content | b64decode | trim }}
+            barrier_url: >-
+              http://127.0.0.1:{{ barrier_port_content.content | b64decode | trim }}/arrive
+
+        - name: Wait for the local barrier listener
+          ansible.builtin.wait_for:
+            host: 127.0.0.1
+            port: "{{ barrier_port_content.content | b64decode | trim }}"
+            timeout: 15
+
+        - name: Create child playbook input files
+          ansible.builtin.tempfile:
+            state: file
+            prefix: osac-detach-child-
+            suffix: .json
+          loop: [one, two]
+          register: cleanup_vars_files
+
+        - name: Write child playbook inputs
+          ansible.builtin.copy:
+            dest: "{{ item.path }}"
+            mode: "0600"
+            content: >-
+              {{ {
+                'fixture_namespace': fixture_namespace,
+                'compute_instance_name': compute_instance_name,
+                'barrier_url': barrier_url
+              } | to_nice_json }}
+          loop: "{{ cleanup_vars_files.results }}"
+
+        - name: Start first detach cleanup after its stale read
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - ansible-playbook
+              - -e
+              - "ansible_python_interpreter={{ ansible_python_interpreter }}"
+              - -e
+              - "@{{ cleanup_vars_files.results[0].path }}"
+              - "{{ playbook_dir }}/run_annotation_cleanup.yml"
+          args:
+            chdir: "{{ playbook_dir }}"
+          async: 300
+          poll: 0
+          register: cleanup_one
+          changed_when: true
+
+        - name: Start second detach cleanup after its stale read
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - ansible-playbook
+              - -e
+              - "ansible_python_interpreter={{ ansible_python_interpreter }}"
+              - -e
+              - "@{{ cleanup_vars_files.results[1].path }}"
+              - "{{ playbook_dir }}/run_annotation_cleanup.yml"
+          args:
+            chdir: "{{ playbook_dir }}"
+          async: 300
+          poll: 0
+          register: cleanup_two
+          changed_when: true
+
+        - name: Wait for both detach cleanup processes
+          ansible.builtin.async_status:
+            jid: "{{ item.ansible_job_id }}"
+          register: cleanup_results
+          until: cleanup_results.finished
+          retries: 90
+          delay: 1
+          loop:
+            - "{{ cleanup_one }}"
+            - "{{ cleanup_two }}"
+
+        - name: Assert both concurrent cleanup processes succeeded
+          ansible.builtin.assert:
+            that:
+              - cleanup_results.results | length == 2
+              - cleanup_results.results | map(attribute='rc') | list == [0, 0]
+
+        - name: Verify the ExternalIP annotation is absent
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ComputeInstance
+            name: "{{ compute_instance_name }}"
+            namespace: "{{ fixture_namespace }}"
+          register: final_compute_instance
+
+        - name: Assert the target remains and no ExternalIP annotation remains
+          ansible.builtin.assert:
+            that:
+              - final_compute_instance.resources | length == 1
+              - >-
+                'osac.openshift.io/external-ip-address'
+                not in final_compute_instance.resources[0].metadata.annotations
+      always:
+        - name: Stop the local stale-read barrier
+          ansible.builtin.uri:
+            url: "{{ barrier_base_url }}/shutdown"
+            method: POST
+            status_code: 204
+          when: barrier_base_url is defined
+          failed_when: false
+          changed_when: false
+
+        - name: Remove the barrier port file
+          ansible.builtin.file:
+            path: "{{ barrier_port_file.path }}"
+            state: absent
+          when: barrier_port_file.path is defined
+
+        - name: Remove child playbook input files
+          ansible.builtin.file:
+            path: "{{ item.path }}"
+            state: absent
+          loop: "{{ cleanup_vars_files.results | default([]) }}"
+          when: item.path is defined
+
+        - name: Remove the ComputeInstance fixture
+          kubernetes.core.k8s:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ComputeInstance
+            name: "{{ compute_instance_name }}"
+            namespace: "{{ fixture_namespace }}"
+            state: absent
+          failed_when: false
+
+        - name: Remove the fixture namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ fixture_namespace }}"
+            state: absent
+          failed_when: false

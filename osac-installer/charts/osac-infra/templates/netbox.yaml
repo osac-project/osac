@@ -1,0 +1,48 @@
+{{- if .Values.netbox.enabled }}
+---
+# Custom SCC for the NetBox subchart (Bitnami).
+# Bitnami hardcodes UID 1000, fsGroup 1000, and sets seccomp RuntimeDefault
+# annotations that the built-in anyuid SCC rejects. This SCC allows RunAsAny
+# for user/group/fsGroup and permits seccomp so the chart runs unmodified.
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: {{ .Release.Name }}-netbox
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+  annotations:
+    kubernetes.io/description: "SCC for NetBox subchart — allows Bitnami hardcoded UID 1000 and seccomp"
+allowPrivilegedContainer: false
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+readOnlyRootFilesystem: true
+allowedCapabilities: []
+defaultAddCapabilities: []
+requiredDropCapabilities:
+- ALL
+seccompProfiles:
+- runtime/default
+- docker/default
+allowedUnsafeSysctls: []
+fsGroup:
+  type: RunAsAny
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: RunAsAny
+supplementalGroups:
+  type: RunAsAny
+volumes:
+- configMap
+- downwardAPI
+- emptyDir
+- persistentVolumeClaim
+- projected
+- secret
+users:
+- system:serviceaccount:{{ .Release.Namespace }}:{{ .Release.Name }}-netbox
+groups: []
+{{- end }}

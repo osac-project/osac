@@ -10,9 +10,10 @@ project_doc_max_bytes = 32768
 [tui]
 status_line = [
   "model-with-reasoning",
-  "current-dir",
+  "project-name",
   "git-branch",
-  "context-remaining",
+  "context-used",
+  "context-window-size",
   "estimated-thread-cost",
   "pull-request-number",
 ]

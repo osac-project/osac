@@ -53,7 +53,7 @@ export type BareMetalNetworkAttachment = Message<"osac.public.v1.BareMetalNetwor
   securityGroups: SecurityGroupLocalReference[];
 
   /**
-   * Physical interface name from the HostType's NetworkInterface list.
+   * Physical interface name from the BareMetalInstanceType's network ports.
    * When omitted on a single-attachment instance, the system selects the first fabric-role interface.
    *
    * @generated from field: optional string interface = 3;
@@ -61,8 +61,8 @@ export type BareMetalNetworkAttachment = Message<"osac.public.v1.BareMetalNetwor
   interface?: string | undefined;
 
   /**
-   * Designates this attachment as the default gateway for multi-NIC instances.
-   * When omitted on a single-attachment instance, that attachment is implicitly primary.
+   * Designates this attachment as the default gateway.
+   * With a single attachment, omit primary or set primary: true; primary: false is rejected.
    *
    * @generated from field: optional bool primary = 4;
    */

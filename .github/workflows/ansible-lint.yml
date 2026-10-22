@@ -1,18 +1,11 @@
 ---
 name: "Ansible Lint"
 
-# Required check name: ansible-lint
-# No paths on pull_request: a trigger path filter leaves that name pending
-# in the merge queue on PRs that do not touch osac-aap. Skip is on steps.
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
-  cancel-in-progress: true
+# Called by ci.yml (job ansible-lint); ci.yml decides whether osac-aap changed.
+# Also runs nightly and on demand, where it always runs.
 
 on:  # yamllint disable-line rule:truthy
-  pull_request:
-    branches: [main]
-  merge_group:
+  workflow_call:
   workflow_dispatch:
   schedule:
     - cron: '0 0 * * *'
@@ -21,66 +14,26 @@ permissions:
   contents: read
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      # CI_GATING_ENABLED == 'false' is an emergency global override forcing
-      # this job to run regardless of the filter result.
-      should-run: ${{ vars.CI_GATING_ENABLED == 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.ansible-osac-aap == 'true' }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-        id: filter
-        with:
-          # Previously missing -- under the default 'someOf' quantifier, a
-          # positive pattern plus separate negation entries meant each
-          # negation independently OR-matched almost every file. Fixed by
-          # migrating to the shared ci-filters.yml, where this filter is
-          # written as one brace-alternation entry compatible with 'every'.
-          predicate-quantifier: 'every'
-          filters: .github/filters/ci-filters.yml
-
   ansible-lint:
     name: ansible-lint
-    needs: changes
-    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - name: Fail if path filter failed
-        if: needs.changes.result != 'success'
-        run: exit 1
-      - id: should-run
-        if: needs.changes.result == 'success' && needs.changes.outputs.should-run == 'true'
-        run: echo "run=true" >> "$GITHUB_OUTPUT"
       - name: Checkout
-        if: steps.should-run.outputs.run
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - name: Install uv
-        if: steps.should-run.outputs.run
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
       - name: Set up Python
-        if: steps.should-run.outputs.run
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version-file: "osac-aap/pyproject.toml"
       - name: Install the project
-        if: steps.should-run.outputs.run
         working-directory: osac-aap
         run: uv sync --locked --all-extras --group development
       - name: Run ansible-lint
-        if: steps.should-run.outputs.run
         working-directory: osac-aap
         # Explicit "." is required: without a target path, ansible-lint
         # discovers files via `git ls-files` against the whole repo (not

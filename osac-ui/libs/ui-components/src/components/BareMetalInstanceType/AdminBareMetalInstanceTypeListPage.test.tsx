@@ -73,7 +73,6 @@ describe('AdminBareMetalInstanceTypeListPage', () => {
     renderPage();
 
     expect(screen.getByRole('heading', { name: 'Bare metal instance types' })).toBeInTheDocument();
-    expect(screen.getByText('Infrastructure').closest('.pf-v6-c-label')).not.toBeNull();
     expect(screen.getAllByRole('columnheader').map((header) => header.textContent)).toEqual([
       'Name',
       'CPU',

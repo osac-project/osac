@@ -189,7 +189,7 @@ func (s *BareMetalInstanceCatalogItemsServer) Create(ctx context.Context,
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map public bare metal instance catalog item to private",
 			slog.Any("error", err))
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance catalog item")
+		err = publicInputMappingError(err, "failed to process bare metal instance catalog item")
 		return
 	}
 
@@ -217,6 +217,11 @@ func (s *BareMetalInstanceCatalogItemsServer) Create(ctx context.Context,
 
 func (s *BareMetalInstanceCatalogItemsServer) Update(ctx context.Context,
 	request *publicv1.BareMetalInstanceCatalogItemsUpdateRequest) (response *publicv1.BareMetalInstanceCatalogItemsUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	publicCatalogItem := request.GetObject()
 	if publicCatalogItem == nil {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
@@ -235,7 +240,7 @@ func (s *BareMetalInstanceCatalogItemsServer) Update(ctx context.Context,
 	err = s.inMapper.Copy(ctx, publicCatalogItem, privateCatalogItem)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map public bare metal instance catalog item to private", slog.Any("error", err))
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance catalog item")
+		return nil, publicInputMappingError(err, "failed to process bare metal instance catalog item")
 	}
 
 	if request.GetUpdateMask() == nil {

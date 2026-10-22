@@ -19,6 +19,7 @@ import {
 } from '@patternfly/react-core';
 
 import { type SecurityGroup, SecurityGroupSchema, SecurityGroupState } from '@osac/types';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import {
   resourceDisplayName,
@@ -81,11 +82,7 @@ export const SecurityGroupDetailPage = () => {
   return (
     <ListPage
       title={sgName}
-      actions={
-        <Button variant="danger" onClick={() => setShowDeleteSgModal(true)}>
-          {t('Delete')}
-        </Button>
-      }
+      actions={<DeleteResourceButton onClick={() => setShowDeleteSgModal(true)} />}
       breadcrumb={
         <Breadcrumb>
           <BreadcrumbItem>

@@ -44,11 +44,22 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-aap
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
 | Filters, variable transforms, and isolated plugin logic | Unit | `uv run pytest tests/unit` |
-<<<<<<< HEAD
+| Keycloak token lookup, cache refresh, and error handling | Unit | `uv run pytest tests/unit/plugins/lookup/test_fulfillment_token.py` |
+| AAP publish-templates credential and Kubernetes token wiring | Unit | `uv run pytest tests/unit/test_publish_templates_auth_config.py` |
 | Template publishing certificate validation | Local protocol integration | Run the `test_cert_validation` play in `collections/ansible_collections/osac/service/roles/publish_templates/tests/test.yml` with `uv run ansible-playbook`; the mock HTTPS server tests the client transport only |
-| AgentlessNet VirtualNetwork allocation, locked SQLite state, and Linux command helpers | Unit | `tests/unit/test_agentless_network_state.py` and `tests/unit/test_agentless_net_network.py`; run `uv run pytest tests/unit` |
-| AgentlessNet VN environment inventory, host registration, and password rejection | Contract | `agentless_net_stub` baseline target runs `files/validate_vn_inventory.yml` in fresh Ansible processes; no SSH/provider commands |
+| AgentlessNet VirtualNetwork/Subnet allocation, current SQLite schema-v1 validation, ExternalIPPool identity/deletion checks, parent locks, VLAN interfaces, switch discovery parsing, and derived DHCP-manager helpers | Unit | `tests/unit/test_agentless_network_state.py`, `tests/unit/test_agentless_net_network.py`, and `tests/unit/test_agentless_net_subnet.py`; run `uv run pytest tests/unit` |
+| AgentlessNet VN and Cumulus Subnet inventory, host registration, trunk validation, and password rejection | Contract | `agentless_net_stub` baseline target runs `files/validate_vn_inventory.yml` in fresh Ansible processes; omitted switch platform defaults to Cumulus and explicit unsupported platforms fail; no SSH/provider commands |
+| AgentlessNet Subnet Fulfillment UUID to Kubernetes UID/tenant mapping | Component integration | `agentless_net_subnet` target includes `_resolve_subnet_parent.yaml` against real Kind; no AAP, SSH, or switch operations |
+| AgentlessNet ExternalIP UID-owned reservation, retry, and release | Unit | `tests/unit/test_agentless_network_state.py`; run `uv run pytest tests/unit`. Temporary SQLite is real. Kubernetes, AAP, SSH, switches, and Linux provider commands are omitted. |
+| AgentlessNet ExternalIP allocation and release playbooks | Component integration ([DEV] OSAC-6307) | `tests/integration/targets/agentless_net_external_ip/tasks/baseline.yml`; included by `make test`. Kind CR fixtures, Ansible playbooks, JSON job artifacts, and temporary SQLite are real; ExternalIP jobs receive unusable Kubernetes credentials to prove they do not access the API. AAP server, SSH, and provider networking are omitted. |
+| AgentlessNet ExternalIPPool CR identity to saved provider state, idempotent registration, and identity-checked deletion | Component integration | `tests/integration/targets/agentless_net_external_ip_pool/tasks/baseline.yml`; real Kind CRs run through the top-level pool playbooks and state module against temporary SQLite using local delegation; no AAP, SSH, switches, or provider commands |
+| AgentlessNet BMI access-port inventory and DHCP lease lookup | Unit plus component contract | `tests/unit/test_agentless_network_state.py`, `tests/unit/test_agentless_net_subnet.py`, and `tests/integration/targets/agentless_net_attachment/tasks/baseline.yml`; saved-state/lease parsing uses temporary SQLite/files, and a child Ansible process exercises real host/interface inventory validation including duplicate mappings and trunk overlap. AAP, SSH, switches, and provider commands are omitted; deployed job behavior is covered by the `e2e` VLAN lab. |
+| Netris Subnet deletion through the top-level delete playbook, its `osac.templates.<implementation-strategy>` dispatch, and the Netris roles' provider response handling | Component integration | `tests/integration/targets/netris_subnet_delete/tasks/baseline.yml`; real Kind namespace/ConfigMap and the top-level delete playbook in a child Ansible process against a fake Netris HTTP endpoint; no AAP controller, operator, switches, or real provider |
+| Netris VirtualNetwork and ExternalIPPool deletion through top-level playbooks, VPC/IPAM-allocation response handling, and ordered cleanup | Component integration | `tests/integration/targets/netris_parent_delete/tasks/baseline.yml`; real Ansible playbooks and local HTTP test endpoint; no Kubernetes objects, AAP controller, operator, switches, or real Netris provider |
+| MetalLB ExternalIP detach annotation cleanup under concurrent stale reads | Component integration | `tests/integration/targets/metallb_l2_detach_annotation/tasks/baseline.yml`; two independent Ansible processes patch the same annotation against real Kind; no deployed AAP or MetalLB provider |
 | Ansible roles, workflow tasks, hooks, leases, finalizers, or Kubernetes resources | Component integration | `make test` or the focused target command |
+| Windows/Linux user-data routing and Windows base-spec regressions | Unit / isolated role transform | `ocp_virt_vm:test_windows_userdata_sysprep`, `ocp_virt_vm:test_windows_no_userdata`, and `ocp_virt_vm:test_linux_userdata_cloudinit` in `make test`; existing role Tests 15–17 run in separate Ansible processes without Kubernetes Secret operations |
+| Windows sysprep Secret copying and VM-spec wiring | Component integration ([DEV] OSAC-6182) | `compute_instance_create:sysprep_secret_copy` in `make test`; real Kind Secrets and `create_secrets.yaml`, including missing-tenant rejection; VM creation and readiness are overridden |
 | Execution-environment definition or dependency inputs | Build/package validation plus applicable integration tests | `make execution-environment-build`, then `make test` |
 | AAP, OpenStack, KubeVirt/RHACM, or provider provisioning | Contract or real-provider integration | Use the qualifying [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) suite |
 | Storage-provider behavior | Component integration (focused) plus real-provider coverage when required | Tenant target-routing runs in `make test`; provider tests require `STORAGE_TESTS_ENABLED=true make test` (or the relevant storage target and provider suite) |
@@ -56,10 +67,14 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-aap
 Storage integration requires `STORAGE_TESTS_ENABLED=true`; image builds are separate build/package validation.
 
 AgentlessNet unit tests use real allocation/locked state and Linux helpers with
-mocked `ip`/`iptables` commands, including real reconciliation and verification.
-The inventory contract tests run real Ansible parsing and `add_host` without
-contacting AAP or the selected node. Deployed VN retry/delete and packet
-isolation coverage remains a QE gap under
+mocked `ip`/`iptables`, systemd/Supervisor, dnsmasq, and switch command output,
+including allocation exclusions, retries, service selection, reconciliation,
+and verification. Pool-state unit tests use SQLite directly to prove the
+current v1 schema, identity preservation, and idempotent deletion. Inventory
+contract tests run real Ansible parsing and
+`add_host` without contacting AAP or the selected node. Service readiness does
+not establish client DHCP leases or traffic delivery. Deployed VN retry/delete
+and packet isolation coverage remains a QE gap under
 [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) /
 [OSAC-4850](https://redhat.atlassian.net/browse/OSAC-4850); no qualifying VN
 runner is tracked here.

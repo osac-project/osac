@@ -18,7 +18,7 @@ VirtualNetworks define the top-level network isolation boundary with CIDR alloca
 
 **Key behaviors:**
 - Creates ClusterUserDefinedNetwork CR in the cluster
-- Supports IPv4-only, IPv6-only, and dual-stack configurations
+- Supports IPv4-only configurations
 - NetworkClass determines the implementation strategy (cudn_net)
 - One VirtualNetwork maps to one ClusterUserDefinedNetwork
 

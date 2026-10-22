@@ -1,0 +1,88 @@
+---
+- name: Normalize the optional AgentlessNet switch inventory
+  ansible.builtin.set_fact:
+    _agentless_net_inventory_switches: >-
+      {{ _agentless_net_inventory_children.get('switches', {})
+         if _agentless_net_inventory_children is mapping else {} }}
+  no_log: true
+
+- name: Normalize AgentlessNet switch hosts and variables
+  ansible.builtin.set_fact:
+    _agentless_net_inventory_switch_hosts: >-
+      {{ _agentless_net_inventory_switches.get('hosts', {})
+         if _agentless_net_inventory_switches is mapping else {} }}
+    _agentless_net_inventory_switch_vars: >-
+      {{ _agentless_net_inventory_switches.get('vars', {})
+         if _agentless_net_inventory_switches is mapping else {} }}
+  no_log: true
+
+- name: Require at least one AgentlessNet Cumulus switch for Subnet operations
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_inventory_switches is mapping
+      - _agentless_net_inventory_switch_hosts is mapping
+      - _agentless_net_inventory_switch_hosts | length > 0
+      - _agentless_net_inventory_switch_vars is mapping
+    fail_msg: >-
+      AgentlessNet Subnet operations require at least one valid Cumulus switch
+      in AGENTLESS_NET_VN_INVENTORY.
+  no_log: true
+
+- name: Validate every AgentlessNet switch connection and trunk list
+  ansible.builtin.assert:
+    that:
+      - item.value is mapping
+      - item.value.get('ansible_host', '') is string
+      - item.value.get('ansible_host', '') | trim | length > 0
+      - item.value.get('ansible_user', '') is string
+      - item.value.get('ansible_user', '') | trim | length > 0
+      - item.value.get('ansible_network_os', 'cumulus') == 'cumulus'
+      - >-
+        (item.value.get('ansible_port', 22) | string
+        | regex_search('^[0-9]{1,5}$')) is not none
+      - item.value.get('ansible_port', 22) | int > 0
+      - item.value.get('ansible_port', 22) | int <= 65535
+      - item.value.get('trunk_ports', []) is sequence
+      - item.value.get('trunk_ports', []) is not string
+      - item.value.get('trunk_ports', []) | length > 0
+      - >-
+        item.value.get('trunk_ports', [])
+        | select('match', '^[A-Za-z0-9_.-]{1,15}$') | list | length
+        == item.value.get('trunk_ports', []) | length
+      - >-
+        item.value.get('trunk_ports', []) | unique | list | length
+        == item.value.get('trunk_ports', []) | length
+      - item.value.get('ansible_ssh_private_key_file', '') is string
+      - >-
+        item.value.get('ansible_ssh_common_args',
+        _agentless_net_inventory_switch_vars.get('ansible_ssh_common_args', '')) is string
+    fail_msg: >-
+      AgentlessNet Subnet switch inventory requires ansible_host, ansible_user,
+      an optional valid SSH port, and a nonempty list of safe, unique
+      trunk_ports. ansible_network_os defaults to cumulus and other values are
+      rejected. Passwords are not accepted.
+  loop: "{{ _agentless_net_inventory_switch_hosts | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  no_log: true
+
+- name: Register validated AgentlessNet Cumulus switches for Subnet operations
+  ansible.builtin.add_host:
+    name: "{{ item.key }}"
+    groups: agentless_net_subnet_switches
+    ansible_connection: ssh
+    ansible_host: "{{ item.value.ansible_host }}"
+    ansible_user: "{{ item.value.ansible_user }}"
+    ansible_port: "{{ item.value.get('ansible_port', 22) }}"
+    ansible_network_os: cumulus
+    ansible_ssh_private_key_file: >-
+      {{ item.value.get('ansible_ssh_private_key_file',
+      _agentless_net_ssh_private_key_file.path | default(omit)) }}
+    ansible_ssh_common_args: >-
+      {{ item.value.get('ansible_ssh_common_args',
+      _agentless_net_inventory_switch_vars.get('ansible_ssh_common_args', omit)) }}
+    trunk_ports: "{{ item.value.trunk_ports }}"
+  loop: "{{ _agentless_net_inventory_switch_hosts | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  no_log: true

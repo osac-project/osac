@@ -17,7 +17,6 @@ export const ExternalIpPoolsListPage = () => {
   return (
     <ListPage
       title={t('External IP pools')}
-      label={t('Infrastructure')}
       description={t('Manage external IP address pools for this cloud platform.')}
       error={error}
       actions={

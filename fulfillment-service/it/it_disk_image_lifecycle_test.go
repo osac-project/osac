@@ -20,7 +20,10 @@ import (
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
@@ -46,6 +49,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 		networkClassesClient           privatev1.NetworkClassesClient
 		virtualNetworksClient          privatev1.VirtualNetworksClient
 		subnetsClient                  privatev1.SubnetsClient
+		securityGroupsClient           privatev1.SecurityGroupsClient
 
 		storageBackendId          string
 		storageTierId             string
@@ -56,6 +60,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 		networkClassId            string
 		virtualNetworkId          string
 		subnetId                  string
+		securityGroupId           string
 	)
 
 	BeforeEach(func() {
@@ -72,6 +77,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 		networkClassesClient = privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 		virtualNetworksClient = privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
 		subnetsClient = privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
+		securityGroupsClient = privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
 
 		// Create StorageBackend
 		sbResp, err := storageBackendsClient.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{
@@ -150,6 +156,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 				Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("di-nc-%s", uuid.New())}.Build(),
 				Title:         "Test Network Class",
 				FabricManager: new("netris"),
+				K8SManager:    new(testVMK8SManagerName),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -243,6 +250,8 @@ var _ = Describe("DiskImage lifecycle", func() {
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		securityGroupId = createComputeInstanceFixtureSecurityGroup(ctx, securityGroupsClient,
+			fmt.Sprintf("test-di-sg-%s", uuid.New()), virtualNetworkId)
 	})
 
 	AfterEach(func() {
@@ -254,7 +263,19 @@ var _ = Describe("DiskImage lifecycle", func() {
 			}.Build()); err != nil {
 				GinkgoT().Logf("cleanup: failed to delete ComputeInstance %s: %v", computeInstanceId, err)
 			}
+			waitForNotFound(func() error {
+				_, err := computeInstancesClient.Get(delCtx, publicv1.ComputeInstancesGetRequest_builder{
+					Id: computeInstanceId,
+				}.Build())
+				return err
+			})
 			computeInstanceId = ""
+		}
+		if securityGroupId != "" {
+			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer delCancel()
+			Expect(cleanupSecurityGroupFixture(delCtx, securityGroupsClient, securityGroupId)).To(Succeed())
+			securityGroupId = ""
 		}
 		if diskImageId != "" {
 			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
@@ -269,31 +290,31 @@ var _ = Describe("DiskImage lifecycle", func() {
 		if subnetId != "" {
 			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
 			defer delCancel()
-			if _, err := subnetsClient.Delete(delCtx, privatev1.SubnetsDeleteRequest_builder{
-				Id: subnetId,
-			}.Build()); err != nil {
-				GinkgoT().Logf("cleanup: failed to delete Subnet %s: %v", subnetId, err)
-			}
+			Expect(cleanupSubnetFixture(delCtx, subnetsClient, subnetId)).To(Succeed())
+			waitForNotFound(func() error {
+				_, err := subnetsClient.Get(delCtx, privatev1.SubnetsGetRequest_builder{Id: subnetId}.Build())
+				return err
+			})
 			subnetId = ""
 		}
 		if virtualNetworkId != "" {
 			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
 			defer delCancel()
-			if _, err := virtualNetworksClient.Delete(delCtx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: virtualNetworkId,
-			}.Build()); err != nil {
-				GinkgoT().Logf("cleanup: failed to delete VirtualNetwork %s: %v", virtualNetworkId, err)
-			}
+			Expect(cleanupVirtualNetworkFixture(delCtx, virtualNetworksClient, virtualNetworkId)).To(Succeed())
+			waitForNotFound(func() error {
+				_, err := virtualNetworksClient.Get(delCtx, privatev1.VirtualNetworksGetRequest_builder{Id: virtualNetworkId}.Build())
+				return err
+			})
 			virtualNetworkId = ""
 		}
 		if networkClassId != "" {
 			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
 			defer delCancel()
-			if _, err := networkClassesClient.Delete(delCtx, privatev1.NetworkClassesDeleteRequest_builder{
-				Id: networkClassId,
-			}.Build()); err != nil {
-				GinkgoT().Logf("cleanup: failed to delete NetworkClass %s: %v", networkClassId, err)
-			}
+			Expect(cleanupNetworkClassFixture(delCtx, networkClassesClient, networkClassId)).To(Succeed())
+			waitForNotFound(func() error {
+				_, err := networkClassesClient.Get(delCtx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassId}.Build())
+				return err
+			})
 			networkClassId = ""
 		}
 		if computeInstanceTemplateId != "" {
@@ -338,7 +359,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 		}
 	})
 
-	It("deprecated DiskImage allows ComputeInstance creation with warning", func() {
+	DescribeTable("DiskImage lifecycle controls ComputeInstance creation", func(lifecycle privatev1.DiskImageLifecycle) {
 		By("Creating a DiskImage")
 		diResp, err := diskImagesClient.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
 			Object: privatev1.DiskImage_builder{
@@ -371,15 +392,22 @@ var _ = Describe("DiskImage lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		By("Verifying the DiskImage is now DEPRECATED")
+		if lifecycle == privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE {
+			diObj.GetSpec().SetLifecycle(lifecycle)
+			_, err = diskImagesClient.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+				Object: diObj, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.lifecycle"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		}
+
+		By("Verifying the selected DiskImage lifecycle persisted")
 		diGetResp, err = diskImagesClient.Get(ctx, privatev1.DiskImagesGetRequest_builder{
 			Id: diskImageId,
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(diGetResp.GetObject().GetSpec().GetLifecycle()).To(
-			Equal(privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED))
+		Expect(diGetResp.GetObject().GetSpec().GetLifecycle()).To(Equal(lifecycle))
 
-		By("Creating a ComputeInstance referencing the deprecated DiskImage")
+		By("Creating a ComputeInstance referencing the selected DiskImage")
 		computeInstanceId = fmt.Sprintf("test-ci-%s", uuid.New())
 		createResp, err := computeInstancesClient.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 			Object: publicv1.ComputeInstance_builder{
@@ -399,11 +427,22 @@ var _ = Describe("DiskImage lifecycle", func() {
 					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
 						publicv1.ComputeNetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
+							SecurityGroups: []*publicv1.SecurityGroupLocalReference{
+								publicv1.SecurityGroupLocalReference_builder{Id: securityGroupId}.Build(),
+							},
 						}.Build(),
 					},
 				}.Build(),
 			}.Build(),
 		}.Build())
+		if lifecycle == privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE {
+			expectCatalogItemStatusCode(err, codes.FailedPrecondition)
+			Expect(status.Convert(err).Message()).To(ContainSubstring("obsolete"))
+			_, err = computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: computeInstanceId}.Build())
+			expectCatalogItemStatusCode(err, codes.NotFound)
+			computeInstanceId = ""
+			return
+		}
 		Expect(err).ToNot(HaveOccurred(), "CI creation with DEPRECATED DiskImage should succeed")
 		Expect(createResp.GetObject()).ToNot(BeNil())
 
@@ -418,5 +457,8 @@ var _ = Describe("DiskImage lifecycle", func() {
 		}
 		Expect(hasDeprecationWarning).To(BeTrue(),
 			fmt.Sprintf("Response should contain deprecation warning, got: %v", warnings))
-	})
+	},
+		Entry("deprecated image permits creation with a warning", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED),
+		Entry("obsolete image rejects creation without persistence", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE),
+	)
 })

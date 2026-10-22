@@ -18,6 +18,8 @@ spec:
         {{- include "osac-devstack.selectorLabels" . | nindent 8 }}
         job: seed-catalog
     spec:
+      securityContext:
+        fsGroup: 1001
       serviceAccountName: {{ include "osac-devstack.serviceAccountName" . }}
       restartPolicy: OnFailure
       initContainers:
@@ -54,6 +56,7 @@ spec:
           value: {{ .Values.catalog.internalApiPort | quote }}
         - name: CATALOG_YAML
           value: "/config/catalog-seed.yaml"
+        {{- include "osac-devstack.fulfillmentAuthEnv" . | nindent 8 }}
         volumeMounts:
         - name: scripts
           mountPath: /scripts
@@ -62,6 +65,7 @@ spec:
         - name: ca-bundle
           mountPath: /etc/ca-bundle
           readOnly: true
+        {{- include "osac-devstack.fulfillmentAuthVolumeMount" . | nindent 8 }}
       volumes:
       - name: scripts
         configMap:
@@ -76,4 +80,5 @@ spec:
           items:
           - key: bundle.pem
             path: bundle.pem
+      {{- include "osac-devstack.fulfillmentAuthVolume" . | nindent 6 }}
 {{- end }}

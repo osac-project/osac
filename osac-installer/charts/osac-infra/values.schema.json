@@ -4,6 +4,42 @@
   "description": "Configuration values for OSAC shared infrastructure (Phase 2)",
   "type": "object",
   "properties": {
+    "hookResources": {
+      "type": "object",
+      "description": "Resource requests and limits applied to every cliImage hook Job. These hooks invoke `oc`, whose peak memory scales with the cluster's CRD count because of API discovery caching, so the limit is shared rather than set per hook. Raise the memory limit on clusters with unusually large CRD counts.",
+      "properties": {
+        "limits": {
+          "type": "object",
+          "properties": {
+            "cpu": {
+              "type": "string",
+              "description": "CPU limit as a Kubernetes quantity, for example 200m or 1",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?[0-9]+))?$"
+            },
+            "memory": {
+              "type": "string",
+              "description": "Memory limit as a Kubernetes quantity, for example 1Gi or 512Mi",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?[0-9]+))?$"
+            }
+          }
+        },
+        "requests": {
+          "type": "object",
+          "properties": {
+            "cpu": {
+              "type": "string",
+              "description": "CPU request as a Kubernetes quantity, for example 50m",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?[0-9]+))?$"
+            },
+            "memory": {
+              "type": "string",
+              "description": "Memory request as a Kubernetes quantity, for example 128Mi",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?[0-9]+))?$"
+            }
+          }
+        }
+      }
+    },
     "mce": {
       "type": "object",
       "properties": {
@@ -31,19 +67,41 @@
         }
       }
     },
-    "bundledVault": {
+    "topolvm": {
       "type": "object",
-      "description": "Bundled OpenBao (Vault-compatible) secret store for dev/CI environments. When enabled, deploys a single-replica OpenBao instance in dev mode with emptyDir storage.",
+      "description": "Optional TopoLVM CSI driver for local development clusters.",
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Deploy a bundled OpenBao instance. Enabled by default — set to false only when pointing at an external Vault/OpenBao instance.",
-          "default": true
+          "description": "Install the TopoLVM Helm dependency.",
+          "default": false
+        }
+      },
+      "additionalProperties": true
+    },
+    "netbox": {
+      "type": "object",
+      "description": "NetBox deployment for the bmaas_netbox E2E test flavor (dev/CI only; not for production).",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Deploy NetBox via the netbox-community subchart.",
+          "default": false
         },
-        "devRootToken": {
+        "apiTokenSecret": {
           "type": "string",
-          "description": "Root token for OpenBao dev mode (required when enabled)",
-          "default": "dev-root-token"
+          "description": "Name of the Secret written into osacNamespace by the post-install seed Job (default: netbox-api-token). Contains the API token for the bare-metal-fulfillment-operator."
+        }
+      }
+    },
+    "bundledVault": {
+      "type": "object",
+      "description": "Bundled OpenBao (Vault-compatible) secret store for testing and CI. Not intended for production.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Deploy a bundled OpenBao instance. Disabled by default — enable in a profile infra.yaml and set keycloakIssuerUrl.",
+          "default": false
         },
         "image": {
           "type": "string",
@@ -52,7 +110,7 @@
         },
         "podSecurityContext": {
           "type": "object",
-          "description": "Pod-level securityContext for the OpenBao deployment. Leave absent (nil) to use the template's built-in standard-Kubernetes defaults (runAsNonRoot: true, runAsUser: 100, runAsGroup: 1000, fsGroup: 1000). Any non-nil value here FULLY REPLACES the template default — partial overrides must include every key you want rendered. On OpenShift with restricted-v2 SCC, set to {runAsNonRoot: true} only.",
+          "description": "Pod-level securityContext for the OpenBao deployment. Defaults to {runAsNonRoot: true} with seccompProfile RuntimeDefault — no hardcoded UID, so OpenShift's restricted-v2 SCC can allocate from the namespace UID range. Any non-nil value here FULLY REPLACES the template default — partial overrides must include every key you want rendered.",
           "properties": {
             "runAsNonRoot": { "type": "boolean" },
             "runAsUser": { "type": "integer" },
@@ -82,7 +140,7 @@
         },
         "keycloakIssuerUrl": {
           "type": "string",
-          "description": "Keycloak OIDC issuer URL for JWT auth bootstrap. On OpenShift this must be the external route URL (not the internal service URL) to avoid issuer mismatch. Leave empty to skip JWT bootstrap.",
+          "description": "Keycloak OIDC issuer URL for JWT auth bootstrap. Required when bundledVault is enabled. On OpenShift this must be the external route URL (not the internal service URL) to avoid issuer mismatch.",
           "default": ""
         },
         "keycloakAudience": {

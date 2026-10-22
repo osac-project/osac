@@ -83,6 +83,9 @@ def _storage_controller_configured(namespace: str) -> bool:
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Skip storage tests when the storage controller is not configured."""
+    # Collection-only checks import readiness and do not need cluster discovery.
+    if config.getoption("collectonly"):
+        return
     namespace: str = env("OSAC_NAMESPACE", "osac-devel")
     if not _storage_controller_configured(namespace):
         skip_storage = pytest.mark.skip(

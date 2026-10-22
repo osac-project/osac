@@ -41,6 +41,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-met
 | Event schema or transition mapping | Unit across affected modules | `make test` |
 | Projection/database code | Component integration (database) | `make test` |
 | Fulfillment client CA parsing, TLS verification, or bundle rotation | Unit with local TLS endpoint plus Helm render | `make test` and `make -C ../osac-installer fulfillment-trust-render-test`; deployed Watch contract remains [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) |
+| Fulfillment client service-account OAuth, credential rotation, or issuer configuration | Unit with local TLS token endpoint plus profile Helm render | `make test` and `make -C ../osac-installer metering-auth-render-test`; deployed cross-cluster auth remains with QE under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) |
 | Kafka producer/consumer, CloudEvents transport, offsets, retries, or DLQ | Component integration | Required suite is currently unavailable; track [OSAC-4846](https://redhat.atlassian.net/browse/OSAC-4846) |
 | Fulfillment Watch or gRPC event ingestion | Contract or component integration | Required suite is currently unavailable; track the relevant [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) task |
 | Provider adapters | Unit plus component/E2E coverage for the provider boundary | `make test` and the qualifying provider suite |

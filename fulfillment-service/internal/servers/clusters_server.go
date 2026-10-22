@@ -225,9 +225,13 @@ func (s *ClustersServer) Create(ctx context.Context,
 			"Failed to map public cluster to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster")
+		err = publicInputMappingError(err, "failed to process cluster")
 		return
 	}
+	// The status is output-only: only the system writes it. The metering source contract
+	// is not enforced on inserts, so a caller-supplied status must never reach the
+	// database as a fabricated fact.
+	privateCluster.ClearStatus()
 
 	// Delegate to the private server:
 	privateRequest := &privatev1.ClustersCreateRequest{}
@@ -259,6 +263,11 @@ func (s *ClustersServer) Create(ctx context.Context,
 
 func (s *ClustersServer) Update(ctx context.Context,
 	request *publicv1.ClustersUpdateRequest) (response *publicv1.ClustersUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	// Validate the request:
 	publicCluster := request.GetObject()
 	if publicCluster == nil {
@@ -269,6 +278,15 @@ func (s *ClustersServer) Update(ctx context.Context,
 	if id == "" {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
+	}
+
+	// The system sets the version transition time when it accepts a version change; users can
+	// read it but never supply it. The rest of the status is already ignored on input.
+	for _, path := range request.GetUpdateMask().GetPaths() {
+		if path == "status.version_transition_time" {
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is output-only", path)
+			return
+		}
 	}
 
 	// Determine how to prepare the private cluster based on whether there's a field mask. When there's a field mask,
@@ -297,7 +315,7 @@ func (s *ClustersServer) Update(ctx context.Context,
 			"Failed to map public cluster to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster")
+		err = publicInputMappingError(err, "failed to process cluster")
 		return
 	}
 

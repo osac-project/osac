@@ -5,7 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Query existing IPAM subnets
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/ipam/subnets"
     method: GET
     headers:
@@ -14,6 +14,7 @@
     status_code: [200]
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _ipam_subnets_resp
   no_log: true
 
@@ -31,7 +32,7 @@
   when: _existing_ipam_subnet is not none
 
 - name: Create IPAM subnet
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/ipam/subnet"
     method: POST
     headers:
@@ -55,6 +56,7 @@
     status_code: [200, 201]
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _ipam_create_resp
   when: _existing_ipam_subnet is none
   no_log: true

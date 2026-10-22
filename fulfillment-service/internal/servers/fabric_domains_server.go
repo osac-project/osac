@@ -19,6 +19,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -37,6 +38,10 @@ type FabricDomainsServer struct {
 	delegate  privatev1.FabricDomainsServer
 	inMapper  *GenericMapper[*publicv1.FabricDomain, *privatev1.FabricDomain]
 	outMapper *GenericMapper[*privatev1.FabricDomain, *publicv1.FabricDomain]
+
+	// Validate filters against the public descriptor before forwarding them to the private server;
+	// otherwise callers can probe private-only fields through CEL compile errors.
+	filterValidator *dao.FilterTranslator
 }
 
 func NewFabricDomainsServer() *FabricDomainsServerBuilder { return &FabricDomainsServerBuilder{} }
@@ -76,16 +81,35 @@ func (b *FabricDomainsServerBuilder) Build() (*FabricDomainsServer, error) {
 	if err != nil {
 		return nil, err
 	}
+	filterValidator, err := dao.NewFilterTranslator().
+		SetLogger(b.logger).
+		SetDescriptor((*publicv1.FabricDomain)(nil).ProtoReflect().Descriptor()).
+		Build()
+	if err != nil {
+		return nil, err
+	}
 	delegate, err := NewPrivateFabricDomainsServer().
 		SetLogger(b.logger).SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).SetMetricsRegisterer(b.metricsRegisterer).Build()
 	if err != nil {
 		return nil, err
 	}
-	return &FabricDomainsServer{delegate: delegate, inMapper: inMapper, outMapper: outMapper}, nil
+	return &FabricDomainsServer{
+		delegate:        delegate,
+		inMapper:        inMapper,
+		outMapper:       outMapper,
+		filterValidator: filterValidator,
+	}, nil
 }
 
 func (s *FabricDomainsServer) List(ctx context.Context, request *publicv1.FabricDomainsListRequest) (*publicv1.FabricDomainsListResponse, error) {
+	filter := request.GetFilter()
+	if filter != "" {
+		if _, err := s.filterValidator.Translate(ctx, filter); err != nil {
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %v", err)
+		}
+	}
+
 	privateRequest := &privatev1.FabricDomainsListRequest{}
 	if request.HasOffset() {
 		privateRequest.SetOffset(request.GetOffset())
@@ -93,9 +117,7 @@ func (s *FabricDomainsServer) List(ctx context.Context, request *publicv1.Fabric
 	if request.HasLimit() {
 		privateRequest.SetLimit(request.GetLimit())
 	}
-	if request.HasFilter() {
-		privateRequest.SetFilter(request.GetFilter())
-	}
+	privateRequest.SetFilter(filter)
 	if request.HasOrder() {
 		privateRequest.SetOrder(request.GetOrder())
 	}
@@ -133,7 +155,7 @@ func (s *FabricDomainsServer) Create(ctx context.Context, request *publicv1.Fabr
 	}
 	privateObject := &privatev1.FabricDomain{}
 	if err := s.inMapper.Copy(ctx, request.GetObject(), privateObject); err != nil {
-		return nil, grpcstatus.Error(grpccodes.Internal, "failed to process fabric domain")
+		return nil, publicInputMappingError(err, "failed to process fabric domain")
 	}
 	privateResponse, err := s.delegate.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: privateObject}.Build())
 	if err != nil {
@@ -147,12 +169,17 @@ func (s *FabricDomainsServer) Create(ctx context.Context, request *publicv1.Fabr
 }
 
 func (s *FabricDomainsServer) Update(ctx context.Context, request *publicv1.FabricDomainsUpdateRequest) (*publicv1.FabricDomainsUpdateResponse, error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	if request.GetObject() == nil {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "object is mandatory")
 	}
 	privateObject := &privatev1.FabricDomain{}
 	if err := s.inMapper.Copy(ctx, request.GetObject(), privateObject); err != nil {
-		return nil, grpcstatus.Error(grpccodes.Internal, "failed to process fabric domain")
+		return nil, publicInputMappingError(err, "failed to process fabric domain")
 	}
 	privateRequest := privatev1.FabricDomainsUpdateRequest_builder{Object: privateObject, UpdateMask: request.GetUpdateMask(), Lock: request.GetLock()}.Build()
 	privateResponse, err := s.delegate.Update(ctx, privateRequest)

@@ -48,7 +48,7 @@ message ExternalIPPool {
   ExternalIPPoolSpec spec = 3;
 
   // Current state of the external IP pool (system-provided, read-only).
-  ExternalIPPoolStatus status = 4;
+  ExternalIPPoolStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the desired configuration for an ExternalIPPool.

@@ -11,7 +11,14 @@
          ['osac.openshift.io/implementation-strategy']
          | default('netris', true) }}
     network_attachments: "{{ resource.spec.networkAttachments | default([]) }}"
-    provisioning_vnet: "{{ netris_bm_provisioning_vnet | default('', true) }}"
+    agentless_net_provisioning_vnet: >-
+      {{ ((lookup('ansible.builtin.env', 'AGENTLESS_NET_VN_INVENTORY')
+           | default('{}', true) | from_yaml).get('all', {}).get('vars', {})
+           .get('agentless_net_provisioning_network', {}).get('name', '')) }}
+    provisioning_vnet: >-
+      {{ agentless_net_provisioning_vnet
+         if implementation_strategy == 'agentless_net'
+         else netris_bm_provisioning_vnet | default('', true) }}
     # A resource carrying a deletionTimestamp is being deprovisioned (offboard:
     # tenant -> provisioning); otherwise it is being provisioned (onboard: provisioning ->
     # tenant). Test presence type-agnostically: ansible-core auto-tags an
@@ -28,26 +35,67 @@
       ansible.builtin.debug:
         var: resource.metadata
 
+    - name: Require tenant ownership metadata on the BMI resource
+      ansible.builtin.assert:
+        that:
+          - resource.metadata.annotations is mapping
+          - resource.metadata.annotations.get('osac.openshift.io/tenant', '') | length > 0
+        fail_msg: Network attachment moves require the BareMetalInstance tenant annotation.
+      no_log: true
+
   tasks:
     - name: Resolve tenant network segment name for each attachment
       kubernetes.core.k8s_info:
         api_version: osac.openshift.io/v1alpha1
         kind: Subnet
+        namespace: "{{ resource.metadata.namespace }}"
         label_selectors:
           - "osac.openshift.io/subnet-uuid={{ item.subnetRef }}"
+        # Kubernetes credentials are supplied by an AAP credential through the
+        # K8S_AUTH_* environment variables. This also works when newer
+        # Automation Controller releases reject pod_spec_override token mounts.
       register: _subnet_lookups
       loop: "{{ network_attachments }}"
       loop_control:
         label: "{{ item.subnetRef }}"
       when: network_attachments | length > 0
+      no_log: true
+
+    - name: Validate Subnet namespace, tenant, and onboarding readiness
+      ansible.builtin.assert:
+        that:
+          - item.resources | length == 0 or item.resources[0].metadata.namespace == resource.metadata.namespace
+          - >-
+            item.resources | length == 0
+            or item.resources[0].metadata.annotations.get('osac.openshift.io/tenant', '')
+               == resource.metadata.annotations['osac.openshift.io/tenant']
+          - >-
+            offboard
+            or item.resources | length == 0
+            or item.resources[0].status.phase == 'Ready'
+          - >-
+            offboard
+            or item.resources | length == 0
+            or item.resources[0].metadata.deletionTimestamp is not defined
+        fail_msg: >-
+          A BareMetalInstance network attachment must reference a ready Subnet
+          in the same namespace and tenant before onboarding.
+      loop: "{{ _subnet_lookups.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.subnetRef }}"
+      when: network_attachments | length > 0
+      no_log: true
 
     - name: Build resolved attachment list (interface + tenant network name)
       ansible.builtin.set_fact:
         _resolved_attachments: >-
           {{ _resolved_attachments | default([]) + [{
                'interface': item.item.interface,
+               'subnet_ref': item.item.subnetRef,
                'tenant_vnet': (item.resources[0].metadata.name
-                               if (item.resources | length > 0) else '')
+                               if (item.resources | length > 0) else ''),
+               'subnet': (item.resources[0]
+                          if (item.resources | length > 0) else {})
              }] }}
       loop: "{{ _subnet_lookups.results | default([]) }}"
       loop_control:

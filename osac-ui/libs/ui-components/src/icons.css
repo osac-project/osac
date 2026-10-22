@@ -8,6 +8,6 @@
   display: inline-flex;
 }
 
-.catalog-item-icon .pf-v6-svg {
+.catalog-item-icon.m-is-active .pf-v6-svg {
   color: var(--pf-t--color--red--50);
 }

@@ -45,6 +45,7 @@ var _ = Describe("ComputeInstance InstanceType resize", func() {
 		networkClassId            string
 		virtualNetworkId          string
 		subnetId                  string
+		securityGroupId           string
 		diskImageId               string
 	)
 
@@ -145,14 +146,21 @@ var _ = Describe("ComputeInstance InstanceType resize", func() {
 				Metadata:      privatev1.Metadata_builder{Name: networkClassName}.Build(),
 				Title:         "Resize test network class",
 				FabricManager: new("netris"),
+				K8SManager:    new(testVMK8SManagerName),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		networkClassId = ncResp.GetObject().GetId()
-		waitForComputeInstanceFixtureResource(ctx, func(probeCtx context.Context) error {
-			_, err := networkClassesClient.Get(probeCtx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassId}.Build())
-			return err
-		})
+		waitForNetworkClassReady(ctx, networkClassesClient, networkClassId)
+		setNetworkClassCanonicalHub(ctx, networkClassesClient, networkClassId, hubId)
+		expectNetworkClassStatus(
+			ctx,
+			networkClassesClient,
+			networkClassId,
+			privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+			hubId,
+			"",
+		)
 
 		virtualNetworkId = fmt.Sprintf("test-resize-vn-%s", uuid.New())
 		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
@@ -199,11 +207,14 @@ var _ = Describe("ComputeInstance InstanceType resize", func() {
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+
+		securityGroupId = createComputeInstanceFixtureSecurityGroup(ctx, fixtureClients.securityGroups,
+			fmt.Sprintf("test-resize-sg-%s", uuid.New()), virtualNetworkId)
 	})
 
 	AfterEach(func() {
 		cleanupComputeInstanceFixture(ctx, fixtureClients, computeInstanceId, resizeInstanceTypeId, instanceTypeId,
-			subnetId, virtualNetworkId, networkClassId, computeInstanceTemplateId, diskImageId, storageTierId, storageBackendId)
+			securityGroupId, subnetId, virtualNetworkId, networkClassId, computeInstanceTemplateId, diskImageId, storageTierId, storageBackendId)
 	})
 
 	It("updates ComputeInstance InstanceType through the public API", func() {
@@ -251,6 +262,9 @@ var _ = Describe("ComputeInstance InstanceType resize", func() {
 					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
 						publicv1.ComputeNetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
+							SecurityGroups: []*publicv1.SecurityGroupLocalReference{
+								publicv1.SecurityGroupLocalReference_builder{Id: securityGroupId}.Build(),
+							},
 						}.Build(),
 					},
 				}.Build(),

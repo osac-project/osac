@@ -83,6 +83,17 @@ message SecurityGroupsCreateResponse {
   SecurityGroup object = 1;
 }
 
+message SecurityGroupsUpdateRequest {
+  // SecurityGroup to update. The complete ingress and egress rule lists are
+  // applied as supplied. The ID identifies the existing group; its name and
+  // parent VirtualNetwork are not changed by this operation.
+  SecurityGroup object = 1;
+}
+
+message SecurityGroupsUpdateResponse {
+  SecurityGroup object = 1;
+}
+
 message SecurityGroupsDeleteRequest {
   string id = 1;
 }
@@ -107,6 +118,16 @@ service SecurityGroups {
   rpc Create(SecurityGroupsCreateRequest) returns (SecurityGroupsCreateResponse) {
     option (google.api.http) = {
       post: "/api/fulfillment/v1/security_groups"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Updates the ingress and egress rules of an existing security group.
+  // Callers must provide the complete rule lists for both directions.
+  rpc Update(SecurityGroupsUpdateRequest) returns (SecurityGroupsUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/fulfillment/v1/security_groups/{object.id}"
       body: "object"
       response_body: "object"
     };

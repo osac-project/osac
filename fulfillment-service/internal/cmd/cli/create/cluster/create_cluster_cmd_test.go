@@ -413,6 +413,62 @@ var _ = Describe("parseClusterNetworkAttachmentFlag", func() {
 	})
 })
 
+var _ = Describe("Create cluster project propagation", func() {
+	It("sets metadata.project from the context when a project is selected", func() {
+		logger := slog.New(slog.NewTextHandler(GinkgoWriter, nil))
+		console, err := terminal.NewConsole().
+			SetLogger(logger).
+			SetStdout(GinkgoWriter).
+			SetStderr(GinkgoWriter).
+			Build()
+		Expect(err).NotTo(HaveOccurred())
+
+		settings, err := config.NewSettings().
+			SetLogger(logger).
+			SetDir(GinkgoT().TempDir()).
+			Build()
+		Expect(err).NotTo(HaveOccurred())
+		settings.SetTenant("tenant-a")
+		settings.SetPlaintext(true)
+
+		server := testutils.NewServer()
+		DeferCleanup(server.Stop)
+		publicv1.RegisterClusterCatalogItemsServer(server.Registrar(), mockClusterCatalogItemsServer{})
+		createRequests := make(chan *publicv1.ClustersCreateRequest, 1)
+		publicv1.RegisterClustersServer(server.Registrar(), &testutils.ClustersServerFuncs{
+			CreateFunc: func(_ context.Context, request *publicv1.ClustersCreateRequest) (*publicv1.ClustersCreateResponse, error) {
+				createRequests <- request
+				return publicv1.ClustersCreateResponse_builder{
+					Object: publicv1.Cluster_builder{Id: "created-cluster"}.Build(),
+				}.Build(), nil
+			},
+		})
+		server.Start()
+		settings.SetAddress(server.Address())
+
+		ctx := logging.LoggerIntoContext(context.Background(), logger)
+		ctx = terminal.ConsoleIntoContext(ctx, console)
+		ctx = config.SettingsIntoContext(ctx, settings)
+		ctx = config.TenantIntoContext(ctx, settings.Tenant())
+		ctx = config.ProjectIntoContext(ctx, "team-a.frontend")
+
+		cmd := Cmd()
+		cmd.SetArgs([]string{
+			"--catalog-item", "catalog-item-id",
+			"--name", "test-cluster",
+		})
+		cmd.SetOut(GinkgoWriter)
+		cmd.SetErr(GinkgoWriter)
+		Expect(cmd.ExecuteContext(ctx)).To(Succeed())
+
+		request := <-createRequests
+		cluster := request.GetObject()
+		Expect(cluster.GetMetadata().GetProject()).To(Equal("team-a.frontend"))
+		Expect(cluster.GetMetadata().GetTenant()).To(Equal("tenant-a"))
+		Expect(cluster.GetMetadata().GetName()).To(Equal("test-cluster"))
+	})
+})
+
 var _ = Describe("Create cluster node sets", func() {
 	It("creates a cluster with multiple explicitly named node sets", func() {
 		logger := slog.New(slog.NewTextHandler(GinkgoWriter, nil))

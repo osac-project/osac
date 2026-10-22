@@ -10,7 +10,7 @@
   when: netris_session_cookie is not defined
 
 - name: Update V-Net
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     force: true
     url: "{{ netris_controller_url }}/api/v2/vnet/{{ vnet_id }}"
     method: PUT
@@ -23,4 +23,5 @@
     status_code: [200, 201]
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   no_log: true

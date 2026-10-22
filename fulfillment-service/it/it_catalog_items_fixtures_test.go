@@ -16,13 +16,20 @@ package it
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
+	"sort"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/defaultnetworking"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 	"google.golang.org/grpc"
@@ -85,6 +92,12 @@ func deferCatalogItemFixtureDeletion(deleteDependency func(context.Context) erro
 
 func catalogItemFixtureMetadata(tenant, project string) *privatev1.Metadata {
 	return privatev1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: tenant, Project: project}.Build()
+}
+
+func catalogItemUnmanagedFixtureMetadata(tenant, project string) *privatev1.Metadata {
+	metadata := catalogItemFixtureMetadata(tenant, project)
+	metadata.SetAnnotations(map[string]string{"osac.openshift.io/management-state": "unmanaged"})
+	return metadata
 }
 
 func createCatalogItemProjectFixture(ctx context.Context, tenant string) string {
@@ -195,22 +208,77 @@ func createCatalogItemStorageTierFixture(ctx context.Context) string {
 
 type catalogItemNetworkFixture struct {
 	subnetID, securityGroupID, virtualNetworkID, networkClassID string
+	networkClassCreated                                         bool
 }
 
 func createCatalogItemNetworkClassFixture(ctx context.Context) string {
 	GinkgoHelper()
+	classID := createCatalogItemNetworkClassFixtureWithoutCleanup(ctx)
 	classes := privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
-	class, err := classes.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-		Object: privatev1.NetworkClass_builder{Metadata: catalogItemFixtureMetadata("shared", ""), Title: "Catalog item integration network", FabricManager: new("netris")}.Build(),
-	}.Build())
-	Expect(err).NotTo(HaveOccurred())
-	classID := class.GetObject().GetId()
 	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
 		_, err := classes.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: classID}.Build())
 		return err
 	}, nil)
+	return classID
+}
+
+func createCatalogItemNetworkClassFixtureWithoutCleanup(ctx context.Context) string {
+	GinkgoHelper()
+	classes := privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
+	class, err := classes.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+		Object: privatev1.NetworkClass_builder{
+			Metadata:      catalogItemFixtureMetadata("shared", ""),
+			Title:         "Catalog item integration network",
+			FabricManager: new("netris"),
+			K8SManager:    new(testVMK8SManagerName),
+		}.Build(),
+	}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	classID := class.GetObject().GetId()
 	waitForNetworkClassReady(ctx, classes, classID)
 	return classID
+}
+
+func getOrCreateTenantDefaultNetworkClassFixture(ctx context.Context) (string, bool) {
+	GinkgoHelper()
+	classes := privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
+	listed, err := classes.List(ctx, privatev1.NetworkClassesListRequest_builder{
+		Filter: new("!has(this.metadata.deletion_timestamp)"),
+	}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	if items := listed.GetItems(); len(items) > 0 {
+		Expect(items[0].GetFabricManager()).NotTo(BeEmpty(), "tenant default networking requires a fabric-backed NetworkClass")
+		return items[0].GetId(), false
+	}
+
+	classID := createCatalogItemNetworkClassFixtureWithoutCleanup(ctx)
+	// The default-networking cleanup registered by the caller runs first, so the
+	// NetworkClass no longer has a default VirtualNetwork reference by the time
+	// this fixture is removed.
+	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+		_, err := classes.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: classID}.Build())
+		return err
+	}, func(ctx context.Context) (bool, error) {
+		_, err := classes.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: classID}.Build())
+		if status.Code(err) == codes.NotFound {
+			return true, nil
+		}
+		if err != nil {
+			return false, nil
+		}
+		return false, nil
+	})
+	waitForNetworkClassReady(ctx, classes, classID)
+	setNetworkClassCanonicalHub(ctx, classes, classID, hubId)
+	expectNetworkClassStatus(
+		ctx,
+		classes,
+		classID,
+		privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+		hubId,
+		"",
+	)
+	return classID, true
 }
 
 func createCatalogItemNetworkFixture(ctx context.Context, tenant, project string) catalogItemNetworkFixture {
@@ -224,7 +292,7 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 	networks := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
 	network, err := networks.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 		Object: privatev1.VirtualNetwork_builder{
-			Metadata: catalogItemFixtureMetadata(tenant, project),
+			Metadata: catalogItemUnmanagedFixtureMetadata(tenant, project),
 			Spec: privatev1.VirtualNetworkSpec_builder{
 				NetworkClass: privatev1.NetworkClassReference_builder{Id: classID}.Build(),
 				Region:       "us-east-1",
@@ -258,17 +326,32 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 		Expect(e).NotTo(HaveOccurred())
 		return r.GetObject().GetStatus().GetState()
 	}, time.Minute, time.Second).Should(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
-	// Catalog provisioning needs a ready network, so advance this fixture from Pending to Ready.
-	currentVirtualNetwork, err := networks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: networkID}.Build())
-	Expect(err).NotTo(HaveOccurred())
-	currentVirtualNetwork.GetObject().SetStatus(privatev1.VirtualNetworkStatus_builder{State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY}.Build())
-	_, err = networks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{Object: currentVirtualNetwork.GetObject(), UpdateMask: catalogItemUpdateMask("status.state")}.Build())
-	Expect(err).NotTo(HaveOccurred())
+	// Wait for the initial projection before simulating provider readiness. Otherwise,
+	// the first Kubernetes status sync can overwrite the READY update with PENDING.
+	waitForNetworkingCR(ctx, listNetworkingCR(
+		tool.KubeClient(),
+		labels.VirtualNetworkUuid,
+		networkID,
+		&osacv1alpha1.VirtualNetworkList{},
+		func(objects *osacv1alpha1.VirtualNetworkList) int { return len(objects.Items) },
+	))
+	waitForNetworkingFixtureResource(ctx, func(probeCtx context.Context) error {
+		_, err := networks.Get(probeCtx, privatev1.VirtualNetworksGetRequest_builder{Id: networkID}.Build())
+		return err
+	})
+	expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
+		response, getErr := networks.Get(getCtx, privatev1.VirtualNetworksGetRequest_builder{Id: networkID}.Build())
+		if getErr != nil {
+			return "", getErr
+		}
+		return response.GetObject().GetStatus().GetHub(), nil
+	})
+	setRoutingVirtualNetworkReady(ctx, networks, networkID)
 
 	subnets := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
 	subnet, err := subnets.Create(ctx, privatev1.SubnetsCreateRequest_builder{
 		Object: privatev1.Subnet_builder{
-			Metadata: catalogItemFixtureMetadata(tenant, project),
+			Metadata: catalogItemUnmanagedFixtureMetadata(tenant, project),
 			Spec: privatev1.SubnetSpec_builder{
 				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: networkID}.Build(),
 				Ipv4Cidr:       new("10.100.1.0/24"),
@@ -301,12 +384,25 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 		Expect(e).NotTo(HaveOccurred())
 		return r.GetObject().GetStatus().GetState()
 	}, time.Minute, time.Second).Should(Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
-	// Catalog provisioning needs a ready Subnet, so advance this fixture from Pending to Ready.
-	currentSubnet, err := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
-	Expect(err).NotTo(HaveOccurred())
-	currentSubnet.GetObject().SetStatus(privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_READY}.Build())
-	_, err = subnets.Update(ctx, privatev1.SubnetsUpdateRequest_builder{Object: currentSubnet.GetObject(), UpdateMask: catalogItemUpdateMask("status.state")}.Build())
-	Expect(err).NotTo(HaveOccurred())
+	waitForNetworkingCR(ctx, listNetworkingCR(
+		tool.KubeClient(),
+		labels.SubnetUuid,
+		subnetID,
+		&osacv1alpha1.SubnetList{},
+		func(objects *osacv1alpha1.SubnetList) int { return len(objects.Items) },
+	))
+	waitForNetworkingFixtureResource(ctx, func(probeCtx context.Context) error {
+		_, err := subnets.Get(probeCtx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
+		return err
+	})
+	expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
+		response, getErr := subnets.Get(getCtx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
+		if getErr != nil {
+			return "", getErr
+		}
+		return response.GetObject().GetStatus().GetHub(), nil
+	})
+	setRoutingSubnetReady(ctx, subnets, subnetID)
 	return catalogItemNetworkFixture{subnetID: subnetID, virtualNetworkID: networkID, networkClassID: classID}
 }
 
@@ -317,7 +413,7 @@ func createCatalogItemNetworkInClassFixture(ctx context.Context, tenant, project
 	groups := privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
 	group, err := groups.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
 		Object: privatev1.SecurityGroup_builder{
-			Metadata: catalogItemFixtureMetadata(tenant, project),
+			Metadata: catalogItemUnmanagedFixtureMetadata(tenant, project),
 			Spec: privatev1.SecurityGroupSpec_builder{
 				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: network.virtualNetworkID}.Build(),
 			}.Build(),
@@ -344,11 +440,30 @@ func createCatalogItemNetworkInClassFixture(ctx context.Context, tenant, project
 		return false, nil
 	})
 
+	waitForNetworkingFixtureResource(ctx, func(probeCtx context.Context) error {
+		_, err := groups.Get(probeCtx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
+		return err
+	})
+	expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
+		response, getErr := groups.Get(getCtx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
+		if getErr != nil {
+			return "", getErr
+		}
+		return response.GetObject().GetStatus().GetHub(), nil
+	})
+
 	Eventually(func() privatev1.SecurityGroupState {
 		r, e := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
 		Expect(e).NotTo(HaveOccurred())
 		return r.GetObject().GetStatus().GetState()
 	}, time.Minute, time.Second).Should(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
+	waitForNetworkingCR(ctx, listNetworkingCR(
+		tool.KubeClient(),
+		labels.SecurityGroupUuid,
+		groupID,
+		&osacv1alpha1.SecurityGroupList{},
+		func(objects *osacv1alpha1.SecurityGroupList) int { return len(objects.Items) },
+	))
 	// The Security Group must be ready before it can join a resource attachment.
 	currentSecurityGroup, err := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
 	Expect(err).NotTo(HaveOccurred())
@@ -459,30 +574,12 @@ func createCatalogItemTenantAdminFixture(ctx context.Context) (string, *grpc.Cli
 	Expect(err).NotTo(HaveOccurred())
 	id := created.GetObject().GetId()
 	DeferCleanup(func(ctx context.Context) {
-		// Authentication creates fulfillment User records in the tenant's root project.
-		users := privatev1.NewUsersClient(tool.InternalView().AdminConn())
-		listed, err := users.List(ctx, privatev1.UsersListRequest_builder{Filter: new("this.metadata.tenant == '" + name + "'")}.Build())
-		Expect(err).NotTo(HaveOccurred())
-		for _, user := range listed.GetItems() {
-			_, err = users.Delete(ctx, privatev1.UsersDeleteRequest_builder{Id: user.GetId()}.Build())
-			Expect(err).NotTo(HaveOccurred())
-			Eventually(func(g Gomega) bool {
-				_, err := users.Get(ctx, privatev1.UsersGetRequest_builder{Id: user.GetId()}.Build())
-				if status.Code(err) == codes.NotFound {
-					return true
-				}
-				g.Expect(err).NotTo(HaveOccurred())
-				_, err = users.Signal(ctx, privatev1.UsersSignalRequest_builder{Id: user.GetId()}.Build())
-				if status.Code(err) == codes.NotFound {
-					return true
-				}
-				g.Expect(err).NotTo(HaveOccurred())
-				return false
-			}, time.Minute, time.Second).Should(BeTrue())
-		}
+		deleteTenantUsers(ctx, name)
 		deleteTenant(ctx, tenants, privatev1.NewProjectsClient(tool.InternalView().AdminConn()), id, name)
 	})
 
+	_, err = tenants.Signal(ctx, privatev1.TenantsSignalRequest_builder{Id: id}.Build())
+	Expect(err).NotTo(HaveOccurred())
 	waitForTenantSynced(ctx, tenants, id)
 	tenant, err := tenants.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
 	Expect(err).NotTo(HaveOccurred())
@@ -568,17 +665,24 @@ func createCatalogItemClusterTemplateFixture(ctx context.Context, defaults *priv
 	return id
 }
 
-func createCatalogItemBareMetalInstanceTemplateFixture(ctx context.Context, defaults *privatev1.BareMetalInstanceTemplateSpecDefaults, parameters []*privatev1.BareMetalInstanceTemplateParameterDefinition) string {
+func createCatalogItemBareMetalInstanceTemplateFixture(ctx context.Context, defaults *privatev1.BareMetalInstanceTemplateSpecDefaults, parameters []*privatev1.BareMetalInstanceTemplateParameterDefinition, instanceType ...string) string {
 	GinkgoHelper()
 	client := privatev1.NewBareMetalInstanceTemplatesClient(tool.InternalView().AdminConn())
+	object := privatev1.BareMetalInstanceTemplate_builder{
+		Id:           "catalog_item_bare_metal_instance_" + uuid.New()[24:],
+		Metadata:     catalogItemFixtureMetadata("shared", ""),
+		Title:        "Catalog item integration Template",
+		SpecDefaults: defaults,
+		Parameters:   parameters,
+	}
+	if len(instanceType) > 0 && instanceType[0] != "" {
+		object.InstanceType = privatev1.BareMetalInstanceTypeReference_builder{
+			Id:     instanceType[0],
+			Shared: true,
+		}.Build()
+	}
 	response, err := client.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
-		Object: privatev1.BareMetalInstanceTemplate_builder{
-			Id:           "catalog_item_bare_metal_instance_" + uuid.New()[24:],
-			Metadata:     catalogItemFixtureMetadata("shared", ""),
-			Title:        "Catalog item integration Template",
-			SpecDefaults: defaults,
-			Parameters:   parameters,
-		}.Build(),
+		Object: object.Build(),
 	}.Build())
 	Expect(err).NotTo(HaveOccurred())
 	id := response.GetObject().GetId()
@@ -597,7 +701,7 @@ func createCatalogItemBareMetalInstanceTypeFixture(ctx context.Context, _ string
 			Metadata: catalogItemFixtureMetadata(auth.SharedTenant, ""),
 			Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 				Hardware: privatev1.BareMetalHardwareSpec_builder{
-					Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 4, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+					Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 4, Architecture: "amd64", ThreadsPerCore: 2}.Build(),
 					Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 16}.Build(),
 					NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
 						privatev1.BareMetalNetworkPortSpec_builder{
@@ -838,4 +942,406 @@ func createCatalogItemMemberFixture(ctx context.Context, tenant string) *grpc.Cl
 	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(conn.Close)
 	return conn
+}
+
+const tenantDefaultNetworkingLabel = "osac.openshift.io/default"
+
+// ensureTenantDefaultNetworkingFixture seeds a READY default Subnet + SecurityGroup (and
+// backing VirtualNetwork) for tenant/project when BMI Create omits network_attachments.
+// Shared catalog items cannot carry tenant-local network defaults, so those Creates rely on
+// this tenant-default path. Idempotent: reuses the newest READY default subnet
+// only when its virtual network has a matching READY default security group.
+func ensureTenantDefaultNetworkingFixture(ctx context.Context, tenant, project string) catalogItemNetworkFixture {
+	GinkgoHelper()
+
+	subnets := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
+	groups := privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
+	networks := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
+	classes := privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
+	filter := fmt.Sprintf(
+		"this.metadata.labels[%q] == 'true' && this.metadata.tenant == %q && this.metadata.project == %q && has(this.spec.ipv4_cidr)",
+		tenantDefaultNetworkingLabel, tenant, project,
+	)
+	listed, err := subnets.List(ctx, privatev1.SubnetsListRequest_builder{Filter: &filter}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	readySubnets := make([]*privatev1.Subnet, 0, len(listed.GetItems()))
+	for _, subnet := range listed.GetItems() {
+		if subnet.GetMetadata().HasDeletionTimestamp() {
+			continue
+		}
+		if subnet.GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
+			continue
+		}
+		readySubnets = append(readySubnets, subnet)
+	}
+	sort.Slice(readySubnets, func(i, j int) bool {
+		return readySubnets[i].GetMetadata().GetCreationTimestamp().AsTime().After(
+			readySubnets[j].GetMetadata().GetCreationTimestamp().AsTime())
+	})
+	if len(readySubnets) > 0 {
+		subnet := readySubnets[0]
+		vnID := ""
+		classID := ""
+		if ref := subnet.GetSpec().GetVirtualNetwork(); ref != nil {
+			vnID = ref.GetId()
+		}
+		if vnID != "" {
+			vnResponse, vnErr := networks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnID}.Build())
+			if vnErr != nil || vnResponse.GetObject().GetMetadata().HasDeletionTimestamp() ||
+				vnResponse.GetObject().GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {
+				vnID = ""
+			}
+			if vnID != "" {
+				classID = vnResponse.GetObject().GetSpec().GetNetworkClass().GetId()
+				classResponse, classErr := classes.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: classID}.Build())
+				if classErr != nil || classResponse.GetObject().GetMetadata().HasDeletionTimestamp() ||
+					classResponse.GetObject().GetFabricManager() == "" {
+					vnID = ""
+				}
+			}
+		}
+		if vnID != "" {
+			sgFilter := fmt.Sprintf(
+				"this.metadata.labels[%q] == 'true' && this.metadata.tenant == %q && this.metadata.project == %q",
+				tenantDefaultNetworkingLabel, tenant, project,
+			)
+			sgListed, sgErr := groups.List(ctx, privatev1.SecurityGroupsListRequest_builder{Filter: &sgFilter}.Build())
+			Expect(sgErr).NotTo(HaveOccurred())
+			for _, sg := range sgListed.GetItems() {
+				if sg.GetMetadata().HasDeletionTimestamp() {
+					continue
+				}
+				if sg.GetStatus().GetState() != privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY {
+					continue
+				}
+				if sg.GetSpec().GetVirtualNetwork().GetId() == vnID {
+					scheduleTenantDefaultNetworkingFixtureCleanup(ctx, tenant)
+					return catalogItemNetworkFixture{
+						subnetID: subnet.GetId(), securityGroupID: sg.GetId(),
+						virtualNetworkID: vnID, networkClassID: classID,
+					}
+				}
+			}
+		}
+	}
+
+	cleanupIncompleteTenantDefaultNetworkingFixture(ctx, tenant, project, networks, classes)
+	classID, classCreated := getOrCreateTenantDefaultNetworkClassFixture(ctx)
+	scheduleTenantDefaultNetworkingFixtureCleanup(ctx, tenant)
+	defaultLabels := map[string]string{tenantDefaultNetworkingLabel: "true"}
+	meta := privatev1.Metadata_builder{
+		Name:    "default",
+		Tenant:  tenant,
+		Project: project,
+		Labels:  defaultLabels,
+	}.Build()
+
+	network, err := networks.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+		Object: privatev1.VirtualNetwork_builder{
+			Metadata: meta,
+			Spec: privatev1.VirtualNetworkSpec_builder{
+				NetworkClass: privatev1.NetworkClassReference_builder{Id: classID}.Build(),
+				Region:       "us-east-1",
+				Ipv4Cidr:     new("10.201.0.0/16"),
+			}.Build(),
+		}.Build(),
+	}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	networkID := network.GetObject().GetId()
+
+	Eventually(func() privatev1.VirtualNetworkState {
+		r, e := networks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: networkID}.Build())
+		Expect(e).NotTo(HaveOccurred())
+		return r.GetObject().GetStatus().GetState()
+	}, time.Minute, time.Second).Should(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
+	currentVN, err := networks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: networkID}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	currentVN.GetObject().SetStatus(privatev1.VirtualNetworkStatus_builder{
+		State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+	}.Build())
+	_, err = networks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+		Object:     currentVN.GetObject(),
+		UpdateMask: catalogItemUpdateMask("status.state"),
+	}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	Eventually(func(g Gomega) {
+		current, getErr := networks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: networkID}.Build())
+		g.Expect(getErr).NotTo(HaveOccurred())
+		g.Expect(current.GetObject().GetStatus().GetState()).To(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY))
+	}, time.Minute, time.Second).Should(Succeed())
+
+	subnetMeta := privatev1.Metadata_builder{
+		Name:    "default-ipv4",
+		Tenant:  tenant,
+		Project: project,
+		Creator: "system",
+		Labels:  defaultLabels,
+		Annotations: map[string]string{
+			"osac.openshift.io/owner-reference": networkID,
+		},
+	}.Build()
+	subnet, err := subnets.Create(ctx, privatev1.SubnetsCreateRequest_builder{
+		Object: privatev1.Subnet_builder{
+			Metadata: subnetMeta,
+			Spec: privatev1.SubnetSpec_builder{
+				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: networkID}.Build(),
+				Ipv4Cidr:       new("10.201.1.0/24"),
+			}.Build(),
+		}.Build(),
+	}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	subnetID := subnet.GetObject().GetId()
+
+	Eventually(func() privatev1.SubnetState {
+		r, e := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
+		Expect(e).NotTo(HaveOccurred())
+		return r.GetObject().GetStatus().GetState()
+	}, time.Minute, time.Second).Should(Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
+	currentSubnet, err := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	currentSubnet.GetObject().SetStatus(privatev1.SubnetStatus_builder{
+		State: privatev1.SubnetState_SUBNET_STATE_READY,
+	}.Build())
+	_, err = subnets.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+		Object:     currentSubnet.GetObject(),
+		UpdateMask: catalogItemUpdateMask("status.state"),
+	}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	Eventually(func(g Gomega) {
+		current, getErr := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
+		g.Expect(getErr).NotTo(HaveOccurred())
+		g.Expect(current.GetObject().GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_READY))
+	}, time.Minute, time.Second).Should(Succeed())
+
+	sgMeta := privatev1.Metadata_builder{
+		Name:    "default",
+		Tenant:  tenant,
+		Project: project,
+		Creator: "system",
+		Labels:  defaultLabels,
+		Annotations: map[string]string{
+			"osac.openshift.io/owner-reference": networkID,
+		},
+	}.Build()
+	group, err := groups.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+		Object: privatev1.SecurityGroup_builder{
+			Metadata: sgMeta,
+			Spec: privatev1.SecurityGroupSpec_builder{
+				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: networkID}.Build(),
+			}.Build(),
+		}.Build(),
+	}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	groupID := group.GetObject().GetId()
+
+	Eventually(func() privatev1.SecurityGroupState {
+		r, e := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
+		Expect(e).NotTo(HaveOccurred())
+		return r.GetObject().GetStatus().GetState()
+	}, time.Minute, time.Second).Should(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
+	currentSG, err := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	currentSG.GetObject().SetStatus(privatev1.SecurityGroupStatus_builder{
+		State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+	}.Build())
+	_, err = groups.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+		Object:     currentSG.GetObject(),
+		UpdateMask: catalogItemUpdateMask("status.state"),
+	}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	Eventually(func(g Gomega) {
+		current, getErr := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
+		g.Expect(getErr).NotTo(HaveOccurred())
+		g.Expect(current.GetObject().GetStatus().GetState()).To(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY))
+		g.Expect(current.GetObject().GetSpec().GetVirtualNetwork().GetId()).To(Equal(networkID))
+	}, time.Minute, time.Second).Should(Succeed())
+	return catalogItemNetworkFixture{
+		subnetID: subnetID, securityGroupID: groupID,
+		virtualNetworkID: networkID, networkClassID: classID, networkClassCreated: classCreated,
+	}
+}
+
+// cleanupIncompleteTenantDefaultNetworkingFixture recovers a default fixture
+// interrupted before its Subnet and SecurityGroup became Ready. These
+// test-owned resources otherwise block the next run with AlreadyExists.
+func cleanupIncompleteTenantDefaultNetworkingFixture(
+	ctx context.Context,
+	tenant, project string,
+	networks privatev1.VirtualNetworksClient,
+	classes privatev1.NetworkClassesClient,
+) {
+	GinkgoHelper()
+	networkFilter := fmt.Sprintf(
+		"this.metadata.name == %q && this.metadata.tenant == %q && this.metadata.project == %q && this.metadata.labels[%q] == 'true'",
+		"default", tenant, project, tenantDefaultNetworkingLabel,
+	)
+	networkResponse, err := networks.List(ctx, privatev1.VirtualNetworksListRequest_builder{Filter: &networkFilter}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	for _, network := range networkResponse.GetItems() {
+		classID := network.GetSpec().GetNetworkClass().GetId()
+		classResponse, classErr := classes.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: classID}.Build())
+		if classErr == nil && !classResponse.GetObject().GetMetadata().HasDeletionTimestamp() {
+			continue
+		}
+		if classErr != nil && status.Code(classErr) != codes.NotFound {
+			Expect(classErr).NotTo(HaveOccurred())
+		}
+		manager, managerErr := newTestDefaultNetworkingManager()
+		Expect(managerErr).NotTo(HaveOccurred())
+		Expect(deleteTenantDefaultNetworkingFixture(ctx, manager, tenant)).To(Succeed())
+	}
+}
+
+func scheduleTenantDefaultNetworkingFixtureCleanup(ctx context.Context, tenant string) {
+	GinkgoHelper()
+	manager, err := newTestDefaultNetworkingManager()
+	Expect(err).NotTo(HaveOccurred())
+	DeferCleanup(func(cleanupCtx context.Context) {
+		Expect(deleteTenantDefaultNetworkingFixture(cleanupCtx, manager, tenant)).To(Succeed())
+	})
+}
+
+func newTestDefaultNetworkingManager() (defaultnetworking.Manager, error) {
+	return defaultnetworking.NewManager().
+		SetLogger(slog.Default()).
+		SetConnection(tool.InternalView().ControllerConn()).
+		Build()
+}
+
+func deleteTenantDefaultNetworkingFixture(ctx context.Context, manager defaultnetworking.Manager, tenant string) error {
+	deadline := time.NewTimer(5 * time.Minute)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		err := manager.Delete(ctx, tenant)
+		if !errors.Is(err, defaultnetworking.ErrResourcesDeleting) {
+			return err
+		}
+		if err := clearTenantDefaultNetworkingFinalizers(ctx, tenant); err != nil {
+			return fmt.Errorf("clear terminating default networking fixture finalizers: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("default networking resources for tenant %q remain after delete", tenant)
+		case <-ticker.C:
+		}
+	}
+}
+
+func clearTenantDefaultNetworkingFinalizers(ctx context.Context, tenant string) error {
+	admin := tool.InternalView().AdminConn()
+	filter := fmt.Sprintf("this.metadata.tenant == %q && this.metadata.labels[%q] == 'true'", tenant, tenantDefaultNetworkingLabel)
+
+	groups := privatev1.NewSecurityGroupsClient(admin)
+	groupResponse, err := groups.List(ctx, privatev1.SecurityGroupsListRequest_builder{Filter: &filter}.Build())
+	if err != nil {
+		return err
+	}
+	for _, object := range groupResponse.GetItems() {
+		if !object.GetMetadata().HasDeletionTimestamp() || len(object.GetMetadata().GetFinalizers()) == 0 {
+			continue
+		}
+		object.GetMetadata().SetFinalizers(nil)
+		if _, err := groups.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+			Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
+		}.Build()); err != nil && status.Code(err) != codes.NotFound {
+			return err
+		}
+	}
+
+	subnets := privatev1.NewSubnetsClient(admin)
+	subnetResponse, err := subnets.List(ctx, privatev1.SubnetsListRequest_builder{Filter: &filter}.Build())
+	if err != nil {
+		return err
+	}
+	for _, object := range subnetResponse.GetItems() {
+		if !object.GetMetadata().HasDeletionTimestamp() || len(object.GetMetadata().GetFinalizers()) == 0 {
+			continue
+		}
+		object.GetMetadata().SetFinalizers(nil)
+		if _, err := subnets.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+			Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
+		}.Build()); err != nil && status.Code(err) != codes.NotFound {
+			return err
+		}
+	}
+
+	networks := privatev1.NewVirtualNetworksClient(admin)
+	networkResponse, err := networks.List(ctx, privatev1.VirtualNetworksListRequest_builder{Filter: &filter}.Build())
+	if err != nil {
+		return err
+	}
+	for _, object := range networkResponse.GetItems() {
+		if !object.GetMetadata().HasDeletionTimestamp() || len(object.GetMetadata().GetFinalizers()) == 0 {
+			continue
+		}
+		object.GetMetadata().SetFinalizers(nil)
+		if _, err := networks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+			Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
+		}.Build()); err != nil && status.Code(err) != codes.NotFound {
+			return err
+		}
+	}
+	return nil
+}
+
+func getTenantDefaultNetworkFixture(ctx context.Context, tenant, project string) catalogItemNetworkFixture {
+	GinkgoHelper()
+
+	subnets := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
+	groups := privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
+	networks := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
+	classes := privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
+	filter := fmt.Sprintf(
+		"this.metadata.labels[%q] == 'true' && this.metadata.tenant == %q && this.metadata.project == %q && has(this.spec.ipv4_cidr)",
+		tenantDefaultNetworkingLabel, tenant, project,
+	)
+	listed, err := subnets.List(ctx, privatev1.SubnetsListRequest_builder{Filter: &filter}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	readySubnets := append([]*privatev1.Subnet(nil), listed.GetItems()...)
+	sort.Slice(readySubnets, func(i, j int) bool {
+		return readySubnets[i].GetMetadata().GetCreationTimestamp().AsTime().After(
+			readySubnets[j].GetMetadata().GetCreationTimestamp().AsTime())
+	})
+
+	for _, subnet := range readySubnets {
+		if subnet.GetMetadata().HasDeletionTimestamp() ||
+			subnet.GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
+			continue
+		}
+		vnID := subnet.GetSpec().GetVirtualNetwork().GetId()
+		vnResponse, err := networks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnID}.Build())
+		if err != nil || vnResponse.GetObject().GetMetadata().HasDeletionTimestamp() ||
+			vnResponse.GetObject().GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {
+			continue
+		}
+		classID := vnResponse.GetObject().GetSpec().GetNetworkClass().GetId()
+		classResponse, err := classes.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: classID}.Build())
+		if err != nil || classResponse.GetObject().GetMetadata().HasDeletionTimestamp() ||
+			classResponse.GetObject().GetFabricManager() == "" {
+			continue
+		}
+		sgFilter := fmt.Sprintf(
+			"this.metadata.labels[%q] == 'true' && this.metadata.tenant == %q && this.metadata.project == %q",
+			tenantDefaultNetworkingLabel, tenant, project,
+		)
+		groupsResponse, err := groups.List(ctx, privatev1.SecurityGroupsListRequest_builder{Filter: &sgFilter}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		for _, group := range groupsResponse.GetItems() {
+			if !group.GetMetadata().HasDeletionTimestamp() &&
+				group.GetStatus().GetState() == privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY &&
+				group.GetSpec().GetVirtualNetwork().GetId() == vnID {
+				return catalogItemNetworkFixture{
+					subnetID: subnet.GetId(), securityGroupID: group.GetId(),
+					virtualNetworkID: vnID, networkClassID: classID,
+				}
+			}
+		}
+	}
+
+	Fail("tenant default networking fixture is missing a READY subnet, virtual network, and security group")
+	return catalogItemNetworkFixture{}
 }

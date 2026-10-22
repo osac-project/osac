@@ -49,7 +49,24 @@ on:
       skip_e2e:
         description: >-
           Skip e2e validation (vmaas/caas/bmaas) and publish anyway if
-          unit/integration/security tests pass.
+          security tests pass, along with unit/integration tests unless
+          those are also skipped via skip_unit/skip_integration.
+        type: boolean
+        default: false
+        required: false
+      skip_integration:
+        description: >-
+          Skip integration tests and publish anyway if security tests
+          pass, along with unit/e2e tests unless those are also skipped
+          via skip_unit/skip_e2e.
+        type: boolean
+        default: false
+        required: false
+      skip_unit:
+        description: >-
+          Skip unit tests and publish anyway if security tests pass,
+          along with integration/e2e tests unless those are also skipped
+          via skip_integration/skip_e2e.
         type: boolean
         default: false
         required: false
@@ -69,6 +86,21 @@ on:
           publish-proto.yaml's "Publish proto (fulfillment-service)" job
           (release mode only, when fulfillment-service is actually bumped
           this run).
+        required: true
+      KONFLUX_SA_TOKEN:
+        description: >-
+          Token for the konflux-bot-0 ServiceAccount, used by
+          "Trigger Konflux staging release" to log in to the Konflux
+          cluster (release mode only). A secret referenced via
+          secrets.X here but never declared in this workflow_call block
+          silently evaluates to empty -- no validation error at call
+          time or runtime -- which is exactly how this went unnoticed
+          until the skip-cascade fix let the job actually run instead of
+          being skipped. Declaring it here with required: true only
+          catches a caller that omits the mapping entirely (that fails
+          workflow validation at call time); a caller that maps it to an
+          expression which itself resolves to nothing (secret doesn't
+          exist, is empty, etc.) still passes silently either way.
         required: true
 
 permissions: {}
@@ -387,6 +419,28 @@ jobs:
           ["osac-ui"]="osac-ui/charts/ui"
         )
 
+        # Every Containerfile that accepts an ARG VERSION, stamped to the
+        # real final version below so the resulting image's `version`
+        # OCI label (see each Containerfile's own comment on this) reports
+        # the real release version instead of its committed dev default --
+        # and so Konflux's release-side {{ oci_version }} tag templating
+        # (see cloud-extensions-stage.yaml's RPA mapping) resolves to it.
+        # osac-aap has no entry here: it builds via ansible-builder, which
+        # dynamically generates its own Containerfile inside the Konflux
+        # pipeline itself (.tekton/osac-aap/*.yaml's generate-ee-context
+        # task) -- there is no committed Containerfile in this repo to sed
+        # a version into. Its release.yaml variant stamps its own
+        # org.opencontainers.image.version label directly, by resolving
+        # its real osac-aap/vX.Y.Z tag by name inside that same task.
+        declare -A COMPONENT_CONTAINERFILES=(
+          ["osac-operator"]="osac-operator/Containerfile"
+          ["fulfillment-service"]="fulfillment-service/Containerfile"
+          ["bare-metal-fulfillment-operator"]="bare-metal-fulfillment-operator/Containerfile"
+          ["osac-metering"]="osac-metering/metering-service/Containerfile osac-metering/adapters/Containerfile.m360-adapter osac-metering/adapters/Containerfile.echo-adapter"
+          ["osac-csi-driver"]="osac-csi-driver/Containerfile"
+          ["osac-ui"]="osac-ui/Containerfile"
+        )
+
         for COMPONENT in $(printf '%s\n' "${!SUB_CHARTS[@]}" | sort); do
           SUB_VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k] // empty' <<<"${COMPONENT_VERSIONS}")
           if [[ -z "${SUB_VERSION}" ]]; then
@@ -403,6 +457,13 @@ jobs:
               SUB_VERSION="${SUB_VERSION}" yq -i '.version = strenv(SUB_VERSION)' "${CHART_DIR}/Chart.yaml"
               SUB_VERSION="${SUB_VERSION}" yq -i '.appVersion = strenv(SUB_VERSION)' "${CHART_DIR}/Chart.yaml"
             done
+            if [[ -n "${COMPONENT_CONTAINERFILES[${COMPONENT}]+set}" ]]; then
+              echo "Stamping ${COMPONENT} Containerfile(s) ARG VERSION to ${SUB_VERSION}..."
+              # Intentional word splitting: some entries list multiple Containerfiles.
+              for CONTAINERFILE in ${COMPONENT_CONTAINERFILES[$COMPONENT]}; do
+                sed -i "s/^ARG VERSION=.*/ARG VERSION=${SUB_VERSION}/" "${CONTAINERFILE}"
+              done
+            fi
             stamp_component_image_refs "${COMPONENT}" "${UMBRELLA_VALUES}" "${PROVISIONAL_TAG}"
           else
             echo "Pinning ${COMPONENT} to already-published ${SUB_VERSION} — no local chart stamping, no build"
@@ -450,7 +511,6 @@ jobs:
         AAP_VER=$(jq -r '.["osac-aap"] // empty' <<<"${COMPONENT_VERSIONS}")
         BMF_VER=$(jq -r '.["bare-metal-fulfillment-operator"] // empty' <<<"${COMPONENT_VERSIONS}")
         METERING_VER=$(jq -r '.["osac-metering"] // empty' <<<"${COMPONENT_VERSIONS}")
-        CSI_VER=$(jq -r '.["osac-csi-driver"] // empty' <<<"${COMPONENT_VERSIONS}")
         UI_VER=$(jq -r '.["osac-ui"] // empty' <<<"${COMPONENT_VERSIONS}")
 
         for overlay in "${NIGHTLY_CI_OVERLAY_VALUES[@]}"; do
@@ -492,14 +552,6 @@ jobs:
             stamp_ci_overlay_if_present "${overlay}" '.metering.image.tag' "${METERING_TAG}"
             stamp_ci_overlay_if_present "${overlay}" '.metering.echoAdapter.image.tag' "${METERING_TAG}"
             stamp_ci_overlay_if_present "${overlay}" '.metering.m360Adapter.image.tag' "${METERING_TAG}"
-          fi
-          if [[ -n "${CSI_VER}" ]]; then
-            NB=$(needs_build_for osac-csi-driver)
-            if [[ "${NB}" == "true" ]]; then
-              stamp_ci_overlay_if_present "${overlay}" '.csiDriver.image.tag' "${PROVISIONAL_TAG}"
-            else
-              stamp_ci_overlay_if_present "${overlay}" '.csiDriver.image.tag' "${CSI_VER}"
-            fi
           fi
           if [[ -n "${UI_VER}" ]]; then
             NB=$(needs_build_for osac-ui)
@@ -728,29 +780,34 @@ jobs:
   # them. Each `uses:` a local reusable workflow that already exists and
   # runs standalone on pull_request/schedule -- reused here rather than
   # duplicated, same reasoning as `build` reusing each component's own
-  # Makefile targets instead of inlining build steps. Unconditional in
-  # both modes -- a release doesn't skip any safety check nightly enforces.
+  # Makefile targets instead of inlining build steps. Unit and integration
+  # are independently skippable via skip_unit/skip_integration below
+  # (manual runs only); security (CodeQL) is unconditional in both modes --
+  # a release doesn't skip that safety check nightly enforces.
   # -------------------------------------------------------------------
   unit-tests:
     name: Unit tests
-    # pull-requests: read matches what unit-tests.yml's own `changes` job
-    # declares (for dorny/paths-filter) -- unused on a workflow_call trigger
-    # (that step's own `if:` only matches pull_request/merge_group), but
-    # GitHub statically validates a called local reusable workflow's job
-    # permissions against the caller's grant regardless of runtime `if:`
-    # guards, so it still must be granted here or the whole run fails to
-    # start.
     permissions:
       contents: read
-      pull-requests: read
+    # Skippable via the skip_unit input, same shape as skip_integration/
+    # skip_e2e below but independent of them: both callers pass this
+    # through from their own workflow_dispatch input; the nightly
+    # scheduled trigger never sets it, so the cron can never skip unit
+    # tests.
+    if: inputs.skip_unit != true
     uses: ./.github/workflows/unit-tests.yml
 
   integration-tests:
     name: Integration tests
-    # See unit-tests' comment above -- same reason.
     permissions:
       contents: read
-      pull-requests: read
+    # Skippable via the skip_integration input, same shape as skip_e2e
+    # above but independent of it: both callers pass this through from
+    # their own workflow_dispatch input; the nightly scheduled trigger
+    # never sets it, so the cron can never skip integration tests.
+    # promote-and-publish below tolerates this being skipped as well as
+    # succeeded.
+    if: inputs.skip_integration != true
     uses: ./.github/workflows/integration-tests.yml
 
   security-tests:
@@ -775,8 +832,10 @@ jobs:
   # Skippable via the skip_e2e input -- both callers pass this through
   # from their own workflow_dispatch input; the nightly scheduled trigger
   # never sets it, so the cron can never skip e2e. promote-and-publish/
-  # publish-umbrella below tolerate these being skipped as well as succeeded; unit/integration/
-  # security tests are NOT skippable by this input.
+  # publish-umbrella below tolerate these being skipped as well as succeeded.
+  # Unit and integration tests have their own, independent skip_unit/
+  # skip_integration inputs (see those jobs above); security tests are
+  # NOT skippable by any input.
   # -------------------------------------------------------------------
   e2e-vmaas-test:
     name: E2E validation (vmaas)
@@ -842,7 +901,7 @@ jobs:
     uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
     with:
       test-suite: bmaas
-      test-filter: 'not TestBmaasNetworking'
+      test-filter: 'not TestBmaasNetworking and not TestCrossTenantBmaasNetworking'
       installer-repo: ${{ github.repository }}
       installer-ref: ${{ needs.prepare.outputs.temp-branch }}
       test-infra-repository: osac-project/osac-test-infra
@@ -873,8 +932,8 @@ jobs:
   #
   # `if:` (not just `needs:`) because a skipped job is not a `success()`
   # by GitHub's default job-gating -- explicitly tolerating skipped
-  # alongside success only for the three e2e jobs (which can only be
-  # skipped via the skip_e2e input) keeps unit/integration/security
+  # alongside success for unit tests (skip_unit), integration tests
+  # (skip_integration), and the three e2e jobs (skip_e2e) keeps security
   # tests hard-required in every case, on both modes.
   # -------------------------------------------------------------------
   promote-and-publish:
@@ -884,8 +943,8 @@ jobs:
       always() &&
       needs.prepare.result == 'success' &&
       needs.build.result == 'success' &&
-      needs.unit-tests.result == 'success' &&
-      needs.integration-tests.result == 'success' &&
+      contains(fromJSON('["success", "skipped"]'), needs.unit-tests.result) &&
+      contains(fromJSON('["success", "skipped"]'), needs.integration-tests.result) &&
       needs.security-tests.result == 'success' &&
       contains(fromJSON('["success", "skipped"]'), needs.e2e-vmaas-test.result) &&
       contains(fromJSON('["success", "skipped"]'), needs.e2e-caas-test.result) &&
@@ -1000,6 +1059,8 @@ jobs:
           bare-metal-fulfillment-operator) IMAGES=(ghcr.io/osac-project/bare-metal-fulfillment-operator) ;;
           osac-metering) IMAGES=(ghcr.io/osac-project/metering-service ghcr.io/osac-project/metering-m360-adapter ghcr.io/osac-project/metering-echo-adapter) ;;
           osac-csi-driver) IMAGES=(ghcr.io/osac-project/osac-csi-driver) ;;
+          # osac-ui uses the same bare SemVer target as every other component.
+          # Historical v* tags came from the archived standalone publish job.
           osac-ui) IMAGES=(ghcr.io/osac-project/osac-ui) ;;
         esac
 
@@ -1057,7 +1118,7 @@ jobs:
     # chart-sources.txt after this whole matrix finishes.
     - name: Upload chart source fragment
       if: steps.check.outputs.needs-build == 'true'
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
       with:
         name: chart-source-${{ matrix.component }}
         path: chart-source.txt
@@ -1320,7 +1381,7 @@ jobs:
         cat images.txt
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
       with:
         name: nightly-${{ needs.prepare.outputs.version }}
         path: |
@@ -1410,6 +1471,8 @@ jobs:
     - name: Create umbrella tag
       env:
         SKIP_E2E: ${{ inputs.skip_e2e }}
+        SKIP_INTEGRATION: ${{ inputs.skip_integration }}
+        SKIP_UNIT: ${{ inputs.skip_unit }}
       run: |
         set -euo pipefail
         source osac-installer/scripts/nightly-charts.sh
@@ -1419,10 +1482,13 @@ jobs:
         COMMIT_SHA=$(git rev-parse HEAD)
         TAG_MESSAGE="Nightly build ${VERSION}"
         [[ "${MODE}" == "release" ]] && TAG_MESSAGE="Release ${VERSION}"
-        # Only ever true on a manual workflow_dispatch run (see the e2e
-        # jobs' own `if:` guards) -- keep this visible in the tag's own
-        # history, not just the transient Slack message below.
+        # Only ever true on a manual workflow_dispatch run (see the e2e/
+        # integration-tests/unit-tests jobs' own `if:` guards) -- keep
+        # this visible in the tag's own history, not just the transient
+        # Slack message below.
         [[ "${SKIP_E2E}" == "true" ]] && TAG_MESSAGE="${TAG_MESSAGE} (e2e skipped: manual workflow_dispatch run)"
+        [[ "${SKIP_INTEGRATION}" == "true" ]] && TAG_MESSAGE="${TAG_MESSAGE} (integration tests skipped: manual workflow_dispatch run)"
+        [[ "${SKIP_UNIT}" == "true" ]] && TAG_MESSAGE="${TAG_MESSAGE} (unit tests skipped: manual workflow_dispatch run)"
 
         if git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null; then
           EXISTING_SHA=$(git rev-parse "${TAG}^{commit}")
@@ -1441,11 +1507,85 @@ jobs:
         git push origin "${TAG}"
         echo "Tagged: ${TAG}"
 
+    # Dedicated slash-free tags for each Helm chart Konflux Component,
+    # pushed BEFORE the osac-release marker tag below so a chart's release
+    # build (triggered by that marker tag) is guaranteed to see this tag
+    # already pushed by the time it clones -- without this ordering, the
+    # marker tag's webhook could fire and the chart build could start
+    # before this step has run at all.
+    #
+    # Slash-free is not a style choice: build-helm-chart-oci-ta's version
+    # computation runs `sed -e "s/^${TAG_PREFIX}//"`, and since sed uses
+    # "/" as its own delimiter, a TAG_PREFIX containing "/" (our usual
+    # "<component>/v" per-component tag format) breaks that command
+    # outright -- confirmed live, it exits with "unknown option to `s'"
+    # rather than silently producing a wrong version. Hence a dedicated
+    # "<chart-component>-v<version>" tag instead of reusing the existing
+    # per-component tag below.
+    #
+    # Always tags the umbrella chart (osac-chart; it's published every
+    # release); per-component chart tags only for whichever components
+    # components-to-tag actually includes this run.
+    - name: Create chart release tags
+      if: inputs.mode == 'release'
+      env:
+        COMPONENT_VERSIONS: ${{ needs.prepare.outputs.component-versions }}
+        COMPONENTS_TO_TAG: ${{ needs.prepare.outputs.components-to-tag }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+        declare -A COMPONENT_CHARTS=(
+          ["osac-operator"]="osac-operator-chart osac-operator-crds-chart"
+          ["fulfillment-service"]="fulfillment-service-chart"
+          ["osac-aap"]="osac-aap-chart"
+          ["bare-metal-fulfillment-operator"]="bare-metal-fulfillment-operator-chart bare-metal-fulfillment-operator-crds-chart"
+          ["osac-metering"]="osac-metering-chart"
+          ["osac-csi-driver"]="osac-csi-driver-chart osac-csi-backends-chart"
+          ["osac-ui"]="osac-ui-chart"
+        )
+
+        push_chart_tag() {
+          local CHART_COMPONENT="$1" CHART_VERSION="$2"
+          local TAG="${CHART_COMPONENT}-v${CHART_VERSION}"
+          local COMMIT_SHA
+          COMMIT_SHA=$(git rev-parse HEAD)
+
+          if git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null; then
+            local EXISTING_SHA
+            EXISTING_SHA=$(git rev-parse "${TAG}^{commit}")
+            if [[ "${EXISTING_SHA}" == "${COMMIT_SHA}" ]]; then
+              echo "Tag ${TAG} already exists at ${COMMIT_SHA}; skipping create/push"
+              return 0
+            fi
+            local safe_tag
+            safe_tag=$(_gha_sanitize_for_message "${TAG}")
+            echo "::error::Tag ${safe_tag} already exists at a different commit; refusing to move tag" >&2
+            exit 1
+          fi
+
+          git tag "${TAG}" -m "Release ${CHART_VERSION}"
+          git push origin "${TAG}"
+          echo "Tagged: ${TAG}"
+        }
+
+        push_chart_tag osac-chart "${VERSION}"
+
+        for COMPONENT in $(jq -r '.[]' <<<"${COMPONENTS_TO_TAG}"); do
+          COMPONENT_VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k]' <<<"${COMPONENT_VERSIONS}")
+          # Intentional word splitting: some entries list multiple charts.
+          for CHART_COMPONENT in ${COMPONENT_CHARTS[$COMPONENT]:-}; do
+            push_chart_tag "${CHART_COMPONENT}" "${COMPONENT_VERSION}"
+          done
+        done
+
     # Dedicated release-only marker tag. The umbrella tag above (osac/v*)
     # fires on both nightly and release runs -- only its message differs --
     # so it can't be used as a trigger for anything that should fire on
     # real releases only. This tag exists purely so Konflux's
-    # Pipelines-as-Code can distinguish the two (see .tekton/*-release.yaml,
+    # Pipelines-as-Code can distinguish the two (see .tekton/*/release.yaml,
     # which trigger on refs/tags/osac-release/*). Not consumed by anything
     # in this repo itself.
     - name: Create release-only marker tag
@@ -1679,6 +1819,8 @@ jobs:
         REPO_OWNER: ${{ github.repository_owner }}
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SKIP_E2E: ${{ inputs.skip_e2e }}
+        SKIP_INTEGRATION: ${{ inputs.skip_integration }}
+        SKIP_UNIT: ${{ inputs.skip_unit }}
       run: |
         set -euo pipefail
         source osac-installer/scripts/nightly-charts.sh
@@ -1691,13 +1833,20 @@ jobs:
         RUN_KIND="Nightly Build"
         [[ "${MODE}" == "release" ]] && RUN_KIND="Release"
 
-        # Only ever true on a manual workflow_dispatch run (see the e2e
-        # jobs' own `if:` guards) -- never silent: a release that skipped
-        # e2e must be obvious in the same place every other success is
-        # announced, not just in the tag message/run log.
+        # Only ever true on a manual workflow_dispatch run (see the e2e/
+        # integration-tests/unit-tests jobs' own `if:` guards) -- never
+        # silent: a release that skipped any of these must be obvious in
+        # the same place every other success is announced, not just in
+        # the tag message/run log.
+        declare -a SKIPPED=()
+        [[ "${SKIP_E2E}" == "true" ]] && SKIPPED+=("e2e")
+        [[ "${SKIP_INTEGRATION}" == "true" ]] && SKIPPED+=("integration")
+        [[ "${SKIP_UNIT}" == "true" ]] && SKIPPED+=("unit")
+
         HEADER_TEXT=":white_check_mark: ${RUN_KIND} ${VERSION} - Published"
-        if [[ "${SKIP_E2E}" == "true" ]]; then
-          HEADER_TEXT=":warning: ${RUN_KIND} ${VERSION} - Published (e2e SKIPPED)"
+        if [[ "${#SKIPPED[@]}" -gt 0 ]]; then
+          SKIPPED_LIST=$(IFS=', '; echo "${SKIPPED[*]}")
+          HEADER_TEXT=":warning: ${RUN_KIND} ${VERSION} - Published (${SKIPPED_LIST} SKIPPED)"
         fi
 
         jq -n \
@@ -1828,27 +1977,60 @@ jobs:
   # only need tag), racing publish-fulfillment-service-binaries/-proto's own
   # checkout of this same temp branch against cleanup deleting it.
   # -------------------------------------------------------------------
-  trigger-konflux-staging-release:
-    name: Trigger Konflux staging release
+  # -------------------------------------------------------------------
+  # Wait for Konflux build — one job per component (matrix, same shape as
+  # `build` above), each polling for that component's own release-
+  # triggered Konflux build (see .tekton/*/release.yaml) to produce a
+  # passing Snapshot for this exact commit. Split out of what used to be
+  # trigger-konflux-staging-release's own first phase purely so each
+  # component's wait gets its own status/logs in the Actions UI, the same
+  # per-component visibility `build` already has -- the actual Konflux
+  # Release below is still one atomic, whole-Application release, not
+  # matrixed (see that job's own comment for why that part stays as is).
+  # -------------------------------------------------------------------
+  wait-for-konflux-build:
+    name: Wait for Konflux build (${{ matrix.component }})
     # Release mode only -- the osac-release/v<version> tag (which Konflux's
-    # Pipelines-as-Code triggers off, see .tekton/*-release.yaml) is itself
+    # Pipelines-as-Code triggers off, see .tekton/*/release.yaml) is itself
     # only pushed in release mode (see "Create release-only marker tag"
     # above). Needs tag specifically (not e.g. promote-and-publish) because
     # that's the job that actually pushes the tag Konflux reacts to --
-    # nothing to wait for here until that's landed.
+    # nothing to wait for here until that's landed. always() is required
+    # even though this job only wants to act on real success -- without it,
+    # GitHub skip-cascades this job whenever a job further back in the
+    # transitive dependency graph (e.g. the e2e-*-test jobs under
+    # skip_e2e=true) is skipped, regardless of this custom if:. Confirmed
+    # live (on the single job this was split from): every skip_e2e=true
+    # release dispatch (rerun or fresh) skipped it even though prepare and
+    # tag both succeeded. Same bug class already documented and fixed on
+    # cleanup's own if: below. !cancelled() is required alongside it --
+    # always() alone would also let this job keep polling (and the
+    # downstream Release job keep going) if someone cancels the workflow
+    # run *after* tag already succeeded, since needs.tag.result would
+    # still read 'success'. A skipped dependency is not the same as an
+    # operator-initiated cancellation.
     needs: [prepare, tag]
-    if: inputs.mode == 'release' && needs.tag.result == 'success'
+    if: always() && !cancelled() && inputs.mode == 'release' && needs.tag.result == 'success'
     runs-on: osac-ci
-    # Must exceed the sum of the script's own three poll phases (build
-    # poll + override-snapshot-test poll + Release-completion poll, each
-    # up to 80min = 240min), not just one of them -- otherwise GitHub
-    # cancels the job mid-phase with no ::error:: message, silently
-    # producing neither a release nor a clear failure reason.
-    timeout-minutes: 260
+    # Must exceed the poll's own timeout (80min) -- otherwise GitHub
+    # cancels the job mid-poll with no ::error:: message, silently
+    # producing neither a resolved build nor a clear failure reason.
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - fulfillment-service
+          - osac-operator
+          - osac-csi-driver
+          - bare-metal-fulfillment-operator
+          - osac-ui
+          - metering-service
+          - metering-m360-adapter
+          - metering-echo-adapter
+          - osac-aap
     permissions:
       contents: read
-    env:
-      VERSION: ${{ needs.prepare.outputs.version }}
 
     steps:
     - name: Checkout repository
@@ -1867,20 +2049,19 @@ jobs:
         openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
         namespace: osac-tenant
 
-    # Waits for all 8 components' release-triggered Konflux builds (see
-    # .tekton/*-release.yaml) to produce a passing Snapshot for this exact
-    # commit, assembles those into one override Snapshot (Konflux's
-    # documented mechanism for combining independently-built components --
-    # PR-scoped group-snapshot auto-combining doesn't apply here, this is a
-    # tag push, not a PR), waits for that override Snapshot's own
-    # integration test to pass, then creates a Release against the
-    # cloud-extensions-stage ReleasePlan. Production is deliberately never
-    # touched by this job -- no ReleasePlan exists for
-    # cloud-extensions-prod yet, by design.
-    - name: Assemble override Snapshot and create staging Release
+    # Polls for this one component's push-triggered build Snapshot at
+    # this exact commit, same single-component shape as every real build
+    # Snapshot observed on this cluster (verified empirically: 506/506,
+    # zero exceptions -- Konflux's app-wide component-build Snapshot
+    # shape is a documented *possibility*, not what this repo's pipelines
+    # actually produce; if that ever changes, this filter would need
+    # revisiting). Writes the resolved component entry (containerImage +
+    # source) to a file for trigger-konflux-staging-release to download
+    # and assemble into the one override Snapshot it actually releases.
+    - name: Wait for component's Konflux build
       env:
         COMMIT_SHA: ${{ steps.commit.outputs.sha }}
-        RUN_ATTEMPT: ${{ github.run_attempt }}
+        COMPONENT: ${{ matrix.component }}
       run: |
         set -euo pipefail
         python3 - <<'PYEOF'
@@ -1891,19 +2072,384 @@ jobs:
         import time
 
         COMMIT_SHA = os.environ["COMMIT_SHA"]
+        COMPONENT = os.environ["COMPONENT"]
+        NAMESPACE = "osac-tenant"
+        POLL_INTERVAL_SECONDS = 30
+        TIMEOUT_SECONDS = 80 * 60
+
+        def condition_true(conditions, cond_type):
+            return any(
+                c.get("type") == cond_type and c.get("status") == "True"
+                for c in conditions
+            )
+
+        def is_permanent_auth_error(stderr):
+            # A stale/invalid KONFLUX_SA_TOKEN or an RBAC permission gap
+            # ("error: You must be logged in to the server (Unauthorized)",
+            # "... is forbidden: User ... cannot ...") never resolves itself
+            # by retrying -- confirmed live, this exact message, on an
+            # expired local oc session during this same investigation.
+            # Retrying it would just burn the full TIMEOUT_SECONDS before
+            # reporting a misleading "Timed out waiting for Konflux build"
+            # instead of the real cause.
+            lowered = stderr.lower()
+            return "unauthorized" in lowered or "forbidden" in lowered
+
+        def find_component():
+            try:
+                out = subprocess.run(
+                    ["oc", "get", "snapshots", "-n", NAMESPACE, "-o", "json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr or ""
+                if is_permanent_auth_error(stderr):
+                    print(f"::error::oc get snapshots failed with a permanent auth/RBAC error: {stderr.strip()}")
+                    raise
+                # Transient oc/API-server hiccups happen occasionally under
+                # the concurrent load of 8 matrix rows polling simultaneously
+                # -- confirmed live (two separate real release dispatches):
+                # a single failed `oc get snapshots` call used to crash this
+                # whole matrix row even though the underlying Konflux build
+                # had already succeeded (the GitHub check-suite showed it
+                # green while this job reported failure). Treat it the same
+                # as "not found yet" and retry on the next poll instead of
+                # propagating the exception and exiting.
+                print(f"::warning::oc get snapshots failed, will retry: {stderr.strip()}", flush=True)
+                return None
+            for item in json.loads(out.stdout)["items"]:
+                ann = item["metadata"].get("annotations", {})
+                if ann.get("build.appstudio.redhat.com/commit_sha") != COMMIT_SHA:
+                    continue
+                comps = item["spec"].get("components", [])
+                if len(comps) != 1 or comps[0]["name"] != COMPONENT:
+                    continue
+                if condition_true(item.get("status", {}).get("conditions", []), "AppStudioTestSucceeded"):
+                    return comps[0]  # keep full entry, incl. source
+            return None
+
+        # Set once if KONFLUX_SA_TOKEN turns out to lack RBAC for pipelineruns
+        # (confirmed live: it has snapshots/releases but not tekton.dev
+        # pipelineruns) -- this status line is cosmetic, so a permission gap
+        # here must degrade to the plain "waiting" message instead of failing
+        # the whole job the way find_component's own oc call correctly does;
+        # losing the build it's polling for over a nicer log line would be
+        # absurd. Checked once rather than re-raising every poll to avoid
+        # spamming the same RBAC error for the rest of TIMEOUT_SECONDS.
+        pipelinerun_rbac_denied = [False]
+
+        def describe_pending_state():
+            # Real resource status instead of a generic "waiting" message --
+            # the build PipelineRun (Succeeded condition's reason/message,
+            # e.g. "Running"/"Tasks Completed: 4 (Failed: 0, Cancelled 0),
+            # Incomplete: 3, Skipped: 1") is far more actionable mid-poll
+            # than silence, and is cheap: one extra `oc get` per interval,
+            # same label selector Konflux itself uses to key a component's
+            # build to this exact commit.
+            if pipelinerun_rbac_denied[0]:
+                print(f"Waiting on {COMPONENT}'s Konflux build...", flush=True)
+                return
+            try:
+                out = subprocess.run(
+                    ["oc", "get", "pipelinerun", "-n", NAMESPACE,
+                     "-l", f"appstudio.openshift.io/component={COMPONENT},pipelinesascode.tekton.dev/sha={COMMIT_SHA}",
+                     "-o", "json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr or ""
+                if is_permanent_auth_error(stderr):
+                    print(f"::warning::oc get pipelinerun denied ({stderr.strip()}) -- falling back to plain waiting messages for the rest of this poll")
+                    pipelinerun_rbac_denied[0] = True
+                    print(f"Waiting on {COMPONENT}'s Konflux build...", flush=True)
+                    return
+                print(f"[{COMPONENT}] Waiting on Konflux build (oc get pipelinerun failed, will retry: {stderr.strip()})", flush=True)
+                return
+            items = json.loads(out.stdout)["items"]
+            if not items:
+                print(f"[{COMPONENT}] Waiting on Konflux build -- no PipelineRun found yet for this commit", flush=True)
+                return
+            items.sort(key=lambda i: i["metadata"].get("creationTimestamp", ""))
+            latest = items[-1]
+            succeeded = next(
+                (c for c in latest.get("status", {}).get("conditions", []) if c.get("type") == "Succeeded"),
+                {},
+            )
+            reason = succeeded.get("reason", "Unknown")
+            message = succeeded.get("message", "")
+            print(f"[{COMPONENT}] PipelineRun {latest['metadata']['name']}: {reason} -- {message}", flush=True)
+
+        deadline = time.time() + TIMEOUT_SECONDS
+        found = None
+        while time.time() < deadline:
+            found = find_component()
+            if found:
+                break
+            describe_pending_state()
+            time.sleep(POLL_INTERVAL_SECONDS)
+        else:
+            print(f"::error::Timed out waiting for {COMPONENT}'s Konflux release build")
+            sys.exit(1)
+
+        print(f"{COMPONENT}: {found['containerImage']}")
+        with open("component.json", "w") as f:
+            json.dump(found, f)
+        PYEOF
+
+    - name: Upload component build fragment
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+      with:
+        name: konflux-build-${{ matrix.component }}
+        path: component.json
+        retention-days: 1
+
+  # -------------------------------------------------------------------
+  # Chart-side mirror of wait-for-konflux-build, for OSAC's 11 Helm chart
+  # Konflux components (see osac-charts-stage ReleasePlan/ECP). Kept as
+  # its own separate job/matrix rather than folded into the 8-component
+  # one above: these charts are new and unproven (no chart component has
+  # had a single real release yet), and wait-for-konflux-build's own
+  # result must stay 'success' or 'failure' as a whole for
+  # trigger-konflux-staging-release's needs: to gate on -- mixing in 11
+  # unproven rows would let one flaky new chart build fail that check and
+  # block the already-working image release entirely. continue-on-error
+  # keeps a chart build hiccup from failing this whole workflow run while
+  # that's still true; remove it once chart releases are as proven as
+  # image releases are today.
+  wait-for-konflux-chart-build:
+    name: Wait for Konflux chart build (${{ matrix.component }})
+    continue-on-error: true
+    needs: [prepare, tag]
+    if: always() && !cancelled() && inputs.mode == 'release' && needs.tag.result == 'success'
+    runs-on: osac-ci
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - osac-chart
+          - osac-operator-chart
+          - osac-operator-crds-chart
+          - fulfillment-service-chart
+          - osac-aap-chart
+          - bare-metal-fulfillment-operator-chart
+          - bare-metal-fulfillment-operator-crds-chart
+          - osac-metering-chart
+          - osac-csi-driver-chart
+          - osac-csi-backends-chart
+          - osac-ui-chart
+    permissions:
+      contents: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        ref: ${{ needs.prepare.outputs.temp-branch }}
+
+    - name: Resolve release commit SHA
+      id: commit
+      run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+    - name: Log in to Konflux cluster
+      uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
+      with:
+        openshift_server_url: https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443
+        openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
+        namespace: osac-tenant
+
+    # Identical logic to wait-for-konflux-build's own step -- see that
+    # job's comments for the full rationale (transient-oc-hiccup
+    # tolerance, pipelinerun-RBAC degrade-gracefully, etc.). Kept as a
+    # literal copy rather than a shared composite action so this job can
+    # be deleted cleanly in one place once charts are folded into the
+    # main matrix (see this job's own top comment).
+    - name: Wait for chart component's Konflux build
+      env:
+        COMMIT_SHA: ${{ steps.commit.outputs.sha }}
+        COMPONENT: ${{ matrix.component }}
+      run: |
+        set -euo pipefail
+        python3 - <<'PYEOF'
+        import json
+        import os
+        import subprocess
+        import sys
+        import time
+
+        COMMIT_SHA = os.environ["COMMIT_SHA"]
+        COMPONENT = os.environ["COMPONENT"]
+        NAMESPACE = "osac-tenant"
+        POLL_INTERVAL_SECONDS = 30
+        TIMEOUT_SECONDS = 80 * 60
+
+        def condition_true(conditions, cond_type):
+            return any(
+                c.get("type") == cond_type and c.get("status") == "True"
+                for c in conditions
+            )
+
+        def is_permanent_auth_error(stderr):
+            lowered = stderr.lower()
+            return "unauthorized" in lowered or "forbidden" in lowered
+
+        def find_component():
+            try:
+                out = subprocess.run(
+                    ["oc", "get", "snapshots", "-n", NAMESPACE, "-o", "json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr or ""
+                if is_permanent_auth_error(stderr):
+                    print(f"::error::oc get snapshots failed with a permanent auth/RBAC error: {stderr.strip()}")
+                    raise
+                print(f"::warning::oc get snapshots failed, will retry: {stderr.strip()}", flush=True)
+                return None
+            for item in json.loads(out.stdout)["items"]:
+                ann = item["metadata"].get("annotations", {})
+                if ann.get("build.appstudio.redhat.com/commit_sha") != COMMIT_SHA:
+                    continue
+                comps = item["spec"].get("components", [])
+                if len(comps) != 1 or comps[0]["name"] != COMPONENT:
+                    continue
+                if condition_true(item.get("status", {}).get("conditions", []), "AppStudioTestSucceeded"):
+                    return comps[0]  # keep full entry, incl. source
+            return None
+
+        pipelinerun_rbac_denied = [False]
+
+        def describe_pending_state():
+            if pipelinerun_rbac_denied[0]:
+                print(f"Waiting on {COMPONENT}'s Konflux build...", flush=True)
+                return
+            try:
+                out = subprocess.run(
+                    ["oc", "get", "pipelinerun", "-n", NAMESPACE,
+                     "-l", f"appstudio.openshift.io/component={COMPONENT},pipelinesascode.tekton.dev/sha={COMMIT_SHA}",
+                     "-o", "json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr or ""
+                if is_permanent_auth_error(stderr):
+                    print(f"::warning::oc get pipelinerun denied ({stderr.strip()}) -- falling back to plain waiting messages for the rest of this poll")
+                    pipelinerun_rbac_denied[0] = True
+                    print(f"Waiting on {COMPONENT}'s Konflux build...", flush=True)
+                    return
+                print(f"[{COMPONENT}] Waiting on Konflux build (oc get pipelinerun failed, will retry: {stderr.strip()})", flush=True)
+                return
+            items = json.loads(out.stdout)["items"]
+            if not items:
+                print(f"[{COMPONENT}] Waiting on Konflux build -- no PipelineRun found yet for this commit", flush=True)
+                return
+            items.sort(key=lambda i: i["metadata"].get("creationTimestamp", ""))
+            latest = items[-1]
+            succeeded = next(
+                (c for c in latest.get("status", {}).get("conditions", []) if c.get("type") == "Succeeded"),
+                {},
+            )
+            reason = succeeded.get("reason", "Unknown")
+            message = succeeded.get("message", "")
+            print(f"[{COMPONENT}] PipelineRun {latest['metadata']['name']}: {reason} -- {message}", flush=True)
+
+        deadline = time.time() + TIMEOUT_SECONDS
+        found = None
+        while time.time() < deadline:
+            found = find_component()
+            if found:
+                break
+            describe_pending_state()
+            time.sleep(POLL_INTERVAL_SECONDS)
+        else:
+            print(f"::error::Timed out waiting for {COMPONENT}'s Konflux release build")
+            sys.exit(1)
+
+        print(f"{COMPONENT}: {found['containerImage']}")
+        with open("component.json", "w") as f:
+            json.dump(found, f)
+        PYEOF
+
+    - name: Upload chart component build fragment
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+      with:
+        name: konflux-chart-build-${{ matrix.component }}
+        path: component.json
+        retention-days: 1
+
+  trigger-konflux-staging-release:
+    name: Trigger Konflux staging release
+    # Same release-only, tag-gated, skip-cascade-safe reasoning as
+    # wait-for-konflux-build's own needs/if comment above -- also needs
+    # that job directly since this one consumes its 9 uploaded fragments.
+    needs: [prepare, tag, wait-for-konflux-build]
+    if: |
+      always() && !cancelled() && inputs.mode == 'release' &&
+      needs.tag.result == 'success' &&
+      needs.wait-for-konflux-build.result == 'success'
+    runs-on: osac-ci
+    # Must exceed the sum of the script's own two remaining poll phases
+    # (override-snapshot-test + Release-completion, each up to 80min =
+    # 160min) -- the build-wait phase is now wait-for-konflux-build's own
+    # matrix, with its own 85min timeout -- otherwise GitHub cancels the
+    # job mid-phase with no ::error:: message, silently producing neither
+    # a release nor a clear failure reason.
+    timeout-minutes: 170
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+
+    steps:
+    # One fragment per component, each written by wait-for-konflux-build's
+    # own matrix row -- a job that succeeded (this job's own needs: above
+    # requires it) by construction produced exactly 9.
+    - name: Download component build fragments
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+      with:
+        pattern: konflux-build-*
+        path: konflux-build-fragments
+
+    - name: Log in to Konflux cluster
+      uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
+      with:
+        openshift_server_url: https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443
+        openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
+        namespace: osac-tenant
+
+    # Assembles wait-for-konflux-build's 9 per-component fragments into
+    # one override Snapshot (Konflux's documented mechanism for combining
+    # independently-built components -- PR-scoped group-snapshot auto-
+    # combining doesn't apply here, this is a tag push, not a PR), waits
+    # for that override Snapshot's own integration test to pass, then
+    # creates a Release against the cloud-extensions-stage ReleasePlan.
+    # Deliberately still ONE Release of all 9 components, not matrixed:
+    # a Konflux Release processes its whole referenced Snapshot as a
+    # single atomic unit, so splitting this into one Release per
+    # component would mean either 9 redundant Releases of the exact same
+    # combined Snapshot, or 9 independent releases each from its own
+    # single-component build Snapshot -- the latter would drop this
+    # job's whole reason for existing (confirming all 9 components
+    # actually work together before anything ships) and let a release
+    # ship some components while others silently fail. Production is
+    # deliberately never touched by this job -- no ReleasePlan exists for
+    # cloud-extensions-prod yet, by design.
+    - name: Assemble override Snapshot and create staging Release
+      env:
+        RUN_ATTEMPT: ${{ github.run_attempt }}
+      run: |
+        set -euo pipefail
+        python3 - <<'PYEOF'
+        import glob
+        import json
+        import os
+        import subprocess
+        import sys
+        import time
+
         VERSION = os.environ["VERSION"]
         RUN_ATTEMPT = os.environ["RUN_ATTEMPT"]
         NAMESPACE = "osac-tenant"
-        COMPONENTS = [
-            "fulfillment-service",
-            "osac-operator",
-            "osac-csi-driver",
-            "bare-metal-fulfillment-operator",
-            "osac-ui",
-            "metering-service",
-            "metering-m360-adapter",
-            "metering-echo-adapter",
-        ]
         POLL_INTERVAL_SECONDS = 30
         TIMEOUT_SECONDS = 80 * 60
 
@@ -1919,48 +2465,22 @@ jobs:
                 for c in conditions
             )
 
-        def find_components():
-            out = subprocess.run(
-                ["oc", "get", "snapshots", "-n", NAMESPACE, "-o", "json"],
-                capture_output=True, text=True, check=True,
-            )
-            found = {}
-            for item in json.loads(out.stdout)["items"]:
-                ann = item["metadata"].get("annotations", {})
-                if ann.get("build.appstudio.redhat.com/commit_sha") != COMMIT_SHA:
-                    continue
-                comps = item["spec"].get("components", [])
-                # Every real push-triggered build Snapshot observed on this
-                # cluster is single-component (verified empirically: 506/506,
-                # zero exceptions) -- Konflux's app-wide component-build
-                # Snapshot shape is a documented *possibility*, not what this
-                # repo's pipelines actually produce. If that ever changes,
-                # this filter would need revisiting.
-                if len(comps) != 1:
-                    continue
-                component = comps[0]
-                name = component["name"]
-                if name not in COMPONENTS or name in found:
-                    continue
-                if condition_true(item.get("status", {}).get("conditions", []), "AppStudioTestSucceeded"):
-                    found[name] = component  # keep full entry, incl. source
-            return found
+        def is_permanent_auth_error(stderr):
+            # Same reasoning as find_component's own helper in
+            # wait-for-konflux-build's script -- a stale/invalid
+            # KONFLUX_SA_TOKEN or an RBAC permission gap never resolves by
+            # retrying; fail fast with the real cause instead of burning
+            # the full TIMEOUT_SECONDS to report a misleading timeout.
+            lowered = stderr.lower()
+            return "unauthorized" in lowered or "forbidden" in lowered
 
-        deadline = time.time() + TIMEOUT_SECONDS
         found = {}
-        while time.time() < deadline:
-            found = find_components()
-            missing = [c for c in COMPONENTS if c not in found]
-            if not missing:
-                break
-            print(f"Waiting on Konflux builds, still missing: {missing}", flush=True)
-            time.sleep(POLL_INTERVAL_SECONDS)
-        else:
-            missing = [c for c in COMPONENTS if c not in found]
-            print(f"::error::Timed out waiting for Konflux release builds. Missing/failed: {missing}")
-            sys.exit(1)
+        for path in sorted(glob.glob("konflux-build-fragments/konflux-build-*/component.json")):
+            with open(path) as f:
+                component = json.load(f)
+            found[component["name"]] = component
 
-        print("All 8 components built and passed tests:")
+        print("All components built and passed tests:")
         for name, component in found.items():
             print(f"  {name}: {component['containerImage']}")
 
@@ -2011,17 +2531,36 @@ jobs:
 
         deadline = time.time() + TIMEOUT_SECONDS
         while time.time() < deadline:
-            out = subprocess.run(
-                ["oc", "get", "snapshot", resource_name, "-n", NAMESPACE, "-o", "json"],
-                capture_output=True, text=True, check=True,
-            )
+            try:
+                out = subprocess.run(
+                    ["oc", "get", "snapshot", resource_name, "-n", NAMESPACE, "-o", "json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr or ""
+                if is_permanent_auth_error(stderr):
+                    print(f"::error::oc get snapshot failed with a permanent auth/RBAC error: {stderr.strip()}")
+                    raise
+                # Same transient-oc-hiccup reasoning as find_component's own
+                # retry above -- don't let one failed `oc get` crash this
+                # job when the override Snapshot itself is still fine.
+                print(f"::warning::oc get snapshot failed, will retry: {stderr.strip()}", flush=True)
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
             conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
             if condition_true(conditions, "AppStudioTestSucceeded"):
                 break
             if condition_false(conditions, "AppStudioTestSucceeded"):
                 print(f"::error::Override snapshot {resource_name} failed its integration tests")
                 sys.exit(1)
-            print(f"Waiting on {resource_name}'s integration tests...", flush=True)
+            if conditions:
+                summary = "; ".join(
+                    f"{c.get('type')}={c.get('status')} ({c.get('reason')}: {c.get('message')})"
+                    for c in conditions
+                )
+                print(f"[{resource_name}] {summary}", flush=True)
+            else:
+                print(f"Waiting on {resource_name}'s integration tests -- no conditions reported yet", flush=True)
             time.sleep(POLL_INTERVAL_SECONDS)
         else:
             print(f"::error::Timed out waiting for {resource_name}'s integration tests")
@@ -2045,10 +2584,22 @@ jobs:
         # actually released it -- only this confirms that.
         deadline = time.time() + TIMEOUT_SECONDS
         while time.time() < deadline:
-            out = subprocess.run(
-                ["oc", "get", "release", resource_name, "-n", NAMESPACE, "-o", "json"],
-                capture_output=True, text=True, check=True,
-            )
+            try:
+                out = subprocess.run(
+                    ["oc", "get", "release", resource_name, "-n", NAMESPACE, "-o", "json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr or ""
+                if is_permanent_auth_error(stderr):
+                    print(f"::error::oc get release failed with a permanent auth/RBAC error: {stderr.strip()}")
+                    raise
+                # Same transient-oc-hiccup reasoning as find_component's own
+                # retry above -- don't let one failed `oc get` crash this
+                # job when the Release itself is still progressing fine.
+                print(f"::warning::oc get release failed, will retry: {stderr.strip()}", flush=True)
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
             conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
             if condition_true(conditions, "Released"):
                 print(f"::notice::Konflux staging release succeeded: {resource_name}")
@@ -2058,7 +2609,233 @@ jobs:
             ):
                 print(f"::error::Konflux staging release failed: {resource_name}")
                 sys.exit(1)
-            print(f"Waiting on {resource_name}'s release to complete...", flush=True)
+            if conditions:
+                summary = "; ".join(
+                    f"{c.get('type')}={c.get('status')} ({c.get('reason')}: {c.get('message')})"
+                    for c in conditions
+                )
+                print(f"[{resource_name}] {summary}", flush=True)
+            else:
+                print(f"Waiting on {resource_name}'s release to complete -- no conditions reported yet", flush=True)
+            time.sleep(POLL_INTERVAL_SECONDS)
+        else:
+            print(f"::error::Timed out waiting for {resource_name}'s release to complete")
+            sys.exit(1)
+        PYEOF
+
+  # -------------------------------------------------------------------
+  # Chart-side mirror of trigger-konflux-staging-release -- see
+  # wait-for-konflux-chart-build's own top comment for why this is a
+  # separate job/Release rather than folded into the image one: charts
+  # need a different ReleasePlan (osac-charts-stage, a different pipeline
+  # -- rh-push-helm-chart-to-registry-redhat-io -- an RPA can only
+  # reference one), and are new/unproven enough that their failure
+  # shouldn't block or fail the already-working image release.
+  # continue-on-error mirrors the build-wait job's own for the same
+  # reason; remove both once chart releases are as proven as image
+  # releases are today.
+  trigger-konflux-chart-staging-release:
+    name: Trigger Konflux chart staging release
+    continue-on-error: true
+    needs: [prepare, tag, wait-for-konflux-chart-build]
+    if: |
+      always() && !cancelled() && inputs.mode == 'release' &&
+      needs.tag.result == 'success' &&
+      needs.wait-for-konflux-chart-build.result == 'success'
+    runs-on: osac-ci
+    timeout-minutes: 170
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+
+    steps:
+    - name: Download chart component build fragments
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+      with:
+        pattern: konflux-chart-build-*
+        path: konflux-chart-build-fragments
+
+    - name: Log in to Konflux cluster
+      uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
+      with:
+        openshift_server_url: https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443
+        openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
+        namespace: osac-tenant
+
+    # Identical logic to trigger-konflux-staging-release's own step,
+    # targeting osac-charts-stage instead of cloud-extensions-stage and a
+    # distinct resource_name (osac-charts-release-...) so the two don't
+    # collide in the same osac-tenant namespace. See that job's own
+    # comments for the full rationale.
+    - name: Assemble chart override Snapshot and create staging Release
+      env:
+        RUN_ATTEMPT: ${{ github.run_attempt }}
+      run: |
+        set -euo pipefail
+        python3 - <<'PYEOF'
+        import glob
+        import json
+        import os
+        import subprocess
+        import sys
+        import time
+
+        VERSION = os.environ["VERSION"]
+        RUN_ATTEMPT = os.environ["RUN_ATTEMPT"]
+        NAMESPACE = "osac-tenant"
+        POLL_INTERVAL_SECONDS = 30
+        TIMEOUT_SECONDS = 80 * 60
+
+        def condition_true(conditions, cond_type):
+            return any(
+                c.get("type") == cond_type and c.get("status") == "True"
+                for c in conditions
+            )
+
+        def condition_false(conditions, cond_type):
+            return any(
+                c.get("type") == cond_type and c.get("status") == "False"
+                for c in conditions
+            )
+
+        def is_permanent_auth_error(stderr):
+            lowered = stderr.lower()
+            return "unauthorized" in lowered or "forbidden" in lowered
+
+        found = {}
+        for path in sorted(glob.glob("konflux-chart-build-fragments/konflux-chart-build-*/component.json")):
+            with open(path) as f:
+                component = json.load(f)
+            found[component["name"]] = component
+
+        # wait-for-konflux-chart-build runs with continue-on-error: true per
+        # component (see its own top comment) -- a chart whose build/wait
+        # failed or never ran simply never uploads a component.json, with no
+        # other signal here. Without this check, `found` could silently come
+        # up short (or carry an unexpected name) and this job would release
+        # an incomplete/wrong chart set rather than failing loudly.
+        EXPECTED = {
+            "osac-chart", "osac-operator-chart", "osac-operator-crds-chart",
+            "fulfillment-service-chart", "osac-aap-chart",
+            "bare-metal-fulfillment-operator-chart",
+            "bare-metal-fulfillment-operator-crds-chart", "osac-metering-chart",
+            "osac-csi-driver-chart", "osac-csi-backends-chart", "osac-ui-chart",
+        }
+        missing = EXPECTED - found.keys()
+        unexpected = found.keys() - EXPECTED
+        if missing or unexpected:
+            print(f"::error::Chart fragment set mismatch -- missing={sorted(missing)} unexpected={sorted(unexpected)}")
+            sys.exit(1)
+
+        print("All chart components built and passed tests:")
+        for name, component in found.items():
+            print(f"  {name}: {component['containerImage']}")
+
+        version_slug = VERSION.replace(".", "-")
+        resource_name = f"osac-charts-release-v{version_slug}-attempt{RUN_ATTEMPT}"
+        snapshot = {
+            "apiVersion": "appstudio.redhat.com/v1alpha1",
+            "kind": "Snapshot",
+            "metadata": {
+                "name": resource_name,
+                "namespace": NAMESPACE,
+                "labels": {"test.appstudio.openshift.io/type": "override"},
+            },
+            "spec": {
+                "application": "osac",
+                "components": [
+                    {
+                        "name": n,
+                        "containerImage": component["containerImage"],
+                        **({"source": component["source"]} if "source" in component else {}),
+                    }
+                    for n, component in found.items()
+                ],
+            },
+        }
+        with open("/tmp/chart-snapshot.json", "w") as f:
+            json.dump(snapshot, f)
+        subprocess.run(["oc", "apply", "-f", "/tmp/chart-snapshot.json"], check=True)
+        print(f"Created override Snapshot {resource_name}")
+
+        deadline = time.time() + TIMEOUT_SECONDS
+        while time.time() < deadline:
+            try:
+                out = subprocess.run(
+                    ["oc", "get", "snapshot", resource_name, "-n", NAMESPACE, "-o", "json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr or ""
+                if is_permanent_auth_error(stderr):
+                    print(f"::error::oc get snapshot failed with a permanent auth/RBAC error: {stderr.strip()}")
+                    raise
+                print(f"::warning::oc get snapshot failed, will retry: {stderr.strip()}", flush=True)
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
+            conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
+            if condition_true(conditions, "AppStudioTestSucceeded"):
+                break
+            if condition_false(conditions, "AppStudioTestSucceeded"):
+                print(f"::error::Override snapshot {resource_name} failed its integration tests")
+                sys.exit(1)
+            if conditions:
+                summary = "; ".join(
+                    f"{c.get('type')}={c.get('status')} ({c.get('reason')}: {c.get('message')})"
+                    for c in conditions
+                )
+                print(f"[{resource_name}] {summary}", flush=True)
+            else:
+                print(f"Waiting on {resource_name}'s integration tests -- no conditions reported yet", flush=True)
+            time.sleep(POLL_INTERVAL_SECONDS)
+        else:
+            print(f"::error::Timed out waiting for {resource_name}'s integration tests")
+            sys.exit(1)
+
+        release = {
+            "apiVersion": "appstudio.redhat.com/v1alpha1",
+            "kind": "Release",
+            "metadata": {"name": resource_name, "namespace": NAMESPACE},
+            "spec": {"releasePlan": "osac-charts-stage", "snapshot": resource_name},
+        }
+        with open("/tmp/chart-release.json", "w") as f:
+            json.dump(release, f)
+        subprocess.run(["oc", "apply", "-f", "/tmp/chart-release.json"], check=True)
+        print(f"Created Release {resource_name}, waiting for it to complete")
+
+        deadline = time.time() + TIMEOUT_SECONDS
+        while time.time() < deadline:
+            try:
+                out = subprocess.run(
+                    ["oc", "get", "release", resource_name, "-n", NAMESPACE, "-o", "json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr or ""
+                if is_permanent_auth_error(stderr):
+                    print(f"::error::oc get release failed with a permanent auth/RBAC error: {stderr.strip()}")
+                    raise
+                print(f"::warning::oc get release failed, will retry: {stderr.strip()}", flush=True)
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
+            conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
+            if condition_true(conditions, "Released"):
+                print(f"::notice::Konflux chart staging release succeeded: {resource_name}")
+                break
+            if condition_false(conditions, "Released") and any(
+                c.get("type") == "Released" and c.get("reason") == "Failed" for c in conditions
+            ):
+                print(f"::error::Konflux chart staging release failed: {resource_name}")
+                sys.exit(1)
+            if conditions:
+                summary = "; ".join(
+                    f"{c.get('type')}={c.get('status')} ({c.get('reason')}: {c.get('message')})"
+                    for c in conditions
+                )
+                print(f"[{resource_name}] {summary}", flush=True)
+            else:
+                print(f"Waiting on {resource_name}'s release to complete -- no conditions reported yet", flush=True)
             time.sleep(POLL_INTERVAL_SECONDS)
         else:
             print(f"::error::Timed out waiting for {resource_name}'s release to complete")
@@ -2067,7 +2844,7 @@ jobs:
 
   cleanup:
     name: Cleanup temp branch
-    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, promote-and-publish, publish-umbrella, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto, notify-release, notify-failure, trigger-konflux-staging-release]
+    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, promote-and-publish, publish-umbrella, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto, notify-release, notify-failure, wait-for-konflux-build, trigger-konflux-staging-release, wait-for-konflux-chart-build, trigger-konflux-chart-staging-release]
     runs-on: ubuntu-latest
     # notify-failure (and now notify-release, create-component-releases,
     # publish-fulfillment-service-binaries/-proto) are routinely skipped

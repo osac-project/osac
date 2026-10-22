@@ -54,7 +54,11 @@ var _ = Describe("Networking API contract", func() {
 				Expect(publicService.Methods().ByName(method)).ToNot(BeNil(), "public %s.%s", resource.name, method)
 				Expect(privateService.Methods().ByName(method)).ToNot(BeNil(), "private %s.%s", resource.name, method)
 			}
-			Expect(publicService.Methods().ByName("Update")).To(BeNil(), "public %s.Update", resource.name)
+			if resource.name == "SecurityGroups" {
+				Expect(publicService.Methods().ByName("Update")).ToNot(BeNil(), "public %s.Update", resource.name)
+			} else {
+				Expect(publicService.Methods().ByName("Update")).To(BeNil(), "public %s.Update", resource.name)
+			}
 			Expect(privateService.Methods().ByName("Update")).ToNot(BeNil(), "private %s.Update", resource.name)
 		}
 	})
@@ -68,12 +72,33 @@ var _ = Describe("Networking API contract", func() {
 			Expect(httpRule(publicService.Methods().ByName("Get")).GetGet()).To(Equal("/api/fulfillment/v1/" + resource.plural + "/{id}"))
 			Expect(httpRule(publicService.Methods().ByName("Create")).GetPost()).To(Equal("/api/fulfillment/v1/" + resource.plural))
 			Expect(httpRule(publicService.Methods().ByName("Delete")).GetDelete()).To(Equal("/api/fulfillment/v1/" + resource.plural + "/{id}"))
-			Expect(publicService.Methods().ByName("Update")).To(BeNil(), "public %s PATCH", resource.name)
+			publicUpdate := publicService.Methods().ByName("Update")
+			if resource.name == "SecurityGroups" {
+				Expect(publicUpdate).ToNot(BeNil())
+				if publicUpdate != nil {
+					Expect(httpRule(publicUpdate).GetPatch()).To(Equal("/api/fulfillment/v1/security_groups/{object.id}"))
+				}
+			} else {
+				Expect(publicUpdate).To(BeNil(), "public %s PATCH", resource.name)
+			}
 
 			privateUpdate := privateService.Methods().ByName("Update")
 			Expect(privateUpdate).ToNot(BeNil())
 			Expect(httpRule(privateUpdate).GetPatch()).To(Equal("/api/private/v1/" + resource.plural + "/{object.id}"))
 		}
+	})
+
+	It("limits the public SecurityGroups update request to the object", func() {
+		update := findService("osac.public.v1.SecurityGroups").Methods().ByName("Update")
+		Expect(update).ToNot(BeNil())
+		if update == nil {
+			return
+		}
+
+		Expect(update.Input().Fields().Len()).To(Equal(1))
+		Expect(update.Input().Fields().ByName("object")).ToNot(BeNil())
+		Expect(update.Output().Fields().Len()).To(Equal(1))
+		Expect(update.Output().Fields().ByName("object")).ToNot(BeNil())
 	})
 
 	It("rejects legacy raw public Update invocations for every networking resource", func() {
@@ -95,6 +120,9 @@ var _ = Describe("Networking API contract", func() {
 		DeferCleanup(connection.Close)
 
 		for _, resource := range resources {
+			if resource.name == "SecurityGroups" {
+				continue
+			}
 			err = connection.Invoke(
 				context.Background(),
 				"/osac.public.v1."+resource.name+"/Update",

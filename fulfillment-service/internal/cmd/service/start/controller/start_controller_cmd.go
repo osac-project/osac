@@ -39,6 +39,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/autoexternalipattachment"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/baremetalinstance"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/cluster"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/computeinstance"
@@ -46,6 +47,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/externalip"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/externalipattachment"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/externalippool"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/fabricdomain"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/identityprovider"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/natgateway"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/networkclass"
@@ -203,6 +205,8 @@ type runnerContext struct {
 	}
 	client *grpc.ClientConn
 }
+
+const fabricDomainEventFilter = "has(event.fabric_domain) || (has(event.virtual_network) && event.type == EVENT_TYPE_OBJECT_UPDATED && ((has(event.virtual_network.status) && event.virtual_network.status.hub != '') || (has(event.virtual_network.metadata) && has(event.virtual_network.metadata.deletion_timestamp))))"
 
 // run runs the `start controllers` command.
 func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:gocyclo
@@ -495,7 +499,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetName("compute-instance").
 		SetClient(r.client).
 		SetFunction(computeInstanceReconcilerFunction).
-		SetEventFilter("has(event.compute_instance) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
+		SetEventFilter("has(event.compute_instance) || has(event.external_ip) || has(event.external_ip_attachment) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
 		SetHealthReporter(healthAggregator).
 		Build()
 	if err != nil {
@@ -670,6 +674,38 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		}
 	}()
 
+	// Create the fabric domain reconciler. VirtualNetwork changes wake domains waiting for hub placement.
+	r.logger.InfoContext(ctx, "Creating fabric domain reconciler")
+	fabricDomainReconcilerFunction, err := fabricdomain.NewFunction().
+		SetLogger(r.logger).
+		SetConnection(r.client).
+		SetHubCache(hubCache).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create fabric domain reconciler function: %w", err)
+	}
+	fabricDomainReconciler, err := controllers.NewReconciler[*privatev1.FabricDomain]().
+		SetLogger(r.logger).
+		SetName("fabric-domain").
+		SetSync(r.args.sync).
+		SetClient(r.client).
+		SetFunction(fabricDomainReconcilerFunction).
+		SetEventFilter(fabricDomainEventFilter).
+		SetHealthReporter(healthAggregator).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create fabric domain reconciler: %w", err)
+	}
+	r.logger.InfoContext(ctx, "Starting fabric domain reconciler")
+	go func() {
+		err := fabricDomainReconciler.Start(ctx)
+		if err == nil || errors.Is(err, context.Canceled) {
+			r.logger.InfoContext(ctx, "Fabric domain reconciler finished")
+		} else {
+			r.logger.ErrorContext(ctx, "Fabric domain reconciler failed", slog.Any("error", err))
+		}
+	}()
+
 	// Create the security group reconciler:
 	r.logger.InfoContext(ctx, "Creating security group reconciler")
 	securityGroupReconcilerFunction, err := securitygroup.NewFunction().
@@ -781,6 +817,35 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 				"External IP reconciler failed",
 				slog.Any("error", err),
 			)
+		}
+	}()
+
+	r.logger.InfoContext(ctx, "Creating deferred automatic ExternalIP attachment reconciler")
+	autoAttachmentFunction, buildErr := autoexternalipattachment.NewFunction().
+		SetLogger(r.logger).
+		SetConnection(r.client).
+		Build()
+	if buildErr != nil {
+		return fmt.Errorf("failed to create deferred automatic ExternalIP attachment reconciler function: %w", buildErr)
+	}
+	autoAttachmentReconciler, buildErr := controllers.NewReconciler[*privatev1.ExternalIP]().
+		SetLogger(r.logger).
+		SetName("deferred-auto-external-ip-attachment").
+		SetClient(r.client).
+		SetFunction(autoAttachmentFunction).
+		SetEventFilter("has(event.external_ip) || has(event.compute_instance) || has(event.cluster) || has(event.bare_metal_instance) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
+		SetHealthReporter(healthAggregator).
+		Build()
+	if buildErr != nil {
+		return fmt.Errorf("failed to create deferred automatic ExternalIP attachment reconciler: %w", buildErr)
+	}
+	r.logger.InfoContext(ctx, "Starting deferred automatic ExternalIP attachment reconciler")
+	go func() {
+		err := autoAttachmentReconciler.Start(ctx)
+		if err == nil || errors.Is(err, context.Canceled) {
+			r.logger.InfoContext(ctx, "Deferred automatic ExternalIP attachment reconciler finished")
+		} else {
+			r.logger.ErrorContext(ctx, "Deferred automatic ExternalIP attachment reconciler failed", slog.Any("error", err))
 		}
 	}()
 

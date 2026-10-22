@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.public.v1;
 
 import "buf/validate/validate.proto";
+import "google/api/field_behavior.proto";
 import "osac/public/v1/metadata_type.proto";
 
 // Describes a pre-configured bare metal hardware type that can be referenced by name when provisioning
@@ -33,16 +34,17 @@ message BareMetalInstanceType {
 
   Metadata metadata = 2;
   BareMetalInstanceTypeSpec spec = 3 [(buf.validate.field).required = true];
-  BareMetalInstanceTypeStatus status = 4;
+  BareMetalInstanceTypeStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
-// Defines the hardware specifications and host label selector for a BareMetalInstanceType.
+// Defines the hardware specifications and description for a BareMetalInstanceType.
 message BareMetalInstanceTypeSpec {
   // Hardware specifications for this bare metal instance type.
   BareMetalHardwareSpec hardware = 1 [(buf.validate.field).required = true];
 
   // Human-readable description of the bare metal instance type.
   string description = 2;
+
 }
 
 // Contains the system-provided status of a BareMetalInstanceType.
@@ -85,8 +87,8 @@ message BareMetalCPUSpec {
   // Number of CPU cores.
   int32 cores = 1 [(buf.validate.field).int32.gt = 0];
 
-  // CPU architecture (e.g. x86_64, aarch64).
-  string architecture = 2 [(buf.validate.field).string.min_len = 1];
+  // CPU architecture. Accepted values are exactly amd64, arm64, and s390x.
+  string architecture = 2 [(buf.validate.field).string = {in: ["amd64", "arm64", "s390x"]}];
 
   // CPU model. Optional — may be unknown.
   string model = 3;
@@ -140,12 +142,6 @@ message BareMetalInstanceTypeReference {
   string name = 2;
   string project = 3;
   bool shared = 4;
-}
-
-// Local reference to a BareMetalInstanceType resource.
-message BareMetalInstanceTypeLocalReference {
-  string id = 1;
-  string name = 2;
 }
 
 // Describes a network port in a bare metal instance type.

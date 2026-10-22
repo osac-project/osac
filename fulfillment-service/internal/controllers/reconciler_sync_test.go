@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
@@ -128,6 +129,41 @@ var _ = Describe("Reconciler", func() {
 		Entry("an event without an object payload", &privatev1.Event{}),
 	)
 
+	It("skips stale provisioning and deletion events after NotFound and processes the next fresh object", func() {
+		fresh := privatev1.Tenant_builder{
+			Id:       "valid",
+			Metadata: privatev1.Metadata_builder{Name: "fresh", Version: 7}.Build(),
+		}.Build()
+		service.get = func(req *privatev1.TenantsGetRequest) (*privatev1.TenantsGetResponse, error) {
+			if req.GetId() != "valid" {
+				return nil, status.Error(codes.NotFound, "archived")
+			}
+			return privatev1.TenantsGetResponse_builder{Object: fresh}.Build(), nil
+		}
+		objects := make(chan *privatev1.Tenant, 10)
+		builder.SetSync(false).SetFunction(func(_ context.Context, object *privatev1.Tenant) error {
+			objects <- object
+			return nil
+		})
+		start()
+		service.events <- privatev1.Event_builder{
+			Tenant: privatev1.Tenant_builder{Id: "stale-provisioning"}.Build(),
+		}.Build()
+		service.events <- privatev1.Event_builder{
+			Tenant: privatev1.Tenant_builder{Id: "stale-deletion", Metadata: privatev1.Metadata_builder{DeletionTimestamp: timestamppb.Now()}.Build()}.Build(),
+		}.Build()
+		service.events <- privatev1.Event_builder{
+			Tenant: privatev1.Tenant_builder{Id: "valid", Metadata: privatev1.Metadata_builder{Name: "stale", Version: 1}.Build()}.Build(),
+		}.Build()
+		var got *privatev1.Tenant
+		Eventually(objects).Should(Receive(&got))
+		Expect(got.GetId()).To(Equal("valid"))
+		Expect(got.GetMetadata().GetName()).To(Equal("fresh"))
+		Expect(got.GetMetadata().GetVersion()).To(Equal(int32(7)))
+		Expect(service.getCalls.Load()).To(Equal(int32(3)))
+		Consistently(objects, 100*time.Millisecond).ShouldNot(Receive())
+	})
+
 	DescribeTable("Rejects nonpositive sync intervals when enabled", func(interval time.Duration) {
 		_, err := builder.SetSyncInterval(interval).Build()
 		Expect(err).To(MatchError(ContainSubstring("sync interval should be positive")))
@@ -150,6 +186,8 @@ type reconcilerTestServer struct {
 	items      []*privatev1.Tenant
 	listCalls  atomic.Int32
 	watchCalls atomic.Int32
+	getCalls   atomic.Int32
+	get        func(*privatev1.TenantsGetRequest) (*privatev1.TenantsGetResponse, error)
 }
 
 func (s *reconcilerTestServer) List(context.Context, *privatev1.TenantsListRequest) (*privatev1.TenantsListResponse, error) {
@@ -158,6 +196,10 @@ func (s *reconcilerTestServer) List(context.Context, *privatev1.TenantsListReque
 }
 
 func (s *reconcilerTestServer) Get(_ context.Context, request *privatev1.TenantsGetRequest) (*privatev1.TenantsGetResponse, error) {
+	s.getCalls.Add(1)
+	if s.get != nil {
+		return s.get(request)
+	}
 	return &privatev1.TenantsGetResponse{
 		Object: privatev1.Tenant_builder{Id: request.GetId()}.Build(),
 	}, nil

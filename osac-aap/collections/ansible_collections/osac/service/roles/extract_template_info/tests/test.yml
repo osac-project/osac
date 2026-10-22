@@ -91,7 +91,7 @@
         cluster_order:
           spec:
             templateID: "ocp_small"
-            templateParameters: '{}'
+            templateParameters: "{}"
             nodeRequests: []
       when: test_unqualified_id | default(false) | bool
 
@@ -124,7 +124,7 @@
         cluster_order:
           spec:
             templateID: "osac.templates.ocp_small"
-            templateParameters: '{}'
+            templateParameters: "{}"
             nodeRequests: []
       when: test_predefined_id | default(false) | bool
 
@@ -155,7 +155,7 @@
         cluster_order:
           spec:
             templateID: "osac.templates.ocp_virt_vm"
-            templateParameters: '{}'
+            templateParameters: "{}"
             nodeRequests: []
       when: test_empty_params | default(false) | bool
 

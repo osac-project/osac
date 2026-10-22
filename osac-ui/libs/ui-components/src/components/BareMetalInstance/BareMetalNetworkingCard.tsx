@@ -11,10 +11,11 @@ import {
 } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
+import { ExternalIPAttachments } from '@osac/types';
 import type { BareMetalInstance, ExternalIPAttachment } from '@osac/types';
 
 import { type CelFilter, escapeCelStringLiteral } from '../../api/cel';
-import { useExternalIPAttachments } from '../../api/v1/external-ip';
+import { useListResource } from '../../api/use-resource';
 import {
   formatResourceIdsForReview,
   resourceDisplayName,
@@ -43,13 +44,15 @@ const BareMetalNetworkingCard = ({ instance }: Props) => {
   }, [instance.id]);
 
   const {
-    data: externalIPAttachments = [],
+    data: externalIPAttachmentResponse,
     isLoading: eipaLoading,
     error: eipaError,
-  } = useExternalIPAttachments(
+  } = useListResource(
+    ExternalIPAttachments,
     { filter: externalIpAttachmentFilter },
     { enabled: Boolean(instance.spec?.autoExternalIpAttachment) },
   );
+  const externalIPAttachments = externalIPAttachmentResponse?.items ?? [];
 
   const autoCreatedAttachment = externalIPAttachments.find(
     (eipa) => eipa.metadata?.labels?.['osac.openshift.io/auto-created'] === 'true',

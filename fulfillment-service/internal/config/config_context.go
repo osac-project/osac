@@ -25,6 +25,7 @@ type contextKey int
 const (
 	contextSettingsKey contextKey = iota
 	contextTenantKey
+	contextProjectKey
 )
 
 // SettingsFromContext returns the settings from the context. It panics if the given context doesn't contain settings.
@@ -67,4 +68,15 @@ func TenantFromContext(ctx context.Context) string {
 // TenantIntoContext creates a new context that contains the given tenant.
 func TenantIntoContext(ctx context.Context, tenant string) context.Context {
 	return context.WithValue(ctx, contextTenantKey, tenant)
+}
+
+// ProjectFromContext returns the resolved project from the context. Returns an empty string if no project is set.
+func ProjectFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(contextProjectKey).(string)
+	return v
+}
+
+// ProjectIntoContext creates a new context that contains the given project.
+func ProjectIntoContext(ctx context.Context, project string) context.Context {
+	return context.WithValue(ctx, contextProjectKey, project)
 }

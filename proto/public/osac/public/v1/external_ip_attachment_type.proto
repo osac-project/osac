@@ -51,7 +51,7 @@ message ExternalIPAttachment {
   ExternalIPAttachmentSpec spec = 3;
 
   // Current state of the external IP attachment (system-provided, read-only).
-  ExternalIPAttachmentStatus status = 4;
+  ExternalIPAttachmentStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the desired configuration for an ExternalIPAttachment.

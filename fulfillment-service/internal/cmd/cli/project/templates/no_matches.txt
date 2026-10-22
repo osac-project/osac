@@ -1,0 +1,5 @@
+Project '{{ .Ref }}' not found.
+
+Use the 'get' command to list available projects:
+
+  {{ binary }} get projects

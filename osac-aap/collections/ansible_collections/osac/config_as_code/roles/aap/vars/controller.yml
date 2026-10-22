@@ -29,6 +29,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-cluster-fulfillment-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -41,6 +42,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-cluster-fulfillment-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -138,6 +140,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-cluster-fulfillment-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -152,6 +155,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-cluster-fulfillment-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -166,6 +170,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -178,6 +183,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -190,6 +196,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -202,6 +209,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -214,6 +222,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -226,6 +235,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -240,6 +250,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: false
     ask_variables_on_launch: true
     verbosity: 0
@@ -252,6 +263,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -264,6 +276,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -276,6 +289,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -288,6 +302,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -300,6 +315,33 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-create-fabric-domain"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_create_server_cluster.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-fabric-domain"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_delete_server_cluster.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -312,6 +354,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -324,6 +367,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -436,6 +480,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -448,6 +493,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -662,91 +708,7 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
   # (prefix)-cluster-fulfilment-ig secret.
   - name: "{{ aap_prefix }}-cluster-fulfillment-ig"
     is_container_group: true
-    pod_spec_override: |
-      apiVersion: v1
-      kind: Pod
-      metadata:
-        labels:
-          ansible_job: ''
-      spec:
-        serviceAccountName: osac-sa
-        affinity:
-          podAntiAffinity:
-            preferredDuringSchedulingIgnoredDuringExecution:
-              - weight: 100
-                podAffinityTerm:
-                  labelSelector:
-                    matchExpressions:
-                      - key: ansible_job
-                        operator: Exists
-                  topologyKey: kubernetes.io/hostname
-        containers:
-          - image: >-
-              registry.redhat.io/ansible-automation-platform-25/ee-supported-rhel8@sha256:d8400a472e769d0f3d591dafaad318522009c583b08e881c23b6d57a27cc10ed
-            name: worker
-            args:
-              - ansible-runner
-              - worker
-              - '--private-data-dir=/runner'
-            volumeMounts:
-              - name: kube-api-access
-                mountPath: /var/run/secrets/kubernetes.io/serviceaccount
-                readOnly: true
-              - name: agentless-net-inventory
-                mountPath: /var/config/agentless-net
-                readOnly: true
-            env:
-              - name: POD_NAMESPACE
-                valueFrom:
-                  fieldRef:
-                    fieldPath: metadata.namespace
-              - name: POD_NAME
-                valueFrom:
-                  fieldRef:
-                    fieldPath: metadata.name
-              - name: POD_UID
-                valueFrom:
-                  fieldRef:
-                    fieldPath: metadata.uid
-            envFrom:
-              - configMapRef:
-                  name: cluster-fulfillment-ig
-                  optional: true
-              - secretRef:
-                  name: cluster-fulfillment-ig
-              # Netris credentials are deployment-owned and may be supplied
-              # by an external Secret rather than Helm values.
-              - secretRef:
-                  name: netris-credentials
-                  optional: true
-        volumes:
-        - name: kube-api-access
-          projected:
-            sources:
-              - serviceAccountToken:
-                  path: token
-                  expirationSeconds: 3600
-              - configMap:
-                  name: kube-root-ca.crt
-                  items:
-                    - key: ca.crt
-                      path: ca.crt
-              - downwardAPI:
-                  items:
-                    - path: namespace
-                      fieldRef:
-                        apiVersion: v1
-                        fieldPath: metadata.namespace
-              - configMap:
-                  name: openshift-service-ca.crt
-                  items:
-                    - key: service-ca.crt
-                      path: service-ca.crt
-            defaultMode: 420
-        - name: agentless-net-inventory
-          configMap:
-            name: agentless-net-inventory
-            optional: true
+    pod_spec_override: "{{ lookup('ansible.builtin.template', 'cluster-fulfillment-ig.j2') }}"
   # For config-as-code job template, we expect the configuration and the
   # credentials to be passed in (prefix)-config-as-code-ig secret
   - name: "{{ aap_prefix }}-config-as-code-ig"
@@ -793,6 +755,8 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
                     key: password
               - name: LICENSE_MANIFEST_PATH
                 value: /var/secrets/config-as-code/license.zip
+              - name: NETRIS_CA_PATH
+                value: "{{ netris_ca_path }}"
             volumeMounts:
               - name: config-as-code-manifest-volume
                 mountPath: /var/secrets/config-as-code
@@ -840,10 +804,21 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
                   name: publish-templates-ig
                   optional: true
             env:
-              - name: OSAC_PUBLISH_TEMPLATES_NAMESPACE_DEFAULT
+              - name: OSAC_FULFILLMENT_ISSUER_URL
                 valueFrom:
-                  fieldRef:
-                    fieldPath: metadata.namespace
+                  configMapKeyRef:
+                    name: aap-fulfillment-auth-config
+                    key: OSAC_FULFILLMENT_ISSUER_URL
+              - name: OSAC_FULFILLMENT_CLIENT_ID
+                valueFrom:
+                  secretKeyRef:
+                    name: fulfillment-controller-credentials
+                    key: client-id
+              - name: OSAC_FULFILLMENT_CLIENT_SECRET
+                valueFrom:
+                  secretKeyRef:
+                    name: fulfillment-controller-credentials
+                    key: client-secret
               - name: SSL_CERT_FILE
                 value: /certs/bundle.pem
         volumes:

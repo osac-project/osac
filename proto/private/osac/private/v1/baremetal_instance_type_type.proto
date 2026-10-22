@@ -17,6 +17,7 @@ package osac.private.v1;
 
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
 import "osac/private/v1/metadata_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -36,10 +37,10 @@ message BareMetalInstanceType {
 
   Metadata metadata = 2;
   BareMetalInstanceTypeSpec spec = 3 [(buf.validate.field).required = true];
-  BareMetalInstanceTypeStatus status = 4;
+  BareMetalInstanceTypeStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
-// Defines the hardware specifications and host label selector for a BareMetalInstanceType.
+// Defines the hardware specifications and description for a BareMetalInstanceType.
 message BareMetalInstanceTypeSpec {
   // Hardware specifications for this bare metal instance type.
   BareMetalHardwareSpec hardware = 1 [(buf.validate.field).required = true];
@@ -50,6 +51,31 @@ message BareMetalInstanceTypeSpec {
   // Label selector for matching inventory hosts. Required.
   // Labels are passed directly to the inventory backend using backend-native naming conventions.
   BareMetalLabelSelector host_label_selector = 3 [(cleanapi.field).private = true, (buf.validate.field).required = true];
+
+  // Backend fabric bindings for hosts selected by this instance type.
+  BareMetalFabricBindings fabric_bindings = 4 [(cleanapi.field).private = true];
+}
+
+// Fabric-manager profile references for a bare metal instance type.
+message BareMetalFabricBindings {
+  option (cleanapi.message).private = true;
+
+  // Opaque Ethernet east-west profile references keyed by fabric-manager name.
+  // For Netris, the value is a Server Cluster Template ID. The matching
+  // NetworkClass selects the fabric manager; this hardware profile is
+  // independent of NetworkClass.
+  map<string, string> ethernet_ew = 1 [(buf.validate.field).map = {
+    keys: {
+      string: {
+        min_len: 1
+      }
+    }
+    values: {
+      string: {
+        min_len: 1
+      }
+    }
+  }];
 }
 
 // Contains the system-provided status of a BareMetalInstanceType.
@@ -100,8 +126,8 @@ message BareMetalCPUSpec {
   // Number of CPU cores.
   int32 cores = 1 [(buf.validate.field).int32.gt = 0];
 
-  // CPU architecture (e.g. x86_64, aarch64).
-  string architecture = 2 [(buf.validate.field).string.min_len = 1];
+  // CPU architecture. Accepted values are exactly amd64, arm64, and s390x.
+  string architecture = 2 [(buf.validate.field).string = {in: ["amd64", "arm64", "s390x"]}];
 
   // CPU model. Optional — may be unknown.
   string model = 3;
@@ -155,12 +181,6 @@ message BareMetalInstanceTypeReference {
   string name = 2;
   string project = 3;
   bool shared = 4;
-}
-
-// Local reference to a BareMetalInstanceType resource.
-message BareMetalInstanceTypeLocalReference {
-  string id = 1;
-  string name = 2;
 }
 
 // Describes a network port in a bare metal instance type.

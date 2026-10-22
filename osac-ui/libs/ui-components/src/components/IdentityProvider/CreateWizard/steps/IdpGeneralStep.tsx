@@ -1,7 +1,7 @@
 import { Stack, StackItem, Title } from '@patternfly/react-core';
 
-import NameField from '@osac/ui-components/components/catalogProvision/wizard/fields/NameField';
 import { InputField } from '@osac/ui-components/components/Form/InputField';
+import NameField from '@osac/ui-components/components/Form/NameField';
 import OsacForm from '@osac/ui-components/components/Form/OsacForm';
 
 import { useTranslation } from '../../../../hooks/useTranslation';

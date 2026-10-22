@@ -17,7 +17,7 @@ def test_short_lived_vm_metering(
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     vm_template: str,
-    default_subnet: str,
+    default_network_attachment: dict[str, object],
     metering: MeteringCollector,
 ) -> None:
     """Verify metering captures events for a VM created and deleted within 30s (CAP-4).
@@ -31,7 +31,7 @@ def test_short_lived_vm_metering(
     one that has already reached a steady state.
     """
     uuid: str = cli.create_compute_instance(
-        name=unique_name("e2e-ci"), template=vm_template, network_attachments=[{"subnet": default_subnet}]
+        name=unique_name("e2e-ci"), template=vm_template, network_attachments=[default_network_attachment]
     )
     metering.expect("osac.resource.created.v1", resource_id=uuid)
 

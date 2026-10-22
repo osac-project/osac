@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/annotate"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/cani"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/color"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/console"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create"
@@ -33,6 +34,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/label"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/login"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/logout"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/project"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/scale"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/tenant"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/version"
@@ -97,9 +99,16 @@ func Root() (result *cobra.Command, err error) {
 		"",
 		tenantFlagHelp,
 	)
+	flags.StringVar(
+		&runner.args.project,
+		projectFlag,
+		"",
+		projectFlagHelp,
+	)
 
 	// Add commands:
 	result.AddCommand(annotate.Cmd())
+	result.AddCommand(cani.Cmd())
 	result.AddCommand(console.Cmd())
 	result.AddCommand(create.Cmd())
 	result.AddCommand(delete.Cmd())
@@ -110,6 +119,7 @@ func Root() (result *cobra.Command, err error) {
 	result.AddCommand(login.Cmd())
 	result.AddCommand(logout.Cmd())
 	result.AddCommand(scale.Cmd())
+	result.AddCommand(project.Cmd())
 	result.AddCommand(tenant.Cmd())
 	result.AddCommand(version.Cmd())
 	result.AddCommand(volumes.Cmd())
@@ -127,6 +137,7 @@ type runnerContext struct {
 		configDir string
 		cacheDir  string
 		tenant    string
+		project   string
 	}
 }
 
@@ -221,14 +232,23 @@ func (c *runnerContext) persistentPreRun(cmd *cobra.Command, args []string) erro
 		tenant = c.args.tenant
 	}
 
+	// Resolve the effective project: flag takes precedence over saved setting.
+	project := settings.Project()
+	if flags.Changed(projectFlag) {
+		project = c.args.project
+	}
+
 	// Replace the default context with one that contains the logger, the settings, the console,
-	// and the resolved tenant:
+	// the resolved tenant, and the resolved project:
 	ctx := cmd.Context()
 	ctx = logging.LoggerIntoContext(ctx, logger)
 	ctx = config.SettingsIntoContext(ctx, settings)
 	ctx = terminal.ConsoleIntoContext(ctx, console)
 	if tenant != "" {
 		ctx = config.TenantIntoContext(ctx, tenant)
+	}
+	if project != "" {
+		ctx = config.ProjectIntoContext(ctx, project)
 	}
 	cmd.SetContext(ctx)
 
@@ -237,9 +257,10 @@ func (c *runnerContext) persistentPreRun(cmd *cobra.Command, args []string) erro
 
 // Names of command line flags:
 const (
-	configFlag = "config"
-	cacheFlag  = "cache"
-	tenantFlag = "tenant"
+	configFlag  = "config"
+	cacheFlag   = "cache"
+	tenantFlag  = "tenant"
+	projectFlag = "project"
 )
 
 // Names of the environment variables:
@@ -268,6 +289,12 @@ const tenantFlagHelp = `
 _NAME_ - Scope operations to the specified tenant. When set, list operations automatically filter by tenant,
 and create operations populate {{ bt }}metadata.tenant{{ bt }} on new objects. If a current tenant has been
 saved with {{ bt }}{{ binary }} tenant <name>{{ bt }}, the flag takes precedence.
+`
+
+const projectFlagHelp = `
+_NAME_ - Scope operations to the specified project. When set, list operations automatically filter by project,
+and create operations populate {{ bt }}metadata.project{{ bt }} on new objects. If a current project has been
+saved with {{ bt }}{{ binary }} project <name>{{ bt }}, the flag takes precedence.
 `
 
 const cacheFlagHelp = `

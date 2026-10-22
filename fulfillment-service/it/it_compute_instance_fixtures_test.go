@@ -20,6 +20,7 @@ import (
 	"context"
 	"time"
 
+	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -30,6 +31,7 @@ import (
 
 type computeInstanceFixtureClients struct {
 	subnets                  privatev1.SubnetsClient
+	securityGroups           privatev1.SecurityGroupsClient
 	virtualNetworks          privatev1.VirtualNetworksClient
 	networkClasses           privatev1.NetworkClassesClient
 	computeInstances         publicv1.ComputeInstancesClient
@@ -45,6 +47,7 @@ const computeInstanceFixtureProbeTimeout = 10 * time.Second
 func newComputeInstanceFixtureClients() computeInstanceFixtureClients {
 	return computeInstanceFixtureClients{
 		subnets:                  privatev1.NewSubnetsClient(tool.InternalView().AdminConn()),
+		securityGroups:           privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn()),
 		virtualNetworks:          privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn()),
 		networkClasses:           privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn()),
 		computeInstances:         publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn()),
@@ -54,6 +57,47 @@ func newComputeInstanceFixtureClients() computeInstanceFixtureClients {
 		storageBackends:          privatev1.NewStorageBackendsClient(tool.InternalView().AdminConn()),
 		diskImages:               privatev1.NewDiskImagesClient(tool.InternalView().AdminConn()),
 	}
+}
+
+func createComputeInstanceFixtureSecurityGroup(
+	ctx context.Context,
+	client privatev1.SecurityGroupsClient,
+	id, virtualNetworkID string,
+) string {
+	GinkgoHelper()
+	_, err := client.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+		Object: privatev1.SecurityGroup_builder{
+			Id: id,
+			Metadata: privatev1.Metadata_builder{
+				Name:   id,
+				Tenant: usersGroup,
+			}.Build(),
+			Spec: privatev1.SecurityGroupSpec_builder{
+				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
+			}.Build(),
+		}.Build(),
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+
+	Eventually(func(g Gomega) {
+		response, getErr := client.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
+		g.Expect(getErr).ToNot(HaveOccurred())
+		g.Expect(response.GetObject().GetStatus().GetState()).To(
+			Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
+	}, time.Minute, time.Second).Should(Succeed())
+
+	response, err := client.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
+	Expect(err).ToNot(HaveOccurred())
+	securityGroup := response.GetObject()
+	securityGroup.SetStatus(privatev1.SecurityGroupStatus_builder{
+		State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+	}.Build())
+	_, err = client.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+		Object:     securityGroup,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+	return id
 }
 
 func waitForComputeInstanceFixtureStorageBackend(ctx context.Context, client privatev1.StorageBackendsClient, id string) {
@@ -74,26 +118,92 @@ func waitForComputeInstanceFixtureResource(ctx context.Context, get func(context
 }
 
 func setComputeInstanceFixtureVirtualNetworkReady(ctx context.Context, client privatev1.VirtualNetworksClient, id string) {
-	Eventually(func(g Gomega) {
-		probeCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
-		defer cancel()
-		resp, err := client.Get(probeCtx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
-		g.Expect(err).ToNot(HaveOccurred())
-		g.Expect(resp.GetObject().GetStatus().GetState()).To(
-			Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
-	}, time.Minute, time.Second).Should(Succeed())
+	waitForComputeInstanceFixtureResource(ctx, func(probeCtx context.Context) error {
+		_, err := client.Get(probeCtx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+		return err
+	})
+	expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
+		resp, err := client.Get(getCtx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+		if err != nil {
+			return "", err
+		}
+		return resp.GetObject().GetStatus().GetHub(), nil
+	})
 
 	getCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
 	resp, err := client.Get(getCtx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
 	cancel()
 	Expect(err).ToNot(HaveOccurred())
 	virtualNetwork := resp.GetObject()
-	virtualNetwork.SetStatus(privatev1.VirtualNetworkStatus_builder{
-		State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
-	}.Build())
+	if !virtualNetwork.HasStatus() {
+		virtualNetwork.SetStatus(&privatev1.VirtualNetworkStatus{})
+	}
+	virtualNetwork.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY)
 	updateCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
 	_, err = client.Update(updateCtx, privatev1.VirtualNetworksUpdateRequest_builder{
 		Object:     virtualNetwork,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+	}.Build())
+	cancel()
+	Expect(err).ToNot(HaveOccurred())
+	Eventually(func(g Gomega) {
+		probeCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
+		defer cancel()
+		resp, err := client.Get(probeCtx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(resp.GetObject().GetStatus().GetState()).To(
+			Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY))
+	}, time.Minute, time.Second).Should(Succeed())
+}
+
+func setSubnetReady(ctx context.Context, client privatev1.SubnetsClient, id string) {
+	Eventually(func(g Gomega) {
+		probeCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
+		defer cancel()
+		resp, err := client.Get(probeCtx, privatev1.SubnetsGetRequest_builder{Id: id}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(resp.GetObject().GetStatus().GetState()).To(
+			Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
+	}, time.Minute, time.Second).Should(Succeed())
+
+	getCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
+	resp, err := client.Get(getCtx, privatev1.SubnetsGetRequest_builder{Id: id}.Build())
+	cancel()
+	Expect(err).ToNot(HaveOccurred())
+	sub := resp.GetObject()
+	sub.SetStatus(privatev1.SubnetStatus_builder{
+		State: privatev1.SubnetState_SUBNET_STATE_READY,
+	}.Build())
+	updateCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
+	_, err = client.Update(updateCtx, privatev1.SubnetsUpdateRequest_builder{
+		Object:     sub,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+	}.Build())
+	cancel()
+	Expect(err).ToNot(HaveOccurred())
+}
+
+func setSecurityGroupReady(ctx context.Context, client privatev1.SecurityGroupsClient, id string) {
+	Eventually(func(g Gomega) {
+		probeCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
+		defer cancel()
+		resp, err := client.Get(probeCtx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(resp.GetObject().GetStatus().GetState()).To(
+			Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
+	}, time.Minute, time.Second).Should(Succeed())
+
+	getCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
+	resp, err := client.Get(getCtx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
+	cancel()
+	Expect(err).ToNot(HaveOccurred())
+	sgObj := resp.GetObject()
+	sgObj.SetStatus(privatev1.SecurityGroupStatus_builder{
+		State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+	}.Build())
+	updateCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
+	_, err = client.Update(updateCtx, privatev1.SecurityGroupsUpdateRequest_builder{
+		Object:     sgObj,
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 	}.Build())
 	cancel()
@@ -103,7 +213,7 @@ func setComputeInstanceFixtureVirtualNetworkReady(ctx context.Context, client pr
 func cleanupComputeInstanceFixture(
 	ctx context.Context,
 	clients computeInstanceFixtureClients,
-	computeInstanceID, resizeInstanceTypeID, instanceTypeID, subnetID, virtualNetworkID,
+	computeInstanceID, resizeInstanceTypeID, instanceTypeID, securityGroupID, subnetID, virtualNetworkID,
 	networkClassID, computeInstanceTemplateID, diskImageID, storageTierID, storageBackendID string,
 ) {
 	if computeInstanceID != "" {
@@ -139,23 +249,22 @@ func cleanupComputeInstanceFixture(
 				return err
 			})
 	}
+	if securityGroupID != "" {
+		Expect(cleanupSecurityGroupFixture(ctx, clients.securityGroups, securityGroupID)).To(Succeed())
+	}
 	if subnetID != "" {
-		deleteComputeInstanceFixtureResource(ctx,
-			func(deleteCtx context.Context) error {
-				_, err := clients.subnets.Delete(deleteCtx, privatev1.SubnetsDeleteRequest_builder{Id: subnetID}.Build())
-				return err
-			})
+		Expect(cleanupSubnetFixture(ctx, clients.subnets, subnetID)).To(Succeed())
+		waitForNotFound(func() error {
+			_, err := clients.subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
+			return err
+		})
 	}
 	if virtualNetworkID != "" {
-		// VirtualNetworks may have an operator finalizer, so Delete can acknowledge the
-		// soft delete while Get continues returning the object until asynchronous cleanup
-		// completes. The deletion timestamp is enough to release this fixture's dependency
-		// before deleting its NetworkClass.
-		deleteComputeInstanceFixtureResource(ctx,
-			func(deleteCtx context.Context) error {
-				_, err := clients.virtualNetworks.Delete(deleteCtx, privatev1.VirtualNetworksDeleteRequest_builder{Id: virtualNetworkID}.Build())
-				return err
-			})
+		Expect(cleanupVirtualNetworkFixture(ctx, clients.virtualNetworks, virtualNetworkID)).To(Succeed())
+		waitForNotFound(func() error {
+			_, err := clients.virtualNetworks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: virtualNetworkID}.Build())
+			return err
+		})
 	}
 	if networkClassID != "" {
 		deleteAndWaitForComputeInstanceFixtureResource(ctx,

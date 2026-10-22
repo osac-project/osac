@@ -5,7 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Create L4LB
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/l4lb"
     method: POST
     headers:
@@ -32,6 +32,7 @@
     return_content: true
     status_code: [200, 201]
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _l4lb_create_resp
   no_log: true
 

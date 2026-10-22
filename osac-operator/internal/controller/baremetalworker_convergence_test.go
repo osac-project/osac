@@ -25,6 +25,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	controllermetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	api "github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -52,6 +53,71 @@ func (w *workerStatusFaultWriter) Patch(ctx context.Context, obj client.Object, 
 		return w.c.err
 	}
 	return w.SubResourceWriter.Patch(ctx, obj, p, opts...)
+}
+
+// applyRejectionCheckpointRace persists one competing write immediately before
+// the checkpoint reaches the API server. It leaves the reconciler's snapshot
+// untouched, so the real JSON Patch must decide whether that snapshot is valid.
+func applyRejectionCheckpointRace(
+	ctx context.Context, c client.Client, order, original *api.ClusterOrder, competing string,
+) {
+	GinkgoHelper()
+	switch competing {
+	case "target mutation":
+		order.Status.Workers[0].AttemptCount++
+	case "target removal":
+		order.Status.Workers = order.Status.Workers[1:]
+	case "worker reordering":
+		order.Status.Workers[0], order.Status.Workers[1] = order.Status.Workers[1], order.Status.Workers[0]
+	case "object replacement":
+		replaceRejectionCheckpointOrder(ctx, c, order, original)
+	case "unrelated updates":
+		updateUnrelatedRejectionCheckpointFields(ctx, c, order)
+	default:
+		Fail("unknown rejection checkpoint race: " + competing)
+	}
+	Expect(c.Status().Update(ctx, order)).To(Succeed())
+}
+
+func replaceRejectionCheckpointOrder(ctx context.Context, c client.Client, order, original *api.ClusterOrder) {
+	GinkgoHelper()
+	oldUID := order.UID
+	order.Finalizers = nil
+	Expect(c.Update(ctx, order)).To(Succeed())
+	Expect(c.Delete(ctx, order)).To(Succeed())
+	order.ObjectMeta = metav1.ObjectMeta{
+		Name: original.Name, Namespace: original.Namespace,
+		Labels: original.Labels, Annotations: original.Annotations,
+	}
+	workers := order.Status.Workers
+	Expect(c.Create(ctx, order)).To(Succeed())
+	Expect(order.UID).NotTo(Equal(oldUID))
+	order.Status.Workers = workers
+}
+
+func updateUnrelatedRejectionCheckpointFields(ctx context.Context, c client.Client, order *api.ClusterOrder) {
+	GinkgoHelper()
+	order.Annotations["checkpoint-race"] = "preserved"
+	order.Spec.NodeRequests[0].NumberOfNodes = 3
+	Expect(c.Update(ctx, order)).To(Succeed())
+	order.Status.Workers[1].AttemptCount = 7
+	order.SetStatusCondition(api.ConditionWorkersFailed, metav1.ConditionFalse, "competing condition", "RaceFixture")
+}
+
+func workerProvisioningFailureCount() float64 {
+	GinkgoHelper()
+	families, err := controllermetrics.Registry.Gather()
+	Expect(err).NotTo(HaveOccurred())
+	var total float64
+	for _, family := range families {
+		if family.GetName() != "osac_caas_worker_provisioning_failures_total" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			total += metric.GetCounter().GetValue()
+		}
+	}
+	return total
 }
 
 // workerAttemptRaceClient places interruption/competing writes around the real
@@ -434,6 +500,118 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		}
 		Expect(fc.CreateCalls()).To(BeEmpty())
 		Expect(fc.DeleteCalls()).To(BeEmpty())
+	})
+
+	It("records a definitively rejected create when deletion races the journal and finalizes", func() {
+		ready()
+		step() // Durable reservation, no external Create.
+		// Deletion lands between the Attempted journal write and the Create
+		// response, and fulfillment rejects the create because its cluster is
+		// already deleting: the rejected-create deadlock window.
+		fc.SetCreateError(status.Error(codes.InvalidArgument, "the owner reference of bare_metal_instances targets a deleting cluster"))
+		r = buildReconciler(&workerAttemptRaceClient{Client: k8sClient, after: func() error {
+			Expect(getOrder().Status.Workers[0].BMICreateState).To(Equal(api.WorkerBMICreateStateAttempted))
+			Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+			return nil
+		}})
+		step() // Journal, rejected create and rejection checkpoint in one invocation.
+		rejected := getOrder()
+		Expect(rejected.Status.Workers).To(HaveLen(1), "rejection dropped the worker: %+v", rejected.Status.Workers)
+		w := rejected.Status.Workers[0]
+		Expect(w.Phase).To(Equal("Failed"), "rejection checkpoint: %+v", w)
+		Expect(w.BMICreateState).To(Equal(api.WorkerBMICreateStateReserved), "journal not re-armed: %+v", w)
+		Expect(w.LastFailureReason).To(Equal("BMICreateRejected"), "rejection checkpoint: %+v", w)
+		Expect(w.BareMetalInstance.ID).To(BeEmpty(), "rejected create left an identity: %+v", w)
+		Expect(fc.CreateCalls()).To(HaveLen(1), "rejected create not issued exactly once")
+		r = buildReconciler(k8sClient)
+		step() // Persist retirement (Failed -> Unbinding).
+		step() // Cancel the re-armed reservation and finalize.
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), &api.ClusterOrder{}))).To(BeTrue(), "finalizer never cleared after a rejected create")
+		Expect(fc.CreateCalls()).To(HaveLen(1), "teardown re-created after the rejection")
+		Expect(fc.DeleteCalls()).To(BeEmpty(), "no BMI ever existed, but teardown deleted one")
+	})
+
+	// Exercise the real status subresource at the checkpoint request, after
+	// any client-side read. No timing sleeps or local JSON application can
+	// establish these atomicity guarantees.
+	DescribeTable("atomically checkpoints a rejection against concurrent writes", func(competing string) {
+		latest := getOrder()
+		latest.Spec.NodeRequests[0].NumberOfNodes = 2
+		Expect(k8sClient.Update(ctx, latest)).To(Succeed())
+		ready()
+		step() // Reserve two workers.
+		Expect(getOrder().Status.Workers).To(HaveLen(2))
+		fc.SetCreateError(status.Error(codes.InvalidArgument, "request rejected"))
+		before := workerProvisioningFailureCount()
+		var raced *api.ClusterOrder
+		fired := false
+		r = buildReconciler(&workerStatusFaultClient{Client: k8sClient, fail: func(submitted *api.ClusterOrder) bool {
+			if fired || len(submitted.Status.Workers) == 0 || submitted.Status.Workers[0].LastFailureReason != "BMICreateRejected" {
+				return false
+			}
+			fired = true
+			raced = getOrder()
+			applyRejectionCheckpointRace(ctx, k8sClient, raced, co, competing)
+			raced = getOrder()
+			return false
+		}})
+		_, err := run()
+		Expect(fired).To(BeTrue(), "checkpoint request never reached race hook")
+		got := getOrder()
+		if competing == "unrelated updates" {
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.Status.Workers[0].Phase).To(Equal("Failed"))
+			Expect(got.Status.Workers[0].BMICreateState).To(Equal(api.WorkerBMICreateStateReserved))
+			Expect(got.Status.Workers[1:]).To(Equal(raced.Status.Workers[1:]))
+			Expect(got.Status.Conditions).To(Equal(raced.Status.Conditions))
+			Expect(got.Status.DesiredWorkers).To(Equal(raced.Status.DesiredWorkers))
+			Expect(got.Status.CurrentWorkers).To(Equal(raced.Status.CurrentWorkers))
+			Expect(got.Status.ReadyWorkers).To(Equal(raced.Status.ReadyWorkers))
+			Expect(got.Annotations).To(Equal(raced.Annotations))
+			Expect(got.Spec).To(Equal(raced.Spec))
+			Expect(workerProvisioningFailureCount()).To(Equal(before + 1))
+		} else {
+			Expect(err).To(HaveOccurred())
+			Expect(got.Status).To(Equal(raced.Status), "stale checkpoint must be atomic")
+			Expect(workerProvisioningFailureCount()).To(Equal(before))
+		}
+		var rejectionEvents int
+		for len(recorder.Events) > 0 {
+			if strings.Contains(<-recorder.Events, "BMICreateRejected") {
+				rejectionEvents++
+			}
+		}
+		if competing == "unrelated updates" {
+			Expect(rejectionEvents).To(Equal(1))
+		} else {
+			Expect(rejectionEvents).To(BeZero())
+		}
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+	},
+		Entry("target mutation", "target mutation"),
+		Entry("target removal", "target removal"),
+		Entry("worker reordering", "worker reordering"),
+		Entry("object replacement", "object replacement"),
+		Entry("unrelated updates", "unrelated updates"),
+	)
+
+	It("fails a rejected create through the standard retry machinery", func() {
+		ready()
+		step() // Reservation.
+		fc.SetCreateError(status.Error(codes.InvalidArgument, "the owner reference of bare_metal_instances targets a deleting cluster"))
+		r = buildReconciler(k8sClient)
+		step() // Journal, rejected create, checkpoint.
+		rejected := getOrder()
+		Expect(rejected.Status.Workers[0].Phase).To(Equal("Failed"), "rejection checkpoint: %+v", rejected.Status.Workers[0])
+		Expect(rejected.Status.Workers[0].BMICreateState).To(Equal(api.WorkerBMICreateStateReserved), "rejection checkpoint: %+v", rejected.Status.Workers[0])
+		Expect(rejected.Status.Workers[0].LastFailureReason).To(Equal("BMICreateRejected"), "rejection checkpoint: %+v", rejected.Status.Workers[0])
+		step() // The standard machinery arms the retry and its condition.
+		armed := getOrder()
+		Expect(armed.Status.Workers[0].AttemptCount).To(Equal(int32(1)), "backoff not armed: %+v", armed.Status.Workers[0])
+		Expect(armed.Status.Workers[0].NextRetryTime).NotTo(BeNil(), "backoff not armed: %+v", armed.Status.Workers[0])
+		Expect(apimeta.IsStatusConditionTrue(armed.Status.Conditions, api.ConditionWorkersFailed)).To(BeTrue(), "failed-worker condition lagged the checkpoint")
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+		// Growing backoff, due retries and no-tight-loop policy live in Unit.
 	})
 
 	It("retains legacy ID-less state without inferring safety from its timestamp", func() {

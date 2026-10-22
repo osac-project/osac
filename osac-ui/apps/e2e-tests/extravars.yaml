@@ -1,0 +1,20 @@
+# Non-sensitive seed values for the VMaaS UI tests.
+#
+# The deployment URL and Keycloak credentials must be supplied through
+# OSAC_UI_BASE_URL, OSAC_USERNAME, and OSAC_PASSWORD.
+
+tenant_name: 'tenant1'
+
+instance_type:
+  name: 'instance-type-e2e'
+  description: 'Instance type created by e2e test'
+  vcpus: 4
+  memory_gib: 16
+  gpu:
+    count: 1
+    resource_name: 'nvidia.com/A100'
+    pci_device_selector: '10DE:20B0'
+  lifecycle_actions:
+    - 'Deprecate'
+    - 'Obsolete'
+    - 'Reactivate'

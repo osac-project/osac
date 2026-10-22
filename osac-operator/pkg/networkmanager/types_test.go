@@ -17,11 +17,15 @@ limitations under the License.
 package networkmanager_test
 
 import (
+	"context"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 )
@@ -37,7 +41,7 @@ var _ = Describe("ParseConfigMap", func() {
 			Data: map[string]string{
 				"name":         "netris",
 				"description":  "Netris SDN controller",
-				"capabilities": "ipv4",
+				"capabilities": "ipv4,eastWestEthernet",
 			},
 		}
 
@@ -45,12 +49,12 @@ var _ = Describe("ParseConfigMap", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(mgr.Name).To(Equal("netris"))
 		Expect(mgr.Description).To(Equal("Netris SDN controller"))
-		Expect(mgr.Capabilities).To(ConsistOf(networkmanager.CapabilityIPv4))
+		Expect(mgr.Capabilities).To(ConsistOf(networkmanager.CapabilityIPv4, networkmanager.CapabilityEastWestEthernet))
 		Expect(mgr.Type).To(Equal(networkmanager.FabricManager))
 		Expect(mgr.ConfigMapRef).To(Equal(types.NamespacedName{Namespace: "osac", Name: "osac-network-fabric-manager-netris"}))
 	})
 
-	It("parses a valid k8s manager ConfigMap with multiple capabilities", func() {
+	It("parses a valid k8s manager ConfigMap with the IPv4 capability", func() {
 		cm := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "osac-network-k8s-manager-cudn-localnet",
@@ -60,7 +64,7 @@ var _ = Describe("ParseConfigMap", func() {
 			Data: map[string]string{
 				"name":         "cudn_localnet",
 				"description":  "CUDN LocalNet bridge",
-				"capabilities": "ipv4,ipv6,dualStack",
+				"capabilities": "ipv4",
 			},
 		}
 
@@ -68,11 +72,7 @@ var _ = Describe("ParseConfigMap", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(mgr.Name).To(Equal("cudn_localnet"))
 		Expect(mgr.Type).To(Equal(networkmanager.K8sManager))
-		Expect(mgr.Capabilities).To(ConsistOf(
-			networkmanager.CapabilityIPv4,
-			networkmanager.CapabilityIPv6,
-			networkmanager.CapabilityDualStack,
-		))
+		Expect(mgr.Capabilities).To(ConsistOf(networkmanager.CapabilityIPv4))
 	})
 
 	It("returns error for nil ConfigMap", func() {
@@ -165,41 +165,43 @@ var _ = Describe("ParseConfigMap", func() {
 		Expect(err.Error()).To(ContainSubstring("capabilities field must not be empty"))
 	})
 
-	It("expands dualStack to include ipv4 and ipv6", func() {
+	It("rejects the IPv6 capability", func() {
 		cm := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
 			Data: map[string]string{
-				"name":         "ds-only",
+				"name":         "ipv6-only",
+				"capabilities": "ipv6",
+			},
+		}
+
+		_, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
+		Expect(err).To(MatchError(ContainSubstring("ipv6")))
+	})
+
+	It("rejects the dual-stack capability", func() {
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
+			Data: map[string]string{
+				"name":         "dual-stack",
 				"capabilities": "dualStack",
 			},
 		}
 
-		mgr, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(mgr.Capabilities).To(ConsistOf(
-			networkmanager.CapabilityDualStack,
-			networkmanager.CapabilityIPv4,
-			networkmanager.CapabilityIPv6,
-		))
+		_, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
+		Expect(err).To(MatchError(ContainSubstring("dualStack")))
 	})
 
-	It("does not duplicate ipv4/ipv6 when dualStack is listed with them", func() {
+	It("rejects unsupported capability combinations", func() {
 		cm := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
 			Data: map[string]string{
-				"name":         "all-three",
-				"capabilities": "ipv4,ipv6,dualStack",
+				"name":         "mixed-capabilities",
+				"capabilities": "ipv4,dpuSupport",
 			},
 		}
 
-		mgr, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(mgr.Capabilities).To(ConsistOf(
-			networkmanager.CapabilityIPv4,
-			networkmanager.CapabilityIPv6,
-			networkmanager.CapabilityDualStack,
-		))
-		Expect(mgr.Capabilities).To(HaveLen(3))
+		_, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
+		Expect(err).To(MatchError(ContainSubstring("dpuSupport")))
 	})
 
 	It("deduplicates repeated capabilities", func() {
@@ -207,7 +209,7 @@ var _ = Describe("ParseConfigMap", func() {
 			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
 			Data: map[string]string{
 				"name":         "duped",
-				"capabilities": "ipv4,ipv6,ipv4",
+				"capabilities": "ipv4,ipv4",
 			},
 		}
 
@@ -215,7 +217,6 @@ var _ = Describe("ParseConfigMap", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(mgr.Capabilities).To(Equal([]networkmanager.Capability{
 			networkmanager.CapabilityIPv4,
-			networkmanager.CapabilityIPv6,
 		}))
 	})
 
@@ -224,13 +225,13 @@ var _ = Describe("ParseConfigMap", func() {
 			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
 			Data: map[string]string{
 				"name":         "spacey",
-				"capabilities": " ipv4 , ipv6 ",
+				"capabilities": " ipv4 ",
 			},
 		}
 
 		mgr, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(mgr.Capabilities).To(ConsistOf(networkmanager.CapabilityIPv4, networkmanager.CapabilityIPv6))
+		Expect(mgr.Capabilities).To(ConsistOf(networkmanager.CapabilityIPv4))
 	})
 
 	It("handles nil data map", func() {
@@ -241,6 +242,33 @@ var _ = Describe("ParseConfigMap", func() {
 		_, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("missing or empty required field data.name"))
+	})
+})
+
+var _ = Describe("Ethernet east-west capability discovery", func() {
+	It("discovers a fabric manager advertising eastWestEthernet", func() {
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "osac-network-fabric-manager-netris",
+				Namespace: "osac",
+				Labels:    map[string]string{networkmanager.LabelFabricManager: "true"},
+			},
+			Data: map[string]string{
+				"name":         "netris",
+				"capabilities": "ipv4,eastWestEthernet",
+			},
+		}
+		scheme := runtime.NewScheme()
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
+		disc, err := networkmanager.NewDiscovery(cl, "osac")
+		Expect(err).NotTo(HaveOccurred())
+
+		mgr, err := disc.GetFabricManager(context.Background(), "netris")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(mgr.Type).To(Equal(networkmanager.FabricManager))
+		Expect(mgr.HasCapability(networkmanager.CapabilityEastWestEthernet)).To(BeTrue())
+		Expect(mgr.HasCapability(networkmanager.CapabilityIPv4)).To(BeTrue())
 	})
 })
 
@@ -257,5 +285,35 @@ var _ = Describe("Manager.HasCapability", func() {
 			Capabilities: []networkmanager.Capability{networkmanager.CapabilityIPv4},
 		}
 		Expect(mgr.HasCapability(networkmanager.CapabilityDualStack)).To(BeFalse())
+	})
+})
+
+var _ = Describe("ExternalIPContractVersion", func() {
+	It("accepts v1 for a registered manager", func() {
+		manager, err := networkmanager.ParseConfigMap(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "agentless", Namespace: "osac"},
+			Data: map[string]string{
+				"name":         "agentless_net",
+				"capabilities": "ipv4",
+				networkmanager.DataKeyExternalIPContractVersion: networkmanager.ExternalIPContractVersionV1,
+			},
+		}, networkmanager.FabricManager)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(manager.ExternalIPContractVersion).To(Equal(networkmanager.ExternalIPContractVersionV1))
+	})
+
+	It("rejects unsupported versions", func() {
+		_, err := networkmanager.ParseConfigMap(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "agentless", Namespace: "osac"},
+			Data: map[string]string{
+				"name":         "agentless_net",
+				"capabilities": "ipv4",
+				networkmanager.DataKeyExternalIPContractVersion: "v2",
+			},
+		}, networkmanager.FabricManager)
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("unsupported ExternalIP contract version"))
 	})
 })

@@ -44,7 +44,7 @@
             labels:
               app.kubernetes.io/name: csiDriver
               app.kubernetes.io/component: controller
-              osac.openshift.io/fulfillment-trust-client: 'true'
+              osac.openshift.io/fulfillment-trust-client: "true"
           spec:
             replicas: 1
             selector:

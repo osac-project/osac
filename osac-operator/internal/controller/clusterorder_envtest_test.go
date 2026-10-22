@@ -22,6 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -74,7 +75,91 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		return instance
 	}
 
-	It("allows zero observed NodePool replicas while requiring a positive desired worker count", func() {
+	It("rejects changes to the complete network attachment", func() {
+		const name = "cluster-order-immutable-network-attachment"
+		instance := newTestClusterOrder(name)
+		instance.Spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{
+			SubnetRef:         "subnet-a",
+			SecurityGroupRefs: []string{"sg-a"},
+		}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+
+		instance = getClusterOrder(name)
+		instance.Spec.NetworkAttachment.SecurityGroupRefs = []string{"sg-b"}
+		err := k8sClient.Update(ctx, instance)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("networkAttachment is immutable after creation"))
+
+		instance = getClusterOrder(name)
+		instance.Spec.NetworkAttachment.SubnetRef = "subnet-b"
+		err = k8sClient.Update(ctx, instance)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("networkAttachment is immutable after creation"))
+	})
+
+	It("rejects adding or removing the optional network attachment", func() {
+		const addName = "cluster-order-add-network-attachment"
+		withoutAttachment := newTestClusterOrder(addName)
+		Expect(k8sClient.Create(ctx, withoutAttachment)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, withoutAttachment)).To(Succeed()) })
+
+		withoutAttachment = getClusterOrder(addName)
+		withoutAttachment.Spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{SubnetRef: "subnet-a"}
+		err := k8sClient.Update(ctx, withoutAttachment)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("networkAttachment is immutable after creation"))
+
+		const removeName = "cluster-order-remove-network-attachment"
+		withAttachment := newTestClusterOrder(removeName)
+		withAttachment.Spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{SubnetRef: "subnet-a"}
+		Expect(k8sClient.Create(ctx, withAttachment)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, withAttachment)).To(Succeed()) })
+
+		withAttachment = getClusterOrder(removeName)
+		withAttachment.Spec.NetworkAttachment = nil
+		err = k8sClient.Update(ctx, withAttachment)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("networkAttachment is immutable after creation"))
+	})
+
+	It("rejects removing spec to bypass network attachment immutability", func() {
+		const name = "cluster-order-remove-spec"
+		instance := newTestClusterOrder(name)
+		instance.Spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{SubnetRef: "subnet-a"}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+
+		instance = getClusterOrder(name)
+		err := k8sClient.Patch(ctx, instance, client.RawPatch(types.JSONPatchType, []byte(`[{"op":"remove","path":"/spec"}]`)))
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		Expect(err).To(MatchError(ContainSubstring("spec presence is immutable after creation")))
+	})
+
+	It("allows unrelated worker and status updates with an unchanged network attachment", func() {
+		const name = "cluster-order-network-attachment-lifecycle-update"
+		instance := newTestClusterOrder(name)
+		instance.Spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{SubnetRef: "subnet-a"}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+
+		instance = getClusterOrder(name)
+		instance.Spec.NodeRequests = []osacv1alpha1.NodeRequest{{
+			NodeSet:       "worker",
+			NumberOfNodes: 1,
+			BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "worker"},
+		}}
+		Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+
+		instance.Status.DesiredConfigVersion = "lifecycle-update"
+		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+	})
+
+	It("skips status when observed replicas is zero and rejects zero desired workers", func() {
 		const name = "cluster-order-zero-observed-workers"
 		instance := newTestClusterOrder(name)
 		instance.Spec.NodeRequests = []osacv1alpha1.NodeRequest{{NodeSet: "worker",
@@ -86,12 +171,8 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 
 		pool := readyClusterOrderNodePool("worker", 0)
 		Expect(reconciler.handleNodePool(ctx, instance, &pool)).To(Succeed())
-		Expect(instance.Status.NodeRequests).To(HaveLen(1))
-		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed(),
-			"a newly created NodePool reports zero observed replicas")
-		stored := getClusterOrder(name)
-		Expect(stored.Spec.NodeRequests[0].NumberOfNodes).To(Equal(1))
-		Expect(stored.Status.NodeRequests[0].NumberOfNodes).To(Equal(0))
+		Expect(instance.Status.NodeRequests).To(BeEmpty(),
+			"zero observed replicas must not create a status entry")
 
 		invalid := newTestClusterOrder("cluster-order-zero-desired-workers")
 		invalid.Spec.NodeRequests = []osacv1alpha1.NodeRequest{{NodeSet: "worker",
@@ -181,6 +262,43 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 	}
 
 	Context("Provisioning workflow", func() {
+		It("does not submit another cluster job after an attachment update is rejected and continues polling status", func() {
+			const name = "cluster-order-immutable-network-attachment-job"
+			instance := newTestClusterOrder(name)
+			instance.Spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{
+				SubnetRef:         "subnet-a",
+				SecurityGroupRefs: []string{"sg-a"},
+			}
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+
+			instance.Status.DesiredConfigVersion = "v1"
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			_, err := reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+
+			instance = getClusterOrder(name)
+			instance.Spec.NetworkAttachment.SecurityGroupRefs = []string{"sg-b"}
+			err = k8sClient.Update(ctx, instance)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+			instance = getClusterOrder(name)
+			provider.setProvisionJobState(osacv1alpha1.JobStateRunning, "Running")
+			result, err := reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(statusPollInterval))
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			provider.mu.Lock()
+			provisionCalls := provider.provisionCallCount
+			provider.mu.Unlock()
+			Expect(provisionCalls).To(Equal(1))
+			job := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
+			Expect(job).NotTo(BeNil())
+			Expect(job.State).To(Equal(osacv1alpha1.JobStateRunning))
+		})
+
 		It("should provision through the full lifecycle: trigger, running, succeeded", func() {
 			const name = "cluster-order-provision-success"
 			instance := newTestClusterOrder(name)
@@ -467,6 +585,47 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result2.RequeueAfter).To(BeNumerically(">", result1.RequeueAfter), "second failure should have longer backoff")
 			Expect(result2.RequeueAfter).To(BeNumerically("~", 10*time.Minute, 30*time.Second), "backoff should double the 5-minute gap")
+		})
+	})
+
+	Context("Phase transition time stamping", func() {
+		It("stamps the phase transition time once per phase change", func() {
+			const name = "cluster-order-phase-transition-time"
+			instance := newTestClusterOrder(name)
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+			})
+
+			nn := types.NamespacedName{Name: name, Namespace: clusterOrderTestNamespace}
+			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// The first reconcile initializes the empty phase to Progressing and stamps it.
+			instance = getClusterOrder(name)
+			Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ClusterOrderPhaseProgressing))
+			Expect(instance.Status.PhaseTransitionTime).NotTo(BeNil())
+			firstStamp := instance.Status.PhaseTransitionTime.Time
+
+			// A status write that leaves the phase unchanged keeps the stamp.
+			computed := instance.Status.DeepCopy()
+			computed.ApiEndpoint = "192.0.2.10"
+			_, err = reconciler.patchStatusWithRetry(ctx, nn, *computed)
+			Expect(err).NotTo(HaveOccurred())
+			instance = getClusterOrder(name)
+			Expect(instance.Status.ApiEndpoint).To(Equal("192.0.2.10"))
+			Expect(instance.Status.PhaseTransitionTime.Time).To(Equal(firstStamp))
+
+			// A phase change moves it. The CR stores whole seconds, so wait past the
+			// second boundary of the first stamp to make the move observable.
+			time.Sleep(time.Until(firstStamp.Truncate(time.Second).Add(2 * time.Second)))
+			computed = instance.Status.DeepCopy()
+			computed.Phase = osacv1alpha1.ClusterOrderPhaseReady
+			_, err = reconciler.patchStatusWithRetry(ctx, nn, *computed)
+			Expect(err).NotTo(HaveOccurred())
+			instance = getClusterOrder(name)
+			Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ClusterOrderPhaseReady))
+			Expect(instance.Status.PhaseTransitionTime.Time).To(BeTemporally(">", firstStamp))
 		})
 	})
 

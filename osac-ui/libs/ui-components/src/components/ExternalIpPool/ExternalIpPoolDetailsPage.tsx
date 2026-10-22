@@ -1,16 +1,9 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import {
-  Button,
-  Divider,
-  Flex,
-  FlexItem,
-  PageSection,
-  Stack,
-  StackItem,
-} from '@patternfly/react-core';
+import { Divider, Flex, FlexItem, PageSection, Stack, StackItem } from '@patternfly/react-core';
 
 import { ExternalIPPools } from '@osac/types/private';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import ExternalIpPoolDeleteConfirmModal from './ExternalIpPoolDeleteConfirmModal';
 import ExternalIpPoolDetailsPageContent from './ExternalIpPoolDetailsPageContent';
@@ -67,9 +60,7 @@ export const ExternalIpPoolDetailsPage = () => {
                     />
                   </FlexItem>
                   <FlexItem>
-                    <Button variant="danger" onClick={() => setDeleteOpen(true)}>
-                      {t('Delete')}
-                    </Button>
+                    <DeleteResourceButton onClick={() => setDeleteOpen(true)} />
                   </FlexItem>
                 </Flex>
               </StackItem>

@@ -13,8 +13,41 @@ language governing permissions and limitations under the License.
 
 package finalizers
 
+import (
+	"slices"
+
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+)
+
 // Names of well known finalizers.
 const (
 	Controller                 = "fulfillment-controller"
+	TenantLifecycle            = Controller + "-tenant-lifecycle"
+	TenantOnboarding           = Controller + "-tenant-onboarding"
 	ProjectMembershipFinalizer = "projectmembership.osac.io/finalizer"
 )
+
+// PrepareTenant installs both cleanup barriers before provisioning. During
+// deletion, missing barriers represent completed work and must not be restored.
+// The caller must persist a change with a locked update and return immediately.
+func PrepareTenant(tenant *privatev1.Tenant) bool {
+	if !tenant.HasMetadata() {
+		tenant.SetMetadata(&privatev1.Metadata{})
+	}
+	metadata := tenant.GetMetadata()
+	list := metadata.GetFinalizers()
+	if metadata.HasDeletionTimestamp() {
+		return false
+	}
+	changed := false
+	for _, barrier := range []string{TenantLifecycle, TenantOnboarding} {
+		if !slices.Contains(list, barrier) {
+			list = append(list, barrier)
+			changed = true
+		}
+	}
+	if changed {
+		metadata.SetFinalizers(list)
+	}
+	return changed
+}

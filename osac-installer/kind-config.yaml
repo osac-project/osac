@@ -24,3 +24,7 @@ nodes:
             # Allow TokenReview from Authorino
             service-account-issuer: https://kubernetes.default.svc
             service-account-signing-key-file: /etc/kubernetes/pki/sa.key
+      - |
+        kind: KubeletConfiguration
+        containerLogMaxSize: "64Mi"
+        containerLogMaxFiles: 20

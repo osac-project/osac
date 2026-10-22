@@ -17,9 +17,60 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 MANIFESTS="${SCRIPT_DIR}/manifests"
 NS="${1:-${NS:-osac}}"
 AWX_PORT="${AWX_PORT:-8052}"
+OSAC_EE_IMAGE="${OSAC_EE_IMAGE:-ghcr.io/osac-project/osac-aap:latest}"
+OSAC_EE_PULL="${OSAC_EE_PULL:-missing}"
 
 log()  { echo "[+] $*"; }
 warn() { echo "[!] $*" >&2; }
+
+json_string() {
+  python3 -c 'import json, sys; print(json.dumps(sys.stdin.read()))'
+}
+
+execution_environment_json() {
+  OSAC_EE_IMAGE="${OSAC_EE_IMAGE}" OSAC_EE_PULL="${OSAC_EE_PULL}" \
+    python3 -c 'import json, os; print(json.dumps({"name": "osac-aap-ee", "organization": 1, "image": os.environ["OSAC_EE_IMAGE"], "pull": os.environ["OSAC_EE_PULL"]}))'
+}
+
+execution_environment_image_json() {
+  OSAC_EE_IMAGE="${OSAC_EE_IMAGE}" OSAC_EE_PULL="${OSAC_EE_PULL}" \
+    python3 -c 'import json, os; print(json.dumps({"image": os.environ["OSAC_EE_IMAGE"], "pull": os.environ["OSAC_EE_PULL"]}))'
+}
+
+ensure_inventory() {
+  local inventory_name="$1" api="$2" awx_token="$3" inventory_id
+  inventory_id=$(curl -s -X POST "${api}/inventories/" -H "Authorization: Bearer ${awx_token}" \
+    -H "Content-Type: application/json" -d "{\"name\": \"${inventory_name}\", \"organization\": 1}" | \
+    python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
+  if [[ -z "${inventory_id}" ]]; then
+    inventory_id=$(curl -s -H "Authorization: Bearer ${awx_token}" "${api}/inventories/?name=${inventory_name}" | \
+      python3 -c "import json,sys; d=json.load(sys.stdin); print(d['results'][0]['id'] if d.get('results') else '')")
+  fi
+  [[ -n "${inventory_id}" ]] || return 1
+  curl -s -X POST "${api}/inventories/${inventory_id}/hosts/" -H "Authorization: Bearer ${awx_token}" \
+    -H "Content-Type: application/json" -d '{"name": "localhost", "variables": "ansible_connection: local"}' >/dev/null 2>&1 || true
+  printf '%s' "${inventory_id}"
+}
+
+controller_template_specs() {
+  local controller_url="${OSAC_CONTROLLER_VARS_URL:-https://raw.githubusercontent.com/osac-project/osac/main/osac-aap/collections/ansible_collections/osac/config_as_code/roles/aap/vars/controller.yml}"
+  curl -fsSL "${controller_url}" | python3 -c '
+import re
+import sys
+
+text = sys.stdin.read()
+section = text.split("controller_templates:", 1)[1].split("controller_job_template_surveys:", 1)[0]
+entry_pattern = re.compile(r"(?ms)^\s+- name: \"\{\{ aap_prefix \}\}-(?P<name>[^\"]+)\"\s*\n(?P<body>.*?)(?=^\s+- name:|\Z)")
+for entry in entry_pattern.finditer(section):
+    body = entry.group("body")
+    playbook = re.search(r"^\s+playbook:\s+\"([^\"]+)\"", body, re.MULTILINE)
+    inventory = re.search(r"^\s+inventory:\s+\"\{\{ aap_prefix \}\}-([^\"]+)\"", body, re.MULTILINE)
+    if not playbook or not inventory:
+        continue
+    workflow_status = re.search(r"^\s+workflow_status:\s+(\w+)", body, re.MULTILINE)
+    print("|".join(("osac-" + entry.group("name"), playbook.group(1), "osac-" + inventory.group(1), workflow_status.group(1) if workflow_status else "")))
+'
+}
 
 install_awx() {
   log "Installing AWX operator..."
@@ -72,21 +123,8 @@ configure_awx() {
   fi
   log "AWX token created"
 
-  # Inventory (create or reuse).
-  local inv_id
-  inv_id=$(curl -s -X POST "${api}/inventories/" -H "Authorization: Bearer ${awx_token}" \
-    -H "Content-Type: application/json" -d '{"name": "OSAC Dev", "organization": 1}' | \
-    python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
-  if [[ -z "$inv_id" ]]; then
-    inv_id=$(curl -s -H "Authorization: Bearer ${awx_token}" "${api}/inventories/?name=OSAC+Dev" | \
-      python3 -c "import json,sys; d=json.load(sys.stdin); print(d['results'][0]['id'] if d.get('results') else '')")
-  fi
-  curl -s -X POST "${api}/inventories/${inv_id}/hosts/" -H "Authorization: Bearer ${awx_token}" \
-    -H "Content-Type: application/json" \
-    -d '{"name": "localhost", "variables": "ansible_connection: local"}' >/dev/null 2>&1 || true
-
-  # Disable collection/role sync — Red Hat proprietary collections (ansible.platform)
-  # are not available in open-source AWX.
+  # Disable project collection/role sync: OSAC's collections are installed in
+  # its dedicated execution environment from osac-aap/collections/requirements.yml.
   #
   # AWX_TASK_ENV injects env vars into every job's execution environment. We set
   # ANSIBLE_JINJA2_NATIVE=true because the osac-aap ocp_virt_vm role is authored
@@ -96,19 +134,58 @@ configure_awx() {
   # the whole mono-repo and runs ansible-runner with cwd = repo root (no ansible.cfg
   # there), so that config is never loaded. Injecting the env var restores native
   # mode for all osac-aap job runs.
-  curl -s -X PATCH "${api}/settings/jobs/" -H "Authorization: Bearer ${awx_token}" \
+  # Local AWX workers may lack a service-account namespace file. Use the
+  # release namespace for storage config Secrets through the supported override.
+  local settings_payload
+  settings_payload=$(python3 -c '
+import json
+import sys
+
+print(json.dumps({
+    "AWX_COLLECTIONS_ENABLED": False,
+    "AWX_ROLES_ENABLED": False,
+    "AWX_TASK_ENV": {
+        "ANSIBLE_JINJA2_NATIVE": "true",
+        "OSAC_STORAGE_CONFIG_NAMESPACE": sys.argv[1],
+    },
+}))
+' "${NS}")
+  curl -fsS -X PATCH "${api}/settings/jobs/" -H "Authorization: Bearer ${awx_token}" \
     -H "Content-Type: application/json" \
-    -d '{"AWX_COLLECTIONS_ENABLED": false, "AWX_ROLES_ENABLED": false, "AWX_TASK_ENV": {"ANSIBLE_JINJA2_NATIVE": "true"}}' >/dev/null
+    -d "${settings_payload}" >/dev/null
+
+  # Register the OSAC AAP execution environment, which contains the full
+  # collection set including vastdata.vms.
+  local ee_id
+  ee_id=$(curl -s -X POST "${api}/execution_environments/" -H "Authorization: Bearer ${awx_token}" \
+    -H "Content-Type: application/json" \
+    -d "$(execution_environment_json)" | \
+    python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
+  if [[ -z "${ee_id}" ]]; then
+    ee_id=$(curl -s -H "Authorization: Bearer ${awx_token}" "${api}/execution_environments/?name=osac-aap-ee" | \
+      python3 -c "import json,sys; d=json.load(sys.stdin); print(d['results'][0]['id'] if d.get('results') else '')")
+  fi
+  if [[ -z "${ee_id}" ]]; then
+    warn "Failed to create or find the OSAC AAP execution environment"
+    return 1
+  fi
+  curl -s -X PATCH "${api}/execution_environments/${ee_id}/" -H "Authorization: Bearer ${awx_token}" \
+    -H "Content-Type: application/json" \
+    -d "$(execution_environment_image_json)" >/dev/null
+  log "OSAC AAP execution environment configured: ${OSAC_EE_IMAGE} (pull: ${OSAC_EE_PULL})"
 
   # Project from the osac mono-repo. osac-aap playbooks live under osac-aap/, and
   # AWX's Project API always clones the whole repo, so playbook paths below are
   # prefixed with osac-aap/.
+  # Remove the cached checkout before syncing: the repo's graph-latest tag moves,
+  # and Git rejects a fetch when that tag differs from AWX's stale local tag.
   local project_id
   project_id=$(curl -s -X POST "${api}/projects/" -H "Authorization: Bearer ${awx_token}" \
     -H "Content-Type: application/json" -d '{
       "name": "osac-aap", "organization": 1, "scm_type": "git",
       "scm_url": "https://github.com/osac-project/osac.git",
-      "scm_branch": "main", "scm_update_on_launch": false
+      "scm_branch": "main", "scm_update_on_launch": false,
+      "scm_delete_on_update": true
     }' | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
   if [[ -z "$project_id" ]]; then
     project_id=$(curl -s -H "Authorization: Bearer ${awx_token}" "${api}/projects/?name=osac-aap" | \
@@ -117,7 +194,7 @@ configure_awx() {
       # A project surviving a pre-mono-repo run may still point at the old repo.
       curl -s -X PATCH "${api}/projects/${project_id}/" -H "Authorization: Bearer ${awx_token}" \
         -H "Content-Type: application/json" \
-        -d '{"scm_url": "https://github.com/osac-project/osac.git", "scm_branch": "main"}' >/dev/null
+        -d '{"scm_url": "https://github.com/osac-project/osac.git", "scm_branch": "main", "scm_delete_on_update": true}' >/dev/null
       curl -s -X POST "${api}/projects/${project_id}/update/" -H "Authorization: Bearer ${awx_token}" >/dev/null
     fi
   fi
@@ -132,17 +209,9 @@ configure_awx() {
   done
   log "AWX project synced: ${proj_status}"
 
-  # Compute-instance job templates (real playbooks).
-  # Dev-full storage fallback: the compute-instance playbook resolves a
-  # StorageClass by matching its requested tier (_requested_storage_tier,
-  # default 'local') against this injected tenant_storage_classes list. On kind
-  # the only StorageClass is 'standard' (rancher.io/local-path) and the
-  # LVMS-backed 'local' StorageTier hook (register-local-storage.yaml) is
-  # skipped, so nothing populates the tenant's status.storageClasses. We inject
-  # the list here as a job-template extra_var (which outranks the playbook's
-  # osac_job_vars-derived value) so provisioning works without a real storage
-  # backend. The tier MUST be 'local' to match the playbook's requested tier —
-  # a mismatched tier name fails the run ("tier not available").
+  # Compute-instance job templates (real playbooks). Leave storage-class
+  # variables unset here; the operator supplies the tenant's resolved classes
+  # under osac_job_vars whenever it launches a compute job.
   #
   # We deliberately do NOT inject tenant_target_namespace / compute_instance_target_namespace
   # here. As top-level extra_vars they would OUTRANK the ocp_virt_vm role's own
@@ -154,21 +223,79 @@ configure_awx() {
   # stuck at Provisioned=False/WaitingForVM forever. Let the role resolve it; the
   # subnet namespace itself is created by provision-tenant.sh (subnet provisioning
   # is a noop on kind, so nothing else creates it).
-  local compute_extra_vars
-  compute_extra_vars="tenant_storage_classes:
-  - name: standard
-    tier: local"
-  local entry name playbook
+  local inventory_name inventory_id inv_id
+  declare -A inventory_ids
+  for inventory_name in \
+    osac-cluster-fulfillment osac-config-as-code osac-publish-templates \
+    osac-compute-instance-operations osac-networking-operations \
+    osac-bare-metal-fulfillment osac-storage-operations; do
+    inventory_ids["${inventory_name}"]=$(ensure_inventory "${inventory_name}" "${api}" "${awx_token}")
+  done
+  inv_id="${inventory_ids[osac-compute-instance-operations]}"
+  local entry name playbook template_id template_payload
   for entry in \
     "osac-create-compute-instance:osac-aap/playbook_osac_create_compute_instance.yml" \
     "osac-delete-compute-instance:osac-aap/playbook_osac_delete_compute_instance.yml"; do
     name="${entry%%:*}"; playbook="${entry##*:}"
+    template_id=$(curl -fsS -G "${api}/job_templates/" \
+      -H "Authorization: Bearer ${awx_token}" \
+      --data-urlencode "name=${name}" | \
+      python3 -c '
+import json
+import sys
+
+name = sys.argv[1]
+matches = [
+    str(template["id"])
+    for template in json.load(sys.stdin).get("results", [])
+    if template.get("name") == name and template.get("organization") == 1
+]
+if len(matches) > 1:
+    raise SystemExit(f"multiple AWX job templates named {name!r} in organization 1")
+print(matches[0] if matches else "")
+' "${name}")
+    if [[ -n "${template_id}" ]]; then
+      curl -fsS -X PATCH "${api}/job_templates/${template_id}/" \
+        -H "Authorization: Bearer ${awx_token}" \
+        -H "Content-Type: application/json" \
+        -d '{"extra_vars":"{}"}' >/dev/null
+    else
+      template_payload=$(python3 -c '
+import json
+import sys
+
+print(json.dumps({
+    "name": sys.argv[1],
+    "organization": 1,
+    "inventory": int(sys.argv[3]),
+    "project": int(sys.argv[4]),
+    "playbook": sys.argv[2],
+    "extra_vars": "{}",
+    "ask_variables_on_launch": True,
+}))
+' "${name}" "${playbook}" "${inv_id}" "${project_id}")
+      curl -fsS -X POST "${api}/job_templates/" \
+        -H "Authorization: Bearer ${awx_token}" \
+        -H "Content-Type: application/json" \
+        -d "${template_payload}" >/dev/null
+    fi
+    log "  template: ${name}"
+  done
+
+  # Storage templates used by the operator to provision the registered
+  # tenant backend and create tenant-labeled StorageClasses for each tier.
+  for entry in \
+    "osac-create-tenant-storage-backend:osac-aap/playbook_osac_create_tenant_storage_backend.yml" \
+    "osac-delete-tenant-storage-backend:osac-aap/playbook_osac_delete_tenant_storage_backend.yml" \
+    "osac-create-tenant-cluster-storage:osac-aap/playbook_osac_create_tenant_cluster_storage.yml" \
+    "osac-delete-tenant-cluster-storage:osac-aap/playbook_osac_delete_tenant_cluster_storage.yml"; do
+    name="${entry%%:*}"; playbook="${entry##*:}"
     curl -s -X POST "${api}/job_templates/" -H "Authorization: Bearer ${awx_token}" \
       -H "Content-Type: application/json" -d "{
         \"name\": \"${name}\", \"organization\": 1, \"inventory\": ${inv_id},
-        \"project\": ${project_id}, \"playbook\": \"${playbook}\",
-        \"ask_variables_on_launch\": true,
-        \"extra_vars\": $(echo "${compute_extra_vars}" | jq -Rs .)
+        \"project\": ${project_id}, \"playbook\": \"${entry##*:}\",
+        \"extra_vars\": \"{}\", \"ask_variables_on_launch\": true,
+        \"allow_simultaneous\": false
       }" >/dev/null
     log "  template: ${name}"
   done
@@ -186,10 +313,61 @@ configure_awx() {
       -H "Content-Type: application/json" -d "{
         \"name\": \"${name}\", \"organization\": 1, \"inventory\": ${inv_id},
         \"project\": ${project_id}, \"playbook\": \"${playbook}\",
-        \"ask_variables_on_launch\": true
+        \"extra_vars\": \"{}\", \"ask_variables_on_launch\": true
       }" >/dev/null
     log "  template: ${name}"
   done
+
+  # Complete the production template catalog. The legacy loops above are kept
+  # for compatibility with older AWX state; this pass updates every template
+  # with its production playbook, inventory, and execution environment.
+  local template_specs name playbook template_inventory workflow_status
+  local template_id extra_vars extra_vars_json template_payload
+  if ! template_specs=$(controller_template_specs); then
+    warn "Failed to load production controller template definitions"
+    return 1
+  fi
+  if [[ -z "${template_specs}" ]]; then
+    warn "Production controller template definitions are empty"
+    return 1
+  fi
+  while IFS='|' read -r name playbook template_inventory workflow_status; do
+    [[ -n "${name}" ]] || continue
+    if [[ -z "${inventory_ids[${template_inventory}]:-}" ]]; then
+      inventory_ids["${template_inventory}"]=$(ensure_inventory "${template_inventory}" "${api}" "${awx_token}")
+    fi
+    extra_vars="{}"
+    if [[ -n "${workflow_status}" ]]; then
+      extra_vars="workflow_status: ${workflow_status}"
+    fi
+    extra_vars_json=$(printf '%s' "${extra_vars}" | json_string)
+    inventory_id="${inventory_ids[${template_inventory}]}"
+    template_payload=$(cat <<EOF
+{
+  "name": "${name}", "organization": 1, "inventory": ${inventory_id},
+  "project": ${project_id}, "playbook": "${playbook}",
+  "execution_environment": ${ee_id}, "ask_variables_on_launch": true,
+  "allow_simultaneous": false,
+  "extra_vars": ${extra_vars_json}
+}
+EOF
+)
+    template_id=$(curl -s -H "Authorization: Bearer ${awx_token}" "${api}/job_templates/?name=${name}" | \
+      python3 -c "import json,sys; d=json.load(sys.stdin); print(d['results'][0]['id'] if d.get('results') else '')")
+    if [[ -z "${template_id}" ]]; then
+      template_id=$(curl -s -X POST "${api}/job_templates/" -H "Authorization: Bearer ${awx_token}" \
+        -H "Content-Type: application/json" -d "${template_payload}" | \
+        python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
+    fi
+    [[ -n "${template_id}" ]] || { warn "Failed to create or find template ${name}"; return 1; }
+    if ! curl -sS -f -X PATCH "${api}/job_templates/${template_id}/" \
+      -H "Authorization: Bearer ${awx_token}" -H "Content-Type: application/json" \
+      -d "${template_payload}" >/dev/null; then
+      warn "Failed to update job template ${template_id} (${name})"
+      return 1
+    fi
+  done <<< "${template_specs}"
+  log "Production OSAC job templates derived from controller.yml"
 
   # Kubernetes credential so job templates can act on the cluster.
   kubectl -n "${NS}" create serviceaccount awx-runner 2>/dev/null || true
@@ -205,12 +383,11 @@ configure_awx() {
       \"inputs\": {
         \"host\": \"https://kubernetes.default.svc.cluster.local:443\",
         \"bearer_token\": \"${awx_runner_token}\", \"verify_ssl\": true,
-        \"ssl_ca_cert\": $(echo "${cluster_ca}" | jq -Rs .)
+        \"ssl_ca_cert\": $(printf '%s' "${cluster_ca}" | json_string)
       }
     }" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))")
 
   # Attach the credential to every job template.
-  local templates jt_id
   templates=$(curl -s -H "Authorization: Bearer ${awx_token}" "${api}/job_templates/" | \
     python3 -c "import json,sys; print(' '.join(str(t['id']) for t in json.load(sys.stdin)['results']))")
   for jt_id in ${templates}; do

@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.public.v1;
 
 import "buf/validate/validate.proto";
+import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/public/v1/metadata_type.proto";
 
@@ -75,7 +76,7 @@ message InstanceType {
   InstanceTypeSpec spec = 3;
 
   // Current state of the instance type (system-provided, read-only).
-  InstanceTypeStatus status = 4;
+  InstanceTypeStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Hardware specification for GPU devices attached to compute instances provisioned with this instance type.

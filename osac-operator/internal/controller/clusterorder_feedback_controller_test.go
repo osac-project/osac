@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -137,6 +138,203 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 		if err != nil && apierrors.IsNotFound(err) {
 			Expect(k8sClient.Create(testCtx, namespace)).To(Succeed())
 		}
+	})
+
+	Context("state transition time feedback", func() {
+		remoteWithState := func(state privatev1.ClusterState, transitionTime *timestamppb.Timestamp) *privatev1.Cluster {
+			return &privatev1.Cluster{
+				Id:     clusterID,
+				Spec:   &privatev1.ClusterSpec{},
+				Status: &privatev1.ClusterStatus{State: state, StateTransitionTime: transitionTime},
+			}
+		}
+
+		It("copies the CR's phase transition time when the phase changes the state", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-2 * time.Hour))
+			phaseStamp := metav1.NewTime(time.Now().Add(-time.Hour).UTC())
+			remote := remoteWithState(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, oldStamp)
+			clusterOrder := &osacv1alpha1.ClusterOrder{Status: osacv1alpha1.ClusterOrderStatus{
+				Phase:               osacv1alpha1.ClusterOrderPhaseReady,
+				PhaseTransitionTime: &phaseStamp,
+			}}
+
+			syncClusterOrderPhase(testCtx, clusterOrder, remote)
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_READY))
+			// The copied time is the CR's recorded transition, not the feedback moment:
+			// feedback can run long after the phase moved.
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(phaseStamp.Time))
+		})
+
+		It("bumps the stored time by one microsecond when the CR stamp equals it", func() {
+			// Two phase changes within one second carry the same whole-second CR stamp; the
+			// source contract rejects a changed value with a time equal to the stored one,
+			// so the write must land past the stored time instead.
+			phaseStamp := metav1.NewTime(time.Now().Add(-time.Hour).UTC().Truncate(time.Second))
+			stored := timestamppb.New(phaseStamp.Time)
+			remote := remoteWithState(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, stored)
+			clusterOrder := &osacv1alpha1.ClusterOrder{Status: osacv1alpha1.ClusterOrderStatus{
+				Phase:               osacv1alpha1.ClusterOrderPhaseReady,
+				PhaseTransitionTime: &phaseStamp,
+			}}
+
+			syncClusterOrderPhase(testCtx, clusterOrder, remote)
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_READY))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(
+				Equal(phaseStamp.Time.Add(time.Microsecond)))
+		})
+
+		It("falls back to the observation time when the phase changes and the CR carries no time", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithState(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, oldStamp)
+			clusterOrder := &osacv1alpha1.ClusterOrder{Status: osacv1alpha1.ClusterOrderStatus{
+				Phase: osacv1alpha1.ClusterOrderPhaseReady,
+			}}
+
+			syncClusterOrderPhase(testCtx, clusterOrder, remote)
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_READY))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(BeTemporally(">", oldStamp.AsTime()))
+		})
+
+		It("keeps the existing transition time when the state is unchanged", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithState(privatev1.ClusterState_CLUSTER_STATE_READY, oldStamp)
+			clusterOrder := &osacv1alpha1.ClusterOrder{Status: osacv1alpha1.ClusterOrderStatus{
+				Phase: osacv1alpha1.ClusterOrderPhaseReady,
+			}}
+
+			syncClusterOrderPhase(testCtx, clusterOrder, remote)
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_READY))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
+		})
+
+		It("leaves the state and time untouched for an unknown phase", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithState(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, oldStamp)
+			clusterOrder := &osacv1alpha1.ClusterOrder{Status: osacv1alpha1.ClusterOrderStatus{
+				Phase: "unexpected",
+			}}
+
+			syncClusterOrderPhase(testCtx, clusterOrder, remote)
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
+		})
+
+		It("copies the CR's phase transition time when the delete path forces DELETING", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-2 * time.Hour))
+			phaseStamp := metav1.NewTime(time.Now().Add(-time.Hour).UTC())
+			remote := remoteWithState(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, oldStamp)
+			clusterOrder := &osacv1alpha1.ClusterOrder{Status: osacv1alpha1.ClusterOrderStatus{
+				Phase:               osacv1alpha1.ClusterOrderPhaseDeleting,
+				PhaseTransitionTime: &phaseStamp,
+			}}
+
+			Expect(syncClusterOrderDelete(testCtx, clusterOrder, remote)).To(Succeed())
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_DELETING))
+			// The copied time is the CR's recorded transition, not the feedback moment.
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(phaseStamp.Time))
+		})
+
+		It("stamps a later transition time when the delete path forces DELETING", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithState(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, oldStamp)
+			clusterOrder := &osacv1alpha1.ClusterOrder{Status: osacv1alpha1.ClusterOrderStatus{
+				Phase: osacv1alpha1.ClusterOrderPhaseDeleting,
+			}}
+
+			Expect(syncClusterOrderDelete(testCtx, clusterOrder, remote)).To(Succeed())
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_DELETING))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(BeTemporally(">", oldStamp.AsTime()))
+		})
+
+		It("dates DELETING at the deletionTimestamp when the CR phase has not moved yet", func() {
+			// The delete path can sync before the ClusterOrder CR records Phase=Deleting.
+			// The CR's PhaseTransitionTime then still belongs to the previous phase, and
+			// copying it (or a one-microsecond bump of it) would date DELETING at the old
+			// phase's moment, billing the entire READY span as DELETING.
+			readyStamp := metav1.NewTime(time.Now().Add(-2 * time.Hour).UTC())
+			deletedAt := metav1.NewTime(time.Now().Add(-5 * time.Minute).UTC())
+			remote := remoteWithState(privatev1.ClusterState_CLUSTER_STATE_READY, timestamppb.New(readyStamp.Time))
+			clusterOrder := &osacv1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					DeletionTimestamp: &deletedAt,
+				},
+				Status: osacv1alpha1.ClusterOrderStatus{
+					Phase:               osacv1alpha1.ClusterOrderPhaseReady,
+					PhaseTransitionTime: &readyStamp,
+				},
+			}
+
+			Expect(syncClusterOrderDelete(testCtx, clusterOrder, remote)).To(Succeed())
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_DELETING))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(deletedAt.Time))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(BeTemporally(">", readyStamp.Time))
+		})
+
+		It("dates DELETING at the observation time when the CR phase has not moved and carries no deletionTimestamp", func() {
+			readyStamp := metav1.NewTime(time.Now().Add(-2 * time.Hour).UTC())
+			remote := remoteWithState(privatev1.ClusterState_CLUSTER_STATE_READY, timestamppb.New(readyStamp.Time))
+			clusterOrder := &osacv1alpha1.ClusterOrder{Status: osacv1alpha1.ClusterOrderStatus{
+				Phase:               osacv1alpha1.ClusterOrderPhaseReady,
+				PhaseTransitionTime: &readyStamp,
+			}}
+
+			observed := time.Now()
+			Expect(syncClusterOrderDelete(testCtx, clusterOrder, remote)).To(Succeed())
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_DELETING))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(BeTemporally(">=", observed))
+		})
+
+		It("dates DELETING at the deletionTimestamp when deleting from a PROGRESSING phase", func() {
+			// The delete path stamps only DELETING, never an intermediate state derived
+			// from the phase the CR still carries.
+			progressingStamp := metav1.NewTime(time.Now().Add(-30 * time.Minute).UTC())
+			deletedAt := metav1.NewTime(time.Now().Add(-5 * time.Minute).UTC())
+			remote := remoteWithState(privatev1.ClusterState_CLUSTER_STATE_READY, timestamppb.New(progressingStamp.Time))
+			clusterOrder := &osacv1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					DeletionTimestamp: &deletedAt,
+				},
+				Status: osacv1alpha1.ClusterOrderStatus{
+					Phase:               osacv1alpha1.ClusterOrderPhaseProgressing,
+					PhaseTransitionTime: &progressingStamp,
+				},
+			}
+
+			Expect(syncClusterOrderDelete(testCtx, clusterOrder, remote)).To(Succeed())
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_DELETING))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(deletedAt.Time))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(BeTemporally(">", progressingStamp.Time))
+		})
+
+		It("bumps the stored time by one microsecond when the deletionTimestamp is not later than it", func() {
+			readyStamp := timestamppb.New(time.Now().Add(-2 * time.Hour))
+			deletedAt := metav1.NewTime(readyStamp.AsTime().Add(-time.Minute).UTC())
+			remote := remoteWithState(privatev1.ClusterState_CLUSTER_STATE_READY, readyStamp)
+			clusterOrder := &osacv1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					DeletionTimestamp: &deletedAt,
+				},
+				Status: osacv1alpha1.ClusterOrderStatus{
+					Phase: osacv1alpha1.ClusterOrderPhaseReady,
+				},
+			}
+
+			Expect(syncClusterOrderDelete(testCtx, clusterOrder, remote)).To(Succeed())
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_DELETING))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(
+				Equal(readyStamp.AsTime().Add(time.Microsecond)))
+		})
 	})
 
 	Context("When reconciling a resource that doesn't exist", func() {
@@ -345,6 +543,77 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			updated := &osacv1alpha1.ClusterOrder{}
 			err = k8sClient.Get(testCtx, typeNamespacedName, updated)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		})
+	})
+
+	Context("When reconciling a resource deleted while still in Ready phase", func() {
+		BeforeEach(func() {
+			clusterOrder := &osacv1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: clusterOrderNS,
+					Labels: map[string]string{
+						osacClusterOrderIDLabel: clusterID,
+					},
+					Finalizers: []string{osacClusterOrderFeedbackFinalizer},
+				},
+				Spec: osacv1alpha1.ClusterOrderSpec{
+					TemplateID: "test_template",
+				},
+			}
+			Expect(k8sClient.Create(testCtx, clusterOrder)).To(Succeed())
+
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			clusterOrder.Status.Phase = osacv1alpha1.ClusterOrderPhaseReady
+			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
+
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			Expect(k8sClient.Delete(testCtx, clusterOrder)).To(Succeed())
+
+			// The remote still reports READY true: feedback handles the deletion
+			// before the resource controller records Phase=Deleting.
+			mockClient.getResponse = &privatev1.ClustersGetResponse{
+				Object: &privatev1.Cluster{
+					Id:   clusterID,
+					Spec: &privatev1.ClusterSpec{},
+					Status: &privatev1.ClusterStatus{
+						State: privatev1.ClusterState_CLUSTER_STATE_READY,
+						Conditions: []*privatev1.ClusterCondition{
+							{
+								Type:   privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_READY,
+								Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+							},
+						},
+					},
+				},
+			}
+			mockClient.updateResponse = &privatev1.ClustersUpdateResponse{}
+		})
+
+		AfterEach(func() {
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			err := k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)
+			if err == nil {
+				clusterOrder.Finalizers = nil
+				Expect(k8sClient.Update(testCtx, clusterOrder)).To(Succeed())
+			}
+		})
+
+		It("should clear the READY condition while forcing DELETING", func() {
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			result, err := reconciler.Reconcile(testCtx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_DELETING))
+			// The reported condition must agree with the reported state: the READY
+			// condition cannot stay true while the state is DELETING.
+			ready := findExistingClusterCondition(mockClient.lastUpdate,
+				privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_READY)
+			Expect(ready).ToNot(BeNil())
+			Expect(ready.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 		})
 	})
 
@@ -636,7 +905,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			Expect(mockClient.lastUpdate.GetStatus().GetIngressEndpoint()).To(BeEmpty())
 		})
 
-		It("should translate WorkersFailed=True to WORKER_PROVISIONING_FAILED with count-only message", func() {
+		It("should include retry details when all failed workers have pending retries", func() {
 			co := &osacv1alpha1.ClusterOrder{}
 			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
 			co.Status.Phase = osacv1alpha1.ClusterOrderPhaseProgressing
@@ -662,7 +931,8 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			cond := findProtoCondition(mockClient.lastUpdate, privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_WORKER_PROVISIONING_FAILED)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
-			Expect(cond.GetMessage()).To(ContainSubstring("2 of 5"))
+			Expect(cond.GetMessage()).To(Equal(
+				"2 of 5 worker nodes failed to provision; retry 1: attempt 2, next retry pending; retry 2: attempt 1, next retry pending"))
 			Expect(cond.GetMessage()).NotTo(ContainSubstring("bm-w-3"))
 			Expect(cond.GetMessage()).NotTo(ContainSubstring("bm-w-4"))
 			Expect(cond.GetMessage()).NotTo(ContainSubstring("AgentRegistrationTimeout"))
@@ -1164,6 +1434,106 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			Expect(mockClient.lastUpdate.GetStatus().GetConditions()).To(BeEmpty())
 		})
 
+		It("should map failed add-on operators to public degradation", func() {
+			setCRCondition(string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady), metav1.ConditionFalse,
+				"AddOnOperatorsFailed", "Add-on operator installation failed: gpu-operator")
+
+			reconcileOnce()
+
+			degraded := findRemoteCondition(privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED)
+			Expect(degraded).NotTo(BeNil())
+			Expect(degraded.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+			Expect(degraded.GetReason()).To(Equal("AddOnOperatorsFailed"))
+			Expect(degraded.GetMessage()).To(Equal("Add-on operator installation failed: gpu-operator"))
+		})
+
+		It("should clear add-on-owned degradation after all operators recover", func() {
+			setCRCondition(string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady), metav1.ConditionFalse,
+				"AddOnOperatorsFailed", "Add-on operator installation failed: gpu-operator")
+			reconcileOnce()
+
+			setCRCondition(string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady), metav1.ConditionTrue,
+				"AddOnOperatorsReady", "All add-on operators installed")
+			reconcileOnce()
+
+			degraded := findRemoteCondition(privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED)
+			Expect(degraded).NotTo(BeNil())
+			Expect(degraded.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+			Expect(degraded.GetReason()).To(Equal("AddOnOperatorsRecovered"))
+		})
+
+		It("should preserve an unrelated degradation when add-on installation also fails", func() {
+			degraded := &privatev1.ClusterCondition{
+				Type:   privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED,
+				Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			}
+			degraded.SetReason("NodePoolDegraded")
+			degraded.SetMessage("node pool is unhealthy")
+			mockClient.getResponse.GetObject().GetStatus().SetConditions([]*privatev1.ClusterCondition{degraded})
+			setCRCondition(string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady), metav1.ConditionFalse,
+				"AddOnOperatorsFailed", "Add-on operator installation failed: gpu-operator")
+
+			reconcileOnce()
+
+			degraded = mockClient.getResponse.GetObject().GetStatus().GetConditions()[0]
+			Expect(degraded.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+			Expect(degraded.GetReason()).To(Equal("NodePoolDegraded"))
+			Expect(degraded.GetMessage()).To(Equal("node pool is unhealthy"))
+		})
+
+		It("should preserve unrelated degradation when add-on operators are ready", func() {
+			degraded := &privatev1.ClusterCondition{
+				Type:   privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED,
+				Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			}
+			degraded.SetReason("NodePoolDegraded")
+			degraded.SetMessage("node pool is unhealthy")
+			mockClient.getResponse.GetObject().GetStatus().SetConditions([]*privatev1.ClusterCondition{degraded})
+			setCRCondition(string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady), metav1.ConditionTrue,
+				"AddOnOperatorsReady", "All add-on operators installed")
+
+			reconcileOnce()
+
+			degraded = mockClient.getResponse.GetObject().GetStatus().GetConditions()[0]
+			Expect(degraded).NotTo(BeNil())
+			Expect(degraded.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+			Expect(degraded.GetReason()).To(Equal("NodePoolDegraded"))
+		})
+
+		It("should preserve unrelated degradation when the add-on condition is absent", func() {
+			degraded := &privatev1.ClusterCondition{
+				Type:   privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED,
+				Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			}
+			degraded.SetReason("HyperShiftDegraded")
+			degraded.SetMessage("control plane is unhealthy")
+			mockClient.getResponse.GetObject().GetStatus().SetConditions([]*privatev1.ClusterCondition{degraded})
+
+			reconcileOnce()
+
+			degraded = mockClient.getResponse.GetObject().GetStatus().GetConditions()[0]
+			Expect(degraded).NotTo(BeNil())
+			Expect(degraded.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+			Expect(degraded.GetReason()).To(Equal("HyperShiftDegraded"))
+		})
+
+		It("should clear add-on-owned degradation when the add-on condition is absent", func() {
+			degraded := &privatev1.ClusterCondition{
+				Type:   privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED,
+				Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			}
+			degraded.SetReason("AddOnOperatorsFailed")
+			degraded.SetMessage("stale add-on failure")
+			mockClient.getResponse.GetObject().GetStatus().SetConditions([]*privatev1.ClusterCondition{degraded})
+
+			reconcileOnce()
+
+			degraded = findRemoteCondition(privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED)
+			Expect(degraded).NotTo(BeNil())
+			Expect(degraded.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+			Expect(degraded.GetReason()).To(Equal("AddOnOperatorsRecovered"))
+		})
+
 		It("should fill PROGRESSING from Progressing regardless of condition order and not invert once the cluster is available", func() {
 			// A finished cluster: Progressing is False, every installation step is True, and
 			// the cluster is Available. PROGRESSING must follow Progressing (False) - a
@@ -1227,11 +1597,11 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 	})
 
 	Context("ClusterOrder condition mapping completeness", func() {
-		// Tripwire: every ClusterOrder condition must be handled by exactly one of the three
+		// Tripwire: every ClusterOrder condition must be handled by exactly one of the four
 		// dispositions in feedback_controller.go - mapped to a fulfillment condition, listed
 		// as a provisioning stage (refines PROGRESSING's reason/message), or explicitly
-		// unsurfaced. When a new ClusterOrder condition is added to the API, add it here and
-		// wire it into one of the three - otherwise this test fails, instead of the condition
+		// degraded, or unsurfaced. When a new ClusterOrder condition is added to the API, add it here and
+		// wire it into one of the four - otherwise this test fails, instead of the condition
 		// being silently dropped at runtime.
 		knownClusterOrderConditions := []string{
 			osacv1alpha1.ConditionAccepted,
@@ -1250,16 +1620,17 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			for _, condition := range knownClusterOrderConditions {
 				_, mapped := clusterOrderConditionMappings[condition]
 				stage := slices.Contains(clusterOrderProvisioningStages, condition)
+				_, degraded := clusterOrderDegradedConditionSources[condition]
 				_, unsurfaced := clusterOrderUnsurfacedConditions[condition]
 
 				handledCount := 0
-				for _, handled := range []bool{mapped, stage, unsurfaced} {
+				for _, handled := range []bool{mapped, stage, degraded, unsurfaced} {
 					if handled {
 						handledCount++
 					}
 				}
 				Expect(handledCount).To(Equal(1),
-					"condition %q must be handled by exactly one of: mapping, provisioning stage, unsurfaced (got %d)",
+					"condition %q must be handled by exactly one of: mapping, provisioning stage, degraded, unsurfaced (got %d)",
 					condition, handledCount)
 			}
 		})
@@ -1287,6 +1658,10 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 				_, ok := known[condition]
 				Expect(ok).To(BeTrue(), "provisioning-stage condition %q is not a known ClusterOrder condition", condition)
 			}
+			for condition := range clusterOrderDegradedConditionSources {
+				_, ok := known[condition]
+				Expect(ok).To(BeTrue(), "degraded condition %q is not a known ClusterOrder condition", condition)
+			}
 			for condition := range clusterOrderUnsurfacedConditions {
 				_, ok := known[condition]
 				Expect(ok).To(BeTrue(), "unsurfaced condition %q is not a known ClusterOrder condition", condition)
@@ -1307,7 +1682,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 				},
 				Spec: osacv1alpha1.ClusterOrderSpec{
 					TemplateID:     "test_template",
-					AddOnOperators: []string{"pending", "running", "installed", "failed", "not-started"},
+					AddOnOperators: []string{"pending", "running", "installed", "failed", "unknown", "not-started"},
 					NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "workers",
 						NumberOfNodes: 3,
 						BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "m5.xlarge"},
@@ -1413,6 +1788,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 				{Name: "running", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now), State: osacv1alpha1.JobStateRunning}},
 				{Name: "installed", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now), State: osacv1alpha1.JobStateSucceeded}},
 				{Name: "failed", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now), State: osacv1alpha1.JobStateFailed, Message: "installation failed"}},
+				{Name: "unknown", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now), State: osacv1alpha1.JobStateUnknown, Message: "provider state not recognized"}},
 			}
 			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
 
@@ -1421,14 +1797,16 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			Expect(result.IsZero()).To(BeTrue())
 			Expect(mockClient.updateCalled).To(BeTrue())
 			statuses := mockClient.lastUpdate.GetStatus().GetAddOnOperators()
-			Expect(statuses).To(HaveLen(5))
+			Expect(statuses).To(HaveLen(6))
 			Expect(statuses[0].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING))
 			Expect(statuses[1].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING))
 			Expect(statuses[2].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLED))
 			Expect(statuses[3].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_FAILED))
 			Expect(statuses[3].GetMessage()).To(Equal("installation failed"))
-			Expect(statuses[4].GetName()).To(Equal("not-started"))
-			Expect(statuses[4].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_PENDING))
+			Expect(statuses[4].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING))
+			Expect(statuses[4].GetMessage()).To(Equal("provider state not recognized"))
+			Expect(statuses[5].GetName()).To(Equal("not-started"))
+			Expect(statuses[5].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_PENDING))
 
 			hasAddOnOperatorsPath := false
 			for _, path := range mockClient.lastUpdateMask.GetPaths() {

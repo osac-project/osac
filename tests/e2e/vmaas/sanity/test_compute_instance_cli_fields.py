@@ -19,13 +19,17 @@ TEST_USER_DATA: str = "#cloud-config\npackages:\n  - vim\n"
 
 
 def test_compute_instance_cli_explicit_fields(
-    cli: OsacCLI, grpc: GRPCClient, k8s_hub_client: K8sClient, default_subnet: str, vm_template: str
+    cli: OsacCLI,
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    default_network_attachment: dict[str, object],
+    vm_template: str,
 ) -> None:
     name = unique_name("e2e-ci")
     uuid: str = cli.create_compute_instance(
         template=vm_template,
         name=name,
-        network_attachments=[{"subnet": default_subnet}],
+        network_attachments=[default_network_attachment],
         boot_disk_size=TEST_BOOT_DISK_SIZE,
         run_strategy=TEST_RUN_STRATEGY,
         user_data_secret_ref=TEST_USER_DATA,

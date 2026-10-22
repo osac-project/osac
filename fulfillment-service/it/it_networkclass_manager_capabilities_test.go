@@ -45,7 +45,7 @@ var _ = Describe("NetworkClass manager capability discovery", func() {
 			},
 			Data: map[string]string{
 				"name":         fabricManagerName,
-				"capabilities": "ipv4,ipv6,dualStack",
+				"capabilities": "ipv4",
 			},
 		}
 		k8sConfigMap := &corev1.ConfigMap{

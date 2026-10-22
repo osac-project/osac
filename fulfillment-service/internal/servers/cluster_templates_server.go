@@ -211,7 +211,7 @@ func (s *ClusterTemplatesServer) Create(ctx context.Context,
 			"Failed to map public cluster template to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster template")
+		err = publicInputMappingError(err, "failed to process cluster template")
 		return
 	}
 
@@ -245,6 +245,11 @@ func (s *ClusterTemplatesServer) Create(ctx context.Context,
 
 func (s *ClusterTemplatesServer) Update(ctx context.Context,
 	request *publicv1.ClusterTemplatesUpdateRequest) (response *publicv1.ClusterTemplatesUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	// Validate the request:
 	publicClusterTemplate := request.GetObject()
 	if publicClusterTemplate == nil {
@@ -274,7 +279,7 @@ func (s *ClusterTemplatesServer) Update(ctx context.Context,
 			"Failed to map public cluster template to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster template")
+		err = publicInputMappingError(err, "failed to process cluster template")
 		return
 	}
 

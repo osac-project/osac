@@ -94,9 +94,6 @@ message ClusterNodeSetMap {
 
 // Defines one node set in a cluster catalog item's locked or default policy.
 message ClusterCatalogNodeSet {
-  reserved 1;
-  reserved "host_type";
-
   // Number of nodes in the set.
   int32 size = 2;
 

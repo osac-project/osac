@@ -20,17 +20,21 @@ package project
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/defaultnetworking"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
@@ -38,12 +42,13 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+const defaultNetworkingDeleteRetryDelay = time.Second
+
 // FunctionBuilder contains the data needed to build instances of the reconciler function.
 type FunctionBuilder struct {
 	logger              *slog.Logger
 	connection          *grpc.ClientConn
 	projectGroupManager *idp.ProjectGroupManager
-	usersClient         privatev1.UsersClient
 	defaultNetwork      defaultnetworking.Manager
 }
 
@@ -70,12 +75,6 @@ func (b *FunctionBuilder) SetProjectGroupManager(value *idp.ProjectGroupManager)
 	return b
 }
 
-// SetUsersClient sets the users client that the reconciler will use to look up user information.
-func (b *FunctionBuilder) SetUsersClient(value privatev1.UsersClient) *FunctionBuilder {
-	b.usersClient = value
-	return b
-}
-
 // SetDefaultNetworking sets the controller-owned manager used to clean up
 // system-created networking when a tenant root project is deleted.
 func (b *FunctionBuilder) SetDefaultNetworking(value defaultnetworking.Manager) *FunctionBuilder {
@@ -98,16 +97,10 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		return
 	}
 
-	usersClient := b.usersClient
-	if usersClient == nil {
-		usersClient = privatev1.NewUsersClient(b.connection)
-	}
-
 	result = &function{
 		logger:                   b.logger,
 		projectsClient:           privatev1.NewProjectsClient(b.connection),
 		tenantsClient:            privatev1.NewTenantsClient(b.connection),
-		usersClient:              usersClient,
 		projectMembershipsClient: privatev1.NewProjectMembershipsClient(b.connection),
 		projectGroupManager:      b.projectGroupManager,
 		defaultNetwork:           b.defaultNetwork,
@@ -121,7 +114,6 @@ type function struct {
 	logger                   *slog.Logger
 	projectsClient           privatev1.ProjectsClient
 	tenantsClient            privatev1.TenantsClient
-	usersClient              privatev1.UsersClient
 	projectMembershipsClient privatev1.ProjectMembershipsClient
 	projectGroupManager      *idp.ProjectGroupManager
 	defaultNetwork           defaultnetworking.Manager
@@ -154,9 +146,22 @@ func (r *function) Run(ctx context.Context, project *privatev1.Project) error {
 			Object:     project,
 			UpdateMask: updateMask,
 		}.Build())
+		if err != nil {
+			return err
+		}
 	}
 
-	return err
+	// Updating a deleting project with no finalizers archives it. Signal the
+	// tenant only after that update succeeds so tenant deletion waits until the
+	// project's tenant foreign-key reference is gone.
+	if oldProject.HasMetadata() &&
+		oldProject.GetMetadata().HasDeletionTimestamp() &&
+		slices.Contains(oldProject.GetMetadata().GetFinalizers(), finalizers.Controller) &&
+		!slices.Contains(project.GetMetadata().GetFinalizers(), finalizers.Controller) {
+		task.signalTenant(ctx)
+	}
+
+	return nil
 }
 
 // task contains the data needed to reconcile a single project.
@@ -231,8 +236,7 @@ func (t *task) validateAndActivate(ctx context.Context) error {
 	projectPath := strings.ReplaceAll(projectName, ".", "/")
 
 	// Create Keycloak groups for project authorization
-	// Returns the system:managers group ID to avoid timing issues with group lookup
-	managersGroupID, err := t.r.projectGroupManager.CreateProjectGroups(ctx, projectTenant, projectPath)
+	_, err := t.r.projectGroupManager.CreateProjectGroups(ctx, projectTenant, projectPath)
 	if err != nil {
 		t.updateCondition(
 			privatev1.ProjectConditionType_PROJECT_CONDITION_TYPE_KEYCLOAK_SYNC,
@@ -257,58 +261,12 @@ func (t *task) validateAndActivate(ctx context.Context) error {
 		return fmt.Errorf("failed to create Keycloak groups: %w", err)
 	}
 
-	// Add the project creator to the system:managers group using the ID from creation
-	// This avoids timing issues where the group isn't immediately visible in searches
-	creatorUsername := t.project.GetMetadata().GetCreator()
-	if creatorUsername != "" {
-		// Look up the user to get their Keycloak user ID
-		userResponse, err := t.r.usersClient.Get(ctx, privatev1.UsersGetRequest_builder{
-			Id: creatorUsername,
-		}.Build())
-		if err != nil {
-			if status.Code(err) == codes.NotFound {
-				t.r.logger.WarnContext(ctx, "Creator user not found, cannot add to managers group",
-					slog.String("project", t.project.GetMetadata().GetName()),
-					slog.String("!creator", creatorUsername),
-				)
-			} else {
-				t.r.logger.WarnContext(ctx, "Failed to look up creator user",
-					slog.String("project", t.project.GetMetadata().GetName()),
-					slog.String("!creator", creatorUsername),
-					slog.Any("error", err),
-				)
-			}
-			// Don't fail the reconciliation if this fails - the groups are still created
-			// The user can be added manually later
-		} else {
-			user := userResponse.GetObject()
-			keycloakUserID := user.GetStatus().GetKeycloakUserId()
-			if keycloakUserID == "" {
-				t.r.logger.WarnContext(ctx, "Creator user has no Keycloak user ID, cannot add to managers group",
-					slog.String("project", t.project.GetMetadata().GetName()),
-					slog.String("!creator", creatorUsername),
-				)
-			} else {
-				if err := t.r.projectGroupManager.AddUserToGroupByID(ctx,
-					t.project.GetMetadata().GetTenant(),
-					keycloakUserID,
-					managersGroupID); err != nil {
-					t.r.logger.WarnContext(ctx, "Failed to add creator to managers group",
-						slog.String("project", t.project.GetMetadata().GetName()),
-						slog.String("!creator", creatorUsername),
-						slog.String("managers_group_id", managersGroupID),
-						slog.Any("error", err),
-					)
-					// Don't fail the reconciliation if this fails - the groups are still created
-					// The user can be added manually later
-				} else {
-					t.r.logger.InfoContext(ctx, "Added creator to project managers group",
-						slog.String("project", t.project.GetMetadata().GetName()),
-						slog.String("!creator", creatorUsername),
-						slog.String("managers_group_id", managersGroupID),
-					)
-				}
-			}
+	// Create a ProjectMembership for the project creator with manager role.
+	// The ProjectMembership reconciler will handle adding the user to the Keycloak group.
+	creatorID := t.project.GetMetadata().GetCreator()
+	if creatorID != "" {
+		if err := t.createProjectMembershipForCreator(ctx, creatorID); err != nil {
+			return fmt.Errorf("failed to create ProjectMembership for creator: %w", err)
 		}
 	}
 
@@ -346,6 +304,81 @@ func (t *task) findProjectByName(ctx context.Context, name string) (*privatev1.P
 		return nil, nil
 	}
 	return items[0], nil
+}
+
+// createProjectMembershipForCreator creates a ProjectMembership record for the project creator
+// with the manager role. This keeps the database in sync with Keycloak groups and ensures
+// creators can immediately see projects they create in membership queries.
+func (t *task) createProjectMembershipForCreator(ctx context.Context, creatorID string) error {
+	// Generate a deterministic, DNS-compatible name from tenant and project identity
+	// Hash the full identity to ensure uniqueness and DNS compliance (max 63 chars)
+	tenant := t.project.GetMetadata().GetTenant()
+	projectName := t.project.GetMetadata().GetName()
+	identity := fmt.Sprintf("%s/%s", tenant, projectName)
+	hash := sha256.Sum256([]byte(identity))
+	hashStr := hex.EncodeToString(hash[:])[:16] // Use first 16 hex chars (8 bytes)
+	membershipName := fmt.Sprintf("creator-%s", hashStr)
+
+	// Create the membership - creatorID is the user ID
+	userRef := privatev1.UserReference_builder{
+		Id: creatorID,
+	}.Build()
+
+	membership := privatev1.ProjectMembership_builder{
+		Metadata: privatev1.Metadata_builder{
+			Name:    membershipName,
+			Tenant:  tenant,
+			Project: projectName,
+		}.Build(),
+		Spec: privatev1.ProjectMembershipSpec_builder{
+			Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
+			Users: []*privatev1.UserReference{userRef},
+		}.Build(),
+	}.Build()
+
+	_, err := t.r.projectMembershipsClient.Create(ctx, privatev1.ProjectMembershipsCreateRequest_builder{
+		Object: membership,
+	}.Build())
+	if err != nil {
+		// Check if it's a duplicate error - the database trigger will catch duplicate (tenant, project, user) tuples
+		if status.Code(err) == codes.AlreadyExists {
+			t.r.logger.DebugContext(ctx, "ProjectMembership already exists for creator",
+				slog.String("project", t.project.GetMetadata().GetName()),
+				slog.String("!creator", creatorID),
+			)
+			listResp, listErr := t.r.projectMembershipsClient.List(ctx, privatev1.ProjectMembershipsListRequest_builder{
+				Filter: new(fmt.Sprintf("this.metadata.tenant == %q && this.metadata.project == %q", tenant, projectName)),
+			}.Build())
+			if listErr != nil {
+				return fmt.Errorf("failed to query for project memberships: %w", listErr)
+			}
+			for _, membership := range listResp.GetItems() {
+				if membership.GetSpec().Role == privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER {
+					for _, user := range membership.GetSpec().Users {
+						if user.Id == creatorID {
+							return nil
+						}
+					}
+				}
+			}
+
+			t.r.logger.DebugContext(ctx, "ProjectMembership already exists for creator but not as a manager",
+				slog.String("project", t.project.GetMetadata().GetName()),
+				slog.String("!creator", creatorID),
+				slog.String("membership_name", membershipName),
+			)
+			return fmt.Errorf("ProjectMembership already exists for creator but not as a manager: %w", err)
+		}
+		return fmt.Errorf("failed to create ProjectMembership: %w", err)
+	}
+
+	t.r.logger.InfoContext(ctx, "Created ProjectMembership for creator",
+		slog.String("project", t.project.GetMetadata().GetName()),
+		slog.String("!creator", creatorID),
+		slog.String("membership_name", membershipName),
+	)
+
+	return nil
 }
 
 // delete performs the deletion cleanup for a project.
@@ -399,7 +432,11 @@ func (t *task) delete(ctx context.Context) error {
 	// ordinary API callers remain blocked by the system-managed protection.
 	if t.project.GetMetadata().GetName() == "" && t.r.defaultNetwork != nil {
 		if err := t.r.defaultNetwork.Delete(ctx, t.project.GetMetadata().GetTenant()); err != nil {
-			return fmt.Errorf("failed to delete default networking resources: %w", err)
+			wrapped := fmt.Errorf("failed to delete default networking resources: %w", err)
+			if errors.Is(err, defaultnetworking.ErrResourcesDeleting) {
+				return controllers.RequeueAtInterval(wrapped, defaultNetworkingDeleteRetryDelay)
+			}
+			return wrapped
 		}
 	}
 
@@ -418,13 +455,6 @@ func (t *task) delete(ctx context.Context) error {
 	}
 
 	t.removeFinalizer()
-
-	// When the root project (empty name) is deleted, signal the parent tenant
-	// so it re-reconciles and can proceed with its own deletion.
-	if t.project.GetMetadata().GetName() == "" {
-		t.signalTenant(ctx)
-	}
-
 	return nil
 }
 
@@ -538,8 +568,7 @@ func (t *task) removeFinalizer() {
 }
 
 // signalTenant looks up the parent tenant by name and signals it so that the
-// tenant reconciler re-runs. This is used when the root project is deleted to
-// unblock the tenant's own deletion.
+// tenant reconciler re-runs after this project has been archived.
 func (t *task) signalTenant(ctx context.Context) {
 	tenantName := t.project.GetMetadata().GetTenant()
 	listResp, err := t.r.tenantsClient.List(ctx, privatev1.TenantsListRequest_builder{
@@ -561,7 +590,7 @@ func (t *task) signalTenant(ctx context.Context) {
 		Id: items[0].GetId(),
 	}.Build())
 	if err != nil {
-		t.r.logger.WarnContext(ctx, "Failed to signal tenant after root project deletion",
+		t.r.logger.WarnContext(ctx, "Failed to signal tenant after project deletion",
 			slog.String("tenant_id", items[0].GetId()),
 			slog.Any("error", err),
 		)

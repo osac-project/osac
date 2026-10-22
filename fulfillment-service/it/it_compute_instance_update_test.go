@@ -95,6 +95,80 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 		Expect(err).NotTo(HaveOccurred())
 	})
 
+	It("allows run_strategy updates through the public API", func(ctx context.Context) {
+		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
+		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		conn := tool.ExternalView().UserConn()
+		instance, err := createComputeInstanceFixture(ctx, conn, publicv1.ComputeInstanceSpec_builder{
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(instance.GetSpec().GetRunStrategy()).To(Equal(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS))
+
+		client := publicv1.NewComputeInstancesClient(conn)
+
+		By("updating run_strategy from ALWAYS to HALTED")
+		updateResponse, err := client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+			Object: publicv1.ComputeInstance_builder{
+				Id:   instance.GetId(),
+				Spec: publicv1.ComputeInstanceSpec_builder{RunStrategy: new(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED)}.Build(),
+			}.Build(),
+			UpdateMask: catalogItemUpdateMask("spec.run_strategy"),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updateResponse.GetObject().GetSpec().GetRunStrategy()).To(Equal(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED))
+
+		persisted, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: instance.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(persisted.GetObject().GetSpec().GetRunStrategy()).To(Equal(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED))
+
+		By("updating run_strategy back to ALWAYS")
+		updateResponse, err = client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+			Object: publicv1.ComputeInstance_builder{
+				Id:   instance.GetId(),
+				Spec: publicv1.ComputeInstanceSpec_builder{RunStrategy: new(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS)}.Build(),
+			}.Build(),
+			UpdateMask: catalogItemUpdateMask("spec.run_strategy"),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updateResponse.GetObject().GetSpec().GetRunStrategy()).To(Equal(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS))
+
+		persisted, err = client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: instance.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(persisted.GetObject().GetSpec().GetRunStrategy()).To(Equal(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS))
+	})
+
+	It("allows instance_type updates through the public API", func(ctx context.Context) {
+		firstInstanceType := createCatalogItemComputeInstanceTypeFixture(ctx)
+		secondInstanceType := createCatalogItemComputeInstanceTypeFixture(ctx)
+		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
+		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		conn := tool.ExternalView().UserConn()
+		instance, err := createComputeInstanceFixture(ctx, conn, publicv1.ComputeInstanceSpec_builder{
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+			InstanceType:       publicv1.InstanceTypeReference_builder{Id: firstInstanceType}.Build(),
+			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+
+		client := publicv1.NewComputeInstancesClient(conn)
+
+		By("updating instance_type to the second type")
+		candidate := proto.Clone(instance).(*publicv1.ComputeInstance)
+		candidate.GetSpec().SetInstanceType(publicv1.InstanceTypeReference_builder{Id: secondInstanceType}.Build())
+		updateResponse, err := client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+			Object:     candidate,
+			UpdateMask: catalogItemUpdateMask("spec.instance_type"),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updateResponse.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal(secondInstanceType))
+
+		persisted, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: instance.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(persisted.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal(secondInstanceType))
+	})
+
 	DescribeTable("validates networking against persisted deletion state", func(ctx context.Context, deleteFirst, maskDeletionTimestamp bool) {
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)

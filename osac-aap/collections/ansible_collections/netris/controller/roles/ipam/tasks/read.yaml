@@ -11,7 +11,7 @@
     fail_msg: "ipam_count must be >= 1, got {{ ipam_count }}"
 
 - name: Query all IPAM subnets
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/ipam/subnets"
     method: GET
     headers:
@@ -19,6 +19,7 @@
     return_content: true
     status_code: [200]
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _ipam_subnets_resp
   no_log: true
 

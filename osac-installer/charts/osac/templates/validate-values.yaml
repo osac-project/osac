@@ -1,1 +1,8 @@
 {{- include "osac.validateValues" . -}}
+{{- if .Values.bmf.netbox.enabled }}
+{{- $serviceIssuer := tpl (required "service.auth.issuerUrl is required when bmf.netbox.enabled is true" .Values.service.auth.issuerUrl) . }}
+{{- $bmfIssuer := tpl (required "bmf.secretAPI.issuerUrl is required when bmf.netbox.enabled is true" .Values.bmf.secretAPI.issuerUrl) . }}
+{{- if ne $serviceIssuer $bmfIssuer }}
+{{- fail "bmf.secretAPI.issuerUrl must match service.auth.issuerUrl when bmf.netbox.enabled is true" }}
+{{- end }}
+{{- end }}

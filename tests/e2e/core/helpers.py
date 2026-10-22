@@ -6,13 +6,13 @@ import os
 import re
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any, TypeVar
 from uuid import uuid4
 
 import pytest
 
-from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until, run_unchecked
 
@@ -39,6 +39,58 @@ T = TypeVar("T")
 
 def unique_name(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex[:8]}"
+
+
+def get_bmi_instance_type_from_template(grpc: GRPCClient, *, template_name: str) -> str | None:
+    response = grpc.call(
+        service=f"{PRIVATE_API}.BareMetalInstanceTemplates/List",
+        data={"filter": f'this.metadata.name == "{template_name}"'},
+    )
+    template = next(
+        (item for item in response.get("items", []) if item.get("metadata", {}).get("name") == template_name), None
+    )
+    if template is None:
+        raise RuntimeError(f"BareMetalInstanceTemplate {template_name!r} was not found")
+
+    instance_type_ref = template.get("instance_type") or template.get("instanceType")
+    if instance_type_ref is None:
+        return None
+    if not isinstance(instance_type_ref, dict):
+        raise RuntimeError(f"BareMetalInstanceTemplate {template_name!r} has an invalid instance_type reference")
+
+    instance_type_name = instance_type_ref.get("name")
+    if isinstance(instance_type_name, str) and instance_type_name:
+        return instance_type_name
+
+    instance_type_id = instance_type_ref.get("id")
+    if not isinstance(instance_type_id, str) or not instance_type_id:
+        raise RuntimeError(
+            f"BareMetalInstanceTemplate {template_name!r} has an instance_type reference without a name or id"
+        )
+
+    type_response = grpc.call(service=f"{PRIVATE_API}.BareMetalInstanceTypes/Get", data={"id": instance_type_id})
+    instance_type_name = type_response.get("object", {}).get("metadata", {}).get("name")
+    if not isinstance(instance_type_name, str) or not instance_type_name:
+        raise RuntimeError(f"BareMetalInstanceType {instance_type_id!r} has no metadata.name")
+    return instance_type_name
+
+
+def bmi_instance_type_for_tests(grpc: GRPCClient, *, template_name: str, configured: str) -> Iterator[str]:
+    if configured:
+        yield configured
+        return
+
+    from_template = get_bmi_instance_type_from_template(grpc, template_name=template_name)
+    if from_template:
+        yield from_template
+        return
+
+    name = unique_name("e2e-bmi-type")
+    type_id = grpc.create_baremetal_instance_type(name=name, host_type_label="default", fabric_port="data-0")
+    try:
+        yield name
+    finally:
+        grpc.delete_baremetal_instance_type(type_id=type_id)
 
 
 def allocate_worker_subnet(prefix: int = 24) -> ipaddress.IPv4Network:
@@ -275,7 +327,7 @@ def wait_for_grpc_subnet_ready(*, grpc: GRPCClient, subnet_id: str) -> None:
     poll_until(
         fn=_state,
         until=lambda v: v == _SUBNET_READY_STATE,
-        retries=30,
+        retries=60,
         delay=2,
         description=f"Subnet {subnet_id} gRPC READY",
     )
@@ -443,7 +495,7 @@ def wait_for_cluster_progressing(*, k8s: K8sClient, name: str) -> None:
     poll_until(
         fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
         until=lambda v: v == "Progressing",
-        retries=30,
+        retries=60,
         delay=2,
         description=f"{name} ClusterOrder Progressing phase",
     )

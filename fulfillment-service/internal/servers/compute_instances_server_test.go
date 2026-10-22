@@ -15,10 +15,12 @@ package servers
 
 import (
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -92,6 +94,26 @@ var _ = Describe("Compute instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			// Create a test virtual network and subnet for all tests to use:
+			k8sManager := "test-k8s-manager"
+			networkClassesDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = networkClassesDao.Create().SetObject(privatev1.NetworkClass_builder{
+				Id:         "test-network-class",
+				K8SManager: &k8sManager,
+				Metadata: privatev1.Metadata_builder{
+					Name:   "test-network-class",
+					Tenant: testTenant,
+				}.Build(),
+				Status: privatev1.NetworkClassStatus_builder{
+					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+					Hub:   "network-hub-a",
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
 			vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
@@ -103,6 +125,14 @@ var _ = Describe("Compute instances server", func() {
 				Metadata: privatev1.Metadata_builder{
 					Name:   "test-vnet",
 					Tenant: testTenant,
+					Labels: map[string]string{defaultLabel: "true"},
+				}.Build(),
+				Spec: privatev1.VirtualNetworkSpec_builder{
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-network-class"}.Build(),
+				}.Build(),
+				Status: privatev1.VirtualNetworkStatus_builder{
+					State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+					Hub:   "network-hub-a",
 				}.Build(),
 			}.Build()
 
@@ -127,10 +157,33 @@ var _ = Describe("Compute instances server", func() {
 				}.Build(),
 				Status: privatev1.SubnetStatus_builder{
 					State: privatev1.SubnetState_SUBNET_STATE_READY,
+					Hub:   "network-hub-a",
 				}.Build(),
 			}.Build()
 
 			_, err = subnetsDao.Create().SetObject(subnet).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			securityGroupsDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = securityGroupsDao.Create().SetObject(privatev1.SecurityGroup_builder{
+				Id: "test-sg-default",
+				Metadata: privatev1.Metadata_builder{
+					Name:   "test-sg-default",
+					Tenant: testTenant,
+					Labels: map[string]string{defaultLabel: "true"},
+				}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "test-vnet"}.Build(),
+				}.Build(),
+				Status: privatev1.SecurityGroupStatus_builder{
+					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+					Hub:   "network-hub-a",
+				}.Build(),
+			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 
 			// Create a default InstanceType for tests that need it:
@@ -292,6 +345,12 @@ var _ = Describe("Compute instances server", func() {
 					}.Build(),
 					Status: publicv1.ComputeInstanceStatus_builder{
 						State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+						ComputeNetworkAttachmentStatuses: []*publicv1.ComputeNetworkAttachmentStatus{
+							publicv1.ComputeNetworkAttachmentStatus_builder{
+								SubnetRef: "spoofed-subnet",
+								IpAddress: "192.0.2.99",
+							}.Build(),
+						},
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -301,7 +360,10 @@ var _ = Describe("Compute instances server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("general.small"))
-			Expect(object.GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+			// The status is output-only: a caller-supplied state and attachment
+			// statuses are dropped instead of persisted.
+			Expect(object.GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED))
+			Expect(object.GetStatus().GetComputeNetworkAttachmentStatuses()).To(BeEmpty())
 		})
 
 		It("List objects", func() {
@@ -456,7 +518,8 @@ var _ = Describe("Compute instances server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).To(Equal(id))
 			Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("general.small"))
-			Expect(object.GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+			// No status was supplied on create and the system has not written one yet:
+			Expect(object.GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED))
 		})
 
 		It("Updates object", func() {
@@ -532,6 +595,234 @@ var _ = Describe("Compute instances server", func() {
 			Expect(fetched.GetSpec().GetDiskImage().GetId()).To(Equal("test-disk-image"))
 			Expect(fetched.GetSpec().GetBootDisk().GetSizeGib()).To(BeNumerically("==", 20))
 			Expect(fetched.GetSpec().GetRestartRequestedAt()).ToNot(BeNil())
+		})
+
+		It("Keeps the stored status across a maskless update carrying a status", func() {
+			createTemplate("general.small")
+
+			// Create an object:
+			createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-compute-instance",
+					}.Build(),
+					Spec: publicv1.ComputeInstanceSpec_builder{
+						Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
+						InstanceType: publicv1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
+						RunStrategy:  publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+						DiskImage:    publicv1.DiskImageReference_builder{Id: "test-disk-image"}.Build(),
+						BootDisk: publicv1.ComputeInstanceDisk_builder{
+							SizeGib:     proto.Int32(20),
+							StorageTier: publicv1.StorageTierReference_builder{Name: "standard"}.Build(),
+						}.Build(),
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							publicv1.ComputeNetworkAttachment_builder{
+								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			// Store a state with its transition time, as the operator feedback would. The time
+			// must be after creation: the source contract clamps a first time on or before it.
+			storedTime := timestamppb.New(time.Now())
+			ciDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			stored, err := ciDao.Get().SetId(id).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			storedObject := stored.GetObject()
+			storedObject.SetStatus(privatev1.ComputeInstanceStatus_builder{
+				State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+				StateTransitionTime: storedTime,
+			}.Build())
+			_, err = ciDao.Update().SetObject(storedObject).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Round-trip the public object without a mask, carrying a fabricated state
+			// with a later transition time:
+			getResponse, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: id,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			tampered := getResponse.GetObject()
+			tampered.GetStatus().SetState(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+			tampered.GetStatus().SetStateTransitionTime(timestamppb.Now())
+			updateResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+				Object: tampered,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// The stored status and its transition time are unchanged:
+			Expect(updateResponse.GetObject().GetStatus().GetState()).To(
+				Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+			Expect(updateResponse.GetObject().GetStatus().GetStateTransitionTime().AsTime()).To(
+				Equal(storedTime.AsTime()))
+
+			// And they survive a round-trip through the database:
+			after, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: id,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(after.GetObject().GetStatus().GetState()).To(
+				Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+			Expect(after.GetObject().GetStatus().GetStateTransitionTime().AsTime()).To(
+				Equal(storedTime.AsTime()))
+		})
+
+		It("Rejects changing network attachments via the public update path", func() {
+			createTemplate("general.small")
+
+			// Second READY subnet for the replacement attempt:
+			subnetsDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = subnetsDao.Create().SetObject(privatev1.Subnet_builder{
+				Id: "test-subnet-2",
+				Metadata: privatev1.Metadata_builder{
+					Name:   "test-subnet-2",
+					Tenant: testTenant,
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "test-vnet"}.Build(),
+					Ipv4Cidr:       new("10.0.1.0/24"),
+				}.Build(),
+				Status: privatev1.SubnetStatus_builder{
+					State: privatev1.SubnetState_SUBNET_STATE_READY,
+					Hub:   "network-hub-a",
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-compute-instance",
+					}.Build(),
+					Spec: publicv1.ComputeInstanceSpec_builder{
+						Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							publicv1.ComputeNetworkAttachment_builder{
+								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+					Status: publicv1.ComputeInstanceStatus_builder{
+						State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			updateResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Id: id,
+					Spec: publicv1.ComputeInstanceSpec_builder{
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							publicv1.ComputeNetworkAttachment_builder{
+								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet-2"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.network_attachments"},
+				},
+			}.Build())
+			Expect(updateResponse).To(BeNil())
+			status, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(codes.InvalidArgument))
+			stored, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			attachments := stored.GetObject().GetSpec().GetNetworkAttachments()
+			Expect(attachments).To(HaveLen(1))
+			Expect(attachments[0].GetSubnet().GetId()).To(Equal("test-subnet"))
+		})
+		It("preserves reserved metadata while merging nonempty unmasked labels", func() {
+			createTemplate("general.small")
+
+			createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name:   "compute-instance-metadata-merge",
+						Labels: map[string]string{"retained": "before"},
+						Annotations: map[string]string{
+							"ordinary": "before",
+						},
+					}.Build(),
+					Spec: publicv1.ComputeInstanceSpec_builder{
+						Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							publicv1.ComputeNetworkAttachment_builder{
+								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			instancesDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			storedResponse, err := instancesDao.Get().SetId(id).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			stored := storedResponse.GetObject()
+			stored.GetMetadata().GetLabels()["admin.osac.openshift.io/managed"] = "system"
+			stored.GetMetadata().GetAnnotations()["provider.admin.osac.openshift.io/id"] = "provider"
+			_, err = instancesDao.Update().SetObject(stored).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			updateObject := proto.Clone(createResponse.GetObject()).(*publicv1.ComputeInstance)
+			updateObject.GetMetadata().SetLabels(map[string]string{"added": "after"})
+			updateResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+				Object: updateObject,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{
+				"retained": "before",
+				"added":    "after",
+			}))
+			Expect(updateResponse.GetObject().GetMetadata().GetAnnotations()).To(Equal(map[string]string{
+				"ordinary": "before",
+			}))
+
+			storedResponse, err = instancesDao.Get().SetId(id).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(storedResponse.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{
+				"admin.osac.openshift.io/managed": "system",
+				"retained":                        "before",
+				"added":                           "after",
+			}))
+			Expect(storedResponse.GetObject().GetMetadata().GetAnnotations()).To(Equal(map[string]string{
+				"provider.admin.osac.openshift.io/id": "provider",
+				"ordinary":                            "before",
+			}))
+
+			clearObject := proto.Clone(updateResponse.GetObject()).(*publicv1.ComputeInstance)
+			clearObject.GetMetadata().SetLabels(map[string]string{})
+			clearResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+				Object: clearObject,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(clearResponse.GetObject().GetMetadata().GetLabels()).To(BeEmpty())
+			storedResponse, err = instancesDao.Get().SetId(id).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(storedResponse.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{
+				"admin.osac.openshift.io/managed": "system",
+			}))
 		})
 
 		It("Deletes object", func() {
@@ -647,6 +938,87 @@ var _ = Describe("Compute instances server", func() {
 			Expect(spec.GetDiskImage().GetId()).To(Equal("test-disk-image"))
 			Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(10)))
 		})
+
+		It("Drops a user-supplied running instance type on public create", func() {
+			createTemplate("running-type-template")
+
+			response, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-compute-instance",
+					}.Build(),
+					Spec: publicv1.ComputeInstanceSpec_builder{
+						Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "running-type-template"}.Build(),
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							publicv1.ComputeNetworkAttachment_builder{
+								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+					Status: publicv1.ComputeInstanceStatus_builder{
+						InstanceType: publicv1.InstanceTypeReference_builder{
+							Id: "standard-4-16", Name: "standard-4-16",
+						}.Build(),
+						InstanceTypeTransitionTime: timestamppb.Now(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			// Only the system sets the running type fields; user-supplied values are dropped.
+			Expect(response.GetObject().GetStatus().GetInstanceType()).To(BeNil())
+			Expect(response.GetObject().GetStatus().GetInstanceTypeTransitionTime()).To(BeNil())
+
+			getResponse, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: response.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetStatus().GetInstanceType()).To(BeNil())
+			Expect(getResponse.GetObject().GetStatus().GetInstanceTypeTransitionTime()).To(BeNil())
+		})
+
+		DescribeTable("Rejects a public update of the output-only running instance type fields",
+			func(path string) {
+				createTemplate("running-type-update-template")
+
+				createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+					Object: publicv1.ComputeInstance_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: "test-compute-instance",
+						}.Build(),
+						Spec: publicv1.ComputeInstanceSpec_builder{
+							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "running-type-update-template"}.Build(),
+							NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+								publicv1.ComputeNetworkAttachment_builder{
+									Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+					Object: publicv1.ComputeInstance_builder{
+						Id: createResponse.GetObject().GetId(),
+						Status: publicv1.ComputeInstanceStatus_builder{
+							InstanceType: publicv1.InstanceTypeReference_builder{
+								Id: "standard-4-16", Name: "standard-4-16",
+							}.Build(),
+							InstanceTypeTransitionTime: timestamppb.Now(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{path},
+					},
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring(path + " is output-only"))
+			},
+			Entry("instance type", "status.instance_type"),
+			Entry("instance type transition time", "status.instance_type_transition_time"),
+			Entry("instance type name subpath", "status.instance_type.name"),
+			Entry("instance type transition time subpath", "status.instance_type_transition_time.seconds"),
+		)
 	})
 })
 

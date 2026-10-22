@@ -5,6 +5,7 @@ import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v
 
 import type { ProjectMembership } from '@osac/types';
 import { useDeleteProjectMembership } from '@osac/ui-components/api/v1/project-membership';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import { useTranslation } from '../../hooks/useTranslation';
 import DeleteResourceModal from '../Resource/DeleteResourceModal';
@@ -63,14 +64,13 @@ const ProjectMembershipActionsMenu = ({
           >
             {t('Edit')}
           </DropdownItem>
-          <DropdownItem
+          <DeleteResourceButton
+            isDropdown
             onClick={() => {
               setDeleteOpen(true);
               setOpen(false);
             }}
-          >
-            {t('Delete')}
-          </DropdownItem>
+          />
         </DropdownList>
       </Dropdown>
     </>

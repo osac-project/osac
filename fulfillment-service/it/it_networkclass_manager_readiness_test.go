@@ -45,7 +45,7 @@ var _ = Describe("NetworkClass manager readiness", func() {
 			},
 			Data: map[string]string{
 				"name":         fabricManagerName,
-				"capabilities": "ipv4,ipv6,dualStack",
+				"capabilities": "ipv4",
 			},
 		}
 		k8sConfigMap := &corev1.ConfigMap{

@@ -105,8 +105,9 @@ OSAC Controller running on the Management Cluster. Its worker controller fetches
 Cluster to derive tenant ownership, and creates worker BMIs through the fixed shared
 `osac.templates.bm_host_provisioning` template with shared BMITs. The fulfillment BMI carries a
 `cluster-order` correlation label and `owner-reference=ClusterOrder/<name>` annotation, and its
-Kubernetes CR receives the tenant and owner-reference annotations plus BMI UUID label. Reuse,
-rebuild and deletion check the fetched BMI's tenant, expected name and owner association; old
+Kubernetes CR receives the tenant annotation and BMI UUID label, not the API owner-reference
+annotation. Reuse, rebuild and deletion check the fetched BMI's tenant, expected name and
+owner association; old
 `system`-owned workers are not automatically adopted or deleted. BMI reconciliation currently
 chooses its Hub independently: **same-Hub placement in multi-Hub deployments is not yet ensured**.
 

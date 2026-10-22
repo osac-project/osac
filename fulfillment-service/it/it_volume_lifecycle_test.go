@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
@@ -229,6 +230,7 @@ var _ = Describe("Volume lifecycle", func() {
 
 		volObj := feedbackResp.GetObject()
 		volObj.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
+		volObj.GetStatus().SetStateTransitionTime(timestamppb.New(time.Now()))
 		volObj.GetStatus().SetVendorVolumeId("test-vendor-vol-123")
 
 		_, err = volumesClient.Update(ctx,

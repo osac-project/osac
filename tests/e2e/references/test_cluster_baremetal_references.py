@@ -11,7 +11,7 @@ import pytest
 
 from tests.e2e.core.caas_versions import ensure_caas_disk_image_version
 from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
-from tests.e2e.core.helpers import assert_grpc_field_violation
+from tests.e2e.core.helpers import assert_grpc_field_violation, bmi_instance_type_for_tests, wait_for_bmi_grpc_removal
 from tests.e2e.core.runner import env
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ def shared_cluster_bmit(private_grpc: GRPCClient) -> Generator[str, None, None]:
             logger.warning("Failed to cleanup shared BMIT %s", bmi_type_id)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def bmi_template(private_grpc: GRPCClient) -> str:
     configured = env("OSAC_BMI_TEMPLATE", "")
     if configured:
@@ -112,6 +112,13 @@ def ref_bmi_disk_image(grpc: GRPCClient) -> Generator[str, None, None]:
             grpc.delete_disk_image(disk_image_id=disk_image_id)
         except subprocess.CalledProcessError:
             logger.warning("Failed to cleanup BMI disk image %s", name)
+
+
+@pytest.fixture(scope="session")
+def bmi_instance_type(private_grpc: GRPCClient, bmi_template: str) -> Generator[str, None, None]:
+    yield from bmi_instance_type_for_tests(
+        private_grpc, template_name=bmi_template, configured=env("OSAC_BMI_INSTANCE_TYPE", "").strip()
+    )
 
 
 class TestClusterBareMetalReferences:
@@ -162,7 +169,12 @@ class TestClusterBareMetalReferences:
 
     @pytest.mark.requires_bmaas
     def test_baremetal_instance_chain_by_name(
-        self, private_grpc: GRPCClient, grpc: GRPCClient, bmi_template: str, ref_bmi_disk_image: str
+        self,
+        private_grpc: GRPCClient,
+        grpc: GRPCClient,
+        bmi_template: str,
+        bmi_instance_type: str,
+        ref_bmi_disk_image: str,
     ):
         tag = uuid4().hex[:8]
         cat_name = f"ref-bmi-cat-{tag}"
@@ -186,6 +198,7 @@ class TestClusterBareMetalReferences:
                         "metadata": {"name": f"ref-bmi-{tag}"},
                         "spec": {
                             "catalog_item": {"name": cat_name, "shared": True},
+                            "instance_type": {"name": bmi_instance_type, "shared": True},
                             "disk_image": {"name": ref_bmi_disk_image},
                             "ssh_public_key": _TEST_SSH_PUBLIC_KEY,
                         },
@@ -197,10 +210,13 @@ class TestClusterBareMetalReferences:
             cat_ref = spec.get("catalog_item", spec.get("catalogItem", {}))
             assert cat_ref.get("name") == cat_name
             assert cat_ref.get("id") == cat_id
+            instance_type_ref = spec.get("instance_type", spec.get("instanceType", {}))
+            assert instance_type_ref.get("name") == bmi_instance_type
         finally:
             if bmi_id:
                 try:
                     grpc.delete_baremetal_instance(bmi_id=bmi_id)
+                    wait_for_bmi_grpc_removal(grpc=grpc, uuid=bmi_id)
                 except subprocess.CalledProcessError:
                     logger.warning("Failed to cleanup BMI %s", bmi_id)
             try:
@@ -283,7 +299,7 @@ class TestClusterBareMetalReferences:
                     },
                 )
                 cluster_id = response["object"]["id"]
-            assert_grpc_field_violation(exc_info, field_path="node_sets.workers.baremetal_instance_type")
+            assert_grpc_field_violation(exc_info, field_path='object.spec.node_sets["workers"].baremetal_instance_type')
         finally:
             if cluster_id:
                 jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.Clusters/Delete", data={"id": cluster_id})

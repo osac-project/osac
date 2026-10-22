@@ -4,6 +4,7 @@ import { Dropdown, DropdownItem, DropdownList, MenuToggle } from '@patternfly/re
 import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
 
 import type { StorageTier } from '@osac/types/private';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import StorageTierDeleteConfirmModal from './StorageTierDeleteConfirmModal';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -48,14 +49,13 @@ const StorageTierActionsMenu = ({ tier }: StorageTierActionsMenuProps) => {
           >
             {t('Edit')}
           </DropdownItem>
-          <DropdownItem
+          <DeleteResourceButton
+            isDropdown
             onClick={() => {
               setDeleteOpen(true);
               setOpen(false);
             }}
-          >
-            {t('Delete')}
-          </DropdownItem>
+          />
         </DropdownList>
       </Dropdown>
     </>

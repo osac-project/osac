@@ -10,9 +10,9 @@
 #   - JIT provisioning creates the *user record* on first authenticated call, but it
 #     requires the DB tenant to already exist ("tenant '<t>' doesn't exist" otherwise).
 #   - The Tenants API is gRPC-only (not exposed over REST), so the DB tenant is
-#     created with a throwaway in-cluster grpcurl pod running as the 'admin'
-#     ServiceAccount (same admin identity seed-catalog.sh uses). This keeps the host
-#     dependency-free: only kubectl is needed, no host grpcurl.
+#     created with a throwaway in-cluster grpcurl pod. This keeps the host
+#     dependency-free: only kubectl is needed, no host grpcurl. The Pod receives
+#     a short-lived Keycloak Fulfillment token through a temporary Secret.
 #
 # What this does (all idempotent -- safe to re-run):
 #   1. Create the DB tenant via the private gRPC Tenants API. Creating the tenant
@@ -48,6 +48,8 @@ TOKEN_SECRET_NAME=""
 log()  { echo "[+] $*"; }
 warn() { echo "[!] $*" >&2; }
 
+source /scripts/fulfillment-auth.sh
+
 cleanup() {
   if [[ -n "${POD_NAME}" ]]; then
     kubectl -n "${NS}" delete pod "${POD_NAME}" --ignore-not-found >/dev/null 2>&1 || true
@@ -78,23 +80,23 @@ fi
 log "Provisioning tenant '${TENANT}' in namespace '${NS}'..."
 
 # ── 1. Create the DB tenant via the private gRPC Tenants API ────────────────────
-# Tenants is gRPC-only. Run grpcurl in-cluster as the 'admin' SA (an emergency
-# service account) so no host grpcurl is required. The short-lived admin token is
-# stored in a temporary Secret and exposed to the Pod through an environment
-# reference, not embedded in its spec. grpcurl verifies the internal service
-# certificate against the mounted CA bundle and its service DNS name.
+# Tenants is gRPC-only. Run grpcurl in-cluster so no host grpcurl is required.
+# The short-lived Fulfillment token is stored in a temporary Secret and exposed
+# to the Pod through an environment reference, not embedded in its spec. grpcurl
+# verifies the internal service certificate against the mounted CA bundle and
+# its service DNS name.
 # AlreadyExists is treated as success (re-run friendly).
-admin_token=$(kubectl -n "${NS}" create token admin)
+fulfillment_token="$(get_fulfillment_access_token)"
 pod="osac-provision-tenant-$$"
 POD_NAME="${pod}"
 TOKEN_SECRET_NAME="osac-provision-tenant-token-$$"
 kubectl -n "${NS}" delete pod "${pod}" --ignore-not-found >/dev/null 2>&1 || true
 kubectl -n "${NS}" delete secret "${TOKEN_SECRET_NAME}" --ignore-not-found >/dev/null 2>&1 || true
-printf '%s' "${admin_token}" \
+printf '%s' "${fulfillment_token}" \
   | kubectl -n "${NS}" create secret generic "${TOKEN_SECRET_NAME}" \
       --from-file=token=/dev/stdin --dry-run=client -o yaml \
   | kubectl -n "${NS}" apply -f - >/dev/null
-unset admin_token
+unset fulfillment_token
 export POD_NAME="${pod}" TOKEN_SECRET_NAME GRPCURL_IMAGE NS TENANT INTERNAL_SVC INTERNAL_PORT CA_FILE
 pod_manifest=$(python3 - <<'PY'
 import json
@@ -104,8 +106,9 @@ namespace = os.environ["NS"]
 pod_name = os.environ["POD_NAME"]
 payload = {"object": {"metadata": {"name": os.environ["TENANT"]}}}
 container_args = [
+    "-expand-headers",
     "-cacert", "/etc/ca-bundle/bundle.pem",
-    "-H", "authorization: Bearer $(ADMIN_TOKEN)",
+    "-H", "authorization: Bearer ${FULFILLMENT_TOKEN}",
     "-d", json.dumps(payload),
     f"{os.environ['INTERNAL_SVC']}.{namespace}.svc.cluster.local:{os.environ['INTERNAL_PORT']}",
     "osac.private.v1.Tenants/Create",
@@ -122,7 +125,7 @@ manifest = {
             "image": os.environ["GRPCURL_IMAGE"],
             "command": ["grpcurl"],
             "args": container_args,
-            "env": [{"name": "ADMIN_TOKEN", "valueFrom": {
+            "env": [{"name": "FULFILLMENT_TOKEN", "valueFrom": {
                 "secretKeyRef": {"name": os.environ["TOKEN_SECRET_NAME"], "key": "token"},
             }}],
             "volumeMounts": [{"name": "ca-bundle", "mountPath": "/etc/ca-bundle", "readOnly": True}],

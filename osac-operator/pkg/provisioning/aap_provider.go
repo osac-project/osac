@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/stoewer/go-strcase"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -18,6 +19,7 @@ import (
 // AAPClient is the interface for AAP operations used by the provider.
 type AAPClient interface {
 	GetTemplate(ctx context.Context, templateName string) (*aap.Template, error)
+	ListJobs(ctx context.Context, templateID int) ([]aap.Job, error)
 	LaunchJobTemplate(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error)
 	LaunchWorkflowTemplate(ctx context.Context, req aap.LaunchWorkflowTemplateRequest) (*aap.LaunchWorkflowTemplateResponse, error)
 	GetJob(ctx context.Context, jobID string) (*aap.Job, error)
@@ -128,15 +130,68 @@ func (p *AAPProvider) GetProvisionStatus(ctx context.Context, resource client.Ob
 	return p.getJobStatus(ctx, jobID)
 }
 
-// GetProvisionStatusWithExtraVars checks provisioning job status and returns its output variables.
+// CancelJob cancels a running provisioning job during resource deletion.
+func (p *AAPProvider) CancelJob(ctx context.Context, jobID string) error {
+	return p.cancelProvisionJob(ctx, jobID)
+}
+
+func (p *AAPProvider) FindJobByLaunchID(
+	ctx context.Context,
+	resource client.Object,
+	jobType v1alpha1.JobType,
+	launchID string,
+) (ProvisionStatus, bool, error) {
+	if launchID == "" {
+		return ProvisionStatus{}, false, fmt.Errorf("provider job launch ID must not be empty")
+	}
+	action := ""
+	switch jobType {
+	case v1alpha1.JobTypeProvision:
+		action = "create"
+	case v1alpha1.JobTypeDeprovision:
+		action = "delete"
+	default:
+		return ProvisionStatus{}, false, fmt.Errorf("unsupported provider job type %q", jobType)
+	}
+	templateName, err := p.resolveTemplateName(action, resource)
+	if err != nil {
+		return ProvisionStatus{}, false, err
+	}
+	template, err := p.client.GetTemplate(ctx, templateName)
+	if err != nil {
+		return ProvisionStatus{}, false, fmt.Errorf("failed to get template: %w", err)
+	}
+	jobID, found, err := p.findJobByLaunchID(ctx, template.ID, launchID)
+	if err != nil || !found {
+		return ProvisionStatus{}, found, err
+	}
+	status, err := p.getJobStatus(ctx, jobID)
+	if err != nil {
+		return ProvisionStatus{}, false, err
+	}
+	return status, true, nil
+}
+
+// GetProvisionStatusWithExtraVars checks provisioning job status and returns its submitted inputs
+// and output artifacts from the same AAP job response.
 func (p *AAPProvider) GetProvisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (ProvisionStatusWithExtraVars, error) {
 	job, err := p.client.GetJob(ctx, jobID)
 	if err != nil {
 		return ProvisionStatusWithExtraVars{}, fmt.Errorf("failed to get job: %w", err)
 	}
 
-	status := ProvisionStatusWithExtraVars{ProvisionStatus: provisionStatusFromAAPJob(jobID, job)}
-	if status.State != v1alpha1.JobStateSucceeded || len(job.Artifacts) == 0 {
+	status := ProvisionStatusWithExtraVars{ProvisionStatus: provisionStatusFromAAPJob(ctx, jobID, job)}
+	if status.State != v1alpha1.JobStateSucceeded {
+		return status, nil
+	}
+	if strings.TrimSpace(job.ExtraVars) != "" {
+		if err := json.Unmarshal([]byte(job.ExtraVars), &status.InputExtraVars); err != nil {
+			// Avoid including the input or decoder error in the returned message. AAP inputs can
+			// contain secrets for unrelated provisioning jobs.
+			return status, fmt.Errorf("failed to decode AAP job input variables for job %s", jobID)
+		}
+	}
+	if len(job.Artifacts) == 0 {
 		return status, nil
 	}
 	if err := json.Unmarshal(job.Artifacts, &status.ExtraVars); err != nil {
@@ -217,9 +272,23 @@ func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, resource client
 		if !errors.As(err, &methodNotAllowedErr) {
 			return false, &status, fmt.Errorf("failed to cancel provision job: %w", err)
 		}
-		// 405 means already terminal, proceed
-		log.Info("job cancel returned 405 (already terminal), ready to deprovision", "jobID", latestProvisionJob.JobID)
-		return true, &status, nil
+		// The job may have completed after the status read above. Confirm its
+		// current state before allowing cleanup to overlap a still-running job.
+		status, err = p.GetProvisionStatus(ctx, resource, latestProvisionJob.JobID)
+		if err != nil {
+			var notFoundErr *aap.NotFoundError
+			if errors.As(err, &notFoundErr) {
+				log.Info("AAP job disappeared after cancel returned 405, ready to deprovision", "jobID", latestProvisionJob.JobID)
+				return true, nil, nil
+			}
+			return false, nil, fmt.Errorf("failed to confirm provision job status after cancel: %w", err)
+		}
+		if status.State.IsTerminal() {
+			log.Info("job cancel returned 405 and job is terminal, ready to deprovision", "jobID", latestProvisionJob.JobID, "state", status.State)
+			return true, &status, nil
+		}
+		log.Info("job cancel returned 405 but job remains active, waiting before deprovision", "jobID", latestProvisionJob.JobID, "state", status.State)
+		return false, &status, nil
 	}
 
 	// Cancellation initiated - need to wait, return current status for CR update
@@ -263,12 +332,22 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 	if err != nil {
 		return "", fmt.Errorf("failed to get template: %w", err)
 	}
+	if launchID := AAPJobLaunchIDFromContext(ctx); launchID != "" {
+		jobID, found, err := p.findJobByLaunchID(ctx, template.ID, launchID)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			return jobID, nil
+		}
+	}
 
 	extraVars, err := p.extractExtraVars(ctx, resource)
 	if err != nil {
 		return "", fmt.Errorf("failed to extract extra vars: %w", err)
 	}
 	extraVars = mergeExtraVars(extraVars, inheritedExtraVars)
+	sensitive := adminKubeconfigInExtraVars(extraVars)
 
 	var jobID int
 	switch template.Type {
@@ -277,6 +356,7 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 			TemplateID:   template.ID,
 			TemplateName: templateName,
 			ExtraVars:    extraVars,
+			Sensitive:    sensitive,
 		})
 		if err != nil {
 			return "", fmt.Errorf("failed to launch job template: %w", err)
@@ -287,6 +367,7 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 			TemplateID:   template.ID,
 			TemplateName: templateName,
 			ExtraVars:    extraVars,
+			Sensitive:    sensitive,
 		})
 		if err != nil {
 			return "", fmt.Errorf("failed to launch workflow template: %w", err)
@@ -297,6 +378,35 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 	}
 
 	return strconv.Itoa(jobID), nil
+}
+
+func (p *AAPProvider) findJobByLaunchID(ctx context.Context, templateID int, launchID string) (string, bool, error) {
+	jobs, err := p.client.ListJobs(ctx, templateID)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to list jobs for launch claim: %w", err)
+	}
+	for _, job := range jobs {
+		if job.ID <= 0 || strings.TrimSpace(job.ExtraVars) == "" {
+			continue
+		}
+		var extraVars map[string]any
+		if err := json.Unmarshal([]byte(job.ExtraVars), &extraVars); err != nil {
+			continue
+		}
+		if extraVars[AAPJobLaunchIDExtraVar] == launchID {
+			return strconv.Itoa(job.ID), true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func adminKubeconfigInExtraVars(extraVars map[string]any) bool {
+	jobVars, ok := extraVars["osac_job_vars"].(map[string]any)
+	if !ok {
+		return false
+	}
+	_, ok = jobVars["admin_kubeconfig"]
+	return ok
 }
 
 func mergeExtraVars(extraVars, inheritedExtraVars map[string]any) map[string]any {
@@ -321,6 +431,12 @@ func (p *AAPProvider) extractExtraVars(ctx context.Context, resource client.Obje
 	if err != nil {
 		return nil, err
 	}
+	for key, value := range AAPExtraVarsFromContext(ctx) {
+		if key == "osac_job_vars" {
+			continue
+		}
+		extraVars[key] = value
+	}
 	if p.fulfillmentEndpoint == "" {
 		return extraVars, nil
 	}
@@ -329,6 +445,16 @@ func (p *AAPProvider) extractExtraVars(ctx context.Context, resource client.Obje
 	jobVars["fulfillment_endpoint"] = p.fulfillmentEndpoint
 	jobVars["fulfillment_issuer_url"] = p.fulfillmentIssuerURL
 	return extraVars, nil
+}
+
+// GetDeprovisionStatusWithExtraVars returns status, submitted inputs, and artifacts from an AAP
+// deprovisioning job.
+func (p *AAPProvider) GetDeprovisionStatusWithExtraVars(
+	ctx context.Context,
+	resource client.Object,
+	jobID string,
+) (ProvisionStatusWithExtraVars, error) {
+	return p.GetProvisionStatusWithExtraVars(ctx, resource, jobID)
 }
 
 // GetDeprovisionStatus checks deprovisioning job status via AAP API.
@@ -348,16 +474,21 @@ func (p *AAPProvider) getJobStatus(ctx context.Context, jobID string) (Provision
 		return ProvisionStatus{}, fmt.Errorf("failed to get job: %w", err)
 	}
 
-	return provisionStatusFromAAPJob(jobID, job), nil
+	return provisionStatusFromAAPJob(ctx, jobID, job), nil
 }
 
-func provisionStatusFromAAPJob(jobID string, job *aap.Job) ProvisionStatus {
+func provisionStatusFromAAPJob(ctx context.Context, jobID string, job *aap.Job) ProvisionStatus {
 	status := ProvisionStatus{
 		JobID:     jobID,
 		State:     mapAAPStatusToJobState(job.Status),
 		Message:   job.Status,
 		StartTime: job.Started,
 		EndTime:   job.Finished,
+	}
+	if len(job.Artifacts) > 0 {
+		if err := json.Unmarshal(job.Artifacts, &status.Outputs); err != nil {
+			ctrllog.FromContext(ctx).Error(err, "AAP job returned non-object artifacts", "jobID", jobID)
+		}
 	}
 
 	// Populate error details if job failed
@@ -414,6 +545,9 @@ func extractExtraVars(ctx context.Context, resource client.Object) (map[string]a
 	if kc := AdminKubeconfigFromContext(ctx); kc != "" {
 		vars["admin_kubeconfig"] = kc
 	}
+	if name := AddOnOperatorNameFromContext(ctx); name != "" {
+		vars["addon_operator_name"] = strings.ReplaceAll(name, "-", "_")
+	}
 
 	if tiers := StorageTierDefinitionsFromContext(ctx); len(tiers) > 0 {
 		vars["storage_tier_definitions"] = tierDefinitionsToExtraVars(tiers)
@@ -425,6 +559,24 @@ func extractExtraVars(ctx context.Context, resource client.Object) (map[string]a
 
 	if macs := NetworkAttachmentMACsFromContext(ctx); len(macs) > 0 {
 		vars["network_attachment_macs"] = macs
+	}
+
+	if parent := SubnetParentVirtualNetworkFromContext(ctx); parent != (SubnetParentVirtualNetwork{}) {
+		vars["parent_virtual_network"] = map[string]any{
+			"fulfillment_id": parent.FulfillmentID,
+			"kubernetes_uid": parent.KubernetesUID,
+			"tenant_id":      parent.TenantID,
+			"phase":          parent.Phase,
+		}
+	}
+	if pool := ExternalIPPoolFromContext(ctx); pool != (ExternalIPPoolContext{}) {
+		vars["external_ip_pool"] = map[string]any{
+			"fulfillment_id": pool.FulfillmentID,
+			"kubernetes_uid": pool.KubernetesUID,
+			"tenant_id":      pool.TenantID,
+			"cidr":           pool.CIDR,
+			"phase":          pool.Phase,
+		}
 	}
 
 	return map[string]any{

@@ -23,8 +23,23 @@ def run(*args: str, timeout: int = 300) -> str:
     return result.stdout.strip()
 
 
-def run_unchecked(*args: str, timeout: int = 300) -> tuple[str, int]:
+def run_unchecked(*args: str, timeout: int = 300, include_stderr: bool = False) -> tuple[str, int]:
+    """Run a command without raising on failure.
+
+    By default, a successful command (rc 0) returns only stdout so callers
+    that parse structured output (e.g. JSON from ``kubectl -o json``) are
+    not broken by warnings or transient diagnostics written to stderr.
+
+    Pass ``include_stderr=True`` when the caller needs to inspect stderr
+    content even on success -- for example to assert that a deprecation
+    warning was emitted.
+
+    On failure (rc != 0), stdout and stderr are always combined so that
+    error messages written to either stream are available for diagnostics.
+    """
     result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+    if result.returncode == 0 and not include_stderr:
+        return result.stdout.strip(), 0
     combined = (result.stdout.strip() + "\n" + result.stderr.strip()).strip()
     return combined, result.returncode
 

@@ -9,6 +9,10 @@ global:
   osacDeploymentId: ""
   fulfillmentTrust:
     enabled: false
+  # Issuer URL is read from this ConfigMap's FULFILLMENT_ISSUER_URL key.
+  # The installer creates the default ConfigMap; standalone installs must
+  # create it in the release namespace or set this to another existing ConfigMap.
+  meteringFulfillmentIssuerConfigMapName: osac-metering-fulfillment-config
 
 # Fulfillment address is auto-derived from release namespace.
 # Override fulfillment.address for cross-namespace/cross-cluster (OSAC-3537).

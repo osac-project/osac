@@ -509,6 +509,67 @@ var _ = Describe("Settings", func() {
 		})
 	})
 
+	Describe("Project", func() {
+		BeforeEach(func() {
+			keyring.MockInit()
+		})
+
+		It("Returns empty string when no project is saved", func(ctx context.Context) {
+			settings, err := NewSettings().
+				SetLogger(logger).
+				SetDir(tmp).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			err = settings.Load(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(settings.Project()).To(BeEmpty())
+		})
+
+		It("Round-trips the project through the config file", func(ctx context.Context) {
+			settings, err := NewSettings().
+				SetLogger(logger).
+				SetDir(tmp).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			settings.SetProject("team-a.frontend")
+			err = settings.Save(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			settings2, err := NewSettings().
+				SetLogger(logger).
+				SetDir(tmp).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			err = settings2.Load(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(settings2.Project()).To(Equal("team-a.frontend"))
+		})
+
+		It("Clears the project when set to empty string", func(ctx context.Context) {
+			settings, err := NewSettings().
+				SetLogger(logger).
+				SetDir(tmp).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			settings.SetProject("team-a")
+			err = settings.Save(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			settings.SetProject("")
+			err = settings.Save(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			settings2, err := NewSettings().
+				SetLogger(logger).
+				SetDir(tmp).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			err = settings2.Load(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(settings2.Project()).To(BeEmpty())
+		})
+	})
+
 	Describe("Armed check", func() {
 		It("Returns false when settings are nil", func() {
 			var settings *Settings

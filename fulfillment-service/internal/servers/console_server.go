@@ -80,8 +80,7 @@ func (s *consoleSessionsServer) Create(ctx context.Context,
 	resourceType := obj.GetResourceType()
 	resourceID := obj.GetResourceId()
 
-	if resourceID == "" {
-		err = status.Errorf(codes.InvalidArgument, "field 'resource_id' is mandatory")
+	if err = ValidateRequiredString("resource_id", resourceID); err != nil {
 		return
 	}
 

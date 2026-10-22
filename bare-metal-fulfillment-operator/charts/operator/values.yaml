@@ -24,6 +24,8 @@ secrets:
   managementConfig: "osac-management-config"
   osClouds: "osac-os-clouds"
   bcmCerts: "osac-bcm-certs"
+  netboxToken: "osac-netbox-token"
+  netboxCA: "osac-netbox-ca"
 
 configMaps:
   profiles: "osac-profiles"
@@ -34,6 +36,24 @@ env:
   aapTokenSecretKey: "token"
   aapInsecureSkipVerify: ""
   enableNetworkingProvisioning: "false"
+
+secretAPI:
+  url: "https://fulfillment-internal-api:8001"
+  # Must match the OIDC issuer configured for the Fulfillment Service.
+  issuerUrl: ""
+  caBundle:
+    configMap: "ca-bundle"
+    key: "bundle.pem"
+
+netbox:
+  enabled: false
+  # BMH namespace used for Metal3 management and BMC Secret RBAC in NetBox mode.
+  bmhNamespace: ""
+  url: ""
+  tokenSecretKey: "token"
+  tokenValue: ""
+  caCert: ""
+  allowInsecureHTTP: false
 
 bcm:
   enabled: false

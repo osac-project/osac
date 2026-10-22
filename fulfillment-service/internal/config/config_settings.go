@@ -105,6 +105,7 @@ type generalSettings struct {
 	Scopes      []string   `json:"scopes,omitempty"`
 	RedirectUri string     `json:"redirect_uri,omitempty"`
 	Tenant      string     `json:"tenant,omitempty"`
+	Project     string     `json:"project,omitempty"`
 }
 
 // secretSettings contains the secret fields of the configuration. These are stored as a single
@@ -299,6 +300,16 @@ func (s *Settings) Tenant() string {
 // SetTenant sets the saved tenant name.
 func (s *Settings) SetTenant(value string) {
 	s.general.Tenant = value
+}
+
+// Project returns the saved project name.
+func (s *Settings) Project() string {
+	return s.general.Project
+}
+
+// SetProject sets the saved project name.
+func (s *Settings) SetProject(value string) {
+	s.general.Project = value
 }
 
 // Load populates the settings from the configuration file and the secret store.

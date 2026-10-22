@@ -1,0 +1,68 @@
+---
+# The BMaaS Netris full-install test as a suite of the pull request flow: a real Netris lab on an AWS box, so it is slow and
+# expensive and never chosen automatically (the policy marks it manual_only). A member of the organization starts it by
+# commenting `/test netris` on the pull request, or checking its box in the comment the decision keeps there (osac-ci
+# docs/RULES.md, "Starting suites by hand"); e2e-pr.yml calls
+# this workflow for the commit that was asked for, and its line on the pull request is E2E / BMaaS Netris Full Install. It
+# does not hold the E2E check: that check is the sum of the suites the change needs (VMaaS, CaaS, BMaaS).
+#
+# The "Run workflow" button of e2e-bmaas-netris-full-install-caller.yml still works.
+name: E2E BMaaS Netris Full Install
+
+permissions:
+  contents: read
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        description: Repository that holds the commit to test, owner/name
+        required: true
+        type: string
+      sha:
+        description: The commit to test
+        required: true
+        type: string
+      pr-number:
+        description: The pull request being tested, empty when there is none
+        required: false
+        type: string
+        default: ""
+      fork-pr-author:
+        description: Login of the author of a fork pull request, empty when the commit is not from a fork
+        required: false
+        type: string
+        default: ""
+      fork-pr-author-association:
+        description: Author association of a fork pull request, empty when the commit is not from a fork
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  e2e-bmaas-netris:
+    permissions:
+      contents: read
+      id-token: write
+      checks: write
+      pull-requests: read
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-netris-full-install.yml@main
+    with:
+      osac-repo: https://github.com/${{ inputs.repo }}.git
+      osac-branch: ${{ inputs.sha }}
+      components: >-
+        [
+        { "repo": "${{ inputs.repo }}", "ref": "${{ inputs.sha }}", "containerfile": "fulfillment-service/Containerfile", "context": ".", "imageKey": "service.images.service" },
+        { "repo": "${{ inputs.repo }}", "ref": "${{ inputs.sha }}", "containerfile": "osac-operator/Containerfile", "context": ".", "imageKey": "operator.image.repository" },
+        { "repo": "${{ inputs.repo }}", "ref": "${{ inputs.sha }}", "containerfile": "osac-aap/execution-environment/execution-environment.yaml", "context": ".", "imageKey": "aap.bootstrap.image", "buildType": "ansible-builder" },
+        { "repo": "${{ inputs.repo }}", "ref": "${{ inputs.sha }}", "containerfile": "osac-aap/execution-environment/execution-environment.yaml", "context": ".", "imageKey": "aap.configAsCode.eeImage", "buildType": "ansible-builder" },
+        { "repo": "${{ inputs.repo }}", "ref": "${{ inputs.sha }}", "containerfile": "bare-metal-fulfillment-operator/Containerfile", "context": ".", "imageKey": "bmf.image.repository" }
+        ]
+      test-infra-repository: osac-project/osac-test-infra
+      test-infra-ref: main
+      # pr-number and pr-sha go together: the suite refuses to provision when the pull request head is another commit.
+      pr-repository: ${{ inputs.pr-number != '' && inputs.repo || '' }}
+      pr-sha: ${{ inputs.pr-number != '' && inputs.sha || '' }}
+      pr-number: ${{ inputs.pr-number }}
+      fork-pr-author-association: ${{ inputs.fork-pr-author-association }}
+      fork-pr-author: ${{ inputs.fork-pr-author }}

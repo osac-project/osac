@@ -2,9 +2,11 @@
 set -e
 
 echo "=== Tearing down test environment ==="
+CLEANUP_FAILED=0
 
 # Stop mock VMS server if running
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export KUBECONFIG="${SCRIPT_DIR}/kubeconfig-osac-test"
 if [ -f "${SCRIPT_DIR}/.mock_vms_pid" ]; then
   MOCK_VMS_PID=$(cat "${SCRIPT_DIR}/.mock_vms_pid")
   echo "Stopping mock VMS server (PID: ${MOCK_VMS_PID})..."
@@ -40,8 +42,40 @@ if [ -f /usr/local/share/ca-certificates/osac-test-registry-ca.crt ]; then
   sudo update-ca-certificates > /dev/null 2>&1 || true
 fi
 
-# Delete kind cluster
-kind delete cluster --name osac-test
+# Stop publish_templates test servers left behind by an interrupted scenario.
+python3 - <<'PY'
+import ssl
+import urllib.error
+import urllib.request
+
+opener = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}),
+    urllib.request.HTTPSHandler(context=ssl._create_unverified_context()),
+)
+for url in (
+    "http://127.0.0.1:18081/_shutdown",
+    "https://127.0.0.1:18082/_shutdown",
+):
+    try:
+        opener.open(url, timeout=1).close()
+    except (OSError, urllib.error.URLError):
+        pass
+PY
+
+# Setup can fail before creating the cluster; still clean up local resources.
+if command -v kind > /dev/null 2>&1; then
+  if KIND_CLUSTERS=$(kind get clusters); then
+    if grep -Fxq "osac-test" <<<"${KIND_CLUSTERS}"; then
+      if ! kind delete cluster --name osac-test; then
+        echo "WARNING: Failed to delete Kind cluster; continuing local cleanup" >&2
+        CLEANUP_FAILED=1
+      fi
+    fi
+  else
+    echo "WARNING: Could not list Kind clusters; continuing local cleanup" >&2
+    CLEANUP_FAILED=1
+  fi
+fi
 
 # Clean up temporary files
 rm -f /tmp/osac_test_overrides.log
@@ -49,5 +83,10 @@ rm -rf /tmp/osac-operator
 rm -rf "${SCRIPT_DIR}/certs"
 rm -f "${SCRIPT_DIR}/kubeconfig-osac-test"
 rm -f "${SCRIPT_DIR}/.storage_env"
+
+if [ "${CLEANUP_FAILED}" -ne 0 ]; then
+  echo "=== Cleanup completed with errors ===" >&2
+  exit 1
+fi
 
 echo "=== Cleanup complete ==="

@@ -226,7 +226,7 @@ type runnerContext struct {
 // run runs the `start grpc-server` command.
 func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:gocyclo
 	// Apply service flag defaults and validate (before context creation to avoid cancel leak):
-	c.args.services.EnableAllIfNoneSet()
+	c.args.services.EnableAllIfNoneSet(cmd.Flags())
 	if err := c.args.services.Validate(); err != nil {
 		return fmt.Errorf("invalid service flags: %w", err)
 	}

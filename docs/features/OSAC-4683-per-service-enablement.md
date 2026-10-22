@@ -59,9 +59,12 @@ command-line flags:
 | BMaaS | `--enable-bmaas` |
 | MaaS | `--enable-maas` |
 
-The chart adds a flag to each container command when the corresponding global
-service value is enabled. If the binary is started without any enable flags,
-the fulfillment-service enables all four services for backward compatibility.
+The chart passes all four enable flags to each container command with the
+configured boolean values, so a disabled tier is passed explicitly as
+`--enable-<service>=false`. If the binary is started without any enable
+flags, the fulfillment-service enables all four services for backward
+compatibility; explicitly provided flags, including all-false combinations,
+are preserved as given.
 
 The REST gateway currently registers its generated handlers for all services.
 Calls for a disabled service are rejected by the fulfillment-service gRPC
@@ -110,6 +113,11 @@ updates workloads:
 
 - CaaS can be enabled only when VMaaS or BMaaS is also enabled.
 - MaaS can be enabled only when CaaS is enabled.
+
+Setting all four service values to false is valid: every service tier is
+disabled and only shared infrastructure remains. Because both VMaaS and
+BMaaS are disabled, the shared DiskImages API is disabled as well (see
+Service tiers).
 
 These rules are expressed in the chart's `values.schema.json`. Helm applies
 them to both `helm install` and `helm upgrade`. An invalid combination fails

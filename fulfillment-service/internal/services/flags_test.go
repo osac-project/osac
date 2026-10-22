@@ -24,7 +24,7 @@ var _ = Describe("Service flags", func() {
 	Describe("EnableAllIfNoneSet", func() {
 		DescribeTable("enables all services when none are set",
 			func(initial, expected Flags) {
-				initial.EnableAllIfNoneSet()
+				initial.EnableAllIfNoneSet(nil)
 				Expect(initial).To(Equal(expected))
 			},
 			Entry("all false enables all",
@@ -90,7 +90,7 @@ var _ = Describe("Service flags", func() {
 
 		It("validates after EnableAllIfNoneSet", func() {
 			f := Flags{}
-			f.EnableAllIfNoneSet()
+			f.EnableAllIfNoneSet(nil)
 			Expect(f.Validate()).ToNot(HaveOccurred())
 		})
 	})
@@ -129,6 +129,60 @@ var _ = Describe("Service flags", func() {
 			Expect(flags.VMaaS).To(BeTrue())
 			Expect(flags.BMaaS).To(BeTrue())
 			Expect(flags.MaaS).To(BeTrue())
+		})
+
+		It("allows all flags to be explicitly disabled", func() {
+			fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			flags := RegisterFlags(fs)
+
+			Expect(fs.Parse([]string{
+				"--enable-caas=false", "--enable-vmaas=false",
+				"--enable-bmaas=false", "--enable-maas=false",
+			})).To(Succeed())
+			flags.EnableAllIfNoneSet(fs)
+			Expect(*flags).To(Equal(Flags{}))
+			Expect(flags.Validate()).ToNot(HaveOccurred())
+		})
+	})
+
+	Describe("EnableAllIfNoneSet with a flag set", func() {
+		It("enables all services when no flag was supplied", func() {
+			fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			flags := RegisterFlags(fs)
+
+			Expect(fs.Parse([]string{})).To(Succeed())
+			flags.EnableAllIfNoneSet(fs)
+			Expect(*flags).To(Equal(Flags{CaaS: true, VMaaS: true, BMaaS: true, MaaS: true}))
+		})
+
+		It("preserves an explicit all-false configuration", func() {
+			fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			flags := RegisterFlags(fs)
+
+			Expect(fs.Parse([]string{
+				"--enable-caas=false", "--enable-vmaas=false",
+				"--enable-bmaas=false", "--enable-maas=false",
+			})).To(Succeed())
+			flags.EnableAllIfNoneSet(fs)
+			Expect(*flags).To(Equal(Flags{}))
+		})
+
+		It("preserves a single explicit false flag without defaulting", func() {
+			fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			flags := RegisterFlags(fs)
+
+			Expect(fs.Parse([]string{"--enable-vmaas=false"})).To(Succeed())
+			flags.EnableAllIfNoneSet(fs)
+			Expect(*flags).To(Equal(Flags{}))
+		})
+
+		It("preserves explicit true flags", func() {
+			fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			flags := RegisterFlags(fs)
+
+			Expect(fs.Parse([]string{"--enable-caas", "--enable-vmaas"})).To(Succeed())
+			flags.EnableAllIfNoneSet(fs)
+			Expect(*flags).To(Equal(Flags{CaaS: true, VMaaS: true}))
 		})
 	})
 

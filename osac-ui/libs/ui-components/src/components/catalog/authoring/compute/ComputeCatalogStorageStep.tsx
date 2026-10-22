@@ -54,7 +54,13 @@ const ComputeCatalogStorageStep = () => {
                 titleId="compute-catalog-additional-disks"
                 actions={labelInfo}
               >
-                <AdditionalDisksArrayField name={valueName} isDisabled={isDisabled} />
+                <AdditionalDisksArrayField
+                  name={valueName}
+                  isDisabled={isDisabled}
+                  emptyMessage={t(
+                    'No additional disks. Add disks if this catalog item should include them by default.',
+                  )}
+                />
               </ProvisioningFieldGroup>
             )}
           </CatalogField>

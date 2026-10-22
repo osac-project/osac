@@ -35,6 +35,7 @@ export interface ResourceSelectFieldProps {
   loadErrorTitle?: string;
   emptyTitle?: string;
   emptyDescription?: string;
+  autoSelectFirstOption?: boolean;
   /** Called after a new resource is selected or the field is cleared. Use to trigger cascade resets. */
   onSelectResource?: (value: ResourceSelectValue) => void;
   /** Client-side filter applied after the list response (e.g. GPU-class). */
@@ -61,6 +62,7 @@ export const ResourceSelectField = ({
   loadErrorTitle,
   emptyTitle,
   emptyDescription,
+  autoSelectFirstOption = false,
   onSelectResource,
   filterItems,
   formatOptionLabel = defaultOptionLabel,
@@ -113,6 +115,27 @@ export const ResourceSelectField = ({
     void setFieldValue(idFieldName, items[0].id, false);
   }, [
     autoSelectSingleOption,
+    controlDisabled,
+    idFieldName,
+    isLoading,
+    items,
+    selectedId,
+    setFieldValue,
+  ]);
+
+  useEffect(() => {
+    if (
+      !autoSelectFirstOption ||
+      isLoading ||
+      controlDisabled ||
+      items.length === 0 ||
+      selectedId !== ''
+    ) {
+      return;
+    }
+    void setFieldValue(idFieldName, items[0].id, true);
+  }, [
+    autoSelectFirstOption,
     controlDisabled,
     idFieldName,
     isLoading,

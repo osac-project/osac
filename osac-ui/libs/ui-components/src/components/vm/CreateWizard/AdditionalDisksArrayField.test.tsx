@@ -78,7 +78,7 @@ describe('AdditionalDisksArrayField', () => {
   it('shows no rows and an Add disk action when there are no additional disks', () => {
     renderField();
 
-    expect(screen.getByText('No additional disks added.')).toBeInTheDocument();
+    expect(screen.queryByText('No additional disks yet.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add disk' })).toBeInTheDocument();
     expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
   });
@@ -88,9 +88,9 @@ describe('AdditionalDisksArrayField', () => {
 
     await user.click(screen.getByRole('button', { name: 'Add disk' }));
 
-    expect(screen.queryByText('No additional disks added.')).not.toBeInTheDocument();
-    expect(screen.getByRole('spinbutton', { name: 'Size (GiB)' })).toHaveValue(30);
-    await waitFor(() => expect(screen.getByLabelText(/^Storage tier/)).toBeInTheDocument());
+    expect(screen.queryByRole('group')).not.toBeInTheDocument();
+    expect(screen.getByRole('spinbutton', { name: 'Disk size (GiB)' })).toHaveValue(30);
+    await waitFor(() => expect(getAllResourceSelectInputs(/^Storage tier/)[0]).toHaveValue('fast'));
   });
 
   it('adds a second row alongside the first, each independently editable', async () => {
@@ -99,7 +99,7 @@ describe('AdditionalDisksArrayField', () => {
     await user.click(screen.getByRole('button', { name: 'Add disk' }));
     await user.click(screen.getByRole('button', { name: 'Add disk' }));
 
-    const sizeInputs = screen.getAllByRole('spinbutton', { name: 'Size (GiB)' });
+    const sizeInputs = screen.getAllByRole('spinbutton', { name: 'Disk size (GiB)' });
     expect(sizeInputs).toHaveLength(2);
 
     await user.clear(sizeInputs[0]);
@@ -126,19 +126,11 @@ describe('AdditionalDisksArrayField', () => {
     expect(inputs[1]).toHaveValue('bulk');
   });
 
-  it('clears a required error immediately after selecting an additional disk tier', async () => {
-    const { user } = renderField(
-      [{ sizeGib: '30', storageTier: emptyResourceSelectValue() }],
-      true,
-    );
+  it('defaults a new disk to the first available storage tier', async () => {
+    renderField([{ sizeGib: '30', storageTier: emptyResourceSelectValue() }], true);
 
-    expect(await screen.findByText('Storage tier is required')).toBeInTheDocument();
-
-    await selectTier(user, 0, 'fast');
-
-    await waitFor(() =>
-      expect(screen.queryByText('Storage tier is required')).not.toBeInTheDocument(),
-    );
+    await waitFor(() => expect(getAllResourceSelectInputs(/^Storage tier/)[0]).toHaveValue('fast'));
+    expect(screen.queryByText('Storage tier is required')).not.toBeInTheDocument();
   });
 
   it('removes a row when its Remove action is clicked', async () => {
@@ -147,7 +139,7 @@ describe('AdditionalDisksArrayField', () => {
     await user.click(screen.getByRole('button', { name: 'Add disk' }));
     await user.click(screen.getByRole('button', { name: 'Remove disk' }));
 
-    expect(screen.getByText('No additional disks added.')).toBeInTheDocument();
+    expect(screen.queryByText('No additional disks yet.')).not.toBeInTheDocument();
     expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
   });
 
@@ -155,7 +147,7 @@ describe('AdditionalDisksArrayField', () => {
     const { user } = renderField();
 
     await user.click(screen.getByRole('button', { name: 'Add disk' }));
-    const sizeInputs1 = screen.getAllByRole('spinbutton', { name: 'Size (GiB)' });
+    const sizeInputs1 = screen.getAllByRole('spinbutton', { name: 'Disk size (GiB)' });
     await user.clear(sizeInputs1[0]);
     await user.type(sizeInputs1[0], '77');
 
@@ -163,7 +155,7 @@ describe('AdditionalDisksArrayField', () => {
 
     await user.click(screen.getAllByRole('button', { name: 'Remove disk' })[1]);
 
-    const remaining = screen.getAllByRole('spinbutton', { name: 'Size (GiB)' });
+    const remaining = screen.getAllByRole('spinbutton', { name: 'Disk size (GiB)' });
     expect(remaining).toHaveLength(1);
     expect(remaining[0]).toHaveValue(77);
   });
@@ -171,8 +163,7 @@ describe('AdditionalDisksArrayField', () => {
   it('renders a row already present in initial values (e.g. seeded from a catalog default) as editable and removable', async () => {
     const { user } = renderField([{ sizeGib: '40', storageTier: { id: 'id-fast', name: 'fast' } }]);
 
-    expect(screen.queryByText('No additional disks added.')).not.toBeInTheDocument();
-    const sizeInput = screen.getByRole('spinbutton', { name: 'Size (GiB)' });
+    const sizeInput = screen.getByRole('spinbutton', { name: 'Disk size (GiB)' });
     expect(sizeInput).toHaveValue(40);
     await waitFor(() => expect(getAllResourceSelectInputs(/^Storage tier/)[0]).toHaveValue('fast'));
 
@@ -181,6 +172,6 @@ describe('AdditionalDisksArrayField', () => {
     expect(sizeInput).toHaveValue(60);
 
     await user.click(screen.getByRole('button', { name: 'Remove disk' }));
-    expect(screen.getByText('No additional disks added.')).toBeInTheDocument();
+    expect(screen.queryByText('No additional disks yet.')).not.toBeInTheDocument();
   });
 });

@@ -71,6 +71,8 @@ name for the target cluster.
 The tenant create flow requires that the configured tenant does not already
 exist; the delete flow requires that it exists. The disk image create, lifecycle,
 and delete flows use the configured disk image values and lifecycle actions.
+All VMaaS specs are skipped before browser actions when `tenant_name` is unset or
+empty.
 The create project owns the delete project as teardown, so cleanup runs after
 the lifecycle project even if a lifecycle assertion fails.
 

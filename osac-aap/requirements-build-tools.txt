@@ -75,10 +75,25 @@ xmltodict==1.0.4
 # which trips sbom_spdx.disallowed_package_attributes since it's
 # sourced from public PyPI) needs maturin itself prefetched as a
 # build-system requirement. Confirmed via each package's real sdist
-# pyproject.toml: all three declare `build-backend = "maturin"`, none
-# declare setuptools-rust. rust/cargo RPMs are prefetched in
-# rpms.in.yaml/rpms.lock.yaml for the actual compilation.
+# pyproject.toml: all three declare `build-backend = "maturin"`. rust/
+# cargo RPMs are prefetched in rpms.in.yaml/rpms.lock.yaml for the
+# actual compilation.
 maturin==1.15.0
+# maturin's OWN build-system.requires (confirmed via its real sdist
+# pyproject.toml) needs setuptools>=77.0.0 -- a range that doesn't
+# overlap ansible-runner's own <=70.0.0 upper bound above, so this
+# coexists as a second setuptools version rather than replacing it
+# (same pattern as the two wheel== pins). 82.0.0 satisfies both this
+# and ansible-core's own <=82.0.0 upper bound, so one extra pin covers
+# both. Also needs setuptools-rust>=1.11.0 (confirmed live: "Could not
+# find a version that satisfies the requirement setuptools-rust>=
+# 1.11.0"), whose own runtime need (semantic_version, confirmed via its
+# real PyPI metadata) has no pyproject.toml (legacy setuptools backend,
+# same bootstrap as Cython/python-esiclient) and whose own build-system
+# needs only setuptools>=62.4 + setuptools_scm (already prefetched).
+setuptools==82.0.0
+setuptools-rust==1.13.0
+semantic_version==2.10.0
 # cryptography's own sdist build-system.requires also lists cffi
 # (>=2.0.0 for python>=3.9, which this EE's python3.12 satisfies) --
 # used by its own build.rs for the rust/cffi bridge, per its

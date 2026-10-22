@@ -78,3 +78,13 @@ maturin==1.15.0
 # used by its own build.rs for the rust/cffi bridge, per its
 # pyproject.toml's own comment.
 cffi==2.1.1
+# Both wheel pins above are themselves sdist-only in this fully-source
+# build (no exception to the "no binary wheels" rule, including for
+# pip's own bootstrap packages) and both use flit_core as their build
+# backend -- wheel==0.45.1 needs flit_core>=3.8,<4, wheel==0.48.0 needs
+# flit_core>=3.11,<5; 3.12.0 satisfies both so one pin covers both.
+# Confirmed live: "Could not find a version that satisfies the
+# requirement flit_core<4,>=3.8 (from versions: none)". flit_core's own
+# build-system.requires is empty (self-hosting), confirmed via its real
+# sdist pyproject.toml, so no further transitive need here.
+flit_core==3.12.0

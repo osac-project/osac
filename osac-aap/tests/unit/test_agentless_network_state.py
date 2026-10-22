@@ -48,6 +48,9 @@ SUBNET_FULFILLMENT_ID = "99999999-9999-4999-8999-999999999999"
 VIRTUAL_NETWORK_FULFILLMENT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 BARE_METAL_INSTANCE_UID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 BARE_METAL_INSTANCE_FULFILLMENT_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+NAT_GATEWAY_UID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+NAT_GATEWAY_FULFILLMENT_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+SECOND_SUBNET_UID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
 
 
 def store_for(tmp_path):
@@ -154,6 +157,35 @@ def external_ip_attachment_context(store, *, target_ip="10.0.1.10"):
     }
 
 
+def nat_gateway_context(store):
+    with sqlite3.connect(store.path) as connection:
+        address = connection.execute(
+            "SELECT address FROM external_ips WHERE uid = ?", (UID_THREE,)
+        ).fetchone()[0]
+    parent = store.get_virtual_network(UID_ONE, TENANT_ONE)
+    return {
+        "external_ip": {
+            "name": "test-eip",
+            "namespace": "test-networking",
+            "fulfillment_id": EXTERNAL_IP_FULFILLMENT_ID,
+            "kubernetes_uid": UID_THREE,
+            "tenant_id": TENANT_ONE,
+            "address": address,
+            "state": "Allocated",
+            "phase": "Ready",
+        },
+        "virtual_network": {
+            "name": "test-network",
+            "namespace": "test-networking",
+            "fulfillment_id": VIRTUAL_NETWORK_FULFILLMENT_ID,
+            "kubernetes_uid": UID_ONE,
+            "tenant_id": TENANT_ONE,
+            "ipv4_cidr": parent["virtual_network_cidr"],
+            "phase": "Ready",
+        },
+    }
+
+
 def prepare_attachment_state(tmp_path, monkeypatch):
     store = store_for(tmp_path)
     ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
@@ -166,6 +198,21 @@ def prepare_attachment_state(tmp_path, monkeypatch):
         agentless_net_state.agentless_net_external_ip,
         "reconcile_external_ip_attachment",
         lambda *args, **kwargs: False,
+    )
+    return store
+
+
+def prepare_nat_gateway_state(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    subnet, _ = reserve_subnet(store, uid=UID_TWO, parent_uid=UID_ONE, cidr="10.0.1.0/24")
+    mark_subnet_ready(store, subnet)
+    register_external_ip_pool(store)
+    reserve_external_address(store, UID_THREE, EXTERNAL_IP_FULFILLMENT_ID)
+    monkeypatch.setattr(
+        agentless_net_state.agentless_net_nat_gateway,
+        "reconcile_nat_gateway",
+        lambda *_args, **_kwargs: False,
     )
     return store
 
@@ -942,6 +989,7 @@ def test_state_database_uses_current_schema_v1_and_preserves_uid_and_transit_ind
             "external_ip_pools",
             "external_ips",
             "attachments",
+            "nat_gateways",
         }
         assert connection.execute("SELECT count(*) FROM virtual_networks").fetchone()[0] == 2
         with pytest.raises(sqlite3.IntegrityError):
@@ -963,6 +1011,7 @@ def test_incomplete_schema_v1_fails_closed_without_modification(tmp_path):
         connection.execute("DROP TABLE IF EXISTS external_ips")
         connection.execute("DROP TABLE IF EXISTS external_ip_pools")
         connection.execute("DROP TABLE IF EXISTS attachments")
+        connection.execute("DROP TABLE IF EXISTS nat_gateways")
         connection.execute("DROP TABLE subnets")
         connection.execute("PRAGMA user_version = 1")
 
@@ -981,7 +1030,7 @@ def test_incomplete_schema_v1_fails_closed_without_modification(tmp_path):
 
 
 @pytest.mark.parametrize("check_mode", [False, True], ids=["normal", "check-mode"])
-def test_previous_v1_schema_adds_attachment_table_without_losing_state(
+def test_previous_v1_schema_adds_consumer_tables_without_losing_state(
     tmp_path, check_mode
 ):
     store = store_for(tmp_path)
@@ -990,6 +1039,7 @@ def test_previous_v1_schema_adds_attachment_table_without_losing_state(
     )
     with sqlite3.connect(store.path) as connection:
         connection.execute("DROP TABLE attachments")
+        connection.execute("DROP TABLE nat_gateways")
         connection.execute("PRAGMA user_version = 1")
         assert {
             row[0]
@@ -1024,7 +1074,46 @@ def test_previous_v1_schema_adds_attachment_table_without_losing_state(
             attachment_indexes
         )
         assert connection.execute("SELECT count(*) FROM attachments").fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM nat_gateways").fetchone() == (0,)
         assert connection.execute("SELECT count(*) FROM external_ip_pools").fetchone() == (1,)
+
+
+@pytest.mark.parametrize("check_mode", [False, True], ids=["normal", "check-mode"])
+def test_attachment_schema_v1_adds_nat_gateway_table_without_losing_state(
+    tmp_path, check_mode
+):
+    store = store_for(tmp_path)
+    original, _ = register_external_ip_pool(store)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TABLE nat_gateways")
+        connection.execute("PRAGMA user_version = 1")
+        assert {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        } == agentless_net_state.PRE_NAT_GATEWAY_V1_SCHEMA_TABLES
+
+    migrated, changed = store.ensure_external_ip_pool(
+        POOL_UID,
+        POOL_FULFILLMENT_ID,
+        TENANT_ONE,
+        "IPv4",
+        [POOL_CIDR],
+        check_mode=check_mode,
+    )
+
+    assert migrated == original
+    assert changed is False
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        } == agentless_net_state.SCHEMA_TABLES
+        assert connection.execute("SELECT count(*) FROM nat_gateways").fetchone() == (0,)
 
 
 def test_invalid_previous_v1_schema_is_rejected_without_modification(tmp_path):
@@ -1034,6 +1123,7 @@ def test_invalid_previous_v1_schema_is_rejected_without_modification(tmp_path):
     )
     with sqlite3.connect(store.path) as connection:
         connection.execute("DROP TABLE attachments")
+        connection.execute("DROP TABLE nat_gateways")
         connection.execute("ALTER TABLE external_ip_pools ADD COLUMN unexpected TEXT")
         connection.execute("PRAGMA user_version = 1")
     original_database = store.path.read_bytes()
@@ -1105,6 +1195,7 @@ def test_external_ip_pool_registers_identity_in_current_schema_v1(tmp_path):
             "external_ip_pools",
             "external_ips",
             "attachments",
+            "nat_gateways",
         }
 
 
@@ -2179,6 +2270,280 @@ def test_external_ip_attachment_delete_failure_retains_saved_state(tmp_path, mon
         ).fetchone()
     assert row[0] == "deleting"
     assert json.loads(row[1])["context"] == context
+
+
+def test_nat_gateway_saves_uid_owned_state_and_retries_idempotently(tmp_path, monkeypatch):
+    store = prepare_nat_gateway_state(tmp_path, monkeypatch)
+    context = nat_gateway_context(store)
+    events = []
+
+    def reconcile(parent, gateway, sources):
+        events.append((parent["uid"], gateway["uid"], list(sources)))
+        return False
+
+    monkeypatch.setattr(
+        agentless_net_state.agentless_net_nat_gateway,
+        "reconcile_nat_gateway",
+        reconcile,
+    )
+
+    gateway, changed, provider_changed = store.ensure_nat_gateway(
+        NAT_GATEWAY_UID,
+        NAT_GATEWAY_FULFILLMENT_ID,
+        TENANT_ONE,
+        context,
+        "eth0",
+    )
+
+    assert changed is True
+    assert provider_changed is False
+    assert gateway["phase"] == "ready"
+    assert gateway["external_ip_uid"] == UID_THREE
+    assert gateway["virtual_network_uid"] == UID_ONE
+    assert gateway["source_cidrs"] == [{"subnet_uid": UID_TWO, "cidr": "10.0.1.0/24"}]
+    assert gateway["applied_source_cidrs"] == gateway["source_cidrs"]
+    assert gateway["source_revision"] == agentless_net_state._nat_gateway_source_revision(
+        gateway["source_cidrs"]
+    )
+    assert events == [(UID_ONE, NAT_GATEWAY_UID, gateway["source_cidrs"])]
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("SELECT count(*) FROM nat_gateways").fetchone() == (1,)
+
+    retried, changed, provider_changed = store.ensure_nat_gateway(
+        NAT_GATEWAY_UID,
+        NAT_GATEWAY_FULFILLMENT_ID,
+        TENANT_ONE,
+        context,
+        "eth0",
+    )
+    assert changed is False
+    assert provider_changed is False
+    assert retried == gateway
+    assert len(events) == 2
+
+
+def test_subnet_delete_reconciles_nat_sources_before_vlan_cleanup(tmp_path, monkeypatch):
+    store = prepare_nat_gateway_state(tmp_path, monkeypatch)
+    store.ensure_nat_gateway(
+        NAT_GATEWAY_UID,
+        NAT_GATEWAY_FULFILLMENT_ID,
+        TENANT_ONE,
+        nat_gateway_context(store),
+        "eth0",
+    )
+    events = []
+    monkeypatch.setattr(
+        agentless_net_state.agentless_net_nat_gateway,
+        "reconcile_nat_gateway",
+        lambda _parent, _gateway, sources: events.append(("nat", list(sources))) or False,
+    )
+    monkeypatch.setattr(
+        agentless_net_state,
+        "prepare_subnet_delete_data_plane",
+        lambda *_args: events.append(("subnet",)) or False,
+    )
+
+    deleting, changed = store.prepare_delete_subnet(UID_TWO, TENANT_ONE, "systemd")
+
+    assert changed is True
+    assert deleting["phase"] == "deleting"
+    assert events == [("nat", []), ("subnet",)]
+    with sqlite3.connect(store.path) as connection:
+        gateway = store._nat_gateway_for_uid(connection, NAT_GATEWAY_UID)
+    assert gateway["source_cidrs"] == []
+    assert gateway["applied_source_cidrs"] == []
+    assert store.release_subnet(UID_TWO, TENANT_ONE)[1] is True
+
+
+def test_subnet_ensure_adds_nat_source_before_subnet_ready(tmp_path, monkeypatch):
+    store = prepare_nat_gateway_state(tmp_path, monkeypatch)
+    store.ensure_nat_gateway(
+        NAT_GATEWAY_UID,
+        NAT_GATEWAY_FULFILLMENT_ID,
+        TENANT_ONE,
+        nat_gateway_context(store),
+        "eth0",
+    )
+    parent = get_virtual_network(store, UID_ONE)
+    first_subnet = store.get_subnet(UID_TWO, TENANT_ONE)
+    second_subnet, _ = reserve_subnet(
+        store,
+        uid=SECOND_SUBNET_UID,
+        parent_uid=UID_ONE,
+        cidr=available_subnet_cidr(parent, exclude=(first_subnet["ipv4_cidr"],)),
+    )
+    events = []
+
+    monkeypatch.setattr(
+        agentless_net_state,
+        "reconcile_virtual_network",
+        lambda *_args, **_kwargs: events.append(("virtual-network",)) or False,
+    )
+    monkeypatch.setattr(
+        agentless_net_state,
+        "ensure_subnet_data_plane",
+        lambda _parent, active_subnets, _supervisor: events.append(
+            ("subnet-provider", [item["uid"] for item in active_subnets])
+        ) or False,
+    )
+    monkeypatch.setattr(
+        agentless_net_state.agentless_net_nat_gateway,
+        "reconcile_nat_gateway",
+        lambda _parent, _gateway, sources: events.append(("nat-gateway", list(sources))) or False,
+    )
+
+    ready_subnet, state_changed, provider_changed = store.ensure_and_reconcile_subnet(
+        SECOND_SUBNET_UID, TENANT_ONE, "systemd"
+    )
+
+    expected_sources = [
+        {"subnet_uid": UID_TWO, "cidr": first_subnet["ipv4_cidr"]},
+        {"subnet_uid": SECOND_SUBNET_UID, "cidr": second_subnet["ipv4_cidr"]},
+    ]
+    assert ready_subnet["phase"] == "ready"
+    assert state_changed is True
+    assert provider_changed is True
+    assert [event[0] for event in events] == [
+        "virtual-network", "subnet-provider", "nat-gateway"
+    ]
+    assert events[2][1] == expected_sources
+    with sqlite3.connect(store.path) as connection:
+        gateway = store._nat_gateway_for_uid(connection, NAT_GATEWAY_UID)
+    assert gateway["source_cidrs"] == expected_sources
+    assert gateway["applied_source_cidrs"] == expected_sources
+
+
+def test_nat_gateway_retains_external_ip_virtual_network_and_subnet_until_cleanup(
+    tmp_path, monkeypatch
+):
+    store = prepare_nat_gateway_state(tmp_path, monkeypatch)
+    store.ensure_nat_gateway(
+        NAT_GATEWAY_UID,
+        NAT_GATEWAY_FULFILLMENT_ID,
+        TENANT_ONE,
+        nat_gateway_context(store),
+        "eth0",
+    )
+
+    with pytest.raises(StateError, match="AgentlessNet NATGateway"):
+        store.release_external_ip(UID_THREE, EXTERNAL_IP_FULFILLMENT_ID, TENANT_ONE, POOL_UID)
+    with pytest.raises(StateError, match="saved NATGateways"):
+        store.delete_and_remove_virtual_network(UID_ONE, TENANT_ONE)
+    with pytest.raises(StateError, match="NATGateway SNAT rule"):
+        store.release_subnet(UID_TWO, TENANT_ONE)
+
+    monkeypatch.setattr(
+        agentless_net_state.agentless_net_nat_gateway,
+        "delete_nat_gateway",
+        lambda *_args, **_kwargs: True,
+    )
+    deleted, changed = store.delete_nat_gateway(
+        NAT_GATEWAY_UID, NAT_GATEWAY_FULFILLMENT_ID, TENANT_ONE
+    )
+    assert changed is True
+    assert deleted["phase"] == "deleting"
+    assert store.delete_nat_gateway(
+        NAT_GATEWAY_UID, NAT_GATEWAY_FULFILLMENT_ID, TENANT_ONE
+    ) == (None, False)
+    monkeypatch.setattr(
+        agentless_net_state,
+        "prepare_subnet_delete_data_plane",
+        lambda *_args: False,
+    )
+    store.prepare_delete_subnet(UID_TWO, TENANT_ONE, "systemd")
+    assert store.release_subnet(UID_TWO, TENANT_ONE)[1] is True
+    assert store.release_external_ip(
+        UID_THREE, EXTERNAL_IP_FULFILLMENT_ID, TENANT_ONE, POOL_UID
+    )[1] is True
+
+
+def test_external_ip_cannot_be_shared_between_nat_gateway_and_attachment(tmp_path, monkeypatch):
+    store = prepare_nat_gateway_state(tmp_path, monkeypatch)
+    store.ensure_nat_gateway(
+        NAT_GATEWAY_UID,
+        NAT_GATEWAY_FULFILLMENT_ID,
+        TENANT_ONE,
+        nat_gateway_context(store),
+        "eth0",
+    )
+    with pytest.raises(StateError, match="already reserved"):
+        store.ensure_external_ip_attachment(
+            ATTACHMENT_UID,
+            ATTACHMENT_FULFILLMENT_ID,
+            TENANT_ONE,
+            external_ip_attachment_context(store),
+            "eth0",
+        )
+
+
+def test_nat_gateway_delete_failure_retains_consumer_reservation(tmp_path, monkeypatch):
+    store = prepare_nat_gateway_state(tmp_path, monkeypatch)
+    store.ensure_nat_gateway(
+        NAT_GATEWAY_UID,
+        NAT_GATEWAY_FULFILLMENT_ID,
+        TENANT_ONE,
+        nat_gateway_context(store),
+        "eth0",
+    )
+
+    def fail_delete(*_args, **_kwargs):
+        raise agentless_net_state.NetworkCommandError("route withdrawal failed")
+
+    monkeypatch.setattr(
+        agentless_net_state.agentless_net_nat_gateway,
+        "delete_nat_gateway",
+        fail_delete,
+    )
+    with pytest.raises(StateError, match="route withdrawal failed"):
+        store.delete_nat_gateway(
+            NAT_GATEWAY_UID, NAT_GATEWAY_FULFILLMENT_ID, TENANT_ONE
+        )
+
+    with sqlite3.connect(store.path) as connection:
+        row = connection.execute(
+            "SELECT phase, payload FROM nat_gateways WHERE uid = ?",
+            (NAT_GATEWAY_UID,),
+        ).fetchone()
+    assert row[0] == "deleting"
+    assert json.loads(row[1])["external_ip_uid"] == UID_THREE
+    with pytest.raises(StateError, match="AgentlessNet NATGateway"):
+        store.release_external_ip(UID_THREE, EXTERNAL_IP_FULFILLMENT_ID, TENANT_ONE, POOL_UID)
+
+
+def test_subnet_delete_waits_for_nat_gateway_cleanup_when_gateway_is_deleting(
+    tmp_path, monkeypatch
+):
+    store = prepare_nat_gateway_state(tmp_path, monkeypatch)
+    store.ensure_nat_gateway(
+        NAT_GATEWAY_UID,
+        NAT_GATEWAY_FULFILLMENT_ID,
+        TENANT_ONE,
+        nat_gateway_context(store),
+        "eth0",
+    )
+    monkeypatch.setattr(
+        agentless_net_state.agentless_net_nat_gateway,
+        "delete_nat_gateway",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            agentless_net_state.NetworkCommandError("route withdrawal failed")
+        ),
+    )
+    with pytest.raises(StateError, match="route withdrawal failed"):
+        store.delete_nat_gateway(
+            NAT_GATEWAY_UID, NAT_GATEWAY_FULFILLMENT_ID, TENANT_ONE
+        )
+
+    cleanup_called = False
+
+    def cleanup(*_args):
+        nonlocal cleanup_called
+        cleanup_called = True
+        return False
+
+    monkeypatch.setattr(agentless_net_state, "prepare_subnet_delete_data_plane", cleanup)
+    with pytest.raises(StateError, match="deleting NATGateway"):
+        store.prepare_delete_subnet(UID_TWO, TENANT_ONE, "systemd")
+    assert cleanup_called is False
 
 
 @pytest.mark.parametrize(

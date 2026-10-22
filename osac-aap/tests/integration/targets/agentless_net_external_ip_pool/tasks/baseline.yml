@@ -21,6 +21,7 @@
       - attachments
       - external_ip_pools
       - external_ips
+      - nat_gateways
       - subnets
       - virtual_networks
   tasks:

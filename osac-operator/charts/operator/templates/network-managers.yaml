@@ -78,6 +78,9 @@ data:
   {{- if $mgr.externalIPAttachmentContractVersion }}
   externalIPAttachmentContractVersion: {{ $mgr.externalIPAttachmentContractVersion | quote }}
   {{- end }}
+  {{- if $mgr.natGatewayContractVersion }}
+  natGatewayContractVersion: {{ $mgr.natGatewayContractVersion | quote }}
+  {{- end }}
 {{- end }}
 {{- end }}
 {{- range $name, $mgr := .Values.networkManagers.k8sManagers }}
@@ -107,6 +110,9 @@ data:
   {{- end }}
   {{- if $mgr.externalIPAttachmentContractVersion }}
   externalIPAttachmentContractVersion: {{ $mgr.externalIPAttachmentContractVersion | quote }}
+  {{- end }}
+  {{- if $mgr.natGatewayContractVersion }}
+  natGatewayContractVersion: {{ $mgr.natGatewayContractVersion | quote }}
   {{- end }}
 {{- end }}
 {{- end }}

@@ -1238,6 +1238,40 @@ var _ = Describe("AAPProvider", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
+		It("includes the controller-resolved NATGateway context", func() {
+			gatewayContext := provisioning.NATGatewayContext{
+				ExternalIP: provisioning.NATGatewayExternalIPContext{
+					Name: "egress-ip", Namespace: "networking", FulfillmentID: "eip-id",
+					KubernetesUID: "eip-uid", TenantID: "tenant-a", Address: "198.51.100.10",
+					State: "Allocated", Phase: "Ready",
+				},
+				VirtualNetwork: provisioning.NATGatewayVirtualNetworkContext{
+					Name: "network", Namespace: "networking", FulfillmentID: "vn-id",
+					KubernetesUID: "vn-uid", TenantID: "tenant-a", IPv4CIDR: "10.0.0.0/16",
+					Phase: "Ready",
+				},
+			}
+			ctx = provisioning.WithNATGatewayContext(ctx, gatewayContext)
+			aapClient.launchJobTemplateFunc = func(_ context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				Expect(jobVars["nat_gateway_context"]).To(Equal(map[string]any{
+					"external_ip": map[string]any{
+						"name": "egress-ip", "namespace": "networking", "fulfillment_id": "eip-id",
+						"kubernetes_uid": "eip-uid", "tenant_id": "tenant-a", "address": "198.51.100.10",
+						"state": "Allocated", "phase": "Ready",
+					},
+					"virtual_network": map[string]any{
+						"name": "network", "namespace": "networking", "fulfillment_id": "vn-id",
+						"kubernetes_uid": "vn-uid", "tenant_id": "tenant-a", "ipv4_cidr": "10.0.0.0/16",
+						"phase": "Ready",
+					},
+				}))
+				return &aap.LaunchJobTemplateResponse{JobID: 105}, nil
+			}
+			_, err := provider.TriggerProvision(ctx, &v1alpha1.NATGateway{})
+			Expect(err).NotTo(HaveOccurred())
+		})
+
 		It("should omit the parent identity when it is not set in context", func() {
 			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
 				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)

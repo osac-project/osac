@@ -159,10 +159,29 @@ before marking the attachment Ready; detach uses saved provider state and keeps
 finalizers until its artifact is accepted.
 
 This first delivery supports BMaaS BareMetalInstance targets. It does not add
-SecurityGroup policy, NATGateway SNAT, IPv6, or an upstream-router/BGP-peer
-configuration API. The OSAC-1433 design's AAP input and attachment result
-contract specifies the controller-supplied dependency snapshot and
-same-job-result validation. AgentlessNet implements it under OSAC-6308. Netris
-must adopt the attachment v1 contract before advertising it; that work is
-tracked by OSAC-6638. The OSAC-6308 deployed E2E coverage uses a test-only static
-route and does not validate upstream BGP advertisement.
+SecurityGroup policy, IPv6, or an upstream-router/BGP-peer configuration API.
+The OSAC-1433 design's AAP input and attachment result contract specifies the
+controller-supplied dependency snapshot and same-job-result validation.
+AgentlessNet implements it under OSAC-6308. Netris must adopt the attachment
+v1 contract before advertising it; that work is tracked by OSAC-6638. The
+OSAC-6308 deployed E2E coverage uses a test-only static route and does not
+validate upstream BGP advertisement.
+
+## AgentlessNet NATGateway implementation status
+
+OSAC-6202 adds the independent `natGatewayContractVersion: v1` manager
+registration and controller/AAP contract. The NATGateway controller resolves
+the current ready VirtualNetwork and allocated ExternalIP, submits their
+identity, tenant and address/CIDR snapshot, then accepts only a matching
+same-job `nat_gateway.ensure` or `nat_gateway.delete` result. Unversioned
+managers keep their existing lifecycle. Netris adoption is tracked by OSAC-6694.
+
+AgentlessNet stores NATGateway ownership and source revisions in schema-v1
+SQLite. AAP installs explicit namespace SNAT per active Subnet CIDR, scoped host
+forwarding and a host SNAT-bypass rule before announcing the ExternalIP `/32`
+through local FRR. Subnet lifecycle reconciles that source set before Ready or
+VLAN release. Delete withdraws the route before removing SNAT, forwarding,
+bypass and matching conntrack entries; ExternalIP and VirtualNetwork cleanup
+remain blocked until saved NATGateway state is removed. The contract task is
+OSAC-6693. Deployed BGP convergence and packet delivery remain QE coverage under
+OSAC-5533.

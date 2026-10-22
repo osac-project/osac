@@ -66,6 +66,7 @@ ROLE_TESTS=(
   "agentless_net_external_ip_pool"
   "agentless_net_external_ip"
   "agentless_net_external_ip_attachment"
+  "agentless_net_nat_gateway"
   "agentless_net_subnet"
   "agentless_net_attachment"
   "compute_instance_delete_vmi_recovery"

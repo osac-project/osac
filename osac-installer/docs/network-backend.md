@@ -166,9 +166,10 @@ these checks before AAP configuration:
   OpenSSL can parse as a certificate bundle. Each failure uses a stable
   `ERROR: NETRIS_CA_*` message.
 - The post-install/post-upgrade hook reads the same object as
-  `system:serviceaccount:<namespace>:osac-sa` and fails unless that identity can
-  `get` the ConfigMap. This hook runs after the CA read Role exists and before
-  the AAP bootstrap job, so the first upgrade cannot fail on missing RBAC.
+  `system:serviceaccount:<namespace>:<aap.serviceAccounts.osacSa>` (default
+  `osac-sa`) and fails unless that identity can `get` the ConfigMap. This hook
+  runs after the CA read Role exists and before the AAP bootstrap job, so the
+  first upgrade cannot fail on missing RBAC.
 
 Both hooks are gated by `validation.enabled`. Set
 `global.networking.netris.caBundle.configMap` to an empty value to keep the

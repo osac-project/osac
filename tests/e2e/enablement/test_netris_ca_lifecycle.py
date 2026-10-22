@@ -124,7 +124,7 @@ def _apply(k8s: K8sClient, manifest: str) -> None:
 
 def _pods_mounting(k8s: K8sClient, configmap: str, since: float) -> list[str]:
     names: list[str] = []
-    for pod in k8s.list_json(resource="pods")["items"]:
+    for pod in k8s.list_json(resource="pods", namespace=k8s.namespace)["items"]:
         created = pod.get("metadata", {}).get("creationTimestamp", "")
         if not created:
             continue
@@ -232,6 +232,17 @@ def test_netris_ca_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, namesp
                 namespace,
                 "--wait=false",
             )
+            _expect_denied(
+                k8s_hub_client,
+                probe_sa,
+                "create",
+                "configmap",
+                active,
+                "--from-literal=probe=denied",
+                "--dry-run=server",
+                "-n",
+                namespace,
+            )
         finally:
             run(*k8s_hub_client._base(), "delete", "configmap", allowed, "-n", namespace)
 
@@ -247,6 +258,17 @@ def test_netris_ca_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, namesp
             "configmap",
             next_name,
             f"probe={probe_sa}",
+            "-n",
+            namespace,
+        )
+        _expect_denied(
+            k8s_hub_client,
+            probe_sa,
+            "create",
+            "configmap",
+            next_name,
+            "--from-literal=probe=denied",
+            "--dry-run=server",
             "-n",
             namespace,
         )

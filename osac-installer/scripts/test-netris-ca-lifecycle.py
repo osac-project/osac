@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -127,17 +128,31 @@ class RenderContractTests(unittest.TestCase):
         self.assertIn("CHECK_IDENTITY=true", command_of(identity))
 
         hook_role = find(docs, "ClusterRole", "osac-validate-default")
-        self.assertIn(
-            {"apiGroups": [""], "resources": ["configmaps"], "verbs": ["get"]},
-            hook_role["rules"],
+        self.assertFalse(
+            [
+                rule
+                for rule in hook_role["rules"]
+                if "configmaps" in rule.get("resources", [])
+                or "subjectaccessreviews" in rule.get("resources", [])
+            ]
         )
-        self.assertIn(
-            {
-                "apiGroups": ["authorization.k8s.io"],
-                "resources": ["subjectaccessreviews"],
-                "verbs": ["create"],
-            },
-            hook_role["rules"],
+
+        pre_install_role = find(docs, "Role", "osac-validate-netris-ca")
+        self.assertEqual(
+            pre_install_role["rules"],
+            [
+                {
+                    "apiGroups": [""],
+                    "resources": ["configmaps"],
+                    "resourceNames": ["customer-netris-ca"],
+                    "verbs": ["get"],
+                }
+            ],
+        )
+        pre_install_binding = find(docs, "RoleBinding", "osac-validate-netris-ca")
+        self.assertEqual(
+            pre_install_binding["subjects"],
+            [{"kind": "ServiceAccount", "name": "osac-validate", "namespace": "default"}],
         )
 
         find(docs, "ServiceAccount", "osac-netris-ca-validate")
@@ -158,6 +173,21 @@ class RenderContractTests(unittest.TestCase):
             [{"kind": "ServiceAccount", "name": "osac-sa", "namespace": "default"}],
         )
 
+    def test_configured_aap_service_account_is_used(self) -> None:
+        docs = documents(
+            render(*NETRIS_ARGS, *CA_ARGS, "--set", "aap.serviceAccounts.osacSa=custom-sa")
+        )
+        binding = find(docs, "RoleBinding", "osac-netris-ca-read")
+        self.assertEqual(binding["subjects"][0]["name"], "custom-sa")
+        identity = find(docs, "Job", "osac-netris-ca-identity-validate")
+        self.assertIn(
+            "system:serviceaccount:default:custom-sa", command_of(identity)
+        )
+        pre_install = find(docs, "Job", "osac-pre-install-validate")
+        self.assertIn(
+            "system:serviceaccount:default:custom-sa", command_of(pre_install)
+        )
+
     def test_admission_policy_protects_the_active_name(self) -> None:
         docs = documents(render(*NETRIS_ARGS, *CA_ARGS))
         policy = find(
@@ -170,7 +200,7 @@ class RenderContractTests(unittest.TestCase):
 
         variables = {item["name"]: item["expression"] for item in policy["spec"]["variables"]}
         self.assertEqual(variables["activeName"], "customer-netris-ca")
-        self.assertEqual(variables["adminGroups"], ["system:masters"])
+        self.assertEqual(json.loads(variables["adminGroups"]), ["system:masters"])
         self.assertIn(
             "request.userInfo.groups.exists", policy["spec"]["validations"][0]["expression"]
         )
@@ -198,7 +228,16 @@ class RenderContractTests(unittest.TestCase):
             docs, "ValidatingAdmissionPolicy", "osac-netris-ca-protection-default"
         )
         variables = {item["name"]: item["expression"] for item in policy["spec"]["variables"]}
-        self.assertEqual(variables["adminGroups"], ["platform-admins"])
+        self.assertEqual(json.loads(variables["adminGroups"]), ["platform-admins"])
+
+    def test_empty_admin_groups_fail_schema_validation(self) -> None:
+        with self.assertRaises(subprocess.CalledProcessError):
+            render(
+                *NETRIS_ARGS,
+                *CA_ARGS,
+                "--set-json",
+                "global.networking.netris.caBundle.adminGroups=[]",
+            )
 
 
 class ValidationScriptTests(unittest.TestCase):

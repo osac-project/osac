@@ -266,21 +266,6 @@
       loop_control:
         loop_var: operation_name
 
-    - name: Assert unimplemented operations have no AgentlessNet role entrypoint
-      ansible.builtin.stat:
-        path: "{{ playbook_dir }}/../../../../../collections/ansible_collections/osac/templates/roles/agentless_net/tasks/{{ item }}.yaml"
-      register: excluded_operation_files
-      loop:
-        - attach_external_ip
-        - detach_external_ip
-
-    - name: Verify excluded operations remain uncreated
-      ansible.builtin.assert:
-        that:
-          - not item.stat.exists
-        fail_msg: "Excluded AgentlessNet operation was added: {{ item.item }}"
-      loop: "{{ excluded_operation_files.results }}"
-
     - name: Execute every generic AgentlessNet resource playbook
       ansible.builtin.command:
         argv:

@@ -1,6 +1,6 @@
 import { test } from '@playwright/test';
 
-import { diskImageTestData, tenantNameOrSkip } from './test_data';
+import { diskImagesTestData, tenantNameOrSkip } from './test_data';
 import {
   createDiskImage,
   expectDiskImageListed,
@@ -17,7 +17,7 @@ test('creates a VM-ready disk image from Infrastructure', async ({ page }) => {
     return;
   }
 
-  const diskImage = diskImageTestData;
+  const diskImage = diskImagesTestData;
 
   // 1. Open the browser and log in.
   await openAndLoginWithEnvironment(page, '/');

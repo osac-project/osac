@@ -194,7 +194,7 @@ export const instanceTypeTestData: InstanceTypeTestData = {
   lifecycleActions: rawLifecycleActions,
 };
 
-export const diskImageTestData: DiskImageTestData = {
+export const diskImagesTestData: DiskImageTestData = {
   name: rawDiskImage.name,
   sourceType: rawDiskImage.source_type,
   sourceRef: rawDiskImage.source_ref,

@@ -1,6 +1,6 @@
 import { test } from '@playwright/test';
 
-import { diskImageTestData, tenantNameOrSkip } from './test_data';
+import { diskImagesTestData, tenantNameOrSkip } from './test_data';
 import {
   deleteDiskImage,
   includeObsoleteDiskImages,
@@ -10,8 +10,8 @@ import { openAndLoginWithEnvironment } from '../../../../libs/test-utils/src/gen
 import { openDiskImagesPage } from '../../../../libs/test-utils/src/main.page';
 
 test('deletes the configured disk image', async ({ page }) => {
-  // Allow remote login and deletion to complete.
-  test.setTimeout(120_000);
+  // Allow the 120-second deletion wait plus login and UI actions to complete.
+  test.setTimeout(180_000);
   if (!tenantNameOrSkip()) {
     return;
   }
@@ -22,8 +22,8 @@ test('deletes the configured disk image', async ({ page }) => {
   // 2. Open Infrastructure > Disk images and the configured image.
   await openDiskImagesPage(page);
   await includeObsoleteDiskImages(page);
-  await openDiskImageDetails(page, diskImageTestData.name);
+  await openDiskImageDetails(page, diskImagesTestData.name);
 
   // 3. Confirm deletion and verify that the image is no longer in the table.
-  await deleteDiskImage(page, diskImageTestData.name);
+  await deleteDiskImage(page, diskImagesTestData.name);
 });

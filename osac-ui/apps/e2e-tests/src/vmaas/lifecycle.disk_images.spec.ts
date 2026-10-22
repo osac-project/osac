@@ -1,6 +1,6 @@
 import { test } from '@playwright/test';
 
-import { diskImageTestData, tenantNameOrSkip } from './test_data';
+import { diskImagesTestData, tenantNameOrSkip } from './test_data';
 import {
   expectDiskImageLifecycle,
   openDiskImageDetails,
@@ -21,11 +21,11 @@ test('exercises disk image lifecycle transitions', async ({ page }) => {
 
   // 2. Open Infrastructure > Disk images and the requested image's details.
   await openDiskImagesPage(page);
-  await openDiskImageDetails(page, diskImageTestData.name);
+  await openDiskImageDetails(page, diskImagesTestData.name);
 
   // 3. Verify both lifecycle paths using the shared actions from extravars.yaml. Button-state
   // assertions are paused for OSAC-6385; each call clicks the action and checks the lifecycle.
-  const [deprecate, obsolete, reactivate] = diskImageTestData.lifecycleActions;
+  const [deprecate, obsolete, reactivate] = diskImagesTestData.lifecycleActions;
   await expectDiskImageLifecycle(page, 'Available');
   await transitionDiskImageLifecycle(page, obsolete, 'Obsolete');
   await transitionDiskImageLifecycle(page, reactivate, 'Available');

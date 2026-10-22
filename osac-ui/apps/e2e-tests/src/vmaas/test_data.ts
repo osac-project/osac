@@ -1,7 +1,7 @@
+import { test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { test } from '@playwright/test';
 import { parse } from 'yaml';
 
 import type { DiskImageCreateParams } from '../../../../libs/test-utils/src/disk_images.page';

@@ -1192,7 +1192,8 @@ class StateStore:
             raise StateCorrupt("Subnet indexed state does not match its payload")
         return entry
 
-    def _attachment_for_uid(self, connection: sqlite3.Connection, uid: str):
+    @staticmethod
+    def _attachment_for_uid(connection: sqlite3.Connection, uid: str):
         row = connection.execute(
             """SELECT uid, fulfillment_id, tenant_id, external_ip_uid,
                       virtual_network_uid, subnet_uid, external_address, phase, payload
@@ -1206,7 +1207,7 @@ class StateStore:
         except (json.JSONDecodeError, TypeError) as error:
             raise StateCorrupt("malformed ExternalIPAttachment state payload") from error
         _validate_external_ip_attachment_entry(entry)
-        if row != self._row_for_attachment_entry(entry) or entry["uid"] != uid:
+        if row != StateStore._row_for_attachment_entry(entry) or entry["uid"] != uid:
             raise StateCorrupt("ExternalIPAttachment indexed state does not match its payload")
         return entry
 

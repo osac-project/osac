@@ -140,10 +140,26 @@
         - name: Retry the production attach playbook with the same snapshot
           ansible.builtin.include_tasks: run_playbook.yaml
 
+        - name: Inspect saved provider state after attach retry
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - python
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_eia_state_file }}"
+              - "{{ attachment_uid }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_eia_retried_state
+          changed_when: false
+
         - name: Confirm the attachment retry kept its saved state
           ansible.builtin.assert:
             that:
-              - (agentless_eia_attached_state.stdout | from_json).attachment.context == agentless_eia_context
+              - (agentless_eia_retried_state.stdout | from_json).present
+              - (agentless_eia_retried_state.stdout | from_json).phase == 'ready'
+              - (agentless_eia_retried_state.stdout | from_json).attachment.context == agentless_eia_context
 
         - name: Build the deleting ExternalIPAttachment resource
           ansible.builtin.set_fact:

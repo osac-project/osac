@@ -55,6 +55,25 @@ global:
     fabricManager: ""
     # OSAC Kubernetes Manager; required with VMaaS. "" or cudn_evpn.
     k8sManager: ""
+    netris:
+      controllerUrl: ""
+      # Validate the Netris controller certificate. Keep enabled for production;
+      # set false only in a separately managed test profile.
+      validateCerts: true
+      # Optional customer-created ConfigMap in the AAP namespace. It must
+      # contain the PEM bundle under the fixed key bundle.pem.
+      caBundle:
+        configMap: ""
+        adminGroups:
+          - "system:masters"
+      credentials:
+        username: ""
+      siteId: ""
+      tenantId: ""
+      tenantName: ""
+      mgmtVpcId: ""
+      mgmtVpcName: ""
+      resourceClassMap: ""
     networkClass:
       defaults:
         virtualNetworkIPv4CIDR: 10.200.0.0/16

@@ -6,7 +6,7 @@ import {
   buildComputeCatalogItemCreatePayload,
   buildComputeCatalogItemUpdatePayload,
 } from './payload';
-import { emptyComputeCatalogItemValues } from './values';
+import { emptyComputeCatalogItemValues, getComputeCatalogItemInitialValues } from './values';
 import { emptyResourceSelectValue } from '../../../Form/resourceSelectValue';
 
 describe('buildComputeCatalogItemCreatePayload', () => {
@@ -96,6 +96,27 @@ describe('buildComputeCatalogItemCreatePayload', () => {
     expect(buildComputeCatalogItemCreatePayload(filledValues).fields?.userData).toEqual({
       behavior: { case: 'editable', value: { defaultValue: 'echo hi' } },
     });
+  });
+
+  it('does not serialize the UserDataField secret source before backend support is available', () => {
+    const values = emptyComputeCatalogItemValues();
+    values.userDataSource = { value: 'secret', locked: false };
+    values.userDataSecret = { value: 'user-data-secret', locked: false };
+
+    const payload = buildComputeCatalogItemCreatePayload(values);
+
+    expect(payload.fields).not.toHaveProperty('userDataSecret');
+    expect(payload.fields?.userData).toBeUndefined();
+  });
+
+  it('deserializes catalog user data as the inline source until backend support is available', () => {
+    const values = getComputeCatalogItemInitialValues({
+      fields: { userData: { behavior: { case: 'locked', value: 'cloud-init' } } },
+    } as ComputeInstanceCatalogItem);
+
+    expect(values.userData).toEqual({ value: 'cloud-init', locked: true });
+    expect(values.userDataSource).toEqual({ value: 'inline', locked: false });
+    expect(values.userDataSecret).toEqual({ value: '', locked: false });
   });
 
   it('writes a locked additional-disks list and omits an empty editable one', () => {

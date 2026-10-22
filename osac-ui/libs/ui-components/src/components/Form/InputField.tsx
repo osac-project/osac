@@ -117,6 +117,7 @@ export const InputField = ({
           placeholder={placeholder}
           rows={rows}
           resizeOrientation={resizeOrientation}
+          aria-label={label}
           onChange={(_event, value) => {
             void field.onChange({ target: { name, value } });
           }}

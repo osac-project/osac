@@ -18,7 +18,9 @@ import { catalogValueFromPolicy } from '../catalogItemPolicy';
 export interface BareMetalCatalogItemValues extends CatalogGeneralValues {
   instanceType: ProvisioningFieldValue<string>;
   diskImage: ProvisioningFieldValue<ResourceSelectValue>;
+  userDataSource: ProvisioningFieldValue<'inline' | 'secret'>;
   userData: ProvisioningFieldValue<string>;
+  userDataSecret: ProvisioningFieldValue<string>;
 }
 
 const readInstanceTypeValue = (value: unknown): string => {
@@ -44,7 +46,9 @@ export const emptyBareMetalCatalogItemValues = (): BareMetalCatalogItemValues =>
   ...catalogGeneralValues(),
   instanceType: provisioningFieldValue(''),
   diskImage: provisioningFieldValue(emptyResourceSelectValue()),
+  userDataSource: provisioningFieldValue('inline'),
   userData: provisioningFieldValue(''),
+  userDataSecret: provisioningFieldValue(''),
 });
 
 export const getBareMetalCatalogItemInitialValues = (
@@ -64,6 +68,10 @@ export const getBareMetalCatalogItemInitialValues = (
       readResourceReference,
       emptyResourceSelectValue(),
     ),
+    // Gap: catalog-item serialization currently exposes only inline user data,
+    // so the shared UserDataField source and secret reference cannot be restored.
+    userDataSource: provisioningFieldValue('inline'),
     userData: catalogValueFromPolicy(fields?.userData, readStringValue, ''),
+    userDataSecret: provisioningFieldValue(''),
   };
 };

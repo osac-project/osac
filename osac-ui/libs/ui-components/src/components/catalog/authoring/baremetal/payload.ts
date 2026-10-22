@@ -60,11 +60,16 @@ const buildBareMetalCatalogItemFieldsPayload = (
     fields.diskImage = diskImage;
   }
 
-  const userData = buildFieldPolicy<FieldPolicyInit<'userData'>>(
-    values.userData,
-    isEmptyString,
-    toTrimmedString,
-  );
+  // Gap: the catalog-item backend currently accepts only inline user data;
+  // UserDataField's source and secret reference are not serialized yet.
+  const userData =
+    values.userDataSource.value === 'inline'
+      ? buildFieldPolicy<FieldPolicyInit<'userData'>>(
+          values.userData,
+          isEmptyString,
+          toTrimmedString,
+        )
+      : undefined;
   if (userData) {
     fields.userData = userData;
   }

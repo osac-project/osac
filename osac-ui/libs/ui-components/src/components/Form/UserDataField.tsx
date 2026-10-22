@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useField } from 'formik';
 
 import { Secret, SecretType } from '@osac/types';
@@ -15,6 +16,8 @@ interface UserDataFieldProps {
   inlineName: string;
   projectName: string;
   isDisabled?: boolean;
+  isRequired?: boolean;
+  labelInfo?: ReactNode;
 }
 
 const UserDataField = ({
@@ -23,6 +26,8 @@ const UserDataField = ({
   inlineName,
   projectName,
   isDisabled = false,
+  isRequired = false,
+  labelInfo,
 }: UserDataFieldProps) => {
   const { t } = useTranslation();
   const [sourceField] = useField<string>(sourceName);
@@ -34,7 +39,9 @@ const UserDataField = ({
         name={sourceName}
         label={t('User data')}
         fieldId="user-data-source"
+        isRequired={isRequired}
         isDisabled={isDisabled}
+        labelInfo={labelInfo}
         options={[
           { value: 'inline', label: t('Enter value') },
           { value: 'secret', label: t('Select secret') },

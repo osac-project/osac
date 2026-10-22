@@ -67,6 +67,17 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
     });
   });
 
+  it('does not serialize the UserDataField secret source before backend support is available', () => {
+    const values = emptyBareMetalCatalogItemValues();
+    values.userDataSource = { value: 'secret', locked: false };
+    values.userDataSecret = { value: 'user-data-secret', locked: false };
+
+    const payload = buildBareMetalCatalogItemCreatePayload(values);
+
+    expect(payload.fields).not.toHaveProperty('userDataSecret');
+    expect(payload.fields?.userData).toBeUndefined();
+  });
+
   it('encodes global and tenant-scoped metadata consistently with the general step', () => {
     const globalValues = emptyBareMetalCatalogItemValues();
     globalValues.scope = 'global';
@@ -111,6 +122,8 @@ describe('bare metal catalog item initial values and updates', () => {
     expect(values.instanceType).toEqual({ value: 'acme-1tb', locked: true });
     expect(values.diskImage).toEqual({ value: { id: 'image-1', name: 'rhel-9' }, locked: false });
     expect(values.userData).toEqual({ value: '', locked: false });
+    expect(values.userDataSource).toEqual({ value: 'inline', locked: false });
+    expect(values.userDataSecret).toEqual({ value: '', locked: false });
   });
 
   it('omits immutable general fields and the template from updates', () => {

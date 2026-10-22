@@ -201,3 +201,9 @@ calver==2025.10.20
 docutils==0.23
 changelog-chug==0.0.3
 semver==3.1.0
+# aiohttp (from osac-aap's own execution-environment/requirements.txt,
+# the main 99-package file, not just the build-tools one) needs
+# pkgconfig (bare) alongside setuptools>=67.0 (already have), confirmed
+# via its real sdist pyproject.toml. pkgconfig's own build backend is
+# poetry-core (already have, >=1.0.0 satisfied by 2.5.0).
+pkgconfig==1.6.0

@@ -1,0 +1,37 @@
+{{- if and .Values.validation.enabled (eq .Values.global.networking.fabricManager "netris") .Values.global.networking.netris.caBundle.configMap }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "osac.fullname" . }}-netris-ca-identity-validate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "osac.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "osac.fullname" . }}-netris-ca-validate
+      containers:
+      - name: validate
+        image: {{ .Values.cliImage }}
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          echo "=== Netris CA Identity Validation ==="
+          export CA_CONFIGMAP_NAME={{ .Values.global.networking.netris.caBundle.configMap | quote }}
+          export AAP_NAMESPACE={{ .Release.Namespace | quote }}
+          export CA_EXECUTION_IDENTITY="system:serviceaccount:{{ .Release.Namespace }}:osac-sa"
+          export CHECK_IDENTITY=true
+{{ .Files.Get "files/validate-netris-ca.sh" | nindent 10 }}
+          echo "=== Identity validation passed ==="
+  backoffLimit: 0
+{{- end }}

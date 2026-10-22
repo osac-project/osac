@@ -37,6 +37,16 @@ additional_build_steps:
     # Workaround: UBI 10 repos have glibc-devel 2.39-126 but the base image
     # ships glibc 2.39-124. Update glibc before system packages are installed.
     - RUN dnf update -y --allowerasing glibc glibc-minimal-langpack && dnf clean all
+    # gcc/python3.12-devel are also listed under dependencies.system below,
+    # but ansible-builder only installs that list much later (the builder
+    # stage, via bindep). This base stage's own `pip install
+    # ansible-core ansible-runner` needs them earlier: hermetic sdist
+    # builds (no prebuilt wheels) mean PyYAML's own build-time Cython
+    # dependency (a transitive build requirement of ansible-core) needs a
+    # C compiler and Python headers to compile its C extensions here,
+    # confirmed live: "error: command 'gcc' failed: No such file or
+    # directory".
+    - RUN dnf install -y gcc python3.12-devel && dnf clean all
   prepend_galaxy:
     - COPY _build/collections /usr/share/ansible/collections
     - COPY _build/vendor /usr/share/ansible/collections

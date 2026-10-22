@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,27 @@ FULL_MARKER = "sanity or regression or requires_caas or reference_common"
 
 def _load(path: str) -> dict:
     return yaml.safe_load((ROOT / path).read_text())
+
+
+def _evaluate(node: ast.AST) -> object:
+    """The one thing the selectors do: string literals, == and !=, and the short-circuiting && and || (which, as in
+    Actions, give back the operand that decided). Anything else is refused, so nothing from the YAML is executed."""
+    if isinstance(node, ast.Expression):
+        return _evaluate(node.body)
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, (ast.And, ast.Or)):
+        stop_on = isinstance(node.op, ast.Or)  # `or` stops at the first truthy operand, `and` at the first falsy
+        value: object = None
+        for operand in node.values:
+            value = _evaluate(operand)
+            if bool(value) is stop_on:
+                return value
+        return value
+    if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], (ast.Eq, ast.NotEq)):
+        same = _evaluate(node.left) == _evaluate(node.comparators[0])
+        return same if isinstance(node.ops[0], ast.Eq) else not same
+    raise ValueError(f"unsupported in a selector: {ast.dump(node)[:80]}")
 
 
 def _selection(
@@ -32,7 +54,35 @@ def _selection(
     for name, value in values.items():
         code = code.replace(name, repr(value))
     code = " ".join(code.replace("&&", " and ").replace("||", " or ").split())
-    return eval(code, {"__builtins__": {}})
+    return str(_evaluate(ast.parse(code, mode="eval")))
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "${{ __import__('os').getcwd() }}",
+        "${{ inputs.tier.upper() }}",
+        "${{ unknown }}",
+        "${{ 1 + 1 }}",
+        "${{ x if y else z }}",
+    ],
+)
+def test_the_selector_evaluator_refuses_anything_but_comparisons_and_the_short_circuiting_operators(
+    expression: str,
+) -> None:
+    with pytest.raises((ValueError, SyntaxError)):
+        _selection(expression)
+
+
+def test_the_selector_evaluator_gives_back_the_operand_that_decided_like_actions_do() -> None:
+    assert _selection("${{ inputs.sha != '' && 'a' || 'b' }}", sha=SHA) == "a"
+    assert _selection("${{ inputs.sha != '' && 'a' || 'b' }}") == "b"
+    assert (
+        _selection(
+            "${{ inputs.tier == 'full' && 'x' || inputs.test-suite != '' && inputs.test-suite || 'z' }}", suite="s"
+        )
+        == "s"
+    )
 
 
 @pytest.fixture

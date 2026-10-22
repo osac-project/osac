@@ -40,5 +40,20 @@ packages:
   # compile-profile entry) is already satisfied transitively via
   # pkgconf-pkg-config, so it needs no explicit entry here.
   - rsync
+  # Rust toolchain for building cryptography/pydantic-core/rpds-py from
+  # source hermetically (maturin/PyO3-based, no pure-Python or prebuilt
+  # fallback) instead of fetching a prebuilt wheel -- confirmed via a
+  # real release's Enterprise Contract failure that wheels sourced from
+  # public PyPI trip sbom_spdx.disallowed_package_attributes, and
+  # Red Hat's own trusted-proxy alternatives don't cover this
+  # component's dependency tree closely enough to route around it.
+  # openssl-devel/libffi-devel are cryptography's own native build
+  # deps (CFFI bindings, linking against system OpenSSL), confirmed
+  # present in Hermeto's own upstream integration test for this exact
+  # scenario (tests/integration/pip/scenarios/pip_e2e_rust_extensions/).
+  - rust
+  - cargo
+  - openssl-devel
+  - libffi-devel
 arches:
   - x86_64

@@ -5,12 +5,9 @@
 # execution-environment.yaml's ansible_core/ansible_runner versions change,
 # or if ansible-builder's own template (base/builder/final stage pip
 # installs) changes in a future ansible-builder upgrade.
-#
-# Packages here are routed through Red Hat's trusted-libraries PyPI proxy
-# (prefetch-dependencies-oci-ta's pip-index-url param) -- see
-# requirements-build-tools-pypi.txt for the handful that 404 there and
-# need public PyPI instead.
 ansible-core==2.20.3
+ansible-runner==2.4.3
+bindep==2.14.0
 PyYAML==6.0.3
 packaging==26.3
 dumb-init==1.2.5
@@ -52,8 +49,24 @@ wheel==0.48.0
 # ansible.utils's -- all real, requested collections, not stale vendor
 # (unlike the now-removed orphaned ansible.eda, which contributed a much
 # bigger and genuinely unneeded set of these -- see its vendor removal
-# commit). awxkit/bindep/ttp moved to requirements-build-tools-pypi.txt
-# (404 on the trusted proxy); pytz/textfsm/xmltodict stay here.
+# commit).
 pytz==2026.5
+awxkit==24.6.1
 textfsm==2.1.0
+ttp==0.10.1
 xmltodict==1.0.4
+# cryptography/pydantic-core/rpds-py are maturin (Rust/PyO3) build-
+# backend packages -- no pure-Python or prebuilt-wheel fallback, so
+# building them from source hermetically (instead of fetching a wheel,
+# which trips sbom_spdx.disallowed_package_attributes since it's
+# sourced from public PyPI) needs maturin itself prefetched as a
+# build-system requirement. Confirmed via each package's real sdist
+# pyproject.toml: all three declare `build-backend = "maturin"`, none
+# declare setuptools-rust. rust/cargo RPMs are prefetched in
+# rpms.in.yaml/rpms.lock.yaml for the actual compilation.
+maturin==1.15.0
+# cryptography's own sdist build-system.requires also lists cffi
+# (>=2.0.0 for python>=3.9, which this EE's python3.12 satisfies) --
+# used by its own build.rs for the rust/cffi bridge, per its
+# pyproject.toml's own comment.
+cffi==2.1.1

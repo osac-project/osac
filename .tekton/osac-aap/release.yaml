@@ -46,7 +46,7 @@ spec:
     value: "true"
   - name: prefetch-input
     value: |-
-      [{"type": "rpm", "path": "osac-aap"}, {"type": "pip", "path": "osac-aap", "requirements_files": ["execution-environment/requirements-rhtl.txt", "execution-environment/requirements-pypi.txt"], "requirements_build_files": ["requirements-build-tools.txt", "requirements-build-tools-pypi.txt"], "binary": {}}]
+      [{"type": "rpm", "path": "osac-aap"}, {"type": "pip", "path": "osac-aap", "requirements_files": ["execution-environment/requirements.txt"], "requirements_build_files": ["requirements-build-tools.txt"]}]
   # ansible-builder's Containerfile template hardcodes this ARG's default
   # to the unpinned "ansible-core ansible-runner" -- pin it to match
   # execution-environment.yaml's own resolved versions (both for
@@ -419,22 +419,6 @@ spec:
         value: $(params.prefetch-input)
       - name: enable-package-registry-proxy
         value: $(params.enable-package-registry-proxy)
-      - name: pip-index-url
-        # Fallback index for requirements files that don't declare their
-        # own --index-url (requirements-rhtl.txt, requirements-build-
-        # tools.txt): Red Hat's trusted/rebuilt PyPI mirror. Needed so
-        # Cachi2/Hermeto's wheel fetches carry a repository_url purl
-        # qualifier matching the shared Enterprise Contract policy-data's
-        # hermeto:pip:package:binary except_when clause -- confirmed via a
-        # real release's EC failure otherwise (111 sbom_spdx.
-        # disallowed_package_attributes violations, one per prefetched
-        # wheel sourced from public PyPI instead). The proxy doesn't
-        # mirror 100% of PyPI, though -- requirements-pypi.txt and
-        # requirements-build-tools-pypi.txt carry their own --index-url
-        # line for the handful of packages confirmed missing there, which
-        # overrides this fallback for just those two files (Hermeto
-        # resolves --index-url per requirements file, not per package).
-        value: https://packages.redhat.com/trusted-libraries/python/
       - name: SOURCE_ARTIFACT
         value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
       - name: ociStorage

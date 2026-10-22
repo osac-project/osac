@@ -81,6 +81,7 @@ class OsacCLI:
         user_data_secret_ref: str | None = None,
         instance_type: str | None = None,
         ssh_key: str | None = None,
+        external_ip_attachment: bool = False,
     ) -> str:
         args: list[str] = [
             "create",
@@ -173,6 +174,8 @@ class OsacCLI:
             args.extend(["--user-data", user_data_secret_ref])
         if ssh_key is not None:
             args.extend(["--ssh-key", ssh_key])
+        if external_ip_attachment:
+            args.append("--external-ip-attachment")
 
         return self._parse_uuid(self._run(*args))
 

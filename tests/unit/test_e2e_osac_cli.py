@@ -41,3 +41,13 @@ def test_create_baremetal_instance_can_use_catalog_or_template_type_default(monk
     cli.create_baremetal_instance(name="test-bmi", catalog_item="test-catalog")
 
     assert "--set" not in args
+
+
+def test_create_compute_instance_can_request_automatic_external_ip_attachment(monkeypatch: pytest.MonkeyPatch) -> None:
+    cli, args = _make_cli(monkeypatch)
+    cli.default_instance_type = "small"
+    cli.default_disk_image = "fedora"
+    cli.default_storage_tier = "standard"
+
+    cli.create_compute_instance(template="test-template", external_ip_attachment=True)
+    assert "--external-ip-attachment" in args

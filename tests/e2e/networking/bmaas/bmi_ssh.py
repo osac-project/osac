@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import shlex
 import subprocess
 from collections.abc import Mapping
+
+from tests.e2e.core.ssh_probe import probe_connectivity
 
 log = logging.getLogger(__name__)
 
@@ -19,8 +20,6 @@ _SSH_OPTS = [
     "-i",
     "/root/.ssh/id_rsa",
 ]
-_PROBE_EXIT_SENTINEL = "__OSAC_PROBE_EXIT_STATUS__"
-_PROBE_EXIT_RE = re.compile(rf"(?m)^{_PROBE_EXIT_SENTINEL}=(\d+)$")
 
 
 def _as_text(value: str | bytes | None) -> str:
@@ -104,27 +103,13 @@ def ssh_bmi_unchecked(ssh_host: str, command: str, timeout: int = 30) -> tuple[s
 
 
 def _probe_connectivity(ssh_host: str, command: str, timeout: int = 30) -> bool:
-    wrapped_command = (
-        f'{command}; probe_rc=$?; printf \'\\n{_PROBE_EXIT_SENTINEL}=%s\\n\' "$probe_rc"; exit "$probe_rc"'
+    return probe_connectivity(
+        ssh_host,
+        command,
+        lambda wrapped, call_timeout: ssh_bmi_unchecked(ssh_host, wrapped, timeout=call_timeout),
+        transport="SSH",
+        timeout=timeout,
     )
-    output, ssh_rc = ssh_bmi_unchecked(ssh_host, wrapped_command, timeout=timeout)
-    matches = _PROBE_EXIT_RE.findall(output)
-    if len(matches) != 1:
-        raise RuntimeError(
-            f"SSH connectivity probe from {ssh_host} did not complete (ssh_rc={ssh_rc}, output={output!r})"
-        )
-
-    probe_rc = int(matches[0])
-    if ssh_rc != probe_rc:
-        raise RuntimeError(
-            f"SSH connectivity probe from {ssh_host} reported command exit {probe_rc}, "
-            f"but SSH exited {ssh_rc} (output={output!r})"
-        )
-    if probe_rc not in (0, 1):
-        raise RuntimeError(
-            f"SSH connectivity probe from {ssh_host} failed with unexpected command exit {probe_rc} (output={output!r})"
-        )
-    return probe_rc == 0
 
 
 def arping(ssh_host: str, target_ip: str, count: int = 3) -> bool:

@@ -5,7 +5,6 @@ from typing import Any, ClassVar
 
 import pytest
 
-from tests.e2e.bmaas.regression.networking import bmi_ssh
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     wait_for_bmh_available,
@@ -37,8 +36,9 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+from tests.e2e.networking.bmaas import bmi_ssh
 
-pytestmark = pytest.mark.regression
+pytestmark = [pytest.mark.regression, pytest.mark.requires_netris, pytest.mark.requires_netris_bmaas]
 
 _NETRIS_BMI_RUNNING_RETRIES = 240
 
@@ -173,6 +173,7 @@ class TestBmaasNetworking:
         catalog_item_name: str,
         auto_eip_catalog_item_name: str,
         bmi_instance_type: str,
+        bmi_network_interface: str,
         bmi_disk_image: str,
         net_ssh_public_key: str,
         bmh_namespace: str,
@@ -196,7 +197,9 @@ class TestBmaasNetworking:
                 instance_type=bmi_instance_type,
                 ssh_key=net_ssh_public_key,
                 disk_image=bmi_disk_image,
-                network_attachments=[f"subnet={subnet_id},interface=eth9,primary,security-groups={sg}"],
+                network_attachments=[
+                    f"subnet={subnet_id},interface={bmi_network_interface},primary,security-groups={sg}"
+                ],
                 external_ip_attachment=is_auto_eip,
             )
             print("Created BMI")

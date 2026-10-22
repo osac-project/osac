@@ -115,9 +115,9 @@ jobs:
       fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
 
   # Only a checked box starts this one (the policy marks it manual_only): it is never in the decision's own list.
-  netris:
+  bmaas-netris:
     needs: decide
-    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"netris"')
+    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"bmaas-netris"')
     permissions:
       contents: read
       id-token: write
@@ -131,8 +131,42 @@ jobs:
       fork-pr-author: ${{ needs.decide.outputs.fork-author }}
       fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
 
+  # Optional Netris VMaaS uses the same manual-only flow as BMaaS Netris.
+  vmaas-netris:
+    needs: decide
+    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"vmaas-netris"')
+    permissions:
+      contents: read
+      id-token: write
+      checks: write
+      pull-requests: read
+    uses: ./.github/workflows/e2e-vmaas-netris-full-install.yml
+    with:
+      repo: ${{ needs.decide.outputs.head-repo }}
+      sha: ${{ needs.decide.outputs.sha }}
+      pr-number: ${{ needs.decide.outputs.number }}
+      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
+      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
+
+  # Shared-subnet VM-to-BM connectivity needs both services and the full-ci profile.
+  stretched-netris:
+    needs: decide
+    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"stretched-netris"')
+    permissions:
+      contents: read
+      id-token: write
+      checks: write
+      pull-requests: read
+    uses: ./.github/workflows/e2e-stretched-netris-full-install.yml
+    with:
+      repo: ${{ needs.decide.outputs.head-repo }}
+      sha: ${{ needs.decide.outputs.sha }}
+      pr-number: ${{ needs.decide.outputs.number }}
+      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
+      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
+
   finish:
-    needs: [decide, track, vmaas, caas, bmaas, netris]
+    needs: [decide, track, vmaas, caas, bmaas, bmaas-netris, vmaas-netris, stretched-netris]
     if: always() && needs.decide.outputs.start == 'true'
     uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@21955730dc96e51e049968b25e9d3529f655f4af  # v1.2.12
     permissions:

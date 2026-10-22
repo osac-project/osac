@@ -28,7 +28,6 @@ from typing import Any, ClassVar
 
 import pytest
 
-from tests.e2e.bmaas.regression.networking import bmi_ssh, guest_ssh
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import (
     wait_for_bmh_available,
@@ -52,8 +51,9 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
+from tests.e2e.networking.bmaas import bmi_ssh, guest_ssh
 
-pytestmark = pytest.mark.regression
+pytestmark = [pytest.mark.regression, pytest.mark.requires_netris, pytest.mark.requires_netris_bmaas]
 
 _NETRIS_BMI_RUNNING_RETRIES = 240
 # Poll often; proceed as soon as API + CR are gone. Caps match existing helpers (~5m / ~10m).

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
 
-from tests.e2e.bmaas.regression.networking import bmi_ssh
-from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
+from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import env
+from tests.e2e.networking.bmaas import bmi_ssh
 
 
 @pytest.fixture(scope="session")
@@ -37,6 +39,43 @@ def net_test_run_id() -> str:
 
 
 @pytest.fixture(scope="session")
+def bmi_network_interface() -> str:
+    """Configured guest-visible interface name for BareMetalInstance networking."""
+    return env("OSAC_BMI_NETWORK_INTERFACE")
+
+
+@pytest.fixture(scope="session")
+def k8s_virt_client(namespace: str) -> K8sClient:
+    """Kubernetes client for VMIs in the workload cluster used by networking E2Es."""
+    vm_kubeconfig = os.environ.get("OSAC_VM_KUBECONFIG", "").strip()
+    if not vm_kubeconfig:
+        raise RuntimeError("OSAC_VM_KUBECONFIG must identify the VM cluster kubeconfig")
+    return K8sClient(namespace=namespace, kubeconfig=vm_kubeconfig)
+
+
+@pytest.fixture(scope="session")
+def vm_template() -> str:
+    """ComputeInstance template for VMaaS networking E2Es."""
+    return env("OSAC_VM_TEMPLATE", "ocp-virt-vm")
+
+
+@pytest.fixture(scope="session")
+def bmi_disk_image(private_grpc: GRPCClient, net_test_run_id: str) -> Generator[str, None, None]:
+    """Create the temporary BMaaS disk image shared by Netris connectivity tests."""
+    disk_image_name = f"e2e-netris-bmi-di-{net_test_run_id}"
+    disk_image_id = private_grpc.create_disk_image(
+        name=disk_image_name, source_ref="oci://quay.io/osac-project/fedora-cloud-bmi:44", api=PRIVATE_API
+    )
+
+    yield disk_image_name
+
+    try:
+        private_grpc.delete_disk_image(disk_image_id=disk_image_id, api=PRIVATE_API)
+    except Exception as exc:
+        print(f"WARNING: Failed to delete DiskImage {disk_image_id}: {exc}")
+
+
+@pytest.fixture(scope="session")
 def bmi_template() -> str:
     return env("OSAC_BMI_TEMPLATE", "bm-host-provisioning")
 
@@ -62,9 +101,7 @@ def bmi_instance_type(private_grpc: GRPCClient) -> str:
 
     Labs often export OSAC_BMI_INSTANCE_TYPE=default even when no types are cataloged.
     """
-    requested = (
-        os.environ.get("OSAC_BMI_INSTANCE_TYPE", "").strip() or os.environ.get("OSAC_BM_HOST_TYPE", "").strip()
-    )
+    requested = os.environ.get("OSAC_BMI_INSTANCE_TYPE", "").strip() or os.environ.get("OSAC_BM_HOST_TYPE", "").strip()
     if not requested:
         return ""
     items = private_grpc.call(service="osac.private.v1.BareMetalInstanceTypes/List").get("items") or []

@@ -50,6 +50,7 @@ caas-clear:
   - '{osac-operator/**/*clusterorder*,fulfillment-service/**/*cluster*,proto/**/*cluster*,tests/e2e/caas/**,tests/e2e/references/test_cluster_baremetal_references.py}'
 bmaas-clear:
   - '{bare-metal-fulfillment-operator/**,proto/**/*baremetal_instance*,tests/e2e/bmaas/**,tests/e2e/references/test_cluster_baremetal_references.py}'
+  - '!tests/e2e/networking/**'
 
 # osac-operator (all CRD controllers) and fulfillment-service (the gRPC/REST
 # API) each back BOTH VMaaS and CaaS -- a change under either that ISN'T
@@ -94,17 +95,16 @@ config-yaml-json:
   - '!fulfillment-service/**/*cluster*'
   - '!bare-metal-fulfillment-operator/**'
 
-# Informational only -- CaaS Netris and BMaaS Netris (real EC2/Netris-SDN
+# Informational only -- Netris VMaaS, BMaaS, and stretched connectivity (real EC2/Netris-SDN
 # provisioning, started by hand or with `/test`) aren't wired into any gating
 # at all. `git grep -il netris` confirms
 # osac-aap/collections/ansible_collections/{netris,agentless_net}/** is the
-# actual Ansible automation those two backends run. tests/e2e/bmaas/regression/
-# networking/** is confirmed Netris-lab-only per e2e-bmaas-full-install.yml's
-# own comment ("Networking is Netris-lab only (eth9, virsh, 3 BMIs)").
+# actual Ansible automation those two backends run. tests/e2e/networking/**
+# contains the Netris-specific VMaaS, BMaaS, and stretched E2E tests.
 # fulfillment-service's NetworkClass files are how the platform represents
 # which network backend (Netris vs. others) a tenant/subnet uses.
 netris-relevant:
-  - '{osac-aap/collections/ansible_collections/netris/**,osac-aap/collections/ansible_collections/agentless_net/**,tests/e2e/bmaas/regression/networking/**,fulfillment-service/**/*network_class*,proto/**/*network_class*}'
+  - '{osac-aap/collections/ansible_collections/netris/**,osac-aap/collections/ansible_collections/agentless_net/**,tests/e2e/networking/**,fulfillment-service/**/*network_class*,proto/**/*network_class*}'
 
 # --- E2E full-install gating (used by .github/e2e-policy.yml) ---
 # Which changes need an E2E run. Deliberately NOT named `code`: that key
@@ -195,6 +195,8 @@ vmaas-outside-known-safe:
   - '!.pre-commit-config.yaml'
   - '!tests/e2e/caas/**'
   - '!tests/e2e/bmaas/**'
+  # Netris network tests run only in their separate manual Netris suites.
+  - '!tests/e2e/networking/**'
   - '!tests/e2e/references/test_cluster_baremetal_references.py'
   - '!tools/pr-notify/**'
 caas-outside-known-safe:
@@ -211,6 +213,7 @@ caas-outside-known-safe:
   - '!.pre-commit-config.yaml'
   - '!tests/e2e/vmaas/**'
   - '!tests/e2e/bmaas/**'
+  - '!tests/e2e/networking/**'
   - '!tools/pr-notify/**'
 bmaas-outside-known-safe:
   - '**'
@@ -226,6 +229,7 @@ bmaas-outside-known-safe:
   - '!.pre-commit-config.yaml'
   - '!tests/e2e/vmaas/**'
   - '!tests/e2e/caas/**'
+  - '!tests/e2e/networking/**'
   - '!tools/pr-notify/**'
 
 # --- Every other cheap-check category ------------------------------------

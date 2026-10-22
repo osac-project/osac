@@ -198,11 +198,13 @@ def test_forwarding_chain_rejects_unowned_broad_accept(monkeypatch):
         external_ip.verify_external_forwarding_chain()
 
 
-def test_forwarding_chain_accepts_kernel_reordered_address_selectors(monkeypatch):
+def test_forwarding_chain_accepts_kernel_reordered_selectors_and_conntrack_states(monkeypatch):
     attachment = attachment_state()
     inbound, outbound = external_ip._forwarding_rules(attachment)
     canonical_inbound = [*inbound[4:6], *inbound[:4], *inbound[6:]]
     canonical_outbound = [*outbound[4:6], *outbound[:4], *outbound[6:]]
+    conntrack_state_index = canonical_outbound.index("--ctstate")
+    canonical_outbound[conntrack_state_index + 1] = "RELATED,ESTABLISHED"
     monkeypatch.setattr(
         external_ip,
         "_chain_rules",

@@ -18,6 +18,9 @@ REMOTE_KUBECONFIG_SECRET_NAME=${REMOTE_KUBECONFIG_SECRET_NAME:-"osac-remote-kube
 REMOTE_KUBECONFIG_SECRET_KEY=${REMOTE_KUBECONFIG_SECRET_KEY:-"kubeconfig"}
 MODE=${1:-"configure"}
 
+validate_remote_kubeconfig_secret \
+    "${REMOTE_KUBECONFIG_SECRET_NAME}" "${REMOTE_KUBECONFIG_SECRET_KEY}"
+
 if [[ "${MODE}" != "prepare" && "${MODE}" != "configure" ]]; then
     echo "Usage: $0 [prepare|configure]" >&2
     exit 2

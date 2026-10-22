@@ -3,12 +3,19 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib.sh"
+
 HUB_KUBECONFIG=${HUB_KUBECONFIG:-${KUBECONFIG:-}}
 REMOTE_KUBECONFIG=${REMOTE_KUBECONFIG:?REMOTE_KUBECONFIG must be set}
 REMOTE_API_ADDRESS=${REMOTE_API_ADDRESS:-}
 INSTALLER_NAMESPACE=${INSTALLER_NAMESPACE:-osac}
 REMOTE_KUBECONFIG_SECRET_NAME=${REMOTE_KUBECONFIG_SECRET_NAME:-osac-remote-kubeconfig}
 REMOTE_KUBECONFIG_SECRET_KEY=${REMOTE_KUBECONFIG_SECRET_KEY:-kubeconfig}
+
+validate_remote_kubeconfig_secret \
+    "${REMOTE_KUBECONFIG_SECRET_NAME}" "${REMOTE_KUBECONFIG_SECRET_KEY}"
 
 [[ -r "${REMOTE_KUBECONFIG}" ]] || {
     echo "ERROR: REMOTE_KUBECONFIG is not readable: ${REMOTE_KUBECONFIG}" >&2
@@ -35,6 +42,9 @@ if [[ "${REMOTE_API_ADDRESS}" != https://* ]]; then
     echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2
     exit 2
 fi
+# JSON strings are valid YAML scalars. Encoding here keeps quotes and newlines
+# in the endpoint value from changing the generated kubeconfig structure.
+REMOTE_API_ADDRESS_SCALAR=$(jq -Rn --arg address "${REMOTE_API_ADDRESS}" '$address')
 workload_ca_data=$(oc "${remote_args[@]}" config view --minify --raw --flatten \
     -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
 if [[ -z "${workload_ca_data}" ]]; then
@@ -67,7 +77,7 @@ kind: Config
 clusters:
 - cluster:
     certificate-authority-data: ${workload_ca_data}
-    server: "${REMOTE_API_ADDRESS}"
+    server: ${REMOTE_API_ADDRESS_SCALAR}
   name: remote
 contexts:
 - context:
@@ -91,7 +101,7 @@ awk 'FNR == NR { token = $0; next }
 if ! oc --kubeconfig "${REMOTE_KUBECONFIG_FILE}" --request-timeout=30s \
     get serviceaccount osac-remote-access \
     -n "${INSTALLER_NAMESPACE}" >/dev/null; then
-    echo "ERROR: generated remote kubeconfig cannot authenticate to the workload cluster at ${REMOTE_API_ADDRESS}" >&2
+    echo "ERROR: generated remote kubeconfig cannot authenticate to the workload cluster" >&2
     exit 1
 fi
 

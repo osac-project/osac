@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -68,6 +69,7 @@ var _ = Describe("buildConfigResolver", func() {
 
 	It("uses the configured Secret key for automatic remote kubeconfig lookup", func() {
 		secretKey := "workload-config"
+		testFixtureToken := "test-token"
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: "osac-dev",
@@ -75,7 +77,7 @@ var _ = Describe("buildConfigResolver", func() {
 				Labels:    map[string]string{consoleproxy.RemoteKubeconfigLabel: "true"},
 			},
 			Data: map[string][]byte{
-				secretKey: []byte(`apiVersion: v1
+				secretKey: []byte(fmt.Sprintf(`apiVersion: v1
 kind: Config
 clusters:
 - cluster:
@@ -90,8 +92,8 @@ current-context: remote
 users:
 - name: test
   user:
-    token: test-token
-`),
+    token: %s
+`, testFixtureToken)),
 			},
 		}
 		fakeClient = fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()

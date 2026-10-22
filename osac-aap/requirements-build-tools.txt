@@ -207,3 +207,13 @@ semver==3.1.0
 # via its real sdist pyproject.toml. pkgconfig's own build backend is
 # poetry-core (already have, >=1.0.0 satisfied by 2.5.0).
 pkgconfig==1.6.0
+# cmd2 needs build>=1.2.2, setuptools>=80.7.1 (satisfied by 82.0.0),
+# and setuptools-scm>=9.2 -- a FOURTH coexisting setuptools-scm
+# version (none of the existing 8.x pins satisfy >=9.2), confirmed via
+# its real sdist pyproject.toml. build's own backend is flit_core
+# (already have); its own runtime need is packaging (have) +
+# pyproject_hooks (new, bare, also flit_core-backed, no further
+# cascade).
+setuptools-scm==9.2.2
+pyproject_hooks==1.3.3
+build==1.6.1

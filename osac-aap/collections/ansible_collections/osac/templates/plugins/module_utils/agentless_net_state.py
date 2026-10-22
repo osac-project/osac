@@ -55,6 +55,7 @@ SCHEMA_TABLES = {
     "external_ips",
     "attachments",
 }
+PREVIOUS_V1_SCHEMA_TABLES = SCHEMA_TABLES - {"attachments"}
 LOCK_WAIT_SECONDS = 60
 LOCK_POLL_SECONDS = 0.05
 RESOURCE_LOCK_SHARDS = 256
@@ -112,6 +113,10 @@ class StateError(Exception):
 
 class StateCorrupt(StateError):
     """The state file is missing or does not contain a supported generation."""
+
+
+class _LegacySchemaNeedsMigration(Exception):
+    """A read-only open found the previous v1 table layout."""
 
 
 def _is_canonical_uuid(value: Any) -> bool:
@@ -517,7 +522,14 @@ class StateStore:
         if create:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         if read_only:
-            connection = self._open_database(create=False, read_only=True)
+            try:
+                connection = self._open_database(create=False, read_only=True)
+            except _LegacySchemaNeedsMigration:
+                with _locked_path(self.lock_path):
+                    migrated = self._open_database(create=False)
+                    if migrated is not None:
+                        migrated.close()
+                connection = self._open_database(create=False, read_only=True)
             try:
                 yield connection
             except sqlite3.DatabaseError as error:
@@ -626,6 +638,40 @@ class StateStore:
                     raise
                 tables = set(SCHEMA_TABLES)
                 version = SCHEMA_VERSION
+
+            if version == SCHEMA_VERSION and tables == PREVIOUS_V1_SCHEMA_TABLES:
+                if read_only:
+                    raise _LegacySchemaNeedsMigration
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    tables = {
+                        row[0]
+                        for row in connection.execute(
+                            "SELECT name FROM sqlite_master WHERE type = 'table'"
+                        )
+                    }
+                    version = connection.execute("PRAGMA user_version").fetchone()[0]
+                    if version == SCHEMA_VERSION and tables == PREVIOUS_V1_SCHEMA_TABLES:
+                        self._validate_virtual_network_table(connection)
+                        self._validate_subnet_table(connection)
+                        self._validate_external_ip_pool_schema(connection)
+                        self._validate_external_ip_schema(connection)
+                        self._create_external_ip_attachment_schema(connection)
+                    elif version != SCHEMA_VERSION or tables != SCHEMA_TABLES:
+                        raise StateCorrupt(
+                            "AgentlessNet state database changed during schema migration"
+                        )
+                    connection.commit()
+                except BaseException:
+                    connection.rollback()
+                    raise
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
+                version = connection.execute("PRAGMA user_version").fetchone()[0]
 
             if version != SCHEMA_VERSION:
                 raise StateCorrupt(f"unsupported state schema: {version!r}")
@@ -836,11 +882,19 @@ class StateStore:
             ("subnets", "subnet_uid", "uid"),
         }.issubset(foreign_keys):
             raise StateCorrupt("AgentlessNet ExternalIPAttachment foreign keys are missing")
-        for name, column_index, column in (
-            ("attachments_by_vn", 4, "virtual_network_uid"),
-            ("attachments_by_subnet", 5, "subnet_uid"),
+        for query, column_index, column in (
+            (
+                "PRAGMA index_info(attachments_by_vn)",
+                4,
+                "virtual_network_uid",
+            ),
+            (
+                "PRAGMA index_info(attachments_by_subnet)",
+                5,
+                "subnet_uid",
+            ),
         ):
-            rows = connection.execute(f"PRAGMA index_info({name})").fetchall()
+            rows = connection.execute(query).fetchall()
             if rows != [(0, column_index, column)]:
                 raise StateCorrupt("AgentlessNet ExternalIPAttachment indexes are invalid")
 

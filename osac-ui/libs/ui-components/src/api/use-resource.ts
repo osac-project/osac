@@ -25,6 +25,34 @@ type ResourceQueryOptions<Data extends DescMessage, SelectedData = MessageShape<
   'queryFn' | 'queryKey' | 'select' | 'placeholderData'
 >;
 
+type PaginatedListRequest = { offset?: number; limit?: number };
+
+type PaginatedListResponse = {
+  items: unknown[];
+  size: number;
+  total: number;
+};
+
+type PaginatedListItems<Output extends DescMessage> =
+  MessageShape<Output> extends {
+    items: infer Items;
+  }
+    ? Items
+    : never;
+
+type PaginatedListService<Input extends DescMessage, Output extends DescMessage> = ResourceService<
+  'list',
+  Input,
+  Output
+> &
+  (MessageShape<Input> extends PaginatedListRequest
+    ? MessageShape<Output> extends PaginatedListResponse
+      ? unknown
+      : never
+    : never);
+
+const FETCH_ALL_PAGE_SIZE = 100;
+
 type ResourceMutationOptions<Data extends DescMessage, Variables> = Omit<
   UseMutationOptions<MessageShape<Data>, Error, Variables>,
   'mutationFn'
@@ -63,7 +91,7 @@ export const useListResource = <
   service: ResourceService<'list', Input, Output>,
   request: MessageInitShape<Input> = create(service.method.list.input),
   options: ResourceQueryOptions<Output, SelectedData> = {},
-  select?: (data: MessageShape<Output> & { items: SelectedData }) => SelectedData,
+  select?: (data: MessageShape<Output>) => SelectedData,
 ) => {
   const client = useApiFetch(service);
   const listRequest = create(service.method.list.input, request);
@@ -72,7 +100,37 @@ export const useListResource = <
     ...options,
     queryKey: [service.typeName, 'list', request],
     queryFn: () => client.list(listRequest),
-    select: select as ((data: MessageShape<Output>) => SelectedData) | undefined,
+    select,
+    placeholderData: keepPreviousData,
+  });
+};
+
+/** Loads every item matching the filter, managing offset and limit internally. */
+export const useListAllResources = <Input extends DescMessage, Output extends DescMessage>(
+  service: PaginatedListService<Input, Output>,
+  filter?: string,
+) => {
+  const client = useApiFetch<ResourceService<'list', Input, Output>>(service);
+  const listRequest = create(service.method.list.input);
+
+  return useQuery<MessageShape<Output>, unknown, PaginatedListItems<Output>>({
+    queryKey: [service.typeName, 'list', { filter }, 'all'],
+    queryFn: async ({ signal }) => {
+      const listPage = (offset: number) =>
+        client.list(
+          { ...listRequest, filter, limit: FETCH_ALL_PAGE_SIZE, offset },
+          { signal },
+        ) as Promise<MessageShape<Output> & PaginatedListResponse>;
+      let page = await listPage(0);
+      const items = [...page.items];
+      while (items.length < page.total && page.items.length > 0) {
+        page = await listPage(items.length);
+        items.push(...page.items);
+      }
+      return { ...page, items, size: items.length };
+    },
+    select: (response) =>
+      (response as MessageShape<Output> & { items: PaginatedListItems<Output> }).items,
     placeholderData: keepPreviousData,
   });
 };

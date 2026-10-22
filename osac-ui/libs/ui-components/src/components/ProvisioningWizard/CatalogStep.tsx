@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import type { DescMessage } from '@bufbuild/protobuf';
+import type { DescMessage, Message } from '@bufbuild/protobuf';
+import type { GenMessage } from '@bufbuild/protobuf/codegenv2';
 import {
   Alert,
   Bullseye,
@@ -30,7 +31,7 @@ interface CatalogFormValues {
 }
 
 interface Props<T extends CatalogItem, V extends CatalogFormValues> {
-  catalogService: ResourceService<'list', DescMessage, DescMessage>;
+  catalogService: ResourceService<'list', DescMessage, GenMessage<Message & { items: T[] }>>;
   isInitializing?: boolean;
   getInitialFormValues: (item: T) => V;
   onCatalogItemSelected?: (item: T) => void;
@@ -46,12 +47,7 @@ export const CatalogStep = <T extends CatalogItem, V extends CatalogFormValues>(
   const [search, setSearch] = useState('');
   const formik = useFormikContext<V>();
   const { values } = formik;
-  const catalogQuery = useListResource<DescMessage, DescMessage, T[]>(
-    catalogService,
-    {},
-    {},
-    (data) => data.items,
-  );
+  const catalogQuery = useListResource(catalogService, {}, {}, (data) => data.items);
   const loading = isInitializing || catalogQuery.isPending;
   const error = catalogQuery.isError;
   const retry = () => void catalogQuery.refetch();

@@ -98,11 +98,15 @@ describe('navRowsForRole', () => {
     expect(findSection('admin', 'nav-tenant-services')).toBeUndefined();
   });
 
-  it('includes Catalog and Projects for admin and tenant roles but not IDP manager', () => {
-    for (const role of [...nonIdpRoles, 'admin'] as UserRole[]) {
+  it('includes Catalog and Projects for tenant-admin and tenant roles but not IDP manager', () => {
+    for (const role of [...nonIdpRoles] as UserRole[]) {
       expect(findLink(role, 'catalog')).toBeDefined();
       expect(findLink(role, 'projects')).toBeDefined();
     }
+
+    expect(findLink('admin', 'catalog')).toBeDefined();
+    expect(findLink('admin', 'projects')).toBeUndefined();
+
     expect(findLink('tenant-idp-manager', 'catalog')).toBeUndefined();
     expect(findLink('tenant-idp-manager', 'projects')).toBeUndefined();
   });

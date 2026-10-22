@@ -1,29 +1,22 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import {
-  Alert,
-  Divider,
-  MenuToggle,
-  Select,
-  SelectList,
-  SelectOption,
-  Skeleton,
-} from '@patternfly/react-core';
 
-import { Project } from '@osac/types';
-import { useAllProjects } from '@osac/ui-components/api/v1/project';
+import { type Project, Projects } from '@osac/types';
+import { cel } from '@osac/ui-components/api/cel';
+import { useListAllResources } from '@osac/ui-components/api/use-resource';
 import { serializePageFilter } from '@osac/ui-components/hooks/use-page-filter';
 import { PROJECT_FILTER_PARAM, useSession } from '@osac/ui-components/hooks/use-session';
-import { getErrorMessage } from '@osac/ui-components/utils/error';
 
-import { useTranslation } from '../../hooks/useTranslation';
-import { getFullProjectPath, getProjectName } from '../Project/utils';
+import ProjectSelect from '../Project/ProjectSelect';
+
+import './ProjectFilter.css';
 
 const ProjectFilter = () => {
-  const { t } = useTranslation();
   const { projects, setProjects } = useSession();
-  const [isOpen, setIsOpen] = useState(false);
-  const { data, isLoading, error } = useAllProjects();
+  const { data, isLoading, error } = useListAllResources(
+    Projects,
+    cel<Project>((builder) => builder.field('metadata.tenant').notEquals('shared')),
+  );
   const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
@@ -55,7 +48,7 @@ const ProjectFilter = () => {
   const selectedProjects: Project[] = [];
 
   projects.forEach((p) => {
-    const project = data?.find((d) => getFullProjectPath(d) === p);
+    const project = data?.find((d) => d.metadata?.name === p);
     if (project) {
       selectedProjects.push(project);
     }
@@ -65,80 +58,22 @@ const ProjectFilter = () => {
 
   useEffect(() => {
     if (!isLoading && !hasAllProjects) {
-      setProjects(selectedProjects.map(getFullProjectPath));
+      setProjects(selectedProjects.map((p) => p.metadata?.name || ''));
     }
     // trigger based on hasAllProjects + isLoading only
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasAllProjects, isLoading]);
 
-  let items = (
-    <>
-      {data?.map((p) => (
-        <SelectOption
-          key={p.id}
-          hasCheckbox
-          isSelected={projects.includes(getFullProjectPath(p))}
-          value={getFullProjectPath(p)}
-        >
-          {getProjectName(p, t)}
-        </SelectOption>
-      ))}
-    </>
-  );
-
-  if (isLoading) {
-    items = (
-      <>
-        <SelectOption isDisabled>
-          <Skeleton />
-        </SelectOption>
-        <SelectOption isDisabled>
-          <Skeleton />
-        </SelectOption>
-        <SelectOption isDisabled>
-          <Skeleton />
-        </SelectOption>
-      </>
-    );
-  }
-
-  if (error) {
-    items = (
-      <Alert title={t('Failed to fetch projects')} variant="danger" isInline>
-        {getErrorMessage(error)}
-      </Alert>
-    );
-  }
-
   return (
-    <Select
-      isOpen={isOpen}
-      onSelect={(_, val: string) => {
-        if (val === null) {
-          setProjects([]);
-          setIsOpen(false);
-        } else {
-          setProjects(
-            projects.includes(val) ? projects.filter((p) => p !== val) : [...projects, val],
-          );
-        }
-      }}
-      onOpenChange={() => setIsOpen((o) => !o)}
-      toggle={(toggleRef) => (
-        <MenuToggle ref={toggleRef} onClick={() => setIsOpen((o) => !o)} isExpanded={isOpen}>
-          {selectedProjects.length
-            ? selectedProjects.map((p) => getProjectName(p, t)).join(', ')
-            : t('All projects')}
-        </MenuToggle>
-      )}
-      shouldFocusToggleOnSelect
-    >
-      <SelectList>
-        <SelectOption value={null}>{t('All projects')}</SelectOption>
-        <Divider />
-        {items}
-      </SelectList>
-    </Select>
+    <ProjectSelect
+      mode="multiple"
+      projects={data ?? []}
+      selected={projects}
+      onChange={setProjects}
+      isLoading={isLoading}
+      error={error}
+      fieldId="metadata.project"
+    />
   );
 };
 

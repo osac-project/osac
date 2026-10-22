@@ -1,15 +1,28 @@
-import { useMemo } from 'react';
+import { type ReactNode, useMemo, useState } from 'react';
 import {
+  Label,
   SearchInput,
+  Stack,
+  StackItem,
   Toolbar,
   ToolbarContent,
   ToolbarGroup,
   ToolbarItem,
 } from '@patternfly/react-core';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import {
+  Table,
+  Tbody,
+  Td,
+  type TdProps,
+  Th,
+  Thead,
+  Tr,
+  TreeRowWrapper,
+} from '@patternfly/react-table';
 
-import { Projects } from '@osac/types';
-import { useProjects } from '@osac/ui-components/api/v1/project';
+import { type Project, Projects } from '@osac/types';
+import { cel } from '@osac/ui-components/api/cel';
+import { useListAllResources } from '@osac/ui-components/api/use-resource';
 import ListPage from '@osac/ui-components/components/Page/ListPage';
 import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
@@ -22,27 +35,107 @@ import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import ProjectActionsMenu from './ProjectActionsMenu';
 import ProjectStatusLabel from './ProjectStatusLabel';
-import { getProjectName } from './utils';
+import { type ProjectTreeNode, buildProjectTree, getProjectName } from './utils';
 
 const ProjectListPage = () => {
   const { t } = useTranslation();
   const { role, tenantId } = useSession();
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
 
-  const { data: projects = [], isLoading, error } = useProjects();
+  const filter = cel<Project>((filter) =>
+    filter.and(
+      filter.field('metadata.tenant').notEquals('shared'),
+      search
+        ? filter.or(
+            filter.field('metadata.name').contains(search),
+            filter.field('spec.title').contains(search),
+          )
+        : undefined,
+    ),
+  );
+
+  const { data: projects = [], isLoading, error } = useListAllResources(Projects, filter);
+  const [expandedPaths, setExpandedPaths] = useState<string[]>(['']);
 
   const canCreate = role === 'tenant-admin';
 
-  const filteredProjects = useMemo(() => {
-    if (!search) {
-      return projects;
-    }
-    const lowerSearch = search.toLowerCase();
-    return projects.filter((project) => {
-      const fullName = getProjectName(project, t);
-      return fullName.toLowerCase().includes(lowerSearch);
+  const projectTree = useMemo(() => buildProjectTree(projects), [projects]);
+
+  const renderRows = (
+    nodes: ProjectTreeNode[],
+    level = 1,
+    rowIndex = 0,
+    isHidden = false,
+  ): ReactNode[] => {
+    let nextRowIndex = rowIndex;
+
+    return nodes.flatMap((node, position) => {
+      const { project, path, children } = node;
+      const hasChildren = children.length > 0;
+      const isExpanded = hasChildren && expandedPaths.includes(path);
+      const currentRowIndex = nextRowIndex;
+      const treeRowProps = {
+        isExpanded,
+        isHidden,
+        'aria-level': level,
+        'aria-posinset': position + 1,
+        'aria-setsize': children.length,
+        toggleAriaLabel: t(isExpanded ? 'Collapse project' : 'Expand project'),
+      };
+      const treeRow: NonNullable<TdProps['treeRow']> = {
+        onCollapse: () =>
+          setExpandedPaths((previous) =>
+            isExpanded
+              ? previous.filter((expandedPath) => expandedPath !== path)
+              : [...previous, path],
+          ),
+        rowIndex: currentRowIndex,
+        props: treeRowProps,
+      };
+
+      const childRows = hasChildren
+        ? renderRows(children, level + 1, currentRowIndex + 1, isHidden || !isExpanded)
+        : [];
+
+      nextRowIndex += childRows.length + 1;
+
+      return [
+        <TreeRowWrapper key={project.id} row={{ props: treeRowProps }}>
+          <Td dataLabel={t('Name')} treeRow={treeRow}>
+            <Stack>
+              <StackItem>
+                <ResourceNameField
+                  resource={project}
+                  title={getProjectName(project, t)}
+                  detailsUrl={`/projects/${project.id}`}
+                />
+              </StackItem>
+              {level > 2 && (
+                <StackItem>
+                  <Label isCompact>{t('Nested')}</Label>
+                </StackItem>
+              )}
+              {project.metadata?.description && (
+                <StackItem>
+                  <SubtleContent>{project.metadata.description}</SubtleContent>
+                </StackItem>
+              )}
+            </Stack>
+          </Td>
+          <Td dataLabel={t('Status')}>
+            <ProjectStatusLabel project={project} />
+          </Td>
+          <Td dataLabel={t('Created')}>
+            <Timestamp value={project.metadata?.creationTimestamp} />
+          </Td>
+          <Td dataLabel={t('Actions')} isActionCell>
+            <ProjectActionsMenu project={project} />
+          </Td>
+        </TreeRowWrapper>,
+        ...childRows,
+      ];
     });
-  }, [search, projects, t]);
+  };
 
   return (
     <ListPage
@@ -73,14 +166,14 @@ const ProjectListPage = () => {
             </ToolbarGroup>
           </ToolbarContent>
         </Toolbar>
-        {filteredProjects.length === 0 ? (
+        {projects.length === 0 ? (
           <SubtleContent component="p">
             {search
               ? t('No projects match your search.')
               : t('No projects yet. Create one to get started.')}
           </SubtleContent>
         ) : (
-          <Table aria-label={t('Projects')} variant="compact">
+          <Table aria-label={t('Projects')} variant="compact" isTreeTable>
             <Thead>
               <Tr>
                 <Th>{t('Name')}</Th>
@@ -89,28 +182,7 @@ const ProjectListPage = () => {
                 <Th aria-label={t('Actions')} />
               </Tr>
             </Thead>
-            <Tbody>
-              {filteredProjects.map((project) => (
-                <Tr key={project.id}>
-                  <Td dataLabel={t('Name')}>
-                    <ResourceNameField
-                      resource={project}
-                      title={getProjectName(project, t)}
-                      detailsUrl={`/projects/${project.id}`}
-                    />
-                  </Td>
-                  <Td dataLabel={t('Status')}>
-                    <ProjectStatusLabel project={project} />
-                  </Td>
-                  <Td dataLabel={t('Created')}>
-                    <Timestamp value={project.metadata?.creationTimestamp} />
-                  </Td>
-                  <Td dataLabel={t('Actions')} isActionCell>
-                    <ProjectActionsMenu project={project} />
-                  </Td>
-                </Tr>
-              ))}
-            </Tbody>
+            <Tbody>{renderRows(projectTree)}</Tbody>
           </Table>
         )}
       </ListPageBody>

@@ -1,39 +1,67 @@
-import { Alert } from '@patternfly/react-core';
+import { Alert, FormGroup } from '@patternfly/react-core';
+import { useField } from 'formik';
 
-import { useProjects } from '@osac/ui-components/api/v1/project';
+import { type Project, Projects } from '@osac/types';
+import { cel } from '@osac/ui-components/api/cel';
+import { useListAllResources } from '@osac/ui-components/api/use-resource';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
-import { SelectField, SelectFieldProps } from './SelectField';
-import { getFullProjectPath, getProjectName } from '../Project/utils';
+import { getVisibleFieldError } from './fieldError';
+import { useShowFieldValidationErrors } from './FieldValidationContext';
+import { FormFieldHelper, getFormFieldHelperDescribedBy } from './FormFieldHelper';
+import ProjectSelect from '../Project/ProjectSelect';
 
 interface ProjectFieldProps {
   label?: string;
-  onSelect?: SelectFieldProps['onSelect'];
+  onSelect?: (value: string | number) => void;
   isDisabled?: boolean;
 }
 
-const ProjectField = ({ label, onSelect, isDisabled }: ProjectFieldProps) => {
+const fieldId = 'metadata.project';
+
+const ProjectField = ({ label, onSelect: onSelectProp, isDisabled }: ProjectFieldProps) => {
   const { t } = useTranslation();
-  const { data: projects = [], isLoading, error } = useProjects();
+  const [field, meta, helpers] = useField<string>('metadata.project');
+
+  const showValidationErrors = useShowFieldValidationErrors();
+  const fieldError = getVisibleFieldError(meta, showValidationErrors);
+
+  const fieldLabel = label || t('Project');
+  const helperDescribedBy = getFormFieldHelperDescribedBy(fieldId, fieldError);
+  const {
+    data: projects = [],
+    isLoading,
+    error: loadError,
+  } = useListAllResources(
+    Projects,
+    cel<Project>((builder) => builder.field('metadata.tenant').notEquals('shared')),
+  );
+
   return (
     <>
-      <SelectField
-        fieldId="metadata.project"
-        label={label || t('Project')}
-        name="metadata.project"
-        options={projects.map((p) => ({
-          label: getProjectName(p, t),
-          value: getFullProjectPath(p),
-        }))}
-        isRequired
-        isLoading={isLoading}
-        isDisabled={!!error || isDisabled}
-        onSelect={onSelect}
-      />
-      {!!error && (
+      <FormGroup label={fieldLabel} fieldId={fieldId} isRequired>
+        <ProjectSelect
+          mode="single"
+          projects={projects}
+          selected={[field.value]}
+          onChange={(value) => {
+            void helpers.setValue(value[0], true);
+            void helpers.setTouched(true, false);
+            onSelectProp?.(value[0]);
+          }}
+          isLoading={isLoading}
+          error={loadError}
+          fieldId={fieldId}
+          label={fieldLabel}
+          describedBy={helperDescribedBy}
+          isDisabled={isDisabled}
+        />
+        <FormFieldHelper error={fieldError} fieldId={fieldId} />
+      </FormGroup>
+      {!!loadError && (
         <Alert variant="danger" isInline title={t('Failed to fetch projects')}>
-          {getErrorMessage(error)}
+          {getErrorMessage(loadError)}
         </Alert>
       )}
     </>

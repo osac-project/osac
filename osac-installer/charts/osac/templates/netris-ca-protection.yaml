@@ -1,0 +1,40 @@
+{{- if and (eq .Values.global.networking.fabricManager "netris") .Values.global.networking.netris.caBundle.configMap }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "osac.fullname" . }}-netris-ca-protection-{{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE", "DELETE"]
+      resources: ["configmaps"]
+      scope: Namespaced
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
+  variables:
+  - name: activeName
+    expression: {{ .Values.global.networking.netris.caBundle.configMap | quote }}
+  - name: adminGroups
+    expression: {{ .Values.global.networking.netris.caBundle.adminGroups | toJson }}
+  - name: target
+    expression: "request.operation == 'DELETE' ? oldObject : object"
+  validations:
+  - expression: "variables.target.metadata.name != variables.activeName || request.userInfo.groups.exists(g, g in variables.adminGroups)"
+    message: "Only authorized platform administrators may modify or delete the active Netris CA ConfigMap."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "osac.fullname" . }}-netris-ca-protection-{{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "osac.fullname" . }}-netris-ca-protection-{{ .Release.Namespace }}
+  validationActions: ["Deny"]
+{{- end }}

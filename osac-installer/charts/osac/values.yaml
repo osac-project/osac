@@ -59,6 +59,8 @@ global:
       # contain the PEM bundle under the fixed key bundle.pem.
       caBundle:
         configMap: ""
+        adminGroups:
+          - "system:masters"
       credentials:
         username: ""
       siteId: ""

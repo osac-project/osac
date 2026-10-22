@@ -1,6 +1,7 @@
 import {
   Card,
   CardBody,
+  CardHeader,
   CardTitle,
   Flex,
   FlexItem,
@@ -46,10 +47,11 @@ const CatalogScopeField = ({ isDisabled = false }: CatalogScopeFieldProps) => {
       <Gallery hasGutter minWidths={{ default: '30%' }}>
         {options.map((option) => {
           const isSelected = values.scope === option.value;
+          const cardId = `catalog-item-scope-${option.value}`;
           return (
             <GalleryItem key={option.value}>
               <Card
-                id={`catalog-item-scope-${option.value}`}
+                id={cardId}
                 isCompact
                 isFullHeight
                 isSelectable
@@ -62,19 +64,35 @@ const CatalogScopeField = ({ isDisabled = false }: CatalogScopeFieldProps) => {
                   void setFieldValue('scope', option.value);
                 }}
               >
-                <CardTitle>
-                  <Flex
-                    justifyContent={{ default: 'justifyContentSpaceBetween' }}
-                    alignItems={{ default: 'alignItemsCenter' }}
-                  >
-                    <FlexItem>{option.title}</FlexItem>
-                    {isSelected && (
-                      <FlexItem>
-                        <Label color="blue">{t('Selected')}</Label>
-                      </FlexItem>
-                    )}
-                  </Flex>
-                </CardTitle>
+                <CardHeader
+                  selectableActions={{
+                    selectableActionId: `${cardId}-input`,
+                    selectableActionAriaLabelledby: `${cardId}-title`,
+                    name: 'catalog-item-scope',
+                    variant: 'single',
+                    onChange: (_event, checked) => {
+                      if (checked && !isDisabled) {
+                        void setFieldValue('scope', option.value);
+                      }
+                    },
+                    hasNoOffset: true,
+                    isHidden: true,
+                  }}
+                >
+                  <CardTitle id={`${cardId}-title`}>
+                    <Flex
+                      justifyContent={{ default: 'justifyContentSpaceBetween' }}
+                      alignItems={{ default: 'alignItemsCenter' }}
+                    >
+                      <FlexItem>{option.title}</FlexItem>
+                      {isSelected && (
+                        <FlexItem>
+                          <Label color="grey">{t('Selected')}</Label>
+                        </FlexItem>
+                      )}
+                    </Flex>
+                  </CardTitle>
+                </CardHeader>
                 <CardBody>{option.description}</CardBody>
               </Card>
             </GalleryItem>

@@ -3198,13 +3198,17 @@
                         "enabled": {
                           "const": true
                         }
-                      }
+                      },
+                      "required": ["enabled"]
                     }
-                  }
+                  },
+                  "required": ["caas"]
                 }
-              }
+              },
+              "required": ["services"]
             }
-          }
+          },
+          "required": ["global"]
         },
         {
           "properties": {
@@ -3217,13 +3221,17 @@
                         "enabled": {
                           "const": true
                         }
-                      }
+                      },
+                      "required": ["enabled"]
                     }
-                  }
+                  },
+                  "required": ["vmaas"]
                 }
-              }
+              },
+              "required": ["services"]
             }
-          }
+          },
+          "required": ["global"]
         },
         {
           "properties": {
@@ -3236,13 +3244,17 @@
                         "enabled": {
                           "const": true
                         }
-                      }
+                      },
+                      "required": ["enabled"]
                     }
-                  }
+                  },
+                  "required": ["bmaas"]
                 }
-              }
+              },
+              "required": ["services"]
             }
-          }
+          },
+          "required": ["global"]
         },
         {
           "properties": {
@@ -3255,13 +3267,17 @@
                         "enabled": {
                           "const": true
                         }
-                      }
+                      },
+                      "required": ["enabled"]
                     }
-                  }
+                  },
+                  "required": ["maas"]
                 }
-              }
+              },
+              "required": ["services"]
             }
-          }
+          },
+          "required": ["global"]
         }
       ]
     }

@@ -1,0 +1,30 @@
+{{- if and (eq .Values.global.networking.fabricManager "netris") .Values.global.networking.netris.caBundle.configMap }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "osac.fullname" . }}-netris-ca-read
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: [{{ .Values.global.networking.netris.caBundle.configMap | quote }}]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "osac.fullname" . }}-netris-ca-read
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "osac.fullname" . }}-netris-ca-read
+subjects:
+- kind: ServiceAccount
+  name: osac-sa
+  namespace: {{ .Release.Namespace }}
+{{- end }}

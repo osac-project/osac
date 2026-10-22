@@ -540,12 +540,14 @@ func NewHandler(
 	if oauthResourceURL != "" {
 		resourceMetadataURL = strings.TrimSuffix(oauthResourceURL, "/") + oauthProtectedResourcePath
 	}
-	authenticatedHandler := sdkauth.RequireBearerToken(newTokenVerifier(validator, exchanger), &sdkauth.RequireBearerTokenOptions{
-		// Matches the JWT validator's own expiration leeway, so the SDK's independent expiration check
-		// doesn't reject tokens the validator itself still considers valid.
-		ClockSkew:           tokenExpirationLeeway,
-		ResourceMetadataURL: resourceMetadataURL,
-	})(streamableHandler)
+	authenticatedHandler := authUnavailableMiddleware(
+		sdkauth.RequireBearerToken(newTokenVerifier(validator, exchanger), &sdkauth.RequireBearerTokenOptions{
+			// Matches the JWT validator's own expiration leeway, so the SDK's independent expiration check
+			// doesn't reject tokens the validator itself still considers valid.
+			ClockSkew:           tokenExpirationLeeway,
+			ResourceMetadataURL: resourceMetadataURL,
+		})(streamableHandler),
+	)
 	if oauthAuthorizationServer == "" {
 		return authenticatedHandler, nil
 	}
@@ -562,6 +564,13 @@ func NewHandler(
 
 const exchangeTokenExtraKey = "exchange_token"
 
+// errIssuerUnavailableMarker is the prefix the token verifier
+// uses when the cause is a trusted issuer whose JWKS endpoint
+// is temporarily unreachable. The authUnavailableMiddleware
+// recognises this marker in the SDK's HTTP 500 body and
+// upgrades the response to HTTP 503 with Retry-After.
+const errIssuerUnavailableMarker = "issuer unavailable: "
+
 type apiTokenSource func(context.Context) (string, error)
 
 // newTokenVerifier adapts an auth.JwtValidator to the shape the MCP SDK's bearer-token middleware requires.
@@ -569,6 +578,18 @@ func newTokenVerifier(validator auth.JwtValidator, exchanger TokenExchanger) sdk
 	return func(ctx context.Context, token string, _ *http.Request) (*sdkauth.TokenInfo, error) {
 		parsed, err := validator.Validate(ctx, token)
 		if err != nil {
+			if errors.Is(err, auth.ErrIssuerUnavailable) {
+				// Do NOT wrap as ErrInvalidToken: the
+				// identity provider is temporarily
+				// unreachable and the token may be valid.
+				// The SDK middleware will respond with
+				// HTTP 500, which authUnavailableMiddleware
+				// converts to HTTP 503 + Retry-After.
+				return nil, fmt.Errorf(
+					"%sidentity provider is temporarily unavailable",
+					errIssuerUnavailableMarker,
+				)
+			}
 			return nil, fmt.Errorf("%w: %w", sdkauth.ErrInvalidToken, err)
 		}
 		caller, err := safeCallerContextFromToken(parsed)
@@ -590,6 +611,96 @@ func newTokenVerifier(validator auth.JwtValidator, exchanger TokenExchanger) sdk
 			},
 		}, nil
 	}
+}
+
+// authUnavailableMiddleware wraps an HTTP handler to convert the
+// SDK bearer-token middleware's HTTP 500 into HTTP 503 with
+// Retry-After when the cause is a temporary issuer unavailability.
+//
+// The MCP SDK's RequireBearerToken middleware only supports three
+// HTTP error codes: 401 (ErrInvalidToken), 400 (ErrOAuth), and
+// 500 (anything else). When the token verifier detects that a
+// trusted issuer's JWKS endpoint is unreachable, it returns a
+// non-ErrInvalidToken error whose message starts with
+// errIssuerUnavailableMarker. The SDK writes that message as the
+// HTTP 500 body via http.Error. This middleware intercepts that
+// specific 500 and upgrades it to a 503, giving clients the
+// correct signal to retry.
+func authUnavailableMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		iw := &issuerUnavailableWriter{ResponseWriter: w}
+		next.ServeHTTP(iw, r)
+		iw.finish()
+	})
+}
+
+// issuerUnavailableWriter intercepts the http.Error(w, msg, 500)
+// call sequence that the SDK auth middleware uses. http.Error
+// calls WriteHeader(code) then Write(body) in that order; this
+// writer defers the 500 WriteHeader, inspects the body in Write,
+// and upgrades to 503 when the marker is present.
+type issuerUnavailableWriter struct {
+	http.ResponseWriter
+	pending500 bool
+	decided    bool
+}
+
+// Unwrap exposes the underlying ResponseWriter so that
+// http.NewResponseController can find http.Flusher and other
+// optional interfaces needed for SSE streaming.
+func (w *issuerUnavailableWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+// finish commits a deferred 500 that was never followed by a
+// Write call, so a handler that calls only WriteHeader(500) and
+// returns still sends the correct status code.
+func (w *issuerUnavailableWriter) finish() {
+	if w.pending500 && !w.decided {
+		w.decided = true
+		w.pending500 = false
+		w.ResponseWriter.WriteHeader(
+			http.StatusInternalServerError,
+		)
+	}
+}
+
+func (w *issuerUnavailableWriter) WriteHeader(code int) {
+	if w.decided {
+		return
+	}
+	if code == http.StatusInternalServerError {
+		w.pending500 = true
+		return
+	}
+	w.decided = true
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *issuerUnavailableWriter) Write(b []byte) (int, error) {
+	if w.pending500 && !w.decided {
+		w.decided = true
+		w.pending500 = false
+		if strings.HasPrefix(string(b), errIssuerUnavailableMarker) {
+			h := w.Header()
+			h.Set("Retry-After", "5")
+			h.Set(
+				"Content-Type",
+				"text/plain; charset=utf-8",
+			)
+			h.Del("X-Content-Type-Options")
+			w.ResponseWriter.WriteHeader(
+				http.StatusServiceUnavailable,
+			)
+			msg := "authentication dependency " +
+				"temporarily unavailable\n"
+			return w.ResponseWriter.Write([]byte(msg))
+		}
+		w.ResponseWriter.WriteHeader(
+			http.StatusInternalServerError,
+		)
+	}
+	return w.ResponseWriter.Write(b)
 }
 
 // forwardAPIToken exchanges the caller's MCP token once for this tool call and attaches only the API token.

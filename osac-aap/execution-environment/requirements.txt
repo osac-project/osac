@@ -323,7 +323,7 @@ rpds-py==0.30.0
     # via
     #   jsonschema
     #   referencing
-s3transfer==0.19.2
+s3transfer==0.19.3
     # via boto3
 setuptools==82.0.1
     # via pbr

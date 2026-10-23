@@ -242,7 +242,7 @@ pydantic==2.12.5
     # via
     #   osac-aap (pyproject.toml)
     #   py-pure-client
-pydantic-core==2.41.5
+pydantic-core==2.50.1
     # via pydantic
 pygments==2.19.2
     # via rich

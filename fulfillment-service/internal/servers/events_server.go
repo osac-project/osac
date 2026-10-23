@@ -33,6 +33,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
 	"github.com/osac-project/osac/fulfillment-service/internal/util"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
@@ -524,6 +525,10 @@ func (s *EventsServer) compileFilter(ctx context.Context, filterSrc string) (res
 	tree, issues := s.celEnv.Compile(filterSrc)
 	err = issues.Err()
 	if err != nil {
+		return
+	}
+	if dao.ContainsReservedMetadataReference(tree.NativeRep().Expr()) {
+		err = errors.New("filter references reserved metadata key")
 		return
 	}
 	result, err = s.celEnv.Program(tree)

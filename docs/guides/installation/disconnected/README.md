@@ -12,11 +12,12 @@ operators (via catalog mirroring) and additional images (via the
 
 The current document ends after the mirror registry is populated, all generated
 cluster resources are applied, and the handoff checks pass.
-Operator and OSAC installation begin in separate document.
+Operator and OSAC installation begin in separate documents.
 
-These category-specific guides break down the mirroring process into
-focused, independently verifiable steps.  Each guide covers a specific
-image group with its own prerequisites, execution steps, and verification scenarios.
+Each category page contains image discovery, inventory
+composition, mirror execution, generated mirror-resource application,
+and handoff evidence. It must not install operators or operands, mutate
+runtime custom resources, create service instances, or post-install acceptance checklist.
 
 ## Three-Phase Architecture
 

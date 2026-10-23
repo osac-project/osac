@@ -64,7 +64,8 @@ Before you begin, confirm each item:
 | ----- | ------------------ |
 | OpenShift cluster is in a disconnected or restricted-network state | `oc get proxy/cluster -o jsonpath='{.spec}'` |
 | Latest available `oc-mirror` v2 binary on the bastion | `oc-mirror version` |
-| Mirror registry is reachable from the bastion and from every cluster node | `curl -sSf https://<registry>:8443/v2/ -k` |
+| Mirror registry certificate validates from the bastion | `curl -sS -o /dev/null -w '%{http_code}\n' https://<registry>:8443/v2/` (no `-k`; HTTP `200` or `401` proves TLS validation and reachability) |
+| Mirror registry certificate validates from every cluster node | ```bash for node in $(oc get nodes -o name); do oc debug "$node" -- chroot /host curl -sS -o /dev/null -w "$node %{http_code}\n" 'https://<registry>:8443/v2/' || exit 1; done` (no `-k`)``` |
 | **Bastion authfile** contains source read + mirror write credentials | `jq -e '.auths \| has("registry.redhat.io")' $BASTION_AUTHFILE` |
 | **Bastion authfile** includes mirror registry write credentials | `jq -e '.auths \| has("<registry>:8443")' $BASTION_AUTHFILE` |
 | **Cluster pull secret** contains mirror read-only credentials | `oc get secret/pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' \| base64 -d \| jq '.auths \| keys'` |
@@ -282,9 +283,15 @@ oc get catalogsource redhat-operators -n openshift-marketplace \
   -o jsonpath='{.status.connectionState.lastObservedState}{"\n"}'
 # Expected: READY
 
-# 5. ClusterCatalog exists and serving
-oc get clustercatalog
-
+# 5. Every generated ClusterCatalog exists and is serving
+mapfile -t cluster_catalogs < <(oc get clustercatalog -o name)
+if [ "${#cluster_catalogs[@]}" -eq 0 ]; then
+  echo "ERROR: no ClusterCatalog resources found" >&2
+  exit 1
+fi
+for catalog in "${cluster_catalogs[@]}"; do
+  oc wait "$catalog" --for=condition=Serving --timeout=10m
+done
 # 6. Signature ConfigMap present
 oc get configmap -n openshift-config-managed \
   -l operator.openshift.io/managed=true 2>/dev/null | head
@@ -308,8 +315,17 @@ for pkg in "${core_packages[@]}"; do
     }
 done
 
-# 8b. VMaaS package manifests are required only when VMaaS is selected
-if [ "${ENABLE_VMAAS:-false}" = "true" ]; then
+# 8b. Require the selected profile flags explicitly; never default an
+# unset flag to false because that can skip required handoff checks.
+: "${ENABLE_VMAAS:?Set ENABLE_VMAAS=true or false from the selected profile}"
+: "${ENABLE_BMAAS:?Set ENABLE_BMAAS=true or false from the selected profile}"
+case "$ENABLE_VMAAS" in true|false) ;; *) echo "ERROR: ENABLE_VMAAS must be true or false" >&2; exit 1 ;; esac
+case "$ENABLE_BMAAS" in true|false) ;; *) echo "ERROR: ENABLE_BMAAS must be true or false" >&2; exit 1 ;; esac
+printf 'Selected profile flags: ENABLE_VMAAS=%s ENABLE_BMAAS=%s\n' \
+  "$ENABLE_VMAAS" "$ENABLE_BMAAS"
+
+# 8c. VMaaS package manifests are required only when VMaaS is selected
+if [ "$ENABLE_VMAAS" = "true" ]; then
   vmaas_packages=(kubevirt-hyperconverged lvms-operator metallb-operator)
   for pkg in "${vmaas_packages[@]}"; do
     oc get packagemanifest "$pkg" -n openshift-marketplace -o name \
@@ -320,8 +336,8 @@ if [ "${ENABLE_VMAAS:-false}" = "true" ]; then
   done
 fi
 
-# 8c. MCE is required only when BMaaS is selected
-if [ "${ENABLE_BMAAS:-false}" = "true" ]; then
+# 8d. MCE is required only when BMaaS is selected
+if [ "$ENABLE_BMAAS" = "true" ]; then
   oc get packagemanifest multicluster-engine \
     -n openshift-marketplace -o name 2>/dev/null \
     && echo "OK: BMaaS package multicluster-engine" || {
@@ -329,7 +345,6 @@ if [ "${ENABLE_BMAAS:-false}" = "true" ]; then
       exit 1
     }
 fi
-```
 
 ## Troubleshooting
 

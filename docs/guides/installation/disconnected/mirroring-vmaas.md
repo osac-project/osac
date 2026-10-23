@@ -140,37 +140,48 @@ oc get itms -o yaml | grep -A2 "containerdisk\|rhel-guest"
 
 #### Enforce NeverContactSource (recommended)
 
-By default `oc-mirror` v2 generates ITMS entries without a
-`mirrorSourcePolicy`, which allows CRI-O to fall back to the
-upstream registry.  In a strictly disconnected environment, set
-`NeverContactSource` on every containerdisk ITMS source entry
-to guarantee no upstream contact is attempted:
+Build the exact source set from the `DiskImage` resources selected for this
+mirror run. Do not infer it from repository names:
 
 ```bash
-# Patch every generated ITMS resource whose sources match the
-# containerdisk images.  oc-mirror v2 may generate ITMS
-# resources with names like itms-generic-0; discover them
-# dynamically rather than assuming a fixed name.
+osac get diskimages --tenant shared -o json | \
+  jq -r '.items[] | select(.spec.source_type == "registry") | .spec.source_ref' | \
+  sed -E 's#^docker://##; s#@sha256:.*$##; s#:[^/:]+$##' | \
+  sort -u > selected-diskimage-sources.txt
+
+test -s selected-diskimage-sources.txt || {
+  echo "ERROR: no selected registry DiskImage sources found" >&2
+  exit 1
+}
+
+jq -Rn '[inputs] | map(select(length > 0))' \
+  < selected-diskimage-sources.txt > selected-diskimage-sources.json
+
 for itms_name in $(oc get itms -o json | \
-  jq -r '[.items[] |
-    select(.spec.imageTagMirrors[]? |
-      .source | test("containerdisk|rhel-guest"))] |
+  jq -r --slurpfile selected selected-diskimage-sources.json '
+    [.items[] |
+      select(any(.spec.imageTagMirrors[]?; .source as $s |
+        $selected[0] | index($s)))] |
     unique_by(.metadata.name)[] | .metadata.name'); do
   oc get itms "$itms_name" -o json | \
-    jq '(.spec.imageTagMirrors[] |
-      select(.source | test("containerdisk|rhel-guest")))
+    jq --slurpfile selected selected-diskimage-sources.json '
+      (.spec.imageTagMirrors[] |
+        select(.source as $s | $selected[0] | index($s))) |
       .mirrorSourcePolicy = "NeverContactSource"' | \
     oc apply -f -
 done
 ```
 
-Verify the policy is set:
+Verify every selected source exists and is fail-closed:
 
 ```bash
 oc get itms -o json | \
-  jq '[.items[].spec.imageTagMirrors[] |
-    select(.source | test("containerdisk|rhel-guest")) |
-    {source, mirrorSourcePolicy}]'
+  jq -e --slurpfile selected selected-diskimage-sources.json '
+    [.items[].spec.imageTagMirrors[]] as $entries |
+    all($selected[0][] as $source;
+      any($entries[];
+        .source == $source and
+        .mirrorSourcePolicy == "NeverContactSource"))'
 ```
 
 ### Step 4 — Configure CDI for disconnected registry imports
@@ -205,9 +216,10 @@ registry directly and anonymously:
   `DataVolume` registry URL is copied verbatim from the
   `DiskImage`, so the import targets the mirror directly instead
   of relying on ITMS rewriting.
-
 The resulting `DataVolume`, as OSAC creates it at provisioning
-time:
+time. The URL must include the site's actual mirror endpoint because CDI
+does not apply ITMS rewriting; the standard endpoint in this guide is
+`:8443` (use `:443` only when that is the configured endpoint):
 
 ```yaml
 apiVersion: cdi.kubevirt.io/v1beta1
@@ -217,7 +229,7 @@ metadata:
 spec:
   source:
     registry:
-      url: "docker://<mirror-registry>/<containerdisk-image>:<tag>"
+      url: "docker://<mirror-registry>:8443/<containerdisk-image>:<tag>"
       # pullMethod and secretRef stay unset: CDI's importer
       # performs the pull itself, anonymously.
   pvc:
@@ -336,11 +348,20 @@ Every `Source Ref` must be a
 the classic disconnected failure — CDI ignores ITMS and dials
 the upstream directly (see Troubleshooting).
 
-### 2. Provision a VM from a mirrored DiskImage
+### 2. Provision a fresh VM from a mirrored DiskImage
 
-Create a compute instance from a catalog item, forcing it onto
-the `DiskImage` being validated (adjust the remaining flags to
-what the catalog item already defaults):
+Before creation, prove that no prior root `DataVolume` or PVC can be reused:
+
+```bash
+if oc get datavolume,pvc -A -o name | grep -q '/mirror-validation-root-disk$'; then
+  echo "ERROR: stale mirror-validation root disk exists" >&2
+  exit 1
+fi
+```
+
+Create a compute instance from a catalog item, forcing it onto the
+`DiskImage` being validated (adjust the remaining flags to what the catalog
+item already defaults):
 
 ```bash
 osac create computeinstance \
@@ -352,43 +373,59 @@ osac create computeinstance \
   --ssh-key <ssh-secret>
 ```
 
-Then watch it progress:
+Then watch it progress and require the OSAC `ComputeInstance` Ready
+condition, not only its summary state:
 
 ```bash
-# Live view: the instance passes through STARTING (the
-# containerdisk import) to RUNNING:
 osac get computeinstances --watch
-
-# Summary view:
 osac describe computeinstance mirror-validation
-
-# Full detail, including state and internal IP address:
 osac get computeinstance mirror-validation -o yaml
+
+CI_NS=$(oc get computeinstance -A \
+  -l osac.openshift.io/name=mirror-validation \
+  -o jsonpath='{.items[0].metadata.namespace}')
+CI_NAME=$(oc get computeinstance -n "$CI_NS" \
+  -l osac.openshift.io/name=mirror-validation \
+  -o jsonpath='{.items[0].metadata.name}')
+oc wait -n "$CI_NS" "computeinstance/$CI_NAME" \
+  --for=condition=Ready --timeout=30m
 ```
 
-`RUNNING` with a populated `status.internal_ip_address` is the
-first acceptance signal.  Before treating the category as
-validated, also confirm the full import chain with no reused
-PVC or DataVolume and no manual modifications:
+Capture the generated root `DataVolume` and PVC identities, require a
+successful import and running VMI, and preserve importer logs as evidence:
 
 ```bash
-# Verify the root DataVolume reached Succeeded (CDI import
-# completed from the mirror without an external registry
-# attempt):
-oc get datavolume -A -o custom-columns=\
-'NAME:.metadata.name,PHASE:.status.phase' | \
-  grep mirror-validation
+DV_NAME=$(oc get datavolume -n "$CI_NS" -o json | \
+  jq -r '.items[] | select(.metadata.name | contains("mirror-validation")) | .metadata.name' | head -n1)
+test -n "$DV_NAME" || { echo "ERROR: root DataVolume not found" >&2; exit 1; }
 
-# Verify the backing VMI is Running:
-oc get vmi -A -o custom-columns=\
-'NAME:.metadata.name,PHASE:.status.phase' | \
-  grep mirror-validation
+oc wait -n "$CI_NS" "datavolume/$DV_NAME" \
+  --for=jsonpath='{.status.phase}'=Succeeded --timeout=30m
+PVC_NAME=$(oc get datavolume -n "$CI_NS" "$DV_NAME" \
+  -o jsonpath='{.status.claimName}')
+printf 'ComputeInstance=%s DataVolume=%s PVC=%s\n' \
+  "$CI_NAME" "$DV_NAME" "$PVC_NAME"
+
+oc get vmi -n "$CI_NS" -o custom-columns=\
+'NAME:.metadata.name,PHASE:.status.phase' | grep mirror-validation
+
+IMPORTER_POD=$(oc get pod -n "$CI_NS" \
+  -l cdi.kubevirt.io=importer -o json | \
+  jq -r --arg pvc "$PVC_NAME" '.items[] | select(.metadata.name | contains($pvc)) | .metadata.name' | head -n1)
+test -n "$IMPORTER_POD" || { echo "ERROR: CDI importer pod not found" >&2; exit 1; }
+oc logs -n "$CI_NS" "$IMPORTER_POD" --all-containers \
+  > "${CI_NAME}-cdi-importer.log"
+if grep -E 'https?://(quay.io|registry.redhat.io|registry.access.redhat.com)' \
+  "${CI_NAME}-cdi-importer.log"; then
+  echo "ERROR: importer log contains an upstream registry URL" >&2
+  exit 1
+fi
 ```
 
-If the DataVolume does not reach `Succeeded` or the VMI does
-not reach `Running`, the CDI import path has a disconnected
-limitation — document it rather than claiming end-to-end
-VMaaS support.
+The log check proves only what the importer logged. If egress is not blocked
+or independently observed, record no-external-contact as inferred rather than
+proven. If the Ready condition, DataVolume, or VMI check fails, document the
+disconnected limitation instead of claiming end-to-end VMaaS support.
 
 Delete the instance when done:
 

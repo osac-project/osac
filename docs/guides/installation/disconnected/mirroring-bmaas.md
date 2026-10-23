@@ -122,8 +122,13 @@ the generated **ImageTagMirrorSet** (ITMS):
 ```bash
 oc apply -f oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml
 
-# Also apply ITMS if any additionalImages use tag references
-oc apply -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml 2>/dev/null || true
+# Apply ITMS only when oc-mirror generated the optional file.
+itms_file=oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml
+if [ -f "$itms_file" ]; then
+  oc apply -f "$itms_file"
+else
+  echo "INFO: no generated ITMS file; no tagged additionalImages to apply"
+fi
 ```
 
 ### Step 4 — Configure AgentServiceConfig for disconnected *(Doc 2)*
@@ -178,15 +183,18 @@ spec:
 > bundle to the `AgentServiceConfig` or to the cluster-wide
 > proxy trust bundle.
 
-Apply the updated `AgentServiceConfig`:
+Apply the complete, reviewed `AgentServiceConfig` manifest in Doc 2:
 
 ```bash
 oc apply -f agentserviceconfig.yaml
-# or, to update the existing resource in place:
-oc patch agentserviceconfig agent --type merge \
-  -p '{"spec":{"osImages":[{"openshiftVersion":"4.22","version":"422.94.202503170640-0","url":"http://<bastion>:8080/rhcos-4.22-live.x86_64.iso","cpuArchitecture":"x86_64"}]}}'
 ```
 
+> **Do not merge-patch `spec.osImages`.** JSON merge patch replaces the
+> entire array and can delete entries added for other OpenShift versions or
+> architectures. The Doc 2 procedure must read the current resource, merge
+> the new entry by the tuple `openshiftVersion`, `version`, and
+> `cpuArchitecture`, reject conflicting duplicates, preserve all unrelated
+> entries, and update with resource-version concurrency protection.
 Verify the `AgentServiceConfig` contains the expected
 `osImages` entries:
 

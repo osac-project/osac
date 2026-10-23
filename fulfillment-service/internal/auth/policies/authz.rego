@@ -267,6 +267,7 @@ client_permission_methods := {
     "/osac.public.v1.SelfSubjectAccessReviews/Create",
     "/osac.public.v1.StorageTiers/Get",
     "/osac.public.v1.StorageTiers/List",
+    "/osac.public.v1.Tenants/List",
     "/osac.public.v1.Subnets/Create",
     "/osac.public.v1.Subnets/Delete",
     "/osac.public.v1.Subnets/Get",

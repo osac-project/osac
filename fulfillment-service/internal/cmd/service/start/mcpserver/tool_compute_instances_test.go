@@ -39,6 +39,9 @@ var _ = Describe("handleCreateComputeInstance", func() {
 				return publicv1.ComputeInstancesCreateResponse_builder{
 					Object: publicv1.ComputeInstance_builder{
 						Id: "instance-1",
+						Metadata: publicv1.Metadata_builder{
+							Version: 7,
+						}.Build(),
 						Status: publicv1.ComputeInstanceStatus_builder{
 							State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
 						}.Build(),
@@ -54,13 +57,37 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(output).To(Equal(CreateComputeInstanceOutput{
-			ID:    "instance-1",
-			State: "COMPUTE_INSTANCE_STATE_STARTING",
+			ID:      "instance-1",
+			Version: 7,
+			State:   "COMPUTE_INSTANCE_STATE_STARTING",
 		}))
 		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
 		Expect(capturedObject.GetMetadata().GetName()).To(Equal("demo-vm"))
 		Expect(capturedObject.GetMetadata().GetTenant()).To(BeEmpty())
 		Expect(capturedObject.GetSpec().GetCatalogItem().GetId()).To(Equal("catalog-item-1"))
+	})
+
+	It("Requires a separate call for each changed create request", func() {
+		var capturedNames []string
+		instances := &mockComputeInstancesClient{
+			createFunc: func(
+				_ context.Context, request *publicv1.ComputeInstancesCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstancesCreateResponse, error) {
+				capturedNames = append(capturedNames, request.GetObject().GetMetadata().GetName())
+				return publicv1.ComputeInstancesCreateResponse_builder{}.Build(), nil
+			},
+		}
+
+		handler := handleCreateComputeInstance(instances)
+		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+			Name: "demo-vm-1", CatalogItem: "catalog-item-1",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		_, _, err = handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+			Name: "demo-vm-2", CatalogItem: "catalog-item-1",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(capturedNames).To(Equal([]string{"demo-vm-1", "demo-vm-2"}))
 	})
 
 	It("Applies typed, discoverable field overrides onto the compute instance spec", func() {
@@ -120,6 +147,12 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		Entry("an empty boot disk", CreateComputeInstanceInput{
 			Name: "demo-vm", CatalogItem: "catalog-item-1", BootDisk: &ComputeInstanceBootDiskInput{},
 		}, "boot_disk must include"),
+		Entry("a missing name", CreateComputeInstanceInput{
+			CatalogItem: "catalog-item-1",
+		}, "name is required"),
+		Entry("a blank catalog item", CreateComputeInstanceInput{
+			Name: "demo-vm", CatalogItem: " ",
+		}, "catalog_item is required"),
 		Entry("a non-positive boot disk size", CreateComputeInstanceInput{
 			Name: "demo-vm", CatalogItem: "catalog-item-1", BootDisk: &ComputeInstanceBootDiskInput{SizeGiB: int32Pointer(0)},
 		}, "boot_disk.size_gib must be greater than zero"),
@@ -160,6 +193,27 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
 		Expect(err.Error()).ToNot(ContainSubstring("private SQL host"))
 	})
+
+	It("Returns a safe authorization error when the public API denies creation", func() {
+		instances := &mockComputeInstancesClient{
+			createFunc: func(
+				_ context.Context, _ *publicv1.ComputeInstancesCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstancesCreateResponse, error) {
+				return nil, status.Error(codes.PermissionDenied, "tenant is not allowed")
+			},
+		}
+
+		handler := handleCreateComputeInstance(instances)
+		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+			Name: "demo-vm", CatalogItem: "catalog-item-1",
+		})
+		envelope := decodeToolError(err)
+		Expect(output).To(BeZero())
+		Expect(envelope.Category).To(Equal("authorization"))
+		Expect(envelope.GRPCCode).To(Equal("PermissionDenied"))
+		Expect(envelope.Retryable).To(BeFalse())
+		Expect(err.Error()).ToNot(ContainSubstring("tenant is not allowed"))
+	})
 })
 
 func int32Pointer(value int32) *int32 {
@@ -184,6 +238,22 @@ var _ = Describe("handleDeleteComputeInstance", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(output).To(Equal(DeleteComputeInstanceOutput{ID: "instance-1"}))
 		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
+	})
+
+	It("Rejects a blank delete target before calling the public API", func() {
+		instances := &mockComputeInstancesClient{
+			deleteFunc: func(
+				_ context.Context, _ *publicv1.ComputeInstancesDeleteRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstancesDeleteResponse, error) {
+				return nil, errors.New("Delete should not be called")
+			},
+		}
+
+		handler := handleDeleteComputeInstance(instances)
+		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), DeleteComputeInstanceInput{ID: " "})
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("invalid_request"))
+		Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
 	})
 
 	It("Hides a ComputeInstance Delete error description", func() {

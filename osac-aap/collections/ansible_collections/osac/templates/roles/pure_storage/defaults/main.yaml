@@ -1,0 +1,24 @@
+---
+# Pure-specific defaults — all use pure_storage_ prefix.
+
+# CSI provisioner name — OSAC CSI driver (vendor controllers run on hub)
+pure_storage_csi_provisioner: "osac.csi.openshift.io"
+
+# Hub Secret prefix for per-tenant Pure config
+pure_storage_tenant_config_secret_prefix: "pure-tenant-config-"
+
+# Namespace for hub-cluster config Secrets
+pure_storage_config_namespace: "{{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE') | default('osac-system', true) }}"
+
+# osac-csi-driver Pure controller credential Secret (shared, multi-Realm)
+pure_storage_csi_backends_namespace: "osac-csi-backends"
+pure_storage_csi_credential_secret_name: "pure-csi-credentials"
+
+# Realm NFS server and policy names are read from the hub Secret at runtime
+# (configured during Realm setup, not defaulted here)
+
+# Default NFS version for mount options
+pure_storage_nfs_version: "nfsvers=4.1"
+
+# TLS certificate validation for FlashBlade API
+pure_storage_validate_certs: "{{ lookup('env', 'PURE_VALIDATE_CERTS') | default('true', true) | bool }}"

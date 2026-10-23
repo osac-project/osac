@@ -1,0 +1,23 @@
+---
+# Placeholder. Real CSI credential and StorageClass creation lands with OSAC-5018.
+#
+# Receives from the dispatcher:
+#   _provider_tiers                — tiers with provider: pure
+#   _provider_backend_connections  — connection details for those tiers' backend_ids
+#
+# Must set before returning:
+#   storage_provider_storage_class_names — list; the dispatcher appends it to _all_sc_names
+
+- name: Report that pure_storage ensure_storage_class is not yet implemented
+  ansible.builtin.debug:
+    msg: >-
+      pure_storage ensure_storage_class is a placeholder — CSI credential and
+      StorageClass creation are implemented by OSAC-5018.
+      Tiers: {{ _provider_tiers | default([]) | map(attribute='name') | list }}
+
+# The dispatcher already resets this to [] before each dispatch, so this is
+# belt-and-braces — it keeps the output contract visible in the placeholder
+# rather than relying on the caller's reset.
+- name: Set empty StorageClass names output
+  ansible.builtin.set_fact:
+    storage_provider_storage_class_names: []

@@ -1,0 +1,64 @@
+---
+# Input for konflux-ci/rpm-lockfile-prototype -- resolves to rpms.lock.yaml,
+# which Cachi2/Hermeto prefetches so the hermetic build's dnf install/update
+# steps (baked into execution-environment.yaml's additional_build_steps and
+# dependencies.system) never need live network access. Regenerate with:
+#
+#   podman run --rm -v "${PWD}:/work:Z" \
+#     localhost/rpm-lockfile-prototype:latest \
+#     --image registry.access.redhat.com/ubi10:10.2 \
+#     --outfile=rpms.lock.yaml rpms.in.yaml
+#
+# (build localhost/rpm-lockfile-prototype from
+# https://github.com/konflux-ci/rpm-lockfile-prototype first.)
+contentOrigin:
+  repofiles:
+    - ubi.repo
+packages:
+  # From execution-environment.yaml's additional_build_steps: glibc/
+  # glibc-minimal-langpack updated before system packages are installed
+  # (UBI base image glibc lags behind glibc-devel), git needed to pull
+  # non-versioned git collections, python3.12 is the EE's own interpreter.
+  - glibc
+  - glibc-minimal-langpack
+  - python3.12
+  - git
+  # From execution-environment.yaml's dependencies.system (same list,
+  # kept in sync manually -- update both if that list changes).
+  - systemd-libs
+  - systemd-devel
+  - gcc
+  - python3.12-devel
+  - git-core
+  - bind-utils
+  - krb5-devel
+  # Not in execution-environment.yaml's own dependencies.system list --
+  # pulled in by bindep's default compile profile (aggregated from the
+  # vendored collections'/roles' own bindep.txt files during
+  # ansible-builder's introspect step), confirmed via a real build
+  # failure: "No match for argument: rsync". pkg-config (bindep's other
+  # compile-profile entry) is already satisfied transitively via
+  # pkgconf-pkg-config, so it needs no explicit entry here.
+  - rsync
+  # Rust toolchain for building cryptography/pydantic-core/rpds-py from
+  # source hermetically (maturin/PyO3-based, no pure-Python or prebuilt
+  # fallback) instead of fetching a prebuilt wheel -- confirmed via a
+  # real release's Enterprise Contract failure that wheels sourced from
+  # public PyPI trip sbom_spdx.disallowed_package_attributes, and
+  # Red Hat's own trusted-proxy alternatives don't cover this
+  # component's dependency tree closely enough to route around it.
+  # openssl-devel/libffi-devel are cryptography's own native build
+  # deps (CFFI bindings, linking against system OpenSSL), confirmed
+  # present in Hermeto's own upstream integration test for this exact
+  # scenario (tests/integration/pip/scenarios/pip_e2e_rust_extensions/).
+  - rust
+  - cargo
+  - openssl-devel
+  - libffi-devel
+  # frozenlist's Cython extension (_frozenlist.pyx) is C++ (not plain
+  # C), confirmed via a real build failure: "error: command 'g++'
+  # failed: No such file or directory" -- gcc alone only provides a C
+  # compiler.
+  - gcc-c++
+arches:
+  - x86_64

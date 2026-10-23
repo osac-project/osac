@@ -7,7 +7,7 @@ metadata:
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch.startsWith("refs/tags/osac-release/")
+    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch.startsWith("refs/tags/osac-charts-release/")
   labels:
     appstudio.openshift.io/application: osac
     appstudio.openshift.io/component: bare-metal-fulfillment-operator-crds-chart
@@ -35,11 +35,9 @@ spec:
   # history (per-release stamping commits are never merged into main),
   # so git describe falls back to a nonsense, non-semver version like
   # "0.1.7392_5f8626895" -- confirmed live, a real release dispatch
-  # with nothing bumped produced exactly that, and either silently
-  # published it (charts with no rewrite-registry-image-refs task) or
-  # hard-failed downstream (helm pull --version rejecting it as invalid
-  # semver, in charts that do). tag-prefix is still the dedicated,
-  # slash-free tag (not the per-component "<component>/vX.Y.Z" one --
+  # with nothing bumped produced exactly that and silently published
+  # it. tag-prefix is still the dedicated, slash-free tag (not the
+  # per-component "<component>/vX.Y.Z" one --
   # see resolve-chart-version's own comment for why slash-free matters).
   - name: tag-prefix
     value: bare-metal-fulfillment-operator-crds-chart-v

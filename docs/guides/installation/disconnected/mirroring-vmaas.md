@@ -198,11 +198,11 @@ jq -Rn '[inputs] | map(select(length > 0))' \
 
 for itms_name in $(oc get itms -o json | \
   jq -r --slurpfile selected selected-diskimage-sources.json \
-  '$selected[0] as $sel | [.items[] | select(any(.spec.imageTagMirrors[]?; .source as $src | (.mirrors // []) as $mirs | any($sel[]; . as $s | $s == $src or startswith($src + "/") or any($mirs[]; . as $m | $s == $m or startswith($m + "/")))))] | unique_by(.metadata.name)[] | .metadata.name'); do
+  '$selected[0] as $sel | [.items[] | select(any(.spec.imageTagMirrors[]?; .source as $src | (.mirrors // []) as $mirs | any($sel[]; . as $s | $s == $src or startswith($src + "/") or any($mirs[]; . as $m | $s == $m or ($s | startswith($m + "/"))))))] | unique_by(.metadata.name)[] | .metadata.name'); do
 
   oc get itms "$itms_name" -o json | \
     jq -c --slurpfile selected selected-diskimage-sources.json \
-    '$selected[0] as $sel | .spec.imageTagMirrors |= map(.source as $src | (.mirrors // []) as $mirs | if any($sel[]; . as $s | $s == $src or startswith($src + "/") or any($mirs[]; . as $m | $s == $m or startswith($m + "/"))) then . + {mirrorSourcePolicy: "NeverContactSource"} else . end)' | \
+    '$selected[0] as $sel | .spec.imageTagMirrors |= map(.source as $src | (.mirrors // []) as $mirs | if any($sel[]; . as $s | $s == $src or startswith($src + "/") or any($mirs[]; . as $m | $s == $m or ($s | startswith($m + "/")))) then . + {mirrorSourcePolicy: "NeverContactSource"} else . end)' | \
     oc apply -f -
 
 done

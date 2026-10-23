@@ -96,8 +96,8 @@ ARGUMENT_SPEC = {
         "required": True,
         "choices": list(core.OPERATIONS),
     },
-    "resource": {"type": "dict", "required": True, "no_log": True},
-    "pool": {"type": "dict", "required": True, "no_log": True},
+    "resource": {"type": "dict", "required": True},
+    "pool": {"type": "dict", "required": True},
     "controller_url": {"type": "str", "required": True, "no_log": True},
     "session_cookie": {"type": "str", "required": True, "no_log": True},
     "site_id": {"type": "int", "required": True},
@@ -106,6 +106,23 @@ ARGUMENT_SPEC = {
     "validate_certs": {"type": "bool", "default": True},
     "ca_path": {"type": "path", "required": False, "default": None},
 }
+
+# Provider inputs that must never appear in the returned invocation. The
+# dict snapshots cannot use argument-spec no_log: ansible-core adds every
+# leaf value of a no_log'd dict to the module censor set, which would
+# also censor the returned reservation address whenever a leaf value
+# collided with it.
+_REDACTED_PROVIDER_ARGS = ("resource", "pool", "controller_url", "session_cookie")
+_REDACTED = "VALUE_SPECIFIED_IN_NO_LOG_PARAMETER"
+
+
+def _redacted_invocation(params: dict) -> dict:
+    """Return an invocation whose provider inputs are redacted."""
+    module_args = {
+        key: (_REDACTED if key in _REDACTED_PROVIDER_ARGS else value)
+        for key, value in params.items()
+    }
+    return {"module_args": module_args}
 
 
 def main() -> None:
@@ -117,7 +134,9 @@ def main() -> None:
             params["resource"], params["pool"], params["operation"]
         )
         if module.check_mode:
-            module.exit_json(changed=False, address="")
+            module.exit_json(
+                changed=False, address="", invocation=_redacted_invocation(params)
+            )
             return
         client = core.NetrisSubnetClient(
             module,
@@ -133,10 +152,15 @@ def main() -> None:
         status = getattr(error, "http_status", None)
         suffix = f", HTTP {status}" if status is not None else ""
         module.fail_json(
-            msg=f"Netris ExternalIP {params['operation']} failed ({category}{suffix})"
+            msg=f"Netris ExternalIP {params['operation']} failed ({category}{suffix})",
+            invocation=_redacted_invocation(params),
         )
         return
-    module.exit_json(changed=result["changed"], address=result["address"])
+    module.exit_json(
+        changed=result["changed"],
+        address=result["address"],
+        invocation=_redacted_invocation(params),
+    )
 
 
 if __name__ == "__main__":

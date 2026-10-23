@@ -135,11 +135,13 @@ def test_argument_spec_marks_session_cookie_no_log():
     assert loaded.ARGUMENT_SPEC["validate_certs"]["default"] is True
 
 
-def test_argument_spec_marks_provider_inputs_no_log():
+def test_argument_spec_marks_only_string_secrets_no_log():
     loaded = load_module()
 
-    for name in ("resource", "pool", "controller_url"):
-        assert loaded.ARGUMENT_SPEC[name].get("no_log") is True, name
+    assert loaded.ARGUMENT_SPEC["controller_url"].get("no_log") is True
+    assert loaded.ARGUMENT_SPEC["session_cookie"].get("no_log") is True
+    for name in ("resource", "pool"):
+        assert loaded.ARGUMENT_SPEC[name].get("no_log") is None, name
 
 
 def test_check_mode_validates_inputs_without_any_provider_write(monkeypatch, capsys):
@@ -175,6 +177,69 @@ def test_successful_allocation_returns_changed_and_address(monkeypatch, capsys):
 
     assert result["changed"] is True
     assert result["address"] == "10.20.0.1"
+
+
+def test_allocation_returns_address_intact_when_resource_leaf_values_collide(
+    monkeypatch, capsys
+):
+    """Regression: argspec no_log on dict args censored the returned address.
+
+    ansible-core adds every leaf value of a no_log'd dict to the module
+    censor set. A resource snapshot with generation 1 contributed the
+    censor string "1", which mangled the returned 192.0.2.1 address into
+    "********92.0.2.********".
+    """
+    resource = make_resource()
+    resource["metadata"]["generation"] = 1
+    pool = make_pool()
+    pool["cidr"] = "192.0.2.0/30"
+    record = {
+        "id": 101,
+        "name": f"osac-eip-{RESOURCE_UID}",
+        "prefix": "192.0.2.1/32",
+        "purpose": "nat",
+        "site_id": 1,
+        "tenant_id": 7,
+    }
+
+    class VerifyingClient(StubNetrisClient):
+        def list_subnets(self):
+            if self.created:
+                return [{**record, "prefix": f"{self.created[-1][1].split('/')[0]}/32"}]
+            return []
+
+    result = run_main(
+        monkeypatch, capsys, module_args(resource=resource, pool=pool), VerifyingClient()
+    )
+
+    assert result["changed"] is True
+    assert result["address"] == "192.0.2.1"
+
+
+def test_invocation_redacts_provider_inputs(monkeypatch, capsys):
+    record = {
+        "id": 101,
+        "name": f"osac-eip-{RESOURCE_UID}",
+        "prefix": "10.20.0.5/32",
+        "purpose": "nat",
+        "site_id": 1,
+        "tenant_id": 7,
+    }
+
+    class VerifyingClient(StubNetrisClient):
+        def list_subnets(self):
+            if self.created:
+                return [{**record, "prefix": f"{self.created[-1][1].split('/')[0]}/32"}]
+            return []
+
+    result = run_main(monkeypatch, capsys, module_args(), VerifyingClient())
+    module_args_result = result["invocation"]["module_args"]
+
+    for name in ("resource", "pool", "controller_url", "session_cookie"):
+        assert module_args_result[name] == "VALUE_SPECIFIED_IN_NO_LOG_PARAMETER", name
+    assert module_args_result["operation"] == "external_ip.allocate"
+    assert module_args_result["site_id"] == 1
+    assert module_args_result["tenant_id"] == 7
 
 
 def test_provider_failure_is_sanitized(monkeypatch, capsys):

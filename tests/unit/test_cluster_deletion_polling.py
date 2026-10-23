@@ -252,7 +252,7 @@ _INVALID_ABSENCE_ERRORS = [
     'Error from server (NotFound): clusterorders.osac.openshift.io "other-cluster" not found',
     'Error from server (NotFound): clusterorders.osac.openshift.io "cluster-a" not found: extra text',
     'prefix: Error from server (NotFound): clusterorders.osac.openshift.io "cluster-a" not found',
-    "Unable to connect to the server: connection refused",
+    "Unable to connect to the server: x509: certificate signed by unknown authority",
 ]
 
 

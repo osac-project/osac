@@ -21,6 +21,33 @@ _RESOURCE_NOT_FOUND_ALIASES = {
 }
 
 
+_TRANSIENT_KUBECTL_ERROR_RE = re.compile(
+    r"(?:"
+    r"Error from server \((?:Timeout|ServerTimeout|TooManyRequests|ServiceUnavailable|InternalError)\): [^\n]+"
+    r"|Unable to connect to the server: "
+    r"(?:(?:dial tcp|read tcp|write tcp) [^\n]+: )?"
+    r"(?:connection refused|connect: connection refused|read: connection reset by peer|write: broken pipe"
+    r"|i/o timeout|net/http: TLS handshake timeout|EOF|unexpected EOF|context deadline exceeded)"
+    r"|The connection to the server \S+ was refused - did you specify the right host or port\?"
+    r")"
+)
+
+
+def is_transient_kubectl_error(error: subprocess.CalledProcessError) -> bool:
+    """Conservatively classify read failures for opt-in polling, never as absence.
+
+    Match the final diagnostic, not arbitrary substrings in warnings or server
+    messages. DNS/configuration, authorization, certificate and unknown errors
+    deliberately fail fast. Raw diagnostic text must never be logged here.
+    """
+    if error.returncode != 1:
+        return False
+    output = error.stderr or error.output
+    if not isinstance(output, str) or not output.strip():
+        return False
+    return _TRANSIENT_KUBECTL_ERROR_RE.fullmatch(output.strip().splitlines()[-1]) is not None
+
+
 class K8sClient:
     def __init__(self, *, namespace: str, kubeconfig: str | None = None, as_system_admin: bool = True) -> None:
         self.namespace: str = namespace

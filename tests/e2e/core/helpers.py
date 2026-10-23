@@ -13,7 +13,7 @@ from uuid import uuid4
 import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
-from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.k8s_client import K8sClient, is_transient_kubectl_error
 from tests.e2e.core.runner import poll_until, run_unchecked
 
 _POOL_READY_STATE = "EXTERNAL_IP_POOL_STATE_READY"
@@ -695,7 +695,12 @@ def wait_for_cluster_deletion_without_cleanup(
     def _check_deleted() -> bool:
         if on_poll is not None:
             on_poll()
-        return k8s.is_absent(resource="clusterorder", name=name)
+        try:
+            return k8s.is_absent(resource="clusterorder", name=name)
+        except subprocess.CalledProcessError as error:
+            if not is_transient_kubectl_error(error):
+                raise
+            return False
 
     poll_until(
         fn=_check_deleted,

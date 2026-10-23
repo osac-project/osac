@@ -14,8 +14,8 @@ import {
   VirtualNetworkState,
 } from '@osac/types';
 
+import type { NetworkAttachmentFormFields } from './networkAttachments';
 import NetworkFields from './NetworkFields';
-import type { NetworkAttachmentFormFields } from './networkFields';
 import { type ProvisioningFieldValue, provisioningFieldValue } from './provisioningFieldValue';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 import { emptyResourceSelectValue } from '../../Form/resourceSelectValue';

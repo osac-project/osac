@@ -17,10 +17,6 @@ vi.mock('react-router-dom', async (importOriginal) => {
   };
 });
 
-vi.mock('@osac/ui-components/hooks/use-session.tsx', () => ({
-  useSession: vi.fn(() => ({ role: 'tenant', username: 'test-user', tenantId: 'test-tenant' })),
-}));
-
 const VERSION_ID = 'cluster-version-4-17';
 const PULL_SECRET_ID = 'secret-pull-1';
 
@@ -75,6 +71,7 @@ const clusterCatalogItem = create(ClusterCatalogItemSchema, {
 const renderWizard = (onClosed = vi.fn()) =>
   renderWithProviders(<ClusterCreateWizard onClosed={onClosed} />, {
     apiFixtures: { clusterCatalogItems: [clusterCatalogItem] },
+    session: { role: 'tenant-user' },
   });
 
 // The catalog card's selectable radio input does not currently expose an
@@ -118,6 +115,7 @@ describe('ClusterCreateWizard', () => {
     const { user } = renderWithProviders(<ClusterCreateWizard onClosed={vi.fn()} />, {
       apiFixtures: { clusterCatalogItems: [clusterCatalogItem] },
       transportOverrides: { onClusterCreate: onClusterCreate as never },
+      session: { role: 'tenant-user' },
     });
 
     await selectCatalogItemAndFillName(user, 'my-cluster');
@@ -155,6 +153,7 @@ describe('ClusterCreateWizard', () => {
           throw new ConnectError('Cluster quota exceeded', Code.ResourceExhausted);
         },
       },
+      session: { role: 'tenant-user' },
     });
 
     await selectCatalogItemAndFillName(user, 'my-cluster');

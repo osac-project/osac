@@ -17,10 +17,6 @@ vi.mock('react-router-dom', async (importOriginal) => {
   };
 });
 
-vi.mock('@osac/ui-components/hooks/use-session.tsx', () => ({
-  useSession: vi.fn(() => ({ role: 'tenant', username: 'test-user', tenantId: 'test-tenant' })),
-}));
-
 const INSTANCE_TYPE_ID = 'bm-type-standard';
 const DISK_IMAGE_ID = 'disk-image-rhel-9';
 
@@ -51,6 +47,7 @@ const bareMetalCatalogItem = create(BareMetalInstanceCatalogItemSchema, {
 const renderWizard = (onClosed = vi.fn()) =>
   renderWithProviders(<BareMetalInstanceCreateWizard onClosed={onClosed} />, {
     apiFixtures: { bareMetalCatalogItems: [bareMetalCatalogItem] },
+    session: { role: 'tenant-user' },
   });
 
 // The catalog card's selectable radio input does not currently expose an
@@ -96,6 +93,7 @@ describe('BareMetalInstanceCreateWizard', () => {
     const { user } = renderWithProviders(<BareMetalInstanceCreateWizard onClosed={vi.fn()} />, {
       apiFixtures: { bareMetalCatalogItems: [bareMetalCatalogItem] },
       transportOverrides: { onBareMetalInstanceCreate: onBareMetalInstanceCreate as never },
+      session: { role: 'tenant-user' },
     });
 
     await selectCatalogItemAndFillName(user, 'my-bmi');
@@ -131,6 +129,7 @@ describe('BareMetalInstanceCreateWizard', () => {
           throw new ConnectError('Host type is at capacity', Code.ResourceExhausted);
         },
       },
+      session: { role: 'tenant-user' },
     });
 
     await selectCatalogItemAndFillName(user, 'my-bmi');

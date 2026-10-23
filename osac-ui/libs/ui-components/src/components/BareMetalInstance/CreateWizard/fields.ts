@@ -8,7 +8,7 @@ import {
   type NetworkAttachmentFormFields,
   getEmptyNetworkAttachmentFormFields,
   networkAttachmentFieldsFromPolicy,
-} from '../../ProvisioningWizard/fields/networkFields';
+} from '../../ProvisioningWizard/fields/networkAttachments';
 import type { ProvisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 import {
   getFieldFromCatalogItemPolicy,

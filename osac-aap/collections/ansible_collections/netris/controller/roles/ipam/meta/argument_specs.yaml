@@ -56,3 +56,36 @@ argument_specs:
         type: str
         required: true
         description: "Name of the IPAM subnet to delete."
+      ipam_cidr:
+        type: str
+        description: "Optional CIDR identity for the subnet to delete."
+      ipam_vpc_id:
+        type: int
+        description: "Optional VPC identity for the subnet to delete."
+      ipam_tenant_id:
+        type: int
+        description: "Optional tenant identity for the subnet to delete."
+      ipam_parent_id:
+        type: int
+        description: "Optional parent IPAM subnet ID for a child allocation."
+
+  find_subnet_by_identity:
+    options:
+      ipam_name:
+        type: str
+        required: true
+        description: "Name of the IPAM subnet to find."
+      ipam_cidr:
+        type: str
+        description: "Optional CIDR identity for the IPAM subnet."
+      ipam_vpc_id:
+        type: int
+        required: true
+        description: "Netris VPC ID that owns the IPAM subnet."
+      ipam_tenant_id:
+        type: int
+        required: true
+        description: "Netris tenant ID that owns the IPAM subnet."
+      ipam_parent_id:
+        type: int
+        description: "Optional parent IPAM subnet ID."

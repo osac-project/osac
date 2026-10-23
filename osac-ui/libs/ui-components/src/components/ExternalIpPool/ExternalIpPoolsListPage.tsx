@@ -20,7 +20,7 @@ export const ExternalIpPoolsListPage = () => {
       description={t('Manage external IP address pools for this cloud platform.')}
       error={error}
       actions={
-        <CreateButton to="/admin/infrastructure/external-ip-pools/create">
+        <CreateButton service={ExternalIPPools} to="/admin/infrastructure/external-ip-pools/create">
           {t('Create pool')}
         </CreateButton>
       }

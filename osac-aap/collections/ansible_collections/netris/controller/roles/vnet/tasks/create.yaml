@@ -18,10 +18,34 @@
   register: _vnet_list_resp
   no_log: true
 
-- name: Find V-Net by name
+- name: Find V-Nets by name and VPC
   ansible.builtin.set_fact:
-    _existing_vnet: "{{ (_vnet_list_resp.json.data | default([])) | selectattr('name', 'equalto', vnet_name) | list | first | default({}) }}"
+    _existing_vnets: >-
+      {{ (_vnet_list_resp.json.data | default([]))
+         | selectattr('name', 'equalto', vnet_name)
+         | selectattr('vpc.id', 'equalto', vnet_vpc_id | int)
+         | list }}
   when: _vnet_list_resp.json is mapping
+
+- name: Filter V-Nets by tenant
+  ansible.builtin.set_fact:
+    _existing_vnets: >-
+      {{ _existing_vnets
+         | selectattr('tenant.id', 'equalto', vnet_tenant_id | int)
+         | list }}
+  when: vnet_tenant_id is defined
+
+- name: Fail if the V-Net identity is ambiguous
+  ansible.builtin.assert:
+    that:
+      - _existing_vnets | length <= 1
+    fail_msg: >-
+      More than one Netris V-Net named '{{ vnet_name }}' matches VPC {{ vnet_vpc_id }}
+      and tenant {{ vnet_tenant_id | default('unspecified') }}. Refusing to reuse an ambiguous V-Net.
+
+- name: Set the matching V-Net
+  ansible.builtin.set_fact:
+    _existing_vnet: "{{ _existing_vnets | first | default({}) }}"
 
 - name: Set V-Net facts from existing V-Net (skip creation)
   ansible.builtin.set_fact:

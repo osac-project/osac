@@ -236,6 +236,22 @@ def commit_link(run: dict[str, Any], *, slack: bool = False, label: str | None =
     return f"<{url}|{label}>" if slack else f"[{label}]({url})"
 
 
+def report_status(report: dict[str, Any]) -> str:
+    suites = report["suites"]
+    failed = sum(bool(suite["failed"]) for suite in suites)
+    if failed:
+        if all(suite["expected"] is not None for suite in suites):
+            noun = "suite" if len(suites) == 1 else "suites"
+            status = f"Failures detected in {failed} of {len(suites)} {noun}"
+        else:
+            noun = "suite" if failed == 1 else "suites"
+            status = f"Failures detected in {failed} observed {noun}"
+        if report["status"] == "incomplete":
+            status += " — Incomplete report"
+        return status
+    return "Incomplete report" if report["status"] == "incomplete" else "No failures detected"
+
+
 def report_header(report: dict[str, Any]) -> str:
     failed = any(suite["failed"] for suite in report["suites"])
     icon = status_icon(failed, report["status"] == "incomplete")
@@ -277,20 +293,19 @@ def coverage_text(report: dict[str, Any], summary: dict[str, Any]) -> str:
     expected = {suite["expected"] for suite in suites}
     if report["status"] != "incomplete" and len(expected) == 1:
         repetitions = next(iter(expected))
-        return f"{len(suites)} suites \u00d7 {repetitions} executions = {summary['executions']:,} executions"
+        return f"{len(suites)} suites \u00d7 {repetitions} executions per suite"
     return f"{len(suites)} suites · {summary['executions']:,} recorded executions"
 
 
 def render_suite_table(report: dict[str, Any]) -> list[str]:
-    lines = ["## Suite results", "", "| Suite | Failed / Total | Failure rate |", "|---|---:|---:|"]
+    lines = [
+        "## Suite results",
+        "",
+        "Counts represent repeated executions of each suite, not individual test cases. "
+        "Percentages are calculated per suite.",
+    ]
     for title, suites in grouped_suites(report):
-        summary = result_summary(suites)
-        notes = format_result_notes(summary)
-        extra = f" · {notes}" if notes else ""
-        lines.append(
-            f"| **{title}** | **{summary['failed']:,} / {summary['executions']:,}** | "
-            f"**{format_failure_rate(summary)}**{extra} |"
-        )
+        lines.extend(["", f"### {title}", "", "| Suite | Failed / Recorded | Failure rate |", "|---|---:|---:|"])
         for suite in suites:
             summary = result_summary([suite])
             icon = status_icon(bool(summary["failed"]), not summary["complete"])
@@ -364,24 +379,15 @@ def render_execution_tables(report: dict[str, Any]) -> list[str]:
 def render_markdown(report: dict[str, Any]) -> str:
     run = report["run"]
     overall = result_summary(report["suites"])
-    integration, unit = [result_summary(suites) for _, suites in grouped_suites(report)]
     icon = status_icon(bool(overall["failed"]), report["status"] == "incomplete")
-    status = {"clean": "All suites passed", "failures detected": "Failures detected", "incomplete": "Incomplete report"}
     lines = [
         "# Weekly Test Stability Report",
         "",
-        f"{icon} **{status[report['status']]}** | {campaign_date(run, full_month=True)}",
+        f"{icon} **{report_status(report)}** | {campaign_date(run, full_month=True)}",
         "",
         f"**Commit:** {commit_link(run)}  ",
         f"**Campaign:** [View workflow execution]({run['url']})  ",
         f"**Coverage:** {coverage_text(report, overall)}",
-        "",
-        "| Overall | Integration | Unit | Affected suites |",
-        "|---|---|---|---|",
-        f"| {icon} **{format_failure_rate(overall)}** ({overall['failed']:,}/{overall['executions']:,}) | "
-        f"**{format_failure_rate(integration)}** ({integration['failed']:,}/{integration['executions']:,}) | "
-        f"**{format_failure_rate(unit)}** ({unit['failed']:,}/{unit['executions']:,}) | "
-        f"**{overall['affected']}/{len(report['suites'])}** |",
         "",
         *render_suite_table(report),
         "",
@@ -401,28 +407,26 @@ def slack_group_summary(title: str, suites: list[dict[str, Any]]) -> str:
     summary = result_summary(suites)
     if summary["complete"] and not summary["failed"]:
         noun = "suite" if len(suites) == 1 else "suites"
-        return f"*{title}* - {PASSED_ICON} All {len(suites)} {noun} passed (0/{summary['executions']:,})"
+        return f"*{title}* - {PASSED_ICON} All {len(suites)} {noun} passed"
 
-    noun = "failure" if summary["failed"] == 1 else "failures"
-    lines = [f"*{title}* - {summary['failed']:,} {noun}"]
+    lines = [f"*{title}*"]
     clean_count = 0
-    clean_executions = 0
     for suite in suites:
         result = result_summary([suite])
         if result["complete"] and not result["failed"]:
             clean_count += 1
-            clean_executions += result["executions"]
             continue
         icon = status_icon(bool(result["failed"]), not result["complete"])
         rate = format_failure_rate(result, compact=True)
         notes = format_result_notes(result)
         extra = f" · {notes}" if notes else ""
         lines.append(
-            f"- {icon} {suite_name(suite, slack=True)}: {result['failed']:,}/{result['executions']:,} ({rate}){extra}"
+            f"- {icon} {suite_name(suite, slack=True)}: "
+            f"{result['failed']:,}/{result['executions']:,} executions failed ({rate}){extra}"
         )
     if clean_count:
         noun = "suite" if clean_count == 1 else "suites"
-        lines.append(f"- {PASSED_ICON} Other {clean_count} {noun}: 0/{clean_executions:,}")
+        lines.append(f"- {PASSED_ICON} All other {clean_count} {noun} passed")
 
     # Keep whole lines within Slack's section limit; full suite details stay in the report.
     bounded = []
@@ -437,34 +441,35 @@ def slack_group_summary(title: str, suites: list[dict[str, Any]]) -> str:
 
 def slack_summary_sections(report: dict[str, Any]) -> list[str]:
     overall = result_summary(report["suites"])
-    rate = format_failure_rate(overall, compact=True) if overall["executions"] else "rate unknown"
-    total = f"*{overall['failed']:,}/{overall['executions']:,} runs failed ({rate})*"
-    expected = {suite["expected"] for suite in report["suites"]}
-    repetitions = "runs per suite unknown"
-    if len(expected) == 1 and None not in expected:
-        qualifier = "planned " if report["status"] == "incomplete" else ""
-        repetitions = f"{next(iter(expected))} {qualifier}runs per suite"
-    total += f" | {repetitions}"
+    status = f"*{report_status(report)}*"
     if report["status"] == "incomplete":
-        warning = "Incomplete report"
         notes = format_result_notes(overall)
         if notes:
-            warning += f": {notes}"
-        total += f"\n{INCOMPLETE_ICON} {warning}"
+            status += f"\n{INCOMPLETE_ICON} {notes}"
     groups = [slack_group_summary(title, suites) for title, suites in grouped_suites(report)]
     run = report["run"]
-    links = f"Commit: {commit_link(run, slack=True)} · <{run['url']}|Campaign> · <{run['report_url']}|Report>"
-    return [total, *groups, links]
+    links = f"Commit: {commit_link(run, slack=True)} · <{run['url']}|Campaign>"
+    return [status, *groups, links]
 
 
 def render_slack(report: dict[str, Any]) -> dict[str, Any]:
     """Show failing suites by group and combine the remaining clean suites."""
     sections = [report_header(report), *slack_summary_sections(report)]
+    report_url = report["run"]["report_url"]
+    blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": section}} for section in sections]
+    blocks.append(
+        {
+            "type": "actions",
+            "elements": [
+                {"type": "button", "text": {"type": "plain_text", "text": "View Report"}, "url": report_url}
+            ],
+        }
+    )
     return {
-        "text": "\n\n".join(sections),
+        "text": "\n\n".join([*sections, f"<{report_url}|View Report>"]),
         "unfurl_links": False,
         "unfurl_media": False,
-        "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": section}} for section in sections],
+        "blocks": blocks,
     }
 
 

@@ -86,7 +86,11 @@ const SecretListPage = () => {
         description={t(
           'Store credentials for use at launch. Encrypted at rest in the platform vault.',
         )}
-        actions={<CreateButton to="/secrets/create">{t('Create secret')}</CreateButton>}
+        actions={
+          <CreateButton service={Secrets} to="/secrets/create">
+            {t('Create secret')}
+          </CreateButton>
+        }
         error={error}
       >
         <ListPageBody isLoading={isLoading} error={error}>

@@ -28,6 +28,8 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -44,8 +46,9 @@ var _ privatev1.AddOnOperatorsServer = (*PrivateAddOnOperatorsServer)(nil)
 
 type PrivateAddOnOperatorsServer struct {
 	privatev1.UnimplementedAddOnOperatorsServer
-	defaultPublished bool
-	generic          *GenericServer[*privatev1.AddOnOperator]
+	defaultPublished          bool
+	generic                   *GenericServer[*privatev1.AddOnOperator]
+	publishedOperatorResolver *addOnOperatorResourceResolver
 }
 
 func NewPrivateAddOnOperatorsServer() *PrivateAddOnOperatorsServerBuilder {
@@ -115,9 +118,18 @@ func (b *PrivateAddOnOperatorsServerBuilder) Build() (result *PrivateAddOnOperat
 	if err != nil {
 		return
 	}
+	addOnOperatorsDao, err := dao.NewGenericDAO[*privatev1.AddOnOperator]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
 	result = &PrivateAddOnOperatorsServer{
-		defaultPublished: defaultPublished,
-		generic:          generic,
+		defaultPublished:          defaultPublished,
+		generic:                   generic,
+		publishedOperatorResolver: newPublishedScopedAddOnOperatorResourceResolver(addOnOperatorsDao),
 	}
 	return
 }
@@ -146,13 +158,34 @@ func (s *PrivateAddOnOperatorsServer) Create(ctx context.Context,
 		if err = validateOCPVersionRange(object.GetMinOcpVersion(), object.GetMaxOcpVersion()); err != nil {
 			return
 		}
+		if !isDryRun(ctx) && object.GetPublished() {
+			if err = lockAddOnOperatorDependencyGraph(ctx); err != nil {
+				return
+			}
+		}
 	}
 	err = s.generic.Create(ctx, request, &response)
+	if err != nil {
+		return
+	}
+	if !isDryRun(ctx) && response.GetObject().GetPublished() {
+		err = s.validatePublishedAddOnOperatorGraph(ctx, response.GetObject())
+	}
 	return
 }
 
 func (s *PrivateAddOnOperatorsServer) Update(ctx context.Context,
 	request *privatev1.AddOnOperatorsUpdateRequest) (response *privatev1.AddOnOperatorsUpdateResponse, err error) {
+	if isDryRun(ctx) {
+		return nil, grpcstatus.Error(grpccodes.Unimplemented, "dry-run is not supported for add-on operator updates")
+	}
+	graphMutation := request.GetUpdateMask() == nil ||
+		updateIncludesField(request.GetUpdateMask(), "dependencies", "published")
+	if graphMutation {
+		if err = lockAddOnOperatorDependencyGraph(ctx); err != nil {
+			return
+		}
+	}
 	if object := request.GetObject(); object != nil {
 		if updateIncludesField(request.GetUpdateMask(), "metadata.tenant") {
 			if err = validateSharedOwnership(object); err != nil {
@@ -185,13 +218,68 @@ func (s *PrivateAddOnOperatorsServer) Update(ctx context.Context,
 		}
 	}
 	err = s.generic.Update(ctx, request, &response)
+	if err != nil {
+		return
+	}
+	if !response.GetObject().GetPublished() && graphMutation {
+		dependentErr := ensureNoPublishedAddOnOperatorDependents(
+			ctx, response.GetObject().GetId(), "unpublish", response.GetObject().GetMetadata().GetName())
+		if dependentErr != nil {
+			err = dependentErr
+			if tx, txErr := database.TxFromContext(ctx); txErr == nil {
+				tx.ReportError(&err)
+			}
+			return
+		}
+	}
+	if response.GetObject().GetPublished() && graphMutation {
+		err = s.validatePublishedAddOnOperatorGraph(ctx, response.GetObject())
+	}
 	return
 }
 
 func (s *PrivateAddOnOperatorsServer) Delete(ctx context.Context,
 	request *privatev1.AddOnOperatorsDeleteRequest) (response *privatev1.AddOnOperatorsDeleteResponse, err error) {
+	if isDryRun(ctx) {
+		return nil, grpcstatus.Error(grpccodes.Unimplemented, "dry-run is not supported for add-on operator deletes")
+	}
+	if err = lockAddOnOperatorDependencyGraph(ctx); err != nil {
+		return
+	}
+	var getResponse *privatev1.AddOnOperatorsGetResponse
+	if err = s.generic.Get(ctx, &privatev1.AddOnOperatorsGetRequest{Id: request.GetId()}, &getResponse); err != nil {
+		return
+	}
+	dependentErr := ensureNoPublishedAddOnOperatorDependents(
+		ctx, request.GetId(), "delete", getResponse.GetObject().GetMetadata().GetName())
+	if dependentErr != nil {
+		err = dependentErr
+		return
+	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
+}
+
+// ensureNoPublishedAddOnOperatorDependents rejects mutations that would leave
+// published operators referring to an unpublished or deleted dependency.
+func ensureNoPublishedAddOnOperatorDependents(
+	ctx context.Context, operatorID, operation, displayName string,
+) error {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	exists, err := database.HasPublishedAddOnOperatorDependency(ctx, tx, operatorID, displayName)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	return grpcstatus.Errorf(
+		grpccodes.FailedPrecondition,
+		"cannot %s add-on operator %q: it has published dependents",
+		operation, displayName)
 }
 
 func (s *PrivateAddOnOperatorsServer) Signal(ctx context.Context,

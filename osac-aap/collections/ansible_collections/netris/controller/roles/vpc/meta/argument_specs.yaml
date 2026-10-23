@@ -23,6 +23,18 @@ argument_specs:
         required: true
         description: "Netris tenant ID (admin)."
 
+  read:
+    options:
+      vpc_name:
+        type: str
+        description: "Name of the VPC to find."
+      vpc_lookup_id:
+        type: int
+        description: "Restrict lookup to this exact Netris VPC ID."
+      vpc_tenant_id:
+        type: int
+        description: "Restrict lookup to the VPC's admin tenant."
+
   delete:
     options:
       vpc_name:

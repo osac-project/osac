@@ -9,6 +9,7 @@ import {
 } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
+import { SecurityGroups } from '@osac/types';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField.tsx';
 import { SEARCH_PARAM, usePageFilter } from '@osac/ui-components/hooks/use-page-filter.ts';
@@ -45,7 +46,7 @@ export const SecurityGroupsListPage = () => {
         description={t('Manage firewall rules for your virtual networks.')}
         error={error}
         actions={
-          <CreateButton onClick={() => setIsCreateModalOpen(true)}>
+          <CreateButton service={SecurityGroups} onClick={() => setIsCreateModalOpen(true)}>
             {t('Create security group')}
           </CreateButton>
         }

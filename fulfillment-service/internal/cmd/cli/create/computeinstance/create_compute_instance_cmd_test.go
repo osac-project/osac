@@ -121,13 +121,13 @@ var _ = Describe("buildSpec", func() {
 		Expect(spec.HasDiskImage()).To(BeFalse())
 	})
 
-	It("should set user_data_secret when user-data-secret is provided", func() {
+	It("should set user_data_source.secret when user-data-secret is provided", func() {
 		c := &runnerContext{}
 		c.args.userDataSecret = "cloud-init"
 		spec, err := c.buildSpec("tmpl", nil)
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(spec.GetUserDataSecret().GetName()).To(Equal("cloud-init"))
+		Expect(spec.GetUserDataSource().GetSecret().GetName()).To(Equal("cloud-init"))
 	})
 })
 
@@ -196,13 +196,13 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 		Expect(spec.HasDiskImage()).To(BeFalse())
 	})
 
-	It("should set user_data_secret when user-data-secret is provided", func() {
+	It("should set user_data_source.secret when user-data-secret is provided", func() {
 		c := &runnerContext{}
 		c.args.userDataSecret = "cloud-init"
 		spec, err := c.buildSpecFromCatalogItem("cat-006")
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(spec.GetUserDataSecret().GetName()).To(Equal("cloud-init"))
+		Expect(spec.GetUserDataSource().GetSecret().GetName()).To(Equal("cloud-init"))
 	})
 })
 

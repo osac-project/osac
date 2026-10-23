@@ -122,7 +122,7 @@ class ReportTests(unittest.TestCase):
                 self.assertEqual(sum(suite["other"] for suite in report["suites"]), 1)
                 slack = render_slack(report)["text"]
                 self.assertIn("- \U0001f7e1 fulfillment-service:", slack)
-                self.assertIn("- \U0001f7e2 Other 1 suite: 0/3", slack)
+                self.assertIn("- \U0001f7e2 All other 1 suite passed", slack)
 
     def test_incomplete_reports_keep_warnings_and_failure_color(self) -> None:
         partial = jobs()[1:]
@@ -130,7 +130,7 @@ class ReportTests(unittest.TestCase):
         partial[1]["conclusion"] = "timed_out"
         for observations, conclusion, icon, warning in (
             (jobs()[1:], "success", "\U0001f7e1", "missing 1"),
-            ([], "success", "\U0001f7e1", "*0/0 runs failed (rate unknown)*"),
+            ([], "success", "\U0001f7e1", "Incomplete report"),
             (jobs(), "cancelled", "\U0001f7e1", "Incomplete report"),
             (jobs(), "failure", "\U0001f7e1", "Incomplete report"),
             (partial, "failure", "\U0001f534", "1 timed out, missing 1"),
@@ -141,7 +141,15 @@ class ReportTests(unittest.TestCase):
                 slack = render_slack(report)["text"]
                 self.assertTrue(slack.startswith(icon))
                 self.assertIn(warning, slack)
-                self.assertIn("**Incomplete report**", render_markdown(report))
+                self.assertIn("Incomplete report", render_markdown(report))
+                self.assertNotIn("No failures detected", slack)
+                self.assertNotIn("No failures detected", render_markdown(report))
+                expected_status = (
+                    "Failures detected in 1 of 4 suites — Incomplete report"
+                    if any(observation["conclusion"] == "failure" for observation in observations)
+                    else "Incomplete report"
+                )
+                self.assertIn(f"*{expected_status}*", slack)
 
     def test_invalid_metadata_preserves_observed_failures(self) -> None:
         observations = jobs()
@@ -161,6 +169,9 @@ class ReportTests(unittest.TestCase):
                 self.assertEqual(sum(suite["failed"] for suite in report["suites"]), 1)
                 self.assertIn(f"{RUN['url']}/job/1", render_markdown(report))
                 self.assertIn("Commit: unknown", render_slack(report)["text"])
+                for text in (render_slack(report)["text"], render_markdown(report)):
+                    self.assertIn("Failures detected in 1 observed suite — Incomplete report", text)
+                    self.assertNotIn("of 4 suites", text)
 
     def test_jobs_with_wrong_provenance_are_excluded(self) -> None:
         for field, value in (("run_id", 999), ("run_attempt", 2), ("head_sha", "c" * 40)):
@@ -256,31 +267,31 @@ class ReportTests(unittest.TestCase):
         for index in failed:
             self.assertIn(f"{RUN['url']}/job/{observations[index]['id']}", markdown)
         self.assertIn(f"{RUN['url']}/artifacts/256", markdown)
-        self.assertIn("*3/1,024 runs failed (0.3%)* | 256 runs per suite", render_slack(report)["text"])
+        self.assertIn("*Failures detected in 3 of 4 suites*", render_slack(report)["text"])
 
     def test_clean_and_failing_slack_messages(self) -> None:
         links = (
             f"Commit: <https://github.com/osac-project/osac/commit/{TEST_SHA}|{TEST_SHA[:7]}> · "
-            f"<{RUN['url']}|Campaign> · <{RUN['report_url']}|Report>"
+            f"<{RUN['url']}|Campaign>"
         )
         for failing, title, total, integration, unit in (
             (
                 False,
                 "\U0001f7e2 *OSAC Weekly Test Stability* | Oct 26, 2026",
-                "*0/12 runs failed (0%)* | 3 runs per suite",
-                "*Integration tests* - \U0001f7e2 All 2 suites passed (0/6)",
-                "*Unit tests* - \U0001f7e2 All 2 suites passed (0/6)",
+                "*No failures detected*",
+                "*Integration tests* - \U0001f7e2 All 2 suites passed",
+                "*Unit tests* - \U0001f7e2 All 2 suites passed",
             ),
             (
                 True,
                 "\U0001f534 *OSAC Weekly Test Stability* | Oct 19, 2026",
-                "*3/12 runs failed (25%)* | 3 runs per suite",
-                "*Integration tests* - 2 failures\n"
-                "- \U0001f534 fulfillment-service: 2/3 (66.7%)\n"
-                "- \U0001f7e2 Other 1 suite: 0/3",
-                "*Unit tests* - 1 failure\n"
-                "- \U0001f534 fulfillment-service: 1/3 (33.3%)\n"
-                "- \U0001f7e2 Other 1 suite: 0/3",
+                "*Failures detected in 2 of 4 suites*",
+                "*Integration tests*\n"
+                "- \U0001f534 fulfillment-service: 2/3 executions failed (66.7%)\n"
+                "- \U0001f7e2 All other 1 suite passed",
+                "*Unit tests*\n"
+                "- \U0001f534 fulfillment-service: 1/3 executions failed (33.3%)\n"
+                "- \U0001f7e2 All other 1 suite passed",
             ),
         ):
             with self.subTest(failing=failing):
@@ -292,10 +303,69 @@ class ReportTests(unittest.TestCase):
                 if not failing:
                     report["run"]["started_at"] = "2026-10-25T23:30:00-04:00"
                 payload = render_slack(report)
-                self.assertEqual(payload["text"], "\n\n".join((title, total, integration, unit, links)))
-                self.assertEqual(payload["text"], "\n\n".join(block["text"]["text"] for block in payload["blocks"]))
+                sections = (title, total, integration, unit, links)
+                self.assertEqual(payload["text"], "\n\n".join((*sections, f"<{RUN['report_url']}|View Report>")))
+                self.assertEqual(list(sections), [block["text"]["text"] for block in payload["blocks"][:-1]])
+                self.assertEqual(
+                    payload["blocks"][-1],
+                    {
+                        "type": "actions",
+                        "elements": [
+                            {
+                                "type": "button",
+                                "text": {"type": "plain_text", "text": "View Report"},
+                                "url": RUN["report_url"],
+                            }
+                        ],
+                    },
+                )
+                self.assertNotIn("runs failed", payload["text"])
+                self.assertNotIn(RUN["report_url"], links)
                 self.assertFalse(payload["unfurl_links"])
                 self.assertFalse(payload["unfurl_media"])
+
+    def test_failure_summary_counts_suites_and_preserves_per_suite_rates(self) -> None:
+        metadata = plan(100)
+        metadata["suites"] = [
+            {"group": group, "id": f"{prefix} ({component})"}
+            for group, prefix in (("integration", "Integration test"), ("unit", "Unit tests"))
+            for component in ("fulfillment-service", "osac-operator", "osac-installer", "osac-metering", "osac-ui")
+        ]
+        observations = [
+            job(iteration=iteration)
+            | {
+                "id": index * 1000 + iteration,
+                "name": f"{suite['group'].title()} repetition {iteration} / {suite['id']} / Run",
+                "conclusion": "failure" if index == 0 and iteration <= 16 else "success",
+            }
+            for index, suite in enumerate(metadata["suites"])
+            for iteration in range(1, 101)
+        ]
+        report = aggregate(metadata, [{"jobs": observations}], [], RUN | {"conclusion": "failure"}, [])
+        slack = render_slack(report)["text"]
+        markdown = render_markdown(report)
+        for text in (slack, markdown):
+            self.assertIn("Failures detected in 1 of 10 suites", text)
+            self.assertNotIn("1.6%", text)
+            self.assertNotIn("3.2%", text)
+        self.assertIn("fulfillment-service: 16/100 executions failed (16%)", slack)
+        self.assertIn("All other 4 suites passed", slack)
+        self.assertIn("All 5 suites passed", slack)
+        self.assertIn("| \U0001f534 fulfillment-service | 16 / 100 | **16.0%** |", markdown)
+        self.assertEqual(markdown.count("| \U0001f7e2"), 9)
+
+    def test_failure_summary_uses_singular_and_excludes_incomplete_only_suites(self) -> None:
+        observations = jobs()
+        observations[0]["conclusion"] = "failure"
+        report = summarize(observations[:-1], conclusion="failure")
+        for text in (render_slack(report)["text"], render_markdown(report)):
+            self.assertIn("Failures detected in 1 of 4 suites — Incomplete report", text)
+            self.assertIn("missing 1", text)
+        metadata = plan() | {"suites": [SUITES[0].copy()]}
+        report = aggregate(metadata, [{"jobs": observations[:3]}], [], RUN | {"conclusion": "failure"}, [])
+        for text in (render_slack(report)["text"], render_markdown(report)):
+            self.assertIn("Failures detected in 1 of 1 suite", text)
+            self.assertNotIn("1 of 1 suites", text)
 
     def test_markdown_layout_and_repository_specific_links(self) -> None:
         observations = jobs()
@@ -307,12 +377,20 @@ class ReportTests(unittest.TestCase):
         )
         markdown = render_markdown(report)
         self.assertTrue(
-            markdown.startswith("# Weekly Test Stability Report\n\n\U0001f534 **Failures detected** | October 19, 2026")
+            markdown.startswith(
+                "# Weekly Test Stability Report\n\n\U0001f534 **Failures detected in 2 of 4 suites** | October 19, 2026"
+            )
         )
         self.assertIn(f"**Commit:** [`{TEST_SHA[:7]}`]({url}/commit/{TEST_SHA})", markdown)
-        self.assertIn("**Coverage:** 4 suites \u00d7 3 executions = 12 executions", markdown)
-        self.assertIn("| \U0001f534 **25.0%** (3/12) | **33.3%** (2/6) | **16.7%** (1/6) | **2/4** |", markdown)
-        self.assertLess(markdown.index("**Integration tests**"), markdown.index("**Unit tests**"))
+        self.assertIn("**Coverage:** 4 suites \u00d7 3 executions per suite", markdown)
+        self.assertNotIn("| Overall |", markdown)
+        self.assertNotIn("| **Integration tests** |", markdown)
+        self.assertNotIn("| **Unit tests** |", markdown)
+        self.assertNotIn("25.0%", markdown)
+        self.assertNotIn("16.7%", markdown)
+        self.assertLess(markdown.index("### Integration tests"), markdown.index("### Unit tests"))
+        self.assertEqual(markdown.count("| Suite | Failed / Recorded | Failure rate |"), 2)
+        self.assertIn("not individual test cases", markdown)
         self.assertIn("| \U0001f534 fulfillment-service | 1 / 3 | **33.3%** |", markdown)
         self.assertIn("| \U0001f534 fulfillment-service | 2 / 3 | **66.7%** |", markdown)
         for group, iteration, job_id in (("UT", 1, 1), ("IT", 1, 2001), ("IT", 2, 2002)):
@@ -334,7 +412,9 @@ class ReportTests(unittest.TestCase):
                 observations[0]["conclusion"] = "failure"
                 report = aggregate(metadata, [{"jobs": observations}], [], RUN | {"conclusion": "failure"}, [])
                 slack = render_slack(report)
-                self.assertTrue(all(len(block["text"]["text"]) <= 3000 for block in slack["blocks"]))
+                self.assertTrue(
+                    all(len(block["text"]["text"]) <= 3000 for block in slack["blocks"] if block["type"] == "section")
+                )
                 if name.startswith("<"):
                     self.assertIn("&lt;@everyone&gt;&amp;a|b", slack["text"])
                     self.assertIn("&lt;@everyone&gt;&amp;a\\|b", render_markdown(report))

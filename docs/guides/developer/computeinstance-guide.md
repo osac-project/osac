@@ -420,7 +420,7 @@ grpcurl $GRPCURL_FLAGS -H "Authorization: Bearer $TOKEN" -d '{
         {"subnet": "<subnet-id>"}
       ],
       "run_strategy": "Always",
-      "user_data": "#cloud-config\nuser: <username>\npassword: <password>\nchpasswd:\n  expire: false"
+      "user_data_source": {"inline": "#cloud-config\nuser: <username>\npassword: <password>\nchpasswd:\n  expire: false"}
     }
   }
 }' $OSAC_API osac.public.v1.ComputeInstances/Create
@@ -453,7 +453,7 @@ curl -fsS $CURL_FLAGS -X POST -H "Authorization: Bearer $TOKEN" \
       {"subnet": "<subnet-id>"}
     ],
     "run_strategy": "Always",
-    "user_data": "#cloud-config\nuser: <username>\npassword: <password>\nchpasswd:\n  expire: false"
+    "user_data_source": {"inline": "#cloud-config\nuser: <username>\npassword: <password>\nchpasswd:\n  expire: false"}
   }
 }' "https://$OSAC_API/api/fulfillment/v1/compute_instances"
 ```
@@ -511,12 +511,13 @@ spec:
   network_attachments:
     - subnet: <subnet-id>
   run_strategy: Always
-  user_data: |
-    #cloud-config
-    user: <username>
-    password: <password>
-    chpasswd:
-      expire: false
+  user_data_source:
+    inline: |
+      #cloud-config
+      user: <username>
+      password: <password>
+      chpasswd:
+        expire: false
 ```
 
 To attach security groups in the YAML, add them to the network attachment:
@@ -589,7 +590,7 @@ Once the ComputeInstance is running, attach to its serial console:
 osac console serial computeinstance <computeinstance-name-or-id>
 ```
 
-Log in with the credentials defined in `user_data`.
+Log in with the credentials defined in `user_data_source.inline`.
 
 > **Tip:** To exit the console, press `Ctrl+]`.
 

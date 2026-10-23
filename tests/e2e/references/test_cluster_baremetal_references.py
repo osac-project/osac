@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 _ENV_SKIP_PATTERNS = [re.compile(r"no host type"), re.compile(r"no instance type")]
 _FABRIC_MANAGER_SKIP_PATTERN = re.compile(r"require a fabric manager")
 
-# A BareMetalInstance requires at least one authentication method (ssh_public_key or
-# user_data) at create time, otherwise the resulting host would be inaccessible.
+# A BareMetalInstance requires SSH or user data (inline or Secret-backed)
+# at create time so that the resulting host is accessible.
 _TEST_SSH_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com"
 )

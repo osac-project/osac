@@ -182,6 +182,13 @@ enum TenantConditionType {
   // - False: Infrastructure is not provisioned, or at least one hub reports it is not ready
   // - Unspecified: Readiness cannot be determined and no hub is known to be not ready
   TENANT_CONDITION_TYPE_COMPUTE_INFRASTRUCTURE_READY = 3;
+
+  // Reports the operator's initial storage onboarding milestone.
+  // True remains latched by the operator after initial onboarding and does not
+  // indicate current readiness of individual storage tiers.
+  // False means completion has not been reported; unspecified means the
+  // operator's status is unknown or could not be observed.
+  TENANT_CONDITION_TYPE_STORAGE_ONBOARDING_COMPLETE = 4;
 }
 
 // Lifecycle states for Tenant resources.

@@ -69,9 +69,8 @@ func computeView(item *publicv1.ComputeInstanceCatalogItem) view {
 		appendPolicyRow(&v.fields, "SSH key", p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
 			formatRef(p.GetLocked()), formatRef(p.GetEditable().GetDefaultValue()))
 	}
-	addSecretRef(&v.fields, "User data secret", fields.GetUserDataSecret())
 	addComputeRunStrategy(&v.fields, fields.GetRunStrategy())
-	addString(&v.fields, "User data", fields.GetUserData(), true)
+	addUserDataSource(&v.fields, fields.GetUserDataSource())
 	addComputeAttachments(&v.fields, fields.GetNetworkAttachments())
 	addBool(&v.fields, "Auto external IP attachment", fields.GetAutoExternalIpAttachment())
 	addComputeDisks(&v.fields, fields.GetAdditionalDisks())

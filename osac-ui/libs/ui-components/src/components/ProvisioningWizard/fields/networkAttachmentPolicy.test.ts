@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { networkAttachmentFieldsFromPolicy } from './networkFields';
+import { networkAttachmentFieldsFromPolicy } from './networkAttachments';
 import { emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 
 describe('networkAttachmentFieldsFromPolicy', () => {

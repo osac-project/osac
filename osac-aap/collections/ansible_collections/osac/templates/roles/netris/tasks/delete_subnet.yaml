@@ -1,13 +1,97 @@
 ---
-# Subnet deletion - removes V-Net first, then IPAM subnet
+# Subnet deletion - removes its V-Net, child prefix, then parent IPAM subnet.
 
-- name: Extract Subnet name
+- name: Extract Subnet identity
   ansible.builtin.set_fact:
     subnet_name: "{{ subnet.metadata.name }}"
+    subnet_ipv4_cidr: "{{ subnet.spec.ipv4Cidr | default('') }}"
+    subnet_virtual_network_id: "{{ subnet.spec.virtualNetwork | default('') }}"
+    is_cudn_evpn: >-
+      {{ (subnet.metadata.annotations | default({})).get('osac.openshift.io/k8s-cleanup-strategy', '') == 'cudn_evpn' }}
 
 - name: Display deletion information
   ansible.builtin.debug:
     msg: "Deleting Netris V-Net + IPAM subnet for Subnet '{{ subnet_name }}'"
+
+- name: Look up VirtualNetwork CR by UUID label
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: VirtualNetwork
+    namespace: "{{ subnet.metadata.namespace }}"
+    label_selectors:
+      - "osac.openshift.io/virtualnetwork-uuid={{ subnet_virtual_network_id }}"
+  register: _vn_lookup
+  when: is_cudn_evpn
+
+- name: Require exactly one parent VirtualNetwork CR
+  ansible.builtin.assert:
+    that:
+      - _vn_lookup.resources | length == 1
+    fail_msg: >-
+      Expected exactly one VirtualNetwork with UUID '{{ subnet_virtual_network_id }}' in
+      namespace '{{ subnet.metadata.namespace }}'; refusing to delete unscoped Netris resources.
+  when: is_cudn_evpn
+
+- name: Set parent VirtualNetwork name
+  ansible.builtin.set_fact:
+    subnet_virtual_network_name: "{{ _vn_lookup.resources[0].metadata.name }}"
+    subnet_virtual_network_vpc_id: "{{ _vn_lookup.resources[0].status.backendNetworkId | default('') }}"
+  when: is_cudn_evpn
+
+- name: Validate the parent VPC ID from VirtualNetwork status
+  ansible.builtin.assert:
+    that:
+      - subnet_virtual_network_vpc_id | string | trim is match('^[1-9][0-9]*$')
+    fail_msg: >-
+      VirtualNetwork '{{ subnet_virtual_network_name }}' has no positive Netris VPC ID in
+      status.backendNetworkId; refusing to delete Subnet resources by name alone.
+  when: is_cudn_evpn
+
+- name: Set parent VPC
+  ansible.builtin.set_fact:
+    _parent_vpc:
+      id: "{{ subnet_virtual_network_vpc_id | int }}"
+  when: is_cudn_evpn
+
+- name: Find the exact IPAM parent for this Subnet
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: find_subnet_by_identity
+  vars:
+    ipam_name: "{{ subnet_name }}"
+    ipam_cidr: "{{ subnet_ipv4_cidr }}"
+    ipam_vpc_id: "{{ _parent_vpc.id }}"
+    ipam_tenant_id: "{{ netris_tenant_id }}"
+  when: is_cudn_evpn
+
+- name: Preserve the exact parent IPAM identity
+  ansible.builtin.set_fact:
+    _subnet_ipam_parent: "{{ ipam_subnet_by_identity }}"
+  when: is_cudn_evpn
+
+- name: Look for a reserved child when its parent IPAM subnet is missing
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: find_subnet_by_identity
+  vars:
+    ipam_name: "{{ subnet_name }}-fabric"
+    ipam_vpc_id: "{{ _parent_vpc.id }}"
+    ipam_tenant_id: "{{ netris_tenant_id }}"
+  when:
+    - is_cudn_evpn
+    - _subnet_ipam_parent is not mapping
+
+- name: Fail if a reserved child remains without its parent identity
+  ansible.builtin.assert:
+    that:
+      - ipam_subnet_by_identity is not mapping
+    fail_msg: >-
+      The parent IPAM subnet '{{ subnet_name }}' is missing while a reserved child
+      IPAM subnet '{{ subnet_name }}-fabric' remains in VPC '{{ _parent_vpc.id }}'
+      and tenant '{{ netris_tenant_id }}'. Refusing cleanup without a verifiable parent.
+  when:
+    - is_cudn_evpn
+    - _subnet_ipam_parent is not mapping
 
 - name: Delete V-Net from Netris controller
   ansible.builtin.include_role:
@@ -15,6 +99,30 @@
     tasks_from: delete
   vars:
     vnet_name: "{{ subnet_name }}"
+    vnet_vpc_id: "{{ _parent_vpc.id }}"
+    vnet_tenant_id: "{{ netris_tenant_id }}"
+  when: is_cudn_evpn
+
+- name: Delete V-Net for a non-EVPN Subnet
+  ansible.builtin.include_role:
+    name: netris.controller.vnet
+    tasks_from: delete
+  vars:
+    vnet_name: "{{ subnet_name }}"
+  when: not is_cudn_evpn
+
+- name: Delete the reserved EVPN fabric IPAM subnet
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: delete_subnet
+  vars:
+    ipam_name: "{{ subnet_name }}-fabric"
+    ipam_vpc_id: "{{ _parent_vpc.id }}"
+    ipam_tenant_id: "{{ netris_tenant_id }}"
+    ipam_parent_id: "{{ _subnet_ipam_parent.id }}"
+  when:
+    - is_cudn_evpn
+    - _subnet_ipam_parent is mapping
 
 - name: Delete IPAM subnet from Netris controller
   ansible.builtin.include_role:
@@ -22,6 +130,18 @@
     tasks_from: delete_subnet
   vars:
     ipam_name: "{{ subnet_name }}"
+    ipam_cidr: "{{ subnet_ipv4_cidr }}"
+    ipam_vpc_id: "{{ _parent_vpc.id }}"
+    ipam_tenant_id: "{{ netris_tenant_id }}"
+  when: is_cudn_evpn
+
+- name: Delete IPAM subnet for a non-EVPN Subnet
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: delete_subnet
+  vars:
+    ipam_name: "{{ subnet_name }}"
+  when: not is_cudn_evpn
 
 - name: Delete fabric output ConfigMap
   kubernetes.core.k8s:

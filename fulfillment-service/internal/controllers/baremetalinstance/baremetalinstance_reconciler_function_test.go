@@ -329,7 +329,7 @@ var _ = Describe("mutateBMI", func() {
 		Expect(params).ToNot(HaveKey("userDataSecret"))
 	})
 
-	It("should leave templateParameters empty when no ssh_public_key or user_data", func() {
+	It("should leave templateParameters empty when no ssh_public_key or user_data_source.inline", func() {
 
 		t := &task{
 			r: &function{
@@ -1459,7 +1459,7 @@ var _ = Describe("ensureUserDataSecret", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: bmiID,
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					UserData: new("#cloud-config\npackages:\n  - vim"),
+					UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config\npackages:\n  - vim")}.Build(),
 				}.Build(),
 			}.Build(),
 			hubNamespace:       hubNamespace,
@@ -1507,7 +1507,7 @@ var _ = Describe("ensureUserDataSecret", func() {
 		t := &task{
 			r: &function{logger: logger, secretsClient: secretsClient},
 			bareMetalInstance: privatev1.BareMetalInstance_builder{Id: bmiID, Spec: privatev1.BareMetalInstanceSpec_builder{
-				UserDataSecret: privatev1.SecretLocalReference_builder{Id: "source-secret-id"}.Build(),
+				UserDataSource: privatev1.UserDataSource_builder{Secret: privatev1.SecretLocalReference_builder{Id: "source-secret-id"}.Build()}.Build(),
 			}.Build()}.Build(),
 			hubNamespace: hubNamespace, hubClient: fakeClient, userDataSecretName: bmiID + userDataSecretSuffix,
 		}
@@ -1523,7 +1523,7 @@ var _ = Describe("ensureUserDataSecret", func() {
 		secretsClient.EXPECT().Get(gomock.Any(), gomock.Any()).Return(nil, errors.New("fetch failed"))
 		t := &task{r: &function{logger: logger, secretsClient: secretsClient},
 			bareMetalInstance: privatev1.BareMetalInstance_builder{Spec: privatev1.BareMetalInstanceSpec_builder{
-				UserDataSecret: privatev1.SecretLocalReference_builder{Id: "source-secret-id"}.Build(),
+				UserDataSource: privatev1.UserDataSource_builder{Secret: privatev1.SecretLocalReference_builder{Id: "source-secret-id"}.Build()}.Build(),
 			}.Build()}.Build(), userDataSecretName: bmiID + userDataSecretSuffix}
 		Expect(t.ensureUserDataSecret(ctx, owner)).To(MatchError(ContainSubstring("fetch failed")))
 	})
@@ -1545,7 +1545,7 @@ var _ = Describe("ensureUserDataSecret", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: bmiID,
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					UserData: new("some-data"),
+					UserDataSource: privatev1.UserDataSource_builder{Inline: new("some-data")}.Build(),
 				}.Build(),
 			}.Build(),
 			hubNamespace:       hubNamespace,
@@ -1576,7 +1576,7 @@ var _ = Describe("ensureUserDataSecret", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: bmiID,
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					UserData: new("some-data"),
+					UserDataSource: privatev1.UserDataSource_builder{Inline: new("some-data")}.Build(),
 				}.Build(),
 			}.Build(),
 			hubNamespace:       hubNamespace,

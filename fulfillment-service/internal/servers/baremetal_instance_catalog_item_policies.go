@@ -59,11 +59,11 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 		return nil, err
 	}
 
-	warnings, err := validateCatalogItemDiskImagePolicy(ctx, scope, fields.GetDiskImage(), diskImagesDao)
+	_, warnings, err := validateCatalogItemDiskImagePolicy(ctx, scope, fields.GetDiskImage(), diskImagesDao)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateCatalogItemUserDataSecretPolicy(ctx, scope, fields.GetUserDataSecret(), secretsDao); err != nil {
+	if err := validateCatalogItemUserDataSourcePolicy(ctx, scope, fields.GetUserDataSource(), secretsDao, validateBareMetalUserData); err != nil {
 		return nil, err
 	}
 
@@ -89,11 +89,8 @@ func applyBareMetalInstanceCatalogItemPolicies(
 	if err := applyPolicy(fields.GetSshPublicKey(), spec.HasSshPublicKey(), spec.SetSshPublicKey, decodeStringPolicy, identity[string]); err != nil {
 		return fmt.Errorf("ssh_public_key: %w", err)
 	}
-	if err := applyPolicy(fields.GetUserData(), spec.HasUserData(), spec.SetUserData, decodeStringPolicy, identity[string]); err != nil {
-		return fmt.Errorf("user_data: %w", err)
-	}
-	if err := applyPolicy(fields.GetUserDataSecret(), spec.GetUserDataSecret() != nil, spec.SetUserDataSecret, decodeSecretReferencePolicy, cloneMessage[*privatev1.SecretLocalReference]); err != nil {
-		return fmt.Errorf("user_data_secret: %w", err)
+	if err := applyPolicy(fields.GetUserDataSource(), spec.GetUserDataSource() != nil, spec.SetUserDataSource, decodeUserDataSourcePolicy, cloneMessage[*privatev1.UserDataSource]); err != nil {
+		return fmt.Errorf("user_data_source: %w", err)
 	}
 	if err := applyPolicy(fields.GetRunStrategy(), spec.HasRunStrategy(), spec.SetRunStrategy, decodeBareMetalInstanceRunStrategyPolicy, identity[privatev1.BareMetalInstanceRunStrategy]); err != nil {
 		return fmt.Errorf("run_strategy: %w", err)
@@ -116,11 +113,6 @@ func applyBareMetalInstanceCatalogItemPolicies(
 // validateBareMetalInstanceCatalogItemScalarPolicies checks supported scalar values and returns the first invalid policy.
 func validateBareMetalInstanceCatalogItemScalarPolicies(fields *privatev1.BareMetalInstanceCatalogItemFields) error {
 	if err := validateCatalogItemStringPolicy(fields.GetSshPublicKey(), "fields.ssh_public_key", validateOpenSSHPublicKey); err != nil {
-		return err
-	}
-	if err := validateCatalogItemStringPolicy(fields.GetUserData(), "fields.user_data", func(value string) error {
-		return validateBareMetalUserData([]byte(value))
-	}); err != nil {
 		return err
 	}
 	if _, err := decodeBareMetalInstanceRunStrategyPolicy(fields.GetRunStrategy()); err != nil {

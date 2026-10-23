@@ -7,7 +7,6 @@ import {
   Architecture,
   DiskImagesCreateResponseSchema,
   GuestOSFamily,
-  ServiceTier,
   SourceType,
 } from '@osac/types';
 import type { Tenant } from '@osac/types/private';
@@ -16,32 +15,6 @@ import DiskImageForm, { DISK_IMAGES_LIST_ROUTE } from './DiskImageForm';
 import type { UserRole } from '../../shellTypes';
 import type { MockTransportOverrides } from '../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../test-utils/TestProviders';
-
-vi.mock('../../hooks/use-session', () => ({
-  useSession: vi.fn(() => ({
-    role: 'tenant-user',
-    username: 'testuser',
-    tenantId: 'tenant-1',
-    enabledServices: [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
-  })),
-}));
-
-const { useSession } = await import('../../hooks/use-session');
-
-const makeSession = (role: UserRole) => ({
-  role,
-  username: 'testuser',
-  tenantId: 'tenant-1',
-  enabledServices: [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
-  userTheme: 'system' as const,
-  resolvedTheme: 'light' as const,
-  setUserTheme: vi.fn(),
-  userContrast: 'system' as const,
-  resolvedContrast: 'glass' as const,
-  setUserContrast: vi.fn(),
-  projects: [],
-  setProjects: vi.fn(),
-});
 
 const makeTenant = (id: string, name: string): Tenant => ({ id, metadata: { name } }) as Tenant;
 
@@ -54,10 +27,15 @@ vi.mock('react-router-dom', async (importOriginal) => {
   };
 });
 
-const renderForm = (overrides?: MockTransportOverrides, tenants: Tenant[] = []) =>
+const renderForm = (
+  overrides?: MockTransportOverrides,
+  tenants: Tenant[] = [],
+  role: UserRole = 'tenant-user',
+) =>
   renderWithProviders(<DiskImageForm />, {
     transportOverrides: overrides,
     apiFixtures: { tenants },
+    session: { role, username: 'testuser', tenantId: 'tenant-1' },
   });
 
 const fillValidForm = async (user: ReturnType<typeof renderForm>['user']) => {
@@ -231,10 +209,6 @@ describe('DiskImageForm', () => {
   });
 
   describe('scope control', () => {
-    beforeEach(() => {
-      vi.mocked(useSession).mockReturnValue(makeSession('tenant-user'));
-    });
-
     it('is absent for a tenant-user session', () => {
       renderForm();
 
@@ -242,15 +216,13 @@ describe('DiskImageForm', () => {
     });
 
     it('is absent for a tenant-admin session', () => {
-      vi.mocked(useSession).mockReturnValue(makeSession('tenant-admin'));
-      renderForm();
+      renderForm(undefined, [], 'tenant-admin');
 
       expect(screen.queryByRole('button', { name: 'Scope' })).not.toBeInTheDocument();
     });
 
     it('renders for a provider-admin session, defaulting to Global', () => {
-      vi.mocked(useSession).mockReturnValue(makeSession('admin'));
-      renderForm(undefined, [makeTenant('tenant-1', 'Tenant One')]);
+      renderForm(undefined, [makeTenant('tenant-1', 'Tenant One')], 'admin');
 
       expect(screen.getByRole('button', { name: 'Scope' })).toHaveTextContent('Global');
     });
@@ -277,7 +249,6 @@ describe('DiskImageForm', () => {
     });
 
     it('includes the selected tenant in the create payload for a provider-admin session', async () => {
-      vi.mocked(useSession).mockReturnValue(makeSession('admin'));
       let captured: Record<string, unknown> | undefined;
       const { user } = renderForm(
         {
@@ -289,6 +260,7 @@ describe('DiskImageForm', () => {
           },
         },
         [makeTenant('tenant-1', 'Tenant One')],
+        'admin',
       );
 
       await fillValidForm(user);

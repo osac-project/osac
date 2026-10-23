@@ -20,7 +20,6 @@ import {
 } from '@osac/types';
 
 import ExternalIpListPage from './ExternalIpListPage';
-import { SessionProvider } from '../../hooks/use-session';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const mockNavigate = vi.fn();
@@ -80,28 +79,24 @@ const renderPage = (
   natGateways: NATGateway[] = [],
   routerEntries?: string[],
 ) =>
-  renderWithProviders(
-    <SessionProvider role="tenant-user" username="test-user" tenantId="test-tenant">
-      <ExternalIpListPage />
-    </SessionProvider>,
-    {
-      apiFixtures: {
-        externalIps,
-        externalIpPools: [makePool('pool-1', 'public-edge')],
-        externalIpAttachments: attachments,
-        natGateways,
-        projects: [
-          {
-            id: 'p-1',
-            metadata: { name: 'default' },
-            spec: { title: 'Default' },
-            status: { state: ProjectState.ACTIVE },
-          } as Project,
-        ],
-      },
-      routerEntries,
+  renderWithProviders(<ExternalIpListPage />, {
+    apiFixtures: {
+      externalIps,
+      externalIpPools: [makePool('pool-1', 'public-edge')],
+      externalIpAttachments: attachments,
+      natGateways,
+      projects: [
+        {
+          id: 'p-1',
+          metadata: { name: 'default' },
+          spec: { title: 'Default' },
+          status: { state: ProjectState.ACTIVE },
+        } as Project,
+      ],
     },
-  );
+    routerEntries,
+    session: { role: 'tenant-user' },
+  });
 
 describe('ExternalIpListPage', () => {
   beforeEach(() => {

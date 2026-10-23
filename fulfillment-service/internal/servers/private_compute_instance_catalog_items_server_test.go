@@ -429,7 +429,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					Title:    "CI catalog item with fields",
 					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-						UserData: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
+						UserDataSource: privatev1.UserDataSourceFieldPolicy_builder{Editable: privatev1.EditableUserDataSourceField_builder{}.Build()}.Build(),
 						RunStrategy: privatev1.ComputeInstanceRunStrategyFieldPolicy_builder{Locked: func() *privatev1.ComputeInstanceRunStrategy {
 							v := privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS
 							return &v
@@ -451,7 +451,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			fetched := getResponse.GetObject()
-			Expect(fetched.GetFields().GetUserData().GetEditable()).ToNot(BeNil())
+			Expect(fetched.GetFields().GetUserDataSource().GetEditable()).ToNot(BeNil())
 			Expect(fetched.GetFields().GetRunStrategy().GetLocked()).To(Equal(privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS))
 		})
 
@@ -635,7 +635,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
 					Id: id,
 					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-						UserData: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
+						UserDataSource: privatev1.UserDataSourceFieldPolicy_builder{Editable: privatev1.EditableUserDataSourceField_builder{}.Build()}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
@@ -852,7 +852,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Title:    "Catalog item without instance type field",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-							UserData: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
+							UserDataSource: privatev1.UserDataSourceFieldPolicy_builder{Editable: privatev1.EditableUserDataSourceField_builder{}.Build()}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -861,6 +861,76 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			})
 
 		})
+
+		DescribeTable("validates inline user data against a fixed Windows image", func(
+			guestOS privatev1.GuestOSFamily, imageLocked, sourceLocked bool, content string, update, invalid bool,
+		) {
+			var imagePolicy *privatev1.DiskImageReferenceFieldPolicy
+			if guestOS != privatev1.GuestOSFamily_GUEST_OS_FAMILY_UNSPECIFIED {
+				image, err := server.diskImagesDao.Create().SetObject(privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{Name: "user-data-image", Tenant: testTenant}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						Lifecycle:     privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
+						GuestOsFamily: guestOS,
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				ref := privatev1.DiskImageReference_builder{Id: image.GetObject().GetId()}.Build()
+				imagePolicy = privatev1.DiskImageReferenceFieldPolicy_builder{Locked: ref}.Build()
+				if !imageLocked {
+					imagePolicy = privatev1.DiskImageReferenceFieldPolicy_builder{
+						Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: ref}.Build(),
+					}.Build()
+				}
+			}
+			source := privatev1.UserDataSource_builder{Inline: &content}.Build()
+			sourcePolicy := privatev1.UserDataSourceFieldPolicy_builder{Locked: source}.Build()
+			if !sourceLocked {
+				sourcePolicy = privatev1.UserDataSourceFieldPolicy_builder{
+					Editable: privatev1.EditableUserDataSourceField_builder{DefaultValue: source}.Build(),
+				}.Build()
+			}
+			fields := privatev1.ComputeInstanceCatalogItemFields_builder{
+				DiskImage: imagePolicy, UserDataSource: sourcePolicy,
+			}.Build()
+			item := privatev1.ComputeInstanceCatalogItem_builder{
+				Metadata: privatev1.Metadata_builder{Name: "user-data-offering", Tenant: testTenant}.Build(),
+				Title:    "User data offering",
+				Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+			}.Build()
+			var err error
+			if update {
+				created, createErr := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{Object: item}.Build())
+				Expect(createErr).NotTo(HaveOccurred())
+				item.SetId(created.GetObject().GetId())
+				item.SetFields(fields)
+				_, err = server.Update(ctx, privatev1.ComputeInstanceCatalogItemsUpdateRequest_builder{
+					Object: item, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"fields"}},
+				}.Build())
+			} else {
+				item.SetFields(fields)
+				_, err = server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{Object: item}.Build())
+			}
+			if invalid {
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("fields.user_data_source.inline"))
+			} else {
+				Expect(err).NotTo(HaveOccurred())
+			}
+		},
+			Entry("accepts locked Windows XML", privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS, true, true, "<unattend/>", false, false),
+			Entry("accepts Windows XML default", privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS, true, false, "<unattend/>", false, false),
+			Entry("rejects invalid locked Windows content", privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS, true, true, "not XML", false, true),
+			Entry("rejects an invalid Windows default", privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS, true, false, "not XML", false, true),
+			Entry("rejects a Windows DTD", privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS, true, true, "<!DOCTYPE unattend><unattend/>", false, true),
+			Entry("rejects explicitly empty Windows content", privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS, true, false, "", false, true),
+			Entry("defers a locked source with an editable Windows image", privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS, false, true, "not XML", false, false),
+			Entry("defers a default source with an editable Windows image", privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS, false, false, "not XML", false, false),
+			Entry("accepts opaque Linux content", privatev1.GuestOSFamily_GUEST_OS_FAMILY_LINUX, true, true, "#cloud-config", false, false),
+			Entry("defers content without an image policy", privatev1.GuestOSFamily_GUEST_OS_FAMILY_UNSPECIFIED, false, true, "not XML", false, false),
+			Entry("rejects invalid Windows content on update", privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS, true, false, "not XML", true, true),
+			Entry("accepts Windows XML on update", privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS, true, false, "<unattend/>", true, false),
+		)
 
 		Describe("Disk image validation in fields", func() {
 			It("Returns warning when fields default references a DEPRECATED disk image on Create", func() {
@@ -1257,7 +1327,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Title:    "Catalog item without disk image field",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-							UserData: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
+							UserDataSource: privatev1.UserDataSourceFieldPolicy_builder{Editable: privatev1.EditableUserDataSourceField_builder{}.Build()}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -1307,8 +1377,8 @@ var _ = Describe("Compute Instance Catalog Item policy application", func() {
 				SizeGib:     privatev1.Int32FieldPolicy_builder{Locked: &bootSize}.Build(),
 				StorageTier: privatev1.StorageTierReferenceFieldPolicy_builder{Locked: storageTier}.Build(),
 			}.Build(),
-			RunStrategy: privatev1.ComputeInstanceRunStrategyFieldPolicy_builder{Locked: &runStrategy}.Build(),
-			UserData:    privatev1.StringFieldPolicy_builder{Locked: &userData}.Build(),
+			RunStrategy:    privatev1.ComputeInstanceRunStrategyFieldPolicy_builder{Locked: &runStrategy}.Build(),
+			UserDataSource: privatev1.UserDataSourceFieldPolicy_builder{Locked: privatev1.UserDataSource_builder{Inline: &userData}.Build()}.Build(),
 			NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{
 				Locked: privatev1.ComputeNetworkAttachmentList_builder{
 					Items: []*privatev1.ComputeNetworkAttachment{computeAttachment},
@@ -1331,7 +1401,7 @@ var _ = Describe("Compute Instance Catalog Item policy application", func() {
 		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(bootSize))
 		Expect(spec.GetBootDisk().GetStorageTier()).NotTo(BeIdenticalTo(storageTier))
 		Expect(spec.GetRunStrategy()).To(Equal(runStrategy))
-		Expect(spec.GetUserData()).To(Equal(userData))
+		Expect(spec.GetUserDataSource().GetInline()).To(Equal(userData))
 		Expect(spec.GetAutoExternalIpAttachment()).To(BeFalse())
 		Expect(spec.GetNetworkAttachments()).To(HaveLen(1))
 		Expect(spec.GetAdditionalDisks().GetItems()).To(HaveLen(2))

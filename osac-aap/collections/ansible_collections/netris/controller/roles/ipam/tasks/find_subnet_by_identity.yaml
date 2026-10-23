@@ -1,0 +1,59 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Query IPAM subnets for the requested identity
+  netris.controller.protected_uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/subnets"
+    method: GET
+    force: true
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
+  register: _ipam_identity_lookup
+  no_log: true
+
+- name: Find IPAM subnets matching the supplied identity
+  ansible.builtin.set_fact:
+    ipam_subnets_by_identity: >-
+      {{ (_ipam_identity_lookup.json.data | default([]))
+         | selectattr('name', 'equalto', ipam_name)
+         | selectattr('vpc.id', 'equalto', ipam_vpc_id | int)
+         | selectattr('tenant.id', 'equalto', ipam_tenant_id | int)
+         | list }}
+
+- name: Filter IPAM subnets by CIDR
+  ansible.builtin.set_fact:
+    ipam_subnets_by_identity: >-
+      {{ ipam_subnets_by_identity
+         | selectattr('prefix', 'equalto', ipam_cidr)
+         | list }}
+  when: ipam_cidr is defined
+
+- name: Filter IPAM subnets by parent
+  ansible.builtin.set_fact:
+    ipam_subnets_by_identity: >-
+      {{ ipam_subnets_by_identity
+         | selectattr('parentID', 'equalto', ipam_parent_id | int)
+         | list }}
+  when: ipam_parent_id is defined
+
+- name: Fail if the IPAM subnet identity is ambiguous
+  ansible.builtin.assert:
+    that:
+      - ipam_subnets_by_identity | length <= 1
+    fail_msg: >-
+      More than one Netris IPAM subnet matches '{{ ipam_name }}' at
+      '{{ ipam_cidr | default('unspecified') }}'
+      with VPC '{{ ipam_vpc_id }}' and tenant '{{ ipam_tenant_id }}'.
+      Refusing to select an ambiguous parent.
+
+- name: Set the matching IPAM subnet identity
+  ansible.builtin.set_fact:
+    ipam_subnet_by_identity: "{{ ipam_subnets_by_identity | first | default(none) }}"

@@ -44,7 +44,11 @@ const TenantListPage = () => {
       title={t('Tenants')}
       description={t('Manage tenants for this cloud platform.')}
       error={error}
-      actions={<CreateButton to="/admin/tenants/create">{t('Create tenant')}</CreateButton>}
+      actions={
+        <CreateButton service={Tenants} to="/admin/tenants/create">
+          {t('Create tenant')}
+        </CreateButton>
+      }
     >
       <ListPageBody isLoading={isLoading} error={error}>
         <Toolbar>

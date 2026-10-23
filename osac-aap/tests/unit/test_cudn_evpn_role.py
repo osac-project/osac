@@ -1,10 +1,34 @@
+import importlib.util
+import ipaddress
 import os
-import subprocess
 from pathlib import Path
+import subprocess
 
 import pytest
 import yaml
 from jinja2 import Environment, StrictUndefined
+from ansible.errors import AnsibleFilterError
+
+
+def _evpn_filter_module():
+    filter_path = (
+        Path(__file__).resolve().parents[2]
+        / "collections"
+        / "ansible_collections"
+        / "osac"
+        / "templates"
+        / "plugins"
+        / "filter"
+        / "evpn_fabric_ipam.py"
+    )
+    spec = importlib.util.spec_from_file_location("evpn_fabric_ipam", filter_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+evpn_fabric_ipam = _evpn_filter_module().evpn_fabric_ipam
 
 
 def _role_metadata_path() -> Path:
@@ -30,6 +54,11 @@ def _raw_create_tasks() -> list[dict]:
     return yaml.safe_load(tasks_path.read_text(encoding="utf-8"))
 
 
+def _raw_delete_tasks() -> list[dict]:
+    tasks_path = _role_path() / "tasks" / "delete_subnet.yaml"
+    return yaml.safe_load(tasks_path.read_text(encoding="utf-8"))
+
+
 def _flatten_tasks(tasks: list[dict]) -> list[dict]:
     flattened = []
     for task in tasks:
@@ -43,7 +72,11 @@ def _create_tasks() -> list[dict]:
     return _flatten_tasks(_raw_create_tasks())
 
 
-def _render_cudn() -> dict:
+def _delete_tasks() -> list[dict]:
+    return _flatten_tasks(_raw_delete_tasks())
+
+
+def _render_cudn(fabric_reserved_range: str = "192.0.2.0/25") -> dict:
     template_path = _role_path() / "templates" / "cudn.yaml.j2"
     template = Environment(undefined=StrictUndefined).from_string(template_path.read_text(encoding="utf-8"))
     rendered = template.render(
@@ -55,7 +88,8 @@ def _render_cudn() -> dict:
         subnet_cidr="192.0.2.0/24",
         l2_vni="10007",
         l3_vni="20007",
-        fabric_reserved_range="192.0.2.1-192.0.2.20",
+        fabric_reserved_range=fabric_reserved_range,
+        _evpn_fabric_ipam=evpn_fabric_ipam(fabric_reserved_range),
     )
     return yaml.safe_load(rendered)
 
@@ -71,7 +105,7 @@ def _run_role_with_inputs(tmp_path: Path, input_overrides: dict) -> subprocess.C
         "template_parameters": {},
         "l2_vni": "10007",
         "l3_vni": "20007",
-        "fabric_reserved_range": "192.0.2.1-192.0.2.20",
+        "fabric_reserved_range": "192.0.2.0/25",
     }
     inputs.update(input_overrides)
     playbook = [
@@ -139,6 +173,7 @@ def test_required_fabric_outputs_are_checked_before_kubernetes_writes() -> None:
     assert "Validate EVPN fabric outputs" in task_names
 
     validation_index = task_names.index("Validate EVPN fabric outputs")
+    derive_index = task_names.index("Derive OVN-safe gateway and reserved ranges")
     kubernetes_write_indices = [index for index, task in enumerate(tasks) if "kubernetes.core.k8s" in task]
     assert kubernetes_write_indices
     assert validation_index < min(kubernetes_write_indices)
@@ -148,6 +183,7 @@ def test_required_fabric_outputs_are_checked_before_kubernetes_writes() -> None:
     assert any("l2_vni" in condition for condition in validation["that"])
     assert any("l3_vni" in condition for condition in validation["that"])
     assert any("fabric_reserved_range" in condition for condition in validation["that"])
+    assert validation_index < derive_index < min(kubernetes_write_indices)
 
 
 @pytest.mark.parametrize(
@@ -155,6 +191,8 @@ def test_required_fabric_outputs_are_checked_before_kubernetes_writes() -> None:
     [
         {"fabric_reserved_range": ""},
         {"fabric_reserved_range": "  "},
+        {"fabric_reserved_range": "192.0.2.1/26"},
+        {"fabric_reserved_range": "192.0.2.1-192.0.2.20"},
         {"l2_vni": "0"},
         {"l2_vni": "not-a-vni"},
         {"l3_vni": "16777216"},
@@ -178,7 +216,7 @@ def test_missing_fabric_range_fails_argument_validation_before_namespace_write(t
     assert "Create tenant workload namespace" not in output
 
 
-def test_cudn_template_carries_evpn_identity_and_fabric_range() -> None:
+def test_cudn_template_separates_infrastructure_ips_from_netris_dhcp_range() -> None:
     cudn = _render_cudn()
 
     assert cudn["kind"] == "ClusterUserDefinedNetwork"
@@ -201,9 +239,97 @@ def test_cudn_template_carries_evpn_identity_and_fabric_range() -> None:
     assert network["transport"] == "EVPN"
     assert network["layer2"]["role"] == "Primary"
     assert network["layer2"]["subnets"] == ["192.0.2.0/24"]
-    assert network["layer2"]["reservedSubnets"] == ["192.0.2.1-192.0.2.20"]
-    assert "defaultGatewayIPs" not in network["layer2"]
+    assert network["layer2"]["defaultGatewayIPs"] == ["192.0.2.1"]
+    assert network["layer2"]["infrastructureSubnets"] == ["192.0.2.1/32", "192.0.2.2/32"]
+    assert network["layer2"]["reservedSubnets"] == [
+        "192.0.2.0/32",
+        "192.0.2.3/32",
+        "192.0.2.4/30",
+        "192.0.2.8/29",
+        "192.0.2.16/28",
+        "192.0.2.32/27",
+        "192.0.2.64/26",
+    ]
+    reserved_addresses = {
+        address
+        for cidr in network["layer2"]["reservedSubnets"]
+        for address in ipaddress.ip_network(cidr)
+    }
+    assert ipaddress.ip_address("192.0.2.1") not in reserved_addresses
+    assert ipaddress.ip_address("192.0.2.2") not in reserved_addresses
+    assert ipaddress.ip_address("192.0.2.3") in reserved_addresses
+    assert ipaddress.ip_address("192.0.2.1") in {
+        address
+        for cidr in network["layer2"]["infrastructureSubnets"]
+        for address in ipaddress.ip_network(cidr)
+    }
+    assert ipaddress.ip_address("192.0.2.2") in {
+        address
+        for cidr in network["layer2"]["infrastructureSubnets"]
+        for address in ipaddress.ip_network(cidr)
+    }
     assert network["evpn"] == {"vtep": "tenant-vtep", "macVRF": {"vni": 10007}, "ipVRF": {"vni": 20007}}
+
+
+@pytest.mark.parametrize(
+    ("reserved_range", "gateway", "reserved_subnets"),
+    [
+        (
+            "192.0.2.0/25",
+            "192.0.2.1",
+            [
+                "192.0.2.0/32",
+                "192.0.2.3/32",
+                "192.0.2.4/30",
+                "192.0.2.8/29",
+                "192.0.2.16/28",
+                "192.0.2.32/27",
+                "192.0.2.64/26",
+            ],
+        ),
+        (
+            "192.0.2.0/26",
+            "192.0.2.1",
+            ["192.0.2.0/32", "192.0.2.3/32", "192.0.2.4/30", "192.0.2.8/29", "192.0.2.16/28", "192.0.2.32/27"],
+        ),
+        ("198.51.100.8/30", "198.51.100.9", ["198.51.100.8/32", "198.51.100.11/32"]),
+        ("192.0.2.0/30", "192.0.2.1", ["192.0.2.0/32", "192.0.2.3/32"]),
+        ("192.0.2.0/29", "192.0.2.1", ["192.0.2.0/32", "192.0.2.3/32", "192.0.2.4/30"]),
+    ],
+)
+def test_evpn_fabric_ipam_split_is_complete_and_infrastructure_disjoint(
+    reserved_range: str, gateway: str, reserved_subnets: list[str]
+) -> None:
+    result = evpn_fabric_ipam(reserved_range)
+    management_ip = str(ipaddress.ip_address(int(ipaddress.ip_network(reserved_range).network_address) + 2))
+
+    assert result["gateway_ip"] == gateway
+    assert result["gateway_infrastructure_subnet"] == f"{gateway}/32"
+    assert result["management_infrastructure_subnet"] == f"{management_ip}/32"
+    assert result["reserved_subnets"] == reserved_subnets
+
+    original = set(ipaddress.ip_network(reserved_range))
+    allocated = set().union(*(set(ipaddress.ip_network(cidr)) for cidr in reserved_subnets))
+    assert original - allocated == {ipaddress.ip_address(gateway), ipaddress.ip_address(management_ip)}
+    assert all(
+        ipaddress.ip_address(infrastructure_ip) not in ipaddress.ip_network(cidr)
+        for infrastructure_ip in (gateway, management_ip)
+        for cidr in reserved_subnets
+    )
+
+
+@pytest.mark.parametrize(
+    "reserved_range",
+    ["192.0.2.1/26", "192.0.2.1-192.0.2.20", "2001:db8::/64", "192.0.2.0/31"],
+)
+def test_evpn_fabric_ipam_rejects_noncanonical_or_unsupported_ranges(reserved_range: str) -> None:
+    with pytest.raises(AnsibleFilterError, match="No Kubernetes resources were changed"):
+        evpn_fabric_ipam(reserved_range)
+
+
+def test_evpn_fabric_ipam_fails_closed_when_open_shift_reserved_subnet_limit_would_be_exceeded() -> None:
+    with pytest.raises(AnsibleFilterError, match="at most 25"):
+        evpn_fabric_ipam("4.0.0.0/6")
 
 
 def test_role_creates_tenant_namespace_and_waits_for_cudn_ready() -> None:
@@ -282,6 +408,111 @@ def test_cudn_readiness_wait_rejects_ready_from_an_older_generation() -> None:
     assert evaluate(4)
 
 
+@pytest.mark.parametrize(
+    ("changes", "expected"),
+    [
+        ({}, True),
+        ({"TransportAccepted": {"status": "False"}}, False),
+        ({"NetworkCreated": {"status": "Unknown"}}, False),
+        ({"NetworkAllocationSucceeded": {"status": "False"}}, False),
+        ({"NetworkCreated": None}, False),
+        ({"NetworkCreated": {"observedGeneration": 3}}, False),
+        ({"NetworkCreated": {"observedGeneration": 4}}, True),
+        ({"Ready": {"status": "False", "observedGeneration": 4}}, False),
+    ],
+)
+def test_native_evpn_conditions_require_acceptance_creation_and_allocation(changes: dict, expected: bool) -> None:
+    task = next(t for t in _create_tasks() if t.get("name") == "Wait for current CUDN generation to be Ready")
+    evaluate = Environment().compile_expression(task["until"])
+    conditions = {t: {"type": t, "status": "True"}
+                  for t in ["TransportAccepted", "NetworkCreated", "NetworkAllocationSucceeded"]}
+    for name, change in changes.items():
+        if change is None:
+            conditions.pop(name)
+        else:
+            conditions.setdefault(name, {"type": name}).update(change)
+    resource = {"metadata": {"generation": 4}, "status": {"conditions": list(conditions.values())}}
+    assert bool(evaluate(cudn_status={"resources": [resource]})) == expected
+
+
+@pytest.mark.parametrize(
+    ("conditions", "expected"),
+    [
+        ([{"type": "Ready", "status": "True", "observedGeneration": 4}], True),
+        ([{"type": "Ready", "status": "True", "observedGeneration": 3}], False),
+        ([{"type": "Ready", "status": "False", "observedGeneration": 4},
+          {"type": "TransportAccepted", "status": "True"},
+          {"type": "NetworkCreated", "status": "True"},
+          {"type": "NetworkAllocationSucceeded", "status": "True"}], False),
+        ([{"type": "TransportAccepted", "status": "True"},
+          {"type": "NetworkCreated", "status": "True"},
+          {"type": "NetworkAllocationSucceeded", "status": "True"}], False),
+        ([{"type": "TransportAccepted", "status": "True"},
+          {"type": "NetworkCreated", "status": "False"},
+          {"type": "NetworkAllocationSucceeded", "status": "True"}], False),
+        ([{"type": "TransportAccepted", "status": "True"},
+          {"type": "NetworkCreated", "status": "True", "observedGeneration": 3},
+          {"type": "NetworkAllocationSucceeded", "status": "True"}], False),
+        ([{"type": "TransportAccepted", "status": "True", "observedGeneration": 4},
+          {"type": "NetworkCreated", "status": "True", "observedGeneration": 4},
+          {"type": "NetworkAllocationSucceeded", "status": "True", "observedGeneration": 4}], True),
+        ([{"type": "TransportAccepted", "status": "True", "observedGeneration": 4},
+          {"type": "NetworkCreated", "status": "True"},
+          {"type": "NetworkAllocationSucceeded", "status": "True", "observedGeneration": 4}], False),
+    ],
+)
+def test_owner_handoff_wait_accepts_native_cudn_conditions(conditions: list[dict], expected: bool) -> None:
+    task = next(t for t in _delete_tasks() if t.get("name") == "Wait for successor CUDN generation to be Ready before deleting its old owner")
+    evaluate = Environment().compile_expression(task["until"])
+    resource = {"metadata": {"generation": 4}, "status": {"conditions": conditions}}
+    result = evaluate(_cudn_successor_status={"resources": [resource]})
+    assert bool(result) is expected
+
+
+def test_owner_handoff_vrf_status_is_optional_for_native_cudn() -> None:
+    tasks = _delete_tasks()
+    validate = next(t for t in tasks if t.get("name") == "Validate successor CUDN VRF status")
+    assert validate["when"][-1] == "_cudn_successor_status.resources[0].status.vrfName is defined"
+    assert validate["ansible.builtin.assert"]["that"] == [
+        "_cudn_successor_status.resources[0].status.vrfName is string",
+        "_cudn_successor_status.resources[0].status.vrfName | string | trim | length > 0",
+    ]
+
+
+def test_owner_handoff_waits_for_successor_before_transferring_lease() -> None:
+    tasks = _delete_tasks()
+    names = [task.get("name") for task in tasks]
+    wait_index = names.index("Wait for successor CUDN generation to be Ready before deleting its old owner")
+    validate_index = names.index("Validate successor CUDN VRF status")
+    transfer_index = names.index("Transfer persisted owner after successor CUDN is Ready")
+    namespace_delete_index = names.index("Delete Subnet namespace")
+    assert wait_index < validate_index < transfer_index < namespace_delete_index
+
+
+@pytest.mark.parametrize("vrf_name", [None, "tenant-vrf"])
+def test_status_export_supports_the_native_api_without_vrf_name(tmp_path: Path, vrf_name: str | None) -> None:
+    tasks = _create_tasks()
+    selected = [t for t in tasks if t.get("name") in ["Validate CUDN VRF status", "Export CUDN status"]]
+    status = {} if vrf_name is None else {"vrfName": vrf_name}
+    playbook = tmp_path / "export_status.yaml"
+    playbook.write_text(yaml.safe_dump([{
+        "hosts": "localhost", "gather_facts": False,
+        "vars": {"vnet_name": "test-vnet", "subnet_name": "test-subnet",
+                 "cudn_status": {"resources": [{"status": status}]}},
+        "tasks": [*selected, {"name": "Check exported statistics", "ansible.builtin.assert": {
+            "that": ["export_result.ansible_stats.data.cudn_name == 'test-vnet'",
+                     "export_result.ansible_stats.data.cudn_namespace == 'test-subnet'",
+                     "export_result.ansible_stats.data.vrf_name == 'tenant-vrf'" if vrf_name else
+                     "'vrf_name' not in export_result.ansible_stats.data"]}}],
+    }], sort_keys=False))
+    data = yaml.safe_load(playbook.read_text())
+    data[0]["tasks"][1]["register"] = "export_result"
+    playbook.write_text(yaml.safe_dump(data, sort_keys=False))
+    result = subprocess.run(["ansible-playbook", "-i", "localhost,", "-c", "local", str(playbook)],
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_shared_cudn_is_parent_owned_and_reconciled_only_by_current_owner() -> None:
     tasks = _create_tasks()
     task_names = [task.get("name") for task in tasks]
@@ -294,7 +525,6 @@ def test_shared_cudn_is_parent_owned_and_reconciled_only_by_current_owner() -> N
     assertion = tasks[validate_index]["ansible.builtin.assert"]
     assert "owner-reference" in assertion["that"][0]
     assert "virtualnetwork-uuid" in assertion["that"][0]
-    assert "virtualnetwork-namespace" in assertion["that"][0]
     assert "tenant" in assertion["that"][0]
     assert "Refusing to manage this shared resource" in assertion["fail_msg"]
     assert tasks[apply_index]["kubernetes.core.k8s"]["state"] == "present"
@@ -304,6 +534,132 @@ def test_shared_cudn_is_parent_owned_and_reconciled_only_by_current_owner() -> N
     assert owner_block["when"][0] == "_cudn_owner_subnet_name == subnet_name"
     owner_block_names = [task.get("name") for task in _flatten_tasks(owner_block["block"])]
     assert "Create tenant workload namespace" in owner_block_names
+
+
+@pytest.mark.parametrize(
+    ("compute_instances", "expected_siblings"),
+    [
+        ([], []),
+        (
+            [{"spec": {"networkAttachments": [{"subnetRef": "live-sibling"}]}}],
+            ["live-sibling"],
+        ),
+    ],
+)
+def test_delete_identifies_compute_instance_siblings_after_extracting_refs(
+    tmp_path: Path, compute_instances: list[dict], expected_siblings: list[str]
+) -> None:
+    tasks = _delete_tasks()
+    task_names = [task.get("name") for task in tasks]
+    extract_index = task_names.index("Extract Subnet references from ComputeInstances")
+    preserve_index = task_names.index("Preserve sibling Subnets referenced by ComputeInstances")
+    assert extract_index < preserve_index
+
+    playbook = tmp_path / "compute_instance_siblings.yaml"
+    playbook.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "hosts": "localhost",
+                    "connection": "local",
+                    "gather_facts": False,
+                    "vars": {
+                        "_compute_instance_lookup": {"resources": compute_instances},
+                        "cudn_evpn_sibling_subnets": [
+                            {"metadata": {"name": "live-sibling"}},
+                            {"metadata": {"name": "unused-sibling"}},
+                        ],
+                        "cudn_evpn_live_siblings": [],
+                        "expected_siblings": expected_siblings,
+                    },
+                    "tasks": [
+                        tasks[extract_index],
+                        tasks[preserve_index],
+                        {
+                            "name": "Check retained sibling Subnets",
+                            "ansible.builtin.assert": {
+                                "that": [
+                                    "cudn_evpn_live_siblings | map(attribute='metadata.name') | list == expected_siblings"
+                                ]
+                            },
+                        },
+                    ],
+                }
+            ],
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["ansible-playbook", "--inventory", "localhost,", str(playbook)],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_delete_owner_handoff_derives_gateway_ipam_template_data() -> None:
+    tasks = _delete_tasks()
+    task_names = [task.get("name") for task in tasks]
+    variables_index = task_names.index("Set CUDN template variables from the successor")
+    apply_index = task_names.index("Apply the CUDN for the successor before deleting its current owner")
+    template_variables = tasks[variables_index]["ansible.builtin.set_fact"]
+
+    assert variables_index < apply_index
+    assert template_variables["_evpn_fabric_ipam"] == (
+        "{{ _cudn_next_owner_reserved_range | osac.templates.evpn_fabric_ipam }}"
+    )
+
+
+def test_delete_owner_handoff_reserves_first_half_of_successor_subnet(tmp_path: Path) -> None:
+    tasks = _delete_tasks()
+    range_task = next(task for task in tasks if task.get("name") == "Calculate the successor EVPN reserved range")
+    playbook = tmp_path / "successor_fabric_range.yaml"
+    playbook.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "hosts": "localhost",
+                    "connection": "local",
+                    "gather_facts": False,
+                    "vars": {
+                        "_cudn_owner_subnet_name": "deleting-subnet",
+                        "_deleting_subnet_name": "deleting-subnet",
+                        "_cudn_evpn_next_owner": {
+                            "metadata": {"name": "successor-subnet"},
+                            "spec": {"ipv4Cidr": "192.0.2.0/24"},
+                        },
+                    },
+                    "tasks": [
+                        range_task,
+                        {
+                            "name": "Assert successor split",
+                            "ansible.builtin.assert": {
+                                "that": [
+                                    "_cudn_next_owner_reserved_prefix | int == 25",
+                                    "_cudn_next_owner_reserved_range == '192.0.2.0/25'",
+                                ]
+                            },
+                        },
+                    ],
+                }
+            ],
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["ansible-playbook", "--inventory", "localhost,", str(playbook)],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_existing_sibling_namespaces_are_backfilled_before_cudn_selector_migration() -> None:

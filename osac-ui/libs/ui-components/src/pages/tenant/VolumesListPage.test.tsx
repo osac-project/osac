@@ -13,7 +13,6 @@ import {
 import { mockQueryResult } from '@osac/ui-components/test-utils/query';
 
 import { VolumesListPage } from './VolumesListPage';
-import { SessionProvider } from '../../hooks/use-session';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const makeVolume = (id: string, name: string, state: VolumeState = VolumeState.AVAILABLE): Volume =>
@@ -48,11 +47,7 @@ vi.mock('../../components/Page/ProjectFilter', () => ({
 const { useListResource } = await import('../../api/use-resource');
 
 const renderPage = () =>
-  renderWithProviders(
-    <SessionProvider role="tenant-user" username="test-user" tenantId="test-tenant">
-      <VolumesListPage />
-    </SessionProvider>,
-  );
+  renderWithProviders(<VolumesListPage />, { session: { role: 'tenant-user' } });
 
 describe('VolumesListPage', () => {
   beforeEach(() => {

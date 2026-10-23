@@ -26,6 +26,17 @@ jobs:
     suite: caas
     filters: [caas-outside-known-safe]
     filters_any: [e2e-code, e2e-suite]
+  # A second box for the CaaS suite, for someone adding or changing a regression test: it starts the same suite, on the same
+  # line (so the `E2E` check counts it like the suite), with the regression tests as well as the sanity tests. Never
+  # chosen by the decision and not used by the merge queue. See .github/CI.md.
+  e2e-caas-full:
+    kind: e2e
+    check: "E2E / CaaS Full Install"
+    suite: caas-full
+    manual_only: true
+    variant_of: caas
+    tier: full
+    label: "CaaS Full Install · sanity + regression"
   e2e-bmaas:
     kind: e2e
     check: "E2E / BMaaS Full Install"

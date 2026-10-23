@@ -26,6 +26,7 @@ import "osac/private/v1/compute_instance_common_type.proto";
 import "osac/private/v1/disk_image_type.proto";
 import "osac/private/v1/instance_type_type.proto";
 import "osac/private/v1/secret_type.proto";
+import "osac/private/v1/user_data_source_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -281,4 +282,19 @@ message TemplateParameterPolicy {
 // Configures an editable template parameter.
 message EditableTemplateParameter {
   google.protobuf.Any default_value = 1;
+}
+
+// Defines whether the complete user data source is locked or editable.
+message UserDataSourceFieldPolicy {
+  oneof behavior {
+    option (buf.validate.oneof).required = true;
+
+    UserDataSource locked = 1;
+    EditableUserDataSourceField editable = 2;
+  }
+}
+
+// Configures an editable user data source. A caller-supplied source replaces the entire default.
+message EditableUserDataSourceField {
+  UserDataSource default_value = 1;
 }

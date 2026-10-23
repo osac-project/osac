@@ -306,6 +306,32 @@ var _ = Describe("deployed MCP server", func() {
 			g.Expect(pods.Items).To(BeEmpty())
 		}, time.Minute, time.Second).Should(Succeed())
 
+		claims, parseErr := parseJWTClaims(token)
+		issuedAt, iatErr := claims.GetIssuedAt()
+		expiresAt, expErr := claims.GetExpirationTime()
+		switch {
+		case parseErr != nil:
+			logger.WarnContext(ctx, "MCP outage token timing unavailable",
+				"reason", "claims_parse_failed",
+			)
+		case iatErr != nil || expErr != nil:
+			logger.WarnContext(ctx, "MCP outage token timing unavailable",
+				"reason", "invalid_timing_claims",
+			)
+		case issuedAt == nil || expiresAt == nil:
+			logger.WarnContext(ctx, "MCP outage token timing unavailable",
+				"reason", "missing_timing_claims",
+			)
+		default:
+			now := time.Now().UTC()
+			logger.InfoContext(ctx, "MCP outage token timing",
+				"now", now.Format(time.RFC3339Nano),
+				"iat", issuedAt.UTC(), "exp", expiresAt.UTC(),
+				"lifetime_seconds", expiresAt.Sub(issuedAt.Time).Seconds(),
+				"remaining_seconds", expiresAt.Sub(now).Seconds(),
+			)
+		}
+
 		Eventually(func(g Gomega) {
 			_, err = callDeployedMCPTool[mcpserver.CheckConnectionOutput](
 				ctx, endpoint, token, "check_connection", mcpserver.CheckConnectionInput{},

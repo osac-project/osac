@@ -225,7 +225,7 @@ func (t *task) update(ctx context.Context) error {
 	}
 	existingObject := object != nil
 
-	if t.bareMetalInstance.GetSpec().HasUserData() || t.bareMetalInstance.GetSpec().GetUserDataSecret() != nil {
+	if t.bareMetalInstance.GetSpec().GetUserDataSource() != nil {
 		t.userDataSecretName = fmt.Sprintf("%s%s", t.bareMetalInstance.GetId(), userDataSecretSuffix)
 	}
 
@@ -990,19 +990,19 @@ func (t *task) ensureUserDataSecret(ctx context.Context, owner *bmfov1alpha1.Bar
 }
 
 func (t *task) resolveUserData(ctx context.Context) (string, error) {
-	ref := t.bareMetalInstance.GetSpec().GetUserDataSecret()
+	ref := t.bareMetalInstance.GetSpec().GetUserDataSource().GetSecret()
 	if ref == nil {
-		return t.bareMetalInstance.GetSpec().GetUserData(), nil
+		return t.bareMetalInstance.GetSpec().GetUserDataSource().GetInline(), nil
 	}
 	if t.r.secretsClient == nil {
-		return "", errors.New("secrets client is required to resolve user_data_secret")
+		return "", errors.New("secrets client is required to resolve user_data_source.secret")
 	}
 	if ref.GetId() == "" {
-		return "", errors.New("user_data_secret must have an id")
+		return "", errors.New("user_data_source.secret must have an id")
 	}
 	response, err := t.r.secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{Id: ref.GetId()}.Build())
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch user_data_secret: %w", err)
+		return "", fmt.Errorf("failed to fetch user_data_source.secret: %w", err)
 	}
 	value, ok := response.GetObject().GetData()[userDataSecretKey]
 	if !ok || len(value) == 0 {

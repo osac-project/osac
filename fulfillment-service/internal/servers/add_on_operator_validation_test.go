@@ -40,7 +40,7 @@ var _ = Describe("Add-on operator graph", func() {
 			privatev1.AddOnOperatorLocalReference_builder{Id: right.GetId()}.Build(),
 		})
 
-		selected, fields, order, err := newAddOnOperatorGraph(graphTestResolver(map[string]*privatev1.AddOnOperator{
+		selected, fields, err := newAddOnOperatorGraph(graphTestResolver(map[string]*privatev1.AddOnOperator{
 			shared.GetId(): shared,
 			left.GetId():   left,
 			right.GetId():  right,
@@ -51,7 +51,6 @@ var _ = Describe("Add-on operator graph", func() {
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(selected).To(HaveLen(4))
-		Expect(order).To(Equal([]string{"shared", "left", "right", "root"}))
 		Expect(fields[root.GetId()]).To(Equal("spec.add_on_operators[0]"))
 	})
 
@@ -65,7 +64,7 @@ var _ = Describe("Add-on operator graph", func() {
 			privatev1.AddOnOperatorLocalReference_builder{Id: first.GetId()}.Build(),
 		})
 
-		_, _, _, err := newAddOnOperatorGraph(graphTestResolver(map[string]*privatev1.AddOnOperator{
+		_, _, err := newAddOnOperatorGraph(graphTestResolver(map[string]*privatev1.AddOnOperator{
 			first.GetId():  first,
 			second.GetId(): second,
 		})).resolveAndExpand(context.Background(), &privatev1.Metadata{}, []*privatev1.AddOnOperatorReference{
@@ -88,7 +87,7 @@ var _ = Describe("Add-on operator graph", func() {
 		}
 		root.SetDependencies(dependencies)
 
-		_, _, _, err := newAddOnOperatorGraph(graphTestResolver(operators)).resolveAndExpand(
+		_, _, err := newAddOnOperatorGraph(graphTestResolver(operators)).resolveAndExpand(
 			context.Background(), &privatev1.Metadata{}, []*privatev1.AddOnOperatorReference{
 				privatev1.AddOnOperatorReference_builder{Id: root.GetId()}.Build(),
 			})
@@ -110,7 +109,7 @@ var _ = Describe("Add-on operator graph", func() {
 		}
 		root.SetDependencies(dependencies)
 
-		_, _, _, err := newAddOnOperatorGraph(graphTestResolver(operators)).resolveAndExpand(
+		_, _, err := newAddOnOperatorGraph(graphTestResolver(operators)).resolveAndExpand(
 			context.Background(), &privatev1.Metadata{}, []*privatev1.AddOnOperatorReference{
 				privatev1.AddOnOperatorReference_builder{Id: root.GetId()}.Build(),
 			})

@@ -585,6 +585,76 @@ var _ = Describe("Reflection helper", func() {
 			)).To(BeTrue())
 		})
 
+		It("Computes an explicit map mask for a removed final label", func() {
+			// Register a clusters server that responds to the update request:
+			publicv1.RegisterClustersServer(server.Registrar(), &testing.ClustersServerFuncs{
+				UpdateFunc: func(ctx context.Context, request *publicv1.ClustersUpdateRequest,
+				) (response *publicv1.ClustersUpdateResponse, err error) {
+					defer GinkgoRecover()
+					// An emptied labels map is indistinguishable from
+					// omission without an explicit mask:
+					Expect(request.GetUpdateMask().GetPaths()).To(ConsistOf("metadata.labels"))
+					response = publicv1.ClustersUpdateResponse_builder{
+						Object: request.GetObject(),
+					}.Build()
+					return
+				},
+			})
+
+			// Start the server:
+			server.Start()
+
+			// Use the helper to remove the final label, and verify that the
+			// computed mask reaches the wire:
+			objectHelper := helper.Lookup("cluster")
+			Expect(objectHelper).ToNot(BeNil())
+			original := publicv1.Cluster_builder{
+				Id: "123",
+				Metadata: publicv1.Metadata_builder{
+					Labels: map[string]string{"team": "x"},
+				}.Build(),
+			}.Build()
+			edited := proto.Clone(original).(*publicv1.Cluster)
+			edited.GetMetadata().SetLabels(map[string]string{})
+			_, err := objectHelper.UpdateWithMask(ctx, original, edited)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("Computes an explicit map mask for a removed final annotation", func() {
+			// Register a clusters server that responds to the update request:
+			publicv1.RegisterClustersServer(server.Registrar(), &testing.ClustersServerFuncs{
+				UpdateFunc: func(ctx context.Context, request *publicv1.ClustersUpdateRequest,
+				) (response *publicv1.ClustersUpdateResponse, err error) {
+					defer GinkgoRecover()
+					// An emptied annotations map is indistinguishable from
+					// omission without an explicit mask:
+					Expect(request.GetUpdateMask().GetPaths()).To(ConsistOf("metadata.annotations"))
+					response = publicv1.ClustersUpdateResponse_builder{
+						Object: request.GetObject(),
+					}.Build()
+					return
+				},
+			})
+
+			// Start the server:
+			server.Start()
+
+			// Use the helper to remove the final annotation, and verify that
+			// the computed mask reaches the wire:
+			objectHelper := helper.Lookup("cluster")
+			Expect(objectHelper).ToNot(BeNil())
+			original := publicv1.Cluster_builder{
+				Id: "123",
+				Metadata: publicv1.Metadata_builder{
+					Annotations: map[string]string{"note": "x"},
+				}.Build(),
+			}.Build()
+			edited := proto.Clone(original).(*publicv1.Cluster)
+			edited.GetMetadata().SetAnnotations(map[string]string{})
+			_, err := objectHelper.UpdateWithMask(ctx, original, edited)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
 		It("Invokes delete method", func() {
 			// Register a clusters server that responds to the delete request:
 			publicv1.RegisterClustersServer(server.Registrar(), &testing.ClustersServerFuncs{

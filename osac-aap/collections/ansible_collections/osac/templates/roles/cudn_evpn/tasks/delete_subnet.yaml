@@ -83,7 +83,7 @@
         namespace: "{{ subnet.metadata.namespace }}"
       register: _compute_instance_lookup
 
-    - name: Identify sibling Subnets referenced by ComputeInstances
+    - name: Extract Subnet references from ComputeInstances
       ansible.builtin.set_fact:
         _compute_instance_subnet_refs: >-
           {{ _compute_instance_lookup.resources | default([])
@@ -91,6 +91,9 @@
              | flatten
              | map(attribute='subnetRef', default='')
              | list }}
+
+    - name: Preserve sibling Subnets referenced by ComputeInstances
+      ansible.builtin.set_fact:
         cudn_evpn_live_siblings: >-
           {{ cudn_evpn_live_siblings + (cudn_evpn_sibling_subnets
              | selectattr('metadata.name', 'in', _compute_instance_subnet_refs)
@@ -287,10 +290,10 @@
       ansible.builtin.set_fact:
         _cudn_next_owner_subnet_cidr: "{{ _cudn_evpn_next_owner.spec.ipv4Cidr | default('') }}"
         _cudn_next_owner_reserved_prefix: >-
-          {{ (_cudn_evpn_next_owner.spec.ipv4Cidr | ansible.utils.ipaddr('prefix') | int) + 2 }}
+          {{ (_cudn_evpn_next_owner.spec.ipv4Cidr | ansible.utils.ipaddr('prefix') | int) + 1 }}
         _cudn_next_owner_reserved_range: >-
           {{ _cudn_evpn_next_owner.spec.ipv4Cidr | ansible.utils.ipaddr('network') }}/{{
-             (_cudn_evpn_next_owner.spec.ipv4Cidr | ansible.utils.ipaddr('prefix') | int) + 2 }}
+             (_cudn_evpn_next_owner.spec.ipv4Cidr | ansible.utils.ipaddr('prefix') | int) + 1 }}
       when:
         - _cudn_owner_subnet_name == _deleting_subnet_name
         - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0
@@ -301,7 +304,7 @@
           - _cudn_next_owner_fabric_output.resources | default([]) | length == 1
           - _cudn_next_owner_subnet_cidr | ansible.utils.ipaddr('version') == 4
           - _cudn_next_owner_subnet_cidr | ansible.utils.ipaddr('network/prefix') == _cudn_next_owner_subnet_cidr
-          - _cudn_next_owner_subnet_cidr | ansible.utils.ipaddr('prefix') | int <= 28
+          - _cudn_next_owner_subnet_cidr | ansible.utils.ipaddr('prefix') | int <= 29
           - >-
             (_cudn_next_owner_fabric_output.resources[0].data.l2_vni | default('') | string) is match('^[0-9]+$') and
             (_cudn_next_owner_fabric_output.resources[0].data.l2_vni | int) >= 1 and
@@ -382,6 +385,7 @@
         subnet_name: "{{ _cudn_evpn_next_owner.metadata.name }}"
         subnet_cidr: "{{ _cudn_next_owner_subnet_cidr }}"
         fabric_reserved_range: "{{ _cudn_next_owner_reserved_range }}"
+        _evpn_fabric_ipam: "{{ _cudn_next_owner_reserved_range | osac.templates.evpn_fabric_ipam }}"
         l2_vni: "{{ _cudn_next_owner_fabric_output.resources[0].data.l2_vni | int }}"
         l3_vni: "{{ _cudn_next_owner_fabric_output.resources[0].data.l3_vni | int }}"
       when:
@@ -406,12 +410,24 @@
       register: _cudn_successor_status
       until: >-
         _cudn_successor_status.resources | default([]) | length > 0 and
-        (_cudn_successor_status.resources[0].status.conditions | default([])
-         | selectattr('type', 'equalto', 'Ready')
-         | selectattr('status', 'equalto', 'True')
-         | selectattr('observedGeneration', 'defined')
-         | selectattr('observedGeneration', 'ge', _cudn_successor_status.resources[0].metadata.generation)
-         | list | length > 0)
+        (
+          (_cudn_successor_status.resources[0].status.conditions | default([])
+          | selectattr('type', 'equalto', 'Ready')
+          | selectattr('status', 'equalto', 'True')
+          | selectattr('observedGeneration', 'defined')
+          | selectattr('observedGeneration', 'ge', _cudn_successor_status.resources[0].metadata.generation)
+          | list | length > 0) or
+          (
+            (_cudn_successor_status.resources[0].status.conditions | default([])
+            | selectattr('type', 'equalto', 'Ready') | list | length == 0) and
+            (_cudn_successor_status.resources[0].status.conditions | default([])
+            | selectattr('type', 'in', ['TransportAccepted', 'NetworkCreated', 'NetworkAllocationSucceeded'])
+            | selectattr('status', 'equalto', 'True')
+            | selectattr('observedGeneration', 'defined')
+            | selectattr('observedGeneration', 'ge', _cudn_successor_status.resources[0].metadata.generation)
+            | map(attribute='type') | unique | list | length == 3)
+          )
+        )
       retries: 30
       delay: 10
       when:
@@ -421,7 +437,7 @@
     - name: Validate successor CUDN VRF status
       ansible.builtin.assert:
         that:
-          - _cudn_successor_status.resources[0].status.vrfName is defined
+          - _cudn_successor_status.resources[0].status.vrfName is string
           - _cudn_successor_status.resources[0].status.vrfName | string | trim | length > 0
         fail_msg: >-
           Successor CUDN '{{ vnet_name }}' did not report the applied generation Ready with a
@@ -429,6 +445,7 @@
       when:
         - _cudn_owner_subnet_name == _deleting_subnet_name
         - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0
+        - _cudn_successor_status.resources[0].status.vrfName is defined
 
     - name: Transfer persisted owner after successor CUDN is Ready
       kubernetes.core.k8s:

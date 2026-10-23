@@ -34,7 +34,11 @@ const RoleBindingsPage = () => {
       title={t('Role Bindings')}
       description={t('Manage role bindings for users.')}
       error={error}
-      actions={<CreateButton to="create">{t('Create role binding')}</CreateButton>}
+      actions={
+        <CreateButton service={RoleBindings} to="create">
+          {t('Create role binding')}
+        </CreateButton>
+      }
     >
       <ListPageBody isLoading={isLoading} error={error}>
         {!roleBindings?.items.length ? (

@@ -2217,8 +2217,13 @@ jobs:
   wait-for-konflux-chart-build:
     name: Wait for Konflux chart build (${{ matrix.component }})
     continue-on-error: true
-    needs: [prepare, tag]
-    if: always() && !cancelled() && inputs.mode == 'release' && needs.tag.result == 'success'
+    # Gated on stamp-and-release-charts, not tag directly -- that job is
+    # what actually pushes the osac-charts-release marker tag these chart
+    # builds trigger off, strictly after the image release is confirmed.
+    needs: [prepare, tag, stamp-and-release-charts]
+    if: |
+      always() && !cancelled() && inputs.mode == 'release' &&
+      needs.stamp-and-release-charts.result == 'success'
     runs-on: osac-ci
     timeout-minutes: 85
     strategy:
@@ -2622,6 +2627,175 @@ jobs:
         PYEOF
 
   # -------------------------------------------------------------------
+  # Stamp charts with their real, now-confirmed-released images, then
+  # trigger the chart release -- gated on trigger-konflux-staging-release
+  # succeeding so a chart can never reference an image that doesn't exist
+  # at registry.stage.redhat.io yet. Eliminates patch-chart-image-refs (a
+  # custom Tekton task; same trusted_task.trusted violation class already
+  # fixed on the image side via osac-aap's own committed Containerfile) by
+  # stamping each chart's real image reference directly into committed
+  # source here, before Konflux ever builds it, instead of patching an
+  # in-pipeline copy at build time.
+  #
+  # This is a NEW commit appended to the same temp branch, not an edit to
+  # the earlier "Stamp charts and values" commit (prepare's own step):
+  # that earlier commit's sub-chart values.yaml fields are what
+  # promote-and-publish/publish-umbrella already package and publish to
+  # GHCR for nightly/e2e/community use (stamp_component_image_refs in
+  # nightly-charts.sh) -- overwriting those same fields there would
+  # silently break those already-completed publishes. A later commit,
+  # only ever referenced by the dedicated osac-charts-release marker tag
+  # below, keeps upstream (GHCR, community-facing, committed on this same
+  # temp branch earlier) and downstream (registry.stage.redhat.io,
+  # Konflux-published) cleanly separate -- by the time this commit exists,
+  # nothing reads the earlier one again.
+  #
+  # Mirrors each of the 7 image-backed charts' own (removed)
+  # patch-chart-image-refs params exactly -- same registry-image and
+  # values.yaml field(s) per component -- just computed from prepare's own
+  # component-versions directly, since the real version is already known
+  # here; no git-tag lookup needed the way the removed task required.
+  #
+  # continue-on-error mirrors wait-for-konflux-chart-build/
+  # trigger-konflux-chart-staging-release's own stance below: charts are
+  # new/unproven enough that their failure shouldn't block or fail the
+  # already-working image release.
+  # -------------------------------------------------------------------
+  stamp-and-release-charts:
+    name: Stamp chart image refs and trigger chart release
+    continue-on-error: true
+    needs: [prepare, tag, trigger-konflux-staging-release]
+    if: |
+      always() && !cancelled() && inputs.mode == 'release' &&
+      needs.tag.result == 'success' &&
+      needs.trigger-konflux-staging-release.result == 'success'
+    runs-on: osac-ci
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      COMPONENT_VERSIONS: ${{ needs.prepare.outputs.component-versions }}
+
+    steps:
+    - name: Generate osac-ci app token
+      id: app-token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+      with:
+        app-id: "4966101"
+        private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+
+    - name: Checkout repository
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        ref: ${{ needs.prepare.outputs.temp-branch }}
+        fetch-depth: 0
+        # persist-credentials left enabled (default): this job pushes a
+        # commit and a git tag. Same least-privilege reasoning as tag's
+        # own checkout step above.
+        token: ${{ steps.app-token.outputs.token }}
+
+    # Same registry-image/values.yaml-field mapping each of these 7
+    # charts' own (removed) patch-chart-image-refs task used to carry as
+    # Tekton params -- see each chart's .tekton/<chart>/release.yaml git
+    # history for the per-component values this mirrors.
+    - name: Stamp real chart image refs for Konflux release
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+
+        declare -A CHART_CONTEXTS=(
+          ["osac-operator"]="osac-operator/charts/operator"
+          ["fulfillment-service"]="fulfillment-service/charts/service"
+          ["osac-aap"]="osac-aap/charts/aap"
+          ["bare-metal-fulfillment-operator"]="bare-metal-fulfillment-operator/charts/operator"
+          ["osac-metering"]="osac-metering/charts/osac-metering"
+          ["osac-csi-driver"]="osac-csi-driver/charts/csi-driver"
+          ["osac-ui"]="osac-ui/charts/ui"
+        )
+        declare -A REGISTRY_IMAGES=(
+          ["osac-operator"]="registry.stage.redhat.io/cloud-extensions/osac-operator-rhel10"
+          ["fulfillment-service"]="registry.stage.redhat.io/cloud-extensions/fulfillment-service-rhel10"
+          ["osac-aap"]="registry.stage.redhat.io/cloud-extensions/osac-aap-rhel10"
+          ["bare-metal-fulfillment-operator"]="registry.stage.redhat.io/cloud-extensions/bare-metal-fulfillment-operator-rhel10"
+          ["osac-metering"]="registry.stage.redhat.io/cloud-extensions/metering-service-rhel10"
+          ["osac-csi-driver"]="registry.stage.redhat.io/cloud-extensions/osac-csi-driver-rhel10"
+          ["osac-ui"]="registry.stage.redhat.io/cloud-extensions/osac-ui-rhel10"
+        )
+
+        for COMPONENT in $(printf '%s\n' "${!CHART_CONTEXTS[@]}" | sort); do
+          COMPONENT_VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k] // empty' <<<"${COMPONENT_VERSIONS}")
+          if [[ -z "${COMPONENT_VERSION}" ]]; then
+            safe_component=$(_gha_sanitize_for_message "${COMPONENT}")
+            echo "::warning::Skipping ${safe_component} chart image stamp — no resolved version"
+            continue
+          fi
+          TARGET_IMAGE="${REGISTRY_IMAGES[${COMPONENT}]}:${COMPONENT_VERSION}"
+          VALUES_FILE="${CHART_CONTEXTS[${COMPONENT}]}/values.yaml"
+          echo "Stamping ${COMPONENT} (${VALUES_FILE}) -> ${TARGET_IMAGE}"
+          case "${COMPONENT}" in
+          osac-aap)
+            TARGET_IMAGE="${TARGET_IMAGE}" yq -i '.bootstrap.image = strenv(TARGET_IMAGE)' "${VALUES_FILE}"
+            ;;
+          osac-ui)
+            TARGET_IMAGE="${TARGET_IMAGE}" yq -i '.images.ui = strenv(TARGET_IMAGE)' "${VALUES_FILE}"
+            ;;
+          fulfillment-service)
+            TARGET_IMAGE="${TARGET_IMAGE}" TARGET_REPO="${TARGET_IMAGE%:*}" TARGET_TAG="${TARGET_IMAGE##*:}" \
+              yq -i '.images.service.repository = strenv(TARGET_REPO) | .images.service.tag = strenv(TARGET_TAG)' "${VALUES_FILE}"
+            ;;
+          *)
+            TARGET_IMAGE="${TARGET_IMAGE}" TARGET_REPO="${TARGET_IMAGE%:*}" TARGET_TAG="${TARGET_IMAGE##*:}" \
+              yq -i '.image.repository = strenv(TARGET_REPO) | .image.tag = strenv(TARGET_TAG)' "${VALUES_FILE}"
+            ;;
+          esac
+        done
+
+    - name: Commit and push chart image ref stamps
+      run: |
+        set -euo pipefail
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add -A
+        if git diff --cached --quiet; then
+          echo "::error::No chart stamping changes staged — refusing to push" >&2
+          exit 1
+        fi
+        git commit -m "build: stamp real registry.stage.redhat.io image refs into charts"
+        git push origin "HEAD:${{ needs.prepare.outputs.temp-branch }}"
+
+    # Dedicated marker tag, deliberately separate from the image side's
+    # osac-release/vX.Y.Z (see that tag's own "Create release-only marker
+    # tag" step above) -- Konflux's Pipelines-as-Code triggers chart builds
+    # off THIS tag now (see .tekton/*-chart/release.yaml), which only ever
+    # gets pushed once this job has reached this point, i.e. strictly after
+    # trigger-konflux-staging-release has confirmed every image this
+    # release actually exists at registry.stage.redhat.io.
+    - name: Push charts release marker tag
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+        TAG="osac-charts-release/v${VERSION}"
+        COMMIT_SHA=$(git rev-parse HEAD)
+
+        if git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null; then
+          EXISTING_SHA=$(git rev-parse "${TAG}^{commit}")
+          if [[ "${EXISTING_SHA}" == "${COMMIT_SHA}" ]]; then
+            echo "Tag ${TAG} already exists at ${COMMIT_SHA}; skipping create/push"
+            exit 0
+          fi
+          safe_tag=$(_gha_sanitize_for_message "${TAG}")
+          safe_existing=$(_gha_sanitize_for_message "${EXISTING_SHA}")
+          safe_commit=$(_gha_sanitize_for_message "${COMMIT_SHA}")
+          echo "::error::Tag ${safe_tag} already exists at ${safe_existing}, expected ${safe_commit}; refusing to move tag"
+          exit 1
+        fi
+
+        git tag "${TAG}" -m "Release ${VERSION}"
+        git push origin "${TAG}"
+        echo "Tagged: ${TAG}"
+
+  # -------------------------------------------------------------------
   # Chart-side mirror of trigger-konflux-staging-release -- see
   # wait-for-konflux-chart-build's own top comment for why this is a
   # separate job/Release rather than folded into the image one: charts
@@ -2842,7 +3016,7 @@ jobs:
 
   cleanup:
     name: Cleanup temp branch
-    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, promote-and-publish, publish-umbrella, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto, notify-release, notify-failure, wait-for-konflux-build, trigger-konflux-staging-release, wait-for-konflux-chart-build, trigger-konflux-chart-staging-release]
+    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, promote-and-publish, publish-umbrella, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto, notify-release, notify-failure, wait-for-konflux-build, trigger-konflux-staging-release, stamp-and-release-charts, wait-for-konflux-chart-build, trigger-konflux-chart-staging-release]
     runs-on: ubuntu-latest
     # notify-failure (and now notify-release, create-component-releases,
     # publish-fulfillment-service-binaries/-proto) are routinely skipped

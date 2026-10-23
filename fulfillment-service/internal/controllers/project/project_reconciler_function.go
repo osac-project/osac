@@ -42,7 +42,10 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-const defaultNetworkingDeleteRetryDelay = time.Second
+const (
+	defaultNetworkingDeleteRetryDelay = time.Second
+	projectGroupRetryDelay            = 10 * time.Second
+)
 
 // FunctionBuilder contains the data needed to build instances of the reconciler function.
 type FunctionBuilder struct {
@@ -258,7 +261,10 @@ func (t *task) validateAndActivate(ctx context.Context) error {
 				)
 			}
 		}
-		return fmt.Errorf("failed to create Keycloak groups: %w", err)
+		return controllers.RequeueAfter(
+			fmt.Errorf("failed to create Keycloak groups: %w", err),
+			projectGroupRetryDelay,
+		)
 	}
 
 	// Create a ProjectMembership for the project creator with manager role.
@@ -451,7 +457,10 @@ func (t *task) delete(ctx context.Context) error {
 			slog.String("project_name", t.project.GetMetadata().GetName()),
 			slog.Any("error", err),
 		)
-		return fmt.Errorf("failed to delete Keycloak groups: %w", err)
+		return controllers.RequeueAfter(
+			fmt.Errorf("failed to delete Keycloak groups: %w", err),
+			projectGroupRetryDelay,
+		)
 	}
 
 	t.removeFinalizer()

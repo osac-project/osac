@@ -264,8 +264,10 @@ func registerReferenceLookups(
 	if err != nil {
 		return fmt.Errorf("failed to create Role DAO for reference lookups: %w", err)
 	}
-	references.RegisterDAOLookup(validator, "osac.private.v1.RoleReference", rolesDAO)
-	references.RegisterDAOLookup(validator, "osac.public.v1.RoleReference", rolesDAO)
+	// Role names are globally unique and roles are not tenant- or project-scoped.
+	roleLookup := references.NewDAOLookupFunc(rolesDAO)
+	validator.Register("osac.private.v1.RoleReference", roleLookup)
+	validator.Register("osac.public.v1.RoleReference", roleLookup)
 
 	refUsersDAO, err := dao.NewGenericDAO[*privatev1.User]().
 		SetLogger(logger).

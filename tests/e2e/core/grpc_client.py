@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 import time
 from collections.abc import Callable
+from copy import copy
 from typing import Any
 
 from tests.e2e.core.runner import run, run_unchecked
 
 PUBLIC_API: str = "osac.public.v1"
 PRIVATE_API: str = "osac.private.v1"
+logger = logging.getLogger(__name__)
 
 
 def _metadata(*, name: str, tenant: str | None = None) -> dict[str, str]:
@@ -22,13 +25,30 @@ def _metadata(*, name: str, tenant: str | None = None) -> dict[str, str]:
 
 class GRPCClient:
     _TOKEN_TTL: float = 60.0
+    _READ_ATTEMPTS: int = 3
+    _READ_RETRY_DELAY: int = 2
 
-    def __init__(self, *, address: str, token: str = "", token_factory: Callable[[], str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        address: str,
+        token: str = "",
+        token_factory: Callable[[], str] | None = None,
+        retry_read_connections: bool = False,
+    ) -> None:
+        """Keep transport retries opt-in and maintain a separate token cache per client."""
         self.address: str = address
         self._static_token: str = token
         self._token_factory: Callable[[], str] | None = token_factory
         self._cached_token: str = ""
         self._cached_at: float = 0.0
+        self._retry_read_connections = retry_read_connections
+
+    def with_read_connection_retries(self) -> GRPCClient:
+        """Return a retry-enabled client without changing the shared fixture client."""
+        client = copy(self)
+        client._retry_read_connections = True
+        return client
 
     @property
     def token(self) -> str:
@@ -48,7 +68,27 @@ class GRPCClient:
         return args
 
     def call(self, *, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
-        return json.loads(run(*self._build_args(service=service, data=data)))
+        """Retry Get/List only when grpcurl times out before establishing a connection."""
+        attempt = 1
+        while True:
+            # Authentication errors are outside the RPC retry policy.
+            args = self._build_args(service=service, data=data)
+            try:
+                return json.loads(run(*args))
+            except subprocess.CalledProcessError as error:
+                if (
+                    not self._retry_read_connections
+                    or service.rsplit("/", 1)[-1] not in {"Get", "List"}
+                    or error.returncode != 1
+                    or (error.stderr or "").strip()
+                    != f'Failed to dial target host "{self.address}": context deadline exceeded'
+                    or attempt >= self._READ_ATTEMPTS
+                ):
+                    raise
+                attempt += 1
+                # Commands, headers, endpoints and error output may contain secrets.
+                logger.warning("gRPC read connection timed out; retrying (attempt %d/%d)", attempt, self._READ_ATTEMPTS)
+                time.sleep(self._READ_RETRY_DELAY)
 
     def create_compute_instance(
         self,

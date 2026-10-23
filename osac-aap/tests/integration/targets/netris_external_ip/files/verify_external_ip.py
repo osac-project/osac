@@ -370,19 +370,24 @@ class ExternalIPPlaybookTests(unittest.TestCase):
     @classmethod
     def _cleanup(cls):
         """Remove the isolated Kind resources and stop the fixtures."""
-        for name in ("netris-eip-v1", "netris-eip-isolated", "netris-eip-legacy"):
+        try:
+            for name in ("netris-eip-v1", "netris-eip-isolated",
+                         "netris-eip-legacy"):
+                cls._kubectl(
+                    "patch", "externalip", name, "-n", cls.namespace,
+                    "--type=merge", "-p", '{"metadata":{"finalizers":null}}',
+                    check=False,
+                )
             cls._kubectl(
-                "patch", "externalip", name, "-n", cls.namespace,
-                "--type=merge", "-p", '{"metadata":{"finalizers":null}}',
-                check=False,
+                "delete", "namespace", cls.namespace, "--ignore-not-found"
             )
-        cls._kubectl("delete", "namespace", cls.namespace, "--ignore-not-found")
-        if cls.unusable_kubeconfig:
-            Path(cls.unusable_kubeconfig).unlink(missing_ok=True)
-        for server, thread in zip((cls.server, cls.sentinel), cls.threads):
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=5)
+        finally:
+            if cls.unusable_kubeconfig:
+                Path(cls.unusable_kubeconfig).unlink(missing_ok=True)
+            for server, thread in zip((cls.server, cls.sentinel), cls.threads):
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
 
     @classmethod
     def _require_test_kubeconfig(cls):

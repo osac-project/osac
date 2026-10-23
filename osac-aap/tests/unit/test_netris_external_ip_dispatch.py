@@ -191,7 +191,7 @@ def test_v1_tasks_invoke_the_module_with_the_contract_arguments() -> None:
     assert module["resource"] == "{{ external_ip }}"
     assert module["pool"] == "{{ osac_job_vars.external_ip_pool }}"
     assert module["controller_url"] == "{{ netris_controller_url }}"
-    assert module["session_cookie"] == "{{ netris_session_cookie }}"
+    assert module["session_cookie"] == "{{ netris_session_cookie | default('') }}"
     assert "netris_site_id" in module["site_id"]
     assert "netris_tenant_id" in module["tenant_id"]
     assert module["timeout"] == "{{ netris_timeout | default(30) }}"

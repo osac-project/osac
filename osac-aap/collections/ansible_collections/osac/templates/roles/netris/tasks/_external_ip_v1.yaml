@@ -18,7 +18,9 @@
 - name: Ensure Netris auth
   ansible.builtin.include_role:
     name: netris.controller.auth
-  when: netris_session_cookie is not defined
+  when:
+    - netris_session_cookie is not defined
+    - not ansible_check_mode
 
 - name: Apply the Netris ExternalIP v1 provider state
   osac.templates.netris_external_ip:
@@ -26,7 +28,7 @@
     resource: "{{ external_ip }}"
     pool: "{{ osac_job_vars.external_ip_pool }}"
     controller_url: "{{ netris_controller_url }}"
-    session_cookie: "{{ netris_session_cookie }}"
+    session_cookie: "{{ netris_session_cookie | default('') }}"
     site_id: "{{ netris_site_id | int }}"
     tenant_id: "{{ netris_tenant_id | int }}"
     timeout: "{{ netris_timeout | default(30) }}"

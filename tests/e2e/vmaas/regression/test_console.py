@@ -4,6 +4,7 @@ import base64
 import contextlib
 import json
 import logging
+import os
 import queue
 import ssl
 import subprocess
@@ -140,21 +141,38 @@ def _ws_try_connect(url: str, ticket: str) -> bool:
             ws.shutdown()
 
 
-def _grpc_popen(address: str, ticket: str) -> subprocess.Popen:
-    """Start a gRPC console stream subprocess. Caller must manage stdin/lifecycle."""
+def _grpc_popen(address: str, ticket: str, reflect_token: str) -> subprocess.Popen:
+    """Start a gRPC console stream subprocess. Caller must manage stdin/lifecycle.
+
+    gRPC reflection now requires authentication. Console stream calls use JWE
+    tickets that the JWT validator does not recognise, so we send different
+    credentials for reflection vs the actual RPC: -reflect-header carries the
+    admin JWT for the reflection call, -rpc-header carries the console ticket
+    for ConsoleProxy/Connect. -expand-headers substitutes the env-var references
+    at runtime so neither token appears verbatim in the command arguments.
+    """
+    env = os.environ.copy()
+    env["REFLECTION_JWT"] = reflect_token
+    env["CONSOLE_TICKET"] = ticket
     return subprocess.Popen(
-        ["grpcurl", "-insecure", "-H", f"Authorization: Bearer {ticket}", "-d", "@", address, CONSOLE_GRPC_SERVICE],
+        [
+            "grpcurl", "-insecure", "-expand-headers",
+            "-reflect-header", "Authorization: Bearer ${REFLECTION_JWT}",
+            "-rpc-header", "Authorization: Bearer ${CONSOLE_TICKET}",
+            "-d", "@", address, CONSOLE_GRPC_SERVICE,
+        ],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=env,
     )
 
 
 class _GrpcSession:
     """Interactive gRPC console session via grpcurl subprocess."""
 
-    def __init__(self, address: str, ticket: str) -> None:
-        self._proc = _grpc_popen(address, ticket)
+    def __init__(self, address: str, ticket: str, reflect_token: str) -> None:
+        self._proc = _grpc_popen(address, ticket, reflect_token)
         self._output_q: queue.Queue[str | None] = queue.Queue()
         self._connected = threading.Event()
         self._reader = threading.Thread(target=self._read_stdout, daemon=True)
@@ -214,13 +232,13 @@ class _GrpcSession:
         self._proc.wait()
 
 
-def _grpc_stream(address: str, ticket: str) -> tuple[str, str, int]:
+def _grpc_stream(address: str, ticket: str, reflect_token: str) -> tuple[str, str, int]:
     """Open a gRPC console stream via grpcurl, close stdin, and collect output.
 
     Returns (stdout, stderr, returncode).
     """
     logger.info("gRPC stream opening to %s", address)
-    proc = _grpc_popen(address, ticket)
+    proc = _grpc_popen(address, ticket, reflect_token)
     try:
         proc.stdin.close()  # type: ignore[union-attr]
         proc.stdin = None  # prevent communicate() from flushing closed stdin
@@ -324,7 +342,7 @@ def test_console_serial_websocket(console_vm: dict[str, str], grpc: GRPCClient, 
 def test_console_serial_grpc_stream(console_vm: dict[str, str], grpc: GRPCClient, fulfillment_address: str) -> None:
     """Connect to the serial console via gRPC bidi stream and verify interactive login prompt."""
     session: dict[str, Any] = _create_ticket(grpc, console_vm["uuid"])
-    gs = _GrpcSession(fulfillment_address, session["ticket"])
+    gs = _GrpcSession(fulfillment_address, session["ticket"], reflect_token=grpc.token)
     try:
         _wait_for_login_prompt(send=gs.send, recv=gs.recv)
     finally:
@@ -364,12 +382,12 @@ def test_console_concurrent_session_rejected(
     session1: dict[str, Any] = _create_ticket(grpc, console_vm["uuid"])
     session2: dict[str, Any] = _create_ticket(grpc, console_vm["uuid"])
 
-    gs1 = _GrpcSession(fulfillment_address, session1["ticket"])
+    gs1 = _GrpcSession(fulfillment_address, session1["ticket"], reflect_token=grpc.token)
     try:
         assert gs1.wait_connected(), "First session failed to connect"
         assert gs1.alive, "First session should still be running"
 
-        stdout, stderr, rc = _grpc_stream(fulfillment_address, session2["ticket"])
+        stdout, stderr, rc = _grpc_stream(fulfillment_address, session2["ticket"], reflect_token=grpc.token)
         combined: str = stdout + stderr
         logger.info("Concurrent session2 rc=%d", rc)
         assert rc != 0, f"Second connection should fail, got: {combined!r}"

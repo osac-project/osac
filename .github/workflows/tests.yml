@@ -118,11 +118,6 @@ jobs:
       - name: Install Helm
         if: inputs.kind == 'it-fulfillment-service'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
-      - name: Install ginkgo
-        if: inputs.kind == 'it-fulfillment-service'
-        env:
-          GODEBUG: http2client=0
-        run: go install github.com/onsi/ginkgo/v2/ginkgo@v2.32.0  # keep in sync with go.mod's github.com/onsi/ginkgo/v2 version
       - name: Install infrastructure on Kind
         if: inputs.kind == 'it-fulfillment-service'
         env:
@@ -133,6 +128,7 @@ jobs:
         env:
           CONTAINER_TOOL: docker
           MCP_TEST_ENABLED: "true"
+          IT_TEST_COMMIT: ${{ inputs.commit || github.sha }}
         run: |
           echo '127.0.0.1 fulfillment-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
           echo '127.0.0.1 fulfillment-internal-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null

@@ -58,7 +58,7 @@ cryptography==46.0.7
     #   openstacksdk
     #   py-pure-client
     #   python-openstackclient
-debtcollector==3.0.0
+debtcollector==3.1.0
     # via
     #   oslo-utils
     #   python-keystoneclient

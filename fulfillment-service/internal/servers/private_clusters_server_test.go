@@ -3311,6 +3311,136 @@ var _ = Describe("Private clusters server", func() {
 				Expect(err).ToNot(HaveOccurred())
 			}
 
+			It("Uses locked catalog add-on operator defaults and rejects caller input", func() {
+				operatorID := "locked-catalog-operator-" + uuid.New()[24:32]
+				operatorName := "locked-catalog-operator-" + uuid.New()[24:32]
+				seedAddOnOperator(ctx, operatorID, operatorName, true)
+				createCatalogItem("cat-locked-operators", true, privatev1.ClusterCatalogItemFields_builder{
+					AddOnOperators: privatev1.AddOnOperatorReferenceListFieldPolicy_builder{
+						Locked: privatev1.AddOnOperatorReferenceList_builder{
+							Items: []*privatev1.AddOnOperatorReference{
+								privatev1.AddOnOperatorReference_builder{Id: operatorID, Name: operatorName}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "cluster-locked-operators"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: "cat-locked-operators"}.Build(),
+						}.Build(),
+						Status: privatev1.ClusterStatus_builder{Hub: "my-hub-id"}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetAddOnOperators()).To(HaveLen(1))
+				Expect(response.GetObject().GetSpec().GetAddOnOperators()[0].GetId()).To(Equal(operatorID))
+
+				_, err = server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "cluster-locked-operators-input"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: "cat-locked-operators"}.Build(),
+							AddOnOperators: []*privatev1.AddOnOperatorReference{
+								privatev1.AddOnOperatorReference_builder{Id: operatorID, Name: operatorName}.Build(),
+							},
+						}.Build(),
+						Status: privatev1.ClusterStatus_builder{Hub: "my-hub-id"}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			})
+
+			It("Uses non-empty caller operators for an editable catalog policy", func() {
+				defaultID := "default-catalog-operator-" + uuid.New()[24:32]
+				defaultName := "default-catalog-operator-" + uuid.New()[24:32]
+				callerID := "caller-catalog-operator-" + uuid.New()[24:32]
+				callerName := "caller-catalog-operator-" + uuid.New()[24:32]
+				seedAddOnOperator(ctx, defaultID, defaultName, true)
+				seedAddOnOperator(ctx, callerID, callerName, true)
+				createCatalogItem("cat-editable-operators", true, privatev1.ClusterCatalogItemFields_builder{
+					AddOnOperators: privatev1.AddOnOperatorReferenceListFieldPolicy_builder{
+						Editable: privatev1.EditableAddOnOperatorReferenceList_builder{
+							DefaultValue: privatev1.AddOnOperatorReferenceList_builder{
+								Items: []*privatev1.AddOnOperatorReference{
+									privatev1.AddOnOperatorReference_builder{Id: defaultID, Name: defaultName}.Build(),
+								},
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "cluster-editable-operators"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: "cat-editable-operators"}.Build(),
+						}.Build(),
+						Status: privatev1.ClusterStatus_builder{Hub: "my-hub-id"}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetAddOnOperators()[0].GetId()).To(Equal(defaultID))
+
+				response, err = server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "cluster-editable-operators-input"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: "cat-editable-operators"}.Build(),
+							AddOnOperators: []*privatev1.AddOnOperatorReference{
+								privatev1.AddOnOperatorReference_builder{Id: callerID, Name: callerName}.Build(),
+							},
+						}.Build(),
+						Status: privatev1.ClusterStatus_builder{Hub: "my-hub-id"}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetAddOnOperators()[0].GetId()).To(Equal(callerID))
+			})
+
+			It("Expands catalog operator dependencies during cluster creation", func() {
+				dependencyID := "catalog-graph-dependency-" + uuid.New()[24:32]
+				dependencyName := "catalog-graph-dependency-" + uuid.New()[24:32]
+				rootID := "catalog-graph-root-" + uuid.New()[24:32]
+				rootName := "catalog-graph-root-" + uuid.New()[24:32]
+
+				dependency := newTestAddOnOperator(dependencyID, dependencyName, true)
+				seedAddOnOperatorObject(ctx, dependency)
+				root := newTestAddOnOperator(rootID, rootName, true)
+				root.SetDependencies([]*privatev1.AddOnOperatorLocalReference{
+					privatev1.AddOnOperatorLocalReference_builder{Id: dependencyID}.Build(),
+				})
+				seedAddOnOperatorObject(ctx, root)
+				createCatalogItem("cat-graph-operators", true, privatev1.ClusterCatalogItemFields_builder{
+					AddOnOperators: privatev1.AddOnOperatorReferenceListFieldPolicy_builder{
+						Locked: privatev1.AddOnOperatorReferenceList_builder{
+							Items: []*privatev1.AddOnOperatorReference{
+								privatev1.AddOnOperatorReference_builder{Id: rootID, Name: rootName}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "cluster-graph-operators"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: "cat-graph-operators"}.Build(),
+						}.Build(),
+						Status: privatev1.ClusterStatus_builder{Hub: "my-hub-id"}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				resolvedIDs := make([]string, 0, len(response.GetObject().GetSpec().GetAddOnOperators()))
+				for _, operator := range response.GetObject().GetSpec().GetAddOnOperators() {
+					resolvedIDs = append(resolvedIDs, operator.GetId())
+				}
+				Expect(resolvedIDs).To(ConsistOf(rootID, dependencyID))
+			})
+
 			It("Creates cluster with catalog item and populates node sets from its policy", func() {
 				createCatalogItem("cat-happy", true, nil)
 

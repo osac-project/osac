@@ -24,6 +24,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -114,12 +115,23 @@ func newPublishedScopedAddOnOperatorResourceResolver(
 ) *addOnOperatorResourceResolver {
 	return &addOnOperatorResourceResolver{
 		dao: operatorDAO,
-		get: getPublishedAddOnOperator,
+		get: getPublishedSharedAddOnOperator,
 	}
 }
 
-// getPublishedAddOnOperator resolves a published operator by reference.
-func getPublishedAddOnOperator(
+// newLockedPublishedScopedAddOnOperatorResourceResolver creates a resolver
+// limited to published operators using a locked reference lookup.
+func newLockedPublishedScopedAddOnOperatorResourceResolver(
+	operatorDAO *dao.GenericDAO[*privatev1.AddOnOperator],
+) *addOnOperatorResourceResolver {
+	return &addOnOperatorResourceResolver{
+		dao: operatorDAO,
+		get: getLockedPublishedSharedAddOnOperator,
+	}
+}
+
+// getPublishedSharedAddOnOperator resolves an active published shared operator.
+func getPublishedSharedAddOnOperator(
 	ctx context.Context,
 	operatorDAO *dao.GenericDAO[*privatev1.AddOnOperator],
 	id string,
@@ -128,7 +140,26 @@ func getPublishedAddOnOperator(
 	if err != nil {
 		return nil, err
 	}
-	if !operator.GetPublished() || operator.GetMetadata().GetDeletionTimestamp() != nil {
+	return requirePublishedSharedAddOnOperator(operator, id)
+}
+
+func getLockedPublishedSharedAddOnOperator(
+	ctx context.Context,
+	operatorDAO *dao.GenericDAO[*privatev1.AddOnOperator],
+	id string,
+) (*privatev1.AddOnOperator, error) {
+	operator, err := getLockedReferenceResource(ctx, operatorDAO, id)
+	if err != nil {
+		return nil, err
+	}
+	return requirePublishedSharedAddOnOperator(operator, id)
+}
+
+func requirePublishedSharedAddOnOperator(
+	operator *privatev1.AddOnOperator,
+	id string,
+) (*privatev1.AddOnOperator, error) {
+	if operator.GetMetadata().GetTenant() != auth.SharedTenant || operator.GetMetadata().GetProject() != "" || !operator.GetPublished() || operator.GetMetadata().GetDeletionTimestamp() != nil {
 		return nil, &dao.ErrNotFound{IDs: []string{id}}
 	}
 	return operator, nil

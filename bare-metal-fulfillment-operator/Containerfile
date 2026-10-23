@@ -42,7 +42,7 @@ FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
 # release-side {{ oci_version }} tag templating resolves to it instead
 # of silently falling back to the base image's own inherited version
 # label.
-ARG VERSION=dev
+ARG VERSION=0.0.32-nightly.20261023.f4f86d8.137.1
 LABEL name="cloud-extensions/bare-metal-fulfillment-operator-rhel10"
 LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
 LABEL org.opencontainers.image.version="${VERSION}"

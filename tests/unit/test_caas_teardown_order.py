@@ -65,7 +65,7 @@ def test_parent_removal_precedes_dependent_gc_with_separate_budgets(monkeypatch:
     assert parent_kwargs.get("retry_on_error", False) is False
     infraenv_kwargs = infraenv_poll.call_args.kwargs
     assert (infraenv_kwargs["retries"], infraenv_kwargs["delay"]) == (60, 5)
-    assert infraenv_kwargs["retry_on_error"] is True
+    assert infraenv_kwargs.get("retry_on_error", False) is False
     final_snapshot.assert_not_called()
     k8s.patch.assert_not_called()
     k8s.apply.assert_not_called()
@@ -137,10 +137,11 @@ def test_already_absent_resources_complete_without_sleeps(monkeypatch: pytest.Mo
     final_snapshot.assert_not_called()
 
 
-def test_parent_lookup_error_propagates_without_starting_gc(monkeypatch: pytest.MonkeyPatch) -> None:
-    error = subprocess.CalledProcessError(1, ["kubectl"], stderr="connection refused")
+@pytest.mark.parametrize("stage", ["parent", "infraenv"])
+def test_lookup_errors_propagate_without_retrying(monkeypatch: pytest.MonkeyPatch, stage: str) -> None:
+    error = subprocess.CalledProcessError(1, ["kubectl"], stderr="Error from server (Forbidden): forbidden")
     k8s = Mock(spec=K8sClient)
-    k8s.is_absent.side_effect = error
+    k8s.is_absent.side_effect = [error] if stage == "parent" else [True, error]
     sleep, final_snapshot = Mock(), Mock()
     monkeypatch.setattr(runner.time, "sleep", sleep)
 
@@ -148,37 +149,52 @@ def test_parent_lookup_error_propagates_without_starting_gc(monkeypatch: pytest.
         _wait(k8s, Mock(), final_snapshot)
 
     assert exc_info.value is error
-    k8s.is_absent.assert_called_once_with(resource=_PARENT, name="order-a")
+    assert k8s.is_absent.call_count == (1 if stage == "parent" else 2)
     sleep.assert_not_called()
     final_snapshot.assert_not_called()
 
 
+@pytest.mark.parametrize("stage", ["parent", "infraenv"])
 @pytest.mark.parametrize("recover", [False, True])
-def test_infraenv_lookup_errors_are_not_absence_and_timeout_is_safe(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, recover: bool
+def test_transient_lookup_errors_are_not_absence_and_timeout_is_safe(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, stage: str, recover: bool
 ) -> None:
-    error = subprocess.CalledProcessError(1, ["kubectl", "--token=sensitive-command"], stderr="sensitive-output")
+    error = subprocess.CalledProcessError(
+        1,
+        ["kubectl", "--token=sensitive-command"],
+        stderr="Unable to connect to the server: dial tcp sensitive-output:6443: connect: connection refused",
+    )
+    polls, delay = (121, 10) if stage == "parent" else (60, 5)
+    message = (
+        "ClusterOrder natural teardown timed out"
+        if stage == "parent"
+        else "InfraEnv garbage collection timed out after ClusterOrder removal"
+    )
+    prefix = [] if stage == "parent" else [True]
+    suffix = [True] if stage == "parent" else []
     k8s = Mock(spec=K8sClient)
     if recover:
-        k8s.is_absent.side_effect = [True, error, False, True]
+        k8s.is_absent.side_effect = [*prefix, error, False, True, *suffix]
     else:
-        k8s.is_absent.side_effect = [True] + [error] * 60
+        k8s.is_absent.side_effect = prefix + [error] * polls
     sleep, observe, final_snapshot = Mock(), Mock(), Mock()
     monkeypatch.setattr(runner.time, "sleep", sleep)
 
     with caplog.at_level(logging.INFO):
         if recover:
             _wait(k8s, observe, final_snapshot)
-            assert sleep.call_args_list == [call(5), call(5)]
+            assert sleep.call_args_list == [call(delay), call(delay)]
             final_snapshot.assert_not_called()
         else:
             with pytest.raises(TimeoutError) as exc_info:
                 _wait(k8s, observe, final_snapshot)
-            assert str(exc_info.value) == "InfraEnv garbage collection timed out after ClusterOrder removal"
+            assert str(exc_info.value) == message
             rendered = "".join(traceback.format_exception(exc_info.value))
             assert "sensitive-command" not in rendered
             assert "sensitive-output" not in rendered
-            assert sleep.call_args_list == [call(5)] * 59
+            assert sleep.call_args_list == [call(delay)] * (polls - 1)
+            if stage == "parent":
+                assert all(c.kwargs["resource"] == _PARENT for c in k8s.is_absent.call_args_list)
             final_snapshot.assert_called_once_with()
     assert "sensitive-command" not in caplog.text
     assert "sensitive-output" not in caplog.text

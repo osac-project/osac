@@ -673,7 +673,7 @@ Touched-area requirements: [component guide](../tests/e2e/AGENTS.md#touched-area
 | E2E (VMaaS additional disks) | From the repository root: `uv run pytest tests/e2e/vmaas/regression/test_compute_instance_storage_tier.py -k empty_additional_disks_disables_catalog_item_default` | CatalogItem default application versus an explicit empty `additional_disks` wrapper, checked on the ComputeInstance CR | Requires a configured VMaaS environment with storage tiers, subnet, disk image, instance type, and VM template; no services are mocked. |
 | Unit ([DEV], compute-reference teardown) | From the repository root: `uv run pytest -n 0 tests/unit/test_e2e_helpers.py` | Ordered cleanup at all four compute-reference call sites, exact Kubernetes/API NotFound, bounded polling, and credential-safe command failures | API/client responses and time are mocked; does not prove deployed reconciliation. |
 | E2E ([QE], compute references) | From the repository root: `uv run pytest -n 0 tests/e2e/references/test_compute_references.py` | Reference-based ComputeInstance creation and natural cleanup before deleting dependent Secrets/catalog items or releasing module-scoped dependencies | Requires deployed Fulfillment, operator, AAP, KubeVirt, storage, and tenant networking. No forced finalizer removal; local unit success is not evidence of a passing deployed run. |
-| Unit ([DEV], CaaS teardown) | From the repository root: `uv run pytest -n 0 tests/unit/test_caas_teardown_order.py tests/unit/test_cluster_deletion_polling.py tests/unit/test_caas_deletion_diagnostics.py tests/unit/test_caas_worker_bmi_visibility.py tests/unit/test_caas_two_node_sets.py tests/unit/test_caas_selector_contracts.py` | Read-only wait logic, exact-resource NotFound, ordered worker/parent/dependent waits, shared single/two-node-set budgets, stage-specific safe failures, snapshot throttling and sanitization, worker ownership checks, NodeSet selectors with shared BMITs, and shared-only BMIT reference expectations | API/client responses and time are mocked. No deployed controllers, fulfillment, AAP, provider, or metering is exercised. |
+| Unit ([DEV], CaaS teardown) | From the repository root: `uv run pytest -n 0 tests/unit/test_caas_teardown_order.py tests/unit/test_cluster_deletion_polling.py tests/unit/test_caas_deletion_diagnostics.py tests/unit/test_caas_worker_bmi_visibility.py tests/unit/test_caas_two_node_sets.py tests/unit/test_caas_selector_contracts.py tests/unit/test_kubectl_transient_errors.py` | Read-only wait logic, exact-resource NotFound, transient-only lookup retries, ordered worker/parent/dependent waits, shared single/two-node-set budgets, stage-specific safe failures, snapshot throttling and sanitization, worker ownership checks, NodeSet selectors with shared BMITs, and shared-only BMIT reference expectations | API/client responses and time are mocked. No deployed controllers, fulfillment, AAP, provider, or metering is exercised. |
 | E2E ([QE], focused bare-metal CaaS lifecycle) | From the repository root: `uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py::test_cluster_create --junitxml=/tmp/test-output/caas-bm-teardown-junit.xml` | CLI/API/database, Kubernetes, OSAC operators, AAP, HyperShift/CAPI/CAP-Agent, Assisted Service, provider-backed virtual BMHs, and Kafka/metering; catalog-item-authored creation (published ClusterCatalogItem locking version, node sets, and SSH key), guest readiness, scale events, natural worker/parent teardown, independent InfraEnv GC, fulfillment removal, and deleted events | Requires the compatible deployed CaaS profile; no mocked completion or workaround-enabled deletion wait. Virtual BMHs do not prove physical-hardware coverage. Guest LVMS device readiness, PVC/CSI mount, and application I/O are not established by this lifecycle test. |
 
 Resize lifecycle tests expect `RestartRequired`. Multi-node live hot-plug
@@ -730,8 +730,15 @@ read-only parent wait observe the exact ClusterOrder NotFound (121 attempts at
 ten-second intervals); only after parent removal does the separate InfraEnv GC
 wait observe that exact InfraEnv NotFound in the same namespace (60 attempts at
 five-second intervals). Empty status, a terminating object, or an API error is
-not absence. Parent lookup errors fail fast; InfraEnv lookup errors retain the
-existing retry policy but cannot satisfy the absence assertion.
+not absence. Both parent and InfraEnv polls retry only recognized transient
+kubectl server/transport failures within their existing attempt budgets.
+Authorization, credential, certificate, configuration, and unknown failures
+fail fast. The opt-in classifier recognizes explicit transient server status
+reasons (Timeout, ServerTimeout, TooManyRequests, ServiceUnavailable, InternalError)
+and known connection-refused/reset, broken-pipe, timeout, and EOF diagnostics;
+it does not retry arbitrary substring matches. These errors are treated as a
+pending observation by the two deletion checks; the shared polling helper is
+unchanged. Raw commands and responses are not logged.
 
 The parent and dependent budgets schedule at most 1,200 and 295 seconds of
 sleeps, respectively. Command execution and approximately sixty-second,

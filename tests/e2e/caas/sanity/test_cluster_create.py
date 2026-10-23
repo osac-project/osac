@@ -28,7 +28,7 @@ from tests.e2e.core.helpers import (
     wait_for_cluster_progressing,
     wait_for_hosted_cluster_kubeconfig,
 )
-from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.k8s_client import K8sClient, is_transient_kubectl_error
 from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env, poll_until, run
@@ -140,7 +140,12 @@ def _wait_for_cluster_and_infraenv_deletion(
 
     def _infraenv_absent_with_snapshot() -> bool:
         on_poll()
-        return k8s.is_absent(resource="infraenv.agent-install.openshift.io", name=infra_env_name)
+        try:
+            return k8s.is_absent(resource="infraenv.agent-install.openshift.io", name=infra_env_name)
+        except subprocess.CalledProcessError as error:
+            if not is_transient_kubectl_error(error):
+                raise
+            return False
 
     try:
         poll_until(
@@ -149,7 +154,6 @@ def _wait_for_cluster_and_infraenv_deletion(
             retries=60,
             delay=5,
             description="InfraEnv removal after ClusterOrder deletion",
-            retry_on_error=True,
         )
     except TimeoutError:
         on_timeout()

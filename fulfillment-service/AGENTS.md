@@ -115,6 +115,16 @@ If a fresh environment is needed, confirm that `osac-dev` is a disposable test c
 
 If setup fails with `failed to lookup host '...'`, read [README.md — Running integration tests](README.md#running-integration-tests) for host entries.
 
+### Harness timing and catalog cleanup
+
+Run `go test ./it -run 'TestIntegrationTimings|TestCatalogItemDeletionProbe'`
+for report sanitization, node timing attribution, and deletion observation/signal
+cadence. These unit tests use synthetic reports and API callbacks, not deployed
+services. Run the complete installer `SUITE=fulfillment` command above for real
+archival and dependency-order behavior. Each installer test phase writes a
+sanitized JSON report under `logs/timings/`; see
+[report fields and limitations](../docs/INTEGRATION-TESTING.md#fulfillment-integration-timings).
+
 ## Writing tests
 
 - Prefer Ginkgo/Gomega, following existing test conventions. Use `DescribeTable` with named `Entry` cases when setup and assertions are shared.

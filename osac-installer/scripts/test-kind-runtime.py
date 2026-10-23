@@ -396,6 +396,23 @@ esac
                 self.assertNotIn("b 253:* rwm", self.storage_run_arguments())
                 self.assertNotIn("--privileged", self.storage_run_arguments())
 
+    def test_topolvm_backing_size_is_passed_to_storage_setup(self):
+        for size in ("20G", "2G"):
+            with self.subTest(size=size):
+                self.configure_storage_stubs()
+                self.env["TOPOLVM_BACKING_SIZE"] = size
+                result = self.run_shell("configure_topolvm_device_access; prepare_topolvm_storage")
+                self.assert_success(result)
+                arguments = self.storage_run_arguments()
+                self.assertIn("--env", arguments)
+                self.assertIn(f"TOPOLVM_BACKING_SIZE={size}", arguments)
+                setup_script = arguments[-1]
+                self.assertIn(
+                    'expected_size=$(numfmt --from=iec "$TOPOLVM_BACKING_SIZE" 2>/dev/null)',
+                    setup_script,
+                )
+                self.assertIn('truncate -s "$expected_size" "$disk"', setup_script)
+
     def test_lvmd_replaces_image_with_udev_dependent_configuration(self):
         for provider in ("podman", "docker"):
             with self.subTest(provider=provider):
@@ -535,6 +552,14 @@ create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
         creation = commands.index("kind 1 create cluster --name osac-dev --config config.yaml --wait 60s")
         self.assertLess(lookup, reset)
         self.assertLess(reset, creation)
+
+    def test_create_uses_kind_default_node_image(self):
+        self.env["MOCK_KIND_NODES"] = ""
+        self.assert_success(self.run_create_cluster())
+        self.assertIn(
+            "kind 1 create cluster --name osac-dev --config config.yaml --wait 60s",
+            self.commands(),
+        )
 
     def test_uninstall_deletes_cluster_before_storage_cleanup(self):
         self.assert_success(self.run_shell("delete_cluster osac-dev"))

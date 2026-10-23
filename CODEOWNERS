@@ -107,7 +107,11 @@ Containerfile* @osac-ci[bot]
 Dockerfile* @osac-ci[bot]
 requirements*.txt @osac-ci[bot]
 # Keep team ownership for dependency files in owned
-# components (last match wins).
+# components (last match wins).  Broad directory rules
+# re-establish the team for every file; specific rules
+# below add the bot for known dependency files only.
+/bare-metal-fulfillment-operator/ @osac-project/wg-bmaas
+/osac-ui/ @LiorSoffer @batzionb @rawagner @ElayAharoni
 /bare-metal-fulfillment-operator/go.mod @osac-project/wg-bmaas @osac-ci[bot]
 /bare-metal-fulfillment-operator/go.sum @osac-project/wg-bmaas @osac-ci[bot]
 /bare-metal-fulfillment-operator/Containerfile* @osac-project/wg-bmaas @osac-ci[bot]

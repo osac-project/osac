@@ -226,7 +226,7 @@ var _ = Describe("Tenant deletion with projects", func() {
 		projectsClient = privatev1.NewProjectsClient(tool.InternalView().AdminConn())
 	})
 
-	It("Blocks tenant deletion until all projects are removed", func(ctx context.Context) {
+	It("Deletes all projects before removing the tenant", func(ctx context.Context) {
 		name := fmt.Sprintf("test-%s", uuid.New())
 
 		By(fmt.Sprintf("Creating tenant %q", name))
@@ -237,7 +237,7 @@ var _ = Describe("Tenant deletion with projects", func() {
 
 		By("Creating a project under the tenant")
 		projectName := fmt.Sprintf("proj-%s", uuid.New())
-		projectResp, err := projectsClient.Create(ctx, privatev1.ProjectsCreateRequest_builder{
+		_, err := projectsClient.Create(ctx, privatev1.ProjectsCreateRequest_builder{
 			Object: privatev1.Project_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name:   projectName,
@@ -246,52 +246,25 @@ var _ = Describe("Tenant deletion with projects", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		projectId := projectResp.GetObject().GetId()
-
 		By("Requesting tenant deletion (without deleting the project first)")
 		_, err = tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
 			Id: id,
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		By("Verifying the tenant is not immediately removed (blocked by project FK)")
-		Consistently(
+		By("Waiting for tenant deletion to remove every project, including the root")
+		listFilter := fmt.Sprintf("this.metadata.tenant == %q", name)
+		Eventually(
 			func(g Gomega) {
-				getResp, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{
-					Id: id,
+				listResp, err := projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
+					Filter: &listFilter,
 				}.Build())
 				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(getResp.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+				g.Expect(listResp.GetTotal()).To(BeZero())
 			},
-			10*time.Second,
+			2*time.Minute,
 			time.Second,
 		).Should(Succeed())
-
-		By("Deleting the explicitly created project")
-		deleteProject(ctx, projectsClient, projectId)
-
-		By("Deleting all remaining projects for the tenant (including auto-created root)")
-		listFilter := fmt.Sprintf("this.metadata.tenant == %q", name)
-		for {
-			listResp, listErr := projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
-				Filter: &listFilter,
-			}.Build())
-			Expect(listErr).ToNot(HaveOccurred())
-			if listResp.GetTotal() == 0 {
-				break
-			}
-			for _, item := range listResp.GetItems() {
-				deleteProject(ctx, projectsClient, item.GetId())
-			}
-		}
-
-		By("Signaling the tenant to wake reconcilers from backoff")
-		_, err = tenantsClient.Signal(ctx, privatev1.TenantsSignalRequest_builder{
-			Id: id,
-		}.Build())
-		if err != nil {
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
-		}
 
 		By("Verifying the tenant is eventually fully deleted")
 		Eventually(

@@ -531,12 +531,14 @@ func (t *task) delete(ctx context.Context) error {
 		}
 	}
 
-	// Delete the auto-created unnamed root project so it does not block tenant deletion.
-	if err := t.deleteRootProject(ctx); err != nil {
+	// Delete every project in the tenant. Project controllers enforce child-first
+	// archival, while this reconciler signals deleting projects again on each
+	// retry so parents continue after their children have been archived.
+	if err := t.deleteTenantProjects(ctx); err != nil {
 		return err
 	}
 
-	// Block until all projects are deleted by the administrator.
+	// Keep the tenant and its IDP organization until all projects are archived.
 	remaining, err := t.countRemainingProjects(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to query remaining projects: %w", err)
@@ -648,23 +650,62 @@ func (t *task) countRemainingProjects(ctx context.Context) (int32, error) {
 	return listResp.GetTotal(), nil
 }
 
-// deleteRootProject deletes the auto-created unnamed root project (empty name) that is
-// automatically created for each tenant. Without this, the root project blocks tenant
-// deletion because countRemainingProjects never reaches zero.
-func (t *task) deleteRootProject(ctx context.Context) error {
+// deleteTenantProjects requests deletion of every project in the tenant. Existing
+// deletion requests are signaled again so projects blocked on children or external
+// references retry as the tenant deletion makes progress.
+func (t *task) deleteTenantProjects(ctx context.Context) error {
 	tenantName := t.tenant.GetMetadata().GetName()
-	listFilter := fmt.Sprintf(
-		"this.metadata.name == '' && this.metadata.tenant == %q",
-		tenantName,
+	filter := fmt.Sprintf("this.metadata.tenant == %q", tenantName)
+	limit := int32(100)
+	var (
+		offset   int32
+		projects []*privatev1.Project
+		total    *int32
+		err      error
 	)
-	listResp, err := t.r.projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
-		Filter: new(listFilter),
-	}.Build())
-	if err != nil {
-		return fmt.Errorf("failed to list root project: %w", err)
+	for {
+		listResp, err := t.r.projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
+			Filter: &filter,
+			Limit:  &limit,
+			Offset: &offset,
+		}.Build())
+		if err != nil {
+			return fmt.Errorf("failed to list projects for tenant deletion: %w", err)
+		}
+		if listResp == nil || listResp.GetSize() < 0 ||
+			int64(listResp.GetSize()) != int64(len(listResp.GetItems())) ||
+			listResp.GetTotal() < 0 {
+			return errors.New("project listing returned an invalid page")
+		}
+		pageTotal := listResp.GetTotal()
+		if total == nil {
+			total = &pageTotal
+		} else if *total != pageTotal {
+			return errors.New("project listing total changed during tenant deletion")
+		}
+		projects = append(projects, listResp.GetItems()...)
+		if int64(len(projects)) > int64(*total) {
+			return errors.New("project listing returned more items than its total")
+		}
+		if int64(len(projects)) == int64(*total) {
+			break
+		}
+		if listResp.GetSize() == 0 {
+			return errors.New("project listing returned an incomplete page")
+		}
+		offset += listResp.GetSize()
 	}
-	for _, project := range listResp.GetItems() {
+
+	var deletionErrors []error
+	for _, project := range projects {
 		if project.GetMetadata().HasDeletionTimestamp() {
+			_, err = t.r.projectsClient.Signal(ctx, privatev1.ProjectsSignalRequest_builder{
+				Id: project.GetId(),
+			}.Build())
+			if err != nil && grpcstatus.Code(err) != grpccodes.NotFound {
+				deletionErrors = append(deletionErrors,
+					fmt.Errorf("failed to signal project %s for tenant deletion: %w", project.GetId(), err))
+			}
 			continue
 		}
 		_, err = t.r.projectsClient.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{
@@ -674,14 +715,15 @@ func (t *task) deleteRootProject(ctx context.Context) error {
 			if grpcstatus.Code(err) == grpccodes.NotFound {
 				continue
 			}
-			return fmt.Errorf("failed to delete root project: %w", err)
+			deletionErrors = append(deletionErrors, fmt.Errorf("failed to delete project %s: %w", project.GetId(), err))
+			continue
 		}
-		t.r.logger.DebugContext(ctx, "Deleted root project for tenant",
+		t.r.logger.DebugContext(ctx, "Requested project deletion for tenant",
 			slog.String("tenant_id", t.tenant.GetId()),
 			slog.String("project_id", project.GetId()),
 		)
 	}
-	return nil
+	return errors.Join(deletionErrors...)
 }
 
 var tenantConditionTypes = []privatev1.TenantConditionType{

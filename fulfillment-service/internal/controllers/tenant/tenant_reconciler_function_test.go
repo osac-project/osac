@@ -1229,7 +1229,7 @@ var _ = Describe("Deletion", func() {
 		}
 		reconciler.secretsClient = secrets
 
-		// deleteRootProject List call (no unnamed root projects found)
+		// Tenant project listing (no projects found).
 		mockProjectsClient.EXPECT().
 			List(gomock.Any(), gomock.Any()).
 			Return(privatev1.ProjectsListResponse_builder{}.Build(), nil).
@@ -1285,7 +1285,7 @@ var _ = Describe("Deletion", func() {
 		}
 		reconciler.secretsClient = secrets
 
-		// deleteRootProject List call (no unnamed root projects found)
+		// Tenant project listing (no projects found).
 		mockProjectsClient.EXPECT().
 			List(gomock.Any(), gomock.Any()).
 			Return(privatev1.ProjectsListResponse_builder{}.Build(), nil).
@@ -1460,7 +1460,7 @@ var _ = Describe("Deletion", func() {
 	})
 })
 
-var _ = Describe("Root project deletion during tenant deletion", func() {
+var _ = Describe("Project deletion during tenant deletion", func() {
 	var (
 		ctx                context.Context
 		ctrl               *gomock.Controller
@@ -1490,7 +1490,7 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 		}
 	})
 
-	It("should delete the root project and proceed with tenant deletion", func() {
+	It("should request deletion of every tenant project", func() {
 		tenant := privatev1.Tenant_builder{
 			Id: "org-root-proj",
 			Metadata: privatev1.Metadata_builder{
@@ -1511,17 +1511,36 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 				Tenant: "test-org",
 			}.Build(),
 		}.Build()
+		teamProject := privatev1.Project_builder{
+			Id: "team-proj-id",
+			Metadata: privatev1.Metadata_builder{
+				Name:   "team-a",
+				Tenant: "test-org",
+			}.Build(),
+		}.Build()
 
 		gomock.InOrder(
 			mockProjectsClient.EXPECT().
 				List(gomock.Any(), gomock.Any()).
 				Return(privatev1.ProjectsListResponse_builder{
-					Items: []*privatev1.Project{rootProject},
-					Total: 1,
+					Items: []*privatev1.Project{rootProject, teamProject},
+					Size:  2,
+					Total: 2,
 				}.Build(), nil),
 			mockProjectsClient.EXPECT().
 				Delete(gomock.Any(), gomock.Any()).
-				Return(privatev1.ProjectsDeleteResponse_builder{}.Build(), nil),
+				DoAndReturn(func(_ context.Context, request *privatev1.ProjectsDeleteRequest,
+					_ ...grpc.CallOption) (*privatev1.ProjectsDeleteResponse, error) {
+					Expect(request.GetId()).To(Equal("root-proj-id"))
+					return privatev1.ProjectsDeleteResponse_builder{}.Build(), nil
+				}),
+			mockProjectsClient.EXPECT().
+				Delete(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, request *privatev1.ProjectsDeleteRequest,
+					_ ...grpc.CallOption) (*privatev1.ProjectsDeleteResponse, error) {
+					Expect(request.GetId()).To(Equal("team-proj-id"))
+					return privatev1.ProjectsDeleteResponse_builder{}.Build(), nil
+				}),
 			mockProjectsClient.EXPECT().
 				List(gomock.Any(), gomock.Any()).
 				Return(privatev1.ProjectsListResponse_builder{Total: 0}.Build(), nil),
@@ -1537,7 +1556,7 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
 	})
 
-	It("should skip root project that already has a deletion timestamp", func() {
+	It("should signal a project that already has a deletion timestamp", func() {
 		tenant := privatev1.Tenant_builder{
 			Id: "org-root-deleting",
 			Metadata: privatev1.Metadata_builder{
@@ -1565,8 +1584,16 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 				List(gomock.Any(), gomock.Any()).
 				Return(privatev1.ProjectsListResponse_builder{
 					Items: []*privatev1.Project{rootProject},
+					Size:  1,
 					Total: 1,
 				}.Build(), nil),
+			mockProjectsClient.EXPECT().
+				Signal(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, request *privatev1.ProjectsSignalRequest,
+					_ ...grpc.CallOption) (*privatev1.ProjectsSignalResponse, error) {
+					Expect(request.GetId()).To(Equal("root-proj-id"))
+					return nil, grpcstatus.Error(grpccodes.NotFound, "project not found")
+				}),
 			mockProjectsClient.EXPECT().
 				List(gomock.Any(), gomock.Any()).
 				DoAndReturn(func(_ context.Context, request *privatev1.ProjectsListRequest, _ ...grpc.CallOption) (*privatev1.ProjectsListResponse, error) {
@@ -1581,7 +1608,69 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 		Expect(err.Error()).To(ContainSubstring("project(s) pending deletion"))
 	})
 
-	It("should return error when root project list fails", func() {
+	It("should attempt all projects and join pending deletion errors", func() {
+		tenant := privatev1.Tenant_builder{
+			Id: "org-root-signal-error",
+			Metadata: privatev1.Metadata_builder{
+				Name:              "test-org",
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
+				DeletionTimestamp: timestamppb.Now(),
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
+				IdpTenantName: "test-org",
+			}.Build(),
+		}.Build()
+		rootProject := privatev1.Project_builder{
+			Id: "root-proj-id",
+			Metadata: privatev1.Metadata_builder{
+				Name:              "",
+				Tenant:            "test-org",
+				DeletionTimestamp: timestamppb.Now(),
+			}.Build(),
+		}.Build()
+		teamProject := privatev1.Project_builder{
+			Id: "team-proj-id",
+			Metadata: privatev1.Metadata_builder{
+				Name:   "team-a",
+				Tenant: "test-org",
+			}.Build(),
+		}.Build()
+
+		gomock.InOrder(
+			mockProjectsClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				Return(privatev1.ProjectsListResponse_builder{
+					Items: []*privatev1.Project{rootProject, teamProject},
+					Size:  2,
+					Total: 2,
+				}.Build(), nil),
+			mockProjectsClient.EXPECT().
+				Signal(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, request *privatev1.ProjectsSignalRequest,
+					_ ...grpc.CallOption) (*privatev1.ProjectsSignalResponse, error) {
+					Expect(request.GetId()).To(Equal("root-proj-id"))
+					return nil, grpcstatus.Error(grpccodes.Unavailable, "controller unavailable")
+				}),
+			mockProjectsClient.EXPECT().
+				Delete(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, request *privatev1.ProjectsDeleteRequest,
+					_ ...grpc.CallOption) (*privatev1.ProjectsDeleteResponse, error) {
+					Expect(request.GetId()).To(Equal("team-proj-id"))
+					return nil, grpcstatus.Error(grpccodes.PermissionDenied, "delete denied")
+				}),
+		)
+
+		t := &task{r: reconciler, tenant: tenant}
+		err := t.delete(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("failed to signal project root-proj-id for tenant deletion"))
+		Expect(err.Error()).To(ContainSubstring("controller unavailable"))
+		Expect(err.Error()).To(ContainSubstring("failed to delete project team-proj-id"))
+		Expect(err.Error()).To(ContainSubstring("delete denied"))
+	})
+
+	It("should return error when tenant project listing fails", func() {
 		tenant := privatev1.Tenant_builder{
 			Id: "org-root-err",
 			Metadata: privatev1.Metadata_builder{
@@ -1602,10 +1691,10 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 		t := &task{r: reconciler, tenant: tenant}
 		err := t.delete(ctx)
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("failed to list root project"))
+		Expect(err.Error()).To(ContainSubstring("failed to list projects for tenant deletion"))
 	})
 
-	It("should return error when root project delete fails", func() {
+	It("should return error when tenant project deletion fails", func() {
 		tenant := privatev1.Tenant_builder{
 			Id: "org-root-del-err",
 			Metadata: privatev1.Metadata_builder{
@@ -1626,25 +1715,45 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 				Tenant: "test-org",
 			}.Build(),
 		}.Build()
+		teamProject := privatev1.Project_builder{
+			Id: "team-proj-id",
+			Metadata: privatev1.Metadata_builder{
+				Name:   "team-a",
+				Tenant: "test-org",
+			}.Build(),
+		}.Build()
 
-		mockProjectsClient.EXPECT().
-			List(gomock.Any(), gomock.Any()).
-			Return(privatev1.ProjectsListResponse_builder{
-				Items: []*privatev1.Project{rootProject},
-				Total: 1,
-			}.Build(), nil)
-
-		mockProjectsClient.EXPECT().
-			Delete(gomock.Any(), gomock.Any()).
-			Return(nil, fmt.Errorf("permission denied"))
+		gomock.InOrder(
+			mockProjectsClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				Return(privatev1.ProjectsListResponse_builder{
+					Items: []*privatev1.Project{rootProject, teamProject},
+					Size:  2,
+					Total: 2,
+				}.Build(), nil),
+			mockProjectsClient.EXPECT().
+				Delete(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, request *privatev1.ProjectsDeleteRequest,
+					_ ...grpc.CallOption) (*privatev1.ProjectsDeleteResponse, error) {
+					Expect(request.GetId()).To(Equal("root-proj-id"))
+					return nil, fmt.Errorf("permission denied")
+				}),
+			mockProjectsClient.EXPECT().
+				Delete(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, request *privatev1.ProjectsDeleteRequest,
+					_ ...grpc.CallOption) (*privatev1.ProjectsDeleteResponse, error) {
+					Expect(request.GetId()).To(Equal("team-proj-id"))
+					return privatev1.ProjectsDeleteResponse_builder{}.Build(), nil
+				}),
+		)
 
 		t := &task{r: reconciler, tenant: tenant}
 		err := t.delete(ctx)
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("failed to delete root project"))
+		Expect(err.Error()).To(ContainSubstring("failed to delete project root-proj-id"))
 	})
 
-	It("should ignore NotFound error when deleting root project", func() {
+	It("should ignore NotFound when requesting tenant project deletion", func() {
 		tenant := privatev1.Tenant_builder{
 			Id: "org-root-notfound",
 			Metadata: privatev1.Metadata_builder{
@@ -1671,6 +1780,7 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 				List(gomock.Any(), gomock.Any()).
 				Return(privatev1.ProjectsListResponse_builder{
 					Items: []*privatev1.Project{rootProject},
+					Size:  1,
 					Total: 1,
 				}.Build(), nil),
 			mockProjectsClient.EXPECT().

@@ -144,6 +144,40 @@ def test_argument_spec_marks_only_string_secrets_no_log():
         assert loaded.ARGUMENT_SPEC[name].get("no_log") is None, name
 
 
+def test_module_construction_disables_invocation_logging(monkeypatch, capsys):
+    """Regression: construction-time invocation logging exposed the snapshots.
+
+    ansible-core's AnsibleModule logs non-no_log arguments via _log_invocation
+    at construction, before _redacted_invocation() runs. Module-level no_log
+    gates _log_invocation and log() while leaving the no_log_values censor
+    set — and therefore the returned address — untouched.
+    """
+    loaded = load_module()
+    captured = {}
+    real_ansible_module = loaded.AnsibleModule
+
+    def capturing_ansible_module(*args, **kwargs):
+        captured.update(kwargs)
+        return real_ansible_module(*args, **kwargs)
+
+    monkeypatch.setattr(loaded, "AnsibleModule", capturing_ansible_module)
+    monkeypatch.setattr(
+        ansible_basic,
+        "_ANSIBLE_ARGS",
+        json.dumps(
+            {
+                "ANSIBLE_MODULE_ARGS": module_args(_ansible_check_mode=True),
+                "ANSIBLE_MODULE_CONSTRAINTS": {},
+            }
+        ).encode(),
+    )
+
+    with pytest.raises(SystemExit):
+        loaded.main()
+
+    assert captured.get("no_log") is True
+
+
 def test_check_mode_validates_inputs_without_any_provider_write(monkeypatch, capsys):
     client = StubNetrisClient(records=[])
     args = module_args(_ansible_check_mode=True)

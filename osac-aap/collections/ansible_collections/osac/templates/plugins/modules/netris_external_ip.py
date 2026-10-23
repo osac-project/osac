@@ -127,7 +127,11 @@ def _redacted_invocation(params: dict) -> dict:
 
 def main() -> None:
     """Run one ExternalIP v1 provider operation with sanitized failures."""
-    module = AnsibleModule(argument_spec=ARGUMENT_SPEC, supports_check_mode=True)
+    module = AnsibleModule(
+        argument_spec=ARGUMENT_SPEC,
+        supports_check_mode=True,
+        no_log=True,
+    )
     params = module.params
     try:
         request = core.validate_request(

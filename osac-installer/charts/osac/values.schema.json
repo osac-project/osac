@@ -408,6 +408,10 @@
               "type": "boolean",
               "description": "Override the VMaaS ComputeInstance controller toggle"
             },
+            "clusterOrder": {
+              "type": "boolean",
+              "description": "Override the CaaS ClusterOrder controller toggle"
+            },
             "bareMetalInstance": {
               "type": "boolean",
               "description": "Override the BMaaS BareMetalInstance controller toggle"

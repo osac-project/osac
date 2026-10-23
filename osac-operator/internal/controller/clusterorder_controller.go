@@ -277,16 +277,15 @@ func (r *ClusterOrderReconciler) recordTransitionEventsForStatus(instance *v1alp
 			clusterOrderCreatedEventAction, "ClusterOrder created")
 	}
 
-	if newProgressing != nil && (oldProgressing == nil || oldProgressing.Reason != newProgressing.Reason) {
-		if _, shouldRecord := clusterOrderProvisioningEventReasons[newProgressing.Reason]; shouldRecord {
-			eventType := corev1.EventTypeNormal
-			if _, shouldWarn := clusterOrderWarningEventReasons[newProgressing.Reason]; shouldWarn {
-				eventType = corev1.EventTypeWarning
-			}
-			r.Recorder.Eventf(instance, nil, eventType, newProgressing.Reason,
-				clusterOrderProvisioningEventAction, "ClusterOrder entered provisioning stage %s",
-				humanizeConditionName(newProgressing.Reason))
-		}
+	newReady := instance.Status.Phase == v1alpha1.ClusterOrderPhaseReady && newProgressing != nil &&
+		newProgressing.Status == metav1.ConditionFalse
+	if newReady && !isReadyTransition(oldStatus, oldProgressing) {
+		// A single observation can cross several live HostedCluster stages. Emit the
+		// intermediate worker stage before the terminal Ready event instead of
+		// relying on a second reconcile to manufacture it.
+		r.recordProvisioningStageEvents(instance, oldProgressing)
+	} else if newProgressing != nil && (oldProgressing == nil || oldProgressing.Reason != newProgressing.Reason) {
+		r.recordProvisioningStageEvent(instance, newProgressing.Reason)
 	}
 
 	if oldStatus.Phase != v1alpha1.ClusterOrderPhaseFailed &&
@@ -307,8 +306,6 @@ func (r *ClusterOrderReconciler) recordTransitionEventsForStatus(instance *v1alp
 
 	oldReady := oldStatus.Phase == v1alpha1.ClusterOrderPhaseReady && oldProgressing != nil &&
 		oldProgressing.Status == metav1.ConditionFalse
-	newReady := newStatus.Phase == v1alpha1.ClusterOrderPhaseReady && newProgressing != nil &&
-		newProgressing.Status == metav1.ConditionFalse
 	if newReady && !oldReady {
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, clusterOrderReadyEventReason,
 			clusterOrderReadyEventAction, "ClusterOrder is ready")
@@ -321,6 +318,45 @@ func (r *ClusterOrderReconciler) recordTransitionEventsForStatus(instance *v1alp
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, clusterOrderDeletingEventReason,
 			clusterOrderDeletingEventAction, "ClusterOrder entered deleting phase")
 	}
+}
+
+func isReadyTransition(status *v1alpha1.ClusterOrderStatus, progressing *metav1.Condition) bool {
+	return status.Phase == v1alpha1.ClusterOrderPhaseReady && progressing != nil &&
+		progressing.Status == metav1.ConditionFalse
+}
+
+func (r *ClusterOrderReconciler) recordProvisioningStageEvents(instance *v1alpha1.ClusterOrder,
+	oldProgressing *metav1.Condition) {
+	stages := []string{
+		v1alpha1.ReasonPreparingInfrastructure,
+		v1alpha1.ReasonControlPlaneStarting,
+		v1alpha1.ReasonWorkersJoining,
+	}
+	start := 0
+	if oldProgressing != nil {
+		for i, stage := range stages {
+			if oldProgressing.Reason == stage {
+				start = i + 1
+				break
+			}
+		}
+	}
+	for _, stage := range stages[start:] {
+		r.recordProvisioningStageEvent(instance, stage)
+	}
+}
+
+func (r *ClusterOrderReconciler) recordProvisioningStageEvent(instance *v1alpha1.ClusterOrder, reason string) {
+	if _, shouldRecord := clusterOrderProvisioningEventReasons[reason]; !shouldRecord {
+		return
+	}
+	eventType := corev1.EventTypeNormal
+	if _, shouldWarn := clusterOrderWarningEventReasons[reason]; shouldWarn {
+		eventType = corev1.EventTypeWarning
+	}
+	r.Recorder.Eventf(instance, nil, eventType, reason,
+		clusterOrderProvisioningEventAction, "ClusterOrder entered provisioning stage %s",
+		humanizeConditionName(reason))
 }
 
 type statusTransition struct {
@@ -584,7 +620,6 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 	hc *hypershiftv1beta1.HostedCluster) error {
 
 	log := ctrllog.FromContext(ctx)
-
 	name := hc.GetName()
 	instance.SetClusterReferenceHostedClusterName(name)
 	instance.SetStatusCondition(v1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
@@ -682,7 +717,6 @@ func (r *ClusterOrderReconciler) reconcileClusterOrderReadiness(
 		r.setProgressingStage(instance, deriveProvisioningSubStage(hostedCluster))
 		return
 	}
-
 	instance.SetStatusCondition(v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 
 	if instance.HasBareMetalNodeSet() && !bareMetalWorkersReady(instance) {
@@ -951,6 +985,9 @@ func hostedClusterAndNodePoolsAreReady(instance *v1alpha1.ClusterOrder, hc *hype
 		!apimeta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.KubeAPIServerAvailable)) ||
 		!hostedClusterIsReady(hc) {
 		return false
+	}
+	if len(instance.Spec.NodeRequests) == 0 && len(nodePools) == 0 {
+		return true
 	}
 	return nodePoolsMatchRequests(instance.Spec.NodeRequests, nodePools)
 }
@@ -1250,18 +1287,9 @@ func (r *ClusterOrderReconciler) provisioningCallbacks(instance *v1alpha1.Cluste
 			}
 		},
 		OnSuccess: func(_ provisioning.ProvisionStatus) {
-			if instance.Status.Phase != v1alpha1.ClusterOrderPhaseProgressing {
-				return
-			}
-			if instance.HasBareMetalNodeSet() && !bareMetalWorkersReady(instance) {
-				instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
-					humanizeConditionName(v1alpha1.ReasonWorkersJoining), v1alpha1.ReasonWorkersJoining)
-				return
-			}
-			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
-			if progressing == nil || progressing.Status != metav1.ConditionTrue {
-				instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue, "", v1alpha1.ReasonProgressing)
-			}
+			// Job success only records the provisioning result. The live
+			// HostedCluster and NodePool observations determine the phase and
+			// detailed progressing reason in handleHostedCluster.
 		},
 	}
 }

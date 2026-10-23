@@ -373,7 +373,7 @@ websocket-client==1.9.2
     # via
     #   kubernetes
     #   python-esiclient
-wrapt==2.1.2
+wrapt==2.5.1
     # via
     #   aiobotocore
     #   debtcollector

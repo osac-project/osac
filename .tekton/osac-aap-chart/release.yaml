@@ -50,7 +50,7 @@ spec:
   # registry.stage.redhat.io write access is reserved for the
   # managed release pipeline, which already promotes this exact
   # chart there via the existing osac-charts-stage RPA.
-  # owning-component-tag-prefix reuses the EXISTING osac-ui/vX.Y.Z
+  # owning-component-tag-prefix reuses the EXISTING osac-aap/vX.Y.Z
   # tag (not the dedicated chart tag above) since that's what
   # identifies the real released *image* version.
   - name: owning-component-tag-prefix

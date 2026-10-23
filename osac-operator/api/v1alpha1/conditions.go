@@ -110,6 +110,42 @@ const (
 	ReasonStalled = "Stalled"
 )
 
+// Fabric provider failure reason constants.  These classify provisioning
+// failures reported by the AgentlessNet provider through AAP into stable,
+// diagnostic Kubernetes condition reasons.  Each maps to a real error class
+// in the provider's Python exception hierarchy (see agentless_net_state.py,
+// agentless_net_network.py, and agentless_net_subnet.py).
+const (
+	// ReasonSwitchOperationFailed indicates a Cumulus switch interaction
+	// failed (VLAN discovery, reserved-range parsing, or trunk
+	// convergence).  Maps to SubnetProviderError messages that begin
+	// with "Cumulus ".
+	ReasonSwitchOperationFailed = "SwitchOperationFailed"
+
+	// ReasonNamespaceOperationFailed indicates a Linux network-namespace
+	// or veth-uplink operation failed (creation, deletion, address
+	// convergence, forwarding-isolation rule, or ownership validation).
+	// Maps to NetworkCommandError and StateError messages about
+	// namespace, uplink, or forwarding-isolation state.
+	ReasonNamespaceOperationFailed = "NamespaceOperationFailed"
+
+	// ReasonStateLockTimeout indicates the provider could not acquire
+	// the AgentlessNet state-file lock within its deadline.  Maps to
+	// StateError("timed out waiting for AgentlessNet lock ...").
+	ReasonStateLockTimeout = "StateLockTimeout"
+
+	// ReasonNetNodeCommandFailed indicates a network-node system command
+	// (ip, iptables, sysctl, dnsmasq, ss) failed, timed out, or could
+	// not run.  Maps to NetworkCommandError messages about command exit
+	// status, timeout, or missing binaries.
+	ReasonNetNodeCommandFailed = "NetNodeCommandFailed"
+
+	// ReasonStateCorrupt indicates the AgentlessNet SQLite state
+	// database is corrupt, has an unsupported schema version, or
+	// contains malformed data.  Maps to StateCorrupt exceptions.
+	ReasonStateCorrupt = "StateCorrupt"
+)
+
 // Worker failure reason constants
 const (
 	// ReasonAgentRegistrationTimeout indicates that the agent failed to register

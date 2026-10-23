@@ -310,7 +310,7 @@ func (c *Client) PatchDevice(ctx context.Context, id string, patch DevicePatch, 
 		return DeviceSnapshot{}, err
 	}
 	if strings.TrimSpace(etag) == "" || strings.ContainsAny(etag, "\r\n") {
-		return DeviceSnapshot{}, &APIError{Kind: ErrorKindInvalidRequest}
+		return DeviceSnapshot{}, &APIError{Kind: ErrorKindInvalidETag}
 	}
 	body, err := toSDKPatch(patch)
 	if err != nil {

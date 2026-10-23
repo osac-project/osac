@@ -77,6 +77,9 @@ type Client interface {
 	// Returns an empty map when no mapping is configured, and an error for
 	// malformed mapping data or backend failures.
 	GetHostLogicalPortMACs(ctx context.Context, inventoryHostID string) (map[string]string, error)
+
+	// Close releases resources owned by the inventory client.
+	Close() error
 }
 
 // NewClientFunc is a function that creates a new inventory client from config

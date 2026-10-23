@@ -131,9 +131,33 @@ var _ = Describe("newServer", func() {
 		expectToolAnnotations(tools["delete_compute_instance"], "Delete OSAC compute instance", false, true, false, true)
 		expectComputeInstanceCreateSchema(tools["create_compute_instance"].InputSchema)
 		expectNullableArraySchema(tools["list_resources"].OutputSchema, "items")
-		expectResourceTypeSchema(tools["list_resources"].InputSchema)
+		expectResourceTypeSchema(tools["list_resources"].InputSchema, []ResourceType{
+			ResourceTypeComputeInstanceCatalogItem,
+			ResourceTypeComputeInstanceTemplate,
+			ResourceTypeInstanceType,
+			ResourceTypeDiskImage,
+			ResourceTypeStorageTier,
+			ResourceTypeVirtualNetwork,
+			ResourceTypeSubnet,
+			ResourceTypeSecurityGroup,
+			ResourceTypeComputeInstance,
+			ResourceTypeProject,
+			ResourceTypeSecretReference,
+		})
 		expectResourcePaginationSchema(tools["list_resources"].InputSchema)
-		expectResourceTypeSchema(tools["get_resource"].InputSchema)
+		expectResourceTypeSchema(tools["get_resource"].InputSchema, []ResourceType{
+			ResourceTypeComputeInstanceCatalogItem,
+			ResourceTypeComputeInstanceTemplate,
+			ResourceTypeInstanceType,
+			ResourceTypeDiskImage,
+			ResourceTypeStorageTier,
+			ResourceTypeVirtualNetwork,
+			ResourceTypeSubnet,
+			ResourceTypeSecurityGroup,
+			ResourceTypeComputeInstance,
+			ResourceTypeProject,
+			ResourceTypeSecretReference,
+		})
 	})
 })
 
@@ -177,24 +201,18 @@ func hasMultiTypeSchema(value any) bool {
 	return false
 }
 
-func expectResourceTypeSchema(schema any) {
+func expectResourceTypeSchema(schema any, expected []ResourceType) {
 	document, ok := schema.(map[string]any)
 	Expect(ok).To(BeTrue())
 	properties, ok := document["properties"].(map[string]any)
 	Expect(ok).To(BeTrue())
 	resourceType, ok := properties["resource_type"].(map[string]any)
 	Expect(ok).To(BeTrue())
-	Expect(resourceType["enum"]).To(ConsistOf(
-		string(ResourceTypeComputeInstanceCatalogItem),
-		string(ResourceTypeComputeInstanceTemplate),
-		string(ResourceTypeInstanceType),
-		string(ResourceTypeDiskImage),
-		string(ResourceTypeStorageTier),
-		string(ResourceTypeVirtualNetwork),
-		string(ResourceTypeSubnet),
-		string(ResourceTypeSecurityGroup),
-		string(ResourceTypeComputeInstance),
-	))
+	expectedNames := make([]string, len(expected))
+	for i, resourceType := range expected {
+		expectedNames[i] = string(resourceType)
+	}
+	Expect(resourceType["enum"]).To(ConsistOf(expectedNames))
 }
 
 func expectResourcePaginationSchema(schema any) {

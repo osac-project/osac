@@ -43,7 +43,7 @@ var _ = Describe("Describe diskimage command", func() {
 })
 
 var _ = Describe("Disk image rendering", func() {
-	It("renders all base fields", func() {
+	DescribeTable("renders all base fields", func(architecture publicv1.Architecture, label string) {
 		di := publicv1.DiskImage_builder{
 			Id: "fedora-41",
 			Metadata: publicv1.Metadata_builder{
@@ -54,7 +54,7 @@ var _ = Describe("Disk image rendering", func() {
 				SourceRef:     "quay.io/containerdisks/fedora:41",
 				GuestOsFamily: publicv1.GuestOSFamily_GUEST_OS_FAMILY_LINUX,
 				Architecture: []publicv1.Architecture{
-					publicv1.Architecture_ARCHITECTURE_AMD64,
+					architecture,
 				},
 				Lifecycle: publicv1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
 			}.Build(),
@@ -66,9 +66,13 @@ var _ = Describe("Disk image rendering", func() {
 		Expect(output).To(ContainSubstring("REGISTRY"))
 		Expect(output).To(ContainSubstring("quay.io/containerdisks/fedora:41"))
 		Expect(output).To(ContainSubstring("LINUX"))
-		Expect(output).To(ContainSubstring("AMD64"))
+		Expect(output).To(ContainSubstring(label))
 		Expect(output).To(ContainSubstring("AVAILABLE"))
-	})
+	},
+		Entry("amd64", publicv1.Architecture_ARCHITECTURE_AMD64, "amd64"),
+		Entry("arm64", publicv1.Architecture_ARCHITECTURE_ARM64, "arm64"),
+		Entry("s390x", publicv1.Architecture_ARCHITECTURE_S390X, "s390x"),
+	)
 
 	It("strips enum prefixes", func() {
 		di := publicv1.DiskImage_builder{
@@ -94,7 +98,7 @@ var _ = Describe("Disk image rendering", func() {
 		Expect(output).NotTo(ContainSubstring("DISK_IMAGE_LIFECYCLE_"))
 		Expect(output).To(ContainSubstring("REGISTRY"))
 		Expect(output).To(ContainSubstring("WINDOWS"))
-		Expect(output).To(ContainSubstring("ARM64"))
+		Expect(output).To(ContainSubstring("arm64"))
 		Expect(output).To(ContainSubstring("DEPRECATED"))
 	})
 
@@ -117,7 +121,7 @@ var _ = Describe("Disk image rendering", func() {
 		}.Build()
 
 		output := formatDiskImage(di)
-		Expect(output).To(ContainSubstring("AMD64, ARM64, S390X"))
+		Expect(output).To(ContainSubstring("amd64, arm64, s390x"))
 	})
 
 	It("renders deprecation timestamps when present", func() {

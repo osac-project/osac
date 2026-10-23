@@ -100,6 +100,8 @@ var _ = Describe("handleCheckConnection", func() {
 			ResourceTypeSubnet,
 			ResourceTypeSecurityGroup,
 			ResourceTypeComputeInstance,
+			ResourceTypeProject,
+			ResourceTypeSecretReference,
 		))
 		Expect(output.Tools).To(ConsistOf(
 			"check_connection", "list_resources", "get_resource", "create_compute_instance", "delete_compute_instance",
@@ -177,6 +179,22 @@ var _ = Describe("handleCheckConnection", func() {
 			wantReviewedTenants = append(wantReviewedTenants, tenant, tenant)
 		}
 		Expect(reviewedTenants).To(Equal(wantReviewedTenants))
+	})
+
+	It("Preserves a retryable token exchange error", func() {
+		request := requestWithCaller("raw-bearer-value", safeCallerContext{Subject: "user-1"})
+		request.Extra.TokenInfo.Extra[exchangeTokenExtraKey] = apiTokenSource(func(context.Context) (string, error) {
+			return "", errOAuthTokenExchangeUnavailable
+		})
+		handler := handleCheckConnection(
+			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), &mockSelfSubjectAccessReviewsClient{},
+		)
+		_, _, err := handler(context.Background(), request, CheckConnectionInput{})
+		Expect(err).To(HaveOccurred())
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("service_unavailable"))
+		Expect(envelope.GRPCCode).To(Equal("Unavailable"))
+		Expect(envelope.Retryable).To(BeTrue())
 	})
 
 	It("Preserves a retryable token exchange error", func() {

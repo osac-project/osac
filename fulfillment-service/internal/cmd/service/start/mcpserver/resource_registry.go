@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"google.golang.org/protobuf/proto"
 
@@ -24,8 +25,9 @@ import (
 )
 
 // resourceOperations contains the concrete API operations that back one MCP
-// deployment resource type. The registry keeps list_resources and get_resource
-// generic while retaining a narrow, explicit allowlist of public APIs.
+// deployment resource type. Each entry is a typed adapter; it must never
+// accept an arbitrary public method or serialize a resource directly when a
+// narrower projection is required. A nil get marks a list-only resource.
 type resourceOperations struct {
 	label string
 	list  func(context.Context, string, resourcePageRequest) (ListResourcesOutput, error)
@@ -43,8 +45,84 @@ func (r resourceRegistry) resourceTypes() []ResourceType {
 	return result
 }
 
+func (r resourceRegistry) listResourceTypes() []ResourceType {
+	result := make([]ResourceType, 0, len(r))
+	for resourceType, operations := range r {
+		if operations.list != nil {
+			result = append(result, resourceType)
+		}
+	}
+	slices.Sort(result)
+	return result
+}
+
+func projectResourceOperations(deps ServerDeps) resourceOperations {
+	return resourceOperations{
+		label: "project",
+		list: func(ctx context.Context, filter string, page resourcePageRequest) (ListResourcesOutput, error) {
+			request := publicv1.ProjectsListRequest_builder{
+				Offset: &page.offset,
+				Limit:  &page.limit,
+			}
+			if filter != "" {
+				request.Filter = &filter
+			}
+			response, err := deps.ProjectsClient.List(ctx, request.Build())
+			if err != nil {
+				return ListResourcesOutput{}, fmt.Errorf("failed to list projects: %w", err)
+			}
+			items := summaries(response.GetItems(), func(item *publicv1.Project) ResourceSummary {
+				return ResourceSummary{
+					ID:          item.GetId(),
+					Name:        item.GetMetadata().GetName(),
+					Title:       item.GetSpec().GetTitle(),
+					Description: item.GetSpec().GetDescription(),
+					State:       item.GetStatus().GetState().String(),
+				}
+			})
+			return resourceListOutput(page, response.GetSize(), response.GetTotal(), items), nil
+		},
+		get: func(ctx context.Context, id string) (proto.Message, error) {
+			response, err := deps.ProjectsClient.Get(ctx, publicv1.ProjectsGetRequest_builder{Id: id}.Build())
+			if err != nil {
+				return nil, fmt.Errorf("failed to get project %q: %w", id, err)
+			}
+			return response.GetObject(), nil
+		},
+	}
+}
+
+func secretReferenceResourceOperations(deps ServerDeps) resourceOperations {
+	return resourceOperations{
+		label: "secret reference",
+		list: func(ctx context.Context, filter string, page resourcePageRequest) (ListResourcesOutput, error) {
+			request := publicv1.SecretsListRequest_builder{
+				Offset: &page.offset,
+				Limit:  &page.limit,
+			}
+			if filter != "" {
+				request.Filter = &filter
+			}
+			response, err := deps.SecretsClient.List(ctx, request.Build())
+			if err != nil {
+				return ListResourcesOutput{}, fmt.Errorf("failed to list secret references: %w", err)
+			}
+			items := summaries(response.GetItems(), func(item *publicv1.Secret) ResourceSummary {
+				return ResourceSummary{
+					ID:   item.GetId(),
+					Name: item.GetMetadata().GetName(),
+					Type: secretReferenceType(item.GetType()),
+				}
+			})
+			return resourceListOutput(page, response.GetSize(), response.GetTotal(), items), nil
+		},
+	}
+}
+
 func newResourceRegistry(deps ServerDeps) resourceRegistry {
 	return resourceRegistry{
+		ResourceTypeProject:         projectResourceOperations(deps),
+		ResourceTypeSecretReference: secretReferenceResourceOperations(deps),
 		ResourceTypeComputeInstanceCatalogItem: {
 			label: "compute instance catalog item",
 			list: func(ctx context.Context, filter string, page resourcePageRequest) (ListResourcesOutput, error) {
@@ -270,6 +348,10 @@ func newResourceRegistry(deps ServerDeps) resourceRegistry {
 			},
 		},
 	}
+}
+
+func secretReferenceType(secretType publicv1.SecretType) string {
+	return strings.ToLower(strings.TrimPrefix(secretType.String(), "SECRET_TYPE_"))
 }
 
 func summaries[T any](items []T, summarize func(T) ResourceSummary) []ResourceSummary {

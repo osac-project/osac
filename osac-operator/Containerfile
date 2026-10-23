@@ -31,9 +31,9 @@ COPY --chown=1001:1001 osac-operator/ osac-operator/
 COPY --chown=1001:1001 bare-metal-fulfillment-operator/ bare-metal-fulfillment-operator/
 
 WORKDIR /opt/app-root/src/osac-operator
-RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager ./cmd
-RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o console-proxy cmd/console-proxy/main.go
-RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o trust-admission cmd/trust-admission/main.go
+RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -o manager ./cmd
+RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -o console-proxy cmd/console-proxy/main.go
+RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -o trust-admission cmd/trust-admission/main.go
 
 FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
 # Stamped to the real release version on osac-build-and-publish.yaml's

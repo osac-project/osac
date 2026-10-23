@@ -316,7 +316,7 @@ To create a bare metal instance type:
   --name gpu-large \
   --description 'Large GPU node for ML workloads' \
   --cpu-cores 32 \
-  --cpu-architecture x86_64 \
+  --cpu-architecture amd64 \
   --cpu-model 'Intel Xeon Gold 6338' \
   --cpu-threads-per-core 2 \
   --memory-total-gb 512 \
@@ -349,7 +349,8 @@ _CORES_ - Number of CPU cores. Must be greater than zero.
 `
 
 const cpuArchitectureFlagHelp = `
-_ARCHITECTURE_ - CPU architecture (e.g., {{ bt }}x86_64{{ bt }}, {{ bt }}aarch64{{ bt }}). Required.
+_ARCHITECTURE_ - CPU architecture. Valid values: {{ bt }}amd64{{ bt }}, {{ bt }}arm64{{ bt }},
+and {{ bt }}s390x{{ bt }}. Required.
 `
 
 const cpuModelFlagHelp = `

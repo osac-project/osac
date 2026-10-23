@@ -730,6 +730,11 @@ class K8sClient:
                 count += 1
         return count
 
+    def is_bmh_present(self, *, name: str, bmh_namespace: str) -> bool:
+        """Return whether a BareMetalHost exists in the management namespace."""
+        _output, rc = self._get("get", "baremetalhost", name, "-n", bmh_namespace, checked=False)
+        return rc == 0
+
     def get_bmh_hardware_nics(self, *, name: str, bmh_namespace: str) -> list[str]:
         """Return lowercased MAC addresses from BareMetalHost hardware inspection data."""
         output, rc = self._get(

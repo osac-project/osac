@@ -8,6 +8,14 @@ dependencies = [
     "pytest-xdist>=3.0",
     "pyyaml>=6.0",
     "websocket-client>=1.6",
+    # NetBox inventory client for the e2e backend abstraction. Pinned exactly
+    # per the supply-chain review policy: 7.8.0 is the last release supporting
+    # python3.11 (7.9.x requires >=3.12). Bump to 7.9.x (matched to NetBox
+    # 4.7) when CI moves to python >=3.12.
+    "pynetbox==7.8.0",
+    # requests is imported directly by tests/e2e/core/netbox_client.py for the
+    # TLS session and is also a pynetbox dependency.
+    "requests==2.34.2",
 ]
 
 [tool.setuptools.packages.find]

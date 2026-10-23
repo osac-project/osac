@@ -262,6 +262,10 @@ func (r *UpdateRequest[O]) translateError(ctx context.Context, id, name, tenant 
 		return &ErrMetering{
 			Reason: pgErr.Message,
 		}
+	case errInUseCode:
+		return &ErrInUse{
+			Reason: pgErr.Message,
+		}
 	case errImmutableCode:
 		if pgErr.Detail == "" {
 			r.dao.logger.WarnContext(

@@ -24,7 +24,7 @@ collections:
   - name: vastdata.vms
     version: 1.2.0
   - name: purestorage.flashblade
-    version: 1.26.0
+    version: 1.28.0
   - name: ansible.posix
     version: 2.2.2
   - name: ansible_network.network_runner

@@ -125,6 +125,21 @@ RUN /output/scripts/assemble
 
 # Final build stage
 FROM base AS final
+# Stamped to the real release version on osac-build-and-publish.yaml's
+# temp branch before tagging (same mechanism as every other component's
+# Containerfile and as Chart.yaml's own version field) -- the committed
+# default below is only ever what a local/dev/push/pull-request build
+# sees. Surfaced as a real OCI label so Konflux's release-side
+# {{ oci_version }} tag templating resolves to it instead of silently
+# falling back to the base image's own inherited version label. This
+# replaces the old stamp-release-labels Tekton task (and generate-ee-context
+# before it) -- both tripped Enterprise Contract's trusted_task.trusted
+# rule by existing at all; a plain sed on a committed file needs no
+# Tekton task whatsoever.
+ARG VERSION=dev
+LABEL name="cloud-extensions/osac-aap-rhel10"
+LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
+LABEL org.opencontainers.image.version="${VERSION}"
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 ARG EE_BASE_IMAGE
 ARG PYCMD

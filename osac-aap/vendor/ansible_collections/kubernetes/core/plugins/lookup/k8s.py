@@ -86,14 +86,48 @@ DOCUMENTATION = """
         description:
         - Provide a username for authenticating with the API. Can also be specified via K8S_AUTH_USERNAME environment
           variable.
+      no_proxy:
+        description:
+        - The comma separated list of hosts/domains/IP/CIDR that shouldn't go through proxy.
+          Can also be specified via K8S_AUTH_NO_PROXY environment variable.
+        - Please note that this module does not pick up typical proxy settings from the environment (e.g. NO_PROXY).
+        - This feature requires kubernetes>=19.15.0.
+          When kubernetes library is less than 19.15.0, it fails even if no_proxy is set correctly.
+        type: str
       password:
         description:
         - Provide a password for authenticating with the API. Can also be specified via K8S_AUTH_PASSWORD environment
           variable.
+      proxy:
+        description:
+        - The URL of an HTTP proxy to use for the connection. Can also be specified via K8S_AUTH_PROXY environment variable.
+        - Please note that this module does not pick up typical proxy settings from the environment (e.g. HTTP_PROXY).
+        type: str
+      proxy_headers:
+        description:
+        - The Header used for the HTTP proxy.
+        - Documentation can be found here
+          U(https://urllib3.readthedocs.io/en/latest/reference/urllib3.util.html?highlight=proxy_headers#urllib3.util.make_headers).
+        type: dict
+        suboptions:
+          proxy_basic_auth:
+            type: str
+            description:
+            - Colon-separated username:password for proxy basic authentication header.
+            - Can also be specified via K8S_AUTH_PROXY_HEADERS_PROXY_BASIC_AUTH environment.
+          basic_auth:
+            type: str
+            description:
+            - Colon-separated username:password for basic authentication header.
+            - Can also be specified via K8S_AUTH_PROXY_HEADERS_BASIC_AUTH environment.
+          user_agent:
+            type: str
+            description:
+            - String representing the user-agent you want, such as foo/1.0.
+            - Can also be specified via K8S_AUTH_PROXY_HEADERS_USER_AGENT environment.
       client_cert:
         description:
-        - Path to a certificate used to authenticate with the API. Can also be specified via K8S_AUTH_CERT_FILE
-          environment
+        - Path to a certificate used to authenticate with the API. Can also be specified via K8S_AUTH_CERT_FILE environment
           variable.
         aliases: [ cert_file ]
       client_key:
@@ -177,14 +211,26 @@ RETURN = """
 import os
 
 from ansible.errors import AnsibleError
+from ansible.module_utils.ansible_release import __version__ as ansible_version
 from ansible.module_utils.common._collections_compat import KeysView
 from ansible.module_utils.common.validation import check_type_bool
+from ansible.utils.display import Display
 from ansible_collections.kubernetes.core.plugins.module_utils.k8s.client import (
     get_api_client,
 )
 from ansible_collections.kubernetes.core.plugins.module_utils.k8s.resource import (
     create_definitions,
 )
+from ansible_collections.kubernetes.core.plugins.module_utils.version import (
+    LooseVersion,
+)
+
+display = Display()
+
+# cloud.common declares requires_ansible '>=2.15.0,<2.19'. On newer ansible-core the
+# import still succeeds, so the version has to be checked explicitly: relying on
+# ImportError alone lets turbo mode fail later with an unrelated traceback.
+TURBO_UNSUPPORTED_CORE = "2.19.0"
 
 try:
     enable_turbo_mode = check_type_bool(os.environ.get("ENABLE_TURBO_MODE"))
@@ -192,11 +238,31 @@ except TypeError:
     enable_turbo_mode = False
 
 if enable_turbo_mode:
+    display.deprecated(
+        "ENABLE_TURBO_MODE is deprecated, as it relies on the cloud.common "
+        "collection which is being retired. Setting this environment "
+        "variable will have no effect once support is removed.",
+        version="8.0.0",
+        collection_name="kubernetes.core",
+    )
+    if LooseVersion(ansible_version) >= LooseVersion(TURBO_UNSUPPORTED_CORE):
+        display.warning(
+            "ENABLE_TURBO_MODE is ignored on ansible-core %s: Ansible Turbo mode requires "
+            "the cloud.common collection, which supports ansible-core < %s only. "
+            "Continuing without Turbo mode." % (ansible_version, TURBO_UNSUPPORTED_CORE)
+        )
+        enable_turbo_mode = False
+
+if enable_turbo_mode:
     try:
         from ansible_collections.cloud.common.plugins.plugin_utils.turbo.lookup import (
             TurboLookupBase as LookupBase,
         )
     except ImportError:
+        display.warning(
+            "ENABLE_TURBO_MODE is set but the cloud.common collection is not installed. "
+            "Continuing without Turbo mode."
+        )
         from ansible.plugins.lookup import LookupBase  # noqa: F401
 else:
     from ansible.plugins.lookup import LookupBase  # noqa: F401

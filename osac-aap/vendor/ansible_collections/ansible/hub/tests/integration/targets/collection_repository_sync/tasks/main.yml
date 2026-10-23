@@ -1,5 +1,5 @@
 ---
-- name: collection_repository_sync integration tests
+- name: collection_repository_sync integration tests with basic auth
   module_defaults:
     group/ansible.hub.hub:
       ah_host: "{{ ah_host }}"
@@ -7,25 +7,29 @@
       ah_password: "{{ ah_password }}"
       validate_certs: "{{ ah_verify_ssl }}"
   block:
-    - name: Sync rh-certified in check mode
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+    - name: Sync rh-certified in check mode (basic auth)
       ansible.hub.collection_repository_sync:
         name: rh-certified
         wait: false
-      check_mode: yes
-      register: r
+      check_mode: true
+      register: r_basic_check
 
-    - name: Check if sync is successful
+    - name: Check if sync is successful (basic auth)
       assert:
         that:
-          - r.changed
+          - r_basic_check.changed
 
-    - name: Sync rh-certified
+    - name: Sync rh-certified (basic auth)
       ansible.hub.collection_repository_sync:
         name: rh-certified
         wait: false
-      register: r
+      register: r_basic
 
-    - name: Check if sync is successful
+    - name: Check if sync is successful (basic auth)
       assert:
         that:
-          - r.changed
+          - r_basic.changed

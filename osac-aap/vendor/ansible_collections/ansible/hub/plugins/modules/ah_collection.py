@@ -3,9 +3,6 @@
 
 # Copyright: (c) 2020, Sean Sullivan <@sean-m-sullivan>
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
-from __future__ import absolute_import, division, print_function
-
-__metaclass__ = type
 
 
 DOCUMENTATION = """
@@ -108,6 +105,16 @@ import pathlib
 from ..module_utils.ah_module import AHModule
 
 
+def extract_version_from_path(path):
+    parts = pathlib.Path(path).name.replace(".tar.gz", "").split("-")
+    if len(parts) < 3:
+        raise ValueError(
+            "Could not extract version from '{0}'; expected format: "
+            "<namespace>-<name>-<version>.tar.gz".format(path)
+        )
+    return "-".join(parts[2:])
+
+
 def main():
     # Any additional arguments that are not fields of the item can be added here
     argument_spec = dict(
@@ -141,8 +148,8 @@ def main():
     state = module.params.get("state")
 
     # approval needs a version, if one is not defined find it from the filename.
-    if auto_approve and path:
-        version = "-".join(path.split("-")[2:]).replace('.tar.gz', '')
+    if auto_approve and path and not version:
+        version = extract_version_from_path(path)
 
     # Attempt to look up an existing item based on the provided data
     collection_endpoint = "collections/{0}/{1}".format(namespace, name)

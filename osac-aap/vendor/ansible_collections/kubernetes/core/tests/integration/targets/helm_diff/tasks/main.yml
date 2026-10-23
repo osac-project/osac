@@ -10,7 +10,7 @@
         binary_path: "{{ helm_binary }}"
         state: present
         plugin_path: https://github.com/databus23/helm-diff
-        plugin_version: 3.4.0
+        plugin_version: 3.9.13
 
     - name: Copy test chart
       copy:
@@ -239,6 +239,7 @@
           vars:
             chart_local_path: '{{ _tmpd.path }}/test-chart-deployment-time'
             chart_repo_path: 'testing'
+            helm_binary_path: "{{ helm_binary }}"
       always:
         - name: Delete temporary directory
           ansible.builtin.file:
@@ -324,3 +325,5 @@
       ignore_errors: true
 
 - include_tasks: reuse_values.yml
+
+- include_tasks: reset_then_reuse_values.yml

@@ -1,5 +1,6 @@
 ---
-- name: ah_collection integration tests
+# Test with Basic Authentication
+- name: ah_collection integration tests with basic auth
   module_defaults:
     group/ansible.hub.hub:
       ah_host: "{{ ah_host }}"
@@ -11,15 +12,14 @@
       set_fact:
         test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
       when: test_id is not defined
-
-    - name: Define variables
+    - name: Define variables (basic auth)
       set_fact:
         namespace: "sample"
         company: "my_company_{{ test_id }}"
         collection_name: "sample"
-        build_path: "/home/runner/collections/ansible_collections/ansible/hub/tests/integration/targets/ah_build/files"
+        build_path: "/home/runner/.ansible/collections/ansible_collections/ansible/hub/tests/integration/targets/ah_build/files"
 
-    - name: Create namespace
+    - name: Create namespace (basic auth)
       ansible.hub.ah_namespace:
         name: "{{ namespace }}"
         company: "{{ company }}"
@@ -29,72 +29,72 @@
         links:
           - name: "homepage"
             url: "https://www.redhat.com"
-      register: r
+      register: r_basic_namespace
 
-    - name: Check if the namespace is created
+    - name: Check if the namespace is created (basic auth)
       assert:
         that:
-          - r.changed
+          - r_basic_namespace.changed
 
-    - name: Build Ansible Collection from the directory
+    - name: Build Ansible Collection from the directory (basic auth)
       ansible.hub.ah_build:
         path: "{{ build_path }}/sample/sample"
         output_path: "{{ build_path }}/"
-      register: r
+      register: r_basic_build
 
-    - name: Check if the file exists
+    - name: Check if the file exists (basic auth)
       ansible.builtin.stat:
         path: "{{ build_path }}/sample-sample-1.0.0.tar.gz"
-      register: build_stat
+      register: build_stat_basic
 
-    - name: Check if the build is successful
+    - name: Check if the build is successful (basic auth)
       assert:
         that:
-          - r.changed
-          - build_stat.stat.exists
+          - r_basic_build.changed
+          - build_stat_basic.stat.exists
 
-    - name: Upload a collection to the given collection
+    - name: Upload a collection to the given collection (basic auth)
       ansible.hub.ah_collection:
         namespace: "{{ namespace }}"
         name: "{{ collection_name }}"
         path: "{{ build_path }}/sample-sample-1.0.0.tar.gz"
-      register: r
+      register: r_basic_upload
 
-    - name: Check if the collection is uploaded successfully
+    - name: Check if the collection is uploaded successfully (basic auth)
       assert:
         that:
-          - r.changed
+          - r_basic_upload.changed
 
-    - name: Delete a collection to the given collection
+    - name: Delete a collection to the given collection (basic auth)
       ansible.hub.ah_collection:
         namespace: "{{ namespace }}"
         name: "{{ collection_name }}"
         version: 1.0.0
         state: absent
-      register: r
+      register: r_basic_delete
 
-    - name: Check if the collection is deleted successfully
+    - name: Check if the collection is deleted successfully (basic auth)
       assert:
         that:
-          - r.changed
-          - r.deleted
+          - r_basic_delete.changed
+          - r_basic_delete.deleted
 
   always:
-    - name: Delete a collection to the given collection
+    - name: Delete a collection to the given collection (basic auth)
       ansible.hub.ah_collection:
-        namespace: "{{ namespace }}"
+        namespace: "{{ namespace | default('') }}"
         name: "{{ collection_name }}"
         version: 1.0.0
         state: absent
       ignore_errors: true
 
-    - name: Delete namespace
+    - name: Delete namespace (basic auth)
       ansible.hub.ah_namespace:
-        name: "{{ namespace }}"
+        name: "{{ namespace | default('') }}"
         state: absent
       ignore_errors: true
 
-    - name: Remove built collection
+    - name: Remove built collection (basic auth)
       ansible.builtin.file:
         path: "{{ build_path }}/sample-sample-1.0.0.tar.gz"
         state: absent

@@ -8,11 +8,6 @@
 # automation hub at https://hub.example.com/pulp/api/v3/docs/
 
 
-from __future__ import absolute_import, division, print_function
-
-__metaclass__ = type
-
-
 DOCUMENTATION = r"""
 ---
 module: ah_ee_repository
@@ -31,6 +26,8 @@ options:
   description:
     description:
       - Text that describes the repository.
+      - To remove an existing description, set this to V("").
+      - Setting it to V(null), or omitting it, leaves the description unchanged.
     type: str
   registry:
     description:
@@ -92,7 +89,7 @@ EXAMPLES = r"""
     ah_host: hub.example.com
     ah_username: admin
     ah_password: Sup3r53cr3t
-  no_log: True
+  no_log: true
 
 - name: Ensure the repository README is set
   ansible.hub.ah_ee_repository:
@@ -102,7 +99,7 @@ EXAMPLES = r"""
     ah_host: hub.example.com
     ah_username: admin
     ah_password: Sup3r53cr3t
-  no_log: True
+  no_log: true
 
 - name: Ensure the repository is removed
   ansible.hub.ah_ee_repository:
@@ -111,7 +108,7 @@ EXAMPLES = r"""
     ah_host: hub.example.com
     ah_username: admin
     ah_password: Sup3r53cr3t
-  no_log: True
+  no_log: true
 
 - name: Add a remote repository from quayio registry
   ansible.hub.ah_ee_repository:
@@ -125,7 +122,7 @@ EXAMPLES = r"""
     ah_host: hub.example.com
     ah_username: admin
     ah_password: Sup3r53cr3t
-  no_log: True
+  no_log: true
 """
 
 RETURN = r""" # """
@@ -278,7 +275,10 @@ def main():
         except Exception as e:
             module.fail_json(msg="Cannot read {file}: {error}".format(file=readme_file, error=e))
 
-    if description is not None and repository_pulp.update({"description": description, "base_path": name}, auto_exit=False):
+    # The API rejects an explicit blank string for description ("This field
+    # may not be blank."), but does accept null, so a user clearing the
+    # description with description: "" needs that translated to null here.
+    if description is not None and repository_pulp.update({"description": description or None, "base_path": name}, auto_exit=False):
         changed = True
 
     if readme is None:

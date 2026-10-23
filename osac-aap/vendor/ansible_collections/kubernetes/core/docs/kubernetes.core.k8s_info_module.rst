@@ -174,8 +174,7 @@ Parameters
                 </td>
                 <td>
                         <div>Hide fields matching any of the field definitions in the result</div>
-                        <div>An example might be <code>hidden_fields=[metadata.managedFields]</code></div>
-                        <div>Only field definitions that don&#x27;t reference list items are supported (so V(spec.containers[0]) would not work)</div>
+                        <div>An example might be <code>hidden_fields=[metadata.managedFields]</code> or V(hidden_fields=[spec.containers[0].env[3].value]) or V(hidden_fields=[metadata.annotations[kubectl.kubernetes.io/last-applied-configuration]])</div>
                 </td>
             </tr>
             <tr>
@@ -702,11 +701,26 @@ Examples
         wait_sleep: 10
         wait_timeout: 360
 
+    - name: Wait for OpenShift bootstrap to complete
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: bootstrap
+        namespace: kube-system
+      register: ocp_bootstrap_status
+      until: >
+        ocp_bootstrap_status.resources is defined and
+        (ocp_bootstrap_status.resources | length > 0) and
+        (ocp_bootstrap_status.resources[0].data.status is defined) and
+        (ocp_bootstrap_status.resources[0].data.status == 'complete')
+      retries: 60
+      delay: 15
+
 
 
 Return Values
 -------------
-Common return values are documented `here <https://docs.ansible.com/ansible/latest/reference_appendices/common_return_values.html#common-return-values>`_, the following are the fields unique to this module:
+Common return values are documented `here <https://docs.ansible.com/projects/ansible/latest/reference_appendices/common_return_values.html#common-return-values>`_, the following are the fields unique to this module:
 
 .. raw:: html
 

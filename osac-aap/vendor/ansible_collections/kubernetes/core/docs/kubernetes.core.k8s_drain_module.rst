@@ -595,7 +595,8 @@ Examples
       kubernetes.core.k8s_drain:
         state: drain
         name: foo
-        force: yes
+        delete_options:
+          force: yes
 
     - name: Drain node "foo", but abort if there are pods not managed by a ReplicationController, Job, or DaemonSet, and use a grace period of 15 minutes.
       kubernetes.core.k8s_drain:
@@ -626,7 +627,7 @@ Examples
 
 Return Values
 -------------
-Common return values are documented `here <https://docs.ansible.com/ansible/latest/reference_appendices/common_return_values.html#common-return-values>`_, the following are the fields unique to this module:
+Common return values are documented `here <https://docs.ansible.com/projects/ansible/latest/reference_appendices/common_return_values.html#common-return-values>`_, the following are the fields unique to this module:
 
 .. raw:: html
 

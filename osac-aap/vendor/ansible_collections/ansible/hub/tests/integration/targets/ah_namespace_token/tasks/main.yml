@@ -1,0 +1,69 @@
+---
+- name: ah_namespace integration tests with token auth
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+    - name: Create a token for testing
+      ansible.hub.ah_token:
+        ah_username: "{{ ah_username }}"
+        ah_password: "{{ ah_password }}"
+        state: present
+      no_log: true
+
+    - name: Define variables for credential and project (token auth)
+      set_fact:
+        namespace_token: "my_namespace_token_{{ test_id }}"
+        company_token: "my_company_token_{{ test_id }}"
+
+    - name: Create namespace (token auth)
+      ansible.hub.ah_namespace:
+        name: "{{ namespace_token }}"
+        company: "{{ company_token }}"
+        email: "{{ test_id }}@example.com"
+        avatar_url: https://pnt.redhat.com/pnt/d-11633955/LogoRedHatHatColorRGB.png
+        description: This is the Redhat Namespace
+        links:
+          - name: "homepage"
+            url: "https://www.redhat.com"
+        ah_token: "{{ ah_token.token }}"
+      register: r_token
+
+    - name: Check if the namespace is created (token auth)
+      assert:
+        that:
+          - r_token.changed
+
+    - name: Delete namespace (token auth)
+      ansible.hub.ah_namespace:
+        name: "{{ namespace_token }}"
+        state: absent
+        ah_token: "{{ ah_token.token }}"
+      register: r_token_delete
+
+    - name: Check if the namespace is deleted (token auth)
+      assert:
+        that:
+          - r_token_delete.changed
+
+  always:
+    - name: Delete namespace (token auth)
+      ansible.hub.ah_namespace:
+        name: "{{ namespace_token | default('') }}"
+        state: absent
+        ah_token: "{{ ah_token.token | default('') }}"
+      ignore_errors: true
+
+    - name: Remove test token
+      ansible.hub.ah_token:
+        ah_username: "{{ ah_username }}"
+        ah_password: "{{ ah_password }}"
+        token: "{{ ah_token.token | default('') }}"
+        state: absent
+      ignore_errors: true
+      no_log: true

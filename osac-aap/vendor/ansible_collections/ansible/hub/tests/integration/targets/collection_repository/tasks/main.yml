@@ -1,5 +1,5 @@
 ---
-- name: collection_repository integration tests
+- name: collection_repository integration tests with basic auth
   module_defaults:
     group/ansible.hub.hub:
       ah_host: "{{ ah_host }}"
@@ -11,104 +11,103 @@
       set_fact:
         test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
       when: test_id is not defined
-
-    - name: Define variables
+    - name: Define variables (basic auth)
       set_fact:
-        collection_repo_name: "sample_{{ test_id }}"
-        distribution: "sample_{{ test_id }}"
+        collection_repo_name_basic: "sample_basic_{{ test_id }}"
+        distribution_basic: "sample_basic_{{ test_id }}"
 
-    - name: Create a collection repository in check mode
+    - name: Create a collection repository in check mode (basic auth)
       ansible.hub.collection_repository:
-        name: "{{ collection_repo_name }}"
+        name: "{{ collection_repo_name_basic }}"
         description: "description of the repository"
         pulp_labels:
           pipeline: "approved"
         distribution:
-          name: "{{ distribution }}"
+          name: "{{ distribution_basic }}"
           state: present
         remote: community
         wait: true
-      register: r
-      check_mode: yes
+      register: r_basic_check
+      check_mode: true
 
-    - name: Check if the collection repository is created in check mode
+    - name: Check if the collection repository is created in check mode (basic auth)
       assert:
         that:
-          - r.changed
+          - r_basic_check.changed
 
-    - name: Create a collection repository
+    - name: Create a collection repository (basic auth)
       ansible.hub.collection_repository:
-        name: "{{ collection_repo_name }}"
+        name: "{{ collection_repo_name_basic }}"
         description: "description of the repository"
         pulp_labels:
           pipeline: "approved"
         distribution:
-          name: "{{ distribution }}"
+          name: "{{ distribution_basic }}"
           state: present
         remote: community
         wait: true
-      register: r
+      register: r_basic
 
-    - name: Check if the collection repository is created
+    - name: Check if the collection repository is created (basic auth)
       assert:
         that:
-          - r.changed
+          - r_basic.changed
 
-    - name: Create a collection repository again
+    - name: Create a collection repository again (basic auth)
       ansible.hub.collection_repository:
-        name: "{{ collection_repo_name }}"
+        name: "{{ collection_repo_name_basic }}"
         description: "description of the repository"
         pulp_labels:
           pipeline: "approved"
         distribution:
-          name: "{{ distribution }}"
+          name: "{{ distribution_basic }}"
           state: present
         remote: community
         wait: true
-      register: r
+      register: r_basic_again
 
-    - name: Check if the collection repository is not created again
+    - name: Check if the collection repository is not created again (basic auth)
       assert:
         that:
-          - not r.changed
+          - not r_basic_again.changed
 
-    - name: Delete collection repository in check mode
+    - name: Delete collection repository in check mode (basic auth)
       ansible.hub.collection_repository:
-        name: "{{ collection_repo_name }}"
+        name: "{{ collection_repo_name_basic }}"
         state: absent
-      check_mode: yes
-      register: r
+      check_mode: true
+      register: r_basic_delete_check
 
-    - name: Check if the collection is deleted in check mode
+    - name: Check if the collection is deleted in check mode (basic auth)
       assert:
         that:
-          - r.changed
+          - r_basic_delete_check.changed
 
-    - name: Delete collection repository
+    - name: Delete collection repository (basic auth)
       ansible.hub.collection_repository:
-        name: "{{ collection_repo_name }}"
+        name: "{{ collection_repo_name_basic }}"
         state: absent
-      register: r
+      register: r_basic_delete
 
-    - name: Check if the collection is deleted
+    - name: Check if the collection is deleted (basic auth)
       assert:
         that:
-          - r.changed
+          - r_basic_delete.changed
 
-    - name: Delete collection repository again
+    - name: Delete collection repository again (basic auth)
       ansible.hub.collection_repository:
-        name: "{{ collection_repo_name }}"
+        name: "{{ collection_repo_name_basic }}"
         state: absent
-      register: r
+      register: r_basic_delete_again
 
-    - name: Check if the collection is not deleted again
+    - name: Check if the collection is not deleted again (basic auth)
       assert:
         that:
-          - not r.changed
+          - not r_basic_delete_again.changed
 
   always:
-    - name: Cleanup - Delete collection repository
+    - name: Cleanup - Delete collection repository (basic auth)
       ansible.hub.collection_repository:
-        name: "{{ collection_repo_name }}"
+        name: "{{ collection_repo_name_basic | default('') }}"
         state: absent
       ignore_errors: true

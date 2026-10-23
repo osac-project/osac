@@ -1,7 +1,7 @@
 ---
 # https://access.redhat.com/support/policy/updates/ansible-automation-platform
 # https://docs.ansible.com/ansible/latest/reference_appendices/release_and_maintenance.html#ansible-core-support-matrix
-requires_ansible: ">=2.15.0" # AAP 2.4 or newer
+requires_ansible: ">=2.16.0"  # AAP 2.4 or newer
 action_groups:
   hub:
     - ah_approval
@@ -15,6 +15,7 @@ action_groups:
     - ah_ee_repository_sync
     - ah_group
     - ah_namespace
+    - ah_team
     - ah_role
     - ah_token
     - ah_user
@@ -22,3 +23,4 @@ action_groups:
     - collection_repository
     - collection_repository_sync
     - group_roles
+    - team_roles

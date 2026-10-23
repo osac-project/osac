@@ -26,6 +26,7 @@ jobs:
         with:
           path: ${{ env.source_dir }}
           fetch-depth: "0"
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: list changes for pull request
         id: splitter
@@ -50,18 +51,33 @@ jobs:
       source: "./source"
       cloud_common: "./cloudcommon"
       ansible_posix: "./ansible_posix"
+      community_general: "./community_general"
     strategy:
       fail-fast: false
       matrix:
-        ansible-version:
-          - milestone
-        python-version:
-          - "3.12"
-        enable-turbo-mode:
-          - true
-          - false
+        # Ref must match a branch/tag on github.com/ansible/ansible (e.g. stable-2.18, not 2.18).
+        #
+        ansible-version: ["stable-2.18", "stable-2.21", "milestone"]
+        enable-turbo-mode: [true, false]
+        python-version: ["3.12", "3.13"]
+        exclude:
+          # stable-2.18 is used mainly because turbo mode, no reason to test it with turbo mode disabled
+          - ansible-version: "stable-2.18"
+            enable-turbo-mode: false
+          # turbo mode is supported only by ansible<2.19
+          - ansible-version: "milestone"
+            enable-turbo-mode: true
+          - ansible-version: "stable-2.21"
+            enable-turbo-mode: true
+          # stable-2.18 supports 3.12
+          - ansible-version: "stable-2.18"
+            python-version: "3.13"
+          - ansible-version: "stable-2.21"
+            python-version: "3.12"
+          - ansible-version: "milestone"
+            python-version: "3.12"
         workflow-id: ${{ fromJson(needs.splitter.outputs.test_jobs) }}
-    name: "integration-py${{ matrix.python-version }}-${{ matrix.ansible-version }}-${{ matrix.workflow-id }}"
+    name: Integration tests
     steps:
       - name: Read target
         id: read-targets
@@ -105,6 +121,7 @@ jobs:
           source_path: ${{ env.source }}
 
       - name: checkout ansible-collections/cloud.common
+        if: ${{ matrix.enable-turbo-mode == true }}
         uses: ansible-network/github_actions/.github/actions/checkout_dependency@main
         with:
           repository: ansible-collections/cloud.common
@@ -118,7 +135,15 @@ jobs:
           path: ${{ env.ansible_posix }}
           ref: main
 
+      - name: checkout ansible-collections/community.general
+        uses: ansible-network/github_actions/.github/actions/checkout_dependency@main
+        with:
+          repository: ansible-collections/community.general
+          path: ${{ env.community_general }}
+          ref: main
+
       - name: install cloud.common collection
+        if: ${{ matrix.enable-turbo-mode == true }}
         uses: ansible-network/github_actions/.github/actions/build_install_collection@main
         with:
           install_python_dependencies: true
@@ -129,6 +154,12 @@ jobs:
         with:
           install_python_dependencies: true
           source_path: ${{ env.ansible_posix }}
+
+      - name: install community.general collection
+        uses: ansible-network/github_actions/.github/actions/build_install_collection@main
+        with:
+          install_python_dependencies: false
+          source_path: ${{ env.community_general }}
 
       - name: create kubernetes cluster
         uses: helm/kind-action@v1.8.0

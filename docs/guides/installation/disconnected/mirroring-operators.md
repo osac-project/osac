@@ -291,16 +291,39 @@ must not begin.**  Preserve the ISC and workspace metadata for
 re-runs.
 
 ```bash
-# 1. disableAllDefaultSources is set
+# 1. disableAllDefaultSources is true
 oc get operatorhub cluster \
   -o jsonpath='{.spec.disableAllDefaultSources}{"\n"}'
-# Expected: true
 
-# 2. IDMS resources applied
-oc get imagedigestmirrorset
+default_sources_disabled="$(
+  oc get operatorhub cluster \
+    -o jsonpath='{.spec.disableAllDefaultSources}'
+)" || {
+  echo "ERROR: OperatorHub cluster configuration was not found" >&2
+  exit 1
+}
 
-# 3. ITMS resources applied
-oc get imagetagmirrorset
+if [ "$default_sources_disabled" != "true" ]; then
+  echo "ERROR: disableAllDefaultSources is not true: ${default_sources_disabled:-<empty>}" >&2
+  exit 1
+fi
+printf 'OK: disableAllDefaultSources=%s\n' "$default_sources_disabled"
+
+# 2. At least one IDMS resource is applied
+idms_resources="$(oc get imagedigestmirrorset -o name 2>/dev/null)"
+if [ -z "$idms_resources" ]; then
+  echo "ERROR: no ImageDigestMirrorSet resources found" >&2
+  exit 1
+fi
+printf '%s\n' "$idms_resources"
+
+# 3. At least one ITMS resource is applied
+itms_resources="$(oc get imagetagmirrorset -o name 2>/dev/null)"
+if [ -z "$itms_resources" ]; then
+  echo "ERROR: no ImageTagMirrorSet resources found" >&2
+  exit 1
+fi
+printf '%s\n' "$itms_resources"
 
 # 4. CatalogSource redhat-operators exists and is READY
 catalog_state="$(

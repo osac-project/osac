@@ -114,6 +114,9 @@ provisioning pipeline copies that URL onto the `ComputeInstance` CR
 (`spec.image.sourceRef`) and generates the `DataVolume` from it only at
 provisioning time, so the `DiskImage` catalog is the source of truth for
 what to mirror.
+The CLI accepts `registry` as the source-type input; the stored
+resource uses the protobuf enum `SOURCE_TYPE_REGISTRY`, which is
+the value used in programmatic jq filters.
 
 1. List the `DiskImage` resources offered in your OSAC deployment:
 
@@ -200,7 +203,7 @@ for itms_name in $(oc get itms -o json | \
       select(
         any(.spec.imageTagMirrors[]?; 
           .source as $src | .mirrors[]? as $mir |
-          any($sel[]; startswith($src) or startswith($mir) or ($src | startswith(.)))
+          any($sel[]; startswith($src) or startswith($mir))
         )
       )
     ] | unique_by(.metadata.name)[] | .metadata.name'); do
@@ -210,7 +213,7 @@ for itms_name in $(oc get itms -o json | \
       $selected[0] as $sel |
       .spec.imageTagMirrors |= map(
         .source as $src | .mirrors[]? as $mir |
-        if any($sel[]; startswith($src) or startswith($mir) or ($src | startswith(.)))
+        if any($sel[]; startswith($src) or startswith($mir))
         then .mirrorSourcePolicy = "NeverContactSource"
         else .
         end
@@ -263,7 +266,7 @@ registry directly and anonymously:
   holding each mirrored containerdisk is public and allows
   anonymous pulls; the CDI importer performs the registry pull
   itself and is given no credentials.
-- **- **Mirror-URL `DiskImage`** - set `spec.source_ref` to the mirror
+- **Mirror-URL `DiskImage`** - set `spec.source_ref` to the mirror
   registry image URL when creating the `DiskImage`. The field is
   immutable after creation. The generated `DataVolume` copies the URL
   verbatim, so the import targets the mirror directly instead of relying
@@ -337,10 +340,11 @@ oc debug node/<node> -- chroot /host curl -sS \
   https://<mirror-registry>:8443/v2/
 ```
 
-The `image.config.openshift.io/cluster` `additionalTrustedCA`
-setting is a separate mechanism that serves the image registry
-operator, imagestream imports, and builds; it does not reach the
-nodes, so it cannot replace the proxy `trustedCA` here.
+The `image.config.openshift.io/cluster` `additionalTrustedCA` setting is
+a separate mechanism used by the image registry operator, imagestream
+imports, builds, and pod image pulls on nodes. It does not configure
+CRI-O node pulls or CDI registry imports, so it cannot replace the proxy
+`trustedCA` for the two paths covered here.
 
 #### Optional: CDI insecureRegistries (insecure fallback)
 

@@ -163,12 +163,10 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 | `DRY_RUN_CLUSTER_DOMAIN` | Cluster ingress domain required for an OpenShift dry run |
 | `DRY_RUN_OCP_VERSION` | OpenShift major.minor version required for an OpenShift dry run, e.g. `4.20` |
 
-To preview the full Kind install and enable the CSI driver without making cluster
-changes:
+To preview the full Kind install without making cluster changes:
 
 ```bash
-make install PLATFORM=kind PROFILE=dev NS=osac DRY_RUN=1 \
-  EXTRA_HELM_ARGS='--set csiDriver.enabled=true'
+make install PLATFORM=kind PROFILE=dev NS=osac DRY_RUN=1
 ```
 
 For OpenShift, provide the cluster-specific values explicitly because dry-run
@@ -176,8 +174,7 @@ mode does not query the cluster:
 
 ```bash
 make install PLATFORM=openshift PROFILE=vmaas-ci NS=osac DRY_RUN=1 \
-  DRY_RUN_CLUSTER_DOMAIN=apps.example.com DRY_RUN_OCP_VERSION=4.20 \
-  EXTRA_HELM_ARGS='--set csiDriver.enabled=true'
+  DRY_RUN_CLUSTER_DOMAIN=apps.example.com DRY_RUN_OCP_VERSION=4.20
 ```
 
 `DRY_RUN=1` routes the composite target through `helm template` for every

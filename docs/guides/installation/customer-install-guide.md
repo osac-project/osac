@@ -1,6 +1,6 @@
 # Installing OSAC on OpenShift Container Platform (WIP)
 
-**Last Updated**: 2026-09-16
+**Last Updated**: 2026-10-23
 **Audience**: Cloud administrators
 **Status**: WIP — see the TBD notes in [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend)
 and [Section 8.3](#83-registering-the-hub) for what's still open
@@ -254,6 +254,8 @@ Required for BMaaS with the Metal3 backend:
 - **CaaS** (`global.services.caas.enabled`) requires multicluster engine
   (standalone, or provided by RHACM if it's installed), a DNS backend, a
   network backend, and `aap.instanceGroups.clusterFulfillment` configuration.
+  Hosted control planes provision etcd persistent volume claims from the
+  hub's default storage class (see [Section 2.1](#21-cluster-and-access)).
   For more information,
   see
   [`aap-configuration.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/aap-configuration.md).
@@ -664,12 +666,17 @@ backend. For the full variable reference, see
 **Prerequisites**
 
 - multicluster engine is installed (standalone, or provided by RHACM).
-- MetalLB (or another `LoadBalancer`-class implementation) and LVM Storage
-  (or another dynamic storage class) are installed.
+- MetalLB (or another `LoadBalancer`-class implementation) is installed.
+- The hub cluster has a default storage class (see
+  [Section 2.1](#21-cluster-and-access)). Hosted control planes provision
+  etcd persistent volume claims from it.
 - You have AWS Route 53 credentials for the target hosted zone.
 - Access to the Netris controller: URL, user name, password, site and tenant
   IDs, and management VPC details.
 - SSH private keys for the servers and the bastion host.
+
+> **Note**: OSAC-managed storage tiers are not yet available for CaaS tenant
+> clusters. The tenant-cluster CSI storage provider is under development.
 
 **Procedure**
 
@@ -1196,7 +1203,8 @@ $ oc logs job/osac-pre-install-validate -n <namespace>
 
   Or set `bmf.metal3.enabled` to `false`.
 - `No default StorageClass found`: this is a warning, not a failure. Keycloak
-  and PostgreSQL persistent volume claims remain `Pending`. Set a default
+  and PostgreSQL persistent volume claims remain `Pending`, and CaaS hosted
+  control planes cannot provision etcd persistent volume claims. Set a default
   storage class. See [Section 2.1](#21-cluster-and-access).
 
 ### 11.2 A Helm release is stuck in `pending-install` or `pending-upgrade`

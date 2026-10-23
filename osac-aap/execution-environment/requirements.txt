@@ -252,7 +252,7 @@ pyparsing==3.3.2
     # via oslo-utils
 pyperclip==1.11.0
     # via cmd2
-python-cinderclient==9.9.0
+python-cinderclient==9.10.0
     # via python-openstackclient
 python-daemon==3.1.2
     # via ansible-runner

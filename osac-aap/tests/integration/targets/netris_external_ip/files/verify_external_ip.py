@@ -363,10 +363,12 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         cls.fixture_url = f"http://127.0.0.1:{cls.server.server_port}"
         cls.sentinel_url = f"http://127.0.0.1:{cls.sentinel.server_port}"
         cls.namespace = "osac-netris-eip-" + uuid.uuid4().hex[:8]
+        cls.unusable_kubeconfig = None
+        cls.addClassCleanup(cls._cleanup)
         cls._create_kind_fixtures()
 
     @classmethod
-    def tearDownClass(cls):
+    def _cleanup(cls):
         """Remove the isolated Kind resources and stop the fixtures."""
         for name in ("netris-eip-v1", "netris-eip-isolated", "netris-eip-legacy"):
             cls._kubectl(
@@ -375,7 +377,8 @@ class ExternalIPPlaybookTests(unittest.TestCase):
                 check=False,
             )
         cls._kubectl("delete", "namespace", cls.namespace, "--ignore-not-found")
-        Path(cls.unusable_kubeconfig).unlink(missing_ok=True)
+        if cls.unusable_kubeconfig:
+            Path(cls.unusable_kubeconfig).unlink(missing_ok=True)
         for server, thread in zip((cls.server, cls.sentinel), cls.threads):
             server.shutdown()
             server.server_close()

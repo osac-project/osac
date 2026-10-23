@@ -5,7 +5,7 @@
 # execution-environment.yaml's ansible_core/ansible_runner versions change,
 # or if ansible-builder's own template (base/builder/final stage pip
 # installs) changes in a future ansible-builder upgrade.
-ansible-core==2.20.3
+ansible-core==2.20.10
 ansible-runner==2.4.3
 bindep==2.14.0
 PyYAML==6.0.3

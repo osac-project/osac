@@ -256,6 +256,13 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 	})
 
 	AfterEach(func() {
+		// Remove the tenant-default networking fixture before the class
+		// cleanup: its "default" VirtualNetwork references this block's
+		// NetworkClass, and DeferCleanup runs after this AfterEach, so the
+		// class delete below cannot succeed until the default fixture is gone.
+		manager, err := newTestDefaultNetworkingManager()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(deleteTenantDefaultNetworkingFixture(ctx, manager, usersGroup)).To(Succeed())
 		cleanupComputeInstanceFixture(ctx, fixtureClients, computeInstanceId, "", instanceTypeId,
 			securityGroupId, subnetId, virtualNetworkId, networkClassId, computeInstanceTemplateId, diskImageId, storageTierId, storageBackendId)
 	})

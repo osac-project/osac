@@ -28,6 +28,7 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
 type tierResolutionResult struct {
@@ -74,51 +75,60 @@ func groupByTier(scList []storagev1.StorageClass) map[string][]storagev1.Storage
 	return groups
 }
 
-func getTenantStorageClasses(ctx context.Context, targetClient client.Client, tenantName string) (tierResolutionResult, error) {
+func resolveLabeledStorageClasses(
+	ctx context.Context,
+	targetClient client.Client,
+	tenantLabelValue, resolvedScope, duplicateScope string,
+	expectedTiers map[string]struct{},
+) (tierResolutionResult, error) {
 	log := ctrllog.FromContext(ctx)
 
-	tenantSCList := &storagev1.StorageClassList{}
-	if err := targetClient.List(ctx, tenantSCList, client.MatchingLabels{osacTenantKey: tenantName}); err != nil {
+	scList := &storagev1.StorageClassList{}
+	if err := targetClient.List(ctx, scList, client.MatchingLabels{osacTenantKey: tenantLabelValue}); err != nil {
 		return tierResolutionResult{}, err
 	}
 
-	tenantByTier := groupByTier(tenantSCList.Items)
+	byTier := groupByTier(scList.Items)
 
-	allTiers := make(map[string]struct{})
-	for t := range tenantByTier {
-		allTiers[t] = struct{}{}
-	}
-
-	sortedTiers := make([]string, 0, len(allTiers))
-	for t := range allTiers {
-		sortedTiers = append(sortedTiers, t)
+	sortedTiers := make([]string, 0, len(byTier))
+	for tier := range byTier {
+		if expectedTiers != nil {
+			if _, ok := expectedTiers[tier]; !ok {
+				continue
+			}
+		}
+		sortedTiers = append(sortedTiers, tier)
 	}
 	sort.Strings(sortedTiers)
 
 	var result tierResolutionResult
-
 	for _, tier := range sortedTiers {
-		tenantSCs := tenantByTier[tier]
-
-		switch len(tenantSCs) {
-		case 1:
-			scName := tenantSCs[0].GetName()
+		scs := byTier[tier]
+		if len(scs) == 1 {
+			scName := scs[0].GetName()
 			result.resolved = append(result.resolved, v1alpha1.ResolvedStorageClass{
 				Name: scName,
 				Tier: tier,
 			})
-			msg := fmt.Sprintf("tier %q: StorageClass %q (tenant-specific)", tier, scName)
+			msg := fmt.Sprintf("tier %q: StorageClass %q (%s)", tier, scName, resolvedScope)
 			result.resolvedMessages = append(result.resolvedMessages, msg)
-		case 0:
-			// Tier not available — no StorageClass labeled for this tenant.
-		default:
-			joined, names := joinStorageClassNames(tenantSCs)
-			msg := fmt.Sprintf("tier %q: multiple tenant StorageClasses [%s]", tier, joined)
-			log.Info(msg, "tenant", tenantName, "tier", tier, "storageClasses", names)
+		} else {
+			joined, names := joinStorageClassNames(scs)
+			msg := fmt.Sprintf("tier %q: multiple %s StorageClasses [%s]", tier, duplicateScope, joined)
+			log.Info(msg, "tenant", tenantLabelValue, "tier", tier, "storageClasses", names)
 			result.errorMessages = append(result.errorMessages, msg)
 			result.duplicateMessages = append(result.duplicateMessages, msg)
 			result.ambiguousTiers = append(result.ambiguousTiers, tier)
 		}
+	}
+
+	return result, nil
+}
+
+func getTenantStorageClasses(ctx context.Context, targetClient client.Client, tenantName string) (tierResolutionResult, error) {
+	result, err := resolveLabeledStorageClasses(ctx, targetClient, tenantName, "tenant-specific", "tenant", nil)
+	if err != nil {
+		return tierResolutionResult{}, err
 	}
 
 	if len(result.resolved) == 0 && len(result.errorMessages) == 0 {
@@ -127,4 +137,22 @@ func getTenantStorageClasses(ctx context.Context, targetClient client.Client, te
 	}
 
 	return result, nil
+}
+
+func tierNameSet(tiers []provisioning.TierDefinition) map[string]struct{} {
+	set := make(map[string]struct{}, len(tiers))
+	for _, t := range tiers {
+		set[strings.ToLower(t.Name)] = struct{}{}
+	}
+	return set
+}
+
+// getCSPStorageClasses resolves StorageClasses labeled osac.openshift.io/tenant=csp-managed
+// for the configured CSP-managed storage tiers.
+func getCSPStorageClasses(
+	ctx context.Context,
+	targetClient client.Client,
+	cspTiers []provisioning.TierDefinition,
+) (tierResolutionResult, error) {
+	return resolveLabeledStorageClasses(ctx, targetClient, cspManagedTenantValue, cspManagedTenantValue, cspManagedTenantValue, tierNameSet(cspTiers))
 }

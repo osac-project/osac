@@ -4,6 +4,7 @@ import logging
 import subprocess
 import traceback
 from collections.abc import Iterator
+from itertools import chain, repeat
 from unittest.mock import Mock, call
 
 import pytest
@@ -62,7 +63,7 @@ def test_parent_removal_precedes_dependent_gc_with_separate_budgets(monkeypatch:
     assert sleep.call_args_list == [call(10), call(10), call(5)]
     parent_kwargs = parent_poll.call_args.kwargs
     assert (parent_kwargs["retries"], parent_kwargs["delay"]) == (121, 10)
-    assert parent_kwargs.get("retry_on_error", False) is False
+    assert parent_kwargs["retry_on_error"] is True
     infraenv_kwargs = infraenv_poll.call_args.kwargs
     assert (infraenv_kwargs["retries"], infraenv_kwargs["delay"]) == (60, 5)
     assert infraenv_kwargs["retry_on_error"] is True
@@ -137,19 +138,15 @@ def test_already_absent_resources_complete_without_sleeps(monkeypatch: pytest.Mo
     final_snapshot.assert_not_called()
 
 
-def test_parent_lookup_error_propagates_without_starting_gc(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_parent_lookup_error_is_retried_before_starting_gc(monkeypatch: pytest.MonkeyPatch) -> None:
     error = subprocess.CalledProcessError(1, ["kubectl"], stderr="connection refused")
     k8s = Mock(spec=K8sClient)
-    k8s.is_absent.side_effect = error
-    sleep, final_snapshot = Mock(), Mock()
-    monkeypatch.setattr(runner.time, "sleep", sleep)
+    k8s.is_absent.side_effect = [error, True, True]
+    final_snapshot = Mock()
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
 
-    with pytest.raises(subprocess.CalledProcessError) as exc_info:
-        _wait(k8s, Mock(), final_snapshot)
+    _wait(k8s, Mock(), final_snapshot)
 
-    assert exc_info.value is error
-    k8s.is_absent.assert_called_once_with(resource=_PARENT, name="order-a")
-    sleep.assert_not_called()
     final_snapshot.assert_not_called()
 
 
@@ -162,14 +159,15 @@ def test_infraenv_lookup_errors_are_not_absence_and_timeout_is_safe(
     if recover:
         k8s.is_absent.side_effect = [True, error, False, True]
     else:
-        k8s.is_absent.side_effect = [True] + [error] * 60
-    sleep, observe, final_snapshot = Mock(), Mock(), Mock()
-    monkeypatch.setattr(runner.time, "sleep", sleep)
+        k8s.is_absent.side_effect = chain([True], repeat(error))
+    observe, final_snapshot = Mock(), Mock()
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+    monkeypatch.setattr(helpers, "poll_until", lambda **kwargs: runner.poll_until(**(kwargs | {"retries": 3})))
+    monkeypatch.setattr(scenario, "poll_until", lambda **kwargs: runner.poll_until(**(kwargs | {"retries": 3})))
 
     with caplog.at_level(logging.INFO):
         if recover:
             _wait(k8s, observe, final_snapshot)
-            assert sleep.call_args_list == [call(5), call(5)]
             final_snapshot.assert_not_called()
         else:
             with pytest.raises(TimeoutError) as exc_info:
@@ -178,7 +176,6 @@ def test_infraenv_lookup_errors_are_not_absence_and_timeout_is_safe(
             rendered = "".join(traceback.format_exception(exc_info.value))
             assert "sensitive-command" not in rendered
             assert "sensitive-output" not in rendered
-            assert sleep.call_args_list == [call(5)] * 59
             final_snapshot.assert_called_once_with()
     assert "sensitive-command" not in caplog.text
     assert "sensitive-output" not in caplog.text

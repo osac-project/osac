@@ -135,6 +135,13 @@ def test_argument_spec_marks_session_cookie_no_log():
     assert loaded.ARGUMENT_SPEC["validate_certs"]["default"] is True
 
 
+def test_argument_spec_marks_provider_inputs_no_log():
+    loaded = load_module()
+
+    for name in ("resource", "pool", "controller_url"):
+        assert loaded.ARGUMENT_SPEC[name].get("no_log") is True, name
+
+
 def test_check_mode_validates_inputs_without_any_provider_write(monkeypatch, capsys):
     client = StubNetrisClient(records=[])
     args = module_args(_ansible_check_mode=True)

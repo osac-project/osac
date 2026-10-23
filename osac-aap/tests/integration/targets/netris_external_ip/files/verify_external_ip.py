@@ -708,6 +708,11 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         )
         self.assertEqual(artifact.get("data"), data)
 
+    def _assert_no_provider_secrets(self, output, context):
+        """Assert the callback output hides controller and pool values."""
+        for secret in (self.fixture_url, POOL_ID, self.pool_uid, POOL_CIDR):
+            self.assertNotIn(secret, output, context)
+
     def _deleting_resource(self, name):
         """Put a real CR into deleting and return its snapshot."""
         self._kubectl(
@@ -745,6 +750,9 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         self.assertEqual(reservation["purpose"], "nat")
         self.assertEqual(reservation["site_id"], PROVIDER_SITE_ID)
         self.assertEqual(reservation["tenant_id"], PROVIDER_TENANT_ID)
+        self._assert_no_provider_secrets(
+            output, "I01 v1 callback exposed provider secrets"
+        )
         self._assert_no_kubernetes("I01 v1 allocate hit the Kubernetes sentinel")
 
     # I02: retrying the same UID returns the same address, and a new UID
@@ -858,6 +866,14 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         )
         self.assertNotEqual(rc, 0, f"I04 provider error unexpectedly passed: {output}")
         self.assertEqual(artifact, {})
+        self.assertIn(
+            "failed (provider_error",
+            output,
+            "I04 sanitized failure category is hidden",
+        )
+        self._assert_no_provider_secrets(
+            output, "I04 v1 callback exposed provider secrets"
+        )
         self.assertEqual(self._uid_reservations(uid), [])
         self._assert_no_kubernetes("I04 v1 jobs hit the Kubernetes sentinel")
 

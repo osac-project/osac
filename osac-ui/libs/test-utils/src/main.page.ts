@@ -1,5 +1,6 @@
 import { type Page, expect } from '@playwright/test';
 
+import { CatalogMainPage } from '../../locators/catalog';
 import { InstanceTypesMainPage } from '../../locators/instance_types';
 import { MainPage } from '../../locators/main_page';
 import { TenantsMainPage } from '../../locators/tenants';
@@ -59,4 +60,12 @@ export const openInstanceTypesPage = async (page: Page): Promise<void> => {
   await openMainPageOption(page, 'instanceTypes');
 
   await expect(page.getByRole(...InstanceTypesMainPage.pageTitle)).toBeVisible();
+};
+
+/** Open the Catalog page and verify its title. */
+export const openCatalogPage = async (page: Page): Promise<void> => {
+  await openMainPageOption(page, 'catalog');
+
+  await expect(page).toHaveURL(/\/catalog(?:\?.*)?$/);
+  await expect(page.getByRole(...CatalogMainPage.pageTitle)).toBeVisible();
 };

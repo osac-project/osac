@@ -178,6 +178,15 @@ importers:
         specifier: 1.64.0
         version: 1.64.0
 
+  libs/osac-cli:
+    devDependencies:
+      '@playwright/test':
+        specifier: 1.64.0
+        version: 1.64.0
+      '@types/node':
+        specifier: 20.19.41
+        version: 20.19.41
+
   libs/test-utils:
     devDependencies:
       '@playwright/test':

@@ -120,5 +120,18 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       dependencies: ['vmaas'],
     },
+    {
+      name: 'vmaas-catalog',
+      testDir: vmaasDir,
+      testMatch: /create\.catalog\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+    },
+    {
+      name: 'vmaas-catalog-delete',
+      testDir: vmaasDir,
+      testMatch: /delete\.catalog\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['vmaas-catalog'],
+    },
   ],
 });

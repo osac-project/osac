@@ -5,6 +5,26 @@
 
 tenant_name: 'tenant1'
 
+catalog:
+  name: 'catalog-item-e2e'
+  template: 'osac.templates.ocp_virt_vm'
+  title: 'CLI catalog item'
+  description: 'CLI-created catalog item for E2E testing.'
+  type: 'Virtual Machine'
+  status: 'Live'
+  usage: 'Global public'
+  fields:
+    instance_type:
+      name: 'u1-medium'
+      shared: true
+      vcpus: 4
+      memory_gib: 8
+    boot_disk:
+      size_gib: 80
+    disk_image:
+      name: 'fedora'
+      shared: true
+
 instance_type:
   name: 'instance-type-e2e'
   description: 'Instance type created by e2e test'

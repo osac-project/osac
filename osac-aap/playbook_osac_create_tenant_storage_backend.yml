@@ -57,7 +57,7 @@
         - name: Resolve the CSI installer target
           ansible.builtin.include_role:
             name: osac.service.csi_driver_install
-            tasks_from: 261018-1506-select_test_override_target.yaml
+            tasks_from: select_test_override_target.yaml
           vars:
             csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
 

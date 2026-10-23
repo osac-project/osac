@@ -175,8 +175,10 @@ func (m *Manager) EnsureBMCSecret(ctx context.Context, name, username, password 
 		// cause DeleteBMCSecret to delete it, violating the "never touch
 		// non-operator Secrets" invariant. A non-empty ResourceVersion means the
 		// Secret already existed (update path).
-		if secret.ResourceVersion != "" && secret.Labels[bmcSecretManagedByLabel] != bmcSecretManagedByValue {
-			return fmt.Errorf("BMC credentials Secret %s/%s already exists and is not operator-managed; refusing to overwrite", m.namespace, name)
+		if secret.ResourceVersion != "" {
+			if secret.Labels[bmcSecretManagedByLabel] != bmcSecretManagedByValue {
+				return fmt.Errorf("BMC credentials Secret %s/%s already exists and is not operator-managed; refusing to overwrite", m.namespace, name)
+			}
 		}
 		if secret.Labels == nil {
 			secret.Labels = map[string]string{}

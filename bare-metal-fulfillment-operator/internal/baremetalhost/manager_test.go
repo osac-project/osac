@@ -91,6 +91,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			Expect(bmh.Spec.ConsumerRef).NotTo(BeNil())
 			Expect(bmh.Spec.ConsumerRef.Name).To(Equal("test-instance-uid"))
 			Expect(bmh.Labels["osac.openshift.io/pool-id"]).To(Equal("pool1"))
+			Expect(bmh.OwnerReferences).To(BeEmpty())
 		})
 
 		It("should be idempotent with matching consumerRef", func() {
@@ -426,16 +427,27 @@ var _ = Describe("BareMetalHost Manager", func() {
 			Expect(string(secret.Data["username"])).To(Equal("admin"))
 			Expect(string(secret.Data["password"])).To(Equal("s3cret"))
 			Expect(secret.Labels).To(HaveKeyWithValue(bmcSecretManagedByLabel, bmcSecretManagedByValue))
+			Expect(secret.OwnerReferences).To(BeEmpty())
 		})
 
-		It("should update an existing Secret's credentials idempotently", func() {
-			mgr := newTestManager()
-			Expect(mgr.EnsureBMCSecret(ctx, "node001-bmc-secret", "admin", "old")).To(Succeed())
+		It("should update existing operator-managed credentials and preserve annotations", func() {
+			annotations := map[string]string{"example.com/keep": "value"}
+			existing := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "node001-bmc-secret",
+					Namespace:   testNamespace,
+					Labels:      map[string]string{bmcSecretManagedByLabel: bmcSecretManagedByValue},
+					Annotations: annotations,
+				},
+				Data: map[string][]byte{"username": []byte("admin"), "password": []byte("old")},
+			}
+			mgr := newTestManager(existing)
 			Expect(mgr.EnsureBMCSecret(ctx, "node001-bmc-secret", "admin", "new")).To(Succeed())
 
 			secret := &corev1.Secret{}
 			Expect(mgr.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "node001-bmc-secret"}, secret)).To(Succeed())
 			Expect(string(secret.Data["password"])).To(Equal("new"))
+			Expect(secret.Annotations).To(Equal(annotations))
 		})
 
 		It("should refuse to overwrite a pre-existing Secret it does not own", func() {

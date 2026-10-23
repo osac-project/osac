@@ -337,7 +337,6 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 	if poolID, ok := bareMetalInstance.GetPoolID(); ok {
 		combinedLabels[shared.OsacBareMetalPoolIDLabel] = poolID
 	}
-
 	inventoryHost, err := r.InventoryClient.AssignHost(
 		ctx,
 		bareMetalInstance.Spec.ExternalHostID,
@@ -349,7 +348,7 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 		return ctrl.Result{}, err
 	}
 	if inventoryHost == nil {
-		log.Info("Host is acquired by a different BareMetalInstance, unsetting ExternalHostID", "InventoryHostID", hostID)
+		log.Info("Host is unavailable, unsetting ExternalHostID", "InventoryHostID", hostID)
 		bareMetalInstance.Spec.ExternalHostID = ""
 		if err = r.Update(ctx, bareMetalInstance); err != nil {
 			log.Error(err, "Failed to update BareMetalInstance CR")

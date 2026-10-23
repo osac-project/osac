@@ -271,6 +271,20 @@ message ComputeInstanceStatus {
   //
   // This will be empty if the instance has not been observed running yet.
   optional google.protobuf.Timestamp instance_type_transition_time = 10;
+
+  // The Volume records associated with this instance's disks. This list is
+  // managed by the system and is read-only to API callers.
+  repeated ComputeInstanceVolume volumes = 11;
+}
+
+// Associates a ComputeInstance disk with its Volume record.
+message ComputeInstanceVolume {
+  // Stable disk key: `boot` for the boot disk, then `disk-1`, `disk-2`, and so
+  // on for additional disks in their spec order.
+  string disk_key = 1;
+
+  // Opaque identifier of the associated Volume.
+  string volume_id = 2;
 }
 
 // Contains the Subnet and IPv4 address reported for a network attachment.

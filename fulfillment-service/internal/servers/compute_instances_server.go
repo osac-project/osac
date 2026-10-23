@@ -289,6 +289,9 @@ func (s *ComputeInstancesServer) Update(ctx context.Context,
 	const networkAttachmentStatusFieldPath = "status.compute_network_attachment_statuses"
 	const instanceTypeFieldPath = "status.instance_type"
 	const instanceTypeTransitionTimeFieldPath = "status.instance_type_transition_time"
+	const volumesFieldPath = "status.volumes"
+	const volumeRegistrationFieldPath = "status.volume_registration"
+	const volumeRegistrationJSONFieldPath = "status.volumeRegistration"
 	for _, path := range request.GetUpdateMask().GetPaths() {
 		path = normalizeFieldMaskPath(path)
 		// The system sets the running instance type fields when it observes the instance
@@ -302,6 +305,15 @@ func (s *ComputeInstancesServer) Update(ctx context.Context,
 		}
 		if path == "status" || path == networkAttachmentStatusFieldPath || strings.HasPrefix(path, networkAttachmentStatusFieldPath+".") {
 			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is output-only", networkAttachmentStatusFieldPath)
+			return
+		}
+		if path == volumesFieldPath || strings.HasPrefix(path, volumesFieldPath+".") {
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is output-only", path)
+			return
+		}
+		if path == volumeRegistrationFieldPath || strings.HasPrefix(path, volumeRegistrationFieldPath+".") ||
+			path == volumeRegistrationJSONFieldPath || strings.HasPrefix(path, volumeRegistrationJSONFieldPath+".") {
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is output-only", path)
 			return
 		}
 	}

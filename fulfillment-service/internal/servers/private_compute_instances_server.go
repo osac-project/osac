@@ -575,6 +575,13 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 	var warnings []string
 	var resizeNoOp bool
 	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, current, candidate *privatev1.ComputeInstance) error {
+		if isPublicAPIView(ctx) {
+			// Public maskless updates carry a status snapshot from an earlier Get.
+			candidate.SetStatus(nil)
+			if current.GetStatus() != nil {
+				candidate.SetStatus(proto.Clone(current.GetStatus()).(*privatev1.ComputeInstanceStatus))
+			}
+		}
 		if updateIncludesField(request.GetUpdateMask(), "spec.instance_type") {
 			warnings, resizeNoOp, err = s.validateInstanceTypeResize(ctx, current, candidate)
 			if err != nil {

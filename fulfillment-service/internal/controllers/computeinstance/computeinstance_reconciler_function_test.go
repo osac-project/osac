@@ -2267,7 +2267,7 @@ var _ = Describe("hub persistence", func() {
 		Expect(list.Items).To(BeEmpty(), "ComputeInstance should NOT be created when no hubs available")
 	})
 
-	It("should skip hub selection if already set", func() {
+	It("skips hub selection and preserves disk status when already set", func() {
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
@@ -2288,6 +2288,15 @@ var _ = Describe("hub persistence", func() {
 		// Hub selection should NOT be called (status.hub already set)
 		// No call to hubsClient.List expected
 		hubsClient := controllers.NewMockHubsClient(ctrl)
+		volumes := []*privatev1.ComputeInstanceVolume{
+			privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-reconcile"}.Build(),
+		}
+		registrations := []*privatev1.ComputeInstanceVolumeRegistration{
+			privatev1.ComputeInstanceVolumeRegistration_builder{
+				DiskKey: "boot",
+				State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+			}.Build(),
+		}
 
 		// Only expect final update (no hub persistence update)
 		computeInstancesClient := NewMockComputeInstancesClient(ctrl)
@@ -2296,6 +2305,10 @@ var _ = Describe("hub persistence", func() {
 			DoAndReturn(func(ctx context.Context, req *privatev1.ComputeInstancesUpdateRequest, opts ...grpc.CallOption) (*privatev1.ComputeInstancesUpdateResponse, error) {
 				// Verify status.hub is NOT in the field mask (already set, no update needed)
 				Expect(req.GetUpdateMask().GetPaths()).ToNot(ContainElement("status.hub"))
+				Expect(req.GetUpdateMask().GetPaths()).ToNot(ContainElement("status.volumes"))
+				Expect(req.GetUpdateMask().GetPaths()).ToNot(ContainElement("status.volume_registration"))
+				Expect(req.GetObject().GetStatus().GetVolumes()).To(Equal(volumes))
+				Expect(req.GetObject().GetStatus().GetVolumeRegistration()).To(Equal(registrations))
 				return &privatev1.ComputeInstancesUpdateResponse{Object: req.GetObject()}, nil
 			}).
 			AnyTimes()
@@ -2320,8 +2333,10 @@ var _ = Describe("hub persistence", func() {
 				InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 			}.Build(),
 			Status: privatev1.ComputeInstanceStatus_builder{
-				State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
-				Hub:   hubID, // Hub already set
+				State:              privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+				Hub:                hubID, // Hub already set
+				Volumes:            volumes,
+				VolumeRegistration: registrations,
 			}.Build(),
 		}.Build()
 
@@ -2435,6 +2450,55 @@ var _ = Describe("hub persistence", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(list.Items).To(HaveLen(1))
 		Expect(list.Items[0].Namespace).To(Equal(hubNamespace))
+	})
+
+	It("preserves disk status while persisting the deletion finalizer", func() {
+		volumes := []*privatev1.ComputeInstanceVolume{
+			privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-deleting"}.Build(),
+		}
+		registrations := []*privatev1.ComputeInstanceVolumeRegistration{
+			privatev1.ComputeInstanceVolumeRegistration_builder{
+				DiskKey: "boot",
+				State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+			}.Build(),
+			privatev1.ComputeInstanceVolumeRegistration_builder{
+				DiskKey: "disk-1",
+				State:   privatev1.ComputeInstanceVolumeRegistration_STATE_UNCERTAIN,
+			}.Build(),
+		}
+		computeInstancesClient := NewMockComputeInstancesClient(ctrl)
+		computeInstancesClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.ComputeInstancesUpdateRequest, opts ...grpc.CallOption) (*privatev1.ComputeInstancesUpdateResponse, error) {
+				Expect(req.GetUpdateMask().GetPaths()).ToNot(ContainElement("status.volumes"))
+				Expect(req.GetUpdateMask().GetPaths()).ToNot(ContainElement("status.volume_registration"))
+				Expect(req.GetObject().GetStatus().GetVolumes()).To(Equal(volumes))
+				Expect(req.GetObject().GetStatus().GetVolumeRegistration()).To(Equal(registrations))
+				return &privatev1.ComputeInstancesUpdateResponse{Object: req.GetObject()}, nil
+			})
+
+		metadata := privatev1.Metadata_builder{
+			Tenant:     tenantName,
+			Finalizers: []string{finalizers.Controller},
+		}.Build()
+		metadata.SetDeletionTimestamp(timestamppb.Now())
+		computeInstance := privatev1.ComputeInstance_builder{
+			Id:       computeInstanceID,
+			Metadata: metadata,
+			Spec:     privatev1.ComputeInstanceSpec_builder{}.Build(),
+			Status: privatev1.ComputeInstanceStatus_builder{
+				Volumes:            volumes,
+				VolumeRegistration: registrations,
+			}.Build(),
+		}.Build()
+		f := &function{
+			logger:                 logger,
+			computeInstancesClient: computeInstancesClient,
+			networkingCleanup:      &fakeWorkloadNetworkingCleanup{complete: true},
+		}
+
+		Expect(f.run(ctx, computeInstance)).To(Succeed())
+		Expect(computeInstance.GetMetadata().GetFinalizers()).To(BeEmpty())
 	})
 })
 

@@ -42,6 +42,10 @@ respective areas.
 - Public servers wrap private servers and add tenant/auth behavior; preserve that boundary.
 - Existing database migrations are immutable. Add a new numbered migration instead of changing an applied one.
 - Tenant authorization and attribution must remain enforced on every public resource path.
+- Fulfillment lifecycle code owns `ComputeInstance.status.volumes` and the private
+  `status.volume_registration` state. The public API exposes only the correlation
+  list, and public updates cannot mutate either field. Other lifecycle and
+  feedback writers preserve both fields through their update masks.
 
 ## Generated files
 
@@ -96,6 +100,19 @@ Run it through the `SUITE=fulfillment` installer target; that stage deploys the
 service and database with the operator disabled, so it does not exercise Netris
 or AAP. The complete provider lifecycle belongs to the BMaaS E2E coverage in
 OSAC-4786.
+
+ComputeInstance Volume registration and recovery coverage is in
+[`it/it_compute_instance_volume_records_test.go`](it/it_compute_instance_volume_records_test.go)
+for [OSAC-6610](https://redhat.atlassian.net/browse/OSAC-6610). It uses the real
+private Volume and ComputeInstance APIs/PostgreSQL, with caller-side fault
+clients that lose a committed Create response or return an error after the
+attempted marker commits. It covers restart recovery and cancellation while a
+fixture finalizer holds the parent cleanup path. The test backend is controlled;
+it does not prove production provider behavior or the supported-tier matrix.
+The current cases also use the default empty project; named-project H5 coverage
+is still pending. Current LVMS validation requires node topology, which
+conflicts with the ComputeInstance request contract. Keep topology unset and
+report that compatibility failure instead of bypassing validation.
 
 ```bash
 export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"

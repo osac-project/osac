@@ -64,6 +64,14 @@ external Agent/InfraEnv progression are test-controlled. Keep the minimal
 InfraEnv/ClusterDeployment and existing Agent/NodePool test CRDs: the controller
 Envtest assertions consume them, not an environment bootstrap.
 
+ComputeInstance feedback coverage ([OSAC-6608](https://redhat.atlassian.net/browse/OSAC-6608))
+is in `internal/controller/computeinstance_feedback_controller_test.go`. It
+checks that normal and deleting feedback updates retain the disk correlation
+and registration lists while excluding them from the outgoing update mask. The
+Controller Suite uses real Kubernetes API/etcd and CRDs; Fulfillment responses
+are controlled by the test client. Run `make test`; this does not exercise a
+deployed Fulfillment service or Volume API.
+
 Worker coverage is owned by **osac-operator [DEV]**:
 
 - Ginkgo Unit specs under `internal/controller/baremetalworker/` use descriptive

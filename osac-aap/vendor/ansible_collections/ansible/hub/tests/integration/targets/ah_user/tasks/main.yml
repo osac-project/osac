@@ -1,5 +1,5 @@
 ---
-- name: ah_user integration tests
+- name: ah_user integration tests with basic auth
   module_defaults:
     group/ansible.hub.hub:
       ah_host: "{{ ah_host }}"
@@ -11,26 +11,67 @@
       set_fact:
         test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
       when: test_id is not defined
-
-    - name: Ensure the user exists
+    - name: Ensure the user exists (basic auth)
       ansible.hub.ah_user:
-        username: "user_{{ test_id }}"
-        first_name: "first_{{ test_id }}"
-        last_name: "last_{{ test_id }}"
-        email: "user_{{ test_id }}@example.com"
+        username: "user_basic_{{ test_id }}"
+        first_name: "first_basic_{{ test_id }}"
+        last_name: "last_basic_{{ test_id }}"
+        email: "user_basic_{{ test_id }}@example.com"
         password: vs9mrD55NP
         state: present
-      register: r
+      register: r_basic
+      ignore_errors: true
 
-    - name: Check if the user is created
+    - name: Check if the user is created (standalone or pre-4.12 gateway)
       assert:
         that:
-          - r.changed
+          - r_basic.changed
+      when: r_basic is success
+
+    - name: Check deprecation warning is emitted when behind gateway (Hub 4.10-4.11)
+      assert:
+        that:
+          - r_basic.warnings is defined
+          - r_basic.warnings | length > 0
+          - "'ah_user module is deprecated' in r_basic.warnings[0]"
+          - "'ansible.platform' in r_basic.warnings[0]"
+      when:
+        - ah_behind_gateway | default(false) | bool
+        - r_basic is success
+
+    - name: Check ah_user is blocked on Hub 4.12+ behind gateway (basic auth)
+      assert:
+        that:
+          - r_basic is failed
+          - "'not supported' in r_basic.msg"
+          - "'ansible.platform' in r_basic.msg"
+      when:
+        - ah_behind_gateway | default(false) | bool
+        - r_basic is failed
+        - "'not supported' in r_basic.msg | default('')"
+
+    - name: Check ah_user failed due to gateway permissions (Hub 4.10-4.11)
+      assert:
+        that:
+          - r_basic is failed
+          - "'403' in r_basic.msg"
+      when:
+        - ah_behind_gateway | default(false) | bool
+        - r_basic is failed
+        - "'not supported' not in r_basic.msg | default('')"
+
+    - name: Fail on unexpected standalone error
+      assert:
+        that:
+          - r_basic is success
+        fail_msg: "Unexpected error on standalone: {{ r_basic.msg | default('unknown') }}"
+      when:
+        - not (ah_behind_gateway | default(false) | bool)
+        - r_basic is failed
 
   always:
-    - name: Remove user
+    - name: Remove user (basic auth)
       ansible.hub.ah_user:
-        username: "user_{{ test_id }}"
+        username: "user_basic_{{ test_id }}"
         state: absent
-      register: r
       ignore_errors: true

@@ -66,4 +66,42 @@ jobs:
           #    GHSA-rxhj-4m44-96r4 (high), GHSA-v253-rj99-jwpq (moderate),
           #    GHSA-vq4v-j7r6-jq4m (high), GHSA-w466-c33r-3gjp (high),
           #    GHSA-xpqm-wm3m-f34h (moderate)
-          allow-ghsas: "GHSA-hrxh-6v49-42gf, GHSA-gcjh-h69q-9w9g, GHSA-2phv-j68v-wwqx, GHSA-3qhv-2rgh-x77r, GHSA-4gxm-v5v7-fqc4, GHSA-54hh-g5mx-jqcp, GHSA-5wx6-mg75-v57r, GHSA-6pfh-p556-v868, GHSA-6x96-7vc8-cm3p, GHSA-72r4-9c5j-mj57, GHSA-7vhp-vf5g-r2fw, GHSA-8cc4-rfj6-fhg4, GHSA-c59q-g84q-2gj5, GHSA-cjhr-43r9-cfmw, GHSA-fr4h-3cph-29xv, GHSA-gj8w-mvpf-x27x, GHSA-hg3w-7f8c-63hp, GHSA-hwx4-2j3j-g496, GHSA-m733-5w8f-5ggw, GHSA-p4xf-rf54-rj3x, GHSA-q6j5-fjx5-2mc3, GHSA-qrv3-253h-g69c, GHSA-rxhj-4m44-96r4, GHSA-v253-rj99-jwpq, GHSA-vq4v-j7r6-jq4m, GHSA-w466-c33r-3gjp, GHSA-xpqm-wm3m-f34h"
+          #  - filelock@3.32.7 in osac-aap/requirements-build-tools.txt: pinned
+          #    only to satisfy puccinialin's own declared runtime requirement
+          #    (filelock<4.0.0,>=3.19.1, confirmed via its real, latest 0.1.14
+          #    PyPI metadata -- no newer release relaxes this), for maturin's
+          #    Rust-toolchain-bootstrap fallback logic. That logic never runs
+          #    in this hermetic build: a real system Rust toolchain is always
+          #    present via rpms.lock.yaml, so filelock's own vulnerable code
+          #    path is never exercised. All 3 GHSAs below are fixed only in
+          #    4.2.1+, which falls outside puccinialin's own <4.0.0 upper
+          #    bound -- no version exists that satisfies both. A real fix
+          #    needs puccinialin itself to relax that bound upstream.
+          #    GHSA-v4x8-3wr5-3wq8 (high), GHSA-567q-5qvw-pf92 (low),
+          #    GHSA-9vhv-jxww-xfm5 (low)
+          #  - setuptools@70.0.0 and setuptools@82.0.0 in osac-aap/
+          #    requirements-build-tools.txt: both pinned to the exact
+          #    overlap of ansible-core's and ansible-runner's own build-
+          #    system.requires upper bounds (confirmed live, see that
+          #    file's own comments on each pin) -- ansible-runner==2.4.3
+          #    (its latest release) hard-caps setuptools<=70.0.0, and the
+          #    GHSA fixes below need setuptools>=84.1.0. No version
+          #    satisfies both; the path-traversal/arbitrary-file-write
+          #    behavior they fix is in setuptools' own network-fetch
+          #    (PackageIndex.download) and legacy-wheel-install code
+          #    paths, never exercised during Hermeto's offline prefetch.
+          #    GHSA-5rjg-fvgr-3xxf (high), GHSA-h35f-9h28-mq5c (moderate),
+          #    GHSA-xmj3-9gf7-h52w (low)
+          #  - awxkit@24.6.1 in osac-aap/requirements-build-tools.txt: its
+          #    latest release (confirmed via real PyPI metadata) -- no
+          #    fixed version exists yet upstream.
+          #    GHSA-g29c-rgq6-gxgj (moderate)
+          #  - wheel@0.45.1 in osac-aap/requirements-build-tools.txt:
+          #    ansible-core's own build-system.requires hard-pins wheel
+          #    == 0.45.1 EXACTLY (confirmed via its real sdist
+          #    pyproject.toml, true for both the previous 2.20.3 and the
+          #    current, GHSA-w8p5-mx5w-cpqj-patched 2.20.10) -- not a
+          #    range, so no newer wheel satisfies it. Fixed in 0.46.2;
+          #    no version exists that satisfies both.
+          #    GHSA-8rrh-rw8j-w5fx (high)
+          allow-ghsas: "GHSA-hrxh-6v49-42gf, GHSA-gcjh-h69q-9w9g, GHSA-2phv-j68v-wwqx, GHSA-3qhv-2rgh-x77r, GHSA-4gxm-v5v7-fqc4, GHSA-54hh-g5mx-jqcp, GHSA-5wx6-mg75-v57r, GHSA-6pfh-p556-v868, GHSA-6x96-7vc8-cm3p, GHSA-72r4-9c5j-mj57, GHSA-7vhp-vf5g-r2fw, GHSA-8cc4-rfj6-fhg4, GHSA-c59q-g84q-2gj5, GHSA-cjhr-43r9-cfmw, GHSA-fr4h-3cph-29xv, GHSA-gj8w-mvpf-x27x, GHSA-hg3w-7f8c-63hp, GHSA-hwx4-2j3j-g496, GHSA-m733-5w8f-5ggw, GHSA-p4xf-rf54-rj3x, GHSA-q6j5-fjx5-2mc3, GHSA-qrv3-253h-g69c, GHSA-rxhj-4m44-96r4, GHSA-v253-rj99-jwpq, GHSA-vq4v-j7r6-jq4m, GHSA-w466-c33r-3gjp, GHSA-xpqm-wm3m-f34h, GHSA-v4x8-3wr5-3wq8, GHSA-567q-5qvw-pf92, GHSA-9vhv-jxww-xfm5, GHSA-5rjg-fvgr-3xxf, GHSA-h35f-9h28-mq5c, GHSA-xmj3-9gf7-h52w, GHSA-g29c-rgq6-gxgj, GHSA-8rrh-rw8j-w5fx"

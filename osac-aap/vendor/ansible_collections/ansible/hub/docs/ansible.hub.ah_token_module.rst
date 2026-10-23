@@ -1,14 +1,14 @@
-.. Created with antsibull-docs 2.14.0
+.. Created with antsibull-docs 2.24.0
 
 ansible.hub.ah_token module -- Create, update, or destroy Automation Hub tokens
 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-This module is part of the `ansible.hub collection <https://galaxy.ansible.com/ui/repo/published/ansible/hub/>`_ (version 1.0.0).
+This module is part of the `ansible.hub collection <https://galaxy.ansible.com/ui/repo/published/ansible/hub/>`_ (version 1.0.6).
 
 It is not included in ``ansible-core``.
 To check whether it is installed, run ``ansible-galaxy collection list``.
 
-To install it, use: :code:`ansible-galaxy collection install ansible.hub`.
+To install it, use: :code:`ansible\-galaxy collection install ansible.hub`.
 
 To use it in a playbook, specify: ``ansible.hub.ah_token``.
 
@@ -26,6 +26,7 @@ Synopsis
 - Because of the sensitive nature of tokens, the created token value is only available once through the Ansible fact. (See RETURN for details).
 - Due to the nature of tokens in Automation Hub this module is not idempotent. A second will with the same parameters will create a new token.
 - If you are creating a temporary token for use with modules you should delete the token when you are done with it. See the example for how to do it.
+- :strong:`Deprecated` when used with AAP 2.5 or 2.6. This module will be removed in AAP 2.7. In AAP 2.7, all authentication is handled through the AAP Gateway using JWT and personal access tokens are no longer supported.
 
 
 
@@ -51,31 +52,34 @@ Parameters
     <td valign="top">
       <div class="ansibleOptionAnchor" id="parameter-ah_host"></div>
       <div class="ansibleOptionAnchor" id="parameter-ah_hostname"></div>
+      <div class="ansibleOptionAnchor" id="parameter-aap_hostname"></div>
       <p style="display: inline;"><strong>ah_host</strong></p>
       <a class="ansibleOptionLink" href="#parameter-ah_host" title="Permalink to this option"></a>
-      <p style="font-size: small; margin-bottom: 0;"><span style="color: darkgreen; white-space: normal;">aliases: ah_hostname</span></p>
+      <p style="font-size: small; margin-bottom: 0;"><span style="color: darkgreen; white-space: normal;">aliases: ah_hostname, aap_hostname</span></p>
       <p style="font-size: small; margin-bottom: 0;">
         <span style="color: purple;">string</span>
       </p>
     </td>
     <td valign="top">
       <p>URL to Ansible Automation Hub instance.</p>
-      <p>If value not set, will try environment variable <code class="xref std std-envvar literal notranslate">AH_HOST</code>.</p>
+      <p>If value not set, will try environment variable <code class="xref std std-envvar literal notranslate">AH_HOST</code>, or <code class="xref std std-envvar literal notranslate">AAP_HOSTNAME</code>.</p>
       <p>If value not specified by any means, the value of <code class='docutils literal notranslate'>127.0.0.1</code> will be used.</p>
     </td>
   </tr>
   <tr>
     <td valign="top">
       <div class="ansibleOptionAnchor" id="parameter-ah_password"></div>
+      <div class="ansibleOptionAnchor" id="parameter-aap_password"></div>
       <p style="display: inline;"><strong>ah_password</strong></p>
       <a class="ansibleOptionLink" href="#parameter-ah_password" title="Permalink to this option"></a>
+      <p style="font-size: small; margin-bottom: 0;"><span style="color: darkgreen; white-space: normal;">aliases: aap_password</span></p>
       <p style="font-size: small; margin-bottom: 0;">
         <span style="color: purple;">string</span>
       </p>
     </td>
     <td valign="top">
       <p>Password for your Ansible Automation Hub instance.</p>
-      <p>If value not set, will try environment variable <code class="xref std std-envvar literal notranslate">AH_PASSWORD</code>.</p>
+      <p>If value not set, will try environment variable <code class="xref std std-envvar literal notranslate">AH_PASSWORD</code>, or <code class="xref std std-envvar literal notranslate">AAP_PASSWORD</code>.</p>
     </td>
   </tr>
   <tr>
@@ -97,8 +101,10 @@ Parameters
   <tr>
     <td valign="top">
       <div class="ansibleOptionAnchor" id="parameter-ah_token"></div>
+      <div class="ansibleOptionAnchor" id="parameter-aap_token"></div>
       <p style="display: inline;"><strong>ah_token</strong></p>
       <a class="ansibleOptionLink" href="#parameter-ah_token" title="Permalink to this option"></a>
+      <p style="font-size: small; margin-bottom: 0;"><span style="color: darkgreen; white-space: normal;">aliases: aap_token</span></p>
       <p style="font-size: small; margin-bottom: 0;">
         <span style="color: purple;">any</span>
       </p>
@@ -108,28 +114,32 @@ Parameters
       <p>This value can be in one of two formats.</p>
       <p>A string which is the token itself. (for example, bqV5txm97wqJqtkxlMkhQz0pKhRMMX)</p>
       <p>A dictionary structure as returned by the ah_token module.</p>
-      <p>If value not set, will try environment variable <code class="xref std std-envvar literal notranslate">AH_API_TOKEN</code>.</p>
+      <p>If value not set, will try environment variable <code class="xref std std-envvar literal notranslate">AH_API_TOKEN</code>, or <code class="xref std std-envvar literal notranslate">AAP_TOKEN</code>.</p>
     </td>
   </tr>
   <tr>
     <td valign="top">
       <div class="ansibleOptionAnchor" id="parameter-ah_username"></div>
+      <div class="ansibleOptionAnchor" id="parameter-aap_username"></div>
       <p style="display: inline;"><strong>ah_username</strong></p>
       <a class="ansibleOptionLink" href="#parameter-ah_username" title="Permalink to this option"></a>
+      <p style="font-size: small; margin-bottom: 0;"><span style="color: darkgreen; white-space: normal;">aliases: aap_username</span></p>
       <p style="font-size: small; margin-bottom: 0;">
         <span style="color: purple;">string</span>
       </p>
     </td>
     <td valign="top">
       <p>Username for your Ansible Automation Hub instance.</p>
-      <p>If value not set, will try environment variable <code class="xref std std-envvar literal notranslate">AH_USERNAME</code>.</p>
+      <p>If value not set, will try environment variable <code class="xref std std-envvar literal notranslate">AH_USERNAME</code>, or <code class="xref std std-envvar literal notranslate">AAP_USERNAME</code>.</p>
     </td>
   </tr>
   <tr>
     <td valign="top">
       <div class="ansibleOptionAnchor" id="parameter-request_timeout"></div>
+      <div class="ansibleOptionAnchor" id="parameter-aap_request_timeout"></div>
       <p style="display: inline;"><strong>request_timeout</strong></p>
       <a class="ansibleOptionLink" href="#parameter-request_timeout" title="Permalink to this option"></a>
+      <p style="font-size: small; margin-bottom: 0;"><span style="color: darkgreen; white-space: normal;">aliases: aap_request_timeout</span></p>
       <p style="font-size: small; margin-bottom: 0;">
         <span style="color: purple;">float</span>
       </p>
@@ -137,6 +147,7 @@ Parameters
     <td valign="top">
       <p>Specify the timeout Ansible should use in requests to the Automation Hub host.</p>
       <p>Defaults to 10 seconds, but this is handled by the shared module_utils code.</p>
+      <p>If value not set, will try environment variable <code class="xref std std-envvar literal notranslate">AAP_REQUEST_TIMEOUT</code></p>
     </td>
   </tr>
   <tr>
@@ -162,9 +173,10 @@ Parameters
     <td valign="top">
       <div class="ansibleOptionAnchor" id="parameter-validate_certs"></div>
       <div class="ansibleOptionAnchor" id="parameter-ah_verify_ssl"></div>
+      <div class="ansibleOptionAnchor" id="parameter-aap_validate_certs"></div>
       <p style="display: inline;"><strong>validate_certs</strong></p>
       <a class="ansibleOptionLink" href="#parameter-validate_certs" title="Permalink to this option"></a>
-      <p style="font-size: small; margin-bottom: 0;"><span style="color: darkgreen; white-space: normal;">aliases: ah_verify_ssl</span></p>
+      <p style="font-size: small; margin-bottom: 0;"><span style="color: darkgreen; white-space: normal;">aliases: ah_verify_ssl, aap_validate_certs</span></p>
       <p style="font-size: small; margin-bottom: 0;">
         <span style="color: purple;">boolean</span>
       </p>
@@ -173,7 +185,7 @@ Parameters
       <p>Whether to allow insecure connections to Automation Hub Server.</p>
       <p>If <code class="ansible-value literal notranslate">no</code>, SSL certificates will not be validated.</p>
       <p>This should only be used on personally controlled sites using self-signed certificates.</p>
-      <p>If value not set, will try environment variable <code class="xref std std-envvar literal notranslate">AH_VERIFY_SSL</code>.</p>
+      <p>If value not set, will try environment variable <code class="xref std std-envvar literal notranslate">AH_VERIFY_SSL</code>, or <code class="xref std std-envvar literal notranslate">AAP_VALIDATE_CERTS</code>.</p>
       <p style="margin-top: 8px;"><b">Choices:</b></p>
       <ul>
         <li><p><code>false</code></p></li>
@@ -198,25 +210,25 @@ Examples
     - name: Create a new token using an existing token
       ansible.hub.ah_token:
         ah_token: "{{ my_existing_token }}"
-      no_log: True
+      no_log: true
 
     - name: Delete this token
       ansible.hub.ah_token:
         ah_token: "{{ ah_token }}"
         state: absent
-      no_log: True
+      no_log: true
 
     - name: Create a new token using username/password
       ansible.hub.ah_token:
         state: present
         ah_username: "{{ my_username }}"
         ah_password: "{{ my_password }}"
-      no_log: True
+      no_log: true
 
     - name: Use our new token to make another call
       ansible.hub.namespace:
         ah_token: "{{ ah_token }}"
-      no_log: True
+      no_log: true
 
 
 
@@ -293,10 +305,9 @@ Authors
 - Sean Sullivan (@sean-m-sullivan)
 
 
-
 Collection links
 ~~~~~~~~~~~~~~~~
 
-* `Issue Tracker <https://github.com/ansible-collections/ansible\_hub/issues>`__
-* `Repository (Sources) <https://github.com/ansible-collections/ansible\_hub>`__
-* `Report an issue <https://github.com/ansible-collections/ansible\_hub/issues/new/choose>`__
+* `Issue Tracker <https://github.com/ansible\-collections/ansible\_hub/issues>`__
+* `Repository (Sources) <https://github.com/ansible\-collections/ansible\_hub>`__
+* `Report an issue <https://github.com/ansible\-collections/ansible\_hub/issues/new/choose>`__

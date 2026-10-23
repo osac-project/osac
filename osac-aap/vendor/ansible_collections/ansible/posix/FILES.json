@@ -88,14 +88,14 @@
    "name": ".azure-pipelines/templates/matrix.yml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "4fb0d3ffb2125d5806c7597e4f9d4b2af69cf8c337e9d57803081eddd4a6b081",
+   "chksum_sha256": "693f7ceb1f9b6a3cf0e79e5692cce2fadc28328970c8464ff8fb76f3735f7eab",
    "format": 1
   },
   {
    "name": ".azure-pipelines/templates/test.yml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "2cfa1271f94c71f05ffa0b1f763d8946394b5636e14579cda8ee14bb38bbcf1c",
+   "chksum_sha256": "e943dac9f3433dd25419082678b019ba903792ec0769cfcb744b5706c5f00408",
    "format": 1
   },
   {
@@ -109,7 +109,7 @@
    "name": ".azure-pipelines/azure-pipelines.yml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "a675d3ed4ae0949543727c60d953c0cda60a8fe2f7fb8b15d2623c8983c8edf4",
+   "chksum_sha256": "986e5356847880c398978915b29d4106298d9581c482248761cbdd3a404a93f4",
    "format": 1
   },
   {
@@ -158,7 +158,7 @@
    "name": "changelogs/changelog.yaml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "60737168583f11e8e726e14b5059b05e16e1d7ff836c20e5ab09b25344d49409",
+   "chksum_sha256": "4fdac712059ffb9041d3a5fb016d017cd1d1e12a764bd1b04e43b0440b052ef0",
    "format": 1
   },
   {
@@ -375,7 +375,7 @@
    "name": "plugins/modules/authorized_key.py",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "7c0b732f6d53cdc20eb9d52f56c68fbe813769af258463bf8cadc91e4f7c72f0",
+   "chksum_sha256": "e3a0fe6a00d666903c4d1b6465eb8eac15b7816befff8369da7fd9db38b4b38f",
    "format": 1
   },
   {
@@ -452,7 +452,7 @@
    "name": "plugins/modules/sysctl.py",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "356547612683a7ca991d5009252ffa2e481a7f94d03c6662e38a84a7be96264c",
+   "chksum_sha256": "d6bae0c96f681c5f5a94d9e8740d8c4a3fca94943451d96db8556e17f7c5ed92",
    "format": 1
   },
   {
@@ -659,6 +659,27 @@
    "format": 1
   },
   {
+   "name": "tests/integration/targets/authorized_key/tasks/check_symlink.yml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "11a1348ea67e7c761b9eeb29c616aeea23e41b115187991ed2495ca5c200decf",
+   "format": 1
+  },
+  {
+   "name": "tests/integration/targets/authorized_key/tasks/check_symlink_cleanup.yml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "f3c1d49c1c50f12891fef9c143aafd3d7e91ddf54cc2b15b56032955ee64f902",
+   "format": 1
+  },
+  {
+   "name": "tests/integration/targets/authorized_key/tasks/check_symlink_setup.yml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "6cff48a51b270c99f2c45665672614123fd478efdc1bba40c2710a77ae857911",
+   "format": 1
+  },
+  {
    "name": "tests/integration/targets/authorized_key/tasks/comments.yml",
    "ftype": "file",
    "chksum_type": "sha256",
@@ -669,7 +690,7 @@
    "name": "tests/integration/targets/authorized_key/tasks/main.yml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "d8ad1d7429354a2236a958735c70c20b1b7a29fa0cbb9a960d4a672b43c2da8c",
+   "chksum_sha256": "dd641612ec6f7ed408ebef05ea6854325f8c2b7bca0398ca0ef8fad17de42307",
    "format": 1
   },
   {
@@ -1964,7 +1985,7 @@
    "name": ".ansible-lint",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "c8f1c292514cc2e705a3faf77ca3ac2e3661c364dac64acaadfb2083f09ff561",
+   "chksum_sha256": "3a306fd5e0ac096f3938f9824aa4208b8920a4ced5d0a33095945c5b0b01b143",
    "format": 1
   },
   {
@@ -1978,7 +1999,7 @@
    "name": "CHANGELOG.rst",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "4655ea0e91eafb0633f917b94a8228c8932d7e4fedbe291283283230e6f4d861",
+   "chksum_sha256": "b217bba5f9bc23ad4753b0015abaa57f74e710426ddacef341d3c20a1e1e068c",
    "format": 1
   },
   {
@@ -1999,7 +2020,7 @@
    "name": "README.md",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "dc7f36adc024a58ee1a57b257c71fb74d42dabb56254c725e14c33a4f8ba74ae",
+   "chksum_sha256": "e18f201bd17135d2b4d878a4a63f1a141ae85a93816fd5c61cac25eec9665ced",
    "format": 1
   },
   {

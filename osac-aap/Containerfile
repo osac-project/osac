@@ -1,0 +1,171 @@
+# Hand-maintained equivalent of `ansible-builder create`'s generated
+# Containerfile for execution-environment/execution-environment.yaml,
+# committed directly instead of generated live by a custom Tekton task
+# (the former `generate-ee-context` task) -- that custom task tripped
+# Enterprise Contract's `trusted_task.trusted` rule (it's not on
+# Konflux's trusted-task bundle list, unlike the catalog tasks every
+# other image component's pipeline uses exclusively). Confirmed via a
+# real `ansible-builder create` run against the current
+# execution-environment.yaml that every "_build/" copy source
+# ansible-builder's own generation step produces is already a byte-
+# identical copy of content already committed elsewhere in this repo
+# (collections/, vendor/, execution-environment/requirements.txt) --
+# nothing here is actually dynamically generated per se, only
+# mechanically staged. The only genuinely ansible-builder-owned content
+# is its bundled scripts (execution-environment/ansible-builder-scripts/,
+# pinned to ansible-builder==3.2.0, committed verbatim) and bindep.txt
+# (execution-environment/bindep.txt, a plain rendering of
+# execution-environment.yaml's own dependencies.system list).
+#
+# Regenerate and diff against this file by hand whenever
+# execution-environment.yaml's own structure changes (base image,
+# python version, dependencies.system, additional_build_steps) -- same
+# acceptance already given to rpms.lock.yaml needing manual
+# regeneration via rpm-lockfile-prototype when rpms.in.yaml changes:
+#
+#   podman run --rm --user 0 -v "$(pwd)/osac-aap:/work:Z" -v /tmp/out:/out:Z \
+#     registry.access.redhat.com/ubi9/python-312:latest bash -c '
+#       pip install --quiet ansible-builder==3.2.0 &&
+#       cd /work &&
+#       ansible-builder create --output-filename Containerfile \
+#         -f execution-environment/execution-environment.yaml -c /out/context'
+#
+# Then diff /tmp/out/context/Containerfile against this file (expect
+# ARG/FROM/dependency-install lines to track execution-environment.yaml
+# changes 1:1) and /tmp/out/context/_build/bindep.txt against
+# execution-environment/bindep.txt, updating both by hand to match.
+#
+# path-context for this Containerfile is the repo root (".", same
+# convention as every other image component's own release.yaml), so
+# every COPY path below is relative to the repo root, not this
+# directory.
+
+ARG EE_BASE_IMAGE="registry.access.redhat.com/ubi10:10.2"
+ARG PYCMD="/usr/bin/python3.12"
+ARG PYPKG="python3.12"
+ARG PKGMGR_PRESERVE_CACHE=""
+ARG ANSIBLE_GALAXY_CLI_COLLECTION_OPTS=""
+ARG ANSIBLE_GALAXY_CLI_ROLE_OPTS=""
+ARG ANSIBLE_INSTALL_REFS="ansible-core ansible-runner"
+ARG PKGMGR="/usr/bin/dnf"
+
+# Base build stage
+FROM $EE_BASE_IMAGE AS base
+USER root
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+ARG EE_BASE_IMAGE
+ARG PYCMD
+ARG PYPKG
+ARG PKGMGR_PRESERVE_CACHE
+ARG ANSIBLE_GALAXY_CLI_COLLECTION_OPTS
+ARG ANSIBLE_GALAXY_CLI_ROLE_OPTS
+ARG ANSIBLE_INSTALL_REFS
+ARG PKGMGR
+
+COPY osac-aap/execution-environment/ansible-builder-scripts/ /output/scripts/
+COPY osac-aap/execution-environment/ansible-builder-scripts/entrypoint /opt/builder/bin/entrypoint
+RUN dnf update -y --allowerasing glibc glibc-minimal-langpack && dnf clean all
+RUN dnf install -y gcc gcc-c++ python3.12-devel rust cargo openssl-devel libffi-devel && dnf clean all
+RUN $PKGMGR install $PYPKG -y ; if [ -z $PKGMGR_PRESERVE_CACHE ]; then $PKGMGR clean all; fi
+RUN /output/scripts/pip_install $PYCMD
+RUN $PYCMD -m pip install --no-cache-dir $ANSIBLE_INSTALL_REFS
+
+# Galaxy build stage
+FROM base AS galaxy
+ARG EE_BASE_IMAGE
+ARG PYCMD
+ARG PYPKG
+ARG PKGMGR_PRESERVE_CACHE
+ARG ANSIBLE_GALAXY_CLI_COLLECTION_OPTS
+ARG ANSIBLE_GALAXY_CLI_ROLE_OPTS
+ARG ANSIBLE_INSTALL_REFS
+ARG PKGMGR
+
+COPY osac-aap/collections /usr/share/ansible/collections
+COPY osac-aap/vendor /usr/share/ansible/collections
+RUN dnf install -y git
+RUN /output/scripts/check_galaxy
+WORKDIR /build
+
+RUN mkdir -p /usr/share/ansible
+# No `ansible-galaxy role/collection install` RUN lines here (unlike
+# ansible-builder's own generated equivalent) -- collections/requirements.yml
+# has no roles, and every collection it lists is already fully present via
+# the two COPY lines above (kept up to date by the documented
+# `rm -rf vendor && ansible-galaxy collection install -r collections/
+# requirements.yml` process in osac-aap/AGENTS.md). ansible-galaxy has no
+# Cachi2/Hermeto prefetch type, so a live install call here would simply
+# fail outright under hermetic: true (no network) -- confirmed live by
+# this exact repo's own earlier hermetic rework, which is why
+# generate-ee-context used to pre-resolve collections outside the
+# hermetic sandbox and strip these lines from the generated Containerfile
+# before this static version replaced that task entirely.
+
+# Builder build stage
+FROM base AS builder
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+WORKDIR /build
+ARG EE_BASE_IMAGE
+ARG PYCMD
+ARG PYPKG
+ARG PKGMGR_PRESERVE_CACHE
+ARG ANSIBLE_GALAXY_CLI_COLLECTION_OPTS
+ARG ANSIBLE_GALAXY_CLI_ROLE_OPTS
+ARG ANSIBLE_INSTALL_REFS
+ARG PKGMGR
+
+RUN $PYCMD -m pip install --no-cache-dir bindep pyyaml packaging
+
+COPY --from=galaxy /usr/share/ansible /usr/share/ansible
+
+COPY osac-aap/execution-environment/requirements.txt requirements.txt
+COPY osac-aap/execution-environment/bindep.txt bindep.txt
+RUN $PYCMD /output/scripts/introspect.py introspect --user-pip=requirements.txt --user-bindep=bindep.txt --write-bindep=/tmp/src/bindep.txt --write-pip=/tmp/src/requirements.txt
+RUN /output/scripts/assemble
+
+# Final build stage
+FROM base AS final
+# Stamped to the real release version on osac-build-and-publish.yaml's
+# temp branch before tagging (same mechanism as every other component's
+# Containerfile and as Chart.yaml's own version field) -- the committed
+# default below is only ever what a local/dev/push/pull-request build
+# sees. Surfaced as a real OCI label so Konflux's release-side
+# {{ oci_version }} tag templating resolves to it instead of silently
+# falling back to the base image's own inherited version label. This
+# replaces the old stamp-release-labels Tekton task (and generate-ee-context
+# before it) -- both tripped Enterprise Contract's trusted_task.trusted
+# rule by existing at all; a plain sed on a committed file needs no
+# Tekton task whatsoever.
+ARG VERSION=dev
+LABEL name="cloud-extensions/osac-aap-rhel10"
+LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
+LABEL org.opencontainers.image.version="${VERSION}"
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+ARG EE_BASE_IMAGE
+ARG PYCMD
+ARG PYPKG
+ARG PKGMGR_PRESERVE_CACHE
+ARG ANSIBLE_GALAXY_CLI_COLLECTION_OPTS
+ARG ANSIBLE_GALAXY_CLI_ROLE_OPTS
+ARG ANSIBLE_INSTALL_REFS
+ARG PKGMGR
+
+RUN /output/scripts/check_ansible $PYCMD
+
+COPY --from=galaxy /usr/share/ansible /usr/share/ansible
+
+COPY --from=builder /output/ /output/
+RUN /output/scripts/install-from-bindep && rm -rf /output/wheels
+RUN chmod ug+rw /etc/passwd
+RUN mkdir -p /runner && chgrp 0 /runner && chmod -R ug+rwx /runner
+WORKDIR /runner
+RUN $PYCMD -m pip install --no-cache-dir 'dumb-init==1.2.5'
+RUN chmod 0755 /opt/builder/bin/entrypoint
+COPY --from=quay.io/openshift/origin-cli:4.19 /usr/bin/oc /usr/local/bin/
+COPY --from=quay.io/openshift/origin-cli:4.19 /usr/bin/kubectl /usr/local/bin/
+COPY --from=docker.io/alpine/helm:3.21.4 /usr/bin/helm /usr/local/bin/helm
+RUN rm -rf /output
+LABEL ansible-execution-environment=true
+USER 1000
+ENTRYPOINT ["/opt/builder/bin/entrypoint", "dumb-init"]
+CMD ["bash"]

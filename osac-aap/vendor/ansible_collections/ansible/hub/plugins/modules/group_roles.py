@@ -8,11 +8,6 @@
 # automation hub at https://hub.example.com/pulp/api/v3/docs/
 
 
-from __future__ import absolute_import, division, print_function
-
-__metaclass__ = type
-
-
 DOCUMENTATION = """
 ---
 module: group_roles
@@ -21,6 +16,8 @@ description:
   - Add roles to private automation hub user groups.
   - Requires AAP 2.3 or Galaxy 4.6 or Later for global roles.
   - Requires AAP 2.4 or Galaxy 4.7 or Later for most targeted roles.
+  - Supported through private automation hub 4.10 (AAP 2.5). Use the
+    M(ansible.hub.team_roles) module with private automation hub 4.11 or later.
 author:
   - Sean Sullivan (@sean-m-sullivan)
 options:
@@ -31,6 +28,15 @@ options:
     required: True
     type: list
     elements: str
+  organization:
+    description:
+      - Organization name used to qualify team names in private automation hub.
+      - When set, each unqualified group name is resolved as
+        C(organization::group_name).
+      - This parameter is supported only with private automation hub 4.10 in
+        AAP 2.5. Leave it unset to preserve the existing group behavior.
+    required: false
+    type: str
   role_list:
     description:
       - List of sets of roles and targets to apply to the groups.
@@ -100,6 +106,7 @@ EXAMPLES = """
     groups:
       - santa
       - group1
+    organization: my_org
     role_list:
       - roles:
           - galaxy.group_admin
@@ -133,9 +140,46 @@ from ..module_utils.ah_pulp_object import (
 )
 
 
+def qualify_group_names(module, group_list, organization):
+    """Qualify team names for the opt-in AAP 2.5 organization behavior."""
+    if organization is None:
+        return group_list
+    if not organization:
+        module.fail_json(msg="The organization parameter must not be empty.")
+
+    qualified_group_list = []
+    prefix = "{0}::".format(organization)
+    for group_item in group_list:
+        if "::" in group_item:
+            if not group_item.startswith(prefix):
+                module.fail_json(
+                    msg=(
+                        "Group `{0}` is already organization-qualified for a "
+                        "different organization; do not combine it with organization `{1}`."
+                    ).format(group_item, organization)
+                )
+                continue
+            qualified_group_list.append(group_item)
+        else:
+            qualified_group_list.append(prefix + group_item)
+    return qualified_group_list
+
+
+def validate_server_version(module, version):
+    """Reject group_roles on Hub versions that use the team role API."""
+    if version >= "4.11":
+        module.fail_json(
+            msg=(
+                "The group_roles module is supported through private automation hub 4.10 "
+                "(AAP 2.5). Use the team_roles module with private automation hub 4.11 or later."
+            )
+        )
+
+
 def main():
     argument_spec = dict(
         groups=dict(type='list', elements='str', required=True),
+        organization=dict(type='str', required=False),
         role_list=dict(type='list', elements='dict', required=True),
         state=dict(choices=["present", "enforced", "absent"], default="present"),
     )
@@ -145,6 +189,7 @@ def main():
     group_role_data = {}
     # Extract our parameters
     group_list = module.params.get("groups")
+    organization = module.params.get("organization")
     group_role_data['role_list'] = module.params.get("role_list")
     state = module.params.get("state")
     # Set role data defaults
@@ -152,6 +197,14 @@ def main():
     # Set Group object
     group = AHPulpGroups(module)
     vers = module.get_server_version()
+    validate_server_version(module, vers)
+
+    if organization is not None:
+        if vers < "4.10":
+            module.fail_json(
+                msg="The organization parameter is supported only with private automation hub 4.10 (AAP 2.5)."
+            )
+        group_list = qualify_group_names(module, group_list, organization)
 
     for index, role_item in enumerate(group_role_data['role_list']):
         group_role_data['role_list'][index]['content_urls'] = []
@@ -186,10 +239,24 @@ def main():
                         module.fail_json(msg="Collection Repository `{0}` was not found".format(collection_repositories_item))
             if "execution_environments" in role_item['targets']:
                 repository_pulp = AHPulpEERepository(module)
+                # Quick-fix for AAP-67927: some EE roles
+                # target the parent namespace that holds the EEs
+                # rather than the individual EE itself. When we look
+                # up an EE, the API response already includes a
+                # reference to its parent namespace, so we save both
+                # for use when assigning roles below.
+                # Note: this fix applies to AAP 2.5 (galaxy_ng 4.10).
+                # On AAP 2.6+ (galaxy_ng 4.11+), use the team_roles
+                # module instead, which uses the correct API layer.
+                # See AAP-67927 for more robust alternatives.
+                if 'ee_namespace_urls' not in group_role_data['role_list'][index]:
+                    group_role_data['role_list'][index]['ee_namespace_urls'] = {}
                 for execution_environment_item in role_item['targets']['execution_environments']:
                     repository_pulp.get_object(execution_environment_item)
                     if repository_pulp.exists:
                         group_role_data['role_list'][index]['content_urls'].append(repository_pulp.data['pulp_href'])
+                        if 'namespace' in repository_pulp.data:
+                            group_role_data['role_list'][index]['ee_namespace_urls'][repository_pulp.data['pulp_href']] = repository_pulp.data['namespace']
                     else:
                         module.fail_json(msg="Execution Environment `{0}` was not found".format(execution_environment_item))
             if "container_registery_remotes" in role_item['targets']:
@@ -200,15 +267,31 @@ def main():
                         group_role_data['role_list'][index]['content_urls'].append(registry.data['pulp_href'])
                     else:
                         module.fail_json(msg="Container Registry Remote `{0}` was not found".format(container_registery_remote_item))
+            # Quick-fix for AAP-67927: these EE roles need
+            # to be assigned to the parent namespace that holds the
+            # EEs, not the individual EE. If a role is in this set,
+            # we swap to the namespace reference saved above. This
+            # hard-coded set should be replaced with a dynamic lookup
+            # if Hub adds more namespace-scoped EE roles in the future.
+            ee_namespace_roles = {
+                'galaxy.execution_environment_collaborator',
+                'galaxy.execution_environment_publisher',
+                'galaxy.execution_environment_namespace_owner',
+            }
+            ee_namespace_urls = role_item.get('ee_namespace_urls', {})
             for role in role_item['roles']:
                 role_pulp = AHPulpRolePerm(module)
                 role_pulp.get_object(role)
                 if role_pulp.exists:
                     for content_url in role_item['content_urls']:
+                        if role in ee_namespace_roles and content_url in ee_namespace_urls:
+                            resolved_url = ee_namespace_urls[content_url]
+                        else:
+                            resolved_url = content_url
                         group_role_data['perm_list'].append(
                             {
                                 "role": role_pulp.data['name'],
-                                "content_object": content_url
+                                "content_object": resolved_url
                             }
                         )
                 else:

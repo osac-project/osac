@@ -13,6 +13,11 @@
 !osac-metering/
 !osac-ui/
 
+# osac-aap: ansible-builder execution-environment component, built from a
+# hand-maintained Containerfile (see osac-aap/Containerfile's own header
+# comment) rather than one generated live by a custom Tekton task.
+!osac-aap/
+
 # Shared proto module: every Containerfile now COPYs proto/ for the single
 # generated Go tree at proto/gen/ that all components import.
 !proto/

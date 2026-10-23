@@ -25,7 +25,7 @@ Requirements
 ------------
 The below requirements are needed on the host that executes this module.
 
-- helm (https://github.com/helm/helm/releases) => 3.8.0
+- helm (https://github.com/helm/helm/releases) >= 3.8.0, <4.0.0
 
 
 Parameters
@@ -170,6 +170,7 @@ Parameters
                         <div>Desired state of the registry.</div>
                         <div>If set to V(present) attempt to log in to the remote registry server using the URL specified in O(host).</div>
                         <div>If set to V(absent) attempt to log out from the remote registry server using the URL specified in O(host).</div>
+                        <div>As helm &gt;= 3.18.0 reports successful logout even if the user is not logged in, this module will report a change regardless of the current state.</div>
                 </td>
             </tr>
             <tr>
@@ -214,7 +215,7 @@ Examples
 
 Return Values
 -------------
-Common return values are documented `here <https://docs.ansible.com/ansible/latest/reference_appendices/common_return_values.html#common-return-values>`_, the following are the fields unique to this module:
+Common return values are documented `here <https://docs.ansible.com/projects/ansible/latest/reference_appendices/common_return_values.html#common-return-values>`_, the following are the fields unique to this module:
 
 .. raw:: html
 

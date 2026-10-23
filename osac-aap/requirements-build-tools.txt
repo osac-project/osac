@@ -1,0 +1,237 @@
+# Cachi2/Hermeto pip build-requirements for the EE's generated Containerfile's
+# own tooling installs -- NOT this component's own python dependencies (see
+# execution-environment/requirements.txt for those). Pinned so Cachi2 can
+# prefetch them for the hermetic build; update these pins if
+# execution-environment.yaml's ansible_core/ansible_runner versions change,
+# or if ansible-builder's own template (base/builder/final stage pip
+# installs) changes in a future ansible-builder upgrade.
+ansible-core==2.20.10
+ansible-runner==2.4.3
+bindep==2.14.0
+PyYAML==6.0.3
+packaging==26.3
+dumb-init==1.2.5
+# bindep's own transitive dependencies -- Cachi2 didn't auto-resolve these
+# for a build-requirements entry the way it did for ansible-core/
+# ansible-runner's own transitive deps (confirmed live: distro>=1.7 missing
+# from the prefetch, even though bindep==2.14.0 itself was present), so
+# list them explicitly. Resolved via `pip install bindep==2.14.0 --dry-run
+# --report` against a clean environment.
+distro==1.9.0
+pbr==7.1.3
+Parsley==1.3
+# ansible-core ships no wheel, only an sdist, so pip must build it -- which
+# needs its own build-system requirement (setuptools<=82.0.0,>=66.1.0, per
+# ansible-core's own pyproject.toml) prefetched too. Without this explicit
+# entry, Cachi2 only prefetches whatever version happened to resolve for
+# some OTHER package's transitive dependency (82.0.1 here), which doesn't
+# satisfy ansible-core's own upper bound -- confirmed live: "Could not find
+# a version that satisfies the requirement setuptools<=82.0.0,>=66.1.0".
+# ansible-runner's own build-system.requires is a much older, narrower
+# range (setuptools<=70.0.0,>=45, confirmed live: "Could not find a
+# version that satisfies the requirement setuptools<=70.0.0,>=45") --
+# 70.0.0 is the single version satisfying both packages' constraints at
+# once, so one pin covers both rather than needing two coexisting
+# versions.
+setuptools==70.0.0
+# ansible-core's build-system.requires also hard-pins wheel == 0.45.1
+# exactly (confirmed via its real sdist pyproject.toml), a different
+# exact version than python-esiclient's own wheel need below -- both
+# coexist fine in the shared prefetch cache since pip resolves each
+# package's isolated build environment independently. Confirmed live:
+# "Could not find a version that satisfies the requirement
+# wheel==0.45.1 (from versions: 0.48.0)".
+wheel==0.45.1
+# execution-environment/requirements.txt's python-esiclient dependency is
+# fetched from git (no pyproject.toml, legacy setup.py-only project), so
+# pip builds its wheel using the default legacy build backend, whose
+# implicit build-system.requires is ["setuptools", "wheel"] -- "wheel"
+# itself is never otherwise pulled into the hermetic prefetch, confirmed
+# live: "Could not find a version that satisfies the requirement wheel
+# (from versions: none)".
+wheel==0.48.0
+# ansible-builder's introspect step merges every vendored collection's own
+# bindep.txt/requirements.txt into the final combined pip requirements
+# file at BUILD TIME (inside the Containerfile's builder stage, after
+# collections are copied in) -- these entries never appear anywhere in
+# osac-aap's own execution-environment/requirements.txt, so Cachi2 has no
+# visibility into them from that file alone. Confirmed via a local
+# `ansible-builder create` + introspect.py run against this component's
+# actual collections/vendor tree (same merge the real build performs):
+# pytz/python-dateutil/awxkit come from ansible.controller's own
+# bindep.txt/requirements.txt; textfsm/ttp/xmltodict come from
+# ansible.utils's -- all real, requested collections, not stale vendor
+# (unlike the now-removed orphaned ansible.eda, which contributed a much
+# bigger and genuinely unneeded set of these -- see its vendor removal
+# commit).
+pytz==2026.5
+awxkit==24.6.1
+textfsm==2.1.0
+ttp==0.10.1
+xmltodict==1.0.4
+# cryptography/pydantic-core/rpds-py are maturin (Rust/PyO3) build-
+# backend packages -- no pure-Python or prebuilt-wheel fallback, so
+# building them from source hermetically (instead of fetching a wheel,
+# which trips sbom_spdx.disallowed_package_attributes since it's
+# sourced from public PyPI) needs maturin itself prefetched as a
+# build-system requirement. Confirmed via each package's real sdist
+# pyproject.toml: all three declare `build-backend = "maturin"`. rust/
+# cargo RPMs are prefetched in rpms.in.yaml/rpms.lock.yaml for the
+# actual compilation.
+maturin==1.15.0
+# maturin's OWN build-system.requires (confirmed via its real sdist
+# pyproject.toml) needs setuptools>=77.0.0 -- a range that doesn't
+# overlap ansible-runner's own <=70.0.0 upper bound above, so this
+# coexists as a second setuptools version rather than replacing it
+# (same pattern as the two wheel== pins). 82.0.0 satisfies both this
+# and ansible-core's own <=82.0.0 upper bound, so one extra pin covers
+# both. Also needs setuptools-rust>=1.11.0 (confirmed live: "Could not
+# find a version that satisfies the requirement setuptools-rust>=
+# 1.11.0"), whose own runtime need (semantic_version, confirmed via its
+# real PyPI metadata) has no pyproject.toml (legacy setuptools backend,
+# same bootstrap as Cython/python-esiclient) and whose own build-system
+# needs only setuptools>=62.4 + setuptools_scm (already prefetched).
+setuptools==82.0.0
+setuptools-rust==1.13.0
+semantic_version==2.10.0
+# cryptography's own sdist build-system.requires also lists cffi
+# (>=2.0.0 for python>=3.9, which this EE's python3.12 satisfies) --
+# used by its own build.rs for the rust/cffi bridge, per its
+# pyproject.toml's own comment.
+cffi==2.1.1
+# Both wheel pins above are themselves sdist-only in this fully-source
+# build (no exception to the "no binary wheels" rule, including for
+# pip's own bootstrap packages) and both use flit_core as their build
+# backend -- wheel==0.45.1 needs flit_core>=3.8,<4, wheel==0.48.0 needs
+# flit_core>=3.11,<5; 3.12.0 satisfies both so one pin covers both.
+# Confirmed live: "Could not find a version that satisfies the
+# requirement flit_core<4,>=3.8 (from versions: none)". flit_core's own
+# build-system.requires is empty (self-hosting), confirmed via its real
+# sdist pyproject.toml, so no further transitive need here.
+flit_core==3.12.0
+# ansible-runner's build-system.requires also lists
+# setuptools-scm[toml]>=6.2,<=8.1.0 (confirmed via its real sdist
+# pyproject.toml) alongside setuptools -- 8.1.0 is the exact upper
+# bound. Confirmed live: "Could not find a version that satisfies the
+# requirement setuptools-scm<=8.1.0,>=6.2". setuptools-scm's own
+# build-system.requires self-references (setuptools_scm>=8, a known
+# bootstrap quirk of that package); its runtime requires_dist reduces
+# to packaging+setuptools (already prefetched above) for python3.12 --
+# the tomli/typing-extensions entries are gated to python_version<3.11.
+setuptools-scm==8.1.0
+# PyYAML's build-system.requires includes a bare Cython (python_version
+# < "3.13", which this EE's python3.12 matches) alongside setuptools --
+# confirmed via its real sdist pyproject.toml. Confirmed live: "Could
+# not find a version that satisfies the requirement Cython (from
+# versions: none)". Cython itself ships no pyproject.toml (legacy
+# setuptools.build_meta backend, same as python-esiclient), so it needs
+# only the setuptools/wheel already prefetched above, nothing further.
+Cython==3.3.0
+# maturin's build-system.requires also lists puccinialin>=0.1,<0.2
+# (confirmed live: "Could not find a version that satisfies the
+# requirement puccinialin>=0.1,<0.2") -- a helper that bootstraps a
+# Rust toolchain into a temp dir if none is found at build time. We
+# already have a real system Rust toolchain via rpms.lock.yaml, so its
+# actual bootstrap logic should never run, but pip still needs the
+# package installed to satisfy maturin's declared requirement. This
+# pulled in a real, multi-layer cascade of further build/runtime deps,
+# traced one real "Could not find"/`pip download --dry-run` style
+# check at a time rather than guessed, each confirmed via its own real
+# sdist pyproject.toml:
+#
+#   puccinialin (flit_core, already have) needs at runtime:
+#     filelock, httpx, platformdirs, tqdm
+#   filelock (hatchling+hatch-vcs) -- NEW build backend family
+#   httpx (hatchling+hatch-fancy-pypi-readme) needs at runtime:
+#     anyio, certifi, httpcore, idna
+#   anyio (setuptools+setuptools_scm, already have) needs:
+#     typing_extensions>=4.16.0 (our existing 4.15.0 pin doesn't
+#     satisfy this -- a second, newer, coexisting version)
+#   httpcore (hatchling+hatch-fancy-pypi-readme) needs at runtime: h11
+#   h11, platformdirs, tqdm, certifi: no pyproject.toml/no extra
+#     runtime deps, legacy setuptools bootstrap already covered
+#   hatchling itself: self-hosting (requires = [], build-backend
+#     "hatchling.ouroboros"), no further need
+#   hatch-vcs needs: hatchling (above) + setuptools-scm>=8.2.0 -- a
+#     THIRD setuptools-scm version (doesn't overlap ansible-runner's
+#     own <=8.1.0 upper bound), same coexisting-pin pattern as
+#     setuptools/wheel above
+#   hatch-fancy-pypi-readme needs: hatchling (above)
+#
+# Resolved via each package's real PyPI metadata/sdist pyproject.toml,
+# same methodology as everything else in this file -- not guessed.
+puccinialin==0.1.14
+filelock==3.32.7
+httpx==0.28.1
+anyio==4.15.1
+certifi==2026.10.19
+httpcore==1.0.9
+idna==3.20
+h11==0.16.0
+typing_extensions==4.16.0
+platformdirs==4.13.5
+tqdm==4.70.1
+hatchling==1.32.4
+hatch-vcs==0.5.0
+hatch-fancy-pypi-readme==25.1.0
+setuptools-scm==8.3.1
+# hatchling's own runtime deps (packaging already prefetched above):
+pathspec==1.1.1
+pluggy==1.7.0
+tomlkit==0.15.2
+trove-classifiers==2026.9.21.13
+# tomlkit's build backend is poetry-core (a THIRD build-backend
+# ecosystem, alongside setuptools/flit_core/hatchling) -- self-hosting
+# (requires = []), confirmed via its real sdist pyproject.toml, no
+# further need.
+poetry-core==2.5.0
+# trove-classifiers' build-system.requires also lists calver
+# (setuptools>=77.0.1, already satisfied by setuptools==82.0.0 above),
+# confirmed via its real sdist pyproject.toml.
+calver==2025.10.20
+# python-daemon (an ansible-runner dependency)'s build-system.requires
+# also lists docutils and changelog-chug (bare, confirmed via its real
+# sdist pyproject.toml), alongside wheel/setuptools (already have).
+# changelog-chug's own build-system.requires needs semver>=3.0.0 and
+# docutils>=0.21.0 (satisfied by our own docutils pin) in addition to
+# setuptools. docutils' own build backend is flit_core (already have,
+# >=3.11,<4 satisfied by 3.12.0). semver's own runtime need
+# (fast-semver-rs-backend) is gated behind an unused "native" extra, so
+# nothing further.
+docutils==0.23
+changelog-chug==0.0.3
+semver==3.1.0
+# aiohttp (from osac-aap's own execution-environment/requirements.txt,
+# the main 99-package file, not just the build-tools one) needs
+# pkgconfig (bare) alongside setuptools>=67.0 (already have), confirmed
+# via its real sdist pyproject.toml. pkgconfig's own build backend is
+# poetry-core (already have, >=1.0.0 satisfied by 2.5.0).
+pkgconfig==1.6.0
+# cmd2 needs build>=1.2.2, setuptools>=80.7.1 (satisfied by 82.0.0),
+# and setuptools-scm>=9.2 -- a FOURTH coexisting setuptools-scm
+# version (none of the existing 8.x pins satisfy >=9.2), confirmed via
+# its real sdist pyproject.toml. build's own backend is flit_core
+# (already have); its own runtime need is packaging (have) +
+# pyproject_hooks (new, bare, also flit_core-backed, no further
+# cascade).
+setuptools-scm==9.2.2
+pyproject_hooks==1.3.3
+build==1.6.1
+# frozenlist's own build-system.requires also lists a bare "expandvars"
+# alongside setuptools>=47 (already have), confirmed via its real sdist
+# pyproject.toml. Confirmed live: "Could not find a version that
+# satisfies the requirement expandvars (from versions: none)".
+# expandvars' own build backend is hatchling (already have, self-hosting
+# -- requires = ["hatchling"]), no further cascade.
+expandvars==1.1.2
+# propcache (an aiohttp/aiosignal transitive dep) uses the same aio-libs
+# in-tree pep517_backend as frozenlist, but its own _backend.py hardcodes
+# a narrower dynamic build requirement -- `c_ext_build_deps = ['Cython
+# ~= 3.1.0']` (confirmed by reading its real sdist's
+# packaging/pep517_backend/_backend.py directly) -- that our existing
+# Cython==3.3.0 pin (for PyYAML, which has no such narrow constraint)
+# doesn't satisfy. Confirmed live: "Could not find a version that
+# satisfies the requirement Cython~=3.1.0 (from versions: 3.3.0)". A
+# SECOND coexisting Cython version, same pattern as setuptools/wheel/
+# setuptools-scm above.
+Cython==3.1.8

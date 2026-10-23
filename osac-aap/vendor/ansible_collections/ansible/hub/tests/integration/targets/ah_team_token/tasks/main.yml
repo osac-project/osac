@@ -1,0 +1,93 @@
+---
+- name: ah_team integration tests with token auth
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+
+    - name: Create a token for testing
+      ansible.hub.ah_token:
+        ah_username: "{{ ah_username }}"
+        ah_password: "{{ ah_password }}"
+        state: present
+      no_log: true
+
+    - name: Define variables for test resources
+      set_fact:
+        test_team: "test_team_token_{{ test_id }}"
+
+    # Test: Create a team
+    - name: Create team (token auth)
+      ansible.hub.ah_team:
+        name: "{{ test_team }}"
+        state: present
+        ah_token: "{{ ah_token.token }}"
+      register: r_create
+
+    - name: Check if the team was created
+      assert:
+        that:
+          - r_create.changed
+          - r_create.name == test_team
+          - r_create.id is defined
+
+    # Test: Idempotency - create again should not change
+    - name: Create team again (idempotency, token auth)
+      ansible.hub.ah_team:
+        name: "{{ test_team }}"
+        state: present
+        ah_token: "{{ ah_token.token }}"
+      register: r_create_idempotent
+
+    - name: Check idempotency
+      assert:
+        that:
+          - not r_create_idempotent.changed
+
+    # Test: Delete the team
+    - name: Delete team (token auth)
+      ansible.hub.ah_team:
+        name: "{{ test_team }}"
+        state: absent
+        ah_token: "{{ ah_token.token }}"
+      register: r_delete
+
+    - name: Check if the team was deleted
+      assert:
+        that:
+          - r_delete.changed
+
+    # Test: Idempotency - delete again should not change
+    - name: Delete team again (idempotency, token auth)
+      ansible.hub.ah_team:
+        name: "{{ test_team }}"
+        state: absent
+        ah_token: "{{ ah_token.token }}"
+      register: r_delete_idempotent
+
+    - name: Check delete idempotency
+      assert:
+        that:
+          - not r_delete_idempotent.changed
+
+  always:
+    - name: Cleanup - delete test team
+      ansible.hub.ah_team:
+        name: "{{ test_team | default('') }}"
+        state: absent
+        ah_token: "{{ ah_token.token | default('') }}"
+      ignore_errors: true
+
+    - name: Remove test token
+      ansible.hub.ah_token:
+        ah_username: "{{ ah_username }}"
+        ah_password: "{{ ah_password }}"
+        token: "{{ ah_token.token | default('') }}"
+        state: absent
+      ignore_errors: true
+      no_log: true

@@ -5,28 +5,32 @@
 
     - name: Add a deployment
       k8s:
+        namespace: "{{ scale_namespace }}"
         definition:
           apiVersion: apps/v1
           kind: Deployment
           metadata:
             name: scale-deploy
-            namespace: "{{ scale_namespace }}"
+            labels:
+              app: scale-deploy
           spec:
             replicas: 1
             selector:
               matchLabels:
-                app: "{{ k8s_pod_name }}"
-            template: "{{ k8s_pod_template }}"
-        wait: yes
+                app: scale-deploy
+            template:
+              metadata:
+                labels:
+                  app: scale-deploy
+              spec:
+                containers:
+                  - name: nginx
+                    image: nginx:latest
+                    ports:
+                      - containerPort: 80
+        wait: true
         wait_timeout: "{{ k8s_wait_timeout | default(omit) }}"
-        apply: yes
-      vars:
-        k8s_pod_name: scale-deploy
-        k8s_pod_image: gcr.io/kuar-demo/kuard-amd64:v0.10.0-green
-        k8s_pod_ports:
-          - containerPort: 8080
-            name: http
-            protocol: TCP
+        apply: true
 
     - name: Get pods in scale-deploy
       k8s_info:
@@ -44,7 +48,8 @@
         name: scale-deploy
         namespace: "{{ scale_namespace }}"
         replicas: 0
-        wait: yes
+        wait: true
+        wait_timeout: 60
       register: scale_down
       check_mode: true
 
@@ -75,7 +80,8 @@
         name: scale-deploy
         namespace: "{{ scale_namespace }}"
         replicas: 0
-        wait: yes
+        wait: true
+        wait_timeout: 60
       register: scale_down
       check_mode: true
 
@@ -106,7 +112,7 @@
         name: scale-deploy
         namespace: "{{ scale_namespace }}"
         replicas: 0
-        wait: yes
+        wait: true
         wait_timeout: "{{ k8s_wait_timeout | default(omit) }}"
       register: scale_down
       diff: true
@@ -129,7 +135,7 @@
         that:
           - scale_down is changed
           - '"duration" in scale_down'
-          - scale_down.diff
+          - scale_down.diff != {}
 
     - name: Scale the deployment once again (idempotency)
       k8s_scale:
@@ -138,7 +144,8 @@
         name: scale-deploy
         namespace: "{{ scale_namespace }}"
         replicas: 0
-        wait: yes
+        wait: true
+        wait_timeout: 60
       register: scale_down_idempotency
       diff: true
 
@@ -159,18 +166,20 @@
             replicas: 1
             selector:
               matchLabels:
-                app: "{{ k8s_pod_name }}"
-            template: "{{ k8s_pod_template }}"
-        wait: yes
+                app: scale-deploy
+            template:
+              metadata:
+                labels:
+                  app: scale-deploy
+              spec:
+                containers:
+                  - name: nginx
+                    image: nginx:latest
+                    ports:
+                      - containerPort: 80
+        wait: true
         wait_timeout: "{{ k8s_wait_timeout | default(omit) }}"
-        apply: yes
-      vars:
-        k8s_pod_name: scale-deploy
-        k8s_pod_image: gcr.io/kuar-demo/kuard-amd64:v0.10.0-green
-        k8s_pod_ports:
-          - containerPort: 8080
-            name: http
-            protocol: TCP
+        apply: true
       register: reapply_after_scale
 
     - name: Get pods in scale-deploy
@@ -199,7 +208,7 @@
         wait: yes
         wait_timeout: "{{ k8s_wait_timeout | default(omit) }}"
       register: scale_up
-      diff: no
+      diff: false
 
     - name: Get pods in scale-deploy
       k8s_info:
@@ -227,8 +236,9 @@
         namespace: "{{ scale_namespace }}"
         replicas: 2
         wait: yes
+        wait_timeout: 60
       register: scale_up_noop
-      diff: no
+      diff: false
 
     - name: Get pods in scale-deploy
       k8s_info:
@@ -255,7 +265,7 @@
         name: scale-deploy
         namespace: "{{ scale_namespace }}"
         replicas: 1
-        wait: no
+        wait: false
       register: scale_down_no_wait
       diff: true
 
@@ -274,7 +284,7 @@
       assert:
         that:
           - scale_down_no_wait is changed
-          - scale_down_no_wait.diff
+          - scale_down_no_wait.diff != {}
           - scale_down_no_wait_pods.resources | length == 1
 
     # scale multiple resource using label selectors
@@ -302,12 +312,12 @@
         resource_version: 0
         label_selectors:
           - app=nginx
+        wait_timeout: 60
       register: scale_out
 
     - assert:
         that:
           - not scale_out.changed
-          - scale_out.results | selectattr('warning', 'defined') | list | length == 2
 
     - name: scale deployment using current replicas (wrong value)
       kubernetes.core.k8s_scale:
@@ -322,7 +332,6 @@
     - assert:
         that:
           - not scale_out.changed
-          - scale_out.results | selectattr('warning', 'defined') | list | length == 2
 
     - name: scale deployment using current replicas (right value)
       kubernetes.core.k8s_scale:

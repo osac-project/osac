@@ -1,14 +1,7 @@
 ---
 name: Sanity tests
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
-on:
-  pull_request:
-    branches:
-      - main
-      - stable-*
+on: [workflow_call]
 
 jobs:
   sanity:

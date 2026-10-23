@@ -1,0 +1,172 @@
+---
+- name: team_roles integration tests with basic auth
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      ah_username: "{{ ah_username }}"
+      ah_password: "{{ ah_password }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+
+    - name: Define variables for test resources
+      set_fact:
+        test_team: "test_team_{{ test_id }}"
+        test_namespace: "test_ns_{{ test_id }}"
+
+    # Setup: Create a test team/group
+    - name: Create test team
+      ansible.hub.ah_team:
+        name: "{{ test_team }}"
+        state: present
+      register: r_team_create
+
+    # Test: Assign a global role to the team
+    - name: Assign galaxy.collection_curator role to the team
+      ansible.hub.team_roles:
+        team: "{{ test_team }}"
+        role: galaxy.collection_curator
+        state: present
+      register: r_role_assign
+
+    - name: Check if the role was assigned
+      assert:
+        that:
+          - r_role_assign.changed
+          - r_role_assign.team == test_team
+          - r_role_assign.role == "galaxy.collection_curator"
+
+    # Test: Idempotency - re-run should not change
+    - name: Assign galaxy.collection_curator role to the team (idempotency)
+      ansible.hub.team_roles:
+        team: "{{ test_team }}"
+        role: galaxy.collection_curator
+        state: present
+      register: r_role_assign_idempotent
+
+    - name: Check idempotency
+      assert:
+        that:
+          - not r_role_assign_idempotent.changed
+
+    # Test: Remove the role from the team
+    - name: Remove galaxy.collection_curator role from the team
+      ansible.hub.team_roles:
+        team: "{{ test_team }}"
+        role: galaxy.collection_curator
+        state: absent
+      register: r_role_remove
+
+    - name: Check if the role was removed
+      assert:
+        that:
+          - r_role_remove.changed
+
+    # Test: Idempotency - removing again should not change
+    - name: Remove galaxy.collection_curator role from the team (idempotency)
+      ansible.hub.team_roles:
+        team: "{{ test_team }}"
+        role: galaxy.collection_curator
+        state: absent
+      register: r_role_remove_idempotent
+
+    - name: Check removal idempotency
+      assert:
+        that:
+          - not r_role_remove_idempotent.changed
+
+    # Setup: Create a namespace for scoped role tests
+    - name: Create test namespace
+      ansible.hub.ah_namespace:
+        name: "{{ test_namespace }}"
+        state: present
+      register: r_namespace_create
+
+    - name: Check if the namespace was created
+      assert:
+        that:
+          - r_namespace_create.changed
+
+    # Test: Assign a namespace-scoped role to the team
+    - name: Assign galaxy.collection_namespace_owner role to the team for the namespace
+      ansible.hub.team_roles:
+        team: "{{ test_team }}"
+        role: galaxy.collection_namespace_owner
+        targets:
+          collection_namespaces:
+            - "{{ test_namespace }}"
+        state: present
+      register: r_scoped_role_assign
+
+    - name: Check if the scoped role was assigned
+      assert:
+        that:
+          - r_scoped_role_assign.changed
+          - r_scoped_role_assign.team == test_team
+          - r_scoped_role_assign.role == "galaxy.collection_namespace_owner"
+
+    # Test: Idempotency - re-run should not change
+    - name: Assign galaxy.collection_namespace_owner role to the team (idempotency)
+      ansible.hub.team_roles:
+        team: "{{ test_team }}"
+        role: galaxy.collection_namespace_owner
+        targets:
+          collection_namespaces:
+            - "{{ test_namespace }}"
+        state: present
+      register: r_scoped_role_assign_idempotent
+
+    - name: Check scoped role idempotency
+      assert:
+        that:
+          - not r_scoped_role_assign_idempotent.changed
+
+    # Test: Remove the scoped role from the team
+    - name: Remove galaxy.collection_namespace_owner role from the team
+      ansible.hub.team_roles:
+        team: "{{ test_team }}"
+        role: galaxy.collection_namespace_owner
+        targets:
+          collection_namespaces:
+            - "{{ test_namespace }}"
+        state: absent
+      register: r_scoped_role_remove
+
+    - name: Check if the scoped role was removed
+      assert:
+        that:
+          - r_scoped_role_remove.changed
+
+    # Test: Idempotency - removing again should not change
+    - name: Remove galaxy.collection_namespace_owner role from the team (idempotency)
+      ansible.hub.team_roles:
+        team: "{{ test_team }}"
+        role: galaxy.collection_namespace_owner
+        targets:
+          collection_namespaces:
+            - "{{ test_namespace }}"
+        state: absent
+      register: r_scoped_role_remove_idempotent
+
+    - name: Check scoped role removal idempotency
+      assert:
+        that:
+          - not r_scoped_role_remove_idempotent.changed
+
+  always:
+    # Cleanup: Remove test namespace
+    - name: Delete test namespace
+      ansible.hub.ah_namespace:
+        name: "{{ test_namespace | default('') }}"
+        state: absent
+      ignore_errors: true
+
+    # Cleanup: Remove test team
+    - name: Delete test team
+      ansible.hub.ah_team:
+        name: "{{ test_team | default('') }}"
+        state: absent
+      ignore_errors: true

@@ -8,17 +8,14 @@
 # automation hub at https://hub.example.com/pulp/api/v3/docs/
 
 
-from __future__ import absolute_import, division, print_function
-
-__metaclass__ = type
-
-
 DOCUMENTATION = r"""
 ---
 module: ah_user
 short_description: Manage private automation hub users
 description:
   - Create, delete, and update user accounts in private automation hub.
+  - B(Deprecated) when used with AAP 2.5 or 2.6. This module will be removed in AAP 2.7.
+    In AAP 2.7, user management is handled through the AAP Gateway.
 author:
   - Herve Quatremain (@herve4m)
 options:
@@ -90,16 +87,16 @@ EXAMPLES = r"""
     ah_host: hub.example.com
     ah_username: admin
     ah_password: Sup3r53cr3t
-  no_log: True
+  no_log: true
 
 - name: Ensure the user is removed
   ansible.hub.ah_user:
-    username:  dwilde
+    username: dwilde
     state: absent
     ah_host: hub.example.com
     ah_username: admin
     ah_password: Sup3r53cr3t
-  no_log: True
+  no_log: true
 
 - name: Ensure the user only belongs to the operators and developers groups
   ansible.hub.ah_user:
@@ -112,7 +109,7 @@ EXAMPLES = r"""
     ah_host: hub.example.com
     ah_username: admin
     ah_password: Sup3r53cr3t
-  no_log: True
+  no_log: true
 
 - name: Ensure the user is added to the managers group
   ansible.hub.ah_user:
@@ -124,7 +121,7 @@ EXAMPLES = r"""
     ah_host: hub.example.com
     ah_username: admin
     ah_password: Sup3r53cr3t
-  no_log: True
+  no_log: true
 
 - name: Ensure the password is changed
   ansible.hub.ah_user:
@@ -134,7 +131,7 @@ EXAMPLES = r"""
     ah_host: hub.example.com
     ah_username: admin
     ah_password: Sup3r53cr3t
-  no_log: True
+  no_log: true
 
 - name: Ensure the user is a super user
   ansible.hub.ah_user:
@@ -144,7 +141,7 @@ EXAMPLES = r"""
     ah_host: hub.example.com
     ah_username: admin
     ah_password: Sup3r53cr3t
-  no_log: True
+  no_log: true
 """
 
 RETURN = r""" # """
@@ -184,6 +181,27 @@ def main():
     module.authenticate()
     vers = module.get_server_version()
     user = AHUIUser(module)
+
+    # AHAPIModule.get_server_version() returns a LooseVersion object, so
+    # string comparisons like vers >= "4.12" work via LooseVersion.__ge__.
+    # This differs from ah_token.py which uses AHModule (no built-in version
+    # detection) and constructs LooseVersion explicitly.
+    if module.behind_resource_server:
+        if vers >= "4.12":
+            module.fail_json(
+                msg=(
+                    "The ah_user module is not supported in AAP 2.7+ (Hub {vers}). "
+                    "User management is handled through the AAP Gateway. "
+                    "Use the ansible.platform collection or AAP Gateway UI to manage users instead."
+                ).format(vers=vers)
+            )
+        elif vers >= "4.10":
+            module.warn(
+                "The ah_user module is deprecated when used with AAP 2.5+ (Hub {vers}) "
+                "and will be removed in AAP 2.7. User management should be done through "
+                "the AAP Gateway. Use the ansible.platform collection or AAP Gateway UI "
+                "to manage users instead.".format(vers=vers)
+            )
 
     # Get the user details from its name.
     # API (GET): /api/galaxy/_ui/v1/users/?username=<user_name>

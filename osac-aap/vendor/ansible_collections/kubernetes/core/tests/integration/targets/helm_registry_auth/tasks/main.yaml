@@ -4,7 +4,7 @@
   # and it allow to not install any additional dependencies
   block:
     - name: Ensure that helm is installed
-      ansible.builtin.shell: helm version --client --short | grep v3
+      ansible.builtin.shell: "{{ helm_binary }} version --client --short | grep v3"
       register: _helm_version
       failed_when: _helm_version.rc != 0
 
@@ -44,14 +44,14 @@
 
     - name: Test the registry with correct credentials to ensure that the registry is running
       ansible.builtin.shell: >-
-        echo {{ password | quote }} | helm registry login localhost:{{ registry_port }}
+        echo {{ password | quote }} | {{ helm_binary }} registry login localhost:{{ registry_port }}
         -u {{ username }} --password-stdin
       register: _login_correct
       failed_when: _login_correct.rc != 0
 
     - name: Clean up credentials to run test on clean environment
       ansible.builtin.shell: >-
-        helm registry logout localhost:{{ registry_port }}
+        {{ helm_binary }} registry logout localhost:{{ registry_port }}
       register: _logout
       failed_when: _logout.rc != 0
 
@@ -70,6 +70,7 @@
 
     - name: Test module helm_registry_auth with correct credentials
       helm_registry_auth:
+        binary_path: "{{ helm_binary }}"
         username: "{{ username }}"
         password: "{{ password }}"
         host: localhost:{{ registry_port }}
@@ -87,7 +88,7 @@
 
     - name: Ensure that push to the registry is working
       ansible.builtin.shell: >-
-        helm push "{{ _destination.path }}/k8s-monitoring-1.6.8.tgz"  oci://localhost:{{ registry_port }}/test/
+        {{ helm_binary }} push "{{ _destination.path }}/k8s-monitoring-1.6.8.tgz"  oci://localhost:{{ registry_port }}/test/
       register: _save_chart
       failed_when: _save_chart.rc != 0
 
@@ -99,6 +100,7 @@
 
     - name: Test logout
       helm_registry_auth:
+        binary_path: "{{ helm_binary }}"
         host: localhost:{{ registry_port }}
         state: absent
       register: _helm_registry_auth_logout
@@ -108,19 +110,24 @@
       assert:
         that: "'Removing login credentials' in _helm_registry_auth_logout.stderr"
 
-    - name: Test logout idempotency
-      helm_registry_auth:
-        host: localhost:{{ registry_port }}
-        state: absent
-      register: _helm_registry_auth_logout_idempotency
+    - name: Test idempotency of logout with helm < 3.18.0
+      when: _helm_version.stdout is ansible.builtin.version('v3.18.0', '<')
+      block:
 
-    - name: Assert logout operation did not report change
-      ansible.builtin.assert:
-        that: _helm_registry_auth_logout_idempotency is not changed
+        - name: Test logout idempotency
+          helm_registry_auth:
+            binary_path: "{{ helm_binary }}"
+            host: localhost:{{ registry_port }}
+            state: absent
+          register: _helm_registry_auth_logout_idempotency
+
+        - name: Assert logout operation did not report change
+          ansible.builtin.assert:
+            that: _helm_registry_auth_logout_idempotency is not changed
 
     - name: Ensure that not able to push to the registry
       ansible.builtin.shell: >-
-        helm push "{{ _destination.path }}/k8s-monitoring-1.6.8.tgz"  oci://localhost:{{ registry_port }}/test/
+        {{ helm_binary }} push "{{ _destination.path }}/k8s-monitoring-1.6.8.tgz"  oci://localhost:{{ registry_port }}/test/
       register: _save_chart
       failed_when: _save_chart.rc == 0
 
@@ -133,13 +140,13 @@
       # Helm binary prints the message to stderr
       ansible.builtin.assert:
         that:
-          - "'push access denied' in _save_chart.stderr"
-          - "'authorization failed' in _save_chart.stderr"
+          - "'push access denied' in _save_chart.stderr or 'basic credential not found' in _save_chart.stderr"
           - "_save_chart.rc != 0"
           - "'localhost:{{ registry_port }}' not in _config_json.content | b64decode"
 
     - name: Test module helm_registry_auth with wrong credentials
       helm_registry_auth:
+        binary_path: "{{ helm_binary }}"
         username: "{{ username }}"
         password: "{{ wrong_password }}"
         host: localhost:{{ registry_port }}
@@ -155,7 +162,8 @@
     - name: Assert that the registry is not logged in and auth data is not saved
       ansible.builtin.assert:
         that:
-          - "'401 Unauthorized' in _helm_registry_auth_wrong.stderr"
+          - "'401' in _helm_registry_auth_wrong.stderr"
+          - "'unauthorized' in _helm_registry_auth_wrong.stderr | lower"
           - "'{{ wrong_password }}' not in _helm_registry_auth_correct.command"
           - "'{{ wrong_password }}' not in _helm_registry_auth_correct.stdout"
           - "'{{ wrong_password }}' not in _helm_registry_auth_correct.stderr"

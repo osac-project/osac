@@ -4,10 +4,6 @@
 # Copyright: (c) 2020, Tom Page <@Tompage1994>
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
-from __future__ import absolute_import, division, print_function
-
-__metaclass__ = type
-
 
 DOCUMENTATION = """
 ---
@@ -48,7 +44,6 @@ EXAMPLES = """
 - name: Upload collection to automation hub from galaxy
   ansible.hub.ah_collection_upload:
     path: https://galaxy.ansible.com/download/theforeman-foreman-3.2.0.tar.gz
-
 """
 
 from ..module_utils.ah_module import AHModule

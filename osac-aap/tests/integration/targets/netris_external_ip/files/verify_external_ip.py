@@ -492,31 +492,29 @@ class ExternalIPPlaybookTests(unittest.TestCase):
             yaml.safe_dump(d, default_flow_style=False).strip() for d in documents
         )
         cls._kubectl("apply", "-f", "-", input=manifest)
-        pool = json.loads(
-            cls._kubectl(
-                "get", "externalippool", "netris-eip-pool",
-                "-n", cls.namespace, "-o", "json",
-            )
+        cls.pool_uid = cls._fetched("externalippool", "netris-eip-pool")[
+            "metadata"
+        ]["uid"]
+        cls.v1_resource = cls._fetched("externalip", "netris-eip-v1")
+        cls.isolated_resource = cls._fetched("externalip", "netris-eip-isolated")
+        cls.legacy_resource = cls._fetched("externalip", "netris-eip-legacy")
+
+    @classmethod
+    def _fetched(cls, kind, name):
+        """Fetch one CR without kubectl's last-applied bookkeeping.
+
+        Client-side ``kubectl apply`` embeds the full manifest in the
+        ``kubectl.kubernetes.io/last-applied-configuration`` annotation.
+        Stripping it keeps provider identifiers (for example the pool
+        UUID in ``spec.pool``) out of snapshots that child jobs debug
+        into their callback output.
+        """
+        snapshot = json.loads(
+            cls._kubectl("get", kind, name, "-n", cls.namespace, "-o", "json")
         )
-        cls.pool_uid = pool["metadata"]["uid"]
-        cls.v1_resource = json.loads(
-            cls._kubectl(
-                "get", "externalip", "netris-eip-v1",
-                "-n", cls.namespace, "-o", "json",
-            )
-        )
-        cls.isolated_resource = json.loads(
-            cls._kubectl(
-                "get", "externalip", "netris-eip-isolated",
-                "-n", cls.namespace, "-o", "json",
-            )
-        )
-        cls.legacy_resource = json.loads(
-            cls._kubectl(
-                "get", "externalip", "netris-eip-legacy",
-                "-n", cls.namespace, "-o", "json",
-            )
-        )
+        annotations = snapshot["metadata"].setdefault("annotations", {})
+        annotations.pop("kubectl.kubernetes.io/last-applied-configuration", None)
+        return snapshot
 
     def _pool_snapshot(self):
         """Build the supplied external_ip_pool snapshot."""
@@ -729,6 +727,9 @@ class ExternalIPPlaybookTests(unittest.TestCase):
                     "get", "externalip", name,
                     "-n", self.namespace, "-o", "json",
                 )
+            )
+            snapshot["metadata"].setdefault("annotations", {}).pop(
+                "kubectl.kubernetes.io/last-applied-configuration", None
             )
             if snapshot["metadata"].get("deletionTimestamp"):
                 return snapshot

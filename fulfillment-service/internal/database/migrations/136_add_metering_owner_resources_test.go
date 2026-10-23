@@ -48,7 +48,7 @@ var _ = DescribeMigration("Add metering owner resources", func() {
 	}
 
 	It("carries the owner resource of a worker's cluster reference", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 135)).To(Succeed())
+		Expect(tool.Migrate(ctx, 136)).To(Succeed())
 
 		fields := trackedFields(ctx, "bare_metal_instances")
 		cluster := fieldByPath(fields, "status.cluster")
@@ -66,7 +66,7 @@ var _ = DescribeMigration("Add metering owner resources", func() {
 	})
 
 	It("leaves the other tracked-field lists untouched", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 135)).To(Succeed())
+		Expect(tool.Migrate(ctx, 136)).To(Succeed())
 
 		for _, table := range []string{
 			"compute_instances", "clusters", "volumes", "external_ips", "nat_gateways",

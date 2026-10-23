@@ -27,7 +27,7 @@ import (
 
 var _ = DescribeMigration("Reject earlier metering change times", func() {
 	BeforeEach(func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 136)).To(Succeed())
+		Expect(tool.Migrate(ctx, 137)).To(Succeed())
 		_, err := conn.Exec(ctx, `
 			insert into tenants (id, name, tenant, creator, data)
 			values ('tenant-a', 'tenant-a', 'tenant-a', 'system', '{}');

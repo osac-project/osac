@@ -8,13 +8,10 @@
 # Why: osac-ci auto-approves dependency bot PRs that touch only
 # dependency files (policy/flow.yml bot_approve); CodeRabbit reviews
 # on these PRs add no signal beyond what the policy already checks.
-# osac-dev-bot is listed explicitly to preserve the existing central
-# exclusion regardless of how CodeRabbit merges inherited arrays.
 inheritance: true
 
 reviews:
   auto_review:
     ignore_usernames:
-      - "osac-dev-bot"
       - "dependabot[bot]"
       - "red-hat-konflux-kflux-prd-rh02[bot]"

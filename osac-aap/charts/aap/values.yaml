@@ -15,7 +15,7 @@ aap:
     imagePullPolicy: IfNotPresent
 bootstrap:
   enabled: true
-  image: ghcr.io/osac-project/osac-aap:0.0.39 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+  image: registry.stage.redhat.io/cloud-extensions/osac-aap-rhel10:0.0.39 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
   cliImage: quay.io/openshift/origin-cli:4.20.0
   backoffLimit: 15
   readinessConsecutiveSuccesses: 3

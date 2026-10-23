@@ -360,7 +360,7 @@ typing-extensions==4.15.0
     #   typing-inspection
 typing-inspection==0.4.4
     # via pydantic
-urllib3==2.6.3
+urllib3==2.8.0
     # via
     #   osac-aap (pyproject.toml)
     #   botocore

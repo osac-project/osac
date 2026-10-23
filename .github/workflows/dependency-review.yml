@@ -66,4 +66,17 @@ jobs:
           #    GHSA-rxhj-4m44-96r4 (high), GHSA-v253-rj99-jwpq (moderate),
           #    GHSA-vq4v-j7r6-jq4m (high), GHSA-w466-c33r-3gjp (high),
           #    GHSA-xpqm-wm3m-f34h (moderate)
-          allow-ghsas: "GHSA-hrxh-6v49-42gf, GHSA-gcjh-h69q-9w9g, GHSA-2phv-j68v-wwqx, GHSA-3qhv-2rgh-x77r, GHSA-4gxm-v5v7-fqc4, GHSA-54hh-g5mx-jqcp, GHSA-5wx6-mg75-v57r, GHSA-6pfh-p556-v868, GHSA-6x96-7vc8-cm3p, GHSA-72r4-9c5j-mj57, GHSA-7vhp-vf5g-r2fw, GHSA-8cc4-rfj6-fhg4, GHSA-c59q-g84q-2gj5, GHSA-cjhr-43r9-cfmw, GHSA-fr4h-3cph-29xv, GHSA-gj8w-mvpf-x27x, GHSA-hg3w-7f8c-63hp, GHSA-hwx4-2j3j-g496, GHSA-m733-5w8f-5ggw, GHSA-p4xf-rf54-rj3x, GHSA-q6j5-fjx5-2mc3, GHSA-qrv3-253h-g69c, GHSA-rxhj-4m44-96r4, GHSA-v253-rj99-jwpq, GHSA-vq4v-j7r6-jq4m, GHSA-w466-c33r-3gjp, GHSA-xpqm-wm3m-f34h"
+          #  - filelock@3.32.7 in osac-aap/requirements-build-tools.txt: pinned
+          #    only to satisfy puccinialin's own declared runtime requirement
+          #    (filelock<4.0.0,>=3.19.1, confirmed via its real, latest 0.1.14
+          #    PyPI metadata -- no newer release relaxes this), for maturin's
+          #    Rust-toolchain-bootstrap fallback logic. That logic never runs
+          #    in this hermetic build: a real system Rust toolchain is always
+          #    present via rpms.lock.yaml, so filelock's own vulnerable code
+          #    path is never exercised. All 3 GHSAs below are fixed only in
+          #    4.2.1+, which falls outside puccinialin's own <4.0.0 upper
+          #    bound -- no version exists that satisfies both. A real fix
+          #    needs puccinialin itself to relax that bound upstream.
+          #    GHSA-v4x8-3wr5-3wq8 (high), GHSA-567q-5qvw-pf92 (low),
+          #    GHSA-9vhv-jxww-xfm5 (low)
+          allow-ghsas: "GHSA-hrxh-6v49-42gf, GHSA-gcjh-h69q-9w9g, GHSA-2phv-j68v-wwqx, GHSA-3qhv-2rgh-x77r, GHSA-4gxm-v5v7-fqc4, GHSA-54hh-g5mx-jqcp, GHSA-5wx6-mg75-v57r, GHSA-6pfh-p556-v868, GHSA-6x96-7vc8-cm3p, GHSA-72r4-9c5j-mj57, GHSA-7vhp-vf5g-r2fw, GHSA-8cc4-rfj6-fhg4, GHSA-c59q-g84q-2gj5, GHSA-cjhr-43r9-cfmw, GHSA-fr4h-3cph-29xv, GHSA-gj8w-mvpf-x27x, GHSA-hg3w-7f8c-63hp, GHSA-hwx4-2j3j-g496, GHSA-m733-5w8f-5ggw, GHSA-p4xf-rf54-rj3x, GHSA-q6j5-fjx5-2mc3, GHSA-qrv3-253h-g69c, GHSA-rxhj-4m44-96r4, GHSA-v253-rj99-jwpq, GHSA-vq4v-j7r6-jq4m, GHSA-w466-c33r-3gjp, GHSA-xpqm-wm3m-f34h, GHSA-v4x8-3wr5-3wq8, GHSA-567q-5qvw-pf92, GHSA-9vhv-jxww-xfm5"

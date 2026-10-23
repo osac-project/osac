@@ -185,6 +185,7 @@ spec:
             git fetch --tags origin
             CHART_VERSION=$(git tag -l "$(params.tag-prefix)*" \
               | sed "s#^$(params.tag-prefix)##" \
+              | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true; } \
               | sort -V | tail -1)
             if [ -z "${CHART_VERSION}" ]; then
               echo "ERROR: no tag matching $(params.tag-prefix)* found" >&2

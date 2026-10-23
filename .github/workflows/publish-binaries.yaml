@@ -65,7 +65,7 @@ jobs:
         # own default) because goreleaser.yaml's `signs:` config depends on
         # v3's --bundle-based sign-blob output -- an installer default that
         # silently moved to a pre-v3 cosign would break that config.
-        cosign-release: 'v3.0.6'
+        cosign-release: 'v3.1.4'
     - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de  # v7
       with:
         workdir: fulfillment-service

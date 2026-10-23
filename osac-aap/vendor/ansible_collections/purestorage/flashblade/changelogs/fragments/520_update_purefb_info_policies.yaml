@@ -1,0 +1,2 @@
+minor_changes:
+ - purefb_info - Updated to use get_policies_all() method and added policy type breakdown to default output

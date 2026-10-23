@@ -1,0 +1,8 @@
+download_url: https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/purestorage-flashblade-1.26.0.tar.gz
+format_version: 1.0.0
+name: flashblade
+namespace: purestorage
+server: https://galaxy.ansible.com/api/
+signatures: []
+version: 1.26.0
+version_url: /api/content/published/v3/plugin/ansible/content/published/collections/index/purestorage/flashblade/versions/1.26.0/

@@ -1,0 +1,13 @@
+bugfixes:
+  - purefb_proxy - Fix unsafe res.errors[0].message access that could cause IndexError (#500)
+  - purefb_ra - Fix unsafe res.errors[0].message access that could cause IndexError (#500)
+  - purefb_remote_cred - Fix unsafe res.errors[0].message access that could cause IndexError (#500)
+  - purefb_s3acc - Fix unsafe res.errors[0].message access that could cause IndexError (#500)
+  - purefb_s3user - Fix unsafe res.errors[0].message access that could cause IndexError (#500)
+  - purefb_saml - Fix unsafe res.errors[0].message access that could cause IndexError (#500)
+  - purefb_server - Fix unsafe res.errors[0].message access that could cause IndexError (#500)
+  - purefb_smtp - Fix unsafe res.errors[0].message access that could cause IndexError (#500)
+  - purefb_snap - Fix unsafe res.errors[0].message access that could cause IndexError (#500)
+  - purefb_snmp_agent - Fix unsafe res.errors[0].message access that could cause IndexError (#500)
+  - purefb_snmp_mgr - Fix unsafe res.errors[0].message access that could cause IndexError (#500)
+  - purefb_subnet - Fix unsafe res.errors[0].message access that could cause IndexError (#500)

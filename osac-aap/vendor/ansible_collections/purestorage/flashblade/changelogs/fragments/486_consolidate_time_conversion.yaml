@@ -1,0 +1,8 @@
+bugfixes:
+  - purefb_policy - Use unified time conversion from time_utils module
+  - purefb_connect - Use unified time conversion from time_utils module
+  - purefb_lifecycle - Use unified time conversion from time_utils module with proper None handling
+  - purefb_user - Use unified time conversion from time_utils module
+  - purefb_info - Use unified time conversion from time_utils module
+  - time_utils - Add unified time conversion module with proper error handling and input validation
+  - common - Remove deprecated time conversion functions (replaced by time_utils)

@@ -104,7 +104,7 @@ func renderDiskImage(w io.Writer, di *publicv1.DiskImage) {
 
 		archStrings := make([]string, len(spec.GetArchitecture()))
 		for i, a := range spec.GetArchitecture() {
-			archStrings[i] = strings.TrimPrefix(a.String(), "ARCHITECTURE_")
+			archStrings[i] = strings.ToLower(strings.TrimPrefix(a.String(), "ARCHITECTURE_"))
 		}
 		fmt.Fprintf(writer, "Architecture:\t%s\n", strings.Join(archStrings, ", "))
 

@@ -982,12 +982,7 @@ class ExternalIPPlaybookTests(unittest.TestCase):
             artifact, "external_ip.allocate", before, {"address": "192.0.2.1"}
         )
         self._assert_no_kubernetes("I07 allocate hit the Kubernetes sentinel")
-        after = json.loads(
-            self._kubectl(
-                "get", "externalip", "netris-eip-isolated",
-                "-n", self.namespace, "-o", "json",
-            )
-        )
+        after = self._fetched("externalip", "netris-eip-isolated")
         self.assertEqual(
             after["metadata"]["annotations"], before["metadata"]["annotations"]
         )
@@ -1005,12 +1000,7 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         self.assertEqual(rc, 0, output)
         self._assert_artifact(artifact, "external_ip.release", deleting, {})
         self._assert_no_kubernetes("I07 release hit the Kubernetes sentinel")
-        after = json.loads(
-            self._kubectl(
-                "get", "externalip", "netris-eip-isolated",
-                "-n", self.namespace, "-o", "json",
-            )
-        )
+        after = self._fetched("externalip", "netris-eip-isolated")
         self.assertEqual(
             after["metadata"]["annotations"], before["metadata"]["annotations"]
         )

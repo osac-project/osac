@@ -234,7 +234,7 @@ psutil==7.2.2
     #   python-esiclient
 ptyprocess==0.7.0
     # via pexpect
-py-pure-client==1.94.2
+py-pure-client==1.96.0
     # via osac-aap (pyproject.toml)
 pycparser==3.0
     # via cffi

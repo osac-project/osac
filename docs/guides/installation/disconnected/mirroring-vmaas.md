@@ -11,7 +11,7 @@ mirror registry with anonymous pull access.
 
 > **Relationship to the main guide**: this document covers VMaaS-specific
 > images that extend the base `ImageSetConfiguration` from
-> [disconnected-install.md](../disconnected-install.md).  The operators
+> [README.md](./README.md).  The operators
 > required for VMaaS (`kubevirt-hyperconverged`, `lvms-operator`,
 > `metallb-operator`) are covered in
 > [mirroring-operators.md](mirroring-operators.md).
@@ -25,8 +25,44 @@ mirror registry with anonymous pull access.
 | `HyperConverged` CR created (Phase 1b) | `oc get hyperconverged -n openshift-cnv` |
 | CDI (Containerized Data Importer) is running | `oc get pods -n openshift-cnv -l app=cdi-operator` |
 | Mirror registry reachable and trusted from cluster nodes | `oc debug node/<node> -- chroot /host curl -sS https://<registry>:8443/v2/` (no `-k`) — an HTTP 401 response confirms reachability and CA trust; see [Registry TLS trust](#registry-tls-trust) |
-| Mirror registry reachable from importer pod network | CDI importer pods pull containerdisks from their own network, not through CRI-O; verify DNS resolution and an L3 route or gateway from the importer pod network to the mirror registry — a NetworkPolicy or SecurityGroup egress rule alone does not provide a route |
+| Mirror registry reachable from importer pod network | Run the importer-network diagnostic below; DNS, TLS, and TCP reachability must succeed from the target namespace before provisioning a VM |
 | VMaaS is enabled in OSAC Helm values | `global.services.vmaas.enabled: true` in values file |
+
+CDI importer pods pull containerdisks from the pod network, not through
+CRI-O. Bastion and node checks do not prove this path. Run a temporary
+diagnostic pod in the namespace where CDI creates importer pods:
+
+```bash
+IMPORT_NAMESPACE="<target-namespace>"
+MIRROR_HOST="<registry-hostname>"
+MIRROR_PORT="8443"
+
+oc run mirror-network-check \
+  -n "$IMPORT_NAMESPACE" \
+  --image=registry.redhat.io/openshift4/ose-cli:v4.20.0 \
+  --restart=Never \
+  --command -- sleep 600
+
+oc wait pod/mirror-network-check \
+  -n "$IMPORT_NAMESPACE" \
+  --for=condition=Ready \
+  --timeout=2m
+
+oc exec -n "$IMPORT_NAMESPACE" mirror-network-check -- \
+  getent hosts "$MIRROR_HOST"
+
+oc exec -n "$IMPORT_NAMESPACE" mirror-network-check -- \
+  curl -sS -o /dev/null -w '%{http_code}\n' \
+  "https://${MIRROR_HOST}:${MIRROR_PORT}/v2/"
+
+oc delete pod/mirror-network-check -n "$IMPORT_NAMESPACE"
+```
+
+Expected: DNS resolves the mirror hostname and the registry returns HTTP
+`200` or `401` without `-k`. A timeout, `no route to host`, DNS failure,
+or TLS error blocks VMaaS acceptance. A NetworkPolicy or SecurityGroup egress rule alone does not
+create the required route.
+If the diagnostic pod cannot pull the CLI image before mirror policy is active, use an already mirrored diagnostic image that provides getent and curl; do not fall back to an external image.
 
 ## Resources Required
 
@@ -145,7 +181,7 @@ mirror run. Do not infer it from repository names:
 
 ```bash
 osac get diskimages --tenant shared -o json | \
-  jq -r '.items[] | select(.spec.source_type == "registry") | .spec.source_ref' | \
+  jq -r '.[] | select(.spec.source_type == "SOURCE_TYPE_REGISTRY") | .spec.source_ref' | \
   sed -E 's#^docker://##; s#@sha256:.*$##; s#:[^/:]+$##' | \
   sort -u > selected-diskimage-sources.txt
 
@@ -159,16 +195,28 @@ jq -Rn '[inputs] | map(select(length > 0))' \
 
 for itms_name in $(oc get itms -o json | \
   jq -r --slurpfile selected selected-diskimage-sources.json '
-    [.items[] |
-      select(any(.spec.imageTagMirrors[]?; .source as $s |
-        $selected[0] | index($s)))] |
-    unique_by(.metadata.name)[] | .metadata.name'); do
+    $selected[0] as $sel |
+    [.items[] | 
+      select(
+        any(.spec.imageTagMirrors[]?; 
+          .source as $src | .mirrors[]? as $mir |
+          any($sel[]; startswith($src) or startswith($mir) or ($src | startswith(.)))
+        )
+      )
+    ] | unique_by(.metadata.name)[] | .metadata.name'); do
+
   oc get itms "$itms_name" -o json | \
     jq --slurpfile selected selected-diskimage-sources.json '
-      (.spec.imageTagMirrors[] |
-        select(.source as $s | $selected[0] | index($s))) |
-      .mirrorSourcePolicy = "NeverContactSource"' | \
+      $selected[0] as $sel |
+      .spec.imageTagMirrors |= map(
+        .source as $src | .mirrors[]? as $mir |
+        if any($sel[]; startswith($src) or startswith($mir) or ($src | startswith(.)))
+        then .mirrorSourcePolicy = "NeverContactSource"
+        else .
+        end
+      )' | \
     oc apply -f -
+
 done
 ```
 
@@ -177,11 +225,15 @@ Verify every selected source exists and is fail-closed:
 ```bash
 oc get itms -o json | \
   jq -e --slurpfile selected selected-diskimage-sources.json '
+    $selected[0] as $sel |
     [.items[].spec.imageTagMirrors[]] as $entries |
-    all($selected[0][] as $source;
+    all($sel[]; . as $img |
       any($entries[];
-        .source == $source and
-        .mirrorSourcePolicy == "NeverContactSource"))'
+        (.source as $src | .mirrors[]? as $mir |
+         $img == $src or ($img | startswith($src)) or ($img | startswith($mir))) and
+        .mirrorSourcePolicy == "NeverContactSource"
+      )
+    )'
 ```
 
 ### Step 4 — Configure CDI for disconnected registry imports
@@ -211,11 +263,17 @@ registry directly and anonymously:
   holding each mirrored containerdisk is public and allows
   anonymous pulls; the CDI importer performs the registry pull
   itself and is given no credentials.
-- **Mirror-URL `DiskImage`** — point each OSAC `DiskImage`'s
-  `spec.source_ref` at the mirror registry's image URL; the
-  `DataVolume` registry URL is copied verbatim from the
-  `DiskImage`, so the import targets the mirror directly instead
-  of relying on ITMS rewriting.
+- **- **Mirror-URL `DiskImage`** - set `spec.source_ref` to the mirror
+  registry image URL when creating the `DiskImage`. The field is
+  immutable after creation. The generated `DataVolume` copies the URL
+  verbatim, so the import targets the mirror directly instead of relying
+  on ITMS rewriting. To replace an existing upstream-backed DiskImage,
+  create a new DiskImage with the mirror URL, update tenant-facing
+  templates or catalog entries to reference the new DiskImage, verify
+  that no active ComputeInstance depends on the old entry, and then
+  retire the old DiskImage through the supported OSAC API or CLI. Do not
+  patch `spec.source_ref` in place.
+
 The resulting `DataVolume`, as OSAC creates it at provisioning
 time. The URL must include the site's actual mirror endpoint because CDI
 does not apply ITMS rewriting; the standard endpoint in this guide is

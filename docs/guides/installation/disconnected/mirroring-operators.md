@@ -65,12 +65,36 @@ Before you begin, confirm each item:
 | OpenShift cluster is in a disconnected or restricted-network state | `oc get proxy/cluster -o jsonpath='{.spec}'` |
 | Latest available `oc-mirror` v2 binary on the bastion | `oc-mirror version` |
 | Mirror registry certificate validates from the bastion | `curl -sS -o /dev/null -w '%{http_code}\n' https://<registry>:8443/v2/` (no `-k`; HTTP `200` or `401` proves TLS validation and reachability) |
-| Mirror registry certificate validates from every cluster node | ```bash for node in $(oc get nodes -o name); do oc debug "$node" -- chroot /host curl -sS -o /dev/null -w "$node %{http_code}\n" 'https://<registry>:8443/v2/' || exit 1; done` (no `-k`)``` |
+| Mirror registry certificate validates from every cluster node | Run the per-node certificate validation below; every node must return HTTP `200` or `401` without `-k` |
 | **Bastion authfile** contains source read + mirror write credentials | `jq -e '.auths \| has("registry.redhat.io")' $BASTION_AUTHFILE` |
 | **Bastion authfile** includes mirror registry write credentials | `jq -e '.auths \| has("<registry>:8443")' $BASTION_AUTHFILE` |
 | **Cluster pull secret** contains mirror read-only credentials | `oc get secret/pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' \| base64 -d \| jq '.auths \| keys'` |
 | At least 400 GiB free disk on the bastion | `df -h $(pwd)` |
 | Cluster admin access | `oc auth can-i create catalogsource -n openshift-marketplace` |
+
+Validate the mirror registry certificate and reachability from every
+cluster node:
+
+```bash
+for node in $(oc get nodes -o name); do
+  code="$(
+    oc debug "$node" -- chroot /host \
+      curl -sS -o /dev/null -w '%{http_code}' \
+      'https://<registry>:8443/v2/'
+  )" || {
+    echo "ERROR: TLS validation or reachability failed on $node" >&2
+    exit 1
+  }
+
+  case "$code" in
+    200|401) printf '%s %s\n' "$node" "$code" ;;
+    *)
+      echo "ERROR: unexpected registry response on $node: HTTP $code" >&2
+      exit 1
+      ;;
+  esac
+done
+```
 
 ### Credential Separation
 
@@ -278,10 +302,21 @@ oc get imagedigestmirrorset
 # 3. ITMS resources applied
 oc get imagetagmirrorset
 
-# 4. CatalogSource redhat-operators exists and healthy
-oc get catalogsource redhat-operators -n openshift-marketplace \
-  -o jsonpath='{.status.connectionState.lastObservedState}{"\n"}'
-# Expected: READY
+# 4. CatalogSource redhat-operators exists and is READY
+catalog_state="$(
+  oc get catalogsource redhat-operators -n openshift-marketplace \
+    -o jsonpath='{.status.connectionState.lastObservedState}'
+)" || {
+  echo "ERROR: CatalogSource redhat-operators was not found" >&2
+  exit 1
+}
+
+if [ "$catalog_state" != "READY" ]; then
+  echo "ERROR: CatalogSource redhat-operators is not READY: ${catalog_state:-<empty>}" >&2
+  oc get catalogsource redhat-operators -n openshift-marketplace -o yaml >&2
+  exit 1
+fi
+printf 'OK: CatalogSource redhat-operators state=%s\n' "$catalog_state"
 
 # 5. Every generated ClusterCatalog exists and is serving
 mapfile -t cluster_catalogs < <(oc get clustercatalog -o name)
@@ -292,9 +327,18 @@ fi
 for catalog in "${cluster_catalogs[@]}"; do
   oc wait "$catalog" --for=condition=Serving --timeout=10m
 done
-# 6. Signature ConfigMap present
-oc get configmap -n openshift-config-managed \
-  -l operator.openshift.io/managed=true 2>/dev/null | head
+
+# 6. At least one managed signature ConfigMap is present
+signature_configmaps="$(
+  oc get configmap -n openshift-config-managed \
+    -l operator.openshift.io/managed=true \
+    -o name 2>/dev/null
+)"
+if [ -z "$signature_configmaps" ]; then
+  echo "ERROR: no managed signature ConfigMap found in openshift-config-managed" >&2
+  exit 1
+fi
+printf '%s\n' "$signature_configmaps"
 
 # 7. MCPs converged
 oc wait mcp --all --for=condition=Updated --timeout=0

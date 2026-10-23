@@ -2695,6 +2695,21 @@ jobs:
         # own checkout step above.
         token: ${{ steps.app-token.outputs.token }}
 
+    # osac-ci is a self-hosted runner, unlike prepare's own ubuntu-latest
+    # (GitHub-hosted, yq preinstalled) -- confirmed live, "yq: command not
+    # found" on a real release dispatch without this step. User-local
+    # install (~/.local/bin, GITHUB_PATH), not a system package manager:
+    # this runner's user has no sudo (same constraint as
+    # osac-ci-orchestrator's own jobs).
+    - name: Install yq
+      run: |
+        set -euo pipefail
+        mkdir -p "${HOME}/.local/bin"
+        curl -sSL -o "${HOME}/.local/bin/yq" \
+          "https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64"
+        chmod +x "${HOME}/.local/bin/yq"
+        echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+
     # Same registry-image/values.yaml-field mapping each of these 7
     # charts' own (removed) patch-chart-image-refs task used to carry as
     # Tekton params -- see each chart's .tekton/<chart>/release.yaml git

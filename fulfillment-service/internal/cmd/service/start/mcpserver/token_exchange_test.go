@@ -95,6 +95,72 @@ var _ = Describe("OAuth token exchange", func() {
 		Expect(sameCaller(incoming, outgoing)).To(MatchError("OAuth token exchange changed the caller identity"))
 	})
 
+	It("rejects exchanged API tokens that change the caller", func() {
+		cases := []struct {
+			name    string
+			claims  jwt.MapClaims
+			wantErr string
+		}{
+			{
+				name: "permissions",
+				claims: jwt.MapClaims{
+					"iss": "https://issuer.example.com/realms/osac", "sub": "user-1",
+					"preferred_username": "alice", "groups": []any{"tenant1", "admin"},
+					"exp": float64(time.Now().Add(time.Minute).Unix()),
+				},
+				wantErr: "OAuth token exchange changed the caller permissions",
+			},
+			{
+				name: "subject",
+				claims: jwt.MapClaims{
+					"iss": "https://issuer.example.com/realms/osac", "sub": "user-2",
+					"exp": float64(time.Now().Add(time.Minute).Unix()),
+				},
+				wantErr: "OAuth token exchange changed the caller identity",
+			},
+			{
+				name: "issuer",
+				claims: jwt.MapClaims{
+					"iss": "https://other-issuer.example.com", "sub": "user-1",
+					"preferred_username": "alice", "groups": []any{"tenant1"},
+					"exp": float64(time.Now().Add(time.Minute).Unix()),
+				},
+				wantErr: "OAuth token exchange changed the caller identity",
+			},
+			{
+				name: "expiration",
+				claims: jwt.MapClaims{
+					"iss": "https://issuer.example.com/realms/osac", "sub": "user-1",
+					"preferred_username": "alice", "groups": []any{"tenant1"},
+					"exp": float64(time.Now().Add(-time.Minute).Unix()),
+				},
+				wantErr: "OAuth token exchange returned an expired API token",
+			},
+		}
+
+		for _, test := range cases {
+			By(test.name)
+			client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				body := `{"access_token":"api-token","token_type":"Bearer","issued_token_type":"urn:ietf:params:oauth:token-type:access_token"}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(body)),
+				}, nil
+			})}
+			validator.EXPECT().Validate(gomock.Any(), "api-token").Return(
+				jwt.NewWithClaims(jwt.SigningMethodRS256, test.claims), nil,
+			)
+			exchanger, err := newOAuthTokenExchanger(
+				"https://issuer.example.com/token", "https://mcp.example.com/", "fixture-secret", client, validator,
+			)
+			Expect(err).ToNot(HaveOccurred())
+
+			apiToken, err := exchanger.Exchange(context.Background(), "mcp-token", incoming)
+			Expect(err).To(MatchError(test.wantErr))
+			Expect(apiToken).To(BeEmpty())
+		}
+	})
+
 	It("does not include an authorization-server error body in failures", func() {
 		client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader("sensitive-token-value"))}, nil

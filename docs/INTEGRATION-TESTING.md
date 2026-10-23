@@ -204,9 +204,13 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 - **VMaaS ComputeInstance public update contracts ([OSAC-6617](https://redhat.atlassian.net/browse/OSAC-6617), DEV):** `fulfillment-service/it/it_compute_instance_network_attachment_status_test.go` extends the attachment-feedback case with a real metadata edit, asserts attachment status in the update response and a subsequent public Get, and rejects explicit `status.state` and attachment-status masks alongside their normalized spellings without persistence. `internal/servers/compute_instances_server_test.go` covers status-path rejection, omitted-mask inference, explicit-mask clearing, targeted map replacement, and a real two-transaction reproduction in which concurrent private status feedback survives a maskless public update. The servers suite uses real PostgreSQL row locks and the metering trigger, while suite tenancy and attribution are doubles; the deployed case uses real Fulfillment gRPC APIs, PostgreSQL, and test identities. Run `ginkgo run --timeout 10m internal/servers` from `fulfillment-service/` and the documented Fulfillment installer target above; against an already deployed compatible Kind environment, run `ginkgo run --timeout 20m --focus 'Compute instance network attachment status' it` from `fulfillment-service/`. Neither suite provisions a real VM; provider feedback remains E2E coverage.
 - **MCP server:** `fulfillment-service/it/it_mcp_server_test.go` uses a real MCP
   SDK client and an in-process MCP handler; its exchanger forwards a caller API
-  token to deployed Fulfillment and PostgreSQL. It covers tool discovery,
+  token to deployed Fulfillment and PostgreSQL. It covers five-tool discovery,
   connection summaries, tenant visibility, creator attribution, and rejected
-  writes without persisted mutations. `it_mcp_deployed_test.go` runs in the
+  writes without persisted mutations. `it_mcp_discovery_test.go` creates
+  Projects and Secret references for two tenants, verifies caller-scoped
+  Project and Secret-reference listing, confirms Secret-reference results
+  contain only reference metadata, and checks list-only Secret Get rejection
+  through the shared safe-error contract. `it_mcp_deployed_test.go` runs in the
   Fulfillment Kind CI job with `MCP_TEST_ENABLED=true` and real Keycloak; it
   checks TLS metadata and valid calls, plus rejection of the Fulfillment API
   audience, a wrong issuer, an expired token, and a wrong resource. It also

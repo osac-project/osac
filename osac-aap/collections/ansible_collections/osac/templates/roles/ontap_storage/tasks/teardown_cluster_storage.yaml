@@ -1,0 +1,125 @@
+---
+# ONTAP teardown_cluster_storage: remove cluster-side K8s resources only.
+# Deletes the tenant's ONTAP resources by LABEL (tenant + storage-provider +
+# managed-by): StorageClasses, TridentBackendConfigs (waits for Trident to
+# finish removing the backends), and the CSI Secrets. Label-based selection
+# rather than re-deriving names from the dispatched tiers keeps cleanup
+# symmetric with ensure_storage_class and drift-proof: a backend removed from
+# the tenant's tiers after its resources were created is still cleaned up,
+# rather than leaving behind an orphaned TBC with live CSI credentials.
+# Does NOT release the prepared assignment or touch any ONTAP resources —
+# those belong to teardown_backend.
+# Used when a cluster is deleted but the tenant stays.
+
+- name: Clean up cluster-side K8s resources
+  block:
+    - name: Find all tenant ONTAP StorageClasses by label
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+          - "osac.openshift.io/storage-provider=ontap"
+          - "app.kubernetes.io/managed-by=osac-aap"
+      register: _ontap_cleanup_sc_list
+
+    - name: Delete tenant ONTAP StorageClasses
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ item.metadata.name }}"
+      loop: "{{ _ontap_cleanup_sc_list.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      ignore_errors: true  # noqa: ignore-errors
+
+    - name: Find all tenant ONTAP TridentBackendConfigs by label
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        namespace: "{{ ontap_storage_trident_namespace }}"
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+          - "osac.openshift.io/storage-provider=ontap"
+          - "app.kubernetes.io/managed-by=osac-aap"
+      register: _ontap_cleanup_tbc_list
+
+    - name: Delete tenant ONTAP TridentBackendConfigs
+      kubernetes.core.k8s:
+        state: absent
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "{{ item.metadata.name }}"
+        namespace: "{{ ontap_storage_trident_namespace }}"
+      loop: "{{ _ontap_cleanup_tbc_list.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      ignore_errors: true  # noqa: ignore-errors
+
+    - name: Wait for the TridentBackendConfigs to be removed
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        namespace: "{{ ontap_storage_trident_namespace }}"
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+          - "osac.openshift.io/storage-provider=ontap"
+          - "app.kubernetes.io/managed-by=osac-aap"
+      register: _tbc_check
+      until: _tbc_check.resources | length == 0
+      retries: 12
+      delay: 5
+      ignore_errors: true  # noqa: ignore-errors
+
+    - name: Find all tenant ONTAP CSI Secrets by label
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: "{{ ontap_storage_trident_namespace }}"
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+          - "osac.openshift.io/storage-provider=ontap"
+          - "app.kubernetes.io/managed-by=osac-aap"
+      register: _ontap_cleanup_csi_list
+      no_log: true
+
+    - name: Delete tenant ONTAP CSI Secrets
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item.metadata.name }}"
+        namespace: "{{ ontap_storage_trident_namespace }}"
+      loop: "{{ _ontap_cleanup_csi_list.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      ignore_errors: true  # noqa: ignore-errors
+      no_log: true
+
+    - name: Report teardown_cluster_storage summary
+      ansible.builtin.debug:
+        msg: >-
+          Teardown of ONTAP cluster-side resources for tenant '{{ tenant_name }}'
+          complete. {{ (_ontap_cleanup_sc_list.resources | default([]) | length) }}
+          StorageClasses, {{ (_ontap_cleanup_tbc_list.resources | default([]) | length) }}
+          TridentBackendConfig(s), and {{ (_ontap_cleanup_csi_list.resources | default([]) | length) }}
+          CSI Secret(s) removed from the target cluster. Prepared assignments and
+          ONTAP resources untouched.
+
+  rescue:
+    - name: Warn about teardown_cluster_storage failure (target cluster may be unreachable)
+      ansible.builtin.debug:
+        msg: >-
+          Teardown of ONTAP cluster-side resources failed for tenant '{{ tenant_name }}'.
+          This may be expected if the target cluster is being destroyed.
+          Error: {{ ansible_failed_result.msg | default('unknown') }}
+
+  always:
+    - name: Clear credential-bearing facts
+      ansible.builtin.set_fact:
+        _ontap_cleanup_sc_list: {}
+        _ontap_cleanup_tbc_list: {}
+        _ontap_cleanup_csi_list: {}
+        _tbc_check: {}
+      no_log: true

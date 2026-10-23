@@ -179,7 +179,7 @@ extra_var, each tier declares its provider, and the service-layer dispatcher
 template role with the filtered tier subset.
 
 1. Create role structure. The role **MUST** be named `{provider}_storage` (e.g.,
-   `vast_storage`, `netapp_storage`). This naming convention is enforced by the
+   `vast_storage`, `ontap_storage`). This naming convention is enforced by the
    dispatcher at `osac.service.storage_provider`, which constructs the role name
    dynamically: `osac.templates.{{ provider }}_storage`. Using a different naming
    pattern will cause a runtime role-not-found error.
@@ -189,29 +189,35 @@ template role with the filtered tier subset.
 
 2. Define storage provider metadata in `roles/my_provider_storage/meta/osac.yaml`:
    ```yaml
+   name: my-provider-storage
    title: My Storage Provider
+   description: >
+     Provisions storage resources for OSAC tenants. Describe what the role
+     creates and the credentials it manages.
    template_type: storage_provider
    implementation_strategy: my_provider
    capabilities:
-     supports_nfs: true
+     supported_protocols:
+       - nfs
+       - block
      provisioning_targets:
        - vmaas
        # Add caas only when this provider implements guest-cluster provisioning.
    ```
 
-3. Implement the three required action task files. Each receives `_provider_tiers`
-   (filtered tier subset for this provider) and `_provisioning_target` via `vars:`
-   from the dispatcher:
-   - `tasks/setup.yaml` — provision storage backend resources per tier.
+3. Implement the four required action task files. Each receives `_provider_tiers`
+   (filtered tier subset for this provider) and `_provider_backend_connections`
+   via `vars:` from the dispatcher:
+   - `tasks/setup.yaml` — provision or claim storage backend resources per tier.
      Must set `storage_provider_tenant_config` output fact (dict).
-   - `tasks/ensure_storage_class.yaml` — JIT K8s StorageClass provisioning per tier.
-     Must set `storage_provider_storage_class_names` (list of SC names, one per tier).
-     Must apply EP #26 labels (`osac.openshift.io/tenant`, `osac.openshift.io/storage-tier`).
-   - `tasks/teardown.yaml` — cleanup in reverse dependency order.
-
-4. Add the provider name to the hardcoded allowlist in
-   `osac.service.storage_provider/tasks/main.yaml`. The allowlist is hardcoded
-   (not a variable) to prevent override via extra_vars.
+   - `tasks/ensure_storage_class.yaml` — K8s StorageClass provisioning per tier.
+     Must set `storage_provider_storage_class_names` (list of SC entries, one per tier).
+     Must apply `osac.openshift.io/tenant`, `osac.openshift.io/storage-tier`, and
+     `osac.openshift.io/storage-provider` labels.
+   - `tasks/teardown_cluster_storage.yaml` — remove cluster-side K8s resources
+     (StorageClasses, VolumeSnapshotClasses, CSI Secrets/configs).
+   - `tasks/teardown_backend.yaml` — remove or release backend resources and hub
+     lifecycle Secrets.
 
 5. **Credential isolation:** Admin credentials (e.g., VAST VMS admin) must NEVER
    appear in tenant-namespace K8s Secrets. Provider roles must create per-tenant

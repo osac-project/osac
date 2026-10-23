@@ -5,7 +5,7 @@
 # Requires in scope:
 #   vast_endpoint                 — VMS API hostname
 #   vast_storage_validate_certs   — TLS validation flag
-#   vast_storage_api_timeout      — API timeout (seconds)
+#   storage_provider_api_timeout      — API timeout (seconds)
 #   _vast_cleanup_auth_token      — Bearer token from admin auth
 #   _vast_cleanup_tenant_id       — VAST tenant ID to filter by
 #   _vast_cleanup_resource        — API resource name (e.g., "views", "quotas")
@@ -17,7 +17,7 @@
     headers:
       Authorization: "Bearer {{ _vast_cleanup_auth_token }}"
     validate_certs: "{{ vast_storage_validate_certs }}"
-    timeout: "{{ vast_storage_api_timeout | int }}"
+    timeout: "{{ storage_provider_api_timeout | int }}"
     status_code: [200]
   register: _vast_cleanup_query
   ignore_errors: true
@@ -33,7 +33,7 @@
     headers:
       Authorization: "Bearer {{ _vast_cleanup_auth_token }}"
     validate_certs: "{{ vast_storage_validate_certs }}"
-    timeout: "{{ vast_storage_api_timeout | int }}"
+    timeout: "{{ storage_provider_api_timeout | int }}"
     status_code: [200, 204, 404]
   loop: "{{ _vast_cleanup_query.json | default([]) }}"
   loop_control:

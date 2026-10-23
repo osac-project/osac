@@ -1,0 +1,25 @@
+---
+# ONTAP teardown_backend: release the prepared assignment per backend.
+# Per the netapp-onboarding contract, OSAC never deletes ONTAP resources
+# (SVMs, LIFs, accounts, QoS policies, or admin preparation Secrets stay
+# prepared); releasing marks the hub lifecycle Secret (ontap-tenant-<assignment_key>)
+# as 'retained' after verifying tenant_uid ownership when available.
+# Cluster-side K8s resources belong to teardown_cluster_storage.
+
+- name: Compute the dispatched backend ids
+  ansible.builtin.set_fact:
+    _ontap_backend_ids: "{{ _provider_tiers | default([]) | map(attribute='backend_id') | select('string') | unique | list }}"
+
+- name: Fail if no backend ids could be resolved
+  ansible.builtin.fail:
+    msg: >-
+      Could not resolve any backend_id from the dispatched tiers. The ONTAP
+      provider requires backend_id on every tier to locate the assignment's
+      hub lifecycle record.
+  when: _ontap_backend_ids | length == 0
+
+- name: Release the prepared assignment per backend
+  ansible.builtin.include_tasks: _teardown_backend_per_backend.yaml
+  loop: "{{ _ontap_backend_ids }}"
+  loop_control:
+    loop_var: _ontap_backend_id

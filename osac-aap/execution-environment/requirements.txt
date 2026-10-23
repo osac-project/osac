@@ -223,7 +223,7 @@ prettytable==3.17.0
     #   metalsmith
     #   python-cinderclient
     #   python-novaclient
-propcache==0.4.1
+propcache==0.5.4
     # via
     #   aiohttp
     #   yarl

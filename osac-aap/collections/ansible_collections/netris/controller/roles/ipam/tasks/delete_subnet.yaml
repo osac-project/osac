@@ -18,12 +18,56 @@
   register: _ipam_subnets_resp
   no_log: true
 
-- name: Find IPAM subnet by name
+- name: Find IPAM subnets by name
   ansible.builtin.set_fact:
-    _existing_ipam_subnet: >-
+    _existing_ipam_subnets: >-
       {{ (_ipam_subnets_resp.json.data | default([]))
          | selectattr('name', 'equalto', ipam_name)
-         | list | first | default(none) }}
+         | list }}
+
+- name: Filter IPAM subnets by CIDR
+  ansible.builtin.set_fact:
+    _existing_ipam_subnets: >-
+      {{ _existing_ipam_subnets
+         | selectattr('prefix', 'equalto', ipam_cidr)
+         | list }}
+  when: ipam_cidr is defined
+
+- name: Filter IPAM subnets by VPC
+  ansible.builtin.set_fact:
+    _existing_ipam_subnets: >-
+      {{ _existing_ipam_subnets
+         | selectattr('vpc.id', 'equalto', ipam_vpc_id | int)
+         | list }}
+  when: ipam_vpc_id is defined
+
+- name: Filter IPAM subnets by tenant
+  ansible.builtin.set_fact:
+    _existing_ipam_subnets: >-
+      {{ _existing_ipam_subnets
+         | selectattr('tenant.id', 'equalto', ipam_tenant_id | int)
+         | list }}
+  when: ipam_tenant_id is defined
+
+- name: Filter child IPAM subnets by parent
+  ansible.builtin.set_fact:
+    _existing_ipam_subnets: >-
+      {{ _existing_ipam_subnets
+         | selectattr('parentID', 'equalto', ipam_parent_id | int)
+         | list }}
+  when: ipam_parent_id is defined
+
+- name: Fail if the IPAM deletion identity is ambiguous
+  ansible.builtin.assert:
+    that:
+      - _existing_ipam_subnets | length <= 1
+    fail_msg: >-
+      More than one Netris IPAM subnet matches '{{ ipam_name }}' and the supplied
+      parent/VPC/tenant identity. Refusing to delete an ambiguous resource.
+
+- name: Set the matching IPAM subnet
+  ansible.builtin.set_fact:
+    _existing_ipam_subnet: "{{ _existing_ipam_subnets | first | default(none) }}"
 
 - name: Delete IPAM subnet
   when: _existing_ipam_subnet is defined and _existing_ipam_subnet is mapping

@@ -845,14 +845,14 @@ var _ = Describe("Private bare metal instances server", func() {
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						Template:       privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
-						UserDataSecret: privatev1.SecretLocalReference_builder{Name: secret.GetObject().GetMetadata().GetName()}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Secret: privatev1.SecretLocalReference_builder{Name: secret.GetObject().GetMetadata().GetName()}.Build()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetObject().GetSpec().GetTemplate().GetId()).To(Equal(templateID))
-			Expect(response.GetObject().GetSpec().GetUserDataSecret().GetId()).To(Equal(secret.GetObject().GetId()))
-			Expect(response.GetObject().GetSpec().GetUserDataSecret().GetName()).To(Equal(secret.GetObject().GetMetadata().GetName()))
+			Expect(response.GetObject().GetSpec().GetUserDataSource().GetSecret().GetId()).To(Equal(secret.GetObject().GetId()))
+			Expect(response.GetObject().GetSpec().GetUserDataSource().GetSecret().GetName()).To(Equal(secret.GetObject().GetMetadata().GetName()))
 		})
 
 		It("Rejects direct template that does not exist", func() {
@@ -920,8 +920,8 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						UserData:    new(bigData),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new(bigData)}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -929,7 +929,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("spec.user_data"))
+			Expect(status.Message()).To(ContainSubstring("spec.user_data_source"))
 			Expect(status.Message()).To(ContainSubstring("exceeds the maximum"))
 		})
 
@@ -941,9 +941,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:   privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						UserData:    new(exactData),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new(exactData)}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -969,14 +969,14 @@ var _ = Describe("Private bare metal instances server", func() {
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						UserDataSecret: privatev1.SecretLocalReference_builder{Id: secret.GetObject().GetId()}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Secret: privatev1.SecretLocalReference_builder{Id: secret.GetObject().GetId()}.Build()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("Rejects create when neither ssh_public_key nor user_data is provided", func() {
+		It("Rejects create when neither ssh_public_key nor user_data_source.inline is provided", func() {
 			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -1246,7 +1246,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(status.Message()).To(ContainSubstring("ssh_public_key is immutable"))
 		})
 
-		It("Rejects PATCH that changes user_data", func() {
+		It("Rejects PATCH that changes user_data_source.inline", func() {
 			userData := "original user data"
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
@@ -1254,9 +1254,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:   privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						UserData:    new(userData),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new(userData)}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1268,19 +1268,19 @@ var _ = Describe("Private bare metal instances server", func() {
 				Object: privatev1.BareMetalInstance_builder{
 					Id: object.GetId(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						UserData:    new(newData),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new(newData)}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"spec.user_data"},
+					Paths: []string{"spec.user_data_source"},
 				},
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("user_data is immutable"))
+			Expect(status.Message()).To(ContainSubstring("user_data_source.inline is immutable"))
 		})
 
 		It("Allows PATCH that does not touch immutable fields", func() {

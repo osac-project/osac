@@ -329,10 +329,10 @@ func (c *runnerContext) applyNetworkingFlags(spec *publicv1.BareMetalInstanceSpe
 
 func (c *runnerContext) applyUserDataFlags(spec *publicv1.BareMetalInstanceSpec_builder) {
 	if c.args.userData != "" {
-		spec.UserData = proto.String(c.args.userData)
+		spec.UserDataSource = publicv1.UserDataSource_builder{Inline: proto.String(c.args.userData)}.Build()
 	}
 	if c.args.userDataSecret != "" {
-		spec.UserDataSecret = publicv1.SecretLocalReference_builder{Name: c.args.userDataSecret}.Build()
+		spec.UserDataSource = publicv1.UserDataSource_builder{Secret: publicv1.SecretLocalReference_builder{Name: c.args.userDataSecret}.Build()}.Build()
 	}
 }
 

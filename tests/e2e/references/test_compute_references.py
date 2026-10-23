@@ -376,13 +376,14 @@ class TestComputeReferences:
                 ref_disk_image,
                 default_storage_tier,
             )
-            data["object"]["spec"]["user_data_secret"] = {"name": secret_name}
+            data["object"]["spec"]["user_data_source"] = {"secret": {"name": secret_name}}
 
             response: dict[str, Any] = grpc.call(service=f"{PUBLIC_API}.ComputeInstances/Create", data=data)
             ci_id = response["object"]["id"]
-            secret_ref = response["object"]["spec"].get(
-                "user_data_secret", response["object"]["spec"].get("userDataSecret", {})
+            source = response["object"]["spec"].get(
+                "user_data_source", response["object"]["spec"].get("userDataSource", {})
             )
+            secret_ref = source["secret"]
             assert secret_ref.get("name") == secret_name
             assert secret_ref.get("id") == secret_id
         finally:

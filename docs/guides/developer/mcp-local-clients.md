@@ -28,8 +28,8 @@ make -C osac-installer install \
 This profile also installs the local VM stack, seeds a sample catalog, and
 onboards `tenant1`; sign in as `tenant1_user` or `tenant1_admin` to see its
 resources. The smaller `PROFILE=dev` profile installs the control plane but
-does not seed a tenant or any of the nine MCP resource types, so empty lists
-are expected on a fresh installation.
+does not seed a tenant, so all eleven MCP resource lists are empty on a fresh
+installation, including `project` and `secret_reference`.
 
 The Kind infrastructure step registers a dedicated confidential MCP resource
 client in Keycloak and puts its generated exchange secret in the `osac`

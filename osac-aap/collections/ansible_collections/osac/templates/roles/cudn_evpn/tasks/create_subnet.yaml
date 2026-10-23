@@ -21,6 +21,10 @@
       IPv4 CIDR, valid l2_vni and l3_vni values (1-16777215), and a nonempty
       fabric_reserved_range. No Kubernetes resources were changed.
 
+- name: Derive OVN-safe gateway and reserved ranges
+  ansible.builtin.set_fact:
+    _evpn_fabric_ipam: "{{ fabric_reserved_range | osac.templates.evpn_fabric_ipam }}"
+
 - name: Look up parent VirtualNetwork by UUID label
   kubernetes.core.k8s_info:
     api_version: osac.openshift.io/v1alpha1
@@ -285,31 +289,50 @@
             kind: ClusterUserDefinedNetwork
             name: "{{ vnet_name }}"
           register: cudn_status
+          # OpenShift's native API reports three EVPN conditions instead of Ready.
+          # Preserve generation checks whenever the API supplies them.
           until: >-
             cudn_status.resources | default([]) | length > 0 and
-            (cudn_status.resources[0].status.conditions | default([])
-            | selectattr('type', 'equalto', 'Ready')
-            | selectattr('status', 'equalto', 'True')
-            | selectattr('observedGeneration', 'defined')
-            | selectattr('observedGeneration', 'ge', cudn_status.resources[0].metadata.generation)
-            | list | length > 0)
+            (
+              (cudn_status.resources[0].status.conditions | default([])
+              | selectattr('type', 'equalto', 'Ready')
+              | selectattr('status', 'equalto', 'True')
+              | selectattr('observedGeneration', 'defined')
+              | selectattr('observedGeneration', 'ge', cudn_status.resources[0].metadata.generation)
+              | list | length > 0) or
+              (
+                (cudn_status.resources[0].status.conditions | default([])
+                | selectattr('type', 'equalto', 'Ready') | list | length == 0) and
+                (cudn_status.resources[0].status.conditions | default([])
+                | selectattr('type', 'in', ['TransportAccepted', 'NetworkCreated', 'NetworkAllocationSucceeded'])
+                | selectattr('status', 'equalto', 'True') | map(attribute='type')
+                | unique | list | length == 3) and
+                (cudn_status.resources[0].status.conditions | default([])
+                | selectattr('type', 'in', ['TransportAccepted', 'NetworkCreated', 'NetworkAllocationSucceeded'])
+                | selectattr('observedGeneration', 'defined')
+                | selectattr('observedGeneration', 'lt', cudn_status.resources[0].metadata.generation)
+                | list | length == 0)
+              )
+            )
           retries: 30
           delay: 10
 
         - name: Validate CUDN VRF status
+          # vrfName is an optional extension, absent from the native v1 status schema.
           ansible.builtin.assert:
             that:
-              - cudn_status.resources[0].status.vrfName is defined
+              - cudn_status.resources[0].status.vrfName is string
               - cudn_status.resources[0].status.vrfName | string | trim | length > 0
             fail_msg: >-
-              CUDN '{{ vnet_name }}' reported Ready without a status.vrfName.
+              CUDN '{{ vnet_name }}' returned an invalid status.vrfName.
+          when: cudn_status.resources[0].status.vrfName is defined
 
         - name: Export CUDN status
           ansible.builtin.set_stats:
             data:
               cudn_name: "{{ vnet_name }}"
               cudn_namespace: "{{ subnet_name }}"
-              vrf_name: "{{ cudn_status.resources[0].status.vrfName }}"
+              vrf_name: "{{ cudn_status.resources[0].status.vrfName | default(omit) }}"
       when:
         - _cudn_owner_subnet_name == subnet_name
         - (subnet.metadata.annotations | default({})).get('osac.openshift.io/skip-k8s-manager', '') != 'true'

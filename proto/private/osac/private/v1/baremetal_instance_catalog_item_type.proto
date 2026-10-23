@@ -63,7 +63,8 @@ message BareMetalInstanceCatalogItem {
 // Groups the policies for governable bare metal instance fields.
 message BareMetalInstanceCatalogItemFields {
   StringFieldPolicy ssh_public_key = 1;
-  StringFieldPolicy user_data = 2;
+  reserved 2;
+  reserved "user_data";
   BareMetalInstanceRunStrategyFieldPolicy run_strategy = 3;
   // Reserved field numbers for removed fields (do not reuse).
   reserved 4;
@@ -75,9 +76,11 @@ message BareMetalInstanceCatalogItemFields {
   // Policy for the DiskImage used to provision the instance.
   DiskImageReferenceFieldPolicy disk_image = 8;
 
-  // Optional user data Secret reference. Governs or defaults the secret containing cloud-init
-  // user data for instances created from this catalog item.
-  SecretReferenceFieldPolicy user_data_secret = 9;
+  reserved 9;
+  reserved "user_data_secret";
+
+  // Governs the complete user data source, including selection of inline content or a Secret.
+  UserDataSourceFieldPolicy user_data_source = 10;
 }
 
 // Reference to a BareMetalInstanceCatalogItem resource.

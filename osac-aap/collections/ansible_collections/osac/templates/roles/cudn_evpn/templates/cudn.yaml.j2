@@ -22,8 +22,15 @@ spec:
       role: Primary
       subnets:
         - "{{ subnet_cidr }}"
+      defaultGatewayIPs:
+        - "{{ _evpn_fabric_ipam.gateway_ip }}"
+      infrastructureSubnets:
+        - "{{ _evpn_fabric_ipam.gateway_infrastructure_subnet }}"
+        - "{{ _evpn_fabric_ipam.management_infrastructure_subnet }}"
       reservedSubnets:
-        - "{{ fabric_reserved_range }}"
+{% for reserved_subnet in _evpn_fabric_ipam.reserved_subnets %}
+        - "{{ reserved_subnet }}"
+{% endfor %}
     evpn:
       vtep: tenant-vtep
       macVRF:

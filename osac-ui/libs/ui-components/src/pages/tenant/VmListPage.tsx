@@ -15,7 +15,7 @@ import {
   ToolbarItem,
 } from '@patternfly/react-core';
 
-import { ComputeInstance, ComputeInstanceState } from '@osac/types';
+import { ComputeInstance, ComputeInstanceState, ComputeInstances } from '@osac/types';
 import { useComputeInstances } from '@osac/ui-components/api/v1/compute-instance';
 import { useInstanceTypes } from '@osac/ui-components/api/v1/instance-types';
 import ListPage from '@osac/ui-components/components/Page/ListPage';
@@ -99,7 +99,11 @@ export const VmListPage = () => {
       title={t('Virtual machines')}
       description={t('View and filter your virtual machines.')}
       error={error}
-      actions={<CreateButton to="/vms/create">{t('Create virtual machine')}</CreateButton>}
+      actions={
+        <CreateButton service={ComputeInstances} to="/vms/create">
+          {t('Create virtual machine')}
+        </CreateButton>
+      }
     >
       <ListPageBody isLoading={isLoading} error={error}>
         <Stack hasGutter>

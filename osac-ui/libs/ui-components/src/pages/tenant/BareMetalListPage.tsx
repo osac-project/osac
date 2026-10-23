@@ -15,7 +15,7 @@ import {
   ToolbarItem,
 } from '@patternfly/react-core';
 
-import { type BareMetalInstance } from '@osac/types';
+import { type BareMetalInstance, BareMetalInstances } from '@osac/types';
 import { type CelFilter } from '@osac/ui-components/api/cel';
 import { useBareMetalInstances } from '@osac/ui-components/api/v1/baremetal-instance';
 import { isBareMetalPowerStateFilter } from '@osac/ui-components/components/BareMetalInstance/bareMetalInstanceDisplay';
@@ -131,7 +131,11 @@ export const BareMetalListPage = () => {
       title={t('Bare Metal')}
       description={t('Monitor and manage bare metal instances across all projects.')}
       error={instancesError}
-      actions={<CreateButton to="/bare-metal/create">{t('Provision bare metal')}</CreateButton>}
+      actions={
+        <CreateButton service={BareMetalInstances} to="/bare-metal/create">
+          {t('Provision bare metal')}
+        </CreateButton>
+      }
     >
       <Stack hasGutter>
         <StackItem>

@@ -17,10 +17,6 @@ vi.mock('react-router-dom', async (importOriginal) => {
   };
 });
 
-vi.mock('@osac/ui-components/hooks/use-session.tsx', () => ({
-  useSession: vi.fn(() => ({ role: 'tenant', username: 'test-user', tenantId: 'test-tenant' })),
-}));
-
 const INSTANCE_TYPE_ID = 'it-standard-4-8';
 const DISK_IMAGE_ID = 'disk-image-rhel-9';
 const STORAGE_TIER_ID = 'tier-fast';
@@ -61,6 +57,7 @@ const vmCatalogItem = create(ComputeInstanceCatalogItemSchema, {
 const renderWizard = (onClosed = vi.fn()) =>
   renderWithProviders(<VmCreateWizard onClosed={onClosed} />, {
     apiFixtures: { catalogItems: [vmCatalogItem] },
+    session: { role: 'tenant-user' },
   });
 
 // The catalog card's selectable radio input does not currently expose an
@@ -107,6 +104,7 @@ describe('VmCreateWizard', () => {
     const { user } = renderWithProviders(<VmCreateWizard onClosed={vi.fn()} />, {
       apiFixtures: { catalogItems: [vmCatalogItem] },
       transportOverrides: { onComputeInstanceCreate: onComputeInstanceCreate as never },
+      session: { role: 'tenant-user' },
     });
 
     await selectCatalogItemAndFillName(user, 'my-vm');
@@ -142,6 +140,7 @@ describe('VmCreateWizard', () => {
           throw new ConnectError('Instance type is at capacity', Code.ResourceExhausted);
         },
       },
+      session: { role: 'tenant-user' },
     });
 
     await selectCatalogItemAndFillName(user, 'my-vm');

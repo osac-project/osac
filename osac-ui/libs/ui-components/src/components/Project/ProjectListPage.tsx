@@ -8,6 +8,7 @@ import {
 } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
+import { Projects } from '@osac/types';
 import { useProjects } from '@osac/ui-components/api/v1/project';
 import ListPage from '@osac/ui-components/components/Page/ListPage';
 import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
@@ -50,7 +51,9 @@ const ProjectListPage = () => {
       error={error}
       actions={
         canCreate && !!tenantId ? (
-          <CreateButton to="/projects/create">{t('Create project')}</CreateButton>
+          <CreateButton service={Projects} to="/projects/create">
+            {t('Create project')}
+          </CreateButton>
         ) : undefined
       }
     >

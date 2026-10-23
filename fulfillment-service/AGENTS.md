@@ -82,6 +82,13 @@ and the authenticated public Cluster cases in `it/it_public_clusters_test.go` vi
 and legacy shared-object cleanup, not deployed worker provisioning or teardown;
 that boundary belongs to the existing tenant-owned CaaS E2E journey.
 
+Tenant storage onboarding projection uses the Unit specs in
+`internal/controllers/tenant/tenant_storage_onboarding_test.go` and the
+component-integration fixture `it/it_tenant_storage_onboarding_test.go`.
+The latter writes operator Tenant conditions, explicitly signals the private
+Tenant API, and checks persisted status through the deployed service. It does
+not exercise the operator's storage readiness calculation or VM provisioning.
+
 FabricDomain API authorization, tenant filtering, CRUD persistence, and cleanup
 are component-integration coverage in
 [`it/it_fabric_domain_tenant_api_test.go`](it/it_fabric_domain_tenant_api_test.go).
@@ -89,6 +96,14 @@ Run it through the `SUITE=fulfillment` installer target; that stage deploys the
 service and database with the operator disabled, so it does not exercise Netris
 or AAP. The complete provider lifecycle belongs to the BMaaS E2E coverage in
 OSAC-4786.
+
+ComputeInstance public update contracts require both suites. The deployed
+[`it/it_compute_instance_network_attachment_status_test.go`](it/it_compute_instance_network_attachment_status_test.go)
+covers read-only public status and attachment feedback across a maskless
+update; run it through the `SUITE=fulfillment` installer target. The
+`internal/servers` suite covers update-mask inference, targeted map
+replacement, preserved private metadata, and the concurrent-controller status
+race with real PostgreSQL row locks. Neither suite provisions a real VM.
 
 ```bash
 export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"

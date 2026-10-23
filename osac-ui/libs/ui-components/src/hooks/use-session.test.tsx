@@ -2,21 +2,40 @@ import { useNavigate } from 'react-router-dom';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { SessionProvider, useSession } from './use-session';
+import { ServiceTier } from '@osac/types';
+
+import { useSession } from './use-session';
 import { TestProviders } from '../test-utils/TestProviders';
 
 const makeWrapper = (initialEntries: string[] = ['/']) => {
   const Wrapper = ({ children }: { children: React.ReactNode }) => (
-    <TestProviders routerEntries={initialEntries}>
-      <SessionProvider role="tenant-user" username="alice" tenantId="t-123">
-        {children}
-      </SessionProvider>
+    <TestProviders
+      routerEntries={initialEntries}
+      session={{ role: 'tenant-user', username: 'alice', tenantId: 't-123' }}
+    >
+      {children}
     </TestProviders>
   );
   return Wrapper;
 };
 
 describe('useSession', () => {
+  it('provides an admin session by default in TestProviders', () => {
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <TestProviders>{children}</TestProviders>
+    );
+    const { result } = renderHook(() => useSession(), { wrapper });
+
+    expect(result.current.role).toBe('admin');
+    expect(result.current.username).toBe('test-user');
+    expect(result.current.tenantId).toBe('test-tenant');
+    expect(result.current.enabledServices).toEqual([
+      ServiceTier.CAAS,
+      ServiceTier.VMAAS,
+      ServiceTier.BMAAS,
+    ]);
+  });
+
   it('exposes tenantId from provider', async () => {
     const { result } = renderHook(() => useSession(), { wrapper: makeWrapper() });
 
@@ -28,10 +47,8 @@ describe('useSession', () => {
 
   it('exposes an empty tenantId when provider receives an empty string', async () => {
     const wrapper = ({ children }: { children: React.ReactNode }) => (
-      <TestProviders>
-        <SessionProvider role="admin" username="bob" tenantId="">
-          {children}
-        </SessionProvider>
+      <TestProviders session={{ role: 'admin', username: 'bob', tenantId: '' }}>
+        {children}
       </TestProviders>
     );
 

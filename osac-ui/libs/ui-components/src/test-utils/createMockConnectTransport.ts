@@ -56,6 +56,7 @@ import {
   RoleBinding,
   Secret,
   SecurityGroup,
+  SelfSubjectAccessReviews,
   ServiceTier,
   Subnet,
   SubnetsGetRequest,
@@ -128,6 +129,8 @@ import type {
   InstanceTypesCreateResponse,
   InstanceTypesDeleteRequest,
   InstanceTypesDeleteResponse,
+  InstanceTypesGetRequest,
+  InstanceTypesGetResponse,
   InstanceTypesListRequest,
   InstanceTypesListResponse,
   InstanceTypesUpdateRequest,
@@ -431,6 +434,9 @@ export type MockTransportOverrides = {
   ) => MessageInitShape<typeof StorageTiersDeleteResponseSchema>;
   onPublicInstanceTypeList?: () => { items: InstanceType[] };
   onInstanceTypeList?: (req: InstanceTypesListRequest) => InstanceTypesListResponse;
+  onInstanceTypeGet?: (
+    req: InstanceTypesGetRequest,
+  ) => InstanceTypesGetResponse | Promise<InstanceTypesGetResponse>;
   onInstanceTypeCreate?: (req: InstanceTypesCreateRequest) => InstanceTypesCreateResponse;
   onInstanceTypeUpdate?: (req: InstanceTypesUpdateRequest) => InstanceTypesUpdateResponse;
   onInstanceTypeDelete?: (req: InstanceTypesDeleteRequest) => InstanceTypesDeleteResponse;
@@ -539,6 +545,10 @@ export const createMockConnectTransport = (
     createRouterTransport((router) => {
       router.service(Capabilities, {
         get: () => ({ enabledServices }),
+      });
+
+      router.service(SelfSubjectAccessReviews, {
+        create: () => ({ object: { status: { allowed: true } } }),
       });
 
       router.service(ComputeInstanceCatalogItems, {
@@ -913,9 +923,12 @@ export const createMockConnectTransport = (
             total: privateInstanceTypes.length,
           };
         },
-        get: (req) => ({
-          object: privateInstanceTypes.find((item) => item.id === req.id),
-        }),
+        get: (req) => {
+          if (overrides.onInstanceTypeGet) {
+            return overrides.onInstanceTypeGet(req);
+          }
+          return { object: privateInstanceTypes.find((item) => item.id === req.id) };
+        },
         create: (req) => {
           if (overrides.onInstanceTypeCreate) {
             return overrides.onInstanceTypeCreate(req);

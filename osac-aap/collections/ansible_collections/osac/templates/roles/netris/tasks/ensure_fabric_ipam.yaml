@@ -1,0 +1,208 @@
+---
+# Keep the Netris V-Net gateway on the full OSAC Subnet CIDR. This child IPAM
+# prefix only bounds the Netris DHCP pool and the OVN-reserved address block.
+- name: Read IPAM subnets in the parent VPC
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/subnets?filterByVpc={{ _parent_vpc.id }}"
+    method: GET
+    force: true
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
+  register: _fabric_ipam_before
+  no_log: true
+
+- name: Find the full Subnet parent and reserved fabric prefix
+  ansible.builtin.set_fact:
+    _fabric_ipam_parents: >-
+      {{ _fabric_ipam_before.json.data | selectattr('id', 'equalto', ipam_subnet_id | int) | list }}
+    _fabric_ipam_named: >-
+      {{ _fabric_ipam_before.json.data | selectattr('name', 'equalto', subnet_name ~ '-fabric') | list }}
+    _fabric_ipam_existing: >-
+      {{ _fabric_ipam_before.json.data | selectattr('prefix', 'equalto', _fabric_reserved_range) | list }}
+
+- name: Validate the fabric IPAM parent identity
+  ansible.builtin.assert:
+    that:
+      - _fabric_ipam_parents | length == 1
+      - _fabric_ipam_parents[0].name == subnet_name
+      - _fabric_ipam_parents[0].prefix == subnet_ipv4_cidr
+      - _fabric_ipam_parents[0].vpc.id | int == _parent_vpc.id | int
+      - _fabric_ipam_parents[0].tenant.id | int == netris_tenant_id | int
+    fail_msg: "Refusing to create a fabric prefix under an IPAM parent with a different Subnet/VPC identity."
+
+- name: Validate the existing reserved fabric prefix identity
+  ansible.builtin.assert:
+    that:
+      - _fabric_ipam_named | length <= 1
+      - _fabric_ipam_existing | length <= 1
+      - >-
+        _fabric_ipam_existing | length == 0 or
+        (_fabric_ipam_named | length == 1 and
+         _fabric_ipam_existing[0].id | int == _fabric_ipam_named[0].id | int)
+      - >-
+        _fabric_ipam_named | length == 0 or
+        _fabric_ipam_named[0].parentID | int == ipam_subnet_id | int
+      - >-
+        _fabric_ipam_named | length == 0 or
+        _fabric_ipam_named[0].vpc.id | int == _parent_vpc.id | int
+      - >-
+        _fabric_ipam_named | length == 0 or
+        _fabric_ipam_named[0].tenant.id | int == netris_tenant_id | int
+    fail_msg: >-
+      The existing reserved fabric IPAM subnet does not match this Subnet's name,
+      parent, VPC, and tenant identity. Refusing to replace or create an IPAM prefix.
+
+- name: Read hosts in the reserved fabric prefix before replacement
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/hosts/{{ _fabric_ipam_named[0].id }}"
+    method: GET
+    force: true
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
+  register: _fabric_ipam_existing_hosts
+  when:
+    - _fabric_ipam_named | length == 1
+    - _fabric_ipam_named[0].prefix != _fabric_reserved_range
+  no_log: true
+
+- name: Ensure the old reserved fabric prefix has no hosts or child prefixes
+  ansible.builtin.assert:
+    that:
+      - _fabric_ipam_existing_hosts.json.data | default([]) | length == 0
+      - _fabric_ipam_named[0].children | default([]) | length == 0
+    fail_msg: >-
+      The existing reserved fabric IPAM prefix has hosts or child prefixes. Refusing to
+      replace it because doing so could discard allocated addresses.
+  when:
+    - _fabric_ipam_named | length == 1
+    - _fabric_ipam_named[0].prefix != _fabric_reserved_range
+
+- name: Delete the old reserved fabric prefix before replacing its CIDR
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/subnet/{{ _fabric_ipam_named[0].id }}"
+    method: DELETE
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200, 204, 400, 404]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
+  register: _fabric_ipam_delete_response
+  when:
+    - _fabric_ipam_named | length == 1
+    - _fabric_ipam_named[0].prefix != _fabric_reserved_range
+  no_log: true
+
+- name: Fail if Netris rejected replacement of the old reserved fabric prefix
+  ansible.builtin.fail:
+    msg: >-
+      Netris refused to delete the old reserved fabric IPAM prefix for '{{ subnet_name }}'.
+      No V-Net changes were made. Remove any remaining allocations or child prefixes first.
+  when: _fabric_ipam_delete_response is defined and _fabric_ipam_delete_response.status | default(0) == 400
+
+- name: Read IPAM subnets after reserved-prefix replacement
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/subnets?filterByVpc={{ _parent_vpc.id }}"
+    method: GET
+    force: true
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
+  register: _fabric_ipam_ready_for_create
+  no_log: true
+
+- name: Find current reserved prefix state before create or reuse
+  ansible.builtin.set_fact:
+    _fabric_ipam_named: >-
+      {{ _fabric_ipam_ready_for_create.json.data | selectattr('name', 'equalto', subnet_name ~ '-fabric') | list }}
+    _fabric_ipam_existing: >-
+      {{ _fabric_ipam_ready_for_create.json.data | selectattr('prefix', 'equalto', _fabric_reserved_range) | list }}
+
+- name: Validate the reserved prefix slot before create or reuse
+  ansible.builtin.assert:
+    that:
+      - _fabric_ipam_named | length <= 1
+      - _fabric_ipam_existing | length <= 1
+      - >-
+        _fabric_ipam_named | length == 0 or
+        _fabric_ipam_named[0].prefix == _fabric_reserved_range
+      - >-
+        _fabric_ipam_existing | length == 0 or
+        (_fabric_ipam_named | length == 1 and
+         _fabric_ipam_existing[0].id | int == _fabric_ipam_named[0].id | int)
+    fail_msg: >-
+      Netris still has an incompatible prefix named '{{ subnet_name }}-fabric' or a
+      conflicting subnet at '{{ _fabric_reserved_range }}'. No V-Net changes were made.
+
+- name: Create the child IPAM subnet for the reserved fabric range
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/subnet"
+    method: POST
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    body_format: json
+    body:
+      name: "{{ subnet_name }}-fabric"
+      prefix: "{{ _fabric_reserved_range }}"
+      parentID: "{{ ipam_subnet_id | int }}"
+      purpose: common
+      sites:
+        - id: "{{ netris_site_id | int }}"
+      tenant:
+        id: "{{ netris_tenant_id | int }}"
+      vpc:
+        id: "{{ _parent_vpc.id | int }}"
+    return_content: true
+    status_code: [200, 201]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
+  when:
+    - _fabric_ipam_named | length == 0
+    - _fabric_ipam_existing | length == 0
+  no_log: true
+
+- name: Read back the reserved fabric prefix
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/subnets?filterByVpc={{ _parent_vpc.id }}"
+    method: GET
+    force: true
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
+  register: _fabric_ipam_after
+  no_log: true
+
+- name: Find the reserved prefix after creation or reuse
+  ansible.builtin.set_fact:
+    _fabric_ipam_verified: >-
+      {{ _fabric_ipam_after.json.data | selectattr('prefix', 'equalto', _fabric_reserved_range) | list }}
+
+- name: Validate the reserved fabric IPAM identity
+  ansible.builtin.assert:
+    that:
+      - _fabric_ipam_verified | length == 1
+      - _fabric_ipam_verified[0].name == subnet_name ~ '-fabric'
+      - _fabric_ipam_verified[0].parentID | int == ipam_subnet_id | int
+      - _fabric_ipam_verified[0].vpc.id | int == _parent_vpc.id | int
+      - _fabric_ipam_verified[0].tenant.id | int == netris_tenant_id | int
+    fail_msg: "The reserved fabric prefix does not match the expected child IPAM/VPC identity. No V-Net was created."

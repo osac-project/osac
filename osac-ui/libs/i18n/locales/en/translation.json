@@ -372,6 +372,7 @@
   "External IPs": "External IPs",
   "Failed": "Failed",
   "Failed to attach external IP": "Failed to attach external IP",
+  "Failed to check create permissions": "Failed to check create permissions",
   "Failed to connect to the console.": "Failed to connect to the console.",
   "Failed to create external IP": "Failed to create external IP",
   "Failed to create instance type": "Failed to create instance type",

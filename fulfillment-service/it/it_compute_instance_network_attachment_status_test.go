@@ -73,10 +73,18 @@ var _ = Describe("Compute instance network attachment status", Label("compute-ne
 		Expect(statuses[0].GetSubnetRef()).To(Equal(network.subnetID))
 		Expect(statuses[0].GetIpAddress()).To(Equal("192.0.2.42"))
 		publicObject.SetStatus(nil)
-		_, err = publicClient.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+		publicObject.GetMetadata().SetLabels(map[string]string{"it": "updated"})
+		updateResponse, err := publicClient.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
 			Object: publicObject,
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
+		// The user edit persisted and the Update response carries the feedback:
+		Expect(updateResponse.GetObject().GetMetadata().GetLabels()).To(Equal(
+			map[string]string{"it": "updated"}))
+		statuses = updateResponse.GetObject().GetStatus().GetComputeNetworkAttachmentStatuses()
+		Expect(statuses).To(HaveLen(1))
+		Expect(statuses[0].GetSubnetRef()).To(Equal(network.subnetID))
+		Expect(statuses[0].GetIpAddress()).To(Equal("192.0.2.42"))
 
 		response, err = publicClient.Get(ctx,
 			publicv1.ComputeInstancesGetRequest_builder{Id: instance.GetId()}.Build())
@@ -105,6 +113,7 @@ var _ = Describe("Compute instance network attachment status", Label("compute-ne
 		}.Build())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		for _, path := range []string{
+			"status.state",
 			"status. compute_network_attachment_statuses",
 			"status..compute_network_attachment_statuses",
 			" status.compute_network_attachment_statuses ",

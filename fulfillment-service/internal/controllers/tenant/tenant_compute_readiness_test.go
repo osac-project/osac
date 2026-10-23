@@ -122,7 +122,7 @@ var _ = Describe("Tenant compute infrastructure readiness", func() {
 		Expect(c.GetStatus()).To(Equal(want))
 		Expect(c.GetReason()).To(Equal(reason))
 		Expect(c.GetLastTransitionTime()).NotTo(BeNil())
-		Expect(req.GetObject().GetStatus().GetConditions()).To(HaveLen(3))
+		Expect(req.GetObject().GetStatus().GetConditions()).To(HaveLen(4))
 		Expect(req.GetObject().GetStatus().GetConditions()[0].GetStatus()).To(Equal(ready))
 		Expect(req.GetObject().GetStatus().GetConditions()[1].GetStatus()).To(Equal(ready))
 	}

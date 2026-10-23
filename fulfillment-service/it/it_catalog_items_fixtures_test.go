@@ -565,6 +565,11 @@ func catalogItemParameterPolicies() map[string]*publicv1.TemplateParameterPolicy
 // Keycloak break-glass administration does not imply OSAC tenant-admin permissions.
 // Grant that realm role before logging in so the public API exercises genuine tenant scope.
 func createCatalogItemTenantAdminFixture(ctx context.Context) (string, *grpc.ClientConn) {
+	identity := createCatalogItemTenantAdminIdentityFixture(ctx)
+	return identity.TenantID, identity.Conn
+}
+
+func createCatalogItemTenantAdminIdentityFixture(ctx context.Context) metadataTestIdentity {
 	GinkgoHelper()
 	tenants := privatev1.NewTenantsClient(tool.InternalView().AdminConn())
 	name := catalogItemFixtureName()
@@ -601,10 +606,28 @@ func createCatalogItemTenantAdminFixture(ctx context.Context) (string, *grpc.Cli
 	Expect(code).To(Equal(http.StatusNoContent))
 
 	_, token := loginAsBreakGlass(ctx, tenants, name, id)
-	conn, err := tool.makeGrpcConn(externalServiceAddr, token)
+	publicConn, err := tool.makeGrpcConn(externalServiceAddr, token)
 	Expect(err).NotTo(HaveOccurred())
-	DeferCleanup(conn.Close)
-	return name, conn
+	DeferCleanup(publicConn.Close)
+	credentials := tenant.GetObject().GetStatus().GetBreakGlassCredentials()
+	username, password := "", ""
+	if credentials != nil {
+		username = credentials.GetUsername()
+		password = credentials.GetPassword()
+	}
+	if password == "" {
+		username = fmt.Sprintf("%s-osac-break-glass", name)
+		password = "test-break-glass-pass-123!"
+	}
+	httpClient := tool.makeHttpClient(externalServiceAddr, token)
+	DeferCleanup(func() { httpClient.CloseIdleConnections() })
+	return metadataTestIdentity{
+		Conn:       publicConn,
+		HTTPClient: httpClient,
+		TenantID:   name,
+		Username:   username,
+		Password:   password,
+	}
 }
 
 func createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx context.Context, parameters []*privatev1.ComputeInstanceTemplateParameterDefinition) string {
@@ -926,6 +949,10 @@ func setCatalogItemSubnetFixtureState(ctx context.Context, id string, state priv
 
 // createCatalogItemMemberFixture authenticates an ordinary member of the item's tenant.
 func createCatalogItemMemberFixture(ctx context.Context, tenant string) *grpc.ClientConn {
+	return createCatalogItemMemberIdentityFixture(ctx, tenant).Conn
+}
+
+func createCatalogItemMemberIdentityFixture(ctx context.Context, tenant string) metadataTestIdentity {
 	GinkgoHelper()
 	name := catalogItemFixtureName()
 	code, _, err := tool.KeycloakAdminRequest(ctx, http.MethodPost, "/users", map[string]any{"username": name, "enabled": true, "firstName": name, "lastName": "Test"})
@@ -941,7 +968,15 @@ func createCatalogItemMemberFixture(ctx context.Context, tenant string) *grpc.Cl
 	conn, err := tool.makeGrpcConn(externalServiceAddr, token)
 	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(conn.Close)
-	return conn
+	httpClient := tool.makeHttpClient(externalServiceAddr, token)
+	DeferCleanup(func() { httpClient.CloseIdleConnections() })
+	return metadataTestIdentity{
+		Conn:       conn,
+		HTTPClient: httpClient,
+		TenantID:   tenant,
+		Username:   name,
+		Password:   usersPassword,
+	}
 }
 
 const tenantDefaultNetworkingLabel = "osac.openshift.io/default"

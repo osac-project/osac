@@ -41,7 +41,7 @@ func validateUserDataSecret(
 		return nil, nil
 	}
 	if ref.GetId() == "" && ref.GetName() == "" {
-		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "user_data_secret must specify id or name")
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "user_data_source.secret must specify id or name")
 	}
 
 	resolved, err := references.NewDAOLookupFunc(secretsDao)(ctx, "", "", ref.GetId(), ref.GetName())
@@ -55,46 +55,46 @@ func validateUserDataSecret(
 			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"there is no secret with identifier or name '%s'", refKey(ref))
 		}
-		logger.ErrorContext(ctx, "Failed to resolve user_data_secret reference", "error", err)
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to resolve user_data_secret reference")
+		logger.ErrorContext(ctx, "Failed to resolve user_data_source.secret reference", "error", err)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to resolve user_data_source.secret reference")
 	}
 	if resolved.Tenant == auth.SharedTenant {
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"shared secrets cannot be used as user_data_secret references")
+			"shared secrets cannot be used as user_data_source.secret references")
 	}
 
 	secretResponse, err := secretsDao.Get().SetId(resolved.ID).Do(ctx)
 	if err != nil {
-		logger.ErrorContext(ctx, "Failed to load user_data_secret reference", "error", err)
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to resolve user_data_secret reference")
+		logger.ErrorContext(ctx, "Failed to load user_data_source.secret reference", "error", err)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to resolve user_data_source.secret reference")
 	}
 	secret := secretResponse.GetObject()
-	if err := validateSecretType(secret, refKey(ref), "user_data_secret", privatev1.SecretType_SECRET_TYPE_USER_DATA); err != nil {
+	if err := validateSecretType(secret, refKey(ref), "user_data_source.secret", privatev1.SecretType_SECRET_TYPE_USER_DATA); err != nil {
 		return nil, err
 	}
 	data := secret.GetData()
 	// Vault-backed Secrets may keep their value outside the database and must be fetched before validation.
 	if len(data) == 0 && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
 		if secretStore == nil {
-			logger.ErrorContext(ctx, "Failed to load user_data_secret value: secret store isn't configured")
-			return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to resolve user_data_secret reference")
+			logger.ErrorContext(ctx, "Failed to load user_data_source.secret value: secret store isn't configured")
+			return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to resolve user_data_source.secret reference")
 		}
 		metadata := secret.GetMetadata()
 		data, err = secretStore.Fetch(ctx, metadata.GetTenant(), metadata.GetProject(), metadata.GetName())
 		if err != nil {
-			logger.ErrorContext(ctx, "Failed to load user_data_secret value from store", "error", err)
-			return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to resolve user_data_secret reference")
+			logger.ErrorContext(ctx, "Failed to load user_data_source.secret value from store", "error", err)
+			return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to resolve user_data_source.secret reference")
 		}
 	}
 	value, ok := data[userDataSecretDataKey]
 	if !ok || len(value) == 0 {
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"secret '%s' referenced by user_data_secret must contain a non-empty '%s' entry",
+			"secret '%s' referenced by user_data_source.secret must contain a non-empty '%s' entry",
 			refKey(ref), userDataSecretDataKey)
 	}
 	if err := validateBareMetalUserData(value); err != nil {
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"secret '%s' referenced by user_data_secret has a '%s' entry whose %s",
+			"secret '%s' referenced by user_data_source.secret has a '%s' entry whose %s",
 			refKey(ref), userDataSecretDataKey, err)
 	}
 

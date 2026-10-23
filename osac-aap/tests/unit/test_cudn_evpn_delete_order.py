@@ -1,3 +1,6 @@
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -32,6 +35,20 @@ def _flatten_tasks(tasks: list[dict]) -> list[dict]:
 
 def _delete_tasks() -> list[dict]:
     return _flatten_tasks(_raw_delete_tasks())
+
+
+def _flatten_values(values):
+    for value in values:
+        if isinstance(value, (list, tuple)):
+            yield from _flatten_values(value)
+        else:
+            yield value
+
+
+def _compile_expression(expression: str):
+    environment = Environment()
+    environment.filters["flatten"] = lambda values: list(_flatten_values(values))
+    return environment.compile_expression(expression.removeprefix("{{").removesuffix("}}").strip())
 
 
 def test_cudn_is_deleted_and_fully_absent_before_namespace_cleanup() -> None:
@@ -202,20 +219,24 @@ def test_bare_fabric_only_sibling_is_not_a_live_cudn_consumer() -> None:
     live_siblings = list(initialize_expression)
     assert live_siblings == []
 
-    reference_task = next(
-        task for task in tasks if task.get("name") == "Identify sibling Subnets referenced by ComputeInstances"
+    extract_task = next(
+        task for task in tasks if task.get("name") == "Extract Subnet references from ComputeInstances"
     )
-    append_expression = Environment().compile_expression(
-        reference_task["ansible.builtin.set_fact"]["cudn_evpn_live_siblings"]
-        .removeprefix("{{")
-        .removesuffix("}}")
-        .strip()
+    extract_expression = _compile_expression(
+        extract_task["ansible.builtin.set_fact"]["_compute_instance_subnet_refs"]
+    )
+    subnet_refs = extract_expression(_compute_instance_lookup={"resources": []})
+    preserve_task = next(
+        task for task in tasks if task.get("name") == "Preserve sibling Subnets referenced by ComputeInstances"
+    )
+    append_expression = _compile_expression(
+        preserve_task["ansible.builtin.set_fact"]["cudn_evpn_live_siblings"]
     )
     bare_fabric_only = {"metadata": {"name": "fabric-only-successor"}}
     live_siblings = append_expression(
         cudn_evpn_live_siblings=live_siblings,
         cudn_evpn_sibling_subnets=[bare_fabric_only],
-        _compute_instance_subnet_refs=[],
+        _compute_instance_subnet_refs=subnet_refs,
     )
     assert live_siblings == []
 
@@ -245,10 +266,10 @@ def test_bare_fabric_only_sibling_is_not_a_live_cudn_consumer() -> None:
     lookup = namespace_lookup["kubernetes.core.k8s_info"]
     assert lookup["kind"] == "Namespace"
     assert lookup["name"] == "{{ item.metadata.name }}"
-    reference_task = next(
-        task for task in tasks if task.get("name") == "Identify sibling Subnets referenced by ComputeInstances"
+    preserve_task = next(
+        task for task in tasks if task.get("name") == "Preserve sibling Subnets referenced by ComputeInstances"
     )
-    expression = reference_task["ansible.builtin.set_fact"]["cudn_evpn_live_siblings"]
+    expression = preserve_task["ansible.builtin.set_fact"]["cudn_evpn_live_siblings"]
     select_referenced = Environment().compile_expression(expression.removeprefix("{{").removesuffix("}}").strip())
     siblings = [
         {"metadata": {"name": "active"}},
@@ -272,12 +293,38 @@ def test_compute_instance_references_are_considered_for_any_sibling_state() -> N
     assert lookup["kubernetes.core.k8s_info"]["api_version"] == "osac.openshift.io/v1alpha1"
     assert lookup["kubernetes.core.k8s_info"]["kind"] == "ComputeInstance"
 
-    identify = next(
-        task for task in tasks if task.get("name") == "Identify sibling Subnets referenced by ComputeInstances"
+    extract = next(
+        task for task in tasks if task.get("name") == "Extract Subnet references from ComputeInstances"
     )
-    facts = identify["ansible.builtin.set_fact"]
-    assert "subnetRef" in facts["_compute_instance_subnet_refs"]
-    assert "selectattr('metadata.name', 'in', _compute_instance_subnet_refs)" in facts["cudn_evpn_live_siblings"]
+    preserve = next(
+        task for task in tasks if task.get("name") == "Preserve sibling Subnets referenced by ComputeInstances"
+    )
+    names = [task.get("name") for task in tasks]
+    assert names.index("List ComputeInstances in the management namespace") < names.index(
+        "Extract Subnet references from ComputeInstances"
+    ) < names.index("Preserve sibling Subnets referenced by ComputeInstances")
+
+    extract_expression = _compile_expression(
+        extract["ansible.builtin.set_fact"]["_compute_instance_subnet_refs"]
+    )
+    refs = extract_expression(
+        _compute_instance_lookup={
+            "resources": [
+                {"spec": {"networkAttachments": [{"subnetRef": "active"}, {"subnetRef": "deleting"}]}},
+                {"spec": {"networkAttachments": [{"subnetRef": "active"}]}},
+            ]
+        }
+    )
+    assert refs == ["active", "deleting", "active"]
+
+    preserve_expression = _compile_expression(
+        preserve["ansible.builtin.set_fact"]["cudn_evpn_live_siblings"]
+    )
+    siblings = [{"metadata": {"name": "active"}}, {"metadata": {"name": "deleting"}}]
+    live_siblings = preserve_expression(
+        cudn_evpn_live_siblings=[], cudn_evpn_sibling_subnets=siblings, _compute_instance_subnet_refs=refs
+    )
+    assert live_siblings == siblings
 
 
 def test_resource_deletes_are_idempotent() -> None:
@@ -384,7 +431,6 @@ def test_owner_handoff_promotes_oldest_cudn_enabled_sibling_before_removing_old_
     select = tasks[select_index]["ansible.builtin.set_fact"]["_cudn_evpn_next_owner"]
     select_expression = Environment().compile_expression(select.removeprefix("{{").removesuffix("}}").strip())
     assert select_expression(_cudn_evpn_owner_candidates=candidates) == tie_breaker
-
     promote = tasks[promote_index]
     assert promote["kubernetes.core.k8s"]["state"] == "present"
     assert promote["kubernetes.core.k8s"]["definition"] == "{{ lookup('template', 'cudn.yaml.j2') | from_yaml }}"
@@ -413,6 +459,59 @@ def test_owner_handoff_promotes_oldest_cudn_enabled_sibling_before_removing_old_
     assert "observedGeneration" in ready["until"]
     assert ready["retries"] == 30
     assert ready["delay"] == 10
+
+
+def test_owner_handoff_accepts_maximum_supported_netris_subnet_prefix(tmp_path: Path) -> None:
+    ansible_playbook = shutil.which("ansible-playbook")
+    assert ansible_playbook is not None, "ansible-playbook must be installed in the AAP dev environment"
+
+    task = next(task for task in _delete_tasks() if task.get("name") == "Validate successor fabric outputs for CUDN handoff")
+    playbook = tmp_path / "validate_successor_fabric.yaml"
+    ansible_home = tmp_path / "ansible-home"
+    ansible_local_temp = tmp_path / "ansible-local"
+    ansible_home.mkdir()
+    ansible_local_temp.mkdir()
+    playbook.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "hosts": "localhost",
+                    "gather_facts": False,
+                    "vars": {
+                        "_cudn_owner_subnet_name": "old-owner",
+                        "_deleting_subnet_name": "old-owner",
+                        "_cudn_evpn_next_owner": {"metadata": {"name": "successor"}},
+                        "_cudn_next_owner_subnet_cidr": "192.0.2.0/29",
+                        "_cudn_next_owner_reserved_range": "192.0.2.0/30",
+                        "_cudn_next_owner_fabric_output": {
+                            "resources": [
+                                {
+                                    "data": {
+                                        "l2_vni": "100",
+                                        "l3_vni": "200",
+                                        "fabric_reserved_range": "192.0.2.0/30",
+                                    }
+                                }
+                            ]
+                        },
+                    },
+                    "tasks": [task],
+                }
+            ],
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [ansible_playbook, "-v", "-i", "localhost,", "-c", "local", str(playbook)],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "ANSIBLE_HOME": str(ansible_home), "ANSIBLE_LOCAL_TEMP": str(ansible_local_temp)},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_owner_handoff_creates_or_updates_cudn_before_transferring_lease() -> None:

@@ -441,7 +441,7 @@ var _ = Describe("MCP server", func() {
 		Expect(connection.Server.Version).ToNot(BeEmpty())
 		Expect(connection.Caller.Subject).ToNot(BeEmpty())
 		Expect(connection.Caller.Tenants).To(ContainElement(usersGroup))
-		Expect(connection.ResourceFamilies).To(HaveLen(9))
+		Expect(connection.ResourceFamilies).To(HaveLen(11))
 		Expect(connection.Tools).To(ConsistOf(
 			"check_connection", "list_resources", "get_resource", "create_compute_instance", "delete_compute_instance",
 		))

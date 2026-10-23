@@ -209,7 +209,7 @@ type task struct {
 const tenantDeletionRetryInterval = time.Second
 
 // update performs the reconciliation logic for creating or updating a tenant,
-// then refreshes compute readiness independently of lifecycle errors.
+// then refreshes infrastructure conditions independently of lifecycle errors.
 func (t *task) update(ctx context.Context) error {
 	oldTenant := proto.Clone(t.tenant).(*privatev1.Tenant)
 	reconcileErr := t.updateLifecycle(ctx)
@@ -218,7 +218,9 @@ func (t *task) update(ctx context.Context) error {
 		t.tenant = oldTenant
 	}
 	if t.r != nil && t.r.hubsClient != nil && t.r.hubCache != nil {
-		t.checkComputeInfrastructureReadiness(ctx)
+		t.checkInfrastructureConditions(ctx)
+	} else {
+		t.projectStorageOnboardingCondition(nil, true)
 	}
 	return reconcileErr
 }

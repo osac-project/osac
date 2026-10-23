@@ -1038,6 +1038,130 @@ var _ = Describe("Private clusters server", func() {
 			Expect(ids).To(ConsistOf(first.GetId(), second.GetId(), dependency.GetId()))
 		})
 
+		It("rejects cluster creation when the expanded dependency closure exceeds the operator limit", func() {
+			dependency := newTestAddOnOperator("operator-expansion-limit-dependency", "operator-expansion-limit-dependency", true)
+			dependencyIDs := make([]string, 0, maxClusterAddOnOperators-1)
+			for i := range maxClusterAddOnOperators - 1 {
+				dependencyID := fmt.Sprintf("operator-expansion-limit-leaf-%d", i)
+				seedAddOnOperatorObject(ctx, newTestAddOnOperator(dependencyID, dependencyID, true))
+				dependencyIDs = append(dependencyIDs, dependencyID)
+			}
+			seedAddOnOperatorObject(ctx, dependency)
+
+			root := newTestAddOnOperator("operator-expansion-limit-root", "operator-expansion-limit-root", true)
+			root.SetDependencies([]*privatev1.AddOnOperatorLocalReference{
+				privatev1.AddOnOperatorLocalReference_builder{Id: dependency.GetId()}.Build(),
+			})
+			seedAddOnOperatorObject(ctx, root)
+
+			operatorServer, err := NewPrivateAddOnOperatorsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			dependencies := make([]*privatev1.AddOnOperatorLocalReference, 0, len(dependencyIDs))
+			for _, dependencyID := range dependencyIDs {
+				dependencies = append(dependencies,
+					privatev1.AddOnOperatorLocalReference_builder{Id: dependencyID}.Build())
+			}
+			_, err = operatorServer.Update(ctx, privatev1.AddOnOperatorsUpdateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Id:           dependency.GetId(),
+					Dependencies: dependencies,
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"dependencies"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Id: root.GetId()}.Build(),
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("maximum of 32 operators"))
+		})
+
+		It("allows requested roots that overlap the dependency closure", func() {
+			rootIDs := make([]string, 0, maxClusterAddOnOperators)
+			for i := range maxClusterAddOnOperators {
+				operatorID := fmt.Sprintf("operator-overlapping-root-%d", i)
+				rootIDs = append(rootIDs, operatorID)
+			}
+			for i, operatorID := range rootIDs {
+				operator := newTestAddOnOperator(operatorID, operatorID, true)
+				if i == 0 {
+					operator.SetDependencies([]*privatev1.AddOnOperatorLocalReference{
+						privatev1.AddOnOperatorLocalReference_builder{Id: rootIDs[1]}.Build(),
+					})
+				}
+				seedAddOnOperatorObject(ctx, operator)
+			}
+
+			object, err := createClusterWithAddOnOperators(ctx, server, func() []*privatev1.AddOnOperatorReference {
+				refs := make([]*privatev1.AddOnOperatorReference, 0, len(rootIDs))
+				for _, rootID := range rootIDs {
+					refs = append(refs, privatev1.AddOnOperatorReference_builder{Id: rootID}.Build())
+				}
+				return refs
+			}())
+			Expect(err).ToNot(HaveOccurred())
+			resolvedIDs := make([]string, 0, len(object.GetSpec().GetAddOnOperators()))
+			for _, operator := range object.GetSpec().GetAddOnOperators() {
+				resolvedIDs = append(resolvedIDs, operator.GetId())
+			}
+			Expect(resolvedIDs).To(ConsistOf(rootIDs))
+		})
+
+		It("keeps existing cluster snapshots when dependency edges change", func() {
+			first := newTestAddOnOperator("operator-snapshot-first", "operator-snapshot-first", true)
+			second := newTestAddOnOperator("operator-snapshot-second", "operator-snapshot-second", true)
+			root := newTestAddOnOperator("operator-snapshot-root", "operator-snapshot-root", true)
+			root.SetDependencies([]*privatev1.AddOnOperatorLocalReference{
+				privatev1.AddOnOperatorLocalReference_builder{Id: first.GetId()}.Build(),
+			})
+			seedAddOnOperatorObject(ctx, first)
+			seedAddOnOperatorObject(ctx, second)
+			seedAddOnOperatorObject(ctx, root)
+
+			firstCluster, err := createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Id: root.GetId()}.Build(),
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			operatorServer, err := NewPrivateAddOnOperatorsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = operatorServer.Update(ctx, privatev1.AddOnOperatorsUpdateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Id: root.GetId(),
+					Dependencies: []*privatev1.AddOnOperatorLocalReference{
+						privatev1.AddOnOperatorLocalReference_builder{Id: second.GetId()}.Build(),
+					},
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"dependencies"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			secondCluster, err := createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Id: root.GetId()}.Build(),
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			firstIDs := make([]string, 0, len(firstCluster.GetSpec().GetAddOnOperators()))
+			for _, operator := range firstCluster.GetSpec().GetAddOnOperators() {
+				firstIDs = append(firstIDs, operator.GetId())
+			}
+			secondIDs := make([]string, 0, len(secondCluster.GetSpec().GetAddOnOperators()))
+			for _, operator := range secondCluster.GetSpec().GetAddOnOperators() {
+				secondIDs = append(secondIDs, operator.GetId())
+			}
+			Expect(firstIDs).To(ConsistOf(root.GetId(), first.GetId()))
+			Expect(secondIDs).To(ConsistOf(root.GetId(), second.GetId()))
+		})
+
 		It("rejects circular dependencies", func() {
 			first := newTestAddOnOperator("operator-cycle-a", "operator-cycle-a", true)
 			first.SetDependencies([]*privatev1.AddOnOperatorLocalReference{
@@ -1054,8 +1178,7 @@ var _ = Describe("Private clusters server", func() {
 				privatev1.AddOnOperatorReference_builder{Id: first.GetId()}.Build(),
 			})
 			Expect(err).To(HaveOccurred())
-			expectAddOnOperatorFieldViolation(err, "spec.add_on_operators[0]")
-			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("cycle"))
+			Expect(err.Error()).To(ContainSubstring("dependency cycle detected"))
 		})
 
 		It("rejects mutually exclusive operators", func() {
@@ -1132,17 +1255,16 @@ var _ = Describe("Private clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("accepts and canonicalizes an unpublished operator", func() {
+		It("rejects an unpublished operator", func() {
 			operator := newTestAddOnOperator("operator-unpublished", "operator-unpublished", false)
 			seedAddOnOperatorObject(ctx, operator)
 
-			object, err := createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+			_, err := createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
 				privatev1.AddOnOperatorReference_builder{Id: operator.GetId()}.Build(),
 			})
-			Expect(err).ToNot(HaveOccurred())
-			Expect(object.GetSpec().GetAddOnOperators()).To(HaveLen(1))
-			Expect(object.GetSpec().GetAddOnOperators()[0].GetId()).To(Equal(operator.GetId()))
-			Expect(object.GetSpec().GetAddOnOperators()[0].GetName()).To(Equal(operator.GetMetadata().GetName()))
+			Expect(err).To(HaveOccurred())
+			expectAddOnOperatorFieldViolation(err, "spec.add_on_operators[0]")
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("not published"))
 		})
 
 		It("accepts and canonicalizes an unpublished dependency", func() {

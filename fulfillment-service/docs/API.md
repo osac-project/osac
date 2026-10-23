@@ -243,6 +243,39 @@ The `spec` and `status` fields have strict ownership rules:
   reflect the current state of the object, which may differ from what the user requested in `spec`
   while changes are being applied.
 
+### ComputeInstance public update semantics
+
+The public `ComputeInstances` update enforces the following rules on its request
+object and field mask. They are scoped to this service; other resource servers
+do not necessarily follow them.
+
+- **Public status is read-only.** The whole `status` and every `status.*` mask
+  path are rejected with `InvalidArgument`, including whitespace and double-dot
+  normalized spellings. Status values carried incidentally in the request
+  object are ignored. Controller-reported state, transition times, conditions,
+  and feedback such as network-attachment status are written only through the
+  private API.
+- **Omitted mask infers supplied fields.** With no `update_mask`, paths are
+  inferred from the populated direct children of `spec` and the permitted
+  metadata fields. Omitted fields stay unchanged; clearing a scalar or an empty
+  map requires an explicit mask path.
+- **Explicit mask selects writable fields only.** Permitted metadata paths are
+  `labels`, `annotations`, `display_name`, and `description`; spec paths are
+  accepted and validated by the field-path compiler. Any other root — including
+  `name`, `tenant`, and `project`, which are server-assigned and immutable once
+  the object is created, and private metadata such as `version`, timestamps,
+  and finalizers — is rejected. The tenant is determined from the authenticated
+  caller and cannot be moved by an update.
+- **Targeted maps are atomic.** A mask selecting `metadata.labels` or
+  `metadata.annotations` replaces that map's ordinary entries, and an explicit
+  empty map clears them; reserved system-owned entries are retained. An
+  untargeted map stays unchanged.
+- **Explicit empty mask is a no-op.** It still runs the version and validation
+  checks but persists no changes.
+
+System-owned metadata and status feedback remain writable only through the
+private `ComputeInstances` API, which controllers and system components use.
+
 ### Annotations vs spec/status fields
 
 Annotations (`metadata.annotations`) are intended for arbitrary, user-controlled metadata. They are

@@ -17,7 +17,7 @@ const AdminInstanceTypeListPage = () => {
       description={t('Manage provider-defined instance types for this cloud platform.')}
       error={error}
       actions={
-        <CreateButton to="/admin/infrastructure/instance-types/create">
+        <CreateButton service={InstanceTypes} to="/admin/infrastructure/instance-types/create">
           {t('Create instance type')}
         </CreateButton>
       }

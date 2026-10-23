@@ -29,7 +29,7 @@ import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/disk_image_type.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/metering_type.proto";
-import "osac/private/v1/secret_type.proto";
+import "osac/private/v1/user_data_source_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -66,9 +66,8 @@ message BareMetalInstanceSpec {
   // Invalid keys are rejected at create time with a 400 error.
   optional string ssh_public_key = 2 [(google.api.field_behavior) = IMMUTABLE];
 
-  // User data (e.g. cloud-init). Passed to the OS at first boot. Immutable after creation.
-  // Maximum size: 64 KB.
-  optional string user_data = 3 [(google.api.field_behavior) = IMMUTABLE];
+  reserved 3;
+  reserved "user_data";
 
   // Run strategy controls the power state of the bare metal instance.
   // An enum is used rather than a boolean to leave room for future states (e.g. suspended backends).
@@ -149,11 +148,12 @@ message BareMetalInstanceSpec {
   // obsolete images are rejected.
   DiskImageReference disk_image = 12 [(google.api.field_behavior) = IMMUTABLE];
 
-  // Reference to a Secret containing user data for the bare metal instance.
-  // The Secret must contain a non-empty `userdata` entry. Mutually exclusive with `user_data`.
-  // An existing inline value may be migrated by setting this field while clearing `user_data`
-  // in the same update.
-  SecretLocalReference user_data_secret = 13 [(google.api.field_behavior) = IMMUTABLE];
+  reserved 13;
+  reserved "user_data_secret";
+
+  // User data passed to the OS at first boot, limited to 64 KiB.
+  // Immutable after creation, except that inline content may be migrated to a Secret.
+  UserDataSource user_data_source = 14;
 }
 
 // The status contains the details of the bare metal instance provided by the system.

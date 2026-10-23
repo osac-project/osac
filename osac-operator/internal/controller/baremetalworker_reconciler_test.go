@@ -942,7 +942,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 		Expect(bmi.GetSpec().GetDiskImage().GetId()).To(Equal(diskImageID))
 		Expect(bmi.GetSpec().GetInstanceType().GetName()).To(Equal("bm-standard"))
 
-		userData := bmi.GetSpec().GetUserData()
+		userData := bmi.GetSpec().GetUserDataSource().GetInline()
 		Expect(userData).ToNot(BeEmpty())
 		Expect(json.Valid([]byte(userData))).To(BeTrue())
 

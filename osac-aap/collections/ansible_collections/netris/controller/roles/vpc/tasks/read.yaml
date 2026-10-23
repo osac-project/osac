@@ -2,6 +2,8 @@
 # List VPCs and optionally find one by name.
 # Optional variables:
 #   vpc_name — find a specific VPC by name
+#   vpc_lookup_id — restrict the lookup to this exact Netris VPC ID
+#   vpc_tenant_id — restrict the lookup to the VPC's admin tenant
 # Output facts:
 #   netris_vpcs   — full list of VPCs
 #   netris_vpc    — the matched VPC dict (or none if not found / not requested)
@@ -28,17 +30,56 @@
   register: _vpc_read_resp
   no_log: true
 
-- name: Set VPC facts
+- name: Initialize VPC lookup candidates
   ansible.builtin.set_fact:
     netris_vpcs: "{{ _vpc_read_resp.json.data | default([]) }}"
-    netris_vpc: >-
-      {{ (_vpc_read_resp.json.data | default([]))
+    _netris_vpc_matches: >-
+      {{ _vpc_read_resp.json.data | default([]) }}
+
+- name: Filter VPCs by name
+  ansible.builtin.set_fact:
+    _netris_vpc_matches: >-
+      {{ _netris_vpc_matches
          | selectattr('name', 'equalto', vpc_name)
-         | list | first | default(none) }}
+         | list }}
   when: vpc_name is defined
+
+- name: Filter VPCs by ID
+  ansible.builtin.set_fact:
+    _netris_vpc_matches: >-
+      {{ _netris_vpc_matches
+         | selectattr('id', 'equalto', vpc_lookup_id | int)
+         | list }}
+  when: vpc_lookup_id is defined
+
+- name: Filter VPCs by admin tenant
+  ansible.builtin.set_fact:
+    _netris_vpc_matches: >-
+      {{ _netris_vpc_matches
+         | selectattr('adminTenant.id', 'equalto', vpc_tenant_id | int)
+         | list }}
+  when:
+    - vpc_tenant_id is defined
+
+- name: Fail if the VPC lookup is ambiguous
+  ansible.builtin.assert:
+    that:
+      - _netris_vpc_matches | length <= 1
+    fail_msg: >-
+      More than one Netris VPC matches the supplied name, ID, and admin tenant.
+      Refusing to select an ambiguous VPC.
+  when: vpc_name is defined or vpc_lookup_id is defined or vpc_tenant_id is defined
+
+- name: Set VPC facts from the matching VPC
+  ansible.builtin.set_fact:
+    netris_vpc: "{{ _netris_vpc_matches | first | default(none) }}"
+  when: vpc_name is defined or vpc_lookup_id is defined or vpc_tenant_id is defined
 
 - name: Set VPC facts (no filter)
   ansible.builtin.set_fact:
     netris_vpcs: "{{ _vpc_read_resp.json.data | default([]) }}"
     netris_vpc: "{{ none }}"
-  when: vpc_name is not defined
+  when:
+    - vpc_name is not defined
+    - vpc_lookup_id is not defined
+    - vpc_tenant_id is not defined

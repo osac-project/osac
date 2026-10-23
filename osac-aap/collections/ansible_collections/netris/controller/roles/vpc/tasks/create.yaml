@@ -18,10 +18,26 @@
   register: _vpc_list_resp
   no_log: true
 
-- name: Find VPC by name
+- name: Find VPCs by name and admin tenant
   ansible.builtin.set_fact:
-    _existing_vpc: "{{ (_vpc_list_resp.json.data | default([])) | selectattr('name', 'equalto', vpc_name) | list | first | default(none) }}"
+    _existing_vpcs: >-
+      {{ (_vpc_list_resp.json.data | default([]))
+         | selectattr('name', 'equalto', vpc_name)
+         | selectattr('adminTenant.id', 'equalto', vpc_tenant_id | int)
+         | list }}
   when: _vpc_list_resp.json is mapping
+
+- name: Fail if the VPC identity is ambiguous
+  ansible.builtin.assert:
+    that:
+      - _existing_vpcs | length <= 1
+    fail_msg: >-
+      More than one Netris VPC named '{{ vpc_name }}' belongs to admin tenant
+      {{ vpc_tenant_id }}. Refusing to reuse an ambiguous VPC.
+
+- name: Set the matching VPC
+  ansible.builtin.set_fact:
+    _existing_vpc: "{{ _existing_vpcs | first | default(none) }}"
 
 - name: Set VPC facts from existing VPC (skip creation)
   ansible.builtin.set_fact:

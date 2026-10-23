@@ -27,5 +27,5 @@ fields:
   run_strategy:
     editable:
       default_value: COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS
-  user_data:
+  user_data_source:
     editable: {}

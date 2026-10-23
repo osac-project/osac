@@ -62,14 +62,14 @@ func clusterView(item *publicv1.ClusterCatalogItem) view {
 		appendPolicyRow(&v.fields, "Cluster version", p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
 			formatFullRef(p.GetLocked()), formatFullRef(p.GetEditable().GetDefaultValue()))
 	}
-	addString(&v.fields, "SSH public key", fields.GetSshPublicKey(), false)
+	addString(&v.fields, "SSH public key", fields.GetSshPublicKey())
 	if p := fields.GetPullSecretSecret(); p != nil {
 		appendPolicyRow(&v.fields, "Pull secret", p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
 			formatRef(p.GetLocked()), formatRef(p.GetEditable().GetDefaultValue()))
 	}
 	network := fields.GetNetwork()
-	addString(&v.fields, "Pod CIDR", network.GetPodCidr(), false)
-	addString(&v.fields, "Service CIDR", network.GetServiceCidr(), false)
+	addString(&v.fields, "Pod CIDR", network.GetPodCidr())
+	addString(&v.fields, "Service CIDR", network.GetServiceCidr())
 	addNodeSets(&v.fields, fields.GetNodeSets())
 	addBool(&v.fields, "Auto external IP attachment", fields.GetAutoExternalIpAttachment())
 	if p := fields.GetNetworkAttachment(); p != nil {

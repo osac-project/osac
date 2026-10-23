@@ -53,3 +53,9 @@ argument_specs:
         type: str
         required: true
         description: "Name of the V-Net to delete."
+      vnet_vpc_id:
+        type: int
+        description: "Optional VPC identity for the V-Net to delete."
+      vnet_tenant_id:
+        type: int
+        description: "Optional tenant identity for the V-Net to delete."

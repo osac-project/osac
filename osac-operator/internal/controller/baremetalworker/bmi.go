@@ -150,7 +150,7 @@ func (r *Reconciler) buildBMICreateRequest(
 			Id: systemBMITemplateID, Shared: true,
 		}.Build(),
 		DiskImage:          image,
-		UserData:           &ignitionRaw,
+		UserDataSource:     privatev1.UserDataSource_builder{Inline: &ignitionRaw}.Build(),
 		InstanceType:       instanceType,
 		NetworkAttachments: netAttachments,
 	}

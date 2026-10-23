@@ -718,7 +718,7 @@ grpcurl $GRPCURL_FLAGS -H "Authorization: Bearer $TOKEN" -d '{
       "ssh_key": {"name": "<ssh-key-name>"},
       "boot_disk": {"size_gib": 40},
       "network_attachments": [{"subnet": "<subnet-id>"}],
-      "user_data": "#cloud-config\nuser: myuser\npassword: <password>\nchpasswd:\n  expire: false"
+      "user_data_source": {"inline": "#cloud-config\nuser: myuser\npassword: <password>\nchpasswd:\n  expire: false"}
     }
   }
 }' $OSAC_API osac.public.v1.ComputeInstances/Create
@@ -738,7 +738,7 @@ curl -fsS $CURL_FLAGS -X POST -H "Authorization: Bearer $TOKEN" \
     "ssh_key": {"name": "<ssh-key-name>"},
     "boot_disk": {"size_gib": 40},
     "network_attachments": [{"subnet": "<subnet-id>"}],
-    "user_data": "#cloud-config\nuser: myuser\npassword: <password>\nchpasswd:\n  expire: false"
+    "user_data_source": {"inline": "#cloud-config\nuser: myuser\npassword: <password>\nchpasswd:\n  expire: false"}
   }
 }' "https://$OSAC_API/api/fulfillment/v1/compute_instances"
 ```

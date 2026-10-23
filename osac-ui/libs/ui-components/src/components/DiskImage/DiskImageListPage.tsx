@@ -12,7 +12,7 @@ import {
   ToolbarItem,
 } from '@patternfly/react-core';
 
-import { Architecture, DiskImageLifecycle, GuestOSFamily } from '@osac/types';
+import { Architecture, DiskImageLifecycle, DiskImages, GuestOSFamily } from '@osac/types';
 import { Tenants } from '@osac/types/private';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
 
@@ -226,7 +226,7 @@ const DiskImageListPage = () => {
       description={t('Manage disk images available for provisioning virtual machines.')}
       error={error}
       actions={
-        <CreateButton to="/admin/infrastructure/disk-images/create">
+        <CreateButton service={DiskImages} to="/admin/infrastructure/disk-images/create">
           {t('Create disk image')}
         </CreateButton>
       }

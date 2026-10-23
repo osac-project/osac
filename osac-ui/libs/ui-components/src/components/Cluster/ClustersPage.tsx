@@ -1,5 +1,6 @@
 import { Alert, Toolbar, ToolbarContent, ToolbarGroup, ToolbarItem } from '@patternfly/react-core';
 
+import { Clusters } from '@osac/types';
 import { useClusters } from '@osac/ui-components/api/v1/cluster';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
 
@@ -18,7 +19,11 @@ export const ClustersPage = () => {
       title={t('Clusters')}
       description={t('OpenShift clusters provisioned for your organization.')}
       error={error}
-      actions={<CreateButton to="/clusters/create">{t('Create cluster')}</CreateButton>}
+      actions={
+        <CreateButton service={Clusters} to="/clusters/create">
+          {t('Create cluster')}
+        </CreateButton>
+      }
     >
       <ListPageBody isLoading={isLoading} error={error}>
         <Toolbar>

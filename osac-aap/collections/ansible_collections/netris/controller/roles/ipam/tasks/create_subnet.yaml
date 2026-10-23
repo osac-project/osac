@@ -18,12 +18,41 @@
   register: _ipam_subnets_resp
   no_log: true
 
-- name: Find IPAM subnet by name
+- name: Find IPAM subnets by name and CIDR
   ansible.builtin.set_fact:
-    _existing_ipam_subnet: >-
+    _existing_ipam_subnets: >-
       {{ (_ipam_subnets_resp.json.data | default([]))
          | selectattr('name', 'equalto', ipam_name)
-         | list | first | default(none) }}
+         | selectattr('prefix', 'equalto', ipam_cidr)
+         | list }}
+
+- name: Filter existing IPAM subnets by VPC
+  ansible.builtin.set_fact:
+    _existing_ipam_subnets: >-
+      {{ _existing_ipam_subnets
+         | selectattr('vpc.id', 'equalto', ipam_vpc_id | int)
+         | list }}
+  when: ipam_vpc_id is defined
+
+- name: Filter existing IPAM subnets by tenant
+  ansible.builtin.set_fact:
+    _existing_ipam_subnets: >-
+      {{ _existing_ipam_subnets
+         | selectattr('tenant.id', 'equalto', ipam_tenant_id | int)
+         | list }}
+  when: ipam_tenant_id is defined
+
+- name: Fail if the IPAM subnet identity is ambiguous
+  ansible.builtin.assert:
+    that:
+      - _existing_ipam_subnets | length <= 1
+    fail_msg: >-
+      More than one Netris IPAM subnet matches '{{ ipam_name }}' at '{{ ipam_cidr }}'
+      with the requested VPC and tenant. Refusing to reuse an ambiguous parent.
+
+- name: Set the matching IPAM subnet
+  ansible.builtin.set_fact:
+    _existing_ipam_subnet: "{{ _existing_ipam_subnets | first | default(none) }}"
 
 - name: Set IPAM facts from existing subnet (skip creation)
   ansible.builtin.set_fact:

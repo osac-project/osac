@@ -51,7 +51,7 @@ func validateAndCanonicalizeComputeInstanceCatalogItemPolicies(
 	if err != nil {
 		return nil, err
 	}
-	imageWarnings, err := validateCatalogItemDiskImagePolicy(ctx, scope, fields.GetDiskImage(), diskImagesDao)
+	diskImage, imageWarnings, err := validateCatalogItemDiskImagePolicy(ctx, scope, fields.GetDiskImage(), diskImagesDao)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,11 @@ func validateAndCanonicalizeComputeInstanceCatalogItemPolicies(
 	if err := validateComputeInstanceCatalogItemSSHKeyPolicy(ctx, scope, fields.GetSshKey(), secretsDao); err != nil {
 		return nil, err
 	}
-	if err := validateCatalogItemUserDataSecretPolicy(ctx, scope, fields.GetUserDataSecret(), secretsDao); err != nil {
+	var validateInline func([]byte) error
+	if fields.GetDiskImage().HasLocked() && diskImage.GetSpec().GetGuestOsFamily() == privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS {
+		validateInline = isPureXMLNoDTD
+	}
+	if err := validateCatalogItemUserDataSourcePolicy(ctx, scope, fields.GetUserDataSource(), secretsDao, validateInline); err != nil {
 		return nil, err
 	}
 
@@ -144,17 +148,14 @@ func applyComputeInstanceCatalogItemPolicies(spec *privatev1.ComputeInstanceSpec
 	if err := applyPolicy(fields.GetSshKey(), spec.GetSshKey() != nil, spec.SetSshKey, decodeSecretReferencePolicy, cloneMessage[*privatev1.SecretLocalReference]); err != nil {
 		return fmt.Errorf("ssh_key: %w", err)
 	}
-	if err := applyPolicy(fields.GetUserDataSecret(), spec.GetUserDataSecret() != nil, spec.SetUserDataSecret, decodeSecretReferencePolicy, cloneMessage[*privatev1.SecretLocalReference]); err != nil {
-		return fmt.Errorf("user_data_secret: %w", err)
-	}
 	if err := applyPolicy(fields.GetInstanceType(), spec.HasInstanceType(), spec.SetInstanceType, decodeInstanceTypeReferencePolicy, cloneMessage[*privatev1.InstanceTypeReference]); err != nil {
 		return fmt.Errorf("instance_type: %w", err)
 	}
 	if err := applyPolicy(fields.GetRunStrategy(), spec.HasRunStrategy(), spec.SetRunStrategy, decodeComputeInstanceRunStrategyPolicy, identity[privatev1.ComputeInstanceRunStrategy]); err != nil {
 		return fmt.Errorf("run_strategy: %w", err)
 	}
-	if err := applyPolicy(fields.GetUserData(), spec.HasUserData(), spec.SetUserData, decodeStringPolicy, identity[string]); err != nil {
-		return fmt.Errorf("user_data: %w", err)
+	if err := applyPolicy(fields.GetUserDataSource(), spec.GetUserDataSource() != nil, spec.SetUserDataSource, decodeUserDataSourcePolicy, cloneMessage[*privatev1.UserDataSource]); err != nil {
+		return fmt.Errorf("user_data_source: %w", err)
 	}
 	if err := applyPolicy(fields.GetAutoExternalIpAttachment(), spec.HasAutoExternalIpAttachment(), spec.SetAutoExternalIpAttachment, decodeBoolPolicy, identity[bool]); err != nil {
 		return fmt.Errorf("auto_external_ip_attachment: %w", err)
@@ -403,9 +404,6 @@ func validateComputeInstanceCatalogItemNetworkAttachmentsPolicy(
 func validateComputeInstanceCatalogItemScalarPolicies(fields *privatev1.ComputeInstanceCatalogItemFields) error {
 	if _, err := decodeComputeInstanceRunStrategyPolicy(fields.GetRunStrategy()); err != nil {
 		return catalogItemPolicyError("fields.run_strategy", err.Error())
-	}
-	if _, err := decodeStringPolicy(fields.GetUserData()); err != nil {
-		return catalogItemPolicyError("fields.user_data", err.Error())
 	}
 	return validateCatalogItemBoolPolicy(fields.GetAutoExternalIpAttachment(), "fields.auto_external_ip_attachment")
 }

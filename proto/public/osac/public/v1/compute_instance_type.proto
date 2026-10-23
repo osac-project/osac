@@ -27,6 +27,7 @@ import "osac/public/v1/disk_image_type.proto";
 import "osac/public/v1/metadata_type.proto";
 import "osac/public/v1/instance_type_type.proto";
 import "osac/public/v1/secret_type.proto";
+import "osac/public/v1/user_data_source_type.proto";
 
 // Contains the details of the compute instance.
 //
@@ -129,8 +130,8 @@ message ComputeInstanceSpec {
   // Run strategy for the compute instance.
   optional ComputeInstanceRunStrategy run_strategy = 10 [(buf.validate.field).enum = {defined_only: true, not_in: [0]}];
 
-  // User data for the compute instance (e.g. cloud-init, ignition).
-  optional string user_data = 11;
+  reserved 11;
+  reserved "user_data";
 
   // Reserved field numbers for removed fields (do not reuse).
   reserved 12, 13;
@@ -162,17 +163,17 @@ message ComputeInstanceSpec {
   // defaults are applied. The server validates existence, lifecycle, and tenant visibility.
   DiskImageReference disk_image = 19;
 
-  // Reference to a Secret containing user data for the compute instance.
-  // The Secret must contain a non-empty `userdata` entry. Mutually exclusive with `user_data`.
-  // Immutable after creation: an existing inline value may be migrated by setting this field
-  // while clearing `user_data` in the same update, but the reference itself cannot be changed
-  // afterwards.
-  SecretLocalReference user_data_secret = 20 [(google.api.field_behavior) = IMMUTABLE];
+  reserved 20;
+  reserved "user_data_secret";
 
   // Reference to a tenant-scoped Secret containing an OpenSSH public key used to configure cloud-init access.
   // The referenced Secret must have type SECRET_TYPE_SSH_PUBLIC_KEY and a non-empty data["public_key"] entry.
   // The reference is resolved to its canonical ID and name during creation and cannot be changed afterwards.
   SecretLocalReference ssh_key = 21 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Inline user data or a Secret containing a non-empty `userdata` entry.
+  // Inline content may be changed or migrated to a Secret. A Secret reference is immutable once set.
+  UserDataSource user_data_source = 22;
 }
 
 // The status contains the details of the compute instance provided by the system.

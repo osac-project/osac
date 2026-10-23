@@ -1,22 +1,11 @@
 import { screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import type { Project } from '@osac/types';
-import { ProjectState, ServiceTier } from '@osac/types';
+import { ProjectState } from '@osac/types';
 
 import ProjectListPage from './ProjectListPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
-
-vi.mock('../../hooks/use-session', () => ({
-  useSession: vi.fn(() => ({
-    role: 'tenant-admin',
-    username: 'testuser',
-    tenantId: 'tenant-1',
-    enabledServices: [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
-  })),
-}));
-
-const { useSession } = await import('../../hooks/use-session');
 
 const makeProject = (id: string, name: string, state = ProjectState.ACTIVE): Project =>
   ({
@@ -34,29 +23,16 @@ const defaultProjects = [
   makeProject('p-2', 'backend', ProjectState.PENDING),
 ];
 
-const renderPage = (projects: Project[] = defaultProjects) =>
+const renderPage = (
+  projects: Project[] = defaultProjects,
+  role: 'tenant-admin' | 'tenant-user' = 'tenant-admin',
+) =>
   renderWithProviders(<ProjectListPage />, {
     apiFixtures: { projects },
+    session: { role, username: 'testuser', tenantId: 'tenant-1' },
   });
 
 describe('ProjectListPage', () => {
-  beforeEach(() => {
-    vi.mocked(useSession).mockReturnValue({
-      role: 'tenant-admin',
-      username: 'testuser',
-      tenantId: 'tenant-1',
-      enabledServices: [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
-      userTheme: 'system',
-      resolvedTheme: 'light',
-      setUserTheme: vi.fn(),
-      userContrast: 'system',
-      resolvedContrast: 'glass',
-      setUserContrast: vi.fn(),
-      projects: [],
-      setProjects: vi.fn(),
-    });
-  });
-
   it('renders the page title and description', async () => {
     renderPage();
 
@@ -89,22 +65,7 @@ describe('ProjectListPage', () => {
   });
 
   it('hides the Create project link for tenant-user', async () => {
-    vi.mocked(useSession).mockReturnValue({
-      role: 'tenant-user',
-      username: 'testuser',
-      tenantId: 'tenant-1',
-      enabledServices: [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
-      userTheme: 'system',
-      resolvedTheme: 'light',
-      setUserTheme: vi.fn(),
-      userContrast: 'system',
-      resolvedContrast: 'glass',
-      setUserContrast: vi.fn(),
-      projects: [],
-      setProjects: vi.fn(),
-    });
-
-    renderPage();
+    renderPage(defaultProjects, 'tenant-user');
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Projects' })).toBeInTheDocument();

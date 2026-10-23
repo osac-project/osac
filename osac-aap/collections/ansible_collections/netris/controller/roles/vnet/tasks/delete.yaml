@@ -17,10 +17,41 @@
   register: _vnet_list_resp
   no_log: true
 
-- name: Find V-Net by name
+- name: Find V-Nets by name
   ansible.builtin.set_fact:
-    _existing_vnet: "{{ (_vnet_list_resp.json.data | default([])) | selectattr('name', 'equalto', vnet_name) | list | first | default({}) }}"
+    _existing_vnets: >-
+      {{ (_vnet_list_resp.json.data | default([]))
+         | selectattr('name', 'equalto', vnet_name)
+         | list }}
   when: _vnet_list_resp.json is mapping
+
+- name: Filter V-Nets by VPC
+  ansible.builtin.set_fact:
+    _existing_vnets: >-
+      {{ _existing_vnets
+         | selectattr('vpc.id', 'equalto', vnet_vpc_id | int)
+         | list }}
+  when: vnet_vpc_id is defined
+
+- name: Filter V-Nets by tenant
+  ansible.builtin.set_fact:
+    _existing_vnets: >-
+      {{ _existing_vnets
+         | selectattr('tenant.id', 'equalto', vnet_tenant_id | int)
+         | list }}
+  when: vnet_tenant_id is defined
+
+- name: Fail if the V-Net deletion identity is ambiguous
+  ansible.builtin.assert:
+    that:
+      - _existing_vnets | length <= 1
+    fail_msg: >-
+      More than one Netris V-Net named '{{ vnet_name }}' matches the supplied
+      VPC/tenant identity. Refusing to delete an ambiguous resource.
+
+- name: Set the matching V-Net
+  ansible.builtin.set_fact:
+    _existing_vnet: "{{ _existing_vnets | first | default({}) }}"
 
 - name: Delete V-Net
   when: _existing_vnet | length > 0

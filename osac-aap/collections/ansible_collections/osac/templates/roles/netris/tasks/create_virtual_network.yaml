@@ -36,6 +36,14 @@
       VPC '{{ vn_name }}' {{ (vpc_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
       (ID: {{ vpc_id | default('unknown') }})
 
+- name: Validate Netris VPC ID
+  ansible.builtin.assert:
+    that:
+      - vpc_id is defined
+      - vpc_id | string | trim is match('^[0-9]+$')
+      - vpc_id | int > 0
+    fail_msg: "Netris did not return a VPC ID for VirtualNetwork '{{ vn_name }}'"
+
 - name: Create IPAM allocation for VirtualNetwork CIDR
   ansible.builtin.include_role:
     name: netris.controller.ipam
@@ -55,3 +63,10 @@
       IPAM allocation '{{ vn_name }}' {{ (ipam_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
       (ID: {{ ipam_subnet_id | default('unknown') }})
   when: vn_ipv4_cidr | length > 0
+
+- name: Export VirtualNetwork VPC ID
+  ansible.builtin.set_stats:
+    data:
+      vpc_id: "{{ vpc_id | int }}"
+    per_host: false
+    aggregate: false

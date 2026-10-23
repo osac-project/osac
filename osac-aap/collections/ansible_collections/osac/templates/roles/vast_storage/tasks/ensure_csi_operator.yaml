@@ -129,7 +129,7 @@
 
     - name: Ensure the VAST OLM Subscription uses the stable certified channel
       ansible.builtin.include_tasks:
-        file: "{{ role_path }}/../../../service/roles/storage_provider/tasks/261018-0054-reconcile_olm_subscription.yaml"
+        file: "{{ role_path }}/../../../service/roles/storage_provider/tasks/reconcile_olm_subscription.yaml"
         apply:
           tags: [provider_csi_driver_install]
       vars:
@@ -137,7 +137,7 @@
 
     - name: Resolve and approve the initial VAST operator InstallPlan
       ansible.builtin.include_tasks:
-        file: "{{ role_path }}/../../../service/roles/storage_provider/tasks/261016-2112-install_pinned_olm_operator.yaml"
+        file: "{{ role_path }}/../../../service/roles/storage_provider/tasks/install_pinned_olm_operator.yaml"
         apply:
           tags: [provider_csi_driver_install]
       vars:

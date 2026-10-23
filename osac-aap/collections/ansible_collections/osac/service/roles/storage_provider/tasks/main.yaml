@@ -531,11 +531,11 @@
           when: not (_netapp_trident_test_install_override_active | bool)
           block:
             - name: Ensure the Trident OLM Subscription uses the stable certified channel
-              ansible.builtin.include_tasks: 261018-0054-reconcile_olm_subscription.yaml
+              ansible.builtin.include_tasks: reconcile_olm_subscription.yaml
 
             - name: Resolve and approve the initial Trident operator InstallPlan
               ansible.builtin.include_tasks:
-                file: 261016-2112-install_pinned_olm_operator.yaml
+                file: install_pinned_olm_operator.yaml
                 apply:
                   tags: [provider_csi_driver_install]
               vars:

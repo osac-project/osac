@@ -41,7 +41,7 @@ var agentGVK = schema.GroupVersionKind{
 }
 
 // reconcileObservedAgents performs Agent actions against the invocation snapshot:
-// it matches and binds unbound Agents, then enforces the registration timeout.
+// it repairs established Agent roles, binds unbound Agents, then enforces the registration timeout.
 // Phase projection already happened once in observeExistingWorkers; this stage
 // never re-derives phases from the Agent list, and after a bind or delete it
 // leaves further observation to the next explicit invocation. Status persistence
@@ -51,6 +51,21 @@ func (r *Reconciler) reconcileObservedAgents(
 ) ([]v1alpha1.WorkerStatus, ctrl.Result, error) {
 	workers = append([]v1alpha1.WorkerStatus(nil), workers...)
 	if o.agents != nil {
+		for i := range workers {
+			w := &workers[i]
+			if !eligibleForAgentObservation(*w) {
+				continue
+			}
+			association := associateEstablishedAgent(o.agents.Items, co, w.Name)
+			if err := association.err(); err != nil {
+				return nil, ctrl.Result{}, err
+			}
+			if association.state == agentEstablished {
+				if err := r.repairAgentRole(ctx, co, association.agent, w); err != nil {
+					return nil, ctrl.Result{}, err
+				}
+			}
+		}
 		if _, err := r.matchAndBindAgents(ctx, co, o.agents, workers, r.workerMACResolver(o)); err != nil {
 			return nil, ctrl.Result{}, err
 		}
@@ -123,7 +138,7 @@ func (r *Reconciler) matchAndBindAgents(
 }
 
 // bindAgent sets the Agent's clusterDeploymentName (late binding), marks it approved,
-// and applies labels for NodePool selection and role identification.
+// and applies NodePool labels and the Assisted worker role.
 func (r *Reconciler) bindAgent(
 	ctx context.Context, co *v1alpha1.ClusterOrder,
 	agent *unstructured.Unstructured, worker *v1alpha1.WorkerStatus,
@@ -160,6 +175,9 @@ func (r *Reconciler) bindAgent(
 	if err := unstructured.SetNestedField(latest.Object, true, "spec", "approved"); err != nil {
 		return fmt.Errorf("setting agent approved: %w", err)
 	}
+	if _, err := setAgentWorkerRoleIfEmpty(latest); err != nil {
+		return err
+	}
 
 	labels := latest.GetLabels()
 	if labels == nil {
@@ -180,6 +198,63 @@ func (r *Reconciler) bindAgent(
 	latest.SetLabels(labels)
 
 	return r.Patch(ctx, latest, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+}
+
+// repairAgentRole handles Agents whose OSAC worker binding survived an earlier
+// reconcile but whose role was left empty. It changes only the role, including
+// after CAP-Agent has taken over the deployment reference.
+func (r *Reconciler) repairAgentRole(
+	ctx context.Context, co *v1alpha1.ClusterOrder,
+	agent *unstructured.Unstructured, worker *v1alpha1.WorkerStatus,
+) error {
+	role, _, err := unstructured.NestedString(agent.Object, "spec", "role")
+	if err != nil {
+		return fmt.Errorf("reading agent role: %w", err)
+	}
+	if role != "" {
+		return nil
+	}
+	reader := r.apiReader
+	if reader == nil {
+		reader = r.Client
+	}
+	latest := &unstructured.Unstructured{}
+	latest.SetGroupVersionKind(agentGVK)
+	if err := reader.Get(ctx, client.ObjectKeyFromObject(agent), latest); err != nil {
+		return err
+	}
+	if latest.GetUID() != agent.GetUID() {
+		return fmt.Errorf("agent %s identity changed before role repair", agent.GetName())
+	}
+	if latest.GetLabels()[workerNameLabel] != worker.Name {
+		return fmt.Errorf("agent %s worker binding changed before role repair", agent.GetName())
+	}
+	if err := verifyAgentBinding(latest, co, worker); err != nil {
+		return err
+	}
+	base := latest.DeepCopy()
+	changed, err := setAgentWorkerRoleIfEmpty(latest)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	return r.Patch(ctx, latest, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+}
+
+func setAgentWorkerRoleIfEmpty(agent *unstructured.Unstructured) (bool, error) {
+	role, _, err := unstructured.NestedString(agent.Object, "spec", "role")
+	if err != nil {
+		return false, fmt.Errorf("reading agent role: %w", err)
+	}
+	if role != "" {
+		return false, nil
+	}
+	if err := unstructured.SetNestedField(agent.Object, "worker", "spec", "role"); err != nil {
+		return false, fmt.Errorf("setting agent role: %w", err)
+	}
+	return true, nil
 }
 
 // verifyAgentBinding prevents reassigning an Agent, including when its binding

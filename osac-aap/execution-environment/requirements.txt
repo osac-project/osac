@@ -120,7 +120,7 @@ keystoneauth1==5.13.1
     #   python-ironicclient
     #   python-keystoneclient
     #   python-novaclient
-kubernetes==35.0.0
+kubernetes==37.0.1
     # via osac-aap (pyproject.toml)
 lockfile==0.12.2
     # via python-daemon

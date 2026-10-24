@@ -66,6 +66,7 @@ are independent of suite selection.
 | Area | Required coverage | Command (repository root) | Boundary |
 |---|---|---|---|
 | CaaS CI suite policy | [DEV] Unit/Contract selection checks | `OSAC_TEST_INFRA_DIR=/path/to/osac-test-infra uv run pytest -n 0 tests/unit/test_caas_ci_suite_policy.py` | Evaluates caller YAML and executes reusable path-selection Bash locally. No deployed services; companion checks skip if the checkout is not specified. |
+| E2E component build contexts | [DEV] Unit/Contract check that every declared `context` holds its Containerfile's COPY sources | `uv run pytest -n 0 tests/unit/test_e2e_component_build_contexts.py` | Reads the `e2e-*-full-install.yml` callers and `resolve-e2e-components`, then resolves paths on disk. No image is built, so `.containerignore` allowlists and build success are not established. |
 
 ## Component-hooks and sandbox regression smoke tests
 

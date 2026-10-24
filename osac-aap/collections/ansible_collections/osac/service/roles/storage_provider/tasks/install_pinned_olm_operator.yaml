@@ -29,7 +29,6 @@
       or (
         _storage_provider_olm_subscription.resources[0].status.installPlanRef.name is defined
         and _storage_provider_olm_subscription.resources[0].status.currentCSV | default('', true) | length > 0
-        and _storage_provider_olm_subscription.resources[0].status.bundleLookups | default([], true) | length > 0
       )
     )
 
@@ -50,7 +49,10 @@
   register: _storage_provider_olm_install_plan
   retries: 30
   delay: 10
-  until: _storage_provider_olm_install_plan.resources | length > 0
+  # OLM records bundle lookups on the InstallPlan status, not the Subscription status.
+  until: >-
+    _storage_provider_olm_install_plan.resources | length > 0
+    and _storage_provider_olm_install_plan.resources[0].status.bundleLookups | default([], true) | length > 0
 
 - name: Resolve the current operator CSV from the stable-channel Subscription status
   when: _storage_provider_olm_installed_csv | length == 0
@@ -67,6 +69,11 @@
         _storage_provider_olm_install_plan.resources[0].spec.clusterServiceVersionNames
         | default([]) == [_storage_provider_olm_target_csv]
       - >-
+        (_storage_provider_olm_install_plan.resources[0].status.bundleLookups
+         | default([], true)
+         | selectattr('identifier', 'equalto', _storage_provider_olm_target_csv)
+         | list | length) == 1
+      - >-
         _storage_provider_olm_subscription.resources[0].status.currentCSV
         == _storage_provider_olm_target_csv
       - >-
@@ -76,11 +83,11 @@
          | selectattr('uid', 'equalto', _storage_provider_olm_subscription.resources[0].metadata.uid)
          | list | length) == 1
       - >-
-        _storage_provider_olm_subscription.resources[0].status.bundleLookups
+        _storage_provider_olm_install_plan.resources[0].status.bundleLookups
         | default([], true) | rejectattr('catalogSourceRef.name', 'equalto', storage_provider_olm_subscription_installer.catalog_source)
         | list | length == 0
       - >-
-        _storage_provider_olm_subscription.resources[0].status.bundleLookups
+        _storage_provider_olm_install_plan.resources[0].status.bundleLookups
         | default([], true) | rejectattr('catalogSourceRef.namespace', 'equalto', storage_provider_olm_subscription_installer.catalog_namespace)
         | list | length == 0
     fail_msg: >-

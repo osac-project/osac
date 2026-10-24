@@ -1,0 +1,52 @@
+---
+# Shared Netris ExternalIP v1 tasks. Invoked by the create/delete entry
+# points with external_ip_v1_operation set. Validates the supplied
+# snapshots, invokes the osac.templates.netris_external_ip module and
+# emits the v1 job-result artifact. No Kubernetes access, no CR writes
+# and no status mutation on this path; the operator owns status.
+
+- name: Validate the ExternalIP v1 dispatch inputs
+  ansible.builtin.assert:
+    that:
+      - external_ip.metadata is defined
+      - osac_job_vars.external_ip_pool is defined
+      - external_ip_v1_operation in ['external_ip.allocate', 'external_ip.release']
+    fail_msg: >-
+      ExternalIP v1 requires the contract version annotation, the resource
+      snapshot, and the osac_job_vars.external_ip_pool snapshot.
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when:
+    - netris_session_cookie is not defined
+    - not ansible_check_mode
+
+- name: Apply the Netris ExternalIP v1 provider state
+  osac.templates.netris_external_ip:
+    operation: "{{ external_ip_v1_operation }}"
+    resource: "{{ external_ip }}"
+    pool: "{{ osac_job_vars.external_ip_pool }}"
+    controller_url: "{{ netris_controller_url }}"
+    session_cookie: "{{ netris_session_cookie | default('') }}"
+    site_id: "{{ netris_site_id | int }}"
+    tenant_id: "{{ netris_tenant_id | int }}"
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
+  register: external_ip_v1_result
+
+- name: Report the ExternalIP v1 operation result
+  ansible.builtin.set_stats:
+    data:
+      osac_result:
+        schemaVersion: v1
+        operation: "{{ external_ip_v1_operation }}"
+        resourceUID: "{{ external_ip.metadata.uid }}"
+        observedGeneration: "{{ external_ip.metadata.generation | int }}"
+        data: >-
+          {{ {'address': external_ip_v1_result.address}
+             if external_ip_v1_operation == 'external_ip.allocate' else {} }}
+    per_host: false
+    aggregate: false
+  when: not ansible_check_mode

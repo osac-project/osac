@@ -430,8 +430,10 @@ type ComputeInstanceSpec struct {
 	AdditionalDisks *ComputeInstanceDiskList `protobuf:"bytes,9,opt,name=additional_disks,json=additionalDisks,proto3" json:"additional_disks,omitempty"`
 	// Run strategy for the compute instance.
 	RunStrategy *ComputeInstanceRunStrategy `protobuf:"varint,10,opt,name=run_strategy,json=runStrategy,proto3,enum=osac.private.v1.ComputeInstanceRunStrategy,oneof" json:"run_strategy,omitempty"`
-	// Network attachments: one entry per NIC. The complete attachment list, including
-	// subnet and security group references, is immutable after creation.
+	// Optional: clients may omit this field or send an empty list to request the
+	// tenant's default Subnet and SecurityGroup. At most one network attachment
+	// is accepted. The complete attachment list, including subnet and security
+	// group references, is immutable after creation.
 	NetworkAttachments []*ComputeNetworkAttachment `protobuf:"bytes,14,rep,name=network_attachments,json=networkAttachments,proto3" json:"network_attachments,omitempty"`
 	// Reference to a compute instance catalog item. Mutually exclusive with template on Create; retained as immutable provenance afterward.
 	// When set, the server fetches the catalog item and applies its typed field policies.
@@ -824,8 +826,10 @@ type ComputeInstanceSpec_builder struct {
 	AdditionalDisks *ComputeInstanceDiskList
 	// Run strategy for the compute instance.
 	RunStrategy *ComputeInstanceRunStrategy
-	// Network attachments: one entry per NIC. The complete attachment list, including
-	// subnet and security group references, is immutable after creation.
+	// Optional: clients may omit this field or send an empty list to request the
+	// tenant's default Subnet and SecurityGroup. At most one network attachment
+	// is accepted. The complete attachment list, including subnet and security
+	// group references, is immutable after creation.
 	NetworkAttachments []*ComputeNetworkAttachment
 	// Reference to a compute instance catalog item. Mutually exclusive with template on Create; retained as immutable provenance afterward.
 	// When set, the server fetches the catalog item and applies its typed field policies.

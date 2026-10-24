@@ -2783,6 +2783,19 @@
               "description": "Name of the customer-created ConfigMap in the AAP namespace. It must contain bundle.pem and is mounted read-only into Netris execution pods.",
               "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
               "maxLength": 253
+            },
+            "adminGroups": {
+              "type": "array",
+              "description": "Groups allowed to create, update, or delete the active Netris CA ConfigMap.",
+              "minItems": 1,
+              "default": [
+                "system:masters"
+              ],
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true
             }
           },
           "additionalProperties": false

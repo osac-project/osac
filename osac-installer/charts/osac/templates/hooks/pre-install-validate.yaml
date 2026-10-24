@@ -78,6 +78,13 @@ spec:
           fi
           {{- end }}
 
+          {{- if and (eq .Values.global.networking.fabricManager "netris") .Values.global.networking.netris.caBundle.configMap }}
+          export CA_CONFIGMAP_NAME={{ .Values.global.networking.netris.caBundle.configMap | quote }}
+          export AAP_NAMESPACE={{ .Release.Namespace | quote }}
+          export CA_EXECUTION_IDENTITY="system:serviceaccount:{{ .Release.Namespace }}:{{ default "osac-sa" .Values.aap.serviceAccounts.osacSa }}"
+          export CHECK_IDENTITY=false
+{{ .Files.Get "files/validate-netris-ca.sh" | nindent 10 }}
+          {{ end }}
           echo "=== Validation passed ==="
   backoffLimit: 0
 ---
@@ -134,4 +141,43 @@ subjects:
 - kind: ServiceAccount
   name: {{ include "osac.fullname" . }}-validate
   namespace: {{ .Release.Namespace }}
+{{- if and (eq .Values.global.networking.fabricManager "netris") .Values.global.networking.netris.caBundle.configMap }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "osac.fullname" . }}-validate-netris-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: [{{ .Values.global.networking.netris.caBundle.configMap | quote }}]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "osac.fullname" . }}-validate-netris-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "osac.fullname" . }}-validate-netris-ca
+subjects:
+- kind: ServiceAccount
+  name: {{ include "osac.fullname" . }}-validate
+  namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- end }}

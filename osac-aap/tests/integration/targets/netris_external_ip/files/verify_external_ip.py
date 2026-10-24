@@ -628,15 +628,30 @@ class ExternalIPPlaybookTests(unittest.TestCase):
     def _spawn_child(self, playbook, job_vars, isolated=True):
         """Start one child Ansible process for a concurrent race case."""
         vars_path = self._write_vars(job_vars)
-        process = subprocess.Popen(
-            self._command(playbook, vars_path),
-            cwd=OSAC_AAP,
-            env=self._child_env(isolated),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        try:
+            process = subprocess.Popen(
+                self._command(playbook, vars_path),
+                cwd=OSAC_AAP,
+                env=self._child_env(isolated),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except BaseException:
+            vars_path.unlink(missing_ok=True)
+            raise
         return process, vars_path
+
+    def _spawn_all(self, playbook, job_vars_list):
+        """Start every child; reap the started ones if a later spawn fails."""
+        spawned = []
+        try:
+            for job_vars in job_vars_list:
+                spawned.append(self._spawn_child(playbook, job_vars))
+        except BaseException:
+            self._reap(spawned)
+            raise
+        return spawned
 
     def _collect(self, process, vars_path, timeout=SUBPROCESS_TIMEOUT):
         """Collect one spawned child and enforce the wall timeout."""
@@ -650,6 +665,14 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         vars_path.unlink(missing_ok=True)
         return process.returncode, self._parse_artifact(stdout), stdout + stderr
 
+    def _reap(self, spawned):
+        """Kill still-live children and remove their vars files."""
+        for process, vars_path in spawned:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+            vars_path.unlink(missing_ok=True)
+
     def _collect_all(self, spawned, timeout=SUBPROCESS_TIMEOUT):
         """Collect every spawned child, even when one collection fails."""
         try:
@@ -658,11 +681,7 @@ class ExternalIPPlaybookTests(unittest.TestCase):
             # A failing _collect raises before the remaining children are
             # collected: kill any still-live process and remove its vars
             # file so neither leaks past the test method.
-            for process, vars_path in spawned:
-                if process.poll() is None:
-                    process.kill()
-                    process.communicate()
-                vars_path.unlink(missing_ok=True)
+            self._reap(spawned)
 
     @staticmethod
     def _parse_artifact(stdout):
@@ -1085,10 +1104,9 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         self._scenario(barrier={"name": "create", "parties": 2})
         first = self.v1_resource
         second = self._constructed_resource(str(uuid.uuid4()))
-        spawned = [
-            self._spawn_child(CREATE_PLAYBOOK, self._job_vars(r))
-            for r in (first, second)
-        ]
+        spawned = self._spawn_all(
+            CREATE_PLAYBOOK, [self._job_vars(r) for r in (first, second)]
+        )
         results = self._collect_all(spawned)
         for rc, artifact, output in results:
             self.assertEqual(rc, 0, output)
@@ -1101,10 +1119,9 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         # Two concurrent same-UID requests converge on one address.
         self._scenario(barrier={"name": "create", "parties": 2})
         same = self._constructed_resource(str(uuid.uuid4()))
-        spawned = [
-            self._spawn_child(CREATE_PLAYBOOK, self._job_vars(same))
-            for _ in range(2)
-        ]
+        spawned = self._spawn_all(
+            CREATE_PLAYBOOK, [self._job_vars(same) for _ in range(2)]
+        )
         results = self._collect_all(spawned)
         for rc, artifact, output in results:
             self.assertEqual(rc, 0, output)

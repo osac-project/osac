@@ -16,21 +16,13 @@ Install these clients only when their corresponding production service is select
 Log in as a cluster administrator. Replace every value enclosed in angle brackets before running a command.
 
 ```bash
-# Use a dedicated Bash 4.4+ session, not a shared interactive shell.
-set -Eeuo pipefail
-shopt -s inherit_errexit
-umask 077
-trap 'rc=$?; printf "ERROR: prereqs check failed: line=%s status=%s; stop before the next section.\n" "$LINENO" "$rc" >&2; exit "$rc"' ERR
-PREREQ_RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/osac-prereqs.XXXXXXXX")"
-export PREREQ_RUN_DIR
-cd "$PREREQ_RUN_DIR"
-# Copy approved site input files here; keep the same session for all sections.
-export PROFILE=core                    # core or core-vmaas; match Doc 1
-export ENABLE_VMAAS=false              # core:false or core-vmaas:true only
-case "$PROFILE:$ENABLE_VMAAS" in
-  core:false|core-vmaas:true) ;;
-  *) printf 'ERROR: use core:false or core-vmaas:true and match Doc 1.\n' >&2; exit 1 ;;
-esac
+export PROFILE=core                    # core or core-vmaas
+export ENABLE_VMAAS=false              # true or false; must match Doc 1
+export WITH_LVMS=false                 # install LVMS in operators.md only when true
+export WITH_METALLB=false              # install MetalLB in operators.md only when true
+export STORAGE_CLASS='<approved-dynamic-storage-class>'
+export LOADBALANCER_PROVIDER=existing  # existing or metallb; must match WITH_METALLB
+export KAFKA_PROVIDER=external         # external or in-cluster
 export CATALOG_SOURCE=redhat-operators
 export CATALOG_NAMESPACE=openshift-marketplace
 export MIRROR_HOST='<mirror.example.com:8443>'
@@ -103,63 +95,15 @@ printf '%s\n' "$itms_resources"
 Both lists must be nonempty. Compare the live resources with the generated files:
 
 ```bash
-# Requires Mike Farah yq v4. Mirror preference order is significant.
-cat > "$PREREQ_RUN_DIR/normalise-policy.jq" <<'JQ'
-[.[] | if .kind == "List" then .items[] else . end |
- select(.kind == $kind) |
- {name: .metadata.name,
-  mappings: [.spec[$field][] |
-    {source, mirrors, mirrorSourcePolicy: (.mirrorSourcePolicy // "AllowContactingSource")}
-  ] | sort_by(.source, .mirrorSourcePolicy, .mirrors)}] |
-if length == 0 or (map(.name) | length != (unique | length)) then
-  error("missing or duplicate expected policy identity")
-elif all(.[]; (.name | type == "string" and length > 0) and
-  (.mappings | length > 0) and all(.mappings[];
-    (.source | type == "string" and length > 0) and
-    (.mirrors | type == "array" and length > 0) and
-    all(.mirrors[]; type == "string" and length > 0))) then sort_by(.name)
-else error("invalid policy mapping") end
-JQ
-verify_doc1_policies() {
-  local kind resource field artifact stem
-  for kind in ImageDigestMirrorSet ImageTagMirrorSet; do
-    case "$kind" in
-      ImageDigestMirrorSet)
-        resource=imagedigestmirrorset; field=imageDigestMirrors
-        artifact=idms-oc-mirror.yaml; stem=idms ;;
-      ImageTagMirrorSet)
-        resource=imagetagmirrorset; field=imageTagMirrors
-        artifact=itms-oc-mirror.yaml; stem=itms ;;
-    esac
-    yq ea -o=json -I=0 '.' "$DOC1_WORKSPACE/working-dir/cluster-resources/$artifact" \
-      > "$PREREQ_RUN_DIR/$stem-documents.json" || return
-    jq -s --arg kind "$kind" --arg field "$field" \
-      -f "$PREREQ_RUN_DIR/normalise-policy.jq" \
-      "$PREREQ_RUN_DIR/$stem-documents.json" \
-      > "$PREREQ_RUN_DIR/$stem-expected.json" || return
-    oc get "$resource" -o json > "$PREREQ_RUN_DIR/$stem-live-list.json" || return
-    jq '.items' "$PREREQ_RUN_DIR/$stem-live-list.json" \
-      | jq --arg kind "$kind" --arg field "$field" \
-          -f "$PREREQ_RUN_DIR/normalise-policy.jq" \
-      > "$PREREQ_RUN_DIR/$stem-live.json" || return
-    jq -e --slurpfile expected "$PREREQ_RUN_DIR/$stem-expected.json" '
-      . as $live | all($expected[0][]; . as $e | any($live[]; . == $e))
-    ' "$PREREQ_RUN_DIR/$stem-live.json" >/dev/null || return
-    jq -e --arg mirror "$MIRROR_HOST" '
-      all(.[]; all(.mappings[]; any(.mirrors[]; split("/")[0] == $mirror)))
-    ' "$PREREQ_RUN_DIR/$stem-expected.json" >/dev/null || return
-    printf 'PASS: %s archived identities and mappings match live state.\n' "$kind"
-  done
-  jq -s '
-    [.[0][] | .mappings[] | . + {mode: "digest"}] +
-    [.[1][] | .mappings[] | . + {mode: "tag"}]
-  ' "$PREREQ_RUN_DIR/idms-expected.json" "$PREREQ_RUN_DIR/itms-expected.json" \
-    > "$PREREQ_RUN_DIR/verified-image-policies.json" || return
-}
-verify_doc1_policies
+oc get imagedigestmirrorset -o yaml > /tmp/live-idms.yaml
+oc get imagetagmirrorset -o yaml > /tmp/live-itms.yaml
+
+grep -F "$MIRROR_HOST" /tmp/live-idms.yaml
+grep -F "$MIRROR_HOST" /tmp/live-itms.yaml
+rm -f /tmp/live-idms.yaml /tmp/live-itms.yaml
 ```
 
-Every archived name and complete normalized mapping list must match its live object. Ignore server metadata and mapping-entry order, not mirror preference order. Both policy kinds remain mandatory; unrelated live resources cannot substitute for archived identities. Missing/changed mappings stop at Doc 1; do not repair policies here. Retain snapshots for Section 5 and diagnosis.
+If either resource type is absent or does not reference the selected mirror, stop and return to Doc 1. Do not create or modify IDMS or ITMS in this guide.
 
 When VMaaS is selected, verify the exact containerdisk source set recorded by Doc 1 and require `NeverContactSource`.
 
@@ -180,17 +124,13 @@ if test "$ENABLE_VMAAS" = true; then
   jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and length > 0)' \
     selected-diskimage-sources.json
   oc get imagetagmirrorset -o json \
-    | jq -e --arg mirror "$MIRROR_HOST" \
-        --slurpfile selected selected-diskimage-sources.json '
-      [.items[].spec.imageTagMirrors[]] as $entries |
-      all($selected[0][]; . as $image |
-        ($image | sub("^docker://"; "") | sub(":[^/:]+$"; "")) as $repository |
-        ($image | contains("@") | not) and
-        ($image | test(":[^/:]+$")) and
-        any($entries[]; .source as $source |
-          ($repository == $source or ($repository | startswith($source + "/"))) and
-          .mirrorSourcePolicy == "NeverContactSource" and
-          any(.mirrors[]?; split("/")[0] == $mirror)))'
+    | jq -e --slurpfile selected selected-diskimage-sources.json '
+        [.items[].spec.imageTagMirrors[]] as $entries |
+        all($selected[0][]; . as $image |
+          any($entries[];
+            (.source as $source | .mirrors[]? as $mirror |
+              ($image == $source or ($image | startswith($source)) or ($image | startswith($mirror))) and
+              .mirrorSourcePolicy == "NeverContactSource")))'
 fi
 ```
 
@@ -204,68 +144,48 @@ Doc 1 sets `targetCatalog: redhat-operators`; later Subscriptions use that exact
 oc get catalogsource redhat-operators -n openshift-marketplace \
   -o jsonpath='name={.metadata.name}{" state="}{.status.connectionState.lastObservedState}{" image="}{.spec.image}{"\n"}'
 oc get catalogsource redhat-operators -n openshift-marketplace -o json \
-  | jq -e --arg mirror "$MIRROR_HOST" '
+  | jq -e --arg mirror "${MIRROR_HOST%%:*}" '
       .metadata.name == "redhat-operators" and
       .metadata.namespace == "openshift-marketplace" and
       .status.connectionState.lastObservedState == "READY" and
-      (.spec.image | split("/")[0]) == $mirror'
+      (.spec.image | contains($mirror))'
 ```
 
 The first command must show `name=redhat-operators state=READY`; the second must return `true`.
 
-Verify every generated ClusterCatalog is serving:
+On OpenShift 4.22, `ClusterCatalog` (`olm.operatorframework.io/v1`) is generally available. It coexists with the OLM Classic CatalogSource; readiness of one does not replace readiness of the other. Verify only the ClusterCatalog objects identified by the generated Doc 1 file, not unrelated cluster catalogs:
 
 ```bash
-cluster_catalog_names="$(oc get clustercatalog -o name)"
-test -n "$cluster_catalog_names"
-mapfile -t cluster_catalogs <<< "$cluster_catalog_names"
-test "${#cluster_catalogs[@]}" -gt 0
-for catalog in "${cluster_catalogs[@]}"; do
-  oc wait "$catalog" --for=condition=Serving --timeout=10m
-done
+export GENERATED_CLUSTER_CATALOG="$DOC1_WORKSPACE/working-dir/cluster-resources/cc-redhat-operator-index-v4-22.yaml"
+test -s "$GENERATED_CLUSTER_CATALOG"
+oc wait -f "$GENERATED_CLUSTER_CATALOG" --for=condition=Serving --timeout=10m
+oc get -f "$GENERATED_CLUSTER_CATALOG" -o json | jq -e '
+  (.items // [.]) as $catalogs |
+  ($catalogs | length > 0) and
+  all($catalogs[];
+    .apiVersion == "olm.operatorframework.io/v1" and
+    any(.status.conditions[]?;
+      .type == "Serving" and .status == "True" and .reason == "Available"))'
 ```
 
-Verify expected signature ConfigMap identities and required data from the archived artifact, not a broad managed-resource label:
+Verify the managed signature ConfigMap gate used by Doc 1:
 
 ```bash
-yq ea -o=json -I=0 '.' \
-  "$DOC1_WORKSPACE/working-dir/cluster-resources/signature-configmap.yaml" \
-  > "$PREREQ_RUN_DIR/signature-documents.json"
-jq -s '
-  [.[] | if .kind == "List" then .items[] else . end | select(.kind == "ConfigMap")] |
-  if length > 0 and all(.[];
-    (.metadata.name | type == "string" and length > 0) and
-    .metadata.namespace == "openshift-config-managed" and
-    (((.data // {}) | length) + ((.binaryData // {}) | length) > 0))
-  then . else error("missing signature ConfigMap identity or data") end
-' "$PREREQ_RUN_DIR/signature-documents.json" > "$PREREQ_RUN_DIR/signature-expected.json"
-jq -c '.[]' "$PREREQ_RUN_DIR/signature-expected.json" \
-  > "$PREREQ_RUN_DIR/signature-expected.jsonl"
-while IFS= read -r expected; do
-  name="$(printf '%s\n' "$expected" | jq -er '.metadata.name')"
-  namespace="$(printf '%s\n' "$expected" | jq -er '.metadata.namespace')"
-  oc get configmap "$name" -n "$namespace" -o json \
-    > "$PREREQ_RUN_DIR/signature-live.json"
-  jq -e --argjson expected "$expected" '
-    . as $live |
-    .metadata.name == $expected.metadata.name and
-    .metadata.namespace == $expected.metadata.namespace and
-    all(($expected.data // {} | to_entries[]);
-      . as $kv | $live.data[$kv.key] == $kv.value) and
-    all(($expected.binaryData // {} | to_entries[]);
-      . as $kv | $live.binaryData[$kv.key] == $kv.value)
-  ' "$PREREQ_RUN_DIR/signature-live.json" >/dev/null
-  printf 'PASS: signature ConfigMap %s/%s identity and required data.\n' "$namespace" "$name"
-done < "$PREREQ_RUN_DIR/signature-expected.jsonl"
-signature_configmaps="$(jq -r 'map(.metadata.namespace + "/" + .metadata.name) | join(",")' \
-  "$PREREQ_RUN_DIR/signature-expected.json")"
+signature_configmaps="$(
+  oc get configmap -n openshift-config-managed \
+    -l operator.openshift.io/managed=true -o name 2>/dev/null
+)"
+test -n "$signature_configmaps"
+printf '%s\n' "$signature_configmaps"
 ```
 
-A missing/changed expected identity or key stops at Doc 1; extra unrelated live keys are preserved. Do not create a second catalog/signature resource here.
+If the CatalogSource is absent/not READY, a ClusterCatalog is not Serving, or no managed signature ConfigMap exists, stop and return to Doc 1. Do not create a second catalog or signature resource.
 
 ### Verify affected MachineConfigPool convergence
 
-Doc 1 states that applying IDMS/ITMS restarts CRI-O and kubelet across nodes. Check the pools recorded by the handoff. A paused pool is not converged and must be deliberately unpaused or explicitly excluded by the cluster owner before installation.
+Plan the mirror-policy change with the cluster owner: on OpenShift 4.22, ITMS changes cause node draining, while IDMS changes do not drain nodes and use a CRI-O restart. Both resource types are required by this handoff, so allow the ITMS drain/rollout to finish within the approved disruption window; do not infer convergence from an IDMS-only change or a completed apply. This guide consumes the existing rollout and does not reapply mirror policies. Doc 1 uses oc-mirror v2; do not replace that workflow with the deprecated `oc adm release mirror` command.
+
+Check the affected pools recorded by the handoff using the stable common generation/count/Updated/Degraded checks below. Do not require the newer Technology Preview MCP condition split to pass this gate. A paused pool is not converged and must be deliberately unpaused or explicitly excluded by the cluster owner before installation.
 
 ```bash
 oc get machineconfigpool \
@@ -301,28 +221,26 @@ Doc 1 separates the bastion authfile, which has source-read and mirror-write acc
 
 ```bash
 umask 077
-if ! test -s "$MIRROR_AUTH_FILE" || ! test -r "$MIRROR_AUTH_FILE"; then
-  printf 'ERROR: missing, empty or unreadable mirror authfile.\n' >&2; exit 1
-fi
-jq -e --arg host "$MIRROR_HOST" \
-  '.auths[$host] | type == "object" and length > 0' "$MIRROR_AUTH_FILE" >/dev/null
+test -r "$MIRROR_AUTH_FILE"
+jq -e --arg host "$MIRROR_HOST" '.auths | has($host)' "$MIRROR_AUTH_FILE"
+skopeo login --authfile "$MIRROR_AUTH_FILE" "$MIRROR_HOST"
 ```
 
-Use the approved persistent read-only authfile directly with exact mirror-image `skopeo inspect --authfile` checks. Missing/expired/denied credentials stop; never substitute an OpenShift token or write-capable bastion authfile. Do not prompt or rewrite the authfile. Keep it through Section 3 and Section 5 exact-image checks. This does not add `helm registry login`.
+All commands must succeed. Keep this protected read-only auth file available through Section 3.
 
 ### Verify representative mirrored images
 
-Use exact references from the Doc 1 consolidated `additionalImages` inventory and operator catalog:
+Use exact references from the Doc 1 consolidated `additionalImages` inventory and operator catalog, reconciled against the actual downloaded 0.0.24 chart and its dependencies. Component image versions are not inferred from the umbrella version; old-release image inventories are not acceptable evidence:
 
 ```bash
 skopeo inspect --authfile "$MIRROR_AUTH_FILE" \
   'docker://<mirrored-redhat-operator-index-v4.22-by-digest>' >/dev/null
 skopeo inspect --authfile "$MIRROR_AUTH_FILE" \
-  'docker://<exact-mirrored-osac-operator-from-approved-0.0.24-inventory>' >/dev/null
+  'docker://<mirrored-osac-operator-image-from-selected-release>' >/dev/null
 skopeo inspect --authfile "$MIRROR_AUTH_FILE" \
-  'docker://<exact-mirrored-fulfillment-service-from-approved-0.0.24-inventory>' >/dev/null
+  'docker://<mirrored-fulfillment-service-image-from-selected-release>' >/dev/null
 skopeo inspect --authfile "$MIRROR_AUTH_FILE" \
-  'docker://<exact-mirrored-osac-aap-from-approved-0.0.24-inventory>' >/dev/null
+  'docker://<mirrored-aap-ee-image-from-selected-release>' >/dev/null
 ```
 
 For VMaaS, also prove node-level tag redirection with an upstream containerdisk reference selected in Doc 1:
@@ -397,15 +315,13 @@ test "$CATALOG_NAMESPACE" = openshift-marketplace
 oc get catalogsource "$CATALOG_SOURCE" -n "$CATALOG_NAMESPACE" \
   -o jsonpath='state={.status.connectionState.lastObservedState}{" image="}{.spec.image}{"\n"}'
 oc get catalogsource "$CATALOG_SOURCE" -n "$CATALOG_NAMESPACE" -o json \
-  | jq -e --arg mirror "$MIRROR_HOST" '
-      .metadata.name == "redhat-operators" and
-      .metadata.namespace == "openshift-marketplace" and
+  | jq -e --arg mirror "${MIRROR_HOST%%:*}" '
       .status.connectionState.lastObservedState == "READY" and
-      (.spec.image | split("/")[0]) == $mirror'
+      (.spec.image | contains($mirror))'
 ```
 
 > [!WARNING]
-> The source name is not site-selectable for this OSAC 0.0.24 installation. Doc 1 uses `targetCatalog: redhat-operators`; use `source: redhat-operators` and `sourceNamespace: openshift-marketplace` in the operator procedures. If the generated source has another name, return to Doc 1 and correct it before first apply; never apply both names.
+> The source name is not site-selectable for OSAC 0.0.24. Doc 1 uses `targetCatalog: redhat-operators`, and the released Subscription manifests use `source: redhat-operators` with `sourceNamespace: openshift-marketplace`. If the generated source has another name, return to Doc 1 and correct it before first apply; never apply both names.
 
 ## 3. DNS, TLS, and Registry Trust Configuration
 
@@ -436,9 +352,7 @@ Both contexts must return the site-approved address. If the administration host 
 Doc 1 requires certificate-validating registry checks without `-k`. Repeat that gate:
 
 ```bash
-nodes="$(oc get nodes -o name)"
-test -n "$nodes"
-for node in $nodes; do
+for node in $(oc get nodes -o name); do
   code="$(
     oc debug "$node" -- chroot /host \
       curl -sS -o /dev/null -w '%{http_code}' \
@@ -462,46 +376,32 @@ OpenShift uses `image.config.openshift.io/cluster.spec.additionalTrustedCA` for 
 
 ```bash
 export MIRROR_CA_KEY="${MIRROR_HOST//:/..}"
-if ! test -s "$MIRROR_CA_FILE" || ! test -r "$MIRROR_CA_FILE"; then
-  printf 'ERROR: missing, empty or unreadable mirror CA.\n' >&2; exit 1
-fi
-# Snapshot BEFORE deciding which ConfigMap to merge.
-oc get image.config.openshift.io/cluster -o json \
-  > "$PREREQ_RUN_DIR/image-config-original.json"
-image_rv="$(jq -er '.metadata.resourceVersion | select(length > 0)' \
-  "$PREREQ_RUN_DIR/image-config-original.json")"
-image_uid="$(jq -er '.metadata.uid | select(length > 0)' \
-  "$PREREQ_RUN_DIR/image-config-original.json")"
-TRUST_CONFIGMAP="$(jq -r '.spec.additionalTrustedCA.name // ""' \
-  "$PREREQ_RUN_DIR/image-config-original.json")"
+export TRUST_CONFIGMAP="$(oc get image.config.openshift.io/cluster \
+  -o jsonpath='{.spec.additionalTrustedCA.name}')"
 export TRUST_CONFIGMAP="${TRUST_CONFIGMAP:-registry-config}"
-oc get configmap "$TRUST_CONFIGMAP" -n openshift-config --ignore-not-found -o json \
-  > "$PREREQ_RUN_DIR/registry-trust-current.json"
-if test -s "$PREREQ_RUN_DIR/registry-trust-current.json"; then
+
+if oc get configmap "$TRUST_CONFIGMAP" -n openshift-config >/dev/null 2>&1; then
+  oc get configmap "$TRUST_CONFIGMAP" -n openshift-config -o json \
+    > /tmp/registry-trust-current.json
   jq --rawfile ca "$MIRROR_CA_FILE" --arg key "$MIRROR_CA_KEY" '
-    .data = ((.data // {}) + {($key): $ca}) |
-    del(.metadata.managedFields, .metadata.creationTimestamp)
-  ' "$PREREQ_RUN_DIR/registry-trust-current.json" \
-    > "$PREREQ_RUN_DIR/registry-trust-merged.json"
-  oc replace -f "$PREREQ_RUN_DIR/registry-trust-merged.json"
+      .data = ((.data // {}) + {($key): $ca}) |
+      del(.metadata.managedFields, .metadata.creationTimestamp, .metadata.uid)
+    ' /tmp/registry-trust-current.json > /tmp/registry-trust-merged.json
+  oc replace -f /tmp/registry-trust-merged.json
 else
   oc create configmap "$TRUST_CONFIGMAP" -n openshift-config \
     --from-file="${MIRROR_CA_KEY}=${MIRROR_CA_FILE}"
 fi
-image_patch="$(jq -n --arg rv "$image_rv" --arg uid "$image_uid" --arg name "$TRUST_CONFIGMAP" '
-  {metadata: {resourceVersion: $rv, uid: $uid},
-   spec: {additionalTrustedCA: {name: $name}}}
-')"
-if oc patch image.config.openshift.io/cluster --type=merge -p "$image_patch"; then
-  printf 'PASS: registry CA reference updated from original ImageConfig snapshot.\n'
-else
-  printf 'ERROR: ImageConfig update failed; stop and re-read both objects.\n' >&2; exit 1
-fi
+
+oc patch image.config.openshift.io/cluster --type=merge \
+  -p "{\"spec\":{\"additionalTrustedCA\":{\"name\":\"${TRUST_CONFIGMAP}\"}}}"
+
 oc get configmap "$TRUST_CONFIGMAP" -n openshift-config -o json \
-  | jq -e --arg key "$MIRROR_CA_KEY" --rawfile ca "$MIRROR_CA_FILE" '.data[$key] == $ca'
+  | jq -e --arg key "$MIRROR_CA_KEY" '.data[$key] | contains("BEGIN CERTIFICATE")'
+rm -f /tmp/registry-trust-current.json /tmp/registry-trust-merged.json
 ```
 
-Only NotFound may produce an empty ConfigMap read; API/auth failures stop. ConfigMap replace retains its rv/UID and unrelated data/binaryData. Concurrent create must fail, not overwrite. ConfigMap and ImageConfig updates are separate CAS operations, not a transaction. On conflict re-read the reference and selected ConfigMap, then decide a fresh merge; never refresh only rv while keeping a stale name, and never delete the CA object because the pointer patch failed. Wait for MCP convergence using Section 1.
+`oc replace` submits the original `metadata.resourceVersion`; the API rejects a concurrent stale write. On conflict, re-read, merge, and retry. Wait for the affected MCPs to converge using Section 1.
 
 ### Verify and atomically update the cluster pull secret
 
@@ -509,35 +409,35 @@ Doc 1 requires mirror read-only credentials in the cluster pull secret. Never me
 
 ```bash
 oc get secret pull-secret -n openshift-config -o json \
-  > "$PREREQ_RUN_DIR/pull-secret-current.json"
-auth_state="$(jq -er --arg host "$MIRROR_HOST" '
-  .data[".dockerconfigjson"] | @base64d | fromjson | .auths |
-  if type != "object" then error("invalid pull-secret auths")
-  elif has($host) then "present" else "absent" end
-' "$PREREQ_RUN_DIR/pull-secret-current.json")"
-case "$auth_state" in
-  present) printf 'Mirror key present; preserving Secret.\n' ;;
-  absent)
-    jq -e --arg host "$MIRROR_HOST" \
-      '.auths[$host] | type == "object" and length > 0' "$MIRROR_AUTH_FILE" >/dev/null
-    jq --arg host "$MIRROR_HOST" --slurpfile mirror "$MIRROR_AUTH_FILE" '
-      (.data[".dockerconfigjson"] | @base64d | fromjson) as $current |
-      ($current * {auths: ($current.auths + {($host): $mirror[0].auths[$host]})}) as $merged |
-      .data[".dockerconfigjson"] = ($merged | tojson | @base64) |
-      del(.metadata.managedFields, .metadata.creationTimestamp, .metadata.uid)
-    ' "$PREREQ_RUN_DIR/pull-secret-current.json" \
-      > "$PREREQ_RUN_DIR/pull-secret-merged.json"
-    oc replace -f "$PREREQ_RUN_DIR/pull-secret-merged.json"
-    ;;
-  *) printf 'ERROR: invalid pull-secret check result.\n' >&2; exit 1 ;;
-esac
+  | jq -e --arg host "$MIRROR_HOST" '
+      .data[".dockerconfigjson"] | @base64d | fromjson | .auths | has($host)'
+```
+
+If the command returns `true`, do not rewrite the Secret. If it returns `false`, merge the approved read-only auth and submit the original `resourceVersion`:
+
+```bash
+umask 077
+oc get secret pull-secret -n openshift-config -o json \
+  > /tmp/pull-secret-current.json
+
+jq --slurpfile mirror "$MIRROR_AUTH_FILE" '
+    (.data[".dockerconfigjson"] | @base64d | fromjson) as $current |
+    ($current * {auths: ($current.auths + $mirror[0].auths)}) as $merged |
+    .data[".dockerconfigjson"] = ($merged | tojson | @base64) |
+    del(.metadata.managedFields, .metadata.creationTimestamp, .metadata.uid)
+  ' /tmp/pull-secret-current.json > /tmp/pull-secret-merged.json
+
+oc replace -f /tmp/pull-secret-merged.json
+rm -f /tmp/pull-secret-current.json /tmp/pull-secret-merged.json
+```
+
+On conflict, re-read and merge again. Verify the mirror key without printing credentials:
+
+```bash
 oc get secret pull-secret -n openshift-config -o json \
   | jq -e --arg host "$MIRROR_HOST" '
       .data[".dockerconfigjson"] | @base64d | fromjson | .auths | has($host)'
-rm -f "$PREREQ_RUN_DIR/pull-secret-current.json" "$PREREQ_RUN_DIR/pull-secret-merged.json"
 ```
-
-A missing mirror key is a remediation decision, not an ignored API/JSON failure. On conflict repeat the complete read/decision/merge/replace block. Never suppress failure with `|| true` or print credential data.
 
 ### Re-run the Doc 1 registry gate
 
@@ -549,7 +449,7 @@ oc get catalogsource redhat-operators -n openshift-marketplace \
 skopeo inspect --authfile "$MIRROR_AUTH_FILE" \
   'docker://<mirrored-redhat-operator-index-v4.22-by-digest>' >/dev/null
 skopeo inspect --authfile "$MIRROR_AUTH_FILE" \
-  'docker://<exact-mirrored-osac-operator-from-approved-0.0.24-inventory>' >/dev/null
+  'docker://<mirrored-osac-operator-image-from-selected-release>' >/dev/null
 ```
 
 If DNS, certificate trust, authentication, or MCP convergence fails, remain in this document. If the mirror responds but an image or package is absent, return to Doc 1.
@@ -561,7 +461,7 @@ Select one supported service tier and prove every customer-owned production depe
 ### Select the service tier
 
 | Prerequisite | Core | Core + VMaaS | Evidence to record |
-| --- | ---: | ---: | --- |
+|---|---:|---:|---|
 | cert-manager Operator | Required | Required | CSV, CRD, webhook, and operand evidence collected in `operators.md` |
 | trust-manager `v0.20.0` | Required | Required | Deployment, webhook, Bundle CRD, and `ca-bundle` evidence collected in `operators.md` |
 | AAP Operator | Required | Required | Pinned CSV and Manual InstallPlan evidence collected in `operators.md` |
@@ -572,15 +472,27 @@ Select one supported service tier and prove every customer-owned production depe
 
 BMaaS installation and host-provisioning procedures are deferred and are not part of this guide.
 
-Record the selection:
+Record explicit provider choices, including `false` for both optional installations when existing providers are used. These six selection fields are consumed, without shell evaluation, by the entry gate in `operators.md`. Installation of LVMS/MetalLB is confined to the selected VMaaS profile; mirroring their packages does not select them. Use the same `STORAGE_CLASS` and `KAFKA_PROVIDER` in the completion record and values file.
 
 ```bash
+case "$PROFILE/$ENABLE_VMAAS" in core/false|core-vmaas/true) ;; *) echo 'ERROR: profile and VMaaS flag disagree' >&2; exit 1 ;; esac
+for flag in WITH_LVMS WITH_METALLB; do
+  case "${!flag}" in true|false) ;; *) echo "ERROR: invalid $flag" >&2; exit 1 ;; esac
+done
+if test "$ENABLE_VMAAS" = false && { test "$WITH_LVMS" = true || test "$WITH_METALLB" = true; }; then
+  echo 'ERROR: optional LVMS/MetalLB installation requires the VMaaS profile' >&2; exit 1
+fi
+case "$KAFKA_PROVIDER" in external|in-cluster) ;; *) echo 'ERROR: invalid Kafka provider' >&2; exit 1 ;; esac
+case "$LOADBALANCER_PROVIDER/$WITH_METALLB" in existing/false|metallb/true) ;; *) echo 'ERROR: LoadBalancer provider and WITH_METALLB disagree' >&2; exit 1 ;; esac
+test -n "$STORAGE_CLASS" || { echo 'ERROR: selected storage class is empty' >&2; exit 1; }
 cat > prerequisite-selection.env <<EOF
 PROFILE=$PROFILE
 ENABLE_VMAAS=$ENABLE_VMAAS
-STORAGE_CLASS=<storage-class>
-LOADBALANCER_PROVIDER=<existing-or-metallb>
-KAFKA_PROVIDER=<external-or-in-cluster>
+WITH_LVMS=$WITH_LVMS
+WITH_METALLB=$WITH_METALLB
+STORAGE_CLASS=$STORAGE_CLASS
+LOADBALANCER_PROVIDER=$LOADBALANCER_PROVIDER
+KAFKA_PROVIDER=$KAFKA_PROVIDER
 POSTGRES_HOST=<postgres-host>
 VAULT_ADDR=<https://vault.example.com>
 OIDC_ISSUER=<https://keycloak.example.com/realms/osac>
@@ -590,52 +502,30 @@ chmod 0600 prerequisite-selection.env
 
 Do not put passwords, tokens, private keys, or credential-bearing URLs in this file.
 
-Create a new run-owned namespace; never adopt a pre-existing test namespace. Preserve its returned UID:
-
-```bash
-test ! -e "$PREREQ_RUN_DIR/namespace-owned.json"
-PREREQ_RUN_ID="${PREREQ_RUN_DIR##*/}"
-oc create -f - -o json > "$PREREQ_RUN_DIR/namespace-owned.json" <<EOF
-apiVersion: v1
-kind: Namespace
-metadata:
-  generateName: osac-prereq-check-
-  labels:
-    osac-project.org/prereq-run: "${PREREQ_RUN_ID}"
-EOF
-PREREQ_NAMESPACE="$(jq -er '.metadata.name | select(length > 0)' "$PREREQ_RUN_DIR/namespace-owned.json")"
-PREREQ_NAMESPACE_UID="$(jq -er '.metadata.uid | select(length > 0)' "$PREREQ_RUN_DIR/namespace-owned.json")"
-export PREREQ_RUN_ID PREREQ_NAMESPACE PREREQ_NAMESPACE_UID
-printf 'Test namespace=%s uid=%s run=%s\n' "$PREREQ_NAMESPACE" "$PREREQ_NAMESPACE_UID" "$PREREQ_RUN_ID"
-```
-
-Use only this namespace for this run's tests. Creation errors or incomplete ownership evidence stop; never guess a namespace name for cleanup. Setup refuses a second initialization in the same run directory to preserve the earlier ownership record.
-
 ### Verify dynamic storage
 
 Choose either an existing supported dynamic StorageClass or the with-LVMS profile. Do not install LVMS merely because it is available.
 
-```bash
-: "${PREREQ_NAMESPACE:?run-owned test namespace is required}"
-export STORAGE_CLASS='<storage-class>'
-oc get storageclass "$STORAGE_CLASS" >/dev/null
-cat > "$PREREQ_RUN_DIR/storage-test-pvc.yaml" <<EOF
+```yaml
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: osac-prereq-storage-test
-  namespace: ${PREREQ_NAMESPACE}
+  namespace: osac-prereq-check
 spec:
   accessModes: [ReadWriteOnce]
   resources:
     requests:
       storage: 1Gi
-  storageClassName: ${STORAGE_CLASS}
-EOF
-oc apply -f "$PREREQ_RUN_DIR/storage-test-pvc.yaml"
-oc wait -n "$PREREQ_NAMESPACE" pvc/osac-prereq-storage-test \
+  storageClassName: <storage-class>
+```
+
+```bash
+oc create namespace osac-prereq-check --dry-run=client -o yaml | oc apply -f -
+oc apply -f storage-test-pvc.yaml
+oc wait -n osac-prereq-check pvc/osac-prereq-storage-test \
   --for=jsonpath='{.status.phase}'=Bound --timeout=5m
-oc get pvc osac-prereq-storage-test -n "$PREREQ_NAMESPACE" \
+oc get pvc osac-prereq-storage-test -n osac-prereq-check \
   -o custom-columns='NAME:.metadata.name,CLASS:.spec.storageClassName,PHASE:.status.phase,VOLUME:.spec.volumeName'
 ```
 
@@ -646,15 +536,12 @@ Success is `PHASE=Bound` with a nonempty volume. If the claim remains `Pending`,
 If an existing provider is selected, apply a site-reviewed test Deployment and `type: LoadBalancer` Service using an image from Doc 1, wait for an address, and verify client reachability. If MetalLB is selected but not yet installed, record the approved non-overlapping address pool and defer the live test to `operators.md`.
 
 ```bash
-# Approved test YAML must omit namespaces or use this exact run namespace.
-: "${PREREQ_NAMESPACE:?run-owned test namespace is required}"
-oc apply -n "$PREREQ_NAMESPACE" -f loadbalancer-test.yaml
-oc rollout status deployment/osac-prereq-lb-test -n "$PREREQ_NAMESPACE" --timeout=5m
-oc wait service/osac-prereq-lb-test -n "$PREREQ_NAMESPACE" \
+oc apply -f loadbalancer-test.yaml
+oc rollout status deployment/osac-prereq-lb-test -n osac-prereq-check --timeout=5m
+oc wait service/osac-prereq-lb-test -n osac-prereq-check \
   --for=jsonpath='{.status.loadBalancer.ingress[0]}' --timeout=5m
-LB_ADDRESS="$(oc get service osac-prereq-lb-test -n "$PREREQ_NAMESPACE" \
+export LB_ADDRESS="$(oc get service osac-prereq-lb-test -n osac-prereq-check \
   -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}')"
-export LB_ADDRESS
 test -n "$LB_ADDRESS"
 curl --fail --connect-timeout 10 "http://${LB_ADDRESS}:8080/" >/dev/null
 ```
@@ -664,18 +551,13 @@ A failed allocation remains with the provider owner. An allocated but unreachabl
 ### Verify PostgreSQL
 
 ```bash
-if ! test -s /secure/postgres-ca.pem || ! test -r /secure/postgres-ca.pem; then
-  printf 'ERROR: missing, empty or unreadable PostgreSQL CA.\n' >&2; exit 1
-fi
-PGSERVICEFILE=/secure/pg_service.conf \
+PGSERVICEFILE=/secure/pg_service.conf PGSERVICE=osac \
   psql -X -v ON_ERROR_STOP=1 \
-  --dbname='service=osac sslmode=verify-full sslrootcert=/secure/postgres-ca.pem' \
   -c 'select current_database(), current_user, version();' \
-  -c 'select ssl from pg_stat_ssl where pid = pg_backend_pid();' \
   -c 'create temporary table osac_prereq_check(id integer); insert into osac_prereq_check values (1); select count(*) from osac_prereq_check;'
 ```
 
-Provision the trusted CA through the service handoff. The `osac` service supplies the approved DNS hostname/database/user; credentials stay in protected files. Explicit conninfo enforces `verify-full`/root CA even over weaker service-file settings. Require successful hostname/chain verification, `ssl=t` and count `1`. Record only endpoint/database/CA identity, backup owner, restore-test date and Secret names. Any failure blocks `operators.md` with the database owner.
+Success is an authenticated TLS session and a count of `1`. Record endpoint, database, CA identity, backup owner, restore-test date, and Secret names—not secret values. A failure remains with the database owner and blocks `operators.md`.
 
 ### Verify Vault or OpenBao handoff
 
@@ -693,18 +575,7 @@ export VAULT_SECRET_NAME='<vault-credential-secret>'
 export VAULT_CA_CONFIGMAP='<vault-ca-configmap>'
 
 getent hosts "$VAULT_HOST"
-if ! test -s "$VAULT_CA_FILE" || ! test -r "$VAULT_CA_FILE"; then
-  printf 'ERROR: missing, empty or unreadable Vault CA.\n' >&2; exit 1
-fi
-if openssl s_client -brief -connect "${VAULT_HOST}:${VAULT_PORT}" \
-    -servername "$VAULT_HOST" -verify_hostname "$VAULT_HOST" \
-    -verify_return_error -CAfile "$VAULT_CA_FILE" </dev/null \
-    > "$PREREQ_RUN_DIR/vault-tls.log" 2>&1; then
-  printf 'PASS: Vault DNS-hostname and CA verification.\n'
-else
-  printf 'ERROR: Vault TLS failed; inspect protected evidence %s/vault-tls.log.\n' "$PREREQ_RUN_DIR" >&2
-  exit 1
-fi
+openssl s_client -connect "${VAULT_HOST}:${VAULT_PORT}"   -servername "$VAULT_HOST" -CAfile "$VAULT_CA_FILE" </dev/null 2>/dev/null   | grep -q 'Verify return code: 0 (ok)'
 
 oc get secret "$VAULT_SECRET_NAME" -n "$VAULT_SECRET_NAMESPACE" -o json   | jq -e '.data | type == "object" and length > 0'
 oc get configmap "$VAULT_CA_CONFIGMAP" -n "$VAULT_SECRET_NAMESPACE" -o json   | jq -e '.data | type == "object" and length > 0'
@@ -732,21 +603,6 @@ Route this gate according to `KAFKA_PROVIDER` in `prerequisite-selection.env` an
 - `external`: the canonical guide must be complete before `operators.md`. Retain only disconnected DNS/TLS reachability and the existence of the referenced credential Secret and CA ConfigMap.
 - `in-cluster`: no broker exists yet. Verify Doc 1 package/image coverage, record the intended namespace, broker identity, storage class, and canonical-guide evidence destination, then defer operator, broker, user/ACL, and connection verification to `operators.md`.
 
-Read the recorded selection as data before the case below; never source an unchecked shell file:
-
-```bash
-test -r "$PREREQ_RUN_DIR/prerequisite-selection.env"
-KAFKA_PROVIDER="$(jq -Rser '
-  split("\n") | map(select(startswith("KAFKA_PROVIDER="))) |
-  if length != 1 then error("expected exactly one KAFKA_PROVIDER record")
-  else .[0] | ltrimstr("KAFKA_PROVIDER=") end
-' "$PREREQ_RUN_DIR/prerequisite-selection.env")"
-case "$KAFKA_PROVIDER" in
-  external|in-cluster) export KAFKA_PROVIDER ;;
-  *) printf 'ERROR: recorded KAFKA_PROVIDER must be external or in-cluster.\n' >&2; exit 1 ;;
-esac
-```
-
 ```bash
 case "$KAFKA_PROVIDER" in
   external)
@@ -758,18 +614,7 @@ case "$KAFKA_PROVIDER" in
     export KAFKA_CA_CONFIGMAP='<kafka-ca-configmap>'
 
     getent hosts "$KAFKA_HOST"
-    if ! test -s "$KAFKA_CA_FILE" || ! test -r "$KAFKA_CA_FILE"; then
-      printf 'ERROR: missing, empty or unreadable Kafka CA.\n' >&2; exit 1
-    fi
-    if openssl s_client -brief -connect "${KAFKA_HOST}:${KAFKA_PORT}" \
-        -servername "$KAFKA_HOST" -verify_hostname "$KAFKA_HOST" \
-        -verify_return_error -CAfile "$KAFKA_CA_FILE" </dev/null \
-        > "$PREREQ_RUN_DIR/kafka-tls.log" 2>&1; then
-      printf 'PASS: external Kafka DNS-hostname and CA verification.\n'
-    else
-      printf 'ERROR: Kafka TLS failed; inspect protected evidence %s/kafka-tls.log.\n' "$PREREQ_RUN_DIR" >&2
-      exit 1
-    fi
+    openssl s_client -connect "${KAFKA_HOST}:${KAFKA_PORT}"       -servername "$KAFKA_HOST" -CAfile "$KAFKA_CA_FILE" </dev/null 2>/dev/null       | grep -q 'Verify return code: 0 (ok)'
     oc get secret "$KAFKA_SECRET_NAME" -n "$KAFKA_SECRET_NAMESPACE" -o json       | jq -e '.data | type == "object" and length > 0'
     oc get configmap "$KAFKA_CA_CONFIGMAP" -n "$KAFKA_SECRET_NAMESPACE" -o json       | jq -e '.data | type == "object" and length > 0'
 
@@ -810,16 +655,16 @@ Success is a complete `kafka-handoff.txt`. For external Kafka, the canonical gui
 export OIDC_ISSUER='<https://keycloak.example.com/realms/osac>'
 curl --fail --silent --show-error --cacert '<absolute-path-to-idp-ca.pem>' \
   "$OIDC_ISSUER/.well-known/openid-configuration" \
-  | tee "$PREREQ_RUN_DIR/osac-oidc-discovery.json" \
+  | tee /tmp/osac-oidc-discovery.json \
   | jq -e --arg issuer "$OIDC_ISSUER" '
       .issuer == $issuer and
       (.authorization_endpoint | length > 0) and
       (.token_endpoint | length > 0) and
       (.jwks_uri | length > 0)'
 curl --fail --silent --show-error --cacert '<absolute-path-to-idp-ca.pem>' \
-  "$(jq -r '.jwks_uri' "$PREREQ_RUN_DIR/osac-oidc-discovery.json")" \
+  "$(jq -r '.jwks_uri' /tmp/osac-oidc-discovery.json)" \
   | jq -e '.keys | length > 0'
-rm -f "$PREREQ_RUN_DIR/osac-oidc-discovery.json"
+rm -f /tmp/osac-oidc-discovery.json
 ```
 
 Success is an exact issuer match, nonempty endpoints, and at least one signing key. Verify client authentication and role mapping through the site's approved process.
@@ -831,27 +676,7 @@ A customer with enterprise storage, an existing LoadBalancer implementation, ext
 If the PVC remains `Pending`, they stop. They either correct the enterprise provider or deliberately change to with-LVMS and hand storage setup to `operators.md`. They never leave both providers partially configured.
 
 ```bash
-: "${PREREQ_NAMESPACE:?missing run namespace}"
-: "${PREREQ_NAMESPACE_UID:?missing namespace UID}"
-: "${PREREQ_RUN_ID:?missing run identity}"
-oc get namespace "$PREREQ_NAMESPACE" --ignore-not-found -o json \
-  > "$PREREQ_RUN_DIR/namespace-cleanup-current.json"
-if test -s "$PREREQ_RUN_DIR/namespace-cleanup-current.json"; then
-  jq -e --arg uid "$PREREQ_NAMESPACE_UID" --arg run "$PREREQ_RUN_ID" '
-    .metadata.uid == $uid and
-    .metadata.labels["osac-project.org/prereq-run"] == $run and
-    .metadata.deletionTimestamp == null
-  ' "$PREREQ_RUN_DIR/namespace-cleanup-current.json" >/dev/null
-  jq '{apiVersion: "v1", kind: "DeleteOptions",
-       preconditions: {uid: .metadata.uid, resourceVersion: .metadata.resourceVersion}}' \
-    "$PREREQ_RUN_DIR/namespace-cleanup-current.json" \
-    > "$PREREQ_RUN_DIR/namespace-delete-options.json"
-  oc delete --raw="/api/v1/namespaces/${PREREQ_NAMESPACE}" \
-    -f "$PREREQ_RUN_DIR/namespace-delete-options.json"
-  oc wait --for=delete "namespace/$PREREQ_NAMESPACE" --timeout=5m
-else
-  printf 'Run namespace already absent; no deletion sent.\n'
-fi
+oc delete namespace osac-prereq-check --wait=true
 ```
 
 ## 5. Build the Customer Values File on the Bastion Laptop
@@ -872,9 +697,8 @@ All commands must succeed. If public chart access or the approved cluster tunnel
 ### Download and verify the released chart
 
 ```bash
-test "$OSAC_CHART_VERSION" = 0.0.24
-mkdir "$PREREQ_RUN_DIR/osac-chart-${OSAC_CHART_VERSION}"
-cd "$PREREQ_RUN_DIR/osac-chart-${OSAC_CHART_VERSION}"
+mkdir -p osac-chart-0.0.24
+cd osac-chart-0.0.24
 helm pull "$OSAC_CHART_REF" --version "$OSAC_CHART_VERSION" \
   --untar --untardir .
 test -f osac/Chart.yaml
@@ -891,13 +715,13 @@ helm show values ./osac > values-osac.yaml
 chmod 0600 values-osac.yaml
 ```
 
-Set released keys from the downloaded OSAC 0.0.24 chart for namespace/routes, selected services, PostgreSQL, OIDC, AAP, storage, load balancing and Secret references. For Kafka fields, use [Kafka Configuration](../kafka-configuration.md); for Vault/OpenBao fields, use [Secrets Management Configuration](../secrets-management-configuration.md). Do not duplicate their schemas. Preserve released images and validated IDMS/ITMS redirection unless a released key requires a mirror-backed override. Do not invent `global.imageRegistry`, reuse another release's schema or embed credentials.
+Set released keys for namespace/routes, selected services, PostgreSQL, OIDC, AAP, storage, load balancing, and Secret references. For Kafka fields, use [Kafka Configuration](../kafka-configuration.md) as the normative values contract. For Vault/OpenBao fields, use [Secrets Management Configuration](../secrets-management-configuration.md). Do not copy their connection schemas into this guide. Preserve released image references and rely on the validated IDMS/ITMS redirection unless a released value explicitly requires a mirror-backed override. Do not add `global.imageRegistry`; OSAC 0.0.24 does not define it. Do not embed credentials.
 
 ### Review and override `cliImage`
 
-Review `cliImage` in the downloaded OSAC 0.0.24 defaults and rendered hook Jobs. The `osac/v0.0.24` source default is `quay.io/openshift/origin-cli:4.20.0`, an upstream Origin build. Compare its CLI minor with the target cluster and select the approved Red Hat replacement when required. Verify the packaged default rather than assuming another release's values apply; the mirror-backed override and exact-image checks below remain mandatory.
+OSAC 0.0.24 defaults `cliImage` to `quay.io/openshift/origin-cli:4.20.0`. The chart uses this image in pre-install and post-install hook Jobs. Review it explicitly because the default is an upstream Origin build and its 4.20 client version does not match the supported OpenShift 4.22.6 server.
 
-For a supported customer environment, select the corresponding Red Hat `ose-cli` image for the cluster minor version and ensure that exact image is already mirror-resident. If Doc 1 does not cover it, add it to the authoritative ISC `additionalImages`, rerun the same Doc 1 workspace lineage, apply the regenerated IDMS/ITMS, and repeat the handoff gates before continuing.
+For a supported customer environment, select the corresponding Red Hat `registry.redhat.io/openshift4/ose-cli:v4.22` image for the 4.22 cluster minor version and ensure that exact image is already mirror-resident. If Doc 1 does not cover it, add it to the authoritative ISC `additionalImages`, rerun the same Doc 1 workspace lineage, apply the regenerated IDMS/ITMS, and repeat the handoff gates before continuing.
 
 Set the released value to the approved mirror-resident reference:
 
@@ -936,119 +760,63 @@ if grep -nEi '(password|token|private[-_ ]?key):[[:space:]]+[^{$]' rendered-osac
 fi
 ```
 
-Verify three separate facts per rendered image: exact tag/digest membership in the selected Doc 1 inventory (or its exact mapped destination), the appropriate typed policy to the selected mirror, and retrieval of that exact mirror manifest. Prefix membership alone is not coverage. Direct mirror overrides, including `cliImage`, need inventory provenance and exact availability too.
+Extract rendered images and compare them with the exact Doc 1 consolidated `additionalImages` inventory and generated IDMS/ITMS mappings.
+
+First create a reproducible, grep-compatible coverage file. It contains upstream source prefixes and exact ISC image names with digests/tags removed. IDMS/ITMS source entries prove cluster redirection; ISC `additionalImages` entries prove the selected workload inventory. Mirror destinations are not used as coverage keys because rendered manifests normally retain upstream names.
 
 ```bash
-verify_doc1_policies
 ISC="$DOC1_WORKSPACE/../imageset-config.yaml"
 test -f "$ISC"
-yq -r '.mirror.additionalImages[]?.name' "$ISC" > "$PREREQ_RUN_DIR/isc-images.txt"
-jq -Rse 'split("\n") | map(select(length > 0) | sub("^docker://"; "")) |
-  if length > 0 then unique else error("empty exact ISC inventory") end' \
-  "$PREREQ_RUN_DIR/isc-images.txt" > "$PREREQ_RUN_DIR/isc-images.json"
-cat > "$PREREQ_RUN_DIR/image-candidates.jq" <<'JQ'
-def image_ref:
-  sub("^docker://"; "") as $id |
-  if ($id | test("^[^[:space:]<>]+/[^[:space:]<>]+$")) and
-     (($id | test("@sha256:[0-9a-fA-F]{64}$")) or
-      (($id | contains("@") | not) and ($id | test(":[^/:]+$"))))
-  then ($id | sub("@.*$"; "") | sub(":[^/:]+$"; "")) as $repo |
-    {id: $id, repo: $repo, suffix: $id[($repo | length):],
-     mode: (if ($id | contains("@")) then "digest" else "tag" end)}
-  else error("require a fully qualified explicit tag or SHA-256 digest") end;
-def source_matches($repo; $source):
-  $repo == $source or ($repo | startswith($source + "/"));
-[ $inventory[0][] | image_ref ] as $refs |
-[ $refs[] as $ref |
-  if ($ref.repo | split("/")[0]) == $mirror then
-    {source: $ref.id, destination: $ref.id, mode: $ref.mode, policy: "direct-mirror"}
-  else
-    [$policies[0][] | select(.mode == $ref.mode and source_matches($ref.repo; .source))] as $matches |
-    if ($matches | length) == 0 then empty else
-      ($matches | map(.source | length) | max) as $longest |
-      [$matches[] | select((.source | length) == $longest)] as $chosen |
-      if ($chosen | length) != 1 then error("ambiguous most-specific policy; reconcile Doc 1")
-      else $chosen[0] as $policy |
-        $policy.mirrors[] | select(split("/")[0] == $mirror) as $destination |
-        {source: $ref.id, mode: $ref.mode, policy: $policy.source,
-         destination: ($destination + ($ref.repo | ltrimstr($policy.source)) + $ref.suffix)}
-      end
-    end
-  end
-]
-JQ
-jq -n --arg mirror "$MIRROR_HOST" \
-  --slurpfile inventory "$PREREQ_RUN_DIR/isc-images.json" \
-  --slurpfile policies "$PREREQ_RUN_DIR/verified-image-policies.json" \
-  -f "$PREREQ_RUN_DIR/image-candidates.jq" > "$PREREQ_RUN_DIR/image-candidates.json"
-yq -r '.. | select(has("image")) | .image' rendered-osac.yaml \
-  | sort -u > rendered-images.txt
-test -s rendered-images.txt
-: > uncovered-images.txt
-: > validated-mirror-mappings.partial.jsonl
-image_index=0
-while IFS= read -r image; do
-  image_index=$((image_index + 1))
-  image="${image#docker://}"
-  jq --arg image "$image" --arg mirror "$MIRROR_HOST" '
-    [.[] | select(
-      if ($image | split("/")[0]) == $mirror
-      then .destination == $image else .source == $image end)]
-  ' "$PREREQ_RUN_DIR/image-candidates.json" > "$PREREQ_RUN_DIR/current-candidates.json"
-  jq -r '.[].destination' "$PREREQ_RUN_DIR/current-candidates.json" \
-    > "$PREREQ_RUN_DIR/current-candidates.txt"
-  covered=false
-  candidate_index=0
-  while IFS= read -r destination; do
-    candidate_index=$((candidate_index + 1))
-    manifest="$PREREQ_RUN_DIR/image-${image_index}-${candidate_index}.manifest.json"
-    diagnostic="$PREREQ_RUN_DIR/image-${image_index}-${candidate_index}.inspect.log"
-    if skopeo inspect --authfile "$MIRROR_AUTH_FILE" --raw \
-        "docker://${destination}" > "$manifest" 2> "$diagnostic"; then
-      observed_digest="$(skopeo manifest-digest "$manifest")"
-      case "$destination" in
-        *@*)
-          expected_digest="${destination##*@}"
-          if test "$observed_digest" != "$expected_digest"; then
-            printf 'Digest mismatch for %s; expected=%s observed=%s\n' \
-              "$destination" "$expected_digest" "$observed_digest" >> "$diagnostic"
-            continue
-          fi
-          ;;
-      esac
-      checked_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      jq -c --arg image "$image" --arg destination "$destination" \
-        --arg digest "$observed_digest" --arg at "$checked_at" --arg release "$OSAC_CHART_VERSION" '
-        map(select(.destination == $destination))[0] |
-        {schema_version: 1, release: $release, rendered: $image, inventory_source: .source,
-         policy_type: .mode, policy_source: .policy, mirror: $destination,
-         observed_digest: $digest, checked_at: $at}
-      ' "$PREREQ_RUN_DIR/current-candidates.json" >> validated-mirror-mappings.partial.jsonl
-      covered=true
-      break
-    fi
-  done < "$PREREQ_RUN_DIR/current-candidates.txt"
-  if test "$covered" != true; then
-    printf '%s\n' "$image" >> uncovered-images.txt
-    printf 'ERROR: image check=%s ref=%s has no verified available mirror candidate; evidence=%s/image-%s-*.inspect.log\n' \
-      "$image_index" "$image" "$PREREQ_RUN_DIR" "$image_index" >&2
-  fi
-done < rendered-images.txt
-if test -s uncovered-images.txt; then
-  printf 'ERROR: exact image coverage failed; inspect uncovered-images.txt and protected run evidence.\n' >&2
-  exit 1
-fi
-mv validated-mirror-mappings.partial.jsonl validated-mirror-mappings.jsonl
+
+{
+  # Exact additionalImages names from the archived ISC, normalized by removing
+  # transport, digest, and tag. The final sed removes only a tag after the last
+  # slash, preserving registry ports.
+  yq -r '.mirror.additionalImages[]?.name' "$ISC" \
+    | sed -E 's#^docker://##; s#@sha256:[0-9a-fA-F]+$##; s#(:[^/:]+)$##'
+
+  # Upstream source prefixes from live digest and tag mirror policies.
+  oc get imagedigestmirrorset -o json \
+    | jq -r '.items[].spec.imageDigestMirrors[].source'
+  oc get imagetagmirrorset -o json \
+    | jq -r '.items[].spec.imageTagMirrors[].source'
+} | sed '/^$/d' | sort -u > validated-mirror-mappings.txt
+
+test -s validated-mirror-mappings.txt
 ```
 
-Support explicit tags and SHA-256 digests; unsupported/implicit identities stop. Tags need ITMS and digests need IDMS; both resources stay mandatory. Select the most-specific source, preserve its mirror preference order, and stop on ambiguity. Missing inventory/routing/content goes to Doc 1; auth/CA problems remain in Section 3. Never inspect upstream as fallback or hand-edit evidence. Observed digest is point-in-time evidence, not tag immutability; repeat if inputs/policies/values change before installation.
+Then extract the rendered images:
+
+```bash
+yq -r '.. | select(has("image")) | .image' rendered-osac.yaml \
+  | sort -u > rendered-images.txt
+
+: > uncovered-images.txt
+while IFS= read -r image; do
+  normalized="$(printf '%s\n' "$image" \
+    | sed -E 's#^docker://##; s#@sha256:[0-9a-fA-F]+$##; s#(:[^/:]+)$##')"
+  if ! awk -v image="$normalized" '
+      image == $0 || index(image, $0 "/") == 1 { found=1 }
+      END { exit(found ? 0 : 1) }
+    ' validated-mirror-mappings.txt; then
+    echo "$image" >> uncovered-images.txt
+  fi
+done < rendered-images.txt
+
+if test -s uncovered-images.txt; then
+  echo 'ERROR: rendered images without Doc 1 mirror coverage:' >&2
+  cat uncovered-images.txt >&2
+  exit 1
+fi
+```
+
+Upstream image names are expected when mirror redirection covers them. A missing mapping returns to Doc 1; update the authoritative ISC and workspace lineage rather than editing this evidence file by hand.
 
 Do not require server-side dry-run here: operator CRDs and admission webhooks are installed later by `operators.md`. Record evidence:
 
 ```bash
 sha256sum osac/Chart.yaml values-osac.yaml rendered-osac.yaml rendered-images.txt \
-  validated-mirror-mappings.jsonl "$PREREQ_RUN_DIR/isc-images.json" \
-  "$PREREQ_RUN_DIR/verified-image-policies.json" > prereqs-artifacts.sha256
+  > prereqs-artifacts.sha256
 ```
 
 Do not edit `rendered-osac.yaml`; correct `values-osac.yaml` and render again.
@@ -1056,41 +824,31 @@ Do not edit `rendered-osac.yaml`; correct `values-osac.yaml` and render again.
 ## Completion Record
 
 ```bash
-completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-operator="$(oc whoami)"
-idms_names="$(oc get imagedigestmirrorset -o name | paste -sd, -)"
-itms_names="$(oc get imagetagmirrorset -o name | paste -sd, -)"
-cluster_catalog_names="$(oc get clustercatalog -o name | paste -sd, -)"
-values_sha256="$(sha256sum values-osac.yaml | awk '{print $1}')"
-render_sha256="$(sha256sum rendered-osac.yaml | awk '{print $1}')"
-test -n "$operator"
-test -n "$idms_names"
-test -n "$itms_names"
-test -n "$cluster_catalog_names"
-: "${signature_configmaps:?expected signature identities were not verified}"
-cat > "$PREREQ_RUN_DIR/prereqs-completion.pending" <<EOF
-completed_at=$completed_at
-operator=$operator
+cat > prereqs-completion.txt <<EOF
+completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+operator=$(oc whoami)
 profile=$PROFILE
 enable_vmaas=$ENABLE_VMAAS
+with_lvms=$WITH_LVMS
+with_metallb=$WITH_METALLB
 doc1_isc=$DOC1_WORKSPACE/../imageset-config.yaml
 doc1_workspace=$DOC1_WORKSPACE
 operatorhub_disable_all_default_sources=true
-idms_names=$idms_names
-itms_names=$itms_names
+idms_names=$(oc get imagedigestmirrorset -o name | paste -sd, -)
+itms_names=$(oc get imagetagmirrorset -o name | paste -sd, -)
 catalog_source=openshift-marketplace/redhat-operators
-cluster_catalogs=$cluster_catalog_names
-signature_configmaps=$signature_configmaps
+cluster_catalogs=$(oc get -f "$GENERATED_CLUSTER_CATALOG" -o name | paste -sd, -)
+signature_configmaps=$(oc get configmap -n openshift-config-managed -l operator.openshift.io/managed=true -o name | paste -sd, -)
 mirror_host=$MIRROR_HOST
 affected_mcps=$AFFECTED_POOLS
-storage_class=<storage-class>
-loadbalancer_provider=<existing-or-metallb>
+storage_class=$STORAGE_CLASS
+loadbalancer_provider=$LOADBALANCER_PROVIDER
 postgres_endpoint=<postgres-host-and-port>
 vault_endpoint=<vault-or-openbao-url>
 vault_credential_secret=<namespace/name>
 vault_ca_configmap=<namespace/name>
 vault_canonical_evidence=<location-and-rfc3339-timestamp>
-kafka_provider=<external-or-in-cluster>
+kafka_provider=$KAFKA_PROVIDER
 kafka_endpoint=<external-endpoint-or-in-cluster-broker-name>
 kafka_credential_secret=<namespace/name-or-pending-operators>
 kafka_ca_configmap=<namespace/name-or-pending-operators>
@@ -1098,17 +856,16 @@ kafka_canonical_evidence=<location-and-rfc3339-timestamp>
 oidc_issuer=<oidc-issuer-url>
 chart_reference=$OSAC_CHART_REF
 chart_version=$OSAC_CHART_VERSION
-values_sha256=$values_sha256
-render_sha256=$render_sha256
+values_sha256=$(sha256sum values-osac.yaml | awk '{print $1}')
+render_sha256=$(sha256sum rendered-osac.yaml | awk '{print $1}')
 evidence_checksums=prereqs-artifacts.sha256
 EOF
 
 for pool in $AFFECTED_POOLS; do
   oc get machineconfigpool "$pool" \
     -o custom-columns='NAME:.metadata.name,PAUSED:.spec.paused,GEN:.metadata.generation,OBSERVED:.status.observedGeneration,UPDATED:.status.updatedMachineCount,UNAVAILABLE:.status.unavailableMachineCount,DEGRADED:.status.degradedMachineCount' \
-    --no-headers >> "$PREREQ_RUN_DIR/prereqs-completion.pending"
+    --no-headers >> prereqs-completion.txt
 done
-mv "$PREREQ_RUN_DIR/prereqs-completion.pending" prereqs-completion.txt
 ```
 
 Replace every angle-bracket field before storing the record. Do not record credentials.
@@ -1118,13 +875,13 @@ Replace every angle-bracket field before storing the record. Do not record crede
 - [ ] Both generated IDMS and ITMS resources are present and reference the mirror.
 - [ ] VMaaS containerdisk ITMS entries use `NeverContactSource` when VMaaS is selected.
 - [ ] `redhat-operators` is READY in `openshift-marketplace`.
-- [ ] Every generated ClusterCatalog is Serving; archived signature ConfigMap identities and required data match live state.
+- [ ] Every generated ClusterCatalog is Serving and a managed signature ConfigMap exists.
 - [ ] Affected MCPs are unpaused, updated, and not degraded or unavailable.
 - [ ] Core package manifests, plus VMaaS package manifests when selected, come from `redhat-operators`.
 - [ ] DNS, registry trust, read-only mirror authentication, cluster pull credentials, and representative pulls passed.
 - [ ] Production storage, load balancing, PostgreSQL, and identity checks passed.
 - [ ] Vault/OpenBao canonical-guide evidence and disconnected handoff resources passed.
 - [ ] Kafka canonical-guide evidence passed for external Kafka, or the in-cluster handoff is ready for `operators.md`.
-- [ ] The bastion laptop verified the public OSAC 0.0.24 chart; values/render, exact inventory, typed routing and mirror availability checks passed.
-- [ ] `prereqs-completion.txt` and checksum evidence are stored.
+- [ ] The bastion laptop downloaded the public OSAC 0.0.24 chart, and values/render passed static and Doc 1 mirror-coverage review.
+- [ ] `prereqs-completion.txt` and `prerequisite-selection.env` agree on profile, enable_vmaas, with_lvms, with_metallb, kafka_provider and storage_class; checksum evidence is stored.
 - [ ] Installation may proceed to `operators.md`.

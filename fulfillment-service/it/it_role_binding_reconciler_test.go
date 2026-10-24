@@ -20,13 +20,17 @@ import (
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Role binding reconciler", func() {
@@ -80,8 +84,17 @@ var _ = Describe("Role binding reconciler", func() {
 
 		// Create a test user in Keycloak
 		testUserPayload := map[string]any{
-			"username": "my-user",
-			"enabled":  true,
+			"username":      "my-user",
+			"enabled":       true,
+			"email":         "my-user@test.local",
+			"emailVerified": true,
+			"firstName":     "My",
+			"lastName":      "Test",
+			"credentials": []map[string]any{{
+				"type":      "password",
+				"value":     usersPassword,
+				"temporary": false,
+			}},
 		}
 		code, _, err = tool.KeycloakAdminRequest(ctx, "POST", "/users", testUserPayload)
 		Expect(err).ToNot(HaveOccurred())
@@ -223,4 +236,101 @@ var _ = Describe("Role binding reconciler", func() {
 			time.Second,
 		).Should(Succeed())
 	})
+
+	DescribeTable("keeps existing tokens unchanged and applies reader roles to new tokens",
+		func(roleName, tenant string) {
+			_, err := tool.keycloakEnsureUserReady(ctx, "my-user")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(tool.ensureUserInOrg(ctx, "my-user", tenant)).To(Succeed())
+
+			assets := createReaderTestAssets(ctx)
+			oldTokenSource, err := tool.makeKeycloakTokenSource(ctx, "my-user", usersPassword)
+			Expect(err).ToNot(HaveOccurred())
+			oldToken, err := oldTokenSource.Token(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			staticOldTokenSource, err := auth.NewStaticTokenSource().
+				SetLogger(tool.logger).
+				SetToken(oldToken).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(readerTokenRoles(ctx, oldTokenSource)).ToNot(ContainElement(roleName))
+			oldConn, err := tool.makeGrpcConn(externalServiceAddr, staticOldTokenSource)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(func() {
+				Expect(oldConn.Close()).To(Succeed())
+			})
+			oldClient := publicv1.NewClustersClient(oldConn)
+
+			original := createReaderTestCluster(ctx, oldConn, tenant,
+				"role-sync-original-"+uuid.New()[24:], assets)
+			getResponse, err := oldClient.Get(ctx, publicv1.ClustersGetRequest_builder{
+				Id: original.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetId()).To(Equal(original.GetId()))
+
+			createReaderRoleBinding(ctx, testUserID, roleName)
+			Expect(readerTokenRoles(ctx, staticOldTokenSource)).ToNot(ContainElement(roleName))
+
+			getResponse, err = oldClient.Get(ctx, publicv1.ClustersGetRequest_builder{
+				Id: original.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetId()).To(Equal(original.GetId()))
+			oldTokenCluster := createReaderTestCluster(ctx, oldConn, tenant,
+				"role-sync-old-token-create-"+uuid.New()[24:], assets)
+
+			newTokenSource, err := tool.makeKeycloakTokenSource(ctx, "my-user", usersPassword)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(readerTokenRoles(ctx, newTokenSource)).To(ContainElement(roleName))
+			newConn, err := tool.makeGrpcConn(externalServiceAddr, newTokenSource)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(func() {
+				Expect(newConn.Close()).To(Succeed())
+			})
+			newClient := publicv1.NewClustersClient(newConn)
+
+			for _, cluster := range []*publicv1.Cluster{original, oldTokenCluster} {
+				getResponse, err := newClient.Get(ctx, publicv1.ClustersGetRequest_builder{
+					Id: cluster.GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(getResponse.GetObject().GetId()).To(Equal(cluster.GetId()))
+			}
+
+			createdName := "role-sync-new-token-create-" + uuid.New()[24:]
+			createResponse, err := newClient.Create(ctx, readerTestClusterCreateRequest(createdName, tenant, assets))
+			if err == nil {
+				Expect(createResponse).ToNot(BeNil())
+				Expect(createResponse.GetObject()).ToNot(BeNil())
+				deferClusterDeletion(createResponse.GetObject().GetId(), tool.InternalView().AdminConn())
+			}
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+
+			candidate := proto.Clone(original).(*publicv1.Cluster)
+			candidate.GetSpec().GetNodeSets()["my-node-set"].SetSize(4)
+			_, err = newClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{Object: candidate}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+
+			_, err = newClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: original.GetId()}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+
+			adminClient := publicv1.NewClustersClient(tool.InternalView().AdminConn())
+			persisted, err := adminClient.Get(ctx, publicv1.ClustersGetRequest_builder{
+				Id: original.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(persisted.GetObject().GetSpec().GetNodeSets()["my-node-set"].GetSize()).To(Equal(int32(3)))
+			Expect(persisted.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+
+			filter := fmt.Sprintf("this.metadata.name == %q", createdName)
+			persistedList, err := adminClient.List(ctx, publicv1.ClustersListRequest_builder{
+				Filter: &filter,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(persistedList.GetItems()).To(BeEmpty())
+		},
+		Entry("tenant-reader", "tenant-reader", "users"),
+		Entry("cloud-provider-reader", "cloud-provider-reader", "sales"),
+	)
 })

@@ -96,6 +96,24 @@
         "attributes": {}
       },
       {
+        "id": "a1b2c3d4-e5f6-7890-abcd-900000000005",
+        "name": "tenant-reader",
+        "description": "Read-only access within the user's existing tenant scope",
+        "composite": false,
+        "clientRole": false,
+        "containerId": "01e6c34f-6906-4907-9cbd-2dec7a6a0e1d",
+        "attributes": {}
+      },
+      {
+        "id": "a1b2c3d4-e5f6-7890-abcd-900000000006",
+        "name": "cloud-provider-reader",
+        "description": "Read-only access within the user's existing provider scope",
+        "composite": false,
+        "clientRole": false,
+        "containerId": "01e6c34f-6906-4907-9cbd-2dec7a6a0e1d",
+        "attributes": {}
+      },
+      {
         "id": "b2c3d4e5-6789-0123-4567-890123456789",
         "name": "tenant-user-manager",
         "description": "Tenant user manager with user management permissions",

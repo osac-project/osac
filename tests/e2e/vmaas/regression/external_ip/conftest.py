@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import subprocess
 from collections.abc import Callable, Generator
@@ -122,10 +123,10 @@ def created_ips(grpc: GRPCClient, k8s_hub_client: K8sClient) -> Generator[list[t
 
 @pytest.fixture
 def external_ip(
-    grpc: GRPCClient, k8s_hub_client: K8sClient, external_ip_pool: tuple[str, str]
+    grpc: GRPCClient, k8s_hub_client: K8sClient, external_ip_pool: tuple[str, str], ip_project: str
 ) -> Generator[tuple[str, str], None, None]:
     pool_id, _ = external_ip_pool
-    ip_id, ip_cr_name = create_ip(grpc, k8s_hub_client, pool_id)
+    ip_id, ip_cr_name = create_ip(grpc, k8s_hub_client, pool_id, project=ip_project)
     yield ip_id, ip_cr_name
     if k8s_hub_client.is_present(resource="externalip", name=ip_cr_name):
         try:
@@ -166,3 +167,14 @@ def make_compute_instances(
             logger.warning("ComputeInstance %s teardown failed: %s", ci_uuid, (exc.stderr or "").strip())
             continue
         wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+
+
+@pytest.fixture(scope="class")
+def ip_project(grpc: GRPCClient) -> Generator[str, None, None]:
+    """A project the lifecycle test's IP is attributed to, so the heartbeat's
+    project dimension is a real attribution check rather than an absent field."""
+    name = unique_name("e2e-eip-metering-project")
+    project_id: str = grpc.create_project(name=name)
+    yield name
+    with contextlib.suppress(Exception):
+        grpc.delete_project(project_id=project_id)

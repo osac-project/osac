@@ -22,7 +22,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -134,11 +133,12 @@ func syncExternalIPDelete(_ context.Context, obj *v1alpha1.ExternalIP, remote *p
 }
 
 func syncExternalIPStateTransitionTime(obj *v1alpha1.ExternalIP, remote *privatev1.ExternalIP) {
-	if obj.Status.StateTransitionTime == nil {
+	at := stateTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
+	if at == nil {
 		remote.GetStatus().ClearStateTransitionTime()
 		return
 	}
-	remote.GetStatus().SetStateTransitionTime(timestamppb.New(obj.Status.StateTransitionTime.Time))
+	remote.GetStatus().SetStateTransitionTime(at)
 }
 
 func syncExternalIPState(ctx context.Context, obj *v1alpha1.ExternalIP, remote *privatev1.ExternalIP) {

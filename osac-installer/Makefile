@@ -367,6 +367,11 @@ endif
 ##@ Entity: Osac
 
 AAP_LICENSE_FILE ?= values/$(PROFILE)/license.zip
+# Monetize360 Usage API key, applied as the Secret named by
+# metering.m360Adapter.m360.apiKeySecret. Like the AAP license, the key itself
+# never enters the repository: the file is gitignored.
+M360_API_KEY_FILE ?= values/$(PROFILE)/m360-api-key
+M360_API_KEY_SECRET ?= osac-m360-api-key
 
 .PHONY: install-osac
 install-osac: ## Install OSAC instance (PLATFORM= PROFILE= NS= required)
@@ -382,6 +387,13 @@ ifneq ($(PLATFORM),kind)
 	oc label secret config-as-code-manifest-ig \
 		osac.openshift.io/project=osac-aap \
 		-n $(NS) --overwrite
+	@if [ -f "$(M360_API_KEY_FILE)" ]; then \
+		oc create secret generic $(M360_API_KEY_SECRET) \
+			--from-literal=api-key="$$(cat "$(M360_API_KEY_FILE)")" \
+			-n $(NS) --dry-run=client -o yaml | oc apply -f -; \
+	else \
+		echo "NOTE: $(M360_API_KEY_FILE) not found; skipping $(M360_API_KEY_SECRET) (required when metering.m360Adapter.enabled is true)"; \
+	fi
 	@bash -c 'source scripts/lib.sh && check_postgres_prerequisites "$(NS)" "$(INFRA_VALUES)"'
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: Could not determine cluster domain. Is oc logged in?" >&2; exit 1; }
@@ -668,6 +680,10 @@ fulfillment-trust-render-test: helm-deps ## Check verified fulfillment transport
 metering-auth-render-test: helm-deps ## Check metering service-account auth renders in supported profiles
 	python3 scripts/test-metering-auth-render.py
 
+.PHONY: event-publisher-render-test
+event-publisher-render-test: helm-deps ## Check the event publisher and metering topic wiring renders
+	python3 scripts/test-event-publisher-render.py
+
 .PHONY: mce-render-test
 mce-render-test: helm-infra-deps ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance
 	uv run --project .. python scripts/test-mce-render.py
@@ -693,7 +709,7 @@ bmf-netbox-render-test: helm-deps ## Check NetBox, Metal3 management, and Secret
 	uv run --project .. python scripts/test-bmf-netbox-render.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test mce-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \

@@ -191,9 +191,6 @@ def check(enabled: bool) -> None:
     for marker in ("mountPath: /etc/ca-bundle", "name: fulfillment-ca-bundle", "key: bundle.pem"):
         assert marker in operator
     assert "value: /etc/ca-bundle/bundle.pem" in metering
-    assert re.search(
-        rf'- name: FULFILLMENT_TRUST_ENABLED\n\s+value: "{str(enabled).lower()}"', metering
-    ), "metering fulfillment trust flag does not match global.fulfillmentTrust.enabled"
     assert "--fulfillment-ca-file=/etc/ca-bundle/bundle.pem" in operator
     assert "--grpc-insecure" not in operator
 

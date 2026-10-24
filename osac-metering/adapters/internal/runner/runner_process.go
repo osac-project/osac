@@ -59,7 +59,7 @@ func (r *Runner) processMessage(
 		Offset:     msg.Offset,
 	}
 
-	result := submitWithRetry(ctx, r.adapter, event, r.cfg.MaxRetries, r.logger)
+	result := submitWithRetry(ctx, r.adapter, event, r.cfg.MaxRetries, r.logger, r.retries)
 
 	if result.TotalDuration > 0 && result.Attempts > 1 {
 		r.metrics.retryDuration.WithLabelValues(provider).Observe(result.TotalDuration.Seconds())
@@ -85,15 +85,15 @@ func (r *Runner) processMessage(
 				return false
 			}
 		} else {
-			// Context cancelled (e.g., rebalance interrupted retry backoff).
-			// Do NOT track offset — the event will be redelivered to the new
-			// partition owner after rebalance completes.
-			r.logger.V(1).Info("submit interrupted, event will be redelivered",
+			// The session ended mid-backoff: the message was neither delivered nor
+			// dead-lettered. Stop the claim so no later message advances the offset
+			// past this one; the next session redelivers it.
+			r.metrics.eventsFailed.WithLabelValues(provider, "retries_interrupted").Inc()
+			r.logger.Error(result.Err, "submit interrupted, stopping the claim; the message is redelivered",
 				"event_id", eventID, "topic", msg.Topic,
 				"partition", msg.Partition, "offset", msg.Offset,
-				"error", result.Err,
 			)
-			return true
+			return false
 		}
 		r.trackOffset(msg)
 		return true

@@ -16,6 +16,7 @@ package controller
 import (
 	"context"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -29,6 +30,21 @@ func setExternalIPState(status *v1alpha1.ExternalIPStatus, state v1alpha1.Extern
 	status.State = state
 	now := metav1.Now()
 	status.StateTransitionTime = &now
+}
+
+// stateTransitionTimeOf returns the time a status change happened. A CR deleted before any
+// controller status write carries no transition time; the deletion started at the deletion
+// timestamp, so that is then the time of the change. Reporting no time would make
+// fulfillment reject the state change as backdated, and the resource could never finish
+// deleting.
+func stateTransitionTimeOf(at, deleted *metav1.Time) *timestamppb.Timestamp {
+	if at == nil {
+		at = deleted
+	}
+	if at == nil {
+		return nil
+	}
+	return timestamppb.New(at.Time)
 }
 
 func setExternalIPDeleting(status *v1alpha1.ExternalIPStatus) bool {

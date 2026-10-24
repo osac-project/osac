@@ -74,7 +74,7 @@ func translateEvent(ce cloudevents.Event) (string, map[string]any, error) {
 	}
 
 	// Copy lifecycle data fields to top level.
-	for _, key := range schema.LifecycleDataFields() {
+	for _, key := range schema.HeartbeatDataFields() {
 		if key == "usage" {
 			continue
 		}

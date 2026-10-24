@@ -40,6 +40,18 @@
         }
       }
     },
+    "metal3": {
+      "type": "object",
+      "description": "Metal3/Ironic activation for the Bare Metal Fulfillment operator's Metal3 inventory backend",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Apply the Provisioning CR that activates Ironic with no provisioning network and cluster-wide BareMetalHost discovery",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
     "mce": {
       "type": "object",
       "properties": {

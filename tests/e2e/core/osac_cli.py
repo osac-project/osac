@@ -81,6 +81,7 @@ class OsacCLI:
         user_data_secret_ref: str | None = None,
         instance_type: str | None = None,
         ssh_key: str | None = None,
+        project: str | None = None,
     ) -> str:
         args: list[str] = [
             "create",
@@ -92,6 +93,8 @@ class OsacCLI:
             "--run-strategy",
             run_strategy,
         ]
+        if project is not None:
+            args.extend(["--project", project])
         if name is not None:
             args.extend(["--name", name])
 

@@ -60,24 +60,111 @@ osac-metering
 {{- end -}}
 
 {{/*
-Check if a service tier is enabled via global.services.<key>.enabled.
-Args: list of [context, serviceKey]
-Falls back to true when global.services is not set.
-Returns non-empty string for enabled, empty for disabled (for use in {{- if include ... }}).
+Init container that waits for the Kafka SASL secret in the cluster namespace
+and copies its password into the shared kafka-secrets emptyDir.
+Args: list of [context, saslSecretName]
 */}}
-{{- define "osac-metering.serviceEnabled" -}}
-{{- $ctx := index . 0 -}}
-{{- $svcKey := index . 1 -}}
-{{- $enabled := true -}}
-{{- if $ctx.Values.global -}}
-{{- if $ctx.Values.global.services -}}
-{{- $svc := index $ctx.Values.global.services $svcKey -}}
-{{- if $svc -}}
-{{- if hasKey $svc "enabled" -}}
-{{- $enabled = $svc.enabled -}}
+{{- define "osac-metering.kafkaSecretsInitContainer" -}}
+{{- $root := index . 0 -}}
+{{- $saslSecret := index . 1 -}}
+- name: fetch-kafka-secrets
+  image: {{ $root.Values.cliImage | default "quay.io/openshift/origin-cli:4.20.0" }}
+  env:
+    - name: HOME
+      value: /tmp
+    - name: SOURCE_NS
+      value: {{ include "osac-metering.kafkaClusterNamespace" $root }}
+    - name: SASL_SECRET
+      value: {{ $saslSecret }}
+  volumeMounts:
+    - name: kafka-secrets
+      mountPath: /etc/kafka-secrets
+    - name: tmp
+      mountPath: /tmp
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+  command:
+    - /bin/bash
+    - -euo
+    - pipefail
+    - -c
+    - |
+      DEADLINE=$((SECONDS + 300))
+      wait_for_secret() {
+        local name=$1 ns=$2
+        echo "Waiting for secret ${name} in ${ns} (timeout 5m)..."
+        until oc get secret "${name}" -n "${ns}" > /dev/null 2>&1; do
+          if [ $SECONDS -ge $DEADLINE ]; then
+            echo "Timed out waiting for secret ${name} in ${ns}"
+            exit 1
+          fi
+          sleep 5
+        done
+      }
+
+      wait_for_secret "${SASL_SECRET}" "${SOURCE_NS}"
+
+      oc get secret "${SASL_SECRET}" -n "${SOURCE_NS}" -o jsonpath='{.data.password}' | base64 -d > /etc/kafka-secrets/password
+      echo "Kafka SASL secret fetched."
 {{- end -}}
+
+{{/*
+ACLs shared by the adapter KafkaUsers: the adapter reads every tenant's
+heartbeat topic and the shared inference topic, writes every tenant's
+dead-letter topic plus the inference dead-letter topic, and reads its own
+consumer group.
+Args: adapter user name (also the consumer group name)
+*/}}
+{{- define "osac-metering.adapterKafkaUserAcls" -}}
+{{- $user := . -}}
+- resource:
+    type: topic
+    name: osac.metering.heartbeat.
+    patternType: prefix
+  operations:
+    - Read
+    - Describe
+  host: "*"
+- resource:
+    type: topic
+    name: osac.metering.inference
+    patternType: literal
+  operations:
+    - Read
+    - Describe
+  host: "*"
+- resource:
+    type: topic
+    name: osac.metering.dlq.
+    patternType: prefix
+  operations:
+    - Write
+    - Describe
+  host: "*"
+- resource:
+    type: topic
+    name: osac.metering.inference.dlq
+    patternType: literal
+  operations:
+    - Write
+    - Describe
+  host: "*"
+- resource:
+    type: group
+    name: {{ $user }}
+    patternType: literal
+  operations:
+    - Read
+  host: "*"
 {{- end -}}
-{{- end -}}
-{{- end -}}
-{{- if $enabled -}}true{{- end -}}
-{{- end }}

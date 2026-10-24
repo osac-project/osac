@@ -20,12 +20,15 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+
+	"strconv"
 	"sync"
 	"time"
 	"unicode"
 
 	"github.com/IBM/sarama"
 	"github.com/cenkalti/backoff/v4"
+
 	"github.com/gobuffalo/flect"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -74,6 +77,7 @@ type EventPublisherBuilder struct {
 	kafkaConfig         *sarama.Config
 	kafkaBrokers        []string
 	kafkaTopicPrefix    string
+	topicRetentionMS    string
 	listenWaitTimeout   time.Duration
 	listenRetryInterval time.Duration
 	batchSize           int
@@ -101,6 +105,7 @@ type EventPublisher struct {
 	kafkaAdmin       sarama.ClusterAdmin
 	kafkaProducer    sarama.SyncProducer
 	kafkaTopicPrefix string
+	topicRetentionMS string
 	publishedTopics  map[string]bool
 	batchSize        int
 	publishCallback  func(context.Context, *privatev1.Event) error
@@ -143,6 +148,7 @@ type eventPublisherObjectJson struct {
 func NewEventPublisher() *EventPublisherBuilder {
 	return &EventPublisherBuilder{
 		kafkaTopicPrefix:    DefaultEventTopicPrefix,
+		topicRetentionMS:    defaultTopicRetentionMS,
 		dbTable:             defaultEventPublisherTable,
 		dbChannel:           defaultEventPublisherChannel,
 		listenWaitTimeout:   defaultListenWaitTimeout,
@@ -196,6 +202,14 @@ func (b *EventPublisherBuilder) SetKafkaTopicPrefix(value string) *EventPublishe
 	return b
 }
 
+// SetTopicRetentionMS sets how long a topic the publisher creates keeps records, in
+// milliseconds. This is optional, defaults to indefinite (-1), and must be -1 or a positive
+// number.
+func (b *EventPublisherBuilder) SetTopicRetentionMS(value string) *EventPublisherBuilder {
+	b.topicRetentionMS = value
+	return b
+}
+
 // SetListenWaitTimeout sets how long the drain loop sleeps after an empty drain before it looks for unpublished rows
 // again. A PostgreSQL notification received by the listen loop interrupts this wait. This is optional, defaults to five
 // seconds, and there is usually no need to change it.
@@ -241,6 +255,36 @@ func (b *EventPublisherBuilder) SetMetricsInterval(value time.Duration) *EventPu
 }
 
 // Build uses the data stored in the builder to create a new EventPublisher.
+// checkSettings validates the numeric publisher settings. The retention is included here
+// because the broker rejects a value it cannot parse as a whole number of milliseconds
+// with an error that names no cause, so a misconfigured value fails here instead.
+func (b *EventPublisherBuilder) checkSettings() error {
+	if b.listenWaitTimeout <= 0 {
+		return fmt.Errorf("listen wait timeout should be positive, but it is %s", b.listenWaitTimeout)
+	}
+	if b.listenRetryInterval <= 0 {
+		return fmt.Errorf("listen retry interval should be positive, but it is %s", b.listenRetryInterval)
+	}
+	if b.batchSize <= 0 {
+		return fmt.Errorf("batch size should be positive, but it is %d", b.batchSize)
+	}
+	if b.metricsInterval <= 0 {
+		return fmt.Errorf("metrics interval should be positive, but it is %s", b.metricsInterval)
+	}
+	if _, err := strconv.ParseInt(b.topicRetentionMS, 10, 64); err != nil {
+		return fmt.Errorf("topic retention should be a whole number of milliseconds: %w", err)
+	}
+	// Zero is the one value the broker accepts that deletes the event log as it is written,
+	// and any negative other than -1 is rejected per record, forever: both fail here.
+	if retention, _ := strconv.ParseInt(b.topicRetentionMS, 10, 64); retention == 0 || retention < -1 {
+		return fmt.Errorf(
+			"topic retention should be -1 (indefinite) or a positive number of milliseconds, but is %s",
+			b.topicRetentionMS,
+		)
+	}
+	return nil
+}
+
 func (b *EventPublisherBuilder) Build() (result *EventPublisher, err error) {
 	// Check parameters:
 	if b.logger == nil {
@@ -251,20 +295,7 @@ func (b *EventPublisherBuilder) Build() (result *EventPublisher, err error) {
 		err = errors.New("database pool is mandatory")
 		return
 	}
-	if b.listenWaitTimeout <= 0 {
-		err = fmt.Errorf("listen wait timeout should be positive, but it is %s", b.listenWaitTimeout)
-		return
-	}
-	if b.listenRetryInterval <= 0 {
-		err = fmt.Errorf("listen retry interval should be positive, but it is %s", b.listenRetryInterval)
-		return
-	}
-	if b.batchSize <= 0 {
-		err = fmt.Errorf("batch size should be positive, but it is %d", b.batchSize)
-		return
-	}
-	if b.metricsInterval <= 0 {
-		err = fmt.Errorf("metrics interval should be positive, but it is %s", b.metricsInterval)
+	if err = b.checkSettings(); err != nil {
 		return
 	}
 	if b.kafkaTopicPrefix == "" {
@@ -365,6 +396,7 @@ func (b *EventPublisherBuilder) Build() (result *EventPublisher, err error) {
 		kafkaAdmin:       kafkaAdmin,
 		kafkaProducer:    kafkaProducer,
 		kafkaTopicPrefix: b.kafkaTopicPrefix,
+		topicRetentionMS: b.topicRetentionMS,
 		publishedTopics:  map[string]bool{},
 		fetchSQL:         fetchSQL,
 		deleteSQL:        deleteSQL,
@@ -867,7 +899,7 @@ func (p *EventPublisher) ensureTopic(ctx context.Context, topic string) error {
 	admin := p.kafkaAdmin
 	done := make(chan error, 1)
 	go func() {
-		done <- prepareTopic(ctx, admin, topic)
+		done <- prepareTopic(ctx, admin, topic, p.topicRetentionMS, p.logger)
 	}()
 	select {
 	case <-ctx.Done():
@@ -880,7 +912,14 @@ func (p *EventPublisher) ensureTopic(ctx context.Context, topic string) error {
 	}
 }
 
-func prepareTopic(ctx context.Context, admin sarama.ClusterAdmin, topic string) error {
+// topicAdmin is the slice of the cluster admin the publisher needs. Tests fake it.
+type topicAdmin interface {
+	DescribeTopics(topics []string) ([]*sarama.TopicMetadata, error)
+	CreateTopic(topic string, detail *sarama.TopicDetail, validateOnly bool) error
+	DescribeConfig(resource sarama.ConfigResource) ([]sarama.ConfigEntry, error)
+}
+
+func prepareTopic(ctx context.Context, admin topicAdmin, topic, retentionMS string, logger *slog.Logger) error {
 	descriptions, err := admin.DescribeTopics([]string{topic})
 	if err != nil {
 		return fmt.Errorf("failed to describe topic '%s': %w", topic, err)
@@ -897,11 +936,32 @@ func prepareTopic(ctx context.Context, admin sarama.ClusterAdmin, topic string) 
 	}
 	switch description.Err {
 	case sarama.ErrNoError:
-		return nil
+		// The outbox and the publisher assume one partition per topic, ordered by
+		// offset; a topic with more partitions silently breaks that model.
+		if len(description.Partitions) != 1 {
+			return fmt.Errorf(
+				"topic '%s' has %d partitions, want 1: the publisher writes a single partition; "+
+					"recreate the topic with one partition",
+				topic, len(description.Partitions),
+			)
+		}
+		return ensureTopicRetention(admin, topic, retentionMS, logger)
 	case sarama.ErrUnknownTopicOrPartition:
+		retentionBytes := "-1"
+		cleanupPolicy := "delete"
+		// The records are the recovery source, so the entries pin the whole
+		// retention contract: cleanup.policy=delete keeps earlier snapshots a
+		// compacting broker default would discard (messages are keyed by
+		// resource ID), and retention.bytes=-1 keeps a broker size limit from
+		// cutting the configured window short.
 		detail := &sarama.TopicDetail{
 			NumPartitions:     1,
 			ReplicationFactor: -1,
+			ConfigEntries: map[string]*string{
+				"retention.ms":    &retentionMS,
+				"retention.bytes": &retentionBytes,
+				"cleanup.policy":  &cleanupPolicy,
+			},
 		}
 		err = admin.CreateTopic(topic, detail, false)
 		if err != nil && !errors.Is(err, sarama.ErrTopicAlreadyExists) {
@@ -1269,6 +1329,10 @@ const (
 	// DefaultEventTopicPrefix is prepended to the tenant identifier to form Kafka topic names.
 	DefaultEventTopicPrefix = "osac.events."
 
+	// defaultTopicRetentionMS is how long a topic the publisher creates keeps records:
+	// indefinitely.
+	defaultTopicRetentionMS = "-1"
+
 	// defaultEventPublisherTable is the PostgreSQL table that stores change rows.
 	defaultEventPublisherTable = "changes"
 
@@ -1288,3 +1352,43 @@ const (
 	eventPublisherOpDelete = "DELETE"
 	eventPublisherOpSignal = "SIGNAL"
 )
+
+// ensureTopicRetention checks that a topic the publisher did not create carries the
+// configured retention. A topic created out of band, before the publisher's first
+// publish, gets the broker default, and the recovery window silently shrinks to that
+// default. The publisher refuses when it reads a different retention, and when the
+// broker denies the read: without the DescribeConfigs permission the check can never
+// run, and a denied read is a deployment misconfiguration someone must fix. Other
+// read failures log and continue: an unreachable broker is an outage, not a signal
+// about the topic.
+func ensureTopicRetention(
+	admin topicAdmin, topic, retentionMS string, logger *slog.Logger,
+) error {
+	entries, err := admin.DescribeConfig(sarama.ConfigResource{
+		Type: sarama.TopicResource, Name: topic,
+	})
+	if err != nil {
+		if errors.Is(err, sarama.ErrTopicAuthorizationFailed) {
+			return fmt.Errorf(
+				"cannot verify the retention of topic '%s': %w: grant DescribeConfigs on topics to this service's Kafka user",
+				topic, err,
+			)
+		}
+		logger.Info("cannot describe config of existing topic, continuing",
+			"topic", topic, "error", err)
+		return nil
+	}
+	for _, entry := range entries {
+		if entry.Name != "retention.ms" {
+			continue
+		}
+		if entry.Value != retentionMS {
+			return fmt.Errorf(
+				"topic '%s' has retention.ms %s, want %s: fix the topic's configuration",
+				topic, entry.Value, retentionMS,
+			)
+		}
+		return nil
+	}
+	return nil
+}

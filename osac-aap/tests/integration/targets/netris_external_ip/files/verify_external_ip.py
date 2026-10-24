@@ -231,6 +231,7 @@ class NetrisFixtureServer(ThreadingHTTPServer):
         self.scenario = {}
         self.next_subnet_id = 1
         self.barrier = None
+        self.barrier_arrivals = 0
         self.barriers_expired = []
 
     def apply_scenario(self, payload):
@@ -248,6 +249,7 @@ class NetrisFixtureServer(ThreadingHTTPServer):
             self.barrier = (
                 threading.Barrier(int(barrier["parties"])) if barrier else None
             )
+            self.barrier_arrivals = 0
             self.barriers_expired = []
 
     def commit_subnet(self, body):
@@ -296,18 +298,16 @@ class NetrisFixtureServer(ThreadingHTTPServer):
         """Wait for concurrent participants, or expire loudly after 10s."""
         with self.lock:
             barrier = self.barrier
-            if barrier is None:
+            if barrier is None or self.barrier_arrivals >= barrier.parties:
+                # Single-use: later retry creates must not wait again.
                 return True
+            self.barrier_arrivals += 1
         try:
-            index = barrier.wait(timeout=BARRIER_TIMEOUT)
+            barrier.wait(timeout=BARRIER_TIMEOUT)
         except threading.BrokenBarrierError:
             with self.lock:
                 self.barriers_expired.append("create")
             return False
-        if index == 0:
-            # Single-use: later retry creates must not wait again.
-            with self.lock:
-                self.barrier = None
         return True
 
     def handle_error(self, request, client_address):
@@ -613,22 +613,10 @@ class ExternalIPPlaybookTests(unittest.TestCase):
     def _run_child(self, playbook, job_vars, isolated=True,
                    timeout=SUBPROCESS_TIMEOUT):
         """Run one public playbook in a fresh Ansible process."""
-        vars_path = self._write_vars(job_vars)
-        try:
-            result = subprocess.run(
-                self._command(playbook, vars_path),
-                cwd=OSAC_AAP,
-                env=self._child_env(isolated),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
-        finally:
-            vars_path.unlink(missing_ok=True)
-        return result.returncode, self._parse_artifact(result.stdout), (
-            result.stdout + result.stderr
+        process, vars_path = self._spawn_child(
+            playbook, job_vars, isolated=isolated
         )
+        return self._collect(process, vars_path, timeout=timeout)
 
     def _spawn_child(self, playbook, job_vars, isolated=True):
         """Start one child Ansible process for a concurrent race case."""
@@ -741,6 +729,8 @@ class ExternalIPPlaybookTests(unittest.TestCase):
     def _scenario(self, **kwargs):
         """Replace the fixture scenario and clear its request log."""
         self.server.apply_scenario(kwargs)
+        with self.sentinel.lock:
+            self.sentinel.requests.clear()
 
     def _state(self):
         """Return the provider subnets, call log, and barrier results."""

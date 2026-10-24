@@ -6,6 +6,28 @@
 # is ever sourced by a script that forgot to.
 set -euo pipefail
 
+# Validate the Kubernetes Secret metadata.name and data key used for the
+# remote-cluster kubeconfig before either value reaches a command or manifest.
+validate_remote_kubeconfig_secret() {
+    local secret_name="$1"
+    local secret_key="$2"
+    local LC_ALL=C
+
+    if (( ${#secret_name} > 253 )) || \
+        [[ ! "${secret_name}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$ ]]; then
+        echo "ERROR: REMOTE_KUBECONFIG_SECRET_NAME must be a DNS subdomain of at most 253 characters" >&2
+        return 2
+    fi
+
+    if (( ${#secret_key} == 0 || ${#secret_key} > 253 )) || \
+        [[ ! "${secret_key}" =~ ^[-._a-zA-Z0-9]+$ || "${secret_key}" == "." || "${secret_key}" == ..* ]]; then
+        echo "ERROR: REMOTE_KUBECONFIG_SECRET_KEY must be a valid Secret data key of at most 253 characters" >&2
+        return 2
+    fi
+
+    return 0
+}
+
 # Retry a condition until it succeeds or times out, optionally running a command each iteration
 # Usage: retry_until <timeout_seconds> <interval_seconds> <condition_command> [loop_command]
 # Returns: 0 on success, 1 on timeout

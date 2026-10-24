@@ -31,9 +31,11 @@ Usage (from osac-aap/):
     uv run python tests/integration/targets/netris_external_ip/files/verify_external_ip.py
 """
 
+import contextlib
 import json
 import os
 import secrets
+import signal
 import subprocess
 import sys
 import tempfile
@@ -60,6 +62,9 @@ LEGACY_POOL_NAME = "netris-eip-legacy-pool"
 LEGACY_ALLOC_PREFIX = "198.51.100.0/30"
 LEGACY_ALLOCATED = "198.51.100.1"
 SUBPROCESS_TIMEOUT = 90
+# Grace for reaping pipes after a process-group kill; uv does not forward
+# SIGKILL to its ansible-playbook child, so the kill must cover the group.
+REAP_GRACE_SECONDS = 10
 BARRIER_TIMEOUT = 10
 DELETION_POLL_RETRIES = 20
 
@@ -636,6 +641,9 @@ class ExternalIPPlaybookTests(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                # Own process group so a kill reaches the uv wrapper's
+                # ansible-playbook child; uv does not forward SIGKILL.
+                start_new_session=True,
             )
         except BaseException:
             vars_path.unlink(missing_ok=True)
@@ -658,19 +666,34 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         try:
             stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            process.kill()
+            self._kill_tree(process)
             process.communicate()
             vars_path.unlink(missing_ok=True)
             self.fail(f"child playbook exceeded the {timeout}s wall timeout")
         vars_path.unlink(missing_ok=True)
         return process.returncode, self._parse_artifact(stdout), stdout + stderr
 
+    def _kill_tree(self, process):
+        """Kill the child's process group. uv does not forward SIGKILL to
+        its ansible-playbook child, so killing uv alone leaves the job
+        running and holding the captured pipes open."""
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            with contextlib.suppress(ProcessLookupError):
+                process.kill()
+
     def _reap(self, spawned):
         """Kill still-live children and remove their vars files."""
         for process, vars_path in spawned:
             if process.poll() is None:
-                process.kill()
-                process.communicate()
+                self._kill_tree(process)
+                try:
+                    process.communicate(timeout=REAP_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    for stream in (process.stdout, process.stderr):
+                        if stream is not None:
+                            stream.close()
             vars_path.unlink(missing_ok=True)
 
     def _collect_all(self, spawned, timeout=SUBPROCESS_TIMEOUT):

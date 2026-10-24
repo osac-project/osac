@@ -1,6 +1,6 @@
 import { type MessageInitShape } from '@bufbuild/protobuf';
 import { timestampNow } from '@bufbuild/protobuf/wkt';
-import { keepPreviousData, useMutation } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 
 import {
   type ComputeInstance,
@@ -10,22 +10,36 @@ import {
   type ComputeInstancesListResponse,
 } from '@osac/types';
 import { ComputeInstanceRunStrategy } from '@osac/types';
+import { useListResource } from '@osac/ui-components/api/use-resource';
 import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
 
 import { useApiFetch } from '../api-context';
+import { type CelFilter, cel } from '../cel';
 import { apiQueryKey } from '../types';
 import { buildUpdateMaskPaths } from './update-mask';
 import { type ApiQueryClient, useApiQuery, useApiQueryClient } from '../use-api-query';
 
-export const useComputeInstances = () => {
-  const client = useApiFetch(ComputeInstances);
-  const filter = useProjectFilterQuery<ComputeInstance>();
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/compute_instances', undefined, filter ? { filter } : undefined),
-    queryFn: () => client.list({ filter }),
-    select: (data) => data.items,
-    placeholderData: keepPreviousData,
-  });
+export const useComputeInstances = (filters?: CelFilter<ComputeInstance>, enabled = true) => {
+  const projectFilter = useProjectFilterQuery<ComputeInstance>();
+  const filter = cel<ComputeInstance>((builder) => builder.and(projectFilter, filters));
+  const totalsFilter = cel<ComputeInstance>((builder) => builder.and(projectFilter));
+
+  const filteredVmsQuery = useListResource(ComputeInstances, { filter }, { enabled });
+  const totalVmsQuery = useListResource(
+    ComputeInstances,
+    { filter: totalsFilter, limit: 0 },
+    { enabled },
+  );
+
+  const isLoading = filteredVmsQuery.isLoading || totalVmsQuery.isLoading;
+  const error = filteredVmsQuery.error || totalVmsQuery.error;
+
+  return {
+    vms: filteredVmsQuery.data?.items ?? [],
+    totalItems: totalVmsQuery.data?.total ?? 0,
+    isLoading,
+    error,
+  };
 };
 
 export const useComputeInstance = (id: string) => {
@@ -40,6 +54,7 @@ export const useComputeInstance = (id: string) => {
 };
 
 export const invalidateComputeInstancesQueries = async (qc: ApiQueryClient) => {
+  await qc.invalidateServiceQueries(ComputeInstances);
   await qc.invalidateQueries({ queryKey: apiQueryKey('v1/compute_instances') });
 };
 

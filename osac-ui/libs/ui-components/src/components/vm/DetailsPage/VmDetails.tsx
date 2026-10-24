@@ -16,7 +16,6 @@ import {
 
 import type { ComputeInstance } from '@osac/types';
 
-import VmDetailsActionButtons from './VmDetailsActionButtons';
 import VmDetailsOverviewTab from './VmDetailsOverviewTab';
 import VmDetailsSummary from './VmDetailsSummary';
 import VmNetworkingTab from './VmNetworkingTab';
@@ -25,6 +24,7 @@ import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
 import { VmStatusLabel } from '../../../VmStatusLabel';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
+import VmActionButtons from '../actions/VmActionButtons';
 import VmConsoleTab from '../console/VmConsoleTab';
 import {
   VM_DETAIL_CONSOLE_TAB_ID,
@@ -72,7 +72,7 @@ const VmDetails = ({ vm }: Props) => {
                 />
               </FlexItem>
               <FlexItem>
-                <VmDetailsActionButtons vm={vm} />
+                <VmActionButtons vm={vm} />
               </FlexItem>
             </Flex>
           </StackItem>

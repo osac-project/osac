@@ -11,7 +11,7 @@ vi.mock('../../../api/v1/instance-types', () => ({
   useInstanceType: vi.fn(),
 }));
 
-vi.mock('./VmDetailsActionButtons', () => ({
+vi.mock('../actions/VmActionButtons', () => ({
   default: () => <div>Action buttons</div>,
 }));
 

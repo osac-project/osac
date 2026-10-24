@@ -8,7 +8,7 @@ import type {
 } from '@osac/types';
 import { ComputeInstanceState, ExternalIPAttachmentState } from '@osac/types';
 
-import VmDetailsActionButtons from './VmDetailsActionButtons';
+import VmActionButtons from './VmActionButtons';
 import * as resourceModule from '../../../api/use-resource';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
@@ -39,13 +39,22 @@ const setAttachment = (state: ExternalIPAttachmentState, message?: string) => {
   } as unknown as ReturnType<typeof resourceModule.useListResource>);
 };
 
-describe('VmDetailsActionButtons external IP states', () => {
+describe('VmActionButtons external IP states', () => {
   it('shows a disabled progress button while the attachment is provisioning', () => {
     setAttachment(ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_PENDING);
 
-    renderWithProviders(<VmDetailsActionButtons vm={vm} />);
+    renderWithProviders(<VmActionButtons vm={vm} />);
 
     expect(screen.getByRole('button', { name: /Attaching External IP/ })).toBeDisabled();
+  });
+
+  it('shows detach when the attachment is ready but the VM status has no external IP', () => {
+    setAttachment(ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_READY);
+
+    renderWithProviders(<VmActionButtons vm={vm} />);
+
+    expect(screen.getByRole('button', { name: 'Detach external IP' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Attach external IP' })).not.toBeInTheDocument();
   });
 
   it('shows an alert when the attachment fails', () => {
@@ -54,7 +63,7 @@ describe('VmDetailsActionButtons external IP states', () => {
       'external IP binding failed',
     );
 
-    renderWithProviders(<VmDetailsActionButtons vm={vm} />);
+    renderWithProviders(<VmActionButtons vm={vm} />);
 
     expect(screen.getByText('External IP attachment failed')).toBeInTheDocument();
     expect(screen.getByText('external IP binding failed')).toBeInTheDocument();

@@ -22,7 +22,7 @@ interface InstanceCardProps {
   actionMenu: ReactNode;
   title: ReactNode;
   body: ReactNode;
-  footer: ReactNode;
+  footer?: ReactNode;
   actionButton?: ReactNode;
 }
 

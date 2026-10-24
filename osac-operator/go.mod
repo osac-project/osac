@@ -10,7 +10,7 @@ require (
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
 	github.com/openshift/hypershift/api v0.0.0-20250331235933-616a2fae81ae
-	github.com/osac-project/osac/bare-metal-fulfillment-operator v0.0.0-00010101000000-000000000000
+	github.com/osac-project/osac/bare-metal-fulfillment-operator/api v0.0.0-00010101000000-000000000000
 	github.com/osac-project/osac/osac-operator/api v0.0.7
 	github.com/osac-project/osac/proto v0.0.0-00010101000000-000000000000
 	github.com/ovn-org/ovn-kubernetes/go-controller v0.0.0-20251211123925-6d83b2b6e183
@@ -45,6 +45,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
+	github.com/evanphx/json-patch v5.9.11+incompatible // indirect
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
@@ -125,7 +126,7 @@ require (
 )
 
 replace (
-	github.com/osac-project/osac/bare-metal-fulfillment-operator => ../bare-metal-fulfillment-operator
+	github.com/osac-project/osac/bare-metal-fulfillment-operator/api => ../bare-metal-fulfillment-operator/api
 	github.com/osac-project/osac/osac-operator/api => ./api
 	github.com/osac-project/osac/proto => ../proto
 )

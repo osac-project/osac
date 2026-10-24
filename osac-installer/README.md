@@ -230,7 +230,7 @@ make -C ../osac-aap execution-environment-build \
   IMG=ghcr.io/osac-project/osac-aap:latest \
   CONTAINER_TOOL="$CONTAINER_TOOL"
 "$CONTAINER_TOOL" build -t ghcr.io/osac-project/osac-ui:latest \
-  -f ../osac-ui/Containerfile ../osac-ui
+  -f ../osac-ui/Containerfile ..
 
 make kind-load-images PLATFORM=kind PROFILE=dev-full NS=osac \
   CONTAINER_TOOL="$CONTAINER_TOOL"

@@ -20,8 +20,8 @@ def test_disabled_service_grpc_unavailable(grpc: GRPCClient) -> None:
     assert "bmaas" in combined.lower(), f"Error should mention bmaas service, got: {combined.strip()}"
 
 
-def test_disabled_service_absent_from_reflection(fulfillment_address: str) -> None:
-    output = run("grpcurl", "-insecure", fulfillment_address, "list")
+def test_disabled_service_absent_from_reflection(fulfillment_address: str, grpc: GRPCClient) -> None:
+    output = run("grpcurl", "-insecure", "-H", f"Authorization: Bearer {grpc.token}", fulfillment_address, "list")
     services = output.strip().splitlines()
     assert f"{PUBLIC_API}.BareMetalInstances" not in services, (
         "Disabled BareMetalInstances should not appear in reflection"

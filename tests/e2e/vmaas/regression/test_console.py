@@ -4,9 +4,11 @@ import base64
 import contextlib
 import json
 import logging
+import os
 import queue
 import ssl
 import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -140,21 +142,43 @@ def _ws_try_connect(url: str, ticket: str) -> bool:
             ws.shutdown()
 
 
-def _grpc_popen(address: str, ticket: str) -> subprocess.Popen:
+def _fetch_protoset(address: str, admin_token: str) -> str:
+    """Fetch a proto descriptor set for ConsoleProxy using the admin JWT.
+
+    gRPC reflection now requires authentication. Console stream calls use JWE
+    tickets that the JWT validator does not recognise, so reflection fails before
+    the actual RPC is attempted. Pre-fetch the descriptor with the admin token
+    and pass it via -protoset so grpcurl skips reflection for the stream call.
+
+    Returns the path to a temporary .pb file; caller must delete it when done.
+    """
+    fd, path = tempfile.mkstemp(suffix=".pb")
+    os.close(fd)
+    service = CONSOLE_GRPC_SERVICE.split("/")[0]  # "osac.public.v1.ConsoleProxy"
+    subprocess.check_call([
+        "grpcurl", "-insecure",
+        "-H", f"Authorization: Bearer {admin_token}",
+        "-protoset-out", path,
+        address,
+        "describe", service,
+    ])
+    return path
+
+
+def _grpc_popen(address: str, ticket: str, protoset: str | None = None) -> subprocess.Popen:
     """Start a gRPC console stream subprocess. Caller must manage stdin/lifecycle."""
-    return subprocess.Popen(
-        ["grpcurl", "-insecure", "-H", f"Authorization: Bearer {ticket}", "-d", "@", address, CONSOLE_GRPC_SERVICE],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    cmd = ["grpcurl", "-insecure"]
+    if protoset:
+        cmd += ["-protoset", protoset]
+    cmd += ["-H", f"Authorization: Bearer {ticket}", "-d", "@", address, CONSOLE_GRPC_SERVICE]
+    return subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
 class _GrpcSession:
     """Interactive gRPC console session via grpcurl subprocess."""
 
-    def __init__(self, address: str, ticket: str) -> None:
-        self._proc = _grpc_popen(address, ticket)
+    def __init__(self, address: str, ticket: str, protoset: str | None = None) -> None:
+        self._proc = _grpc_popen(address, ticket, protoset=protoset)
         self._output_q: queue.Queue[str | None] = queue.Queue()
         self._connected = threading.Event()
         self._reader = threading.Thread(target=self._read_stdout, daemon=True)
@@ -214,13 +238,13 @@ class _GrpcSession:
         self._proc.wait()
 
 
-def _grpc_stream(address: str, ticket: str) -> tuple[str, str, int]:
+def _grpc_stream(address: str, ticket: str, protoset: str | None = None) -> tuple[str, str, int]:
     """Open a gRPC console stream via grpcurl, close stdin, and collect output.
 
     Returns (stdout, stderr, returncode).
     """
     logger.info("gRPC stream opening to %s", address)
-    proc = _grpc_popen(address, ticket)
+    proc = _grpc_popen(address, ticket, protoset=protoset)
     try:
         proc.stdin.close()  # type: ignore[union-attr]
         proc.stdin = None  # prevent communicate() from flushing closed stdin
@@ -324,11 +348,13 @@ def test_console_serial_websocket(console_vm: dict[str, str], grpc: GRPCClient, 
 def test_console_serial_grpc_stream(console_vm: dict[str, str], grpc: GRPCClient, fulfillment_address: str) -> None:
     """Connect to the serial console via gRPC bidi stream and verify interactive login prompt."""
     session: dict[str, Any] = _create_ticket(grpc, console_vm["uuid"])
-    gs = _GrpcSession(fulfillment_address, session["ticket"])
+    protoset = _fetch_protoset(fulfillment_address, grpc.token)
+    gs = _GrpcSession(fulfillment_address, session["ticket"], protoset=protoset)
     try:
         _wait_for_login_prompt(send=gs.send, recv=gs.recv)
     finally:
         gs.close()
+        os.unlink(protoset)
 
 
 # ---------------------------------------------------------------------------
@@ -363,13 +389,14 @@ def test_console_concurrent_session_rejected(
     """A second connection to the same resource must be rejected while one is active."""
     session1: dict[str, Any] = _create_ticket(grpc, console_vm["uuid"])
     session2: dict[str, Any] = _create_ticket(grpc, console_vm["uuid"])
+    protoset = _fetch_protoset(fulfillment_address, grpc.token)
 
-    gs1 = _GrpcSession(fulfillment_address, session1["ticket"])
+    gs1 = _GrpcSession(fulfillment_address, session1["ticket"], protoset=protoset)
     try:
         assert gs1.wait_connected(), "First session failed to connect"
         assert gs1.alive, "First session should still be running"
 
-        stdout, stderr, rc = _grpc_stream(fulfillment_address, session2["ticket"])
+        stdout, stderr, rc = _grpc_stream(fulfillment_address, session2["ticket"], protoset=protoset)
         combined: str = stdout + stderr
         logger.info("Concurrent session2 rc=%d", rc)
         assert rc != 0, f"Second connection should fail, got: {combined!r}"
@@ -380,6 +407,7 @@ def test_console_concurrent_session_rejected(
         assert gs1.alive, "First session died while second was rejected"
     finally:
         gs1.close()
+        os.unlink(protoset)
 
 
 # ---------------------------------------------------------------------------

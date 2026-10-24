@@ -131,3 +131,26 @@ This implementation updates the allocation handoff in the accepted unified
 networking design. The contract amendment is to follow the deployed AgentlessNet
 ExternalIP E2E validation tracked with OSAC-6307. Unversioned Netris continues
 using its existing annotation handoff until its contract-adoption work is done.
+
+## AgentlessNet ExternalIPAttachment implementation status
+
+The OSAC-6308 AgentlessNet v1 attachment flow is independently versioned by
+`externalIPAttachmentContractVersion`; it does not inherit the ExternalIP
+contract version. The ExternalIPAttachment controller resolves the ready
+ExternalIP, BareMetalInstance, primary Subnet, and VirtualNetwork, then sends
+their resource identities, tenant ownership, addresses, and readiness in the
+same AAP job input as the attachment CR. AAP does not query Kubernetes or write
+CR status. It reserves attachment state in the existing AgentlessNet SQLite
+schema-v1 database, installs inbound whole-address DNAT and scoped forwarding,
+and announces the ExternalIP `/32` through local FRR. The controller validates
+the returned artifact against the submitted input and current resource snapshot
+before marking the attachment Ready; detach uses saved provider state and keeps
+finalizers until its artifact is accepted.
+
+This first delivery supports BMaaS BareMetalInstance targets. It does not add
+SecurityGroup policy, NATGateway SNAT, IPv6, or an upstream-router/BGP-peer
+configuration API. The OSAC-1433 design's AAP input and attachment result
+contract needs an enhancement-proposals amendment for the controller-supplied
+dependency snapshot and result-validation responsibilities. Netris continues
+using its current attachment flow until its follow-up adopts the corrected
+contract. See OSAC-6308 for that contract follow-up and deployed E2E coverage.

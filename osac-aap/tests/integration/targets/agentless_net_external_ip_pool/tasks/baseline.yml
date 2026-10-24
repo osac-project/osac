@@ -18,6 +18,7 @@
                 ansible_host: 127.0.0.1
                 ansible_user: pool-test
     expected_tables:
+      - attachments
       - external_ip_pools
       - external_ips
       - subnets

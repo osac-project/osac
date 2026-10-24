@@ -46,8 +46,10 @@ const (
 	DataKeyCapabilities = "capabilities"
 
 	// DataKeyExternalIPContractVersion selects the ExternalIP allocation contract.
-	DataKeyExternalIPContractVersion = "externalIPContractVersion"
-	ExternalIPContractVersionV1      = "v1"
+	DataKeyExternalIPContractVersion           = "externalIPContractVersion"
+	ExternalIPContractVersionV1                = "v1"
+	DataKeyExternalIPAttachmentContractVersion = "externalIPAttachmentContractVersion"
+	ExternalIPAttachmentContractVersionV1      = "v1"
 )
 
 // ManagerType distinguishes fabric managers from k8s managers.
@@ -92,6 +94,9 @@ type Manager struct {
 
 	// ExternalIPContractVersion declares the ExternalIP allocation contract supported by this manager.
 	ExternalIPContractVersion string
+	// ExternalIPAttachmentContractVersion declares the ExternalIPAttachment job
+	// input/result contract supported by this manager.
+	ExternalIPAttachmentContractVersion string
 
 	// Type indicates whether this is a fabric or k8s manager.
 	Type ManagerType
@@ -133,13 +138,19 @@ func ParseConfigMap(cm *corev1.ConfigMap, managerType ManagerType) (*Manager, er
 		return nil, fmt.Errorf("ConfigMap %s/%s: unsupported ExternalIP contract version %q",
 			cm.Namespace, cm.Name, contractVersion)
 	}
+	attachmentContractVersion := strings.TrimSpace(cm.Data[DataKeyExternalIPAttachmentContractVersion])
+	if attachmentContractVersion != "" && attachmentContractVersion != ExternalIPAttachmentContractVersionV1 {
+		return nil, fmt.Errorf("ConfigMap %s/%s: unsupported ExternalIPAttachment contract version %q",
+			cm.Namespace, cm.Name, attachmentContractVersion)
+	}
 
 	return &Manager{
-		Name:                      strings.TrimSpace(name),
-		Description:               strings.TrimSpace(cm.Data[DataKeyDescription]),
-		Capabilities:              caps,
-		ExternalIPContractVersion: contractVersion,
-		Type:                      managerType,
+		Name:                                strings.TrimSpace(name),
+		Description:                         strings.TrimSpace(cm.Data[DataKeyDescription]),
+		Capabilities:                        caps,
+		ExternalIPContractVersion:           contractVersion,
+		ExternalIPAttachmentContractVersion: attachmentContractVersion,
+		Type:                                managerType,
 		ConfigMapRef: types.NamespacedName{
 			Namespace: cm.Namespace,
 			Name:      cm.Name,

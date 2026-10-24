@@ -46,6 +46,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-ope
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
 | Pure helpers, validation, or state calculations | Unit | `make test` |
+| AgentlessNet ExternalIPAttachment v1 context, AAP result validation, readiness, and detach-finalizer gating | Unit | `internal/controller/externalipattachment_contract_unit_test.go`, `internal/controller/externalipattachment_contract_test.go`, and `pkg/provisioning/external_ip_attachment_result_test.go`; run `make test` |
 | Fulfillment client CA parsing, TLS verification, or bundle rotation | Unit with local TLS endpoint; component integration for deployment | `make test`, then [installer Kind target](../docs/INTEGRATION-TESTING.md#osac-operator) and `make -C ../osac-installer fulfillment-trust-render-test` |
 | Controller reconciliation, finalizers, status, or CRD interactions | Envtest | `make test` |
 | Controller deployment, watches (including optional TopoLVM watch), RBAC, console proxy, networking, or Helm wiring | Component integration | Deploy current image/manifests, then `make integration-tests`; [installer alternative](../docs/INTEGRATION-TESTING.md#osac-operator) |

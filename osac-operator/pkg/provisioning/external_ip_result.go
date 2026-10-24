@@ -6,8 +6,6 @@ import (
 	"net/netip"
 )
 
-const externalIPResultKey = "osac_result"
-
 // ValidateExternalIPResult checks the v1 AAP result identity and operation data.
 func ValidateExternalIPResult(
 	outputs map[string]any,
@@ -15,31 +13,15 @@ func ValidateExternalIPResult(
 	resourceUID string,
 	generation int64,
 ) (string, error) {
-	if resourceUID == "" || generation < 0 {
-		return "", fmt.Errorf("ExternalIP UID and nonnegative generation are required")
-	}
-	encoded, err := json.Marshal(outputs[externalIPResultKey])
+	data, err := validateAAPResultEnvelope(
+		outputs, externalIPResultKey, "ExternalIP", operation, resourceUID, generation,
+	)
 	if err != nil {
-		return "", fmt.Errorf("ExternalIP result is malformed: %w", err)
-	}
-	var result struct {
-		SchemaVersion      string                     `json:"schemaVersion"`
-		Operation          string                     `json:"operation"`
-		ResourceUID        string                     `json:"resourceUID"`
-		ObservedGeneration *int64                     `json:"observedGeneration"`
-		Data               map[string]json.RawMessage `json:"data"`
-	}
-	if err := json.Unmarshal(encoded, &result); err != nil {
-		return "", fmt.Errorf("ExternalIP result is malformed: %w", err)
-	}
-	if result.SchemaVersion != "v1" || result.Operation != operation ||
-		result.ResourceUID != resourceUID || result.ObservedGeneration == nil ||
-		*result.ObservedGeneration != generation || result.Data == nil {
-		return "", fmt.Errorf("ExternalIP result does not match the current operation and resource")
+		return "", err
 	}
 	switch operation {
 	case "external_ip.allocate":
-		encodedAddress, ok := result.Data["address"]
+		encodedAddress, ok := data["address"]
 		if !ok {
 			return "", fmt.Errorf("ExternalIP allocation result has no address")
 		}
@@ -49,7 +31,7 @@ func ValidateExternalIPResult(
 		}
 		return address, nil
 	case "external_ip.release":
-		if len(result.Data) != 0 {
+		if len(data) != 0 {
 			return "", fmt.Errorf("ExternalIP release result data must be empty")
 		}
 		return "", nil

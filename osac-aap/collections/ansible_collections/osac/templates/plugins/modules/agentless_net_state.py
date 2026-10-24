@@ -44,6 +44,8 @@ options:
       - delete_external_ip_pool
       - reserve_external_ip
       - release_external_ip
+      - ensure_external_ip_attachment
+      - delete_external_ip_attachment
   state_file:
     description: Path to the AgentlessNet API state file on the managed node.
     type: path
@@ -96,6 +98,12 @@ options:
     elements: dict
   vip_cidr:
     description: Optional upper-end VIP block excluded from the DHCP range.
+    type: str
+  attachment_context:
+    description: Controller-resolved ExternalIPAttachment dependency snapshot.
+    type: dict
+  external_interface:
+    description: Provider uplink used for ExternalIP forwarding rules.
     type: str
 author:
   - OSAC project
@@ -154,6 +162,10 @@ EXTERNAL_IP_POOL_ACTIONS = {
     "delete_external_ip_pool",
 }
 EXTERNAL_IP_ACTIONS = {"reserve_external_ip", "release_external_ip"}
+EXTERNAL_IP_ATTACHMENT_ACTIONS = {
+    "ensure_external_ip_attachment",
+    "delete_external_ip_attachment",
+}
 
 
 def main() -> None:
@@ -176,6 +188,8 @@ def main() -> None:
                     "delete_external_ip_pool",
                     "reserve_external_ip",
                     "release_external_ip",
+                    "ensure_external_ip_attachment",
+                    "delete_external_ip_attachment",
                 ],
             },
             "state_file": {"type": "path", "required": True},
@@ -199,6 +213,8 @@ def main() -> None:
             },
             "vip_cidr": {"type": "str", "default": ""},
             "mac_address": {"type": "str"},
+            "attachment_context": {"type": "dict"},
+            "external_interface": {"type": "str"},
         },
         required_if=[
             (
@@ -237,6 +253,12 @@ def main() -> None:
                 "release_external_ip",
                 ["fulfillment_id", "pool_uid"],
             ),
+            (
+                "action",
+                "ensure_external_ip_attachment",
+                ["fulfillment_id", "attachment_context", "external_interface"],
+            ),
+            ("action", "delete_external_ip_attachment", ["fulfillment_id"]),
         ],
         supports_check_mode=True,
     )
@@ -299,6 +321,26 @@ def main() -> None:
             if external_ip is not None:
                 result["external_ip"] = external_ip
             module.exit_json(**result)
+            return
+
+        if params["action"] in EXTERNAL_IP_ATTACHMENT_ACTIONS:
+            if params["action"] == "ensure_external_ip_attachment":
+                _attachment, changed = store.ensure_external_ip_attachment(
+                    params["uid"],
+                    params["fulfillment_id"],
+                    params["tenant_id"],
+                    params["attachment_context"],
+                    params["external_interface"],
+                    check_mode=module.check_mode,
+                )
+            else:
+                _attachment, changed = store.delete_external_ip_attachment(
+                    params["uid"],
+                    params["fulfillment_id"],
+                    params["tenant_id"],
+                    check_mode=module.check_mode,
+                )
+            module.exit_json(changed=changed, backend_network_id=params["uid"])
             return
 
         if params["action"] == "ensure_virtual_network":
@@ -425,6 +467,11 @@ def main() -> None:
             )
         )
     except (StateError, SubnetProviderError) as error:
+        if params["action"] in EXTERNAL_IP_ATTACHMENT_ACTIONS:
+            module.fail_json(
+                msg="AgentlessNet ExternalIPAttachment operation failed; inspect the network node and retry."
+            )
+            return
         if params["action"] in EXTERNAL_IP_POOL_ACTIONS:
             module.fail_json(
                 msg="AgentlessNet ExternalIPPool operation failed; inspect the network node and retry."

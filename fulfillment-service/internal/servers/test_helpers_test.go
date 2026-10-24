@@ -124,8 +124,9 @@ func createDiskImageWithLifecycle(
 				Tenant: auth.SharedTenant,
 			}.Build(),
 			Spec: privatev1.DiskImageSpec_builder{
-				Lifecycle:   lifecycle,
-				Deprecation: deprecation,
+				Lifecycle:    lifecycle,
+				Architecture: []privatev1.Architecture{privatev1.Architecture_ARCHITECTURE_AMD64},
+				Deprecation:  deprecation,
 			}.Build(),
 		}.Build(),
 	).Do(ctx)
@@ -288,7 +289,8 @@ func createAvailableDiskImageInTenant(id, name, tenant string) {
 				Tenant: tenant,
 			}.Build(),
 			Spec: privatev1.DiskImageSpec_builder{
-				Lifecycle: privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
+				Lifecycle:    privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
+				Architecture: []privatev1.Architecture{privatev1.Architecture_ARCHITECTURE_AMD64},
 			}.Build(),
 		}.Build(),
 	).Do(ctx)

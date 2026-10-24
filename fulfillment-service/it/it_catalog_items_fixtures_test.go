@@ -716,7 +716,11 @@ func createCatalogItemBareMetalInstanceTemplateFixture(ctx context.Context, defa
 	return id
 }
 
-func createCatalogItemBareMetalInstanceTypeFixture(ctx context.Context, _ string) string {
+func createCatalogItemBareMetalInstanceTypeFixture(ctx context.Context, _ string, architecture ...string) string {
+	cpu := "amd64"
+	if len(architecture) > 0 {
+		cpu = architecture[0]
+	}
 	GinkgoHelper()
 	client := privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 	response, err := client.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
@@ -724,7 +728,7 @@ func createCatalogItemBareMetalInstanceTypeFixture(ctx context.Context, _ string
 			Metadata: catalogItemFixtureMetadata(auth.SharedTenant, ""),
 			Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 				Hardware: privatev1.BareMetalHardwareSpec_builder{
-					Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 4, Architecture: "amd64", ThreadsPerCore: 2}.Build(),
+					Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 4, Architecture: cpu, ThreadsPerCore: 2}.Build(),
 					Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 16}.Build(),
 					NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
 						privatev1.BareMetalNetworkPortSpec_builder{

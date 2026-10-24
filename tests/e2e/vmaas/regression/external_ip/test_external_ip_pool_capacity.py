@@ -74,6 +74,7 @@ class TestPoolCapacity:
         k8s_hub_client: K8sClient,
         created_ips: list[tuple[str, str]],
     ) -> None:
+        """Wait for natural IP deletion and capacity release before refilling the pool."""
         pool_id, _ = small_pool
         ip_id, ip_cr_name = created_ips[0]
         delete_ip(grpc, ip_id)
@@ -109,6 +110,7 @@ class TestPoolCapacity:
         k8s_hub_client: K8sClient,
         created_ips: list[tuple[str, str]],
     ) -> None:
+        """Keep pending IPs tracked until deletion is confirmed, then await zero allocation."""
         pool_id, pool_cr_name = small_pool
         for ip_id, _ in created_ips:
             delete_ip(grpc, ip_id)

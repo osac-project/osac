@@ -419,8 +419,9 @@ def wait_for_external_ip_allocated(*, k8s: K8sClient, name: str) -> None:
 
 
 def wait_for_external_ip_deletion(*, k8s: K8sClient, name: str) -> None:
+    """Wait for the exact ExternalIP to be absent; propagate unconfirmed read errors."""
     poll_until(
-        fn=lambda: not k8s.is_present(resource="externalip", name=name),
+        fn=lambda: k8s.is_absent(resource="externalips", name=name),
         until=lambda v: v is True,
         retries=120,
         delay=5,

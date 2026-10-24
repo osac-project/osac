@@ -36,7 +36,7 @@ RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; \
     go build -buildvcs=false -ldflags "-X main.version=${VERSION} -X main.gitCommit=${GIT_COMMIT}" \
     -o osac-csi-driver ./cmd/osac-csi-driver
 
-FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
+FROM registry.access.redhat.com/ubi10-minimal:10.2-1792742351
 # Stamped to the real release version on osac-build-and-publish.yaml's
 # temp branch before tagging (same mechanism as Chart.yaml's own
 # version field). Surfaced as a real OCI label so Konflux's release-side

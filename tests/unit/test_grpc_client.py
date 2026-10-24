@@ -106,3 +106,72 @@ def test_create_and_delete_shared_baremetal_instance_type(monkeypatch: pytest.Mo
         },
         {"service": f"{PRIVATE_API}.BareMetalInstanceTypes/Delete", "data": {"id": "bmit-123"}},
     ]
+
+
+def test_update_security_group_rules_rejects_omitted_ingress_and_egress(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Do not GET or Update a SecurityGroup when neither rule list is provided."""
+    client = GRPCClient(address="fulfillment-api.example.test:443", token="test-token")
+    calls: list[dict[str, Any]] = []
+
+    def capture_call(*, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        calls.append({"service": service, "data": data})
+        return {}
+
+    monkeypatch.setattr(client, "call", capture_call)
+
+    with pytest.raises(ValueError, match="ingress and/or egress"):
+        client.update_security_group_rules(sg_id="security-group-id")
+
+    assert calls == []
+
+
+def test_update_security_group_rules_updates_provided_ingress(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An ingress-only call GET-merges stored egress into a public Update body."""
+    client = GRPCClient(address="fulfillment-api.example.test:443", token="test-token")
+    calls: list[dict[str, Any]] = []
+    stored_egress = [{"protocol": "PROTOCOL_ALL", "ipv4Cidr": "0.0.0.0/0"}]
+
+    def capture_call(*, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        calls.append({"service": service, "data": data})
+        return {
+            "object": {
+                "id": "security-group-id",
+                "spec": {"virtualNetwork": {"id": "vn-id"}, "egress": stored_egress},
+                "metadata": {"name": "sg", "finalizers": ["fulfillment-controller"], "version": 3},
+            }
+        }
+
+    monkeypatch.setattr(client, "call", capture_call)
+
+    client.update_security_group_rules(sg_id="security-group-id", ingress=[])
+
+    assert calls == [
+        {"service": "osac.public.v1.SecurityGroups/Get", "data": {"id": "security-group-id"}},
+        {
+            "service": "osac.public.v1.SecurityGroups/Update",
+            "data": {"object": {"id": "security-group-id", "spec": {"ingress": [], "egress": stored_egress}}},
+        },
+    ]
+
+
+def test_update_security_group_rules_skips_get_when_both_lists_provided(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Public Update already requires both lists; skip GET when the caller supplies them."""
+    client = GRPCClient(address="fulfillment-api.example.test:443", token="test-token")
+    calls: list[dict[str, Any]] = []
+    ingress = [{"protocol": "PROTOCOL_TCP", "ipv4_cidr": "0.0.0.0/0"}]
+    egress = [{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}]
+
+    def capture_call(*, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        calls.append({"service": service, "data": data})
+        return {}
+
+    monkeypatch.setattr(client, "call", capture_call)
+
+    client.update_security_group_rules(sg_id="security-group-id", ingress=ingress, egress=egress)
+
+    assert calls == [
+        {
+            "service": "osac.public.v1.SecurityGroups/Update",
+            "data": {"object": {"id": "security-group-id", "spec": {"ingress": ingress, "egress": egress}}},
+        }
+    ]

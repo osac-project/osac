@@ -113,12 +113,7 @@ class GRPCClient:
     def create_virtual_network(self, *, name: str, ipv4_cidr: str, tenant: str | None = None) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.VirtualNetworks/Create",
-            data={
-                "object": {
-                    "metadata": _metadata(name=name, tenant=tenant),
-                    "spec": {"ipv4_cidr": ipv4_cidr},
-                }
-            },
+            data={"object": {"metadata": _metadata(name=name, tenant=tenant), "spec": {"ipv4_cidr": ipv4_cidr}}},
         )
         return response["object"]["id"]
 
@@ -216,25 +211,30 @@ class GRPCClient:
         return response["object"]["id"]
 
     def update_security_group_rules(
-        self,
-        *,
-        sg_id: str,
-        ingress: list[dict[str, Any]] | None = None,
-        egress: list[dict[str, Any]] | None = None,
+        self, *, sg_id: str, ingress: list[dict[str, Any]] | None = None, egress: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
-        spec: dict[str, Any] = {}
-        paths: list[str] = []
-        if ingress is not None:
-            spec["ingress"] = ingress
-            paths.append("spec.ingress")
-        if egress is not None:
-            spec["egress"] = egress
-            paths.append("spec.egress")
-        if not paths:
+        """Replace SecurityGroup rule lists via public Update (OSAC-5679)."""
+        # Public Update always writes both complete lists and has no update_mask.
+        # GET-merge an omitted list so the other direction is not cleared. Send
+        # only id plus spec.ingress/egress: private metadata.finalizers is not a
+        # public Metadata field, and grpcurl rejects unknown JSON names.
+        if ingress is None and egress is None:
             raise ValueError("update_security_group_rules requires ingress and/or egress")
+        if ingress is None or egress is None:
+            current = self.get_security_group(sg_id=sg_id)
+            obj = current.get("object")
+            existing: dict[str, Any] = obj if isinstance(obj, dict) else current
+            spec = existing.get("spec")
+            stored: dict[str, Any] = spec if isinstance(spec, dict) else {}
+            if ingress is None:
+                stored_ingress = stored.get("ingress")
+                ingress = list(stored_ingress) if isinstance(stored_ingress, list) else []
+            if egress is None:
+                stored_egress = stored.get("egress")
+                egress = list(stored_egress) if isinstance(stored_egress, list) else []
         return self.call(
-            service=f"{PRIVATE_API}.SecurityGroups/Update",
-            data={"object": {"id": sg_id, "spec": spec}, "updateMask": {"paths": paths}},
+            service=f"{PUBLIC_API}.SecurityGroups/Update",
+            data={"object": {"id": sg_id, "spec": {"ingress": ingress, "egress": egress}}},
         )
 
     # Console operations
@@ -283,8 +283,7 @@ class GRPCClient:
             offset = 0
             while True:
                 response: dict[str, Any] = self.call(
-                    service=f"{PRIVATE_API}.Tenants/List",
-                    data={"offset": offset, "limit": 100},
+                    service=f"{PRIVATE_API}.Tenants/List", data={"offset": offset, "limit": 100}
                 )
                 page = response.get("items", [])
                 items.extend(item for item in page if item.get("metadata", {}).get("name") == name)
@@ -328,12 +327,7 @@ class GRPCClient:
     def create_external_ip(self, *, name: str, pool: str, tenant: str | None = None) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.ExternalIPs/Create",
-            data={
-                "object": {
-                    "metadata": _metadata(name=name, tenant=tenant),
-                    "spec": {"pool": {"id": pool}},
-                }
-            },
+            data={"object": {"metadata": _metadata(name=name, tenant=tenant), "spec": {"pool": {"id": pool}}}},
         )
         return response["object"]["id"]
 

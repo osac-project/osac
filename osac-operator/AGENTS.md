@@ -100,8 +100,10 @@ Worker coverage is owned by **osac-operator [DEV]**:
   union/ambiguity, stale-ignition classification before UID recording, separate
   order availability, attempt-clock/backfill and continuous readiness, and
   NodeSet-partitioned counts. Reservation cleanup specs add pre-Create
-  cancellation/finalization, real create-intent resourceVersion races, restart after persisted intent but
-  before the API call, legacy conservatism and lost-ack delayed-List cleanup.
+  cancellation/finalization, real create-intent resourceVersion races,
+  authoritative-absence cleanup for unreached and legacy Create state,
+  lost-ack List-error delayed visibility, and post-Create orphan
+  compensation on identity-write failure (success and provider-error).
   Each case uses explicit calls; legacy fixture
   convergence is bounded by `16 + 8*N`, not a latency SLA or fallback polling.
 - `baremetalworker_tenant_safety_test.go` preserves tenant/owner rejection and

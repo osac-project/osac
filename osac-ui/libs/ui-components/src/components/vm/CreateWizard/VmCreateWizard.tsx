@@ -16,6 +16,7 @@ import type { ComputeInstanceWizardValues } from './fields';
 import { getComputeInstanceInitialValues } from './fields';
 import { buildComputeInstanceCreatePayload } from './payload';
 import { type VmWizardStepId, buildComputeInstanceStepSchema } from './schemas';
+import VmAccessStep from './VmAccessStep';
 import { VmConfigurationStep } from './VmConfigurationStep';
 import VmGeneralStep from './VmGeneralStep';
 import { VmNetworkingStep } from './VmNetworkingStep';
@@ -39,13 +40,22 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   const [activeStep, setActiveStep] = useState<VmWizardStepId>('catalog');
   const [validationAlert, setValidationAlert] = useState(false);
   const [selectedCatalogItem, setSelectedCatalogItem] = useState<ComputeInstanceCatalogItem>();
-  const steps = ['catalog', 'general', 'configuration', 'storage', 'networking', 'review'] as const;
+  const steps = [
+    'catalog',
+    'general',
+    'configuration',
+    'storage',
+    'networking',
+    'access',
+    'review',
+  ] as const;
   const stepLabels: Record<VmWizardStepId, string> = {
     catalog: t('Catalog item'),
     general: t('General'),
     configuration: t('Configuration'),
     storage: t('Storage'),
     networking: t('Networking'),
+    access: t('Access & initial run'),
     review: t('Review'),
   };
 
@@ -122,6 +132,7 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
                 {step === 'configuration' && <VmConfigurationStep />}
                 {step === 'storage' && <VmStorageStep />}
                 {step === 'networking' && <VmNetworkingStep />}
+                {step === 'access' && <VmAccessStep />}
                 {step === 'review' && <VmReviewStep />}
               </WizardStep>
             ))}

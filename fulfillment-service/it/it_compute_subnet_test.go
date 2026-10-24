@@ -256,8 +256,21 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 	})
 
 	AfterEach(func() {
+		// Delete the workload first: the omission spec's ComputeInstance
+		// references the tenant-default Subnet and SecurityGroup, so the
+		// tenant-default cleanup below cannot run while it exists.
 		cleanupComputeInstanceFixture(ctx, fixtureClients, computeInstanceId, "", instanceTypeId,
-			securityGroupId, subnetId, virtualNetworkId, networkClassId, computeInstanceTemplateId, diskImageId, storageTierId, storageBackendId)
+			"", "", "", "", computeInstanceTemplateId, diskImageId, storageTierId, storageBackendId)
+		// Remove the tenant-default networking fixture next: its "default"
+		// VirtualNetwork references this block's NetworkClass, and DeferCleanup
+		// runs after this AfterEach, so the class delete below cannot succeed
+		// until the default fixture is gone.
+		manager, err := newTestDefaultNetworkingManager()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(deleteTenantDefaultNetworkingFixture(ctx, manager, usersGroup)).To(Succeed())
+		// Finally remove the block resources that depend on the NetworkClass.
+		cleanupComputeInstanceFixture(ctx, fixtureClients, "", "", "",
+			securityGroupId, subnetId, virtualNetworkId, networkClassId, "", "", "", "")
 	})
 
 	It("creates ComputeInstance with network attachments", func() {
@@ -303,6 +316,55 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		Expect(getResp.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()).To(HaveLen(1))
 		Expect(getResp.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()[0].GetId()).To(Equal(securityGroupId),
 			"ComputeInstance should preserve the explicitly specified SecurityGroup")
+	})
+
+	It("uses tenant defaults when network_attachments is omitted", func() {
+		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
+		network := getTenantDefaultNetworkFixture(ctx, usersGroup, "")
+
+		// Create ComputeInstance without any network attachment assignment.
+		computeInstanceId = fmt.Sprintf("test-ci-%s", uuid.New())
+		createResp, err := computeInstancesClient.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+			Object: publicv1.ComputeInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ci-%s", uuid.New()[24:32]),
+				}.Build(),
+				Id: computeInstanceId,
+				Spec: publicv1.ComputeInstanceSpec_builder{
+					Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: computeInstanceTemplateId}.Build(),
+					InstanceType: publicv1.InstanceTypeReference_builder{Name: instanceTypeId}.Build(),
+					RunStrategy:  publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+					BootDisk: publicv1.ComputeInstanceDisk_builder{
+						SizeGib:     proto.Int32(20),
+						StorageTier: publicv1.StorageTierReference_builder{Id: storageTierId}.Build(),
+					}.Build(),
+					DiskImage: &publicv1.DiskImageReference{Id: diskImageId},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(createResp.GetObject()).ToNot(BeNil())
+
+		// Omitted network_attachments should resolve the tenant default Subnet
+		// and SecurityGroup in the Create response.
+		Expect(createResp.GetObject().GetSpec().GetNetworkAttachments()).To(HaveLen(1))
+		Expect(createResp.GetObject().GetSpec().GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal(network.subnetID),
+			"ComputeInstance should default to the tenant default Subnet when network_attachments is omitted")
+		Expect(createResp.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()).To(HaveLen(1))
+		Expect(createResp.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID),
+			"ComputeInstance should default to the tenant default SecurityGroup when network_attachments is omitted")
+
+		// Verify the resolved default attachment is persisted via public Get.
+		getResp, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+			Id: computeInstanceId,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(getResp.GetObject().GetSpec().GetNetworkAttachments()).To(HaveLen(1))
+		Expect(getResp.GetObject().GetSpec().GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal(network.subnetID),
+			"ComputeInstance should persist the tenant default Subnet reference")
+		Expect(getResp.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()).To(HaveLen(1))
+		Expect(getResp.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID),
+			"ComputeInstance should persist the tenant default SecurityGroup reference")
 	})
 
 	It("rejects ComputeInstance without attachments when the tenant has no default subnet", func() {

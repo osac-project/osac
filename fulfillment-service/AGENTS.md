@@ -105,6 +105,15 @@ update; run it through the `SUITE=fulfillment` installer target. The
 replacement, preserved private metadata, and the concurrent-controller status
 race with real PostgreSQL row locks. Neither suite provisions a real VM.
 
+Omitted network-attachment defaulting on ComputeInstance, BareMetalInstance,
+and Cluster create requests is component-integration coverage in
+`it/it_compute_subnet_test.go`, `it/it_baremetal_instance_lifecycle_test.go`,
+and `it/it_public_clusters_network_attachment_test.go` (OSAC-6480). Each case
+creates the resource through the public API with the attachment field omitted
+and asserts Create and public Get return the tenant default Subnet and
+SecurityGroup IDs; fixtures simulate network readiness. Run it through the
+`SUITE=fulfillment` installer target above.
+
 ```bash
 export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
 make -C ../osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac

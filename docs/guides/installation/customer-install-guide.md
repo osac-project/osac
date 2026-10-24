@@ -1,9 +1,10 @@
 # Installing OSAC on OpenShift Container Platform (WIP)
 
-**Last Updated**: 2026-09-16
+**Last Updated**: 2026-10-22
 **Audience**: Cloud administrators
-**Status**: WIP — see the TBD notes in [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend)
-and [Section 8.3](#83-registering-the-hub) for what's still open
+**Status**: WIP — see the TBD notes in [Section 4.4.2](#442-prerequisites-for-provider-networking),
+[Section 6](#6-installation-workflows-by-service), and
+[Section 10](#10-uninstalling-osac) for what's still open
 
 ---
 
@@ -17,16 +18,62 @@ first. The guide covers the VMaaS, CaaS, and BMaaS services.
 ## Contents
 
 1. [OSAC installation architecture](#1-osac-installation-architecture)
+    - [1.1 What is released](#11-what-is-released)
+    - [1.2 Networking](#12-networking)
 2. [Prerequisites](#2-prerequisites)
+    - [2.1 Cluster and access](#21-cluster-and-access)
+    - [2.2 Client tools](#22-client-tools)
+    - [2.3 Platform Operators and components](#23-platform-operators-and-components)
+    - [2.4 Credentials and external services](#24-credentials-and-external-services)
+    - [2.5 Requirements by service](#25-requirements-by-service)
 3. [OSAC component versions](#3-osac-component-versions)
 4. [Installing OSAC](#4-installing-osac)
+    - [4.1 Preparing the cluster](#41-preparing-the-cluster)
+    - [4.2 Configuring the Helm values](#42-configuring-the-helm-values)
+    - [4.3 Installing OSAC](#43-installing-osac)
+    - [4.4 Installing with provider networking](#44-installing-with-provider-networking)
+        - [4.4.1 Choosing the networking settings](#441-choosing-the-networking-settings)
+        - [4.4.2 Prerequisites for provider networking](#442-prerequisites-for-provider-networking)
+        - [4.4.3 Setting the networking Helm values](#443-setting-the-networking-helm-values)
+        - [4.4.4 Settings fixed at installation](#444-settings-fixed-at-installation)
+        - [4.4.5 Applying the Fabric Manager registration](#445-applying-the-fabric-manager-registration)
+        - [4.4.6 Checking the `NetworkClass`](#446-checking-the-networkclass)
+        - [4.4.7 Creating the ExternalIPPools](#447-creating-the-externalippools)
+        - [4.4.8 Replacing the `NetworkClass`](#448-replacing-the-networkclass)
 5. [Helm chart configuration parameters](#5-helm-chart-configuration-parameters)
+    - [5.1 Values set on the command line](#51-values-set-on-the-command-line)
 6. [Installation workflows by service](#6-installation-workflows-by-service)
+    - [6.1 Installing OSAC for VMaaS](#61-installing-osac-for-vmaas)
+    - [6.2 Installing OSAC for CaaS](#62-installing-osac-for-caas)
+    - [6.3 Installing OSAC for BMaaS](#63-installing-osac-for-bmaas)
 7. [Verifying the installation](#7-verifying-the-installation)
 8. [Postinstallation tasks](#8-postinstallation-tasks)
+    - [8.1 Accessing the OSAC consoles](#81-accessing-the-osac-consoles)
+    - [8.2 Installing the `osac` CLI](#82-installing-the-osac-cli)
+    - [8.3 Registering the hub](#83-registering-the-hub)
+    - [8.4 Installing without DNS management](#84-installing-without-dns-management)
+    - [8.5 Additional resources](#85-additional-resources)
 9. [Supported configurations](#9-supported-configurations)
+    - [9.1 Supported for production](#91-supported-for-production)
+    - [9.2 Evaluation only](#92-evaluation-only)
+    - [9.3 Not covered by this guide](#93-not-covered-by-this-guide)
+    - [9.4 Not supported](#94-not-supported)
 10. [Uninstalling OSAC](#10-uninstalling-osac)
 11. [Troubleshooting](#11-troubleshooting)
+    - [11.1 The pre-installation validation hook fails](#111-the-pre-installation-validation-hook-fails)
+    - [11.2 A Helm release is stuck in `pending-install` or `pending-upgrade`](#112-a-helm-release-is-stuck-in-pending-install-or-pending-upgrade)
+    - [11.3 An Operator CSV never reaches `Succeeded`](#113-an-operator-csv-never-reaches-succeeded)
+    - [11.4 An OCI pull fails](#114-an-oci-pull-fails)
+    - [11.5 The `osac-db-init` hook fails](#115-the-osac-db-init-hook-fails)
+    - [11.6 Certificates never become `Ready`](#116-certificates-never-become-ready)
+    - [11.7 The AAP instance does not start](#117-the-aap-instance-does-not-start)
+    - [11.8 The `osac-aap-bootstrap` job fails](#118-the-osac-aap-bootstrap-job-fails)
+    - [11.9 The `osac-publish-templates` hook fails](#119-the-osac-publish-templates-hook-fails)
+    - [11.10 The `fulfillment-*` pods are in `CrashLoopBackOff`](#1110-the-fulfillment--pods-are-in-crashloopbackoff)
+    - [11.11 Web console login loops with an `issuer not trusted` error](#1111-web-console-login-loops-with-an-issuer-not-trusted-error)
+    - [11.12 The first provisioning request fails while the pods are healthy](#1112-the-first-provisioning-request-fails-while-the-pods-are-healthy)
+    - [11.13 Networking problems](#1113-networking-problems)
+    - [11.14 Additional resources](#1114-additional-resources)
 12. [Glossary](#12-glossary)
 
 ---
@@ -74,6 +121,41 @@ To install for a specific service, follow the workflow in
 [Section 6](#6-installation-workflows-by-service). Each workflow lists the
 toggles and values to set.
 
+### 1.2 Networking
+
+OSAC gives tenants VirtualNetworks, Subnets, SecurityGroups, ExternalIPs, and
+NATGateways through two network managers:
+
+- **Fabric Manager.** Configures the provider's physical fabric. The provider
+  writes it, or uses one that OSAC ships, such as Netris. Every deployment
+  selects one.
+- **Kubernetes Manager.** Configures hub networking for VMs. OSAC writes it.
+  This release has `cudn_evpn`, for the `evpn` network type. Only VMaaS needs
+  it.
+
+The installer creates the deployment's one `NetworkClass` from the Helm values
+`global.networking.*`. The `NetworkClass` names both managers and holds the
+tenant defaults. The provider's Fabric Manager registers with a `ConfigMap`
+that you apply. Its Ansible role runs in the AAP execution environment image
+`aap.configAsCode.eeImage`.
+
+`global.networking.provisioningEnabled` turns provider networking on or off.
+With it on (the default), OSAC runs the managers' tasks. With it off, OSAC runs
+no networking job: networking resources become `READY` without connectivity,
+and workloads use the fallback of their service. You set it at the first
+install, and it never changes.
+
+The installer also creates an admission policy. It rejects any create, update
+(also of `status`), or delete of an OSAC networking custom resource or
+`NetworkAttachment`, and any delete of a `ComputeInstance`,
+`BareMetalInstance`, or `ClusterOrder` custom resource, that does not come
+from the OSAC controllers, with the message "OSAC manages this resource; change
+it through the fulfillment API". It also rejects removing an
+`osac.openshift.io/` finalizer from an OSAC custom resource.
+
+To install with provider networking, see
+[Section 4.4](#44-installing-with-provider-networking).
+
 ---
 
 ## 2. Prerequisites
@@ -114,6 +196,8 @@ toggles and values to set.
 - The `osac` CLI, latest release, for postinstallation hub registration and
   day-2 operations (see [Section 8.2](#82-installing-the-osac-cli)). Not
   required for the Helm installation.
+- `curl` and `jq`, for the private API calls that set up networking (see
+  [Section 4.4](#44-installing-with-provider-networking)).
 
 Installing the published phase-2 chart requires only `oc` and `helm`.
 
@@ -146,7 +230,7 @@ observed on OpenShift Container Platform 4.22.6 in September 2026 are listed in
 | [Streams for Apache Kafka](https://access.redhat.com/articles/6644711) | `stable` | `osac-kafka` | `kafka.enabled` | Fulfillment events and optional metering; an external Kafka cluster can serve fulfillment. See [Kafka configuration](kafka-configuration.md). |
 | [OpenShift Virtualization](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/installing) | `stable` | `openshift-cnv` | `cnv.enabled` | VMaaS |
 | [LVM Storage](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/storage/index#persistent-storage-using-lvms) | `stable-<cluster_minor>` | `openshift-storage` | `lvms.enabled` | VMaaS |
-| [MetalLB Operator](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/networking_operators/metallb-operator) | `stable` | `metallb-system` | `metallb.enabled` | VMaaS and CaaS |
+| [MetalLB Operator](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/networking_operators/metallb-operator) | `stable` | `metallb-system` | `metallb.enabled` | CaaS |
 | [multicluster engine for Kubernetes Operator](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.13/html/clusters/cluster_mce_overview) | `stable-2.17` | `multicluster-engine` | `mce.enabled` | CaaS |
 
 Notes on individual components:
@@ -172,8 +256,10 @@ Notes on individual components:
 - **LVM Storage** uses a channel that tracks the OpenShift Container Platform
   minor version; the installation sets it. Any dynamic storage class works if
   you disable `lvms.enabled`.
-- **MetalLB Operator** provides a `LoadBalancer`-class implementation. Any
-  solution that provides one works if you disable `metallb.enabled`.
+- **MetalLB Operator** provides a `LoadBalancer`-class implementation. CaaS
+  uses it on the hub to give each hosted cluster's API its management VIP.
+  Only CaaS needs it. Any solution that provides one works if you disable
+  `metallb.enabled`.
 - **multicluster engine for Kubernetes Operator** is required for
   agent-based cluster provisioning but is disabled by default. Set
   `mce.enabled=true` when this installation owns standalone MCE; the `caas-ci`
@@ -225,17 +311,33 @@ Required for CaaS:
   [Section 8.4](#84-installing-without-dns-management). For more information,
   see
   [`dns-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/dns-backend.md).
-- **A `NetworkClass` with a registered manager.** OSAC provisions cluster
-  networking through a `NetworkClass` custom resource, which requires a
-  fabric manager, a Kubernetes manager, or both, to be registered and
-  referenced (`networkClass.fabricManager` / `networkClass.k8sManager`). At
-  this stage, CaaS assumes the cluster runs on servers that are part of a
-  physical fabric managed by a fabric manager, such as Netris. Netris
-  requires the controller URL, credentials, site and tenant IDs, and SSH keys
-  to the servers and the bastion host. Other fabric and Kubernetes managers
-  may be registered on your cluster; check with whoever manages your OSAC
-  networking configuration for what's available. For more information, see
-  [`network-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/network-backend.md).
+- **The CaaS networking prerequisites** that OSAC does not create: the
+  management publication on the hub (MetalLB and routes), the BMaaS
+  provisioning network, provider routes and DNS from the NATGateway
+  ExternalIPs to the management endpoints, the public DNS zone `DNS_ZONE`
+  served by the `DNS_CLASS` backend, and the hosted cluster's OAuth `Route`
+  host resolvable and reachable from wherever ExternalIPs are reachable. Each
+  hosted cluster also reaches its operator catalog through its NATGateway, to
+  install MetalLB.
+- **With provider networking disabled, also:** provider DNS and routes, for
+  every Cluster, for `api` and `api-int` (to the management API VIP) and
+  `*.apps` (to the guest routers on the workers); and a provisioning network
+  that carries each Cluster's own traffic (between its workers, from the
+  workers to the management endpoints, and inbound to its routers and API)
+  despite the BMaaS host-isolation filters. OSAC does not check these.
+
+Required for networking, for every service:
+
+- **A Fabric Manager.** Every deployment selects one, also with provider
+  networking disabled, because the `NetworkClass` needs it. From the provider,
+  or from the owner of an OSAC-shipped Fabric Manager such as Netris, you get
+  the execution environment image, the settings and secrets, the registration
+  manifest, and the values agreed for the installation. See
+  [Section 4.4](#44-installing-with-provider-networking) and the
+  [Fabric Manager Guide](../networking/fabric-manager-guide.md).
+- **A connected deployment.** OSAC networking supports connected deployments
+  only, not air-gapped or disconnected ones: the hub, the AAP job pods, and the
+  provider's networking services and APIs reach each other.
 
 Required for BMaaS with the Metal3 backend:
 
@@ -246,19 +348,40 @@ Required for BMaaS with the Metal3 backend:
 - **BMC reachability.** Redfish or IPMI access from the cluster to each host
   BMC, plus DHCP and PXE for Ironic inspection.
 
+Required for BMaaS networking, with any backend:
+
+- **The provisioning network and the host data.** The provisioning network,
+  with host isolation, and each host's first attachment to it; BMC
+  reachability on a management network isolated from tenants; the inventory's
+  map of port names to MAC addresses for each host; and the Fabric Manager's
+  map from host name and port name to switch port, in its settings or
+  inventory. OSAC does not create these.
+
 ### 2.5 Requirements by service
 
+Choose the services at the first install. Enabling BMaaS or CaaS after
+networking resources exist is not supported (see
+[Table 4.2](#table-42-settings-fixed-at-installation)).
+
 - **VMaaS** (`global.services.vmaas.enabled`) requires OpenShift Virtualization,
-  LVM Storage or another dynamic storage class, and MetalLB or another
-  `LoadBalancer`-class implementation.
-- **CaaS** (`global.services.caas.enabled`) requires multicluster engine
-  (standalone, or provided by RHACM if it's installed), a DNS backend, a
-  network backend, and `aap.instanceGroups.clusterFulfillment` configuration.
+  LVM Storage or another dynamic storage class, OSAC's Kubernetes Manager
+  `cudn_evpn`, and a Fabric Manager whose registration lists the `evpn`
+  network type. With provider networking enabled, it also requires the
+  `cudn_evpn` hub prerequisites. See
+  [Section 4.4](#44-installing-with-provider-networking).
+- **CaaS** (`global.services.caas.enabled`) requires BMaaS, because every
+  worker is a bare-metal instance; multicluster engine (standalone, or provided
+  by RHACM if it's installed); MetalLB or another `LoadBalancer`-class
+  implementation; a DNS backend; the CaaS networking prerequisites in
+  [Section 2.4](#24-credentials-and-external-services); and
+  `aap.instanceGroups.clusterFulfillment` configuration.
   For more information,
   see
   [`aap-configuration.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/aap-configuration.md).
 - **BMaaS** (`global.services.bmaas.enabled`) requires BareMetalOperator and a
-  `Provisioning` custom resource with `spec.watchAllNamespaces: true`.
+  `Provisioning` custom resource with `spec.watchAllNamespaces: true`, and the
+  BMaaS networking prerequisites in
+  [Section 2.4](#24-credentials-and-external-services).
 
 ---
 
@@ -398,9 +521,12 @@ You create one values file for the `osac` chart, `my-values.yaml`.
    the [secrets management configuration guide](secrets-management-configuration.md#configure-the-osac-instance).
 
 5. Add the service-specific value blocks (`global.services.*`,
-   `operator.networkManagers`, `networkClass`, `aap`, `metering`, and `bmf`)
+   `global.networking`, `aap`, `metering`, and `bmf`)
    from [Section 6](#6-installation-workflows-by-service) for the service you
    are installing.
+
+6. Add the networking values from
+   [Section 4.4.3](#443-setting-the-networking-helm-values).
 
 For a full parameter reference, see
 [Section 5](#5-helm-chart-configuration-parameters).
@@ -421,6 +547,8 @@ Use this procedure when the cluster already meets the prerequisites.
   according to the [secrets management configuration guide](secrets-management-configuration.md).
 - You completed [Section 4.1](#41-preparing-the-cluster) and
   [Section 4.2](#42-configuring-the-helm-values).
+- With provider networking enabled, you completed the networking prerequisites
+  in [Section 4.4.2](#442-prerequisites-for-provider-networking).
 
 **Procedure**
 
@@ -445,9 +573,401 @@ Use this procedure when the cluster already meets the prerequisites.
   `app.kubernetes.io/managed-by` on the `osac-aap` custom resource, and Helm
   4 server-side apply fails without that flag. Helm 3 does not accept it.
 
+  Add `-f` for every other values file, such as the networking secrets file of
+  [Section 4.4.3](#443-setting-the-networking-helm-values), at install and at
+  every later `helm upgrade`.
+
+**Next steps**
+
+- Complete the networking steps after installation, from
+  [Section 4.4.5](#445-applying-the-fabric-manager-registration) to
+  [Section 4.4.7](#447-creating-the-externalippools).
+
 **Verification**
 
 - Complete [Section 7](#7-verifying-the-installation).
+
+### 4.4 Installing with provider networking
+
+Follow this section for every deployment. It covers the values that select the
+managers, the provider's Fabric Manager, and the setup after installation. With
+provider networking disabled, you still set the managers, apply the Fabric
+Manager registration, and check the `NetworkClass`. OSAC then runs no
+networking job, so it uses neither the `cudn_evpn` hub prerequisites nor a
+provider image, settings, or secrets.
+
+The provider's side (building, testing, and handing over the Fabric Manager)
+is in the [Fabric Manager Guide](../networking/fabric-manager-guide.md). The
+provider gives you the execution environment image, the settings and secrets,
+the registration manifest, and the values you agree on below.
+
+The examples use the namespace `$NS` from
+[Section 4.1](#41-preparing-the-cluster), where the OSAC operator and AAP run,
+and a provider Fabric Manager named `acme_fabric`.
+
+#### 4.4.1 Choosing the networking settings
+
+Decide these before the first install. Most of them never change afterward
+(see [Section 4.4.4](#444-settings-fixed-at-installation)).
+
+- **Provider networking.** `global.networking.provisioningEnabled`: `true` (the
+  default) or `false`.
+- **Managers.** `global.networking.fabricManager` is the `name` in the Fabric
+  Manager's registration. `global.networking.k8sManager` is `cudn_evpn` when
+  VMaaS is enabled, or will be enabled later, and empty otherwise. `cudn_evpn` uses the `evpn` network
+  type, so the Fabric Manager must list `evpn` in its `network_types`.
+- **Excluded ranges.** `global.networking.excludedIpv4Cidrs` lists the IPv4
+  CIDRs your infrastructure uses: management, provisioning, and node networks,
+  the DNS resolver addresses given to workloads, and the provider's DNS
+  source-NAT range. No VirtualNetwork or ExternalIPPool can overlap them.
+  The source-NAT range holds one address per VirtualNetwork, including each
+  tenant's default one, so its size caps the number of VirtualNetworks (a /25
+  holds 126).
+- **Tenant defaults.** `global.networking.networkClass.defaults` gives every
+  tenant the same default VirtualNetwork CIDR, Subnet CIDR, and SecurityGroup
+  rules. Allow only minimal access, for example SSH and HTTPS: the default
+  rules apply to every tenant.
+- **Address plan.** `global.networking.networkClass.addressPlan` splits every
+  Subnet into three shares: `overlay` (VM addresses), `fabric` (bare-metal
+  addresses and the provider's devices), and `lbVip` (CaaS ingress addresses).
+  Leave it unset; the installer derives it from the enabled services, as
+  [Table 4.1](#table-41-default-address-plan) shows.
+
+<a id="table-41-default-address-plan"></a>
+**Table 4.1. Default address plan (`overlay` / `fabric` / `lbVip`)**
+
+| Enabled services | With `k8sManager` | Without `k8sManager` |
+|---|---|---|
+| VMaaS, BMaaS, CaaS | 0.5 / 0.25 / 0.25 | Not allowed |
+| VMaaS, BMaaS | 0.5 / 0.5 / 0 | Not allowed |
+| VMaaS | 0.75 / 0.25 / 0 | Not allowed |
+| BMaaS, CaaS | 0.5 / 0.25 / 0.25 | 0 / 0.75 / 0.25 |
+| BMaaS | 0.5 / 0.5 / 0 | 0 / 1 / 0 |
+
+MaaS adds nothing to the plan. If you set `addressPlan`, the installer
+validates it, and a rollout that breaks a rule fails with a message that names
+the field:
+
+- Set all three shares. Each is a multiple of 0.0625 from 0 to 1, and they sum
+  to exactly 1.
+- `overlay` is greater than 0 exactly when `k8sManager` is set. VMaaS needs
+  `k8sManager`.
+- BMaaS or CaaS needs `fabric` greater than 0. CaaS needs `lbVip` greater than
+  0, and needs BMaaS enabled.
+
+The plan sets the longest prefix a VirtualNetwork or Subnet can have, so that
+every range holds at least 16 addresses: /26 for 0.5 / 0.25 / 0.25,
+0 / 0.75 / 0.25, and 0.75 / 0.25 / 0; /27 for 0.5 / 0.5 / 0; /28 for one range,
+such as 0 / 1 / 0; and /24 for plans in sixteenths. The default Subnet CIDR
+must meet this limit.
+
+#### 4.4.2 Prerequisites for provider networking
+
+Complete these before the first install with provider networking enabled.
+
+1. **Agree on the shared values with the provider.** For every deployment:
+   the DNS resolver addresses given to workloads, the provider's DNS
+   source-NAT range, and the ExternalIPPool CIDRs; list the resolver addresses
+   and the source-NAT range in `excludedIpv4Cidrs`. With `cudn_evpn`, also:
+   the hub AS, the hub nodes' BGP addresses, the VTEP CIDR of the VTEP custom
+   resource, the fabric's BGP peers and AS, and the VNI range kept for OSAC.
+
+   The hub AS, the VTEP CIDR, and the VNI range are fixed after the first
+   install; changing them means reinstalling. The hub AS and the VTEP CIDR are
+   kept only in the hub's VTEP custom resource and `FRRConfiguration`, and in
+   the Fabric Manager's settings. OSAC keeps no copy, so nothing compares the
+   two sides. Compare them yourself before the first install: with a different
+   hub AS, the hub imports none of the fabric's route targets, and VMs get no
+   connectivity while every task succeeds. Read the hub side with
+   `oc get vtep tenant-vtep -o yaml` and
+   `oc get frrconfiguration -n openshift-frr-k8s -l evpn=true -o yaml`, and
+   compare it with the provider's settings in `my-values.yaml`.
+
+2. **Configure the `cudn_evpn` hub prerequisites** (VMaaS only). On the hub,
+   create:
+
+   - the `VTEP` custom resource (`k8s.ovn.org/v1`) named `tenant-vtep`, which
+     defines the VTEP addresses of the hub nodes;
+   - an `FRRConfiguration` in `openshift-frr-k8s`, labeled `evpn: "true"`, for
+     the underlay BGP peering of the hub nodes with the fabric;
+   - a `RouteAdvertisements` custom resource whose `frrConfigurationSelector`
+     selects that label.
+
+   The hub needs OVN-Kubernetes, the FRR operator, and the NMState operator.
+   While a prerequisite is missing, `cudn_evpn` fails its Subnet task and
+   retries it. You set no gateway MAC address: the fabric serves the Subnet
+   gateway for VMs.
+
+   > **Note**
+   >
+   > TBD: the designs do not yet give complete manifests for these resources.
+
+3. **Confirm that the provider prepared the fabric.** With `cudn_evpn`, the
+   fabric peers over EVPN with every hub node and routes the VTEP CIDR in the underlay. The
+   underlay and the hub node NICs carry frames of at least 1550 bytes. The
+   upstream path brings the ExternalIPPool CIDRs to the fabric edge, and the
+   fabric reaches the DNS resolvers. The provider maintains the peering as hub
+   nodes are added or removed.
+
+4. **Make the image pullable.** The hub pulls the provider's execution
+   environment image for every job. If its registry needs credentials, add
+   them to the cluster pull secret (see
+   [Section 2.1](#21-cluster-and-access)).
+
+#### 4.4.3 Setting the networking Helm values
+
+Add the networking values to `my-values.yaml`. With provider networking
+enabled, also add the image and the Fabric Manager's settings:
+
+```yaml
+global:
+  networking:
+    provisioningEnabled: true                 # fixed at the first install
+    excludedIpv4Cidrs: [192.168.50.0/24]      # includes the DNS resolvers and the source-NAT range
+    fabricManager: acme_fabric                # the registration name
+    k8sManager: cudn_evpn                     # when VMaaS is or will be enabled; empty otherwise
+    networkClass:
+      defaults:                               # tenant defaults
+        virtualNetworkIPv4CIDR: 10.0.0.0/16
+        subnetIPv4CIDR: 10.0.1.0/24
+        ingressRules:                         # default SecurityGroup
+          - {protocol: PROTOCOL_TCP, ipv4Cidr: 0.0.0.0/0, portFrom: 22, portTo: 22}
+        egressRules:
+          - {protocol: PROTOCOL_ALL, ipv4Cidr: 0.0.0.0/0}
+      # addressPlan: leave unset to derive it (Table 4.1)
+aap:
+  configAsCode:
+    eeImage: registry.acme.example/osac/osac-aap-acme:<base_tag>-1   # from the provider
+  instanceGroups:
+    networkFulfillment:
+      enabled: true
+      config:                                 # ConfigMap network-fulfillment-ig
+        ACME_FABRIC_API_URL: https://fabric-api.acme.example
+        ACME_FABRIC_HUB_AS: "64512"           # a shared value
+        ACME_FABRIC_VNI_RANGE: "10000-29999"
+        ACME_FABRIC_DNS_RESOLVERS: "192.168.50.53,192.168.50.54"
+        ACME_FABRIC_DNS_SNAT_CIDR: 192.168.50.128/25
+        ACME_FABRIC_CA_BUNDLE: |              # a multi-line value
+          -----BEGIN CERTIFICATE-----
+          MIIB...
+          -----END CERTIFICATE-----
+        CUDN_EVPN_DNS_RESOLVERS: "192.168.50.53,192.168.50.54"   # with cudn_evpn: the resolvers VMs get
+```
+
+- **Rules.** Each default rule is a SecurityGroup rule in camelCase:
+  `protocol` is `PROTOCOL_TCP`, `PROTOCOL_UDP`, `PROTOCOL_ICMP`, or
+  `PROTOCOL_ALL`; `ipv4Cidr` is required; `portFrom` and `portTo` are set only
+  for TCP and UDP. The default CIDRs are canonical, the Subnet CIDR is inside
+  the VirtualNetwork CIDR, and the VirtualNetwork CIDR does not overlap
+  `excludedIpv4Cidrs`.
+- **Image.** The provider builds the image on the `osac-aap` image of the OSAC
+  release (the chart value `aap.bootstrap.image`) and rebuilds it for every
+  release. AAP uses it for every OSAC instance group.
+- **Settings and secrets.** Networking jobs run in the AAP instance group
+  `<prefix>-networking-operations-ig` (prefix `osac` by default). Their pods
+  read every key of the `ConfigMap` and the `Secret` `network-fulfillment-ig`
+  in `$NS` as environment variables. The installer writes both from
+  `aap.instanceGroups.networkFulfillment.config` and `.secret` at every
+  install and rollout, so never edit them with `oc`. The key names come from
+  the Fabric Manager's design and start with its registration name in upper
+  case. Job pods read them when they start, so a change applies to the next
+  job.
+- **VM resolvers.** With `cudn_evpn`, set `CUDN_EVPN_DNS_RESOLVERS` to the
+  agreed DNS resolver addresses, comma-separated, each inside
+  `excludedIpv4Cidrs`. `cudn_evpn` gives them to VMs through DHCP. The
+  installer fails the rollout when the setting is missing or invalid.
+
+Put the secrets in a separate values file that is excluded from version
+control, for example `my-secrets.local.yaml`, generated from your secret
+store:
+
+```yaml
+aap:
+  instanceGroups:
+    networkFulfillment:
+      secret:                                 # Secret network-fulfillment-ig
+        ACME_FABRIC_API_TOKEN: "<token_from_your_secret_store>"
+```
+
+Pass this file at install and at every later `helm upgrade`. Every role in the
+instance group can read these values, and networking jobs run as OSAC's job
+service account, which has `cluster-admin`, so install only roles you trust.
+
+Keep AAP job records at least as long as networking resources exist: OSAC
+uses them to track networking jobs. Set AAP's Cleanup Job Details schedule so
+it keeps them that long.
+
+#### 4.4.4 Settings fixed at installation
+
+Set these at the first install. A later rollout that breaks a rule in
+[Table 4.2](#table-42-settings-fixed-at-installation) fails with the message
+shown, and nothing changes.
+
+<a id="table-42-settings-fixed-at-installation"></a>
+**Table 4.2. Settings fixed at installation**
+
+| Setting | Rule after the first install | What enforces it |
+|---|---|---|
+| `global.networking.provisioningEnabled` | Never changes. To change it, reinstall. | The fulfillment service refuses to start: "global.networking.provisioningEnabled cannot change after installation; reinstall to change it". |
+| Enabled services (`global.services.*`) | Enabling BMaaS or CaaS while any VirtualNetwork exists is not supported. Disabling a service does not change the address plan. | The fulfillment service refuses to start: "Enabling BMaaS or CaaS after networking resources exist is not supported in this release; delete every VirtualNetwork or reinstall". |
+| `fabricManager`, `k8sManager`, `networkClass.defaults`, `networkClass.eastWestCapabilities` | Any difference from the `NetworkClass` fails the rollout. Set `k8sManager` at the first install if VMaaS will run. To change them, see [Section 4.4.8](#448-replacing-the-networkclass). | The installer: "NetworkClass <field>[, <field>] cannot change after installation; see Replacing the NetworkClass". |
+| `networkClass.addressPlan` | While no VirtualNetwork exists, each rollout validates the plan, or derives it, and updates the `NetworkClass`. Once one exists, the stored plan stays. | The installer: "addressPlan cannot change while networking resources exist; see Replacing the NetworkClass". |
+| `excludedIpv4Cidrs` | You can add ranges that overlap none of these: the default `virtualNetworkIPv4CIDR`, a VirtualNetwork, an ExternalIPPool, or a Cluster's pod or service CIDR. | The fulfillment service refuses to start: "excludedIpv4Cidrs range <CIDR> overlaps <kind> <ID or CIDR>". |
+| Hub AS, VTEP CIDR, and VNI range | Fixed. To change them, reinstall. The hub nodes' BGP addresses can change as nodes come and go; the provider maintains the peering. | Nothing: compare both sides before the first install ([Section 4.4.2](#442-prerequisites-for-provider-networking)). |
+| CaaS `EXTERNAL_ACCESS_BASE_DOMAIN`, `DNS_ZONE`, and `DNS_CLASS` | Cannot change while any Cluster exists. | The installer: "<setting> cannot change while Clusters exist; delete every Cluster first". |
+| OSAC release | Patch releases (x.y.z) of the same minor release roll out in place. Another minor release, up or down, does not: delete all workloads and networking resources, or reinstall. | While any VirtualNetwork, ExternalIPPool, or workload exists, the fulfillment service refuses to start: "in-place upgrade or downgrade between minor releases is not supported; delete all workloads and networking resources or reinstall". |
+
+#### 4.4.5 Applying the Fabric Manager registration
+
+Use this procedure after the installation, once the image and the settings
+are in place. Until you apply it, the `NetworkClass` stays `PENDING`. The
+installer registers `cudn_evpn` itself.
+
+**Procedure**
+
+1. Get the registration manifest from the provider. It is one `ConfigMap`,
+   applied in `$NS`, the namespace of the OSAC Helm release:
+
+   ```yaml
+   apiVersion: v1
+   kind: ConfigMap
+   metadata:
+     name: network-manager-acme-fabric      # any name
+     labels:
+       osac.openshift.io/network-fabric-manager: "true"
+   immutable: true
+   data:
+     name: acme_fabric                      # the value of global.networking.fabricManager
+     ansible_role: acme.network.fabric
+     network_types: evpn
+     description: Acme Fabric Manager (VXLAN EVPN fabric)
+   ```
+
+   - `immutable: true` is required. To change a registration, delete it and
+     create a new one.
+   - `name` uses lowercase letters, digits, and underscores, and starts with a
+     letter.
+   - `ansible_role` is `<namespace>.<collection>.<role>`. A provider's role is
+     never in an `osac.*` collection; Fabric Managers that OSAC ships, such as
+     Netris, use one.
+   - `network_types` is comma-separated, with no spaces; only `evpn` in this
+     release. It must list `evpn` when `k8sManager` is `cudn_evpn`.
+   - `capabilities` is optional; `eastWestEthernet` is the only value, needed
+     for `networkClass.eastWestCapabilities.supportsEastWestEthernet`.
+   - A key with an empty value counts as absent. Any other `data` key, such as
+     the typo `networkTypes`, fails the `NetworkClass`.
+
+2. Apply it:
+
+   ```console
+   $ oc apply -n "$NS" -f acme-registration.yaml
+   ```
+
+OSAC checks only the format of `ansible_role`. If the role or a task file is
+missing from the image, every task fails and is retried until the image has
+it.
+
+#### 4.4.6 Checking the `NetworkClass`
+
+Read the `NetworkClass` through the private API of the Fulfillment Service.
+
+**Procedure**
+
+1. Set the API address, an admin token of the `admin` service account that
+   the OSAC chart creates, and the CA file:
+
+   ```console
+   $ FULFILLMENT_API="https://$(oc get route fulfillment-internal-api -n "$NS" -o jsonpath='{.spec.host}')"
+   $ OSAC_ADMIN_TOKEN="$(oc create token admin -n "$NS" --duration 1h)"
+   $ oc extract secret/default-ca -n cert-manager --keys=tls.crt --to=- > default-ca.crt
+   $ CA_FILE=default-ca.crt
+   ```
+
+2. Read the status:
+
+   ```console
+   $ curl --fail-with-body --cacert "$CA_FILE" --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
+       "${FULFILLMENT_API}/api/private/v1/network_classes" | jq '.items[0].status'
+   ```
+
+**Verification**
+
+- `state` is `NETWORK_CLASS_STATE_READY`. With `cudn_evpn`, the status also
+  records the managers and the network type `evpn`.
+- If the state is `FAILED`, `message` gives the reason: for example, no
+  registration has the name of `global.networking.fabricManager`, the
+  registration lacks `immutable: true`, or its `network_types` lacks `evpn`.
+  OSAC resolves a `PENDING` or `FAILED` `NetworkClass` again whenever a
+  registration is created or deleted, so create the missing registration, or
+  delete the wrong one and create it again. A wrong Helm value needs
+  [Section 4.4.8](#448-replacing-the-networkclass). OSAC never resolves a
+  `READY` `NetworkClass` again.
+
+#### 4.4.7 Creating the ExternalIPPools
+
+ExternalIPs and NATGateways, including each tenant's default NATGateway
+ExternalIP `default-nat`, take their addresses from an ExternalIPPool. Create
+the pools after the `NetworkClass` is `READY` and before the first Tenant:
+tenant onboarding waits for a `READY` pool.
+
+**Procedure**
+
+- For each pool, run the following command with the variables of
+  [Section 4.4.6](#446-checking-the-networkclass). Each pool has exactly one
+  IPv4 CIDR:
+
+  ```console
+  $ curl --fail-with-body --cacert "$CA_FILE" --request POST \
+      "${FULFILLMENT_API}/api/private/v1/external_ip_pools" \
+      --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" --header "Content-Type: application/json" \
+      --data '{"metadata": {"name": "pool-public-1"}, "spec": {"cidrs": ["198.51.100.0/24"], "ipFamily": "IP_FAMILY_IPV4"}}'
+  ```
+
+  The CIDR holds no address your infrastructure uses. It overlaps no other
+  pool, no `excludedIpv4Cidrs` range, no default `virtualNetworkIPv4CIDR`, no
+  VirtualNetwork, and no Cluster pod or service CIDR. Size the pools for one
+  `default-nat` address per Tenant, plus one address per ExternalIP and two per
+  Cluster; a Tenant whose onboarding finds every pool full gets
+  `DefaultNetworkingReady` `False`.
+
+**Verification**
+
+- The pool becomes `READY` when the Fabric Manager's pool task succeeds:
+
+  ```console
+  $ curl --fail-with-body --cacert "$CA_FILE" --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
+      "${FULFILLMENT_API}/api/private/v1/external_ip_pools" | jq '.items[] | {id, status}'
+  ```
+
+With provider networking disabled, OSAC rejects every ExternalIP, so tenants
+get no default NATGateway and no pool is needed.
+
+#### 4.4.8 Replacing the `NetworkClass`
+
+You need a new `NetworkClass` for a new Fabric Manager role name or network
+types, or new `fabricManager`, `k8sManager`, or `networkClass` values other
+than the address plan: once the `NetworkClass` is `READY`, every resource uses
+the managers it recorded.
+
+**Procedure**
+
+1. Delete every workload, then every networking resource that is not a tenant
+   default, then every Tenant, which deletes its defaults. The reserved tenants
+   `system` and `shared` have no defaults; keep them. Each delete runs the
+   recorded managers' tasks, so the image must still hold the recorded roles.
+2. Delete every ExternalIPPool, then the `NetworkClass`, with the variables of
+   [Section 4.4.6](#446-checking-the-networkclass):
+
+   ```console
+   $ curl --fail-with-body --cacert "$CA_FILE" --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
+       --request DELETE "${FULFILLMENT_API}/api/private/v1/external_ip_pools/<pool_id>"
+   $ curl --fail-with-body --cacert "$CA_FILE" --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
+       --request DELETE "${FULFILLMENT_API}/api/private/v1/network_classes/<network_class_id>"
+   ```
+3. Roll out the new Helm values. The installer creates the new
+   `NetworkClass`.
+4. Once the `NetworkClass` is `READY`, create the ExternalIPPools again
+   ([Section 4.4.7](#447-creating-the-externalippools)), then the Tenants.
 
 ---
 
@@ -487,24 +1007,30 @@ subchart's own `values.yaml` file.
 | `operator.fulfillment.serverAddress` | schema | Fulfillment gRPC endpoint used by the Operator. |
 | `operator.fulfillment.credentials.secretName`, `clientIdKey`, `clientSecretKey` | schema | Name and keys of the Kubernetes Secret holding the `osac-controller` Keycloak service-account credentials. `osac-infra` provisions it for bundled Keycloak; external Keycloak deployments must provide an equivalent Secret. The OSAC chart only references it. |
 | `operator.controllers.tenant`, `operator.controllers.networking`, `operator.controllers.storage` | schema | Enable or disable individual reconcilers. Which services run is driven by `global.services.*`. |
-| `operator.controllers.networkingProvisioning` | schema | When `false`, networking custom resources reconcile to `READY` without a real fabric. |
 | `operator.controllers.volume` | subchart | Enables the Volume reconciler. |
 | `operator.configSecret.name`, `operator.configSecret.optional` | schema | Additional Operator configuration Secret. |
 | `operator.hubAccess.enabled` | schema | Creates the hub-access `ClusterRole` that the Fulfillment Service binds to. |
 | `operator.stall.preparingInfrastructureThreshold`, `operator.stall.controlPlaneStartingThreshold`, `operator.stall.workersJoiningThreshold` | schema | How long a cluster provisioning phase can wait before the Operator marks it stalled. |
 | `operator.tenants[]` | subchart | Tenants pre-created at installation. `shared` is the built-in tenant. |
-| `operator.networkManagers.fabricManagers.<name>.enabled`, `operator.networkManagers.k8sManagers.<name>.enabled` | subchart | Enables a fabric manager (`netris`, `cudn_net`) or a Kubernetes manager (`k8s_only`). |
 
-**Table 5.3. Networking (umbrella level)**
+<a id="table-53-networking-globalnetworking"></a>
+**Table 5.3. Networking (`global.networking.*`)**
+
+The installer creates the one `NetworkClass` from these values. Fabric Manager
+registrations are `ConfigMap` resources that you apply, not Helm values; the
+installer registers `cudn_evpn` itself. See
+[Section 4.4](#44-installing-with-provider-networking).
 
 | Parameter | Source | Description | Default |
 |---|---|---|---|
-| `networkManagers[]` | schema | Registers network-manager `ConfigMap` resources that the Operator dispatcher discovers. Each entry has `name`, `role` (`fabric` or `k8s`), `description`, and `capabilities`. Equivalent to `operator.networkManagers.*`. | `[]` |
-| `networkClass.enabled` | schema | Creates the default `NetworkClass` in the Fulfillment Service after installation. Required for VirtualNetwork and tenant onboarding. | `true` |
-| `networkClass.title`, `networkClass.description` | schema | Required title and description for the `NetworkClass`. | CUDN text |
-| `networkClass.fabricManager`, `networkClass.k8sManager` | schema | Which registered manager backs the class. For fabric-less VMaaS, set `fabricManager: ""` and `k8sManager: "k8s_only"`. For Netris, set `fabricManager: "netris"`. | `cudn_net` and `""` |
-| `networkClass.isDefault` | schema | Marks the class the deployment default. Only one `NetworkClass` can exist. | `true` |
-| `networkClass.defaults.virtualNetworkIPv4CIDR`, `networkClass.defaults.subnetIPv4CIDR`, `networkClass.defaults.enableNatGateway`, `networkClass.defaults.egressRules` | schema | Tenant-onboarding defaults that auto-create the VirtualNetwork, Subnet, and SecurityGroup. | `10.200.0.0/16` and others |
+| `global.networking.provisioningEnabled` | schema | Provider networking. When `false`, OSAC runs no networking job, and networking resources become `READY` without connectivity. Fixed at the first install. | `true` |
+| `global.networking.excludedIpv4Cidrs` | schema | IPv4 CIDRs that your infrastructure uses, including the DNS resolvers given to workloads. No VirtualNetwork or ExternalIPPool can overlap them. You can add ranges later (see [Table 4.2](#table-42-settings-fixed-at-installation)). | `[]` |
+| `global.networking.fabricManager` | schema | The registration `name` of the Fabric Manager. Required for every deployment. | Not set |
+| `global.networking.k8sManager` | schema | The OSAC Kubernetes Manager: `cudn_evpn`, or empty. Required for VMaaS. | Not set |
+| `global.networking.networkClass.defaults.virtualNetworkIPv4CIDR`, `global.networking.networkClass.defaults.subnetIPv4CIDR` | schema | Required. The CIDRs of every tenant's default VirtualNetwork and Subnet. The Subnet CIDR is inside the VirtualNetwork CIDR and meets the prefix limit of the address plan. | Not set |
+| `global.networking.networkClass.defaults.ingressRules`, `global.networking.networkClass.defaults.egressRules` | schema | Rules of every tenant's default SecurityGroup, as camelCase SecurityGroup rules, for example `{protocol: PROTOCOL_TCP, ipv4Cidr: 0.0.0.0/0, portFrom: 22, portTo: 22}`. | Not set |
+| `global.networking.networkClass.eastWestCapabilities.supportsEastWestEthernet` | schema | Enables Ethernet east-west FabricDomains. Needs BMaaS and a Fabric Manager that declares `eastWestEthernet`. | Not set |
+| `global.networking.networkClass.addressPlan.overlay`, `global.networking.networkClass.addressPlan.fabric`, `global.networking.networkClass.addressPlan.lbVip` | schema | Optional shares of every Subnet. Set all three or none. Can change only while no VirtualNetwork exists. See [Section 4.4.1](#441-choosing-the-networking-settings). | Derived from the enabled services ([Table 4.1](#table-41-default-address-plan)) |
 
 **Table 5.4. Fulfillment Service (`service.*`, all `schema`)**
 
@@ -531,13 +1057,14 @@ subchart's own `values.yaml` file.
 | `aap.aap.instance.controller.disabled`, `aap.aap.instance.hub.disabled`, `aap.aap.instance.lightspeed.disabled` | Turn off individual AAP components. |
 | `aap.aap.instance.redisMode` | `standalone` or `cluster`. |
 | `aap.aap.instance.routeTlsTerminationMechanism` | `Edge`, `Passthrough`, or `Reencrypt` for the AAP routes. |
-| `aap.bootstrap.enabled`, `aap.bootstrap.image`, `aap.bootstrap.eeImage`, `aap.bootstrap.backoffLimit` | The postinstallation bootstrap job that loads config-as-code. |
+| `aap.bootstrap.enabled`, `aap.bootstrap.image`, `aap.bootstrap.backoffLimit` | The postinstallation bootstrap job that loads config-as-code. `aap.bootstrap.image` is also the base image that a provider builds its execution environment image on. |
+| `aap.configAsCode.eeImage` | The execution environment and job pod image of every OSAC instance group. With a provider Fabric Manager, set the provider's image, built on the release's `aap.bootstrap.image`. See [Section 4.4.3](#443-setting-the-networking-helm-values). |
 | `aap.configAsCode.manifestSecret` | Secret that holds `license.zip`. |
 | `aap.configAsCode.secret` | Secret with config-as-code runtime flags. |
 | `aap.configAsCode.projectGitUri`, `aap.configAsCode.projectGitBranch` | Git source for the Ansible content that the bootstrap job imports. |
 | `aap.configAsCode.importAgentsEnabled`, `aap.configAsCode.importBcmAgentsEnabled` | Enable bare-metal agent import and the BCM inventory backend. |
-| `aap.instanceGroups.clusterFulfillment.enabled`, `aap.instanceGroups.clusterFulfillment.config`, `aap.instanceGroups.clusterFulfillment.secret` | The `cluster-fulfillment` instance group for CaaS provisioning. See [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend). |
-| `aap.instanceGroups.networkFulfillment.enabled`, `aap.instanceGroups.networkFulfillment.config`, `aap.instanceGroups.networkFulfillment.secret` | The `network-fulfillment` instance group for Netris. See [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend). |
+| `aap.instanceGroups.clusterFulfillment.enabled`, `aap.instanceGroups.clusterFulfillment.config`, `aap.instanceGroups.clusterFulfillment.secret` | The `cluster-fulfillment` instance group for CaaS provisioning. See [Section 6.2](#62-installing-osac-for-caas). |
+| `aap.instanceGroups.networkFulfillment.enabled`, `aap.instanceGroups.networkFulfillment.config`, `aap.instanceGroups.networkFulfillment.secret` | The settings (`config`, the `ConfigMap` `network-fulfillment-ig`) and secrets (`secret`, the `Secret` `network-fulfillment-ig`) of the Fabric Manager, which networking jobs read as environment variables. Set `enabled: true`. The installer writes both at every rollout. See [Section 4.4.3](#443-setting-the-networking-helm-values). |
 | `aap.instanceGroups.storageFulfillment.config.STORAGE_SNAPSHOTS_ENABLED` | Snapshot toggle for the `storage-operations` instance group. |
 | `aap.instanceGroups.publishTemplates.enabled` | Runs the postinstallation `osac-publish-templates` hook, which publishes cluster templates (CaaS, MaaS), compute instance templates (VMaaS), bare-metal instance templates, and add-on operators (CaaS) to the fulfillment catalog. Default `true`. Set to `false` only when no enabled service depends on hook-published templates — currently a BMaaS-only deployment — or when all required templates are provisioned separately. |
 | `aap.instanceGroups.publishTemplates.config.OSAC_TEMPLATE_COLLECTIONS`, `aap.instanceGroups.publishTemplates.config.OSAC_FULFILLMENT_SERVICE_URI` | The Ansible collections to publish and the internal Fulfillment Service URI. |
@@ -553,7 +1080,7 @@ subchart's own `values.yaml` file.
 | `ui.images.ui` | schema | Web console image. | Release tag |
 | `bmf.metal3.enabled`, `bmf.metal3.namespace`, `bmf.metal3.hostClass` | schema | Use the Metal3 backend. Set `namespace` to where your `BareMetalHost` resources live. Requires BareMetalOperator and a `Provisioning` custom resource with `spec.watchAllNamespaces: true`. | `false` |
 | `bmf.env.aapInsecureSkipVerify` | schema | Skip TLS verification for AAP API calls. | `"true"` |
-| `bmf.env.aapUrl`, `bmf.env.enableNetworkingProvisioning` | subchart | AAP controller URL that the Bare Metal Fulfillment Operator drives, and its networking-provisioning toggle. | Not applicable |
+| `bmf.env.aapUrl` | subchart | AAP controller URL that the Bare Metal Fulfillment Operator drives. The operator reads provider networking from `global.networking.provisioningEnabled`. | Not applicable |
 | `bmf.bcm.enabled`, `bmf.bcm.url`, `bmf.bcm.cert`, `bmf.bcm.key`, `bmf.bcm.caCert`, `bmf.bcm.insecureSkipVerify`, `bmf.bcm.hostClass`, `bmf.bcm.bmhNamespace` | subchart | Base Command Manager (BCM) backend. | `false` |
 | `bmf.secrets.inventoryConfig`, `bmf.secrets.managementConfig`, `bmf.secrets.osClouds`, `bmf.configMaps.profiles` | schema | Names of the inventory, management, and `clouds.yaml` Secrets and the profiles `ConfigMap`. | Default names |
 | `operatorCrds.install` | schema | Install the OSAC CRDs. Set it to `false` if a cluster administrator manages them. | `true` |
@@ -591,7 +1118,9 @@ extra `--set` flags.
 Each workflow gives the phase-2 (`my-values.yaml`) values to add for that
 service. It assumes the phase-1 prerequisites for that service (see
 [Table 2.1](#table-21-platform-operators-and-components)) already exist on
-the cluster. Then follow [Section 4](#4-installing-osac).
+the cluster. Every workflow also needs the networking values and steps of
+[Section 4.4](#44-installing-with-provider-networking). Then follow
+[Section 4](#4-installing-osac).
 
 ### 6.1 Installing OSAC for VMaaS
 
@@ -599,14 +1128,16 @@ the cluster. Then follow [Section 4](#4-installing-osac).
 
 - OpenShift Virtualization is installed.
 - LVM Storage is installed, or another dynamic storage class exists.
-- MetalLB is installed, or another `LoadBalancer`-class implementation exists.
+- You have a Fabric Manager registration with `evpn` in its `network_types`;
+  with provider networking enabled, the provider's Fabric Manager.
+- With provider networking enabled, you completed
+  [Section 4.4.2](#442-prerequisites-for-provider-networking), including the
+  `cudn_evpn` hub prerequisites.
 
 **Procedure**
 
-1. In `my-values.yaml`, enable the VMaaS tier and configure fabric-less
-   networking. Fabric-less networking creates the VirtualNetwork and Subnet by
-   using ClusterUserDefinedNetwork (CUDN), the SecurityGroup by using a
-   `NetworkPolicy`, and the ExternalIP by using MetalLB L2:
+1. In `my-values.yaml`, enable the VMaaS tier and select the managers. VMaaS
+   always needs the Kubernetes Manager `cudn_evpn`:
 
    The OSAC chart does not deploy the OSAC CSI routing meta-driver. Provider CSI
    setup and tenant storage provisioning are handled separately by the storage
@@ -615,21 +1146,34 @@ the cluster. Then follow [Section 4](#4-installing-osac).
    ```yaml
    global:
      services: { vmaas: { enabled: true }, caas: { enabled: false }, bmaas: { enabled: false }, maas: { enabled: false } }
+     networking:
+       provisioningEnabled: true
+       fabricManager: acme_fabric
+       k8sManager: cudn_evpn
    lvms:
      enabled: true
-   operator:
-     networkManagers:
-       k8sManagers:
-         k8s_only:
-           enabled: true
-   networkClass:
-     fabricManager: ""
-     k8sManager: "k8s_only"
    aap:
      instanceGroups:
        publishTemplates:
          enabled: true
    ```
+
+   Add the rest of the networking values from
+   [Section 4.4.3](#443-setting-the-networking-helm-values). With only VMaaS
+   enabled, the default address plan is 0.75 / 0.25 / 0, so the default Subnet
+   prefix can be at most /26.
+
+   With provider networking disabled (`provisioningEnabled: false`), each VM
+   runs on the cluster's default pod network. OSAC creates no ExternalIP, and
+   the VM's address is not a tenant address. You still set `fabricManager` and
+   `k8sManager` and apply a registration that lists `evpn`. OSAC runs no
+   networking job, so you need neither the `cudn_evpn` hub prerequisites nor a
+   provider image, settings, or secrets.
+
+   > **Note**
+   >
+   > TBD: the designs do not say which Fabric Manager registration a
+   > deployment without a provider fabric applies.
 
    The `publishTemplates` hook publishes the compute instance
    templates that VMaaS needs. Disable it only if the required
@@ -645,54 +1189,58 @@ the cluster. Then follow [Section 4](#4-installing-osac).
 
 3. Install OSAC. See [Section 4.3](#43-installing-osac).
 
+4. Apply the Fabric Manager registration, check the `NetworkClass`, and create
+   the ExternalIPPools. See
+   [Section 4.4.5](#445-applying-the-fabric-manager-registration) to
+   [Section 4.4.7](#447-creating-the-externalippools).
+
 **Verification**
 
 - Complete [Section 7](#7-verifying-the-installation).
 - Create a `ComputeInstance` custom resource and confirm that it reaches
-  `RUNNING`:
+  `RUNNING`. With provider networking enabled, the tenant's
+  `DefaultNetworkingReady` condition must be `True` first:
 
   ```console
   $ oc get computeinstance -A
   ```
 
-### 6.2 Installing OSAC for CaaS with the Netris network backend
+### 6.2 Installing OSAC for CaaS
 
-The AWS Route 53 DNS backend is the default; it's independent of the network
-backend. For the full variable reference, see
-[`network-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/network-backend.md).
+The AWS Route 53 DNS backend is the default; it's independent of the Fabric
+Manager. CaaS workers are bare-metal instances, so CaaS also needs BMaaS. The
+example uses Netris as the Fabric Manager.
 
 **Prerequisites**
 
 - multicluster engine is installed (standalone, or provided by RHACM).
 - MetalLB (or another `LoadBalancer`-class implementation) and LVM Storage
   (or another dynamic storage class) are installed.
+- The BMaaS prerequisites of [Section 6.3](#63-installing-osac-for-bmaas)
+  are met.
 - You have AWS Route 53 credentials for the target hosted zone.
-- Access to the Netris controller: URL, user name, password, site and tenant
-  IDs, and management VPC details.
+- The CaaS networking prerequisites in
+  [Section 2.4](#24-credentials-and-external-services) are in place.
+- You have the Fabric Manager, here Netris, with its settings, such as the
+  controller URL, user name, password, and site and tenant IDs, and its
+  registration manifest. See
+  [Section 4.4](#44-installing-with-provider-networking).
 - SSH private keys for the servers and the bastion host.
 
 **Procedure**
 
-1. In `my-values.yaml`, enable the CaaS tier, the OpenShift Container Platform
-   release images offered to hosted clusters, and the `cluster-fulfillment`
-   and `network-fulfillment` instance groups with the Netris coordinates:
+1. In `my-values.yaml`, enable the CaaS and BMaaS tiers, the OpenShift
+   Container Platform release images offered to hosted clusters, the Fabric
+   Manager, and the `cluster-fulfillment` and `network-fulfillment` instance
+   groups:
 
    ```yaml
    global:
-     services: { caas: { enabled: true }, vmaas: { enabled: false }, bmaas: { enabled: false }, maas: { enabled: false } }
+     services: { caas: { enabled: true }, vmaas: { enabled: false }, bmaas: { enabled: true }, maas: { enabled: false } }
      networking:
-       fabricManager: netris
-       k8sManager: ""
-       netris:
-         controllerUrl: "https://netris.example.com"
-         credentials:
-           username: "netris"
-         siteId: "5"
-         tenantId: "1"
-         tenantName: "Admin"
-         mgmtVpcId: "4"
-         mgmtVpcName: "RH-Infra"
-         resourceClassMap: '{"fc430":{"server_cluster_template_id":89,"mgmt_interface":"ens4","vpc_interfaces":["ens13"]}}'
+       provisioningEnabled: true
+       fabricManager: <netris_name>  # the name in the Netris registration (TBD)
+       k8sManager: ""               # set cudn_evpn when VMaaS is or will be enabled too
    clusterVersions:
      enabled: true
      versions:
@@ -720,24 +1268,35 @@ backend. For the full variable reference, see
            HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "HighlyAvailable"
        networkFulfillment:
          enabled: true
+         config: {}                 # the Netris settings, as in Section 4.4.3
    ```
 
-   In `global.networking.netris.resourceClassMap`, each key is a resource-class name;
-   `server_cluster_template_id` is the Netris server-cluster template,
-   `mgmt_interface` is the management NIC, and `vpc_interfaces` are the
-   data-plane NICs.
+   - `EXTERNAL_ACCESS_BASE_DOMAIN` must equal `HOSTED_CLUSTER_BASE_DOMAIN`, or
+     the installer rejects it. OSAC publishes each cluster's `api`, `api-int`,
+     and `*.apps` records in the public zone `DNS_ZONE`, which defaults to
+     `EXTERNAL_ACCESS_BASE_DOMAIN`.
+   - `EXTERNAL_ACCESS_BASE_DOMAIN`, `DNS_ZONE`, and `DNS_CLASS` cannot change
+     while any Cluster exists.
+   - Add the rest of the networking values from
+     [Section 4.4.3](#443-setting-the-networking-helm-values), and the `bmf`
+     values from [Section 6.3](#63-installing-osac-for-bmaas).
 
-2. Put the AWS and Netris credentials in a separate values file that is
-   excluded from version control:
+   > **Note**
+   >
+   > TBD: the designs do not yet give the registration name, the role, or the
+   > setting and secret keys of the Netris Fabric Manager. They replace the
+   > former `global.networking.netris.*` values. They also do not say whether
+   > CaaS still needs the `SERVER_SSH_*` and `SERVER_MGMT_ROUTE_*` settings and
+   > the SSH keys, which served the former Netris network steps.
+
+2. Put the AWS, SSH, and Fabric Manager credentials in a separate values file
+   that is excluded from version control:
 
    ```yaml
-   global:
-     networking:
-       netris:
-         credentials:
-           password: "<netris_password>"
    aap:
      instanceGroups:
+       networkFulfillment:
+         secret: {}                 # the Netris secrets, as in Section 4.4.3
        clusterFulfillment:
          secret:
            AWS_ACCESS_KEY_ID: "<route53_access_key_id>"
@@ -755,11 +1314,18 @@ backend. For the full variable reference, see
    and
    [`dns-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/dns-backend.md).
 
+4. Apply the Fabric Manager registration, check the `NetworkClass`, and create
+   the ExternalIPPools. See
+   [Section 4.4.5](#445-applying-the-fabric-manager-registration) to
+   [Section 4.4.7](#447-creating-the-externalippools). Every Cluster takes two
+   ExternalIPs, for its API and its ingress, from a `READY` pool.
+
 **Verification**
 
 - Complete [Section 7](#7-verifying-the-installation), including step 10.
-- Create a `ClusterOrder` custom resource and watch the AAP
-  `cluster-fulfillment` and `network-fulfillment` jobs.
+- Create a Cluster on a VirtualNetwork with a `READY` NATGateway, such as the
+  tenant's default VirtualNetwork, and watch the AAP `cluster-fulfillment` and
+  networking jobs.
 
 ### 6.3 Installing OSAC for BMaaS
 
@@ -768,17 +1334,24 @@ backend. For the full variable reference, see
 - BareMetalOperator is installed, with a `Provisioning` custom resource that has
   `spec.watchAllNamespaces: true`. OSAC does not install these; the
   pre-installation validation hook fails if they are missing.
+- The BMaaS networking prerequisites in
+  [Section 2.4](#24-credentials-and-external-services) are in place.
+- You have the Fabric Manager from the provider. See
+  [Section 4.4](#44-installing-with-provider-networking).
 
 **Procedure**
 
-1. In `my-values.yaml`, enable the BMaaS tier and the Metal3 backend:
+1. In `my-values.yaml`, enable the BMaaS tier and the Metal3 backend, and
+   choose provider networking. This example disables it, so hosts stay on the
+   provisioning network and OSAC runs no networking job:
 
    ```yaml
    global:
      services: { bmaas: { enabled: true }, vmaas: { enabled: false }, caas: { enabled: false }, maas: { enabled: false } }
-   operator:
-     controllers:
-       networkingProvisioning: false
+     networking:
+       provisioningEnabled: false   # fixed at the first install
+       fabricManager: acme_fabric   # required also with provider networking disabled
+       k8sManager: ""
    bmf:
      metal3:
        enabled: true
@@ -787,7 +1360,6 @@ backend. For the full variable reference, see
      env:
        aapUrl: "http://osac-aap/api/controller"
        aapInsecureSkipVerify: "true"
-       enableNetworkingProvisioning: "false"
    aap:
      instanceGroups:
        publishTemplates:
@@ -799,7 +1371,19 @@ backend. For the full variable reference, see
    published by this hook. Set `bmf.metal3.namespace` to the
    namespace where your `BareMetalHost` resources live.
 
+   Also add `networkClass.defaults` from
+   [Section 4.4.3](#443-setting-the-networking-helm-values); they are required
+   with provider networking disabled too. To move hosts to tenant Subnets, set
+   `provisioningEnabled: true` and also add the image and the Fabric Manager's
+   settings from that section. Without `k8sManager`, the default address plan
+   is 0 / 1 / 0.
+
 2. Install OSAC. See [Section 4.3](#43-installing-osac).
+
+3. Apply the Fabric Manager registration and check the `NetworkClass`. With
+   provider networking enabled, also create the ExternalIPPools. See
+   [Section 4.4.5](#445-applying-the-fabric-manager-registration) to
+   [Section 4.4.7](#447-creating-the-externalippools).
 
 **Verification**
 
@@ -947,7 +1531,17 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
 
     The response must be `200` or a `302` redirect to Keycloak.
 
-13. Run a service smoke test, as described in the Verification section of the
+13. Check networking. The `NetworkClass` must be `READY`
+    ([Section 4.4.6](#446-checking-the-networkclass)), and, with provider
+    networking enabled, at least one ExternalIPPool must be `READY`
+    ([Section 4.4.7](#447-creating-the-externalippools)). After you create a
+    Tenant, its `DefaultNetworkingReady` condition must become `True`:
+
+    ```console
+    $ osac get tenant <tenant_name> -o yaml
+    ```
+
+14. Run a service smoke test, as described in the Verification section of the
     workflow in [Section 6](#6-installation-workflows-by-service) for your
     service.
 
@@ -1084,10 +1678,21 @@ values directly.
 Reapply the patch after any infrastructure reinstall that recreates this
 `ConfigMap`.
 
+> **Note**
+>
+> While any Cluster exists, a rollout that changes `DNS_CLASS`, `DNS_ZONE`, or
+> `EXTERNAL_ACCESS_BASE_DOMAIN` fails (see
+> [Table 4.2](#table-42-settings-fixed-at-installation)). The installer
+> compares the Helm values with the running `cluster-fulfillment-ig`
+> configuration, so after this patch every rollout fails while any Cluster
+> exists: the chart cannot carry `dns.noop.dns`.
+
 ### 8.5 Additional resources
 
-- CaaS network backend configuration:
-  [`network-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/network-backend.md)
+- Fabric Manager build, handover, and conformance:
+  [Fabric Manager Guide](../networking/fabric-manager-guide.md)
+- Running the conformance suite:
+  [Running the OSAC conformance suite](../conformance/running-the-conformance-suite.md)
 - CaaS DNS backend configuration:
   [`dns-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/dns-backend.md)
 - AAP instance group configuration:
@@ -1116,6 +1721,11 @@ Reapply the patch after any infrastructure reinstall that recreates this
 - An external Keycloak configured with the `osac` realm, clients, and roles
   through `service.auth` and `service.idp`.
 - A single hub cluster.
+- Networking in a connected deployment, with one `NetworkClass`, IPv4 only.
+  A service's networking is supported only with a Fabric Manager whose
+  conformance report says `conformant` and whose profile for that service
+  (`vm`, `baremetal`, or `cluster`) passed. OSAC does not enforce this. See
+  [Running the OSAC conformance suite](../conformance/running-the-conformance-suite.md).
 
 ### 9.2 Evaluation only
 
@@ -1135,8 +1745,24 @@ Reapply the patch after any infrastructure reinstall that recreates this
   Keycloak through `service.auth` and `service.idp`, but realm and client
   provisioning is out of scope. See
   [`fulfillment-service/docs/INSTALL.md`](https://github.com/osac-project/osac/blob/main/fulfillment-service/docs/INSTALL.md).
-- Multi-hub topologies (TBD — see the note in
-  [Section 8.3](#83-registering-the-hub)).
+
+### 9.4 Not supported
+
+- OSAC networking in air-gapped or disconnected deployments, and IPv6 or
+  dual-stack networking.
+- VMs in a cluster other than the hub.
+- More than one hub. OSAC networking supports exactly one hub, the cluster
+  that runs the OSAC operator, AAP, and the VMs.
+- In-place upgrade or downgrade between minor releases. Only patch releases of
+  the same minor release roll out in place (see
+  [Table 4.2](#table-42-settings-fixed-at-installation)).
+- Changing a setting fixed at installation, including enabling BMaaS or CaaS
+  after networking resources exist (see
+  [Table 4.2](#table-42-settings-fixed-at-installation)).
+- Creating, changing, or deleting OSAC networking custom resources, or deleting
+  workload custom resources, outside the fulfillment API. The admission policy
+  rejects it (see [Section 1.2](#12-networking)). A lost custom resource, for
+  example after an etcd restore, is not supported.
 
 ---
 
@@ -1150,7 +1776,26 @@ Reapply the patch after any infrastructure reinstall that recreates this
    $ helm uninstall osac -n "$NS"
    ```
 
-2. The CRDs are retained because they carry the
+   The uninstall removes the OSAC admission policy and its binding first, so
+   the OSAC custom resources can then be deleted.
+
+   > **Note**
+   >
+   > TBD: the designs do not say whether you must delete the workloads,
+   > Tenants, and ExternalIPPools first, so that the Fabric Manager removes
+   > their state from the provider's fabric, or how OSAC custom resources
+   > that still hold `osac.openshift.io/` finalizers are removed once the
+   > operator is gone.
+
+2. The Fabric Manager registration `ConfigMap` that you applied and the
+   `cudn_evpn` hub prerequisites are not part of the release, so Helm does not
+   remove them. Delete them when you no longer need them, for example:
+
+   ```console
+   $ oc delete configmap network-manager-acme-fabric -n "$NS"
+   ```
+
+3. The CRDs are retained because they carry the
    `helm.sh/resource-policy: keep` annotation. To remove them, run the
    following command:
 
@@ -1376,13 +2021,47 @@ with the correct `global.clusterDomain`.
   `oc get sc --show-labels` for the `osac.openshift.io/tenant` and
   `osac.openshift.io/storage-tier` labels and the `status.storageClasses` field
   of the `Tenant`, and align the requested tier with a labeled storage class.
-- Networking custom resources stuck in `PROGRESSING` on a cluster with no real
-  fabric: set `operator.controllers.networkingProvisioning` to `false`.
-- **CaaS:** watch the AAP `cluster-fulfillment` job for the failing task. Netris
-  or Route 53 credential errors, and `NETRIS_RESOURCE_CLASS_MAP` errors, appear
-  there.
+- Networking resources stuck in `PENDING`: see
+  [Section 11.13](#1113-networking-problems).
+- **CaaS:** watch the AAP `cluster-fulfillment` job for the failing task.
+  Route 53 credential errors appear there; Fabric Manager errors appear in the
+  networking jobs and in the resource's `message`.
 
-### 11.13 Additional resources
+### 11.13 Networking problems
+
+- **A rollout fails after the first install** with one of the messages in
+  [Table 4.2](#table-42-settings-fixed-at-installation): a fixed setting
+  changed. Restore the earlier value. `provisioningEnabled` can change only
+  with a reinstall.
+- **The `NetworkClass` is `FAILED`.** Read its `message`
+  ([Section 4.4.6](#446-checking-the-networkclass)), then fix or re-create the
+  registration. For a wrong Helm value, see
+  [Section 4.4.8](#448-replacing-the-networkclass).
+- **A networking resource stays `PENDING`.** Its `message` names the running
+  task and AAP job ID, or, after a retryable failure, the manager's message and
+  the next retry time. OSAC retries with a backoff from 2 to 30 minutes, with
+  no limit. Fix the cause, for example a setting in
+  `aap.instanceGroups.networkFulfillment`, a missing `cudn_evpn` hub
+  prerequisite, or a role missing from the image, and roll out; the next job
+  reads the new values. On the hub, read the custom resource's `Ready`
+  condition and `status.jobs`.
+- **A networking resource is `FAILED`.** The failure is final; OSAC does not
+  retry it. Its owner deletes it and creates it again. A `FAILED`
+  SecurityGroup can also be fixed with a rule update.
+- **A delete stays `DELETING`.** The delete task is failing and is retried
+  until it succeeds. Repair the provider's backend. You cannot remove the
+  finalizer by hand: the admission policy rejects it.
+- **A Tenant's `DefaultNetworkingReady` is `False`.** Reason
+  `ResourcesPending`: a default is still `PENDING`, or onboarding waits for the
+  `NetworkClass` or a `READY` ExternalIPPool; the message says which. Reason
+  `ResourceFailed`: a default failed, or every `READY` pool is full. A failed
+  default SecurityGroup can be fixed with a rule update; otherwise add pool
+  capacity or repair the cause, then delete and create the Tenant again.
+- **"OSAC manages this resource; change it through the fulfillment API".** The
+  admission policy rejected a change made outside the fulfillment API (see
+  [Section 1.2](#12-networking)). Use the API or the `osac` CLI.
+
+### 11.14 Additional resources
 
 - "Troubleshooting" in the
   [Helm Deployment Guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/helm-deployment-guide.md#troubleshooting)
@@ -1422,9 +2101,28 @@ with the correct `global.clusterDomain`.
 - **Instance group** — An AAP execution group with its own `ConfigMap` and
   Secret of environment variables, for example `cluster-fulfillment`,
   `network-fulfillment`, `storage-fulfillment`, or `publish-templates`.
-- **Network backend (`NETWORK_CLASS`)** — How CaaS clusters get networking,
-  driven by the `NetworkClass` custom resource's registered fabric and
-  Kubernetes managers. Netris is the documented fabric manager.
+  Networking jobs run in `<prefix>-networking-operations-ig` and read the
+  `network-fulfillment-ig` `ConfigMap` and `Secret`.
+- **Fabric Manager** — The network manager that configures the provider's
+  fabric: an Ansible role, written by the provider or shipped by OSAC (for
+  example Netris), registered with a `ConfigMap` and selected by
+  `global.networking.fabricManager`. Every deployment has one. See the
+  [Fabric Manager Guide](../networking/fabric-manager-guide.md).
+- **Kubernetes Manager** — The OSAC network manager that configures hub
+  networking for VMs, selected by `global.networking.k8sManager`. This release
+  has `cudn_evpn`, for the `evpn` network type.
+- **`NetworkClass`** — The deployment's one networking configuration: the
+  selected managers, the tenant defaults, and the address plan. The installer
+  creates it from `global.networking.*`.
+- **Provider networking enabled or disabled** — The value of
+  `global.networking.provisioningEnabled`, fixed at installation. When
+  disabled, OSAC runs no networking job.
+- **ExternalIPPool** — A range of external IPv4 addresses that a cloud
+  administrator creates through the private API. ExternalIPs and NATGateways
+  take their addresses from it.
+- **Execution environment image** — The AAP job image
+  (`aap.configAsCode.eeImage`). With a provider Fabric Manager, it holds the
+  provider's Ansible collection on top of OSAC's image.
 - **DNS backend (`DNS_CLASS`)** — How CaaS clusters get DNS records:
   `dns.route53.dns` (default, AWS Route 53).
 - **config-as-code** — The Ansible content that the `osac-aap-bootstrap` job

@@ -24,12 +24,18 @@ const makeTenant = (id: string, name: string): Tenant =>
 
 const renderSelect = ({
   autoSelectSingleOption = false,
+  filterItems,
+  formatOptionLabel,
   initialValue = emptyResourceSelectValue(),
+  isTypeahead = false,
   tenants = [makeTenant('only-1', 'Only tenant')],
   transportOverrides,
 }: {
   autoSelectSingleOption?: boolean;
+  filterItems?: (item: { id: string; metadata?: { name?: string } }) => boolean;
+  formatOptionLabel?: (item: { id: string; metadata?: { name?: string } }) => string;
   initialValue?: ResourceSelectValue;
+  isTypeahead?: boolean;
   tenants?: Tenant[];
   transportOverrides?: MockTransportOverrides;
 } = {}) => {
@@ -54,6 +60,9 @@ const renderSelect = ({
             service={Tenants}
             isRequired
             autoSelectSingleOption={autoSelectSingleOption}
+            filterItems={filterItems}
+            formatOptionLabel={formatOptionLabel}
+            isTypeahead={isTypeahead}
             placeholder="Select a tenant"
             loadErrorTitle="Failed to fetch tenants"
             emptyTitle="No registered tenants"
@@ -190,5 +199,78 @@ describe('ResourceSelectField', () => {
     expect(screen.getByText('tenants unavailable')).toBeInTheDocument();
     expect(screen.queryByText('No registered tenants')).not.toBeInTheDocument();
     expect(screen.getByLabelText(/^Tenant/)).toBeDisabled();
+  });
+
+  it('hides options that fail filterItems', async () => {
+    const { user } = renderSelect({
+      tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
+      filterItems: (item) => item.id === 't-2',
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
+    });
+    await user.click(screen.getByLabelText(/^Tenant/));
+
+    expect(screen.getByRole('option', { name: 'globex' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'acme' })).not.toBeInTheDocument();
+  });
+
+  it('renders formatOptionLabel for options and the toggle', async () => {
+    const { user } = renderSelect({
+      tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
+      formatOptionLabel: (item) => `${item.metadata?.name ?? item.id} (custom)`,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
+    });
+    await user.click(screen.getByLabelText(/^Tenant/));
+    await user.click(screen.getByRole('option', { name: 'globex (custom)' }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('formik-value')).toHaveTextContent(
+        '{"id":"t-2","name":"globex"}',
+      );
+    });
+    expect(screen.getByLabelText(/^Tenant/)).toHaveTextContent('globex (custom)');
+  });
+
+  it('keeps distinct ids for the typeahead select and toggle', async () => {
+    const { user } = renderSelect({
+      tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
+      isTypeahead: true,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
+    });
+
+    expect(document.querySelectorAll('#tenant')).toHaveLength(1);
+    await user.click(screen.getByLabelText(/^Tenant/));
+    expect(document.getElementById('tenant-select')).not.toBeNull();
+    expect(document.getElementById('tenant')).not.toBe(document.getElementById('tenant-select'));
+  });
+
+  it('filters options by typeahead input when isTypeahead is true', async () => {
+    const { user } = renderSelect({
+      tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
+      isTypeahead: true,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
+    });
+
+    const toggle = screen.getByLabelText(/^Tenant/);
+    await user.click(toggle);
+    const input = screen.getByRole('combobox');
+    await user.clear(input);
+    await user.type(input, 'glob');
+
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: 'globex' })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('option', { name: 'acme' })).not.toBeInTheDocument();
   });
 });

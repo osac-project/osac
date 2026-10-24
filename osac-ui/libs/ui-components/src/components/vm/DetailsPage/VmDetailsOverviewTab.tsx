@@ -1,4 +1,13 @@
-import { Card, CardBody, CardTitle, Grid, GridItem } from '@patternfly/react-core';
+import { useEffect, useState } from 'react';
+import {
+  Card,
+  CardBody,
+  CardTitle,
+  Grid,
+  GridItem,
+  Stack,
+  StackItem,
+} from '@patternfly/react-core';
 
 import type { ComputeInstance } from '@osac/types';
 
@@ -7,6 +16,8 @@ import VmStorageCard from './VmStorageCard';
 import VmUserDataCard from './VmUserDataCard';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { ResourceConditionsTable } from '../../Resource/ResourceConditionsTable';
+import RestartRequiredBanner, { hasRestartRequiredCondition } from '../RestartRequiredBanner';
+import { useRestartRequiredWatch } from '../useRestartRequiredWatch';
 
 interface Props {
   vm: ComputeInstance;
@@ -15,31 +26,54 @@ interface Props {
 const VmDetailsOverviewTab = ({ vm }: Props) => {
   const { t } = useTranslation();
   const conditions = vm.status?.conditions ?? [];
+  const restartRequired = hasRestartRequiredCondition(vm);
+  const [watchForRestart, setWatchForRestart] = useState(false);
+
+  useRestartRequiredWatch({
+    vmId: vm.id,
+    enabled: watchForRestart && !restartRequired,
+    onFinished: () => setWatchForRestart(false),
+  });
+
+  useEffect(() => {
+    if (restartRequired) {
+      setWatchForRestart(false);
+    }
+  }, [restartRequired]);
 
   return (
-    <Grid hasGutter>
-      <GridItem md={6}>
-        <VmDetailsCard vm={vm} />
-      </GridItem>
-      <GridItem md={6}>
-        <Card isFullHeight>
-          <CardTitle>{t('Conditions')}</CardTitle>
-          <CardBody>
-            <ResourceConditionsTable
-              ariaLabel={t('Virtual machine conditions')}
-              conditions={conditions}
-              conditionResourceKind="compute_instance"
-            />
-          </CardBody>
-        </Card>
-      </GridItem>
-      <GridItem span={12}>
-        <VmStorageCard vm={vm} />
-      </GridItem>
-      <GridItem span={12}>
-        <VmUserDataCard vm={vm} />
-      </GridItem>
-    </Grid>
+    <Stack hasGutter>
+      {restartRequired ? (
+        <StackItem>
+          <RestartRequiredBanner vm={vm} />
+        </StackItem>
+      ) : null}
+      <StackItem>
+        <Grid hasGutter>
+          <GridItem md={6}>
+            <VmDetailsCard vm={vm} onInstanceTypeSaved={() => setWatchForRestart(true)} />
+          </GridItem>
+          <GridItem md={6}>
+            <Card isFullHeight>
+              <CardTitle>{t('Conditions')}</CardTitle>
+              <CardBody>
+                <ResourceConditionsTable
+                  ariaLabel={t('Virtual machine conditions')}
+                  conditions={conditions}
+                  conditionResourceKind="compute_instance"
+                />
+              </CardBody>
+            </Card>
+          </GridItem>
+          <GridItem span={12}>
+            <VmStorageCard vm={vm} />
+          </GridItem>
+          <GridItem span={12}>
+            <VmUserDataCard vm={vm} />
+          </GridItem>
+        </Grid>
+      </StackItem>
+    </Stack>
   );
 };
 

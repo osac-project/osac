@@ -276,6 +276,39 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		Expect(updateResp.Object.Status.State).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
 	})
 
+	It("Updates a tenant's display name and description", func() {
+		createResponse, err := tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+			Object: privatev1.Tenant_builder{
+				Metadata: privatev1.Metadata_builder{Name: "my-tenant"}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		const displayName = "My tenant display name"
+		const description = "Updated tenant description"
+		_, err = tenantsServer.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+			Object: privatev1.Tenant_builder{
+				Id: createResponse.GetObject().GetId(),
+				Metadata: privatev1.Metadata_builder{
+					DisplayName: displayName,
+					Description: description,
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+				"metadata.display_name",
+				"metadata.description",
+			}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		getResponse, err := tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{
+			Id: createResponse.GetObject().GetId(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(getResponse.GetObject().GetMetadata().GetDisplayName()).To(Equal(displayName))
+		Expect(getResponse.GetObject().GetMetadata().GetDescription()).To(Equal(description))
+	})
+
 	It("Rejects creation of a tenant with an empty name", func() {
 		response, err := tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{

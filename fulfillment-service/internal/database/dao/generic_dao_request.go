@@ -340,6 +340,11 @@ func (r *request[O]) getMetadata(object O) metadataIface {
 func (r *request[O]) setMetadata(object O, metadata metadataIface) {
 	objectReflect := object.ProtoReflect()
 	if metadata != nil {
+		if objectReflect.Has(r.dao.metadataField) {
+			dataMetadata := proto.Clone(objectReflect.Get(r.dao.metadataField).Message().Interface())
+			stripMetadataColumnFields(dataMetadata.ProtoReflect())
+			proto.Merge(metadata, dataMetadata)
+		}
 		metadataReflect := metadata.ProtoReflect()
 		objectReflect.Set(r.dao.metadataField, protoreflect.ValueOfMessage(metadataReflect))
 	} else {
@@ -356,8 +361,30 @@ func (r *request[O]) cloneObject(object O) O {
 }
 
 func (r *request[O]) marshalData(object O) (result []byte, err error) {
-	result, err = r.dao.jsonEncoder.Marshal(object)
+	dataObject := r.cloneObject(object)
+	objectReflect := dataObject.ProtoReflect()
+	metadata := objectReflect.Mutable(r.dao.metadataField).Message()
+	if !stripMetadataColumnFields(metadata) {
+		objectReflect.Clear(r.dao.metadataField)
+	}
+	result, err = r.dao.jsonEncoder.Marshal(dataObject)
 	return
+}
+
+func stripMetadataColumnFields(metadata protoreflect.Message) bool {
+	hasDataMetadata := false
+	fields := metadata.Descriptor().Fields()
+	for i := 0; i < fields.Len(); i++ {
+		field := fields.Get(i)
+		if _, storedInColumn := metadataColumnFields[field.Name()]; storedInColumn {
+			metadata.Clear(field)
+			continue
+		}
+		if metadata.Has(field) {
+			hasDataMetadata = true
+		}
+	}
+	return hasDataMetadata
 }
 
 func (r *request[O]) unmarshalData(data []byte, object O) error {

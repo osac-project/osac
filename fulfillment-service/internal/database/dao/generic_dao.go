@@ -62,7 +62,8 @@ type GenericDAOBuilder[O Object] struct {
 //   - `labels` - The labels assigned to the object.
 //   - `annotations` - The annotations assigned to the object.
 //   - `version` - The version number, automatically incremented on every update.
-//   - `data` - The serialized object, using the protocol buffers JSON serialization.
+//   - `data` - The serialized object remainder, using protocol buffers JSON serialization. Metadata fields stored in
+//     dedicated columns are omitted; metadata fields without columns are kept in this JSON document.
 //
 // Objects must have field named `id` of string type.
 type GenericDAO[O Object] struct {
@@ -108,6 +109,21 @@ type metadataIface interface {
 	SetAnnotations(map[string]string)
 	GetVersion() int32
 	SetVersion(int32)
+}
+
+// metadataColumnFields are the metadata fields stored in dedicated SQL columns. Other metadata fields are serialized
+// with the object in the data column so they survive create, update, get, list, and archive operations.
+var metadataColumnFields = map[protoreflect.Name]struct{}{
+	"name":               {},
+	"creation_timestamp": {},
+	"deletion_timestamp": {},
+	"finalizers":         {},
+	"creator":            {},
+	"tenant":             {},
+	"project":            {},
+	"labels":             {},
+	"annotations":        {},
+	"version":            {},
 }
 
 // NewGenericDAO creates a builder that can then be used to configure and create a generic DAO.
@@ -246,15 +262,11 @@ func (b *GenericDAOBuilder[O]) Build() (result *GenericDAO[O], err error) {
 	// Create the template that we will clone when we need to create a new metadata object:
 	metadataTemplate := objectTemplate.NewField(metadataField).Message()
 
-	// Create the JSON encoder. We need this special encoder in order to ignore the 'id' and 'metadata' fields
-	// because we save those in separate database columns and not in the JSON document where we save everything
-	// else.
+	// Create the JSON encoder. The id is stored in a dedicated column. marshalData removes metadata fields that are
+	// stored in dedicated columns, while preserving the remaining metadata in the JSON document.
 	jsonEncoder, err := json.NewEncoder().
 		SetLogger(b.logger).
-		AddIgnoredFields(
-			idField.FullName(),
-			metadataField.FullName(),
-		).
+		AddIgnoredFields(idField.FullName()).
 		Build()
 	if err != nil {
 		err = fmt.Errorf("failed to create JSON encoder: %w", err)

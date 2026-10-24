@@ -151,12 +151,6 @@ func deleteTenantUsers(ctx context.Context, tenant string) {
 
 func deleteTenant(ctx context.Context, tenantsClient privatev1.TenantsClient, projectsClient privatev1.ProjectsClient,
 	id, name string) {
-	// Break-glass secrets are stored against the tenant's default project, so they
-	// must be removed before projects (secrets_project_fk) and the tenant
-	// (secrets_tenant_fk) can be deleted. Repeat on each loop in case the
-	// reconciler persists a secret between cleanup steps.
-	secretsClient := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
-
 	// Request tenant deletion first so the tenant reconciler can remove its default
 	// networking resources before project deletion waits on those references.
 	_, err := tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
@@ -180,9 +174,15 @@ func deleteTenant(ctx context.Context, tenantsClient privatev1.TenantsClient, pr
 		Expect(ok && status.Code() == grpccodes.NotFound).To(BeTrue(), "tenant deletion failed: %v", err)
 	}
 
+	completeTenantDeletion(ctx, tenantsClient, projectsClient, id, name)
+}
+
+// completeTenantDeletion finishes cleanup after a tenant deletion was requested.
+func completeTenantDeletion(ctx context.Context, tenantsClient privatev1.TenantsClient,
+	projectsClient privatev1.ProjectsClient, id, name string) {
 	// Wake the tenant reconciler so default networking cleanup starts before the
 	// project cleanup below. Tolerate NotFound if reconciliation already finished.
-	_, err = tenantsClient.Signal(ctx, privatev1.TenantsSignalRequest_builder{
+	_, err := tenantsClient.Signal(ctx, privatev1.TenantsSignalRequest_builder{
 		Id: id,
 	}.Build())
 	if err != nil {
@@ -191,6 +191,30 @@ func deleteTenant(ctx context.Context, tenantsClient privatev1.TenantsClient, pr
 		Expect(signalStatus.Code()).To(Equal(grpccodes.NotFound))
 	}
 
+	deleteTenantDependencies(ctx, projectsClient, name)
+
+	Eventually(
+		func(g Gomega) {
+			_, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{
+				Id: id,
+			}.Build())
+			g.Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			g.Expect(ok).To(BeTrue())
+			g.Expect(status.Code()).To(Equal(grpccodes.NotFound))
+		},
+		2*time.Minute,
+		time.Second,
+	).Should(Succeed())
+}
+
+// deleteTenantDependencies removes tenant secrets and remaining projects after the
+// tenant reconciler has started default-networking cleanup.
+func deleteTenantDependencies(ctx context.Context, projectsClient privatev1.ProjectsClient, name string) {
+	// Break-glass secrets are stored against the tenant's default project, so they
+	// must be removed before projects (secrets_project_fk) can be deleted. Repeat on
+	// each loop in case the reconciler persists a secret between cleanup steps.
+	secretsClient := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
 	listProjectsFilter := fmt.Sprintf(
 		"this.metadata.tenant == %q && this.metadata.name != '' && !has(this.metadata.deletion_timestamp)", name)
 	listProjectsRequest := privatev1.ProjectsListRequest_builder{
@@ -210,20 +234,6 @@ func deleteTenant(ctx context.Context, tenantsClient privatev1.TenantsClient, pr
 		}
 	}
 	deleteSecrets(ctx, secretsClient, name)
-
-	Eventually(
-		func(g Gomega) {
-			_, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{
-				Id: id,
-			}.Build())
-			g.Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			g.Expect(ok).To(BeTrue())
-			g.Expect(status.Code()).To(Equal(grpccodes.NotFound))
-		},
-		2*time.Minute,
-		time.Second,
-	).Should(Succeed())
 }
 
 func waitForTenantSynced(ctx context.Context, client privatev1.TenantsClient, id string) {

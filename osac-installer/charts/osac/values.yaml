@@ -277,12 +277,30 @@ aap:
     instance:
       enabled: true
       name: "osac-aap"
+      api:
+        resourceRequirements:
+          requests:
+            cpu: 50m
+            memory: 750Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
       controller:
         disabled: false
       hub:
         disabled: true
       lightspeed:
         disabled: true
+      proxy:
+        # Limit Envoy workers to fit the 256m CPU quota on large nodes.
+        concurrency: 1
+        resourceRequirements:
+          requests:
+            cpu: 50m
+            memory: 750Mi
+          limits:
+            cpu: 256m
+            memory: 1Gi
       noLog: true
       redisMode: standalone
       routeTlsTerminationMechanism: Edge

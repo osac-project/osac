@@ -135,6 +135,32 @@ Report behavioral coverage, execution readiness, and test execution results
 separately. A case with a proposed harness or unresolved command is planned but
 not execution-ready; static checks passing does not change that status.
 
+## Implementation evidence
+
+Every change must classify its touched behaviors against the tier boundaries
+above and, when the affected component has one, its touched-area map. Changes
+that do not alter runtime behavior need no integration coverage; record that
+classification explicitly. Classify behavior-changing generated config against
+the touched-area map.
+
+Before opening a pull request:
+
+- Every required integration row must have an executed, passing test through
+  the named boundary. Unit tests and mocks do not satisfy a real component
+  boundary; a documented provider gap does not make a lower-tier test
+  coverage of that boundary.
+- Cite the executed command and working directory per row. Lint, typecheck,
+  collection, and schema-generation checks are build validation, not
+  integration evidence.
+- Missing or wrong-tier coverage is reported as a gap, never as covered. Link
+  it to the owning follow-up ticket using its Jira URL when one exists. If no
+  owner or ticket exists, report the gap as unresolved; do not invent a ticket.
+- The PR description or review report must state, per touched boundary: the
+  exercised boundary, running dependencies, executed command, and result — or
+  report the gap as unresolved with its owning ticket URL when one exists. If
+  there is no owner or ticket, state that explicitly; never claim the boundary
+  is covered.
+
 ## Agentic CI sandbox
 
 The repository overlay provides early Autofix feedback. It does not replace

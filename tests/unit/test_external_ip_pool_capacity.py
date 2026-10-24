@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 
 import pytest
 
-from tests.e2e.core import runner
+from tests.e2e.core import helpers, runner
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.vmaas.regression.external_ip import test_external_ip_pool_capacity as capacity
@@ -14,9 +15,11 @@ from tests.e2e.vmaas.regression.external_ip import test_external_ip_pool_capacit
 
 @pytest.fixture
 def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Advance polling time without sleeping or changing Python's shared time module."""
     elapsed = [0.0]
 
     def sleep(seconds: float) -> None:
+        """Charge each polling delay to the runner-local fake clock."""
         elapsed[0] += seconds
 
     monkeypatch.setattr(runner, "time", SimpleNamespace(sleep=sleep, monotonic=lambda: elapsed[0]))
@@ -25,23 +28,27 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 
 @pytest.fixture(params=["test_release_restores_capacity", "test_pool_deletion_succeeds_after_all_ips_released"])
 def consumer(request: pytest.FixtureRequest) -> Callable[..., None]:
+    """Exercise each real capacity consumer with the same lifecycle scenarios."""
     return getattr(capacity.TestPoolCapacity(), request.param)
 
 
 def test_capacity_consumers_wait_for_natural_deletion_before_reading_capacity(
     monkeypatch: pytest.MonkeyPatch, clock: list[float], consumer: Callable[..., None]
 ) -> None:
+    """Allow cleanup beyond 58 seconds while keeping capacity checks after confirmed deletion."""
     grpc = Mock(spec=GRPCClient)
     private_grpc = Mock(spec=GRPCClient)
-    k8s = Mock(spec=K8sClient)
+    k8s = K8sClient(namespace="test", as_system_admin=False)
     tracked = [("ip-first", "cr-first"), ("ip-last", "cr-last")]
     releasing_one = consumer.__name__ == "test_release_restores_capacity"
     completed: set[str] = set()
     capacity_reads: list[float] = []
     allocation_sequence = [2, 1, 2] if releasing_one else [1, 0]
 
-    def is_present(*, resource: str, name: str) -> bool:
-        assert resource == "externalip"
+    def read_resource(*args: str) -> tuple[str, int]:
+        """Model canonical kubectl output until each tracked IP naturally disappears."""
+        name = args[3]
+        assert args == ("kubectl", "get", "externalips", name, "-n", "test")
         expected_ip = ("ip-first", "cr-first") if name == "cr-first" else ("ip-last", "cr-last")
         assert expected_ip in tracked
         assert grpc.delete_external_ip.call_args_list == (
@@ -52,9 +59,14 @@ def test_capacity_consumers_wait_for_natural_deletion_before_reading_capacity(
         present = clock[0] < (62 if releasing_one or name == "cr-last" else 32)
         if not present:
             completed.add(name)
-        return present
+        return (
+            ("resource still present", 0)
+            if present
+            else (f'Error from server (NotFound): externalips "{name}" not found', 1)
+        )
 
     def read_capacity(*, pool_id: str) -> dict[str, object]:
+        """Keep archive propagation separate from confirmed Kubernetes resource deletion."""
         assert pool_id == "pool-id"
         assert completed == ({"cr-first"} if releasing_one else {"cr-first", "cr-last"})
         assert ("ip-first", "cr-first") not in tracked
@@ -64,7 +76,7 @@ def test_capacity_consumers_wait_for_natural_deletion_before_reading_capacity(
         allocated = allocation_sequence[len(capacity_reads) - 1]
         return {"object": {"status": {"total": "2", "allocated": str(allocated), "available": str(2 - allocated)}}}
 
-    k8s.is_present.side_effect = is_present
+    monkeypatch.setattr("tests.e2e.core.k8s_client.run_unchecked", read_resource)
     private_grpc.get_external_ip_pool.side_effect = read_capacity
     monkeypatch.setattr(capacity, "create_ip", Mock(return_value=("ip-refill", "cr-refill")))
     pool_wait = Mock()
@@ -88,17 +100,22 @@ def test_capacity_consumers_wait_for_natural_deletion_before_reading_capacity(
 def test_capacity_consumers_retain_pending_ips_on_natural_deletion_timeout(
     monkeypatch: pytest.MonkeyPatch, clock: list[float], consumer: Callable[..., None]
 ) -> None:
+    """Preserve every still-present IP when the natural-deletion polling budget expires."""
     grpc = Mock(spec=GRPCClient)
     private_grpc = Mock(spec=GRPCClient)
-    k8s = Mock(spec=K8sClient)
+    k8s = K8sClient(namespace="test", as_system_admin=False)
     tracked = [("ip-first", "cr-first"), ("ip-last", "cr-last")]
     releasing_one = consumer.__name__ == "test_release_restores_capacity"
 
-    def is_present(*, resource: str, name: str) -> bool:
-        assert resource == "externalip"
-        return releasing_one or name == "cr-last"
+    def read_resource(*args: str) -> tuple[str, int]:
+        """Leave the pending IP present after any earlier sibling's confirmed removal."""
+        name = args[3]
+        assert args == ("kubectl", "get", "externalips", name, "-n", "test")
+        if releasing_one or name == "cr-last":
+            return "resource still present", 0
+        return f'Error from server (NotFound): externalips "{name}" not found', 1
 
-    k8s.is_present.side_effect = is_present
+    monkeypatch.setattr("tests.e2e.core.k8s_client.run_unchecked", read_resource)
     refill = Mock()
     monkeypatch.setattr(capacity, "create_ip", refill)
     pool_wait = Mock()
@@ -124,6 +141,7 @@ def test_capacity_consumers_retain_pending_ips_on_natural_deletion_timeout(
 
 
 def test_capacity_consumers_retain_tracking_when_delete_request_fails(consumer: Callable[..., None]) -> None:
+    """Do not lose tracked resources when the initial API delete request fails."""
     grpc = Mock(spec=GRPCClient)
     private_grpc = Mock(spec=GRPCClient)
     k8s = Mock(spec=K8sClient)
@@ -141,5 +159,72 @@ def test_capacity_consumers_retain_tracking_when_delete_request_fails(consumer: 
 
     assert tracked == [("ip-first", "cr-first"), ("ip-last", "cr-last")]
     k8s.is_present.assert_not_called()
+    k8s.is_absent.assert_not_called()
     private_grpc.get_external_ip_pool.assert_not_called()
     private_grpc.delete_external_ip_pool.assert_not_called()
+
+
+@pytest.mark.parametrize("absent", [False, True], ids=["present", "canonical-not-found"])
+def test_external_ip_deletion_requires_confirmed_absence(
+    monkeypatch: pytest.MonkeyPatch, clock: list[float], absent: bool
+) -> None:
+    """Accept only exact canonical NotFound; a successful read must keep waiting."""
+    output = 'Error from server (NotFound): externalips "cr-first" not found' if absent else "resource still present"
+    read = Mock(return_value=(output, 1 if absent else 0))
+    monkeypatch.setattr("tests.e2e.core.k8s_client.run_unchecked", read)
+    k8s = K8sClient(namespace="test", as_system_admin=False)
+
+    if absent:
+        helpers.wait_for_external_ip_deletion(k8s=k8s, name="cr-first")
+    else:
+        with pytest.raises(TimeoutError, match="timed out after 595s"):
+            helpers.wait_for_external_ip_deletion(k8s=k8s, name="cr-first")
+
+    assert clock[0] == (0 if absent else 595)
+    assert read.call_args_list == [call("kubectl", "get", "externalips", "cr-first", "-n", "test")] * (
+        1 if absent else 120
+    )
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "Error from server (Forbidden): externalips is forbidden",
+        "Unable to connect to the server: connection refused",
+        'Error from server (NotFound): secrets "cr-first" not found',
+        'Error from server (NotFound): externalips "other-ip" not found',
+    ],
+    ids=["forbidden", "connection-error", "wrong-resource", "wrong-name"],
+)
+def test_capacity_consumers_preserve_tracking_on_unconfirmed_absence(
+    monkeypatch: pytest.MonkeyPatch, clock: list[float], consumer: Callable[..., None], output: str
+) -> None:
+    """Fail closed on lookup errors without releasing tracking or advancing pool operations."""
+    grpc = Mock(spec=GRPCClient)
+    private_grpc = Mock(spec=GRPCClient)
+    k8s = K8sClient(namespace="test", as_system_admin=False)
+    tracked = [("ip-first", "cr-first"), ("ip-last", "cr-last")]
+    read = Mock(return_value=(output, 1))
+    monkeypatch.setattr("tests.e2e.core.k8s_client.run_unchecked", read)
+    refill = Mock()
+    monkeypatch.setattr(capacity, "create_ip", refill)
+    pool_wait = Mock()
+    monkeypatch.setattr(capacity, "wait_for_external_ip_pool_deletion", pool_wait)
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        consumer(
+            small_pool=("pool-id", "pool-cr"),
+            grpc=grpc,
+            private_grpc=private_grpc,
+            k8s_hub_client=k8s,
+            created_ips=tracked,
+        )
+
+    assert exc_info.value.stderr == output
+    assert clock[0] == 0
+    assert tracked == [("ip-first", "cr-first"), ("ip-last", "cr-last")]
+    read.assert_called_once_with("kubectl", "get", "externalips", "cr-first", "-n", "test")
+    private_grpc.get_external_ip_pool.assert_not_called()
+    private_grpc.delete_external_ip_pool.assert_not_called()
+    refill.assert_not_called()
+    pool_wait.assert_not_called()

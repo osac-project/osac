@@ -771,6 +771,25 @@ func createCatalogItemClusterVersionFixture(ctx context.Context, version string)
 	return id
 }
 
+func createCatalogItemAddOnOperatorFixture(ctx context.Context, name string) *privatev1.AddOnOperator {
+	GinkgoHelper()
+	client := privatev1.NewAddOnOperatorsClient(tool.InternalView().AdminConn())
+	response, err := client.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+		Object: privatev1.AddOnOperator_builder{
+			Metadata:  catalogItemFixtureMetadata("shared", ""),
+			Title:     name,
+			Published: proto.Bool(true),
+		}.Build(),
+	}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	object := response.GetObject()
+	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+		_, err := client.Delete(ctx, privatev1.AddOnOperatorsDeleteRequest_builder{Id: object.GetId()}.Build())
+		return err
+	}, nil)
+	return object
+}
+
 func createComputeInstanceCatalogItemFixture(ctx context.Context, conn *grpc.ClientConn, object *publicv1.ComputeInstanceCatalogItem) *publicv1.ComputeInstanceCatalogItem {
 	GinkgoHelper()
 	client := publicv1.NewComputeInstanceCatalogItemsClient(conn)

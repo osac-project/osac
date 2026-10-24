@@ -72,9 +72,7 @@ def test_caas_cluster_storage_lifecycle(
         wait_for_tenant_condition(k8s=k8s_hub_client, name=tenant_name, condition_type="StorageBackendReady")
 
         # --- Create ClusterOrder and associate with our Tenant ---
-        private_grpc.ensure_bare_metal_instance_type(
-            name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
-        )
+        private_grpc.ensure_bare_metal_instance_type(name="ci-worker-bm")
         name = unique_name("e2e-cluster")
         cluster_uuid = cli.create_cluster(
             name=name,

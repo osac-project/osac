@@ -1,5 +1,54 @@
 ---
-- name: Include network-class-specific create tasks
-  ansible.builtin.include_role:
-    name: "{{ network_steps_collection }}.cluster_infra"
-    tasks_from: create.yaml
+# Cluster infrastructure creation.
+# Agents are created directly in the ClusterOrder namespace via a per-cluster
+# InfraEnv (matching the production flow).  No hot-pool selection or
+# labeling is needed — agents appear in the ClusterOrder namespace
+# automatically when they boot against the InfraEnv.
+# Networking CRs (VirtualNetwork, Subnet, SecurityGroup, ExternalIP) are
+# handled separately by the Networking API dispatcher
+# (NetworkClass -> operator -> AAP -> agentless_net).
+
+- name: Wait for control plane namespace
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: "{{ cluster_infra_namespace }}-{{ cluster_infra_name }}"
+  register: cp_ns
+  until: cp_ns.resources | length > 0
+  retries: 30
+  delay: 10
+
+- name: Wait for agents in ClusterOrder namespace
+  kubernetes.core.k8s_info:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: Agent
+    namespace: "{{ cluster_infra_agent_namespace }}"
+  register: ci_agents
+  until: >-
+    ci_agents.resources | length >=
+    (cluster_infra_node_requests
+     | map(attribute='numberOfNodes') | map('int') | sum)
+  retries: 60
+  delay: 10
+  no_log: true
+
+- name: Select unapproved agents
+  ansible.builtin.set_fact:
+    ci_unapproved_agents: >-
+      {{ ci_agents.resources | selectattr('spec.approved', 'false') | list }}
+  no_log: true
+
+- name: Approve agents in ClusterOrder namespace
+  kubernetes.core.k8s_json_patch:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: Agent
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ item.metadata.namespace }}"
+    patch:
+      - op: add
+        path: /spec/approved
+        value: true
+  loop: "{{ ci_unapproved_agents }}"
+  loop_control:
+    label: "Approve agent {{ item.metadata.name }}"
+  no_log: true

@@ -62,9 +62,7 @@ def bmi_instance_type(private_grpc: GRPCClient) -> str:
 
     Labs often export OSAC_BMI_INSTANCE_TYPE=default even when no types are cataloged.
     """
-    requested = (
-        os.environ.get("OSAC_BMI_INSTANCE_TYPE", "").strip() or os.environ.get("OSAC_BM_HOST_TYPE", "").strip()
-    )
+    requested = os.environ.get("OSAC_BMI_INSTANCE_TYPE", "").strip()
     if not requested:
         return ""
     items = private_grpc.call(service="osac.private.v1.BareMetalInstanceTypes/List").get("items") or []

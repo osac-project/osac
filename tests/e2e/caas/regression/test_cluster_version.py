@@ -34,9 +34,7 @@ def test_cluster_create_with_version(
     """Verify explicit version resolution and reference protection."""
     disk_image = private_grpc.ensure_disk_image(name="rhcos-4-22", source_ref=RHCOS_IMAGE)
     version = private_grpc.ensure_cluster_version(version="4.20.0-e2e", image=TEST_RELEASE_IMAGE, disk_image=disk_image)
-    private_grpc.ensure_bare_metal_instance_type(
-        name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
-    )
+    private_grpc.ensure_bare_metal_instance_type(name="ci-worker-bm")
 
     uuid: str | None = None
     co_name: str | None = None
@@ -98,9 +96,7 @@ def test_cluster_create_rejected_for_invalid_version(
     grpc: GRPCClient, private_grpc: GRPCClient, cluster_template: str
 ) -> None:
     """Verify creation is rejected for disabled, obsolete, and missing versions."""
-    private_grpc.ensure_bare_metal_instance_type(
-        name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
-    )
+    private_grpc.ensure_bare_metal_instance_type(name="ci-worker-bm")
 
     def _create_with_version(version_name: str) -> tuple[str, int]:
         return grpc.call_unchecked(

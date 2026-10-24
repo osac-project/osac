@@ -34,7 +34,3 @@ argument_specs:
         type: str
         required: true
         description: "Operator-owned InfraEnv name for this ClusterOrder"
-      network_steps_collection:
-        type: str
-        required: true
-        description: "Ansible collection providing network-class-specific steps (e.g. 'netris.steps', 'osac.steps')"

@@ -113,12 +113,7 @@ class GRPCClient:
     def create_virtual_network(self, *, name: str, ipv4_cidr: str, tenant: str | None = None) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.VirtualNetworks/Create",
-            data={
-                "object": {
-                    "metadata": _metadata(name=name, tenant=tenant),
-                    "spec": {"ipv4_cidr": ipv4_cidr},
-                }
-            },
+            data={"object": {"metadata": _metadata(name=name, tenant=tenant), "spec": {"ipv4_cidr": ipv4_cidr}}},
         )
         return response["object"]["id"]
 
@@ -216,11 +211,7 @@ class GRPCClient:
         return response["object"]["id"]
 
     def update_security_group_rules(
-        self,
-        *,
-        sg_id: str,
-        ingress: list[dict[str, Any]] | None = None,
-        egress: list[dict[str, Any]] | None = None,
+        self, *, sg_id: str, ingress: list[dict[str, Any]] | None = None, egress: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
         spec: dict[str, Any] = {}
         paths: list[str] = []
@@ -283,8 +274,7 @@ class GRPCClient:
             offset = 0
             while True:
                 response: dict[str, Any] = self.call(
-                    service=f"{PRIVATE_API}.Tenants/List",
-                    data={"offset": offset, "limit": 100},
+                    service=f"{PRIVATE_API}.Tenants/List", data={"offset": offset, "limit": 100}
                 )
                 page = response.get("items", [])
                 items.extend(item for item in page if item.get("metadata", {}).get("name") == name)
@@ -328,12 +318,7 @@ class GRPCClient:
     def create_external_ip(self, *, name: str, pool: str, tenant: str | None = None) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.ExternalIPs/Create",
-            data={
-                "object": {
-                    "metadata": _metadata(name=name, tenant=tenant),
-                    "spec": {"pool": {"id": pool}},
-                }
-            },
+            data={"object": {"metadata": _metadata(name=name, tenant=tenant), "spec": {"pool": {"id": pool}}}},
         )
         return response["object"]["id"]
 
@@ -747,7 +732,10 @@ class GRPCClient:
     def delete_baremetal_instance(self, *, bmi_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.BareMetalInstances/Delete", data={"id": bmi_id})
 
-    def create_baremetal_instance_type(self, *, name: str, host_type_label: str, fabric_port: str) -> str:
+    def create_baremetal_instance_type(
+        self, *, name: str, fabric_port: str, host_label_selector: dict[str, str] | None = None
+    ) -> str:
+        selector = host_label_selector or {"osac.openshift.io/host-type": "default"}
         response = self.call(
             service=f"{PRIVATE_API}.BareMetalInstanceTypes/Create",
             data={
@@ -761,7 +749,7 @@ class GRPCClient:
                                 {"name": fabric_port, "role": "fabric", "type": "Ethernet", "speed": "10Gbps"}
                             ],
                         },
-                        "host_label_selector": {"match_labels": {"osac.openshift.io/host-type": host_type_label}},
+                        "host_label_selector": {"match_labels": selector},
                     },
                 }
             },

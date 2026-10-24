@@ -694,8 +694,11 @@ class ExternalIPPlaybookTests(unittest.TestCase):
     def _reap(self, spawned):
         """Kill still-live children and remove their vars files."""
         for process, vars_path in spawned:
+            # Kill unconditionally: uv may have exited while its
+            # ansible-playbook descendant still holds the captured pipes,
+            # and the process group survives its leader's exit.
+            self._kill_tree(process)
             if process.poll() is None:
-                self._kill_tree(process)
                 try:
                     process.communicate(timeout=REAP_GRACE_SECONDS)
                 except subprocess.TimeoutExpired:

@@ -12,7 +12,7 @@ permissions: {}
 
 jobs:
   plan:
-    uses: osac-project/osac-ci/.github/workflows/e2e-queue-plan.yml@357d79f679cdb42bbf2aa0cde8a36c23477a934b  # v1.2.14
+    uses: osac-project/osac-ci/.github/workflows/e2e-queue-plan.yml@9bc077209d7c4a5c61082a9408ab2ec6959b4a82  # v1.2.15
     permissions:
       contents: read
       actions: write
@@ -57,7 +57,7 @@ jobs:
   result:
     needs: plan
     if: always()
-    uses: osac-project/osac-ci/.github/workflows/e2e-queue-result.yml@357d79f679cdb42bbf2aa0cde8a36c23477a934b  # v1.2.14
+    uses: osac-project/osac-ci/.github/workflows/e2e-queue-result.yml@9bc077209d7c4a5c61082a9408ab2ec6959b4a82  # v1.2.15
     permissions:
       actions: write
       contents: read

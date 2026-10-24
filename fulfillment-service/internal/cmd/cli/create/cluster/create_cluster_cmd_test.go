@@ -19,6 +19,7 @@ import (
 	"log/slog"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
 
@@ -413,60 +414,68 @@ var _ = Describe("parseClusterNetworkAttachmentFlag", func() {
 	})
 })
 
-var _ = Describe("Create cluster project propagation", func() {
-	It("sets metadata.project from the context when a project is selected", func() {
-		logger := slog.New(slog.NewTextHandler(GinkgoWriter, nil))
-		console, err := terminal.NewConsole().
-			SetLogger(logger).
-			SetStdout(GinkgoWriter).
-			SetStderr(GinkgoWriter).
-			Build()
-		Expect(err).NotTo(HaveOccurred())
+var _ = Describe("Create cluster metadata propagation", func() {
+	DescribeTable("uses effective tenant and project from command context",
+		func(savedTenant, effectiveTenant, savedProject, effectiveProject string) {
+			logger := slog.New(slog.NewTextHandler(GinkgoWriter, nil))
+			console, err := terminal.NewConsole().
+				SetLogger(logger).
+				SetStdout(GinkgoWriter).
+				SetStderr(GinkgoWriter).
+				Build()
+			Expect(err).NotTo(HaveOccurred())
 
-		settings, err := config.NewSettings().
-			SetLogger(logger).
-			SetDir(GinkgoT().TempDir()).
-			Build()
-		Expect(err).NotTo(HaveOccurred())
-		settings.SetTenant("tenant-a")
-		settings.SetPlaintext(true)
+			settings, err := config.NewSettings().
+				SetLogger(logger).
+				SetDir(GinkgoT().TempDir()).
+				Build()
+			Expect(err).NotTo(HaveOccurred())
+			settings.SetTenant(savedTenant)
+			settings.SetProject(savedProject)
+			settings.SetPlaintext(true)
 
-		server := testutils.NewServer()
-		DeferCleanup(server.Stop)
-		publicv1.RegisterClusterCatalogItemsServer(server.Registrar(), mockClusterCatalogItemsServer{})
-		createRequests := make(chan *publicv1.ClustersCreateRequest, 1)
-		publicv1.RegisterClustersServer(server.Registrar(), &testutils.ClustersServerFuncs{
-			CreateFunc: func(_ context.Context, request *publicv1.ClustersCreateRequest) (*publicv1.ClustersCreateResponse, error) {
-				createRequests <- request
-				return publicv1.ClustersCreateResponse_builder{
-					Object: publicv1.Cluster_builder{Id: "created-cluster"}.Build(),
-				}.Build(), nil
-			},
-		})
-		server.Start()
-		settings.SetAddress(server.Address())
+			server := testutils.NewServer()
+			DeferCleanup(server.Stop)
+			publicv1.RegisterClusterCatalogItemsServer(server.Registrar(), mockClusterCatalogItemsServer{})
+			createRequests := make(chan *publicv1.ClustersCreateRequest, 1)
+			publicv1.RegisterClustersServer(server.Registrar(), &testutils.ClustersServerFuncs{
+				CreateFunc: func(_ context.Context, request *publicv1.ClustersCreateRequest) (*publicv1.ClustersCreateResponse, error) {
+					createRequests <- request
+					return publicv1.ClustersCreateResponse_builder{
+						Object: publicv1.Cluster_builder{Id: "created-cluster"}.Build(),
+					}.Build(), nil
+				},
+			})
+			server.Start()
+			settings.SetAddress(server.Address())
 
-		ctx := logging.LoggerIntoContext(context.Background(), logger)
-		ctx = terminal.ConsoleIntoContext(ctx, console)
-		ctx = config.SettingsIntoContext(ctx, settings)
-		ctx = config.TenantIntoContext(ctx, settings.Tenant())
-		ctx = config.ProjectIntoContext(ctx, "team-a.frontend")
+			ctx := logging.LoggerIntoContext(context.Background(), logger)
+			ctx = terminal.ConsoleIntoContext(ctx, console)
+			ctx = config.SettingsIntoContext(ctx, settings)
+			// The root pre-run resolves --tenant and --project into the command context.
+			ctx = config.TenantIntoContext(ctx, effectiveTenant)
+			ctx = config.ProjectIntoContext(ctx, effectiveProject)
 
-		cmd := Cmd()
-		cmd.SetArgs([]string{
-			"--catalog-item", "catalog-item-id",
-			"--name", "test-cluster",
-		})
-		cmd.SetOut(GinkgoWriter)
-		cmd.SetErr(GinkgoWriter)
-		Expect(cmd.ExecuteContext(ctx)).To(Succeed())
+			cmd := Cmd()
+			cmd.SetArgs([]string{
+				"--catalog-item", "catalog-item-id",
+				"--name", "test-cluster",
+			})
+			cmd.SetOut(GinkgoWriter)
+			cmd.SetErr(GinkgoWriter)
+			Expect(cmd.ExecuteContext(ctx)).To(Succeed())
 
-		request := <-createRequests
-		cluster := request.GetObject()
-		Expect(cluster.GetMetadata().GetProject()).To(Equal("team-a.frontend"))
-		Expect(cluster.GetMetadata().GetTenant()).To(Equal("tenant-a"))
-		Expect(cluster.GetMetadata().GetName()).To(Equal("test-cluster"))
-	})
+			request := <-createRequests
+			cluster := request.GetObject()
+			Expect(cluster.GetMetadata().GetProject()).To(Equal(effectiveProject))
+			Expect(cluster.GetMetadata().GetTenant()).To(Equal(effectiveTenant))
+			Expect(cluster.GetMetadata().GetName()).To(Equal("test-cluster"))
+		},
+		Entry("flags override saved tenant and project",
+			"saved-tenant", "flag-tenant", "saved-project", "flag-project"),
+		Entry("flags work when no tenant or project is saved",
+			"", "flag-tenant", "", "flag-project"),
+	)
 })
 
 var _ = Describe("Create cluster node sets", func() {

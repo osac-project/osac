@@ -34,6 +34,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
@@ -299,12 +300,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		}
 
 		computeInstance := publicv1.ComputeInstance_builder{
-			Metadata: publicv1.Metadata_builder{
-				Name:    c.args.name,
-				Tenant:  c.settings.Tenant(),
-				Project: config.ProjectFromContext(ctx),
-			}.Build(),
-			Spec: specResult,
+			Metadata: metautil.ForCreate(ctx, c.args.name).Build(),
+			Spec:     specResult,
 		}.Build()
 
 		response, err := c.computeInstancesClient.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
@@ -357,11 +354,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	// Prepare the compute instance:
 	computeInstance := publicv1.ComputeInstance_builder{
-		Metadata: publicv1.Metadata_builder{
-			Name:    c.args.name,
-			Project: config.ProjectFromContext(ctx),
-		}.Build(),
-		Spec: spec,
+		Metadata: metautil.ForCreate(ctx, c.args.name).Build(),
+		Spec:     spec,
 	}.Build()
 
 	// Create the compute instance:

@@ -650,6 +650,20 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         vars_path.unlink(missing_ok=True)
         return process.returncode, self._parse_artifact(stdout), stdout + stderr
 
+    def _collect_all(self, spawned, timeout=SUBPROCESS_TIMEOUT):
+        """Collect every spawned child, even when one collection fails."""
+        try:
+            return [self._collect(*p, timeout=timeout) for p in spawned]
+        finally:
+            # A failing _collect raises before the remaining children are
+            # collected: kill any still-live process and remove its vars
+            # file so neither leaks past the test method.
+            for process, vars_path in spawned:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate()
+                vars_path.unlink(missing_ok=True)
+
     @staticmethod
     def _parse_artifact(stdout):
         """Parse global_custom_stats.osac_result from the json callback."""
@@ -1075,7 +1089,7 @@ class ExternalIPPlaybookTests(unittest.TestCase):
             self._spawn_child(CREATE_PLAYBOOK, self._job_vars(r))
             for r in (first, second)
         ]
-        results = [self._collect(*p) for p in spawned]
+        results = self._collect_all(spawned)
         for rc, artifact, output in results:
             self.assertEqual(rc, 0, output)
         addresses = {a["data"]["address"] for _, a, _ in results}
@@ -1091,7 +1105,7 @@ class ExternalIPPlaybookTests(unittest.TestCase):
             self._spawn_child(CREATE_PLAYBOOK, self._job_vars(same))
             for _ in range(2)
         ]
-        results = [self._collect(*p) for p in spawned]
+        results = self._collect_all(spawned)
         for rc, artifact, output in results:
             self.assertEqual(rc, 0, output)
         addresses = {a["data"]["address"] for _, a, _ in results}

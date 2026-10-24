@@ -54,6 +54,15 @@ operator:
     networking: true
     networkingProvisioning: false
     storage: true
+  # Keep the unversioned ExternalIP flow in CI: networkingProvisioning is false
+  # and the reference suite depends on the placeholder-allocated path, which
+  # the v1 contract intentionally does not provide (allocation stays pending).
+  # Flip to v1 together with enabling networkingProvisioning; the semantic
+  # decision is tracked under OSAC-6744.
+  networkManagers:
+    fabricManagers:
+      netris:
+        externalIPContractVersion: ""
   hubAccess:
     enabled: true
   tenants:

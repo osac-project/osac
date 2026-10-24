@@ -123,6 +123,8 @@ var _ = Describe("Default networking provisioning", func() {
 		vnResp, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnId}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		vnObj := vnResp.GetObject()
+		Expect(vnObj.GetSpec().GetIpv4Cidr()).To(Equal("10.200.0.0/16"))
+		Expect(vnObj.GetSpec().GetIpv6Cidr()).To(BeEmpty())
 		vnObj.SetStatus(privatev1.VirtualNetworkStatus_builder{
 			State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
 		}.Build())
@@ -139,8 +141,13 @@ var _ = Describe("Default networking provisioning", func() {
 				Filter: &defaultLabelFilter,
 			}.Build())
 			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(resp.GetItems()).ToNot(BeEmpty())
-			subnetId = resp.GetItems()[0].GetId()
+			items := resp.GetItems()
+			g.Expect(items).To(HaveLen(1))
+			if len(items) != 1 {
+				return
+			}
+			g.Expect(items[0].GetMetadata().GetName()).To(Equal("default-ipv4"))
+			subnetId = items[0].GetId()
 		}, time.Minute, time.Second).Should(Succeed())
 
 		By("Verifying default Subnet K8s CR is created")
@@ -164,6 +171,8 @@ var _ = Describe("Default networking provisioning", func() {
 		subResp, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetId}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		subObj := subResp.GetObject()
+		Expect(subObj.GetSpec().GetIpv4Cidr()).To(Equal("10.200.0.0/20"))
+		Expect(subObj.GetSpec().GetIpv6Cidr()).To(BeEmpty())
 		subObj.SetStatus(privatev1.SubnetStatus_builder{
 			State: privatev1.SubnetState_SUBNET_STATE_READY,
 		}.Build())

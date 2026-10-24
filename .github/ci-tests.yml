@@ -40,6 +40,10 @@
   kind: ui-unit
   # not `code`: that filter leaves osac-ui out on purpose, so an osac-ui-only change runs just this leg
   filters: [ui]
+- id: Unit tests (osac-installer)
+  group: unit
+  kind: helm-unit
+  filters: [code, unit-tests-osac-installer]
 - id: Integration test (fulfillment-service)
   group: integration
   kind: it-fulfillment-service
@@ -63,3 +67,21 @@
   group: integration
   kind: it-osac-installer
   filters: [code]
+# The install preflight against a real API server (Kind): fault injection, install, upgrade and failed-hook logs. One
+# leg per Helm: 3.18.0 is the oldest Helm that prints a failed hook's log, 3.22.0 is the Helm 3 the rest of CI uses,
+# and 4.2.2 is Helm 4. tests.yml picks the Helm version from the kind.
+- id: Integration test (osac-installer preflight, Helm 3.18.0)
+  group: integration
+  kind: it-osac-installer-preflight-helm3
+  timeout: 20
+  filters: [code, integration-tests-osac-installer-preflight]
+- id: Integration test (osac-installer preflight, Helm 3.22.0)
+  group: integration
+  kind: it-osac-installer-preflight-helm322
+  timeout: 20
+  filters: [code, integration-tests-osac-installer-preflight]
+- id: Integration test (osac-installer preflight, Helm 4.2.2)
+  group: integration
+  kind: it-osac-installer-preflight-helm4
+  timeout: 20
+  filters: [code, integration-tests-osac-installer-preflight]

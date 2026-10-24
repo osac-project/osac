@@ -1,0 +1,36 @@
+{{- /*
+Install preflight gate and report.
+
+Runs the checks in files/preflight/catalog.yaml. When a blocking problem is
+found (and preflight.mode is not "report") the render fails with one message
+that lists every problem and its fix. Otherwise the report is published as a
+hook ConfigMap, so it survives the install and external tools can read it:
+
+  oc get configmap <release>-preflight-report -n <namespace> \
+    -o jsonpath='{.data.render\.json}'
+
+The ConfigMap reflects the last render that passed. A failed attempt leaves it
+untouched; its result is the OSAC-PREFLIGHT-JSON line in the error message.
+Values errors (osac.validateValues and `required`) come first and keep Helm's
+own message.
+*/ -}}
+{{- include "osac.validateValues" . -}}
+{{- $r := include "osac.preflight.run" . | fromJson -}}
+{{- if and (gt (int $r.summary.blocking) 0) (ne $r.mode "report") -}}
+{{- fail (include "osac.preflight.failMessage" $r) -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "osac.fullname" . }}-preflight-report
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+    osac.openshift.io/preflight-report: "true"
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-100"
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  render.json: |-
+    {{ $r | toJson }}

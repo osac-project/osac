@@ -275,6 +275,61 @@ the certificate. The Kind
 `SUITE=fulfillment` target exercises deployed startup and API behavior, subject
 to the profile's configured CA and enabled services.
 
+### Install preflight (OSAC-6561)
+
+The `osac` chart checks prerequisites while Helm renders it (`templates/preflight/`,
+`files/preflight/catalog.yaml`) and publishes the result as JSON
+(`files/preflight/report.schema.json`). CI runs the unit and Helm contract tiers
+as the `Unit tests (osac-installer)` leg and the Kind tier as the three
+`Integration test (osac-installer preflight, Helm …)` legs (3.18.0, 3.22.0 and
+4.2.2), all registered in `.github/ci-tests.yml` and run by
+`.github/workflows/tests.yml`, so the
+scheduled and nightly integration runs include them. None of them goes through
+a Makefile target.
+
+| Tier | Command | Real | Faked or not covered |
+|---|---|---|---|
+| Unit, [DEV] OSAC-6566 | `helm unittest charts/osac` from `osac-installer/` (plugin pinned in the workflow) | Helm rendering of the real chart, the engine, catalog, report and failure message | The cluster: `lookup`, capabilities and the release revision are mocked. The plugin's fake client rejects a LIST of a kind with no objects, so empty-list branches are not covered here. |
+| Helm contract, [DEV] OSAC-6562, OSAC-6566 | `uv run --script scripts/test-preflight-render.py` from `osac-installer/` | Offline `helm template` of the umbrella and CSI charts; report schema validation; catalog consistency; the packaged chart archive | No cluster. Asserts the log policy on every hook Job, the CSI hook deadlines, that an offline render never blocks, that `preflight.*` values are closed by the schema, and that `helm package` ships the catalog, schema and preflight templates and no unit tests. |
+| Component integration, [DEV] OSAC-6566 | `uv run --script scripts/test-preflight-kind.py` against a Kind context | Helm 3.18.0, 3.22.0 and 4.2.2, a real API server, real `lookup`, release Secrets, hooks and failed-hook logs | A preflight-only copy of the chart (no workloads); the prerequisites are stub CRDs, a Service with an EndpointSlice and Secrets; OpenShift-only checks run as `skipped: not OpenShift`. |
+
+The Kind test covers a healthy install, an unchanged upgrade, a faulted upgrade
+that leaves the deployed revision and the last passing report intact, the
+install-versus-upgrade severity split, redaction of a database URL, a missing
+namespace, four independent faults reported once on a fresh install, and a
+failing hook that prints its pod log (with a control without the annotation).
+It also covers:
+
+- an installer that cannot read the cluster: with `validation.enabled=false`
+  no cluster read happens and the install works; with validation on, Helm's
+  own `forbidden` error stops the render before anything is installed;
+- the first upgrade of a release made by a chart that had no preflight, with
+  `--reuse-values` (the old chart is a stand-in with its own pre-install hook
+  and the full defaults minus `preflight`; it is not the published chart);
+- installing from the packaged chart archive;
+- the report ConfigMap outliving `helm uninstall`, a reinstall next to it, and
+  the removal command from the customer guide;
+- `--no-hooks`, `--atomic` and `helm rollback`: the render-time gate still
+  applies, writes no report without hooks, adds no rollback revision, and a
+  rollback does not run it.
+
+It refuses to run on a context that is not a Kind cluster.
+
+Coverage gaps:
+
+- The OpenShift-only checks (`ocp-version`, `aap-operator-ready`,
+  `aap-license-secret`) run against a real OpenShift API only in the deployed
+  OpenShift lanes. Owner: [OSAC-6568](https://redhat.atlassian.net/browse/OSAC-6568).
+- Resource shortage and image-pull failures are not detected before the
+  installation starts; they surface at `--wait` time. Later slices of
+  [OSAC-6561](https://redhat.atlassian.net/browse/OSAC-6561) cover them.
+- Helm 4 `--dry-run=server` (and `helm install --dry-run=server` on Helm 3)
+  cannot print a report on a cluster that lacks a CRD the chart renders, even
+  in report mode, because Helm maps every rendered kind first. On Helm 3 the
+  `helm template --dry-run=server -s templates/preflight/report.yaml` form
+  works anywhere; on Helm 4 the failing render's JSON line is the portable
+  channel.
+
 ### OSAC-5343 deployed enablement coverage
 
 The release E2E path adds these assertions to existing user journeys. The

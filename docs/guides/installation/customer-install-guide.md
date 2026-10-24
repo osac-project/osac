@@ -80,10 +80,13 @@ toggles and values to set.
 
 ### 2.1 Cluster and access
 
-- You have a Red Hat OpenShift Container Platform 4.22 cluster (4.22.4 to
-  4.22.6, channel `stable-4.22`) and the `cluster-admin` role on it.
-- A default storage class exists. The pre-installation validation hook issues
-  a warning if none exists. To set one, run the following command:
+- You have a Red Hat OpenShift Container Platform cluster, version 4.22 or
+  later (validated on 4.22.4 to 4.22.6, channel `stable-4.22`), and the
+  `cluster-admin` role on it.
+- A default storage class exists. The install preflight stops a new
+  installation that includes the AAP instance if none exists, because the
+  volume claims would stay `Pending`; it only warns on an upgrade. To set one,
+  run the following command:
 
   ```console
   $ oc patch storageclass <storage_class_name> -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
@@ -110,7 +113,12 @@ toggles and values to set.
 
 - The OpenShift CLI (`oc`), matching the cluster version. The installation and
   its hooks call `oc` and `kubectl`.
-- Helm 3.8 or later, for OCI registry support.
+- Helm 3.8 or later, for OCI registry support. Use Helm 3.18 or later, or
+  Helm 4, so that a failed hook job prints its log in the Helm output; older
+  versions only report that the job failed. The install preflight runs on the
+  machine where you run Helm, with your `kubeconfig`, so that machine needs
+  `cluster-admin` access to the cluster (see
+  [Section 11.1](#111-the-install-preflight-stops-the-installation)).
 - The `osac` CLI, latest release, for postinstallation hub registration and
   day-2 operations (see [Section 8.2](#82-installing-the-osac-cli)). Not
   required for the Helm installation.
@@ -154,7 +162,7 @@ Notes on individual components:
 - **cert-manager Operator for Red Hat OpenShift** installs into the
   `cert-manager-operator` namespace and creates its operands in the
   `cert-manager` namespace. The `certificates.cert-manager.io` CRD is a
-  mandatory pre-installation check.
+  mandatory install preflight check.
 - **trust-manager** distributes the CA bundle. To use an existing
   trust-manager installation, set `trustManager.upstream.enabled=true`.
 - **`default-ca` `ClusterIssuer`** is referenced by `service.certs.issuerRef`.
@@ -240,9 +248,10 @@ Required for CaaS:
 Required for BMaaS with the Metal3 backend:
 
 - **BareMetalOperator and a `Provisioning` custom resource.** When
-  `bmf.metal3.enabled=true`, the pre-installation validation hook requires the
-  `baremetalhosts.metal3.io` CRD and a `Provisioning` resource with
-  `spec.watchAllNamespaces: true`. OSAC does not install BareMetalOperator.
+  `bmf.metal3.enabled=true` or `bmf.netbox.enabled=true`, the install
+  preflight requires the `baremetalhosts.metal3.io` CRD and a `Provisioning`
+  resource with `spec.watchAllNamespaces: true`. OSAC does not install
+  BareMetalOperator.
 - **BMC reachability.** Redfish or IPMI access from the cluster to each host
   BMC, plus DHCP and PXE for Ironic inspection.
 
@@ -358,8 +367,10 @@ Run all installation commands in the same shell session.
 
    > **Note**
    >
-   > The chart pre-installation hook fails if the connection URL that these
-   > Secrets carry does not resolve to a ready PostgreSQL Service.
+   > The install preflight stops the installation if a Secret that
+   > `service.database.connection` names (and that the chart does not create
+   > itself) is missing or lacks a key, or if `dbInit.host` names an in-cluster
+   > Service that has no ready endpoints.
 
 6. For a production deployment, follow the
    [secrets management configuration guide](secrets-management-configuration.md)
@@ -561,7 +572,9 @@ subchart's own `values.yaml` file.
 | `service.kafka.connection` | schema | ConfigMap/Secret mappings for the required `brokers`, `user`, and `password` parameters. Supply resources in the OSAC namespace. | `fulfillment-service-kafka` Secret |
 | `metering.enabled` | schema | Deploys the metering service. Requires Strimzi-managed Kafka, a database connection, and `global.osacDeploymentId` (see [Table 5.1](#table-51-service-enablement-my-valuesyaml) and [Kafka configuration](kafka-configuration.md#optional-metering)). | `false` |
 | `metering.reconciliation.interval`, `metering.m360Adapter.enabled`, `metering.m360Adapter.m360.apiUrl`, `metering.m360Adapter.apiKeySecret` | subchart | Reconcile period and the Monetize360 billing adapter. | Not applicable |
-| `validation.enabled` | schema | Runs the pre-installation validation hook. | `true` |
+| `validation.enabled` | schema | Runs the install preflight. When `false`, every check is skipped and recorded as skipped in the report. | `true` |
+| `preflight.mode` | schema | `enforce` stops the installation on a blocking problem. `report` records problems without stopping. `strict` also stops on warnings. See [Section 11.1](#111-the-install-preflight-stops-the-installation). | `enforce` |
+| `preflight.skip.<check_id>` | schema | Skips one preflight check. The value is the reason, which the report records. | `{}` |
 | `metallb.enabled`, `metallb.addressCIDR` | schema | In the `osac` chart, creates an `IPAddressPool` and an `L2Advertisement`. Edit the pool after installation to match your network. | `false` and `192.168.40.0/24` |
 | `bundledVault.enabled`, `bundledVault.image` | schema | In-cluster OpenBao for testing and CI. Not intended for production. | `true` and `openbao:2.6.2` |
 | `hubAccess.enabled` | schema | Creates hub-access RBAC and registers the local cluster as its own hub. Single-cluster development only. | `false` |
@@ -766,8 +779,8 @@ backend. For the full variable reference, see
 **Prerequisites**
 
 - BareMetalOperator is installed, with a `Provisioning` custom resource that has
-  `spec.watchAllNamespaces: true`. OSAC does not install these; the
-  pre-installation validation hook fails if they are missing.
+  `spec.watchAllNamespaces: true`. OSAC does not install these; the install
+  preflight stops the installation if they are missing.
 
 **Procedure**
 
@@ -831,18 +844,18 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    $ helm list -A | grep osac
    ```
 
-2. Check the pre-installation validation hook. The log ends with
-   `=== Validation passed ===`.
+2. Check the install preflight report. The installation writes it before it
+   creates anything. No result may have the status `fail`, and
+   `summary.blocking` must be `0`:
 
    ```console
-   $ oc logs job/osac-pre-install-validate -n <namespace>
+   $ oc get configmap osac-preflight-report -n <namespace> \
+       -o jsonpath='{.data.render\.json}' | jq '.summary'
    ```
 
-   A missing `certificates.cert-manager.io` CRD aborts the installation. When
-   `bmf.metal3.enabled` is set, a missing `BareMetalHost` CRD or a
-   `Provisioning` resource without `watchAllNamespaces: true` also aborts the
-   installation. A message about a missing default storage class is a warning
-   only.
+   A result with the status `warn` did not stop the installation; its message
+   says what to review. See
+   [Section 11.1](#111-the-install-preflight-stops-the-installation).
 
 3. Check the phase-1 Operators. Each expected CSV must be `Succeeded`:
 
@@ -1158,6 +1171,13 @@ Reapply the patch after any infrastructure reinstall that recreates this
    $ oc delete crd -l app.kubernetes.io/part-of=osac
    ```
 
+3. The install preflight report is a Helm hook resource, so Helm does not
+   remove it with the release. To remove it, run the following command:
+
+   ```console
+   $ oc delete configmap -n "$NS" -l osac.openshift.io/preflight-report=true
+   ```
+
 If your platform team also installed the phase-1 prerequisites for this
 deployment and they need to come down too, see "Uninstall" in the
 [Helm Deployment Guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/helm-deployment-guide.md#uninstall).
@@ -1171,33 +1191,107 @@ Failed hook jobs are retained for inspection. To find them, run the following
 command and then view the logs for each job:
 
 ```console
-$ oc get pods -n <namespace> | grep -E 'validate|db-init|publish-templates|bootstrap'
+$ oc get pods -n <namespace> | grep -E 'db-init|publish-templates|bootstrap'
 ```
 
-### 11.1 The pre-installation validation hook fails
+With Helm 3.18 or later, or Helm 4, Helm prints the log of a failed hook job in
+its own output, so the cause is usually already on your screen.
 
-View the hook log:
+### 11.1 The install preflight stops the installation
+
+`helm install` and `helm upgrade` check the cluster before they create
+anything. If a prerequisite is missing, the command fails within seconds,
+creates nothing, and lists every problem once, with its fix:
 
 ```console
-$ oc logs job/osac-pre-install-validate -n <namespace>
+Error: INSTALLATION FAILED: execution error at (osac/templates/preflight/report.yaml:17:4): OSAC preflight: 2 blocking problem(s), 0 warning(s). Nothing was changed.
+
+  FAIL    default-storageclass: no default StorageClass is set (1 StorageClass(es) exist)
+          Fix: Mark a StorageClass as default: oc patch storageclass <name> ...
+  FAIL    cert-manager-crds: CustomResourceDefinition certificates.cert-manager.io not found
+          Fix: Install the cert-manager Operator for Red Hat OpenShift ...
+
+To skip a check: --set preflight.skip.<id>="<reason>"
+To only report, never block: --set preflight.mode=report
+OSAC-PREFLIGHT-JSON v1: {"apiVersion":"preflight.osac.openshift.io/v1alpha1", ...}
 ```
 
-- `cert-manager CRDs not found`: cert-manager is not installed, or its CRDs are
-  in a different API group. Install cert-manager. Set `certManager.enabled` to
-  `false` only when a cert-manager distribution is present.
-- `BareMetalHost CRD ... not found`, `No Provisioning CR found`, or
-  `Provisioning CR has watchAllNamespaces: false`: these are BMaaS Metal3
-  prerequisites. Install BareMetalOperator, then patch the `Provisioning`
-  resource:
+Fix every listed problem and run the same command again. To confirm that
+nothing was installed, run `helm status osac -n <namespace>`: it reports
+`release: not found`. A check that depends on a failed check is reported as
+`unknown` and is not counted again.
+
+**Requirements.** The preflight runs while Helm renders the chart, with the
+credentials of the user who runs Helm. A render without a cluster, such as
+`helm template` or a GitOps tool that renders manifests, cannot look at the
+cluster: every cluster check is reported as `unknown` and nothing is blocked.
+Create the namespace before you install ([Section 4.1](#41-preparing-the-cluster)):
+the preflight runs before Helm creates a namespace, so with only
+`--create-namespace` it stops at `install-namespace-active`.
+
+**Checks.** A check that does not apply to your configuration is recorded as
+`skipped` with the reason.
+
+| Check | What it verifies | Applies when |
+|---|---|---|
+| `install-namespace-active` | The release namespace exists and is not terminating. | Always |
+| `ocp-version` | The OpenShift version is 4.22 or later (warning only). | OpenShift |
+| `nodes-schedulable` | At least one node is Ready, not cordoned, and not tainted against ordinary pods. | Always; a warning on upgrade |
+| `default-storageclass` | A default storage class exists. | Always; required on a new installation with the AAP instance, otherwise a warning |
+| `cert-manager-crds` | The `certificates.cert-manager.io` CRD exists. | Always |
+| `cert-issuer-ready` | The issuer in `service.certs.issuerRef` exists and is `Ready`. | Always; a warning on upgrade |
+| `ca-bundle-present` | The `service.certs.caBundle.configMap` ConfigMap exists in the namespace. | Always |
+| `db-secrets` | Secrets named in `service.database.connection` that the chart does not create exist, have their keys, and carry a valid PostgreSQL URL. | Always |
+| `db-init-host-endpoints` | When `dbInit.host` is an in-cluster Service, it has a ready endpoint. | In-cluster host |
+| `kafka-access` | The `Kafka` resource is `Ready`, or the Secrets in `service.kafka.connection` exist when `kafka.enabled=false`. | Always |
+| `controller-credentials` | The Fulfillment controller credential Secrets exist with their keys. | `operator.enabled` |
+| `vault-config` | The Secrets and CA bundle named in `service.vault` exist. | `service.vault.endpoint` is set |
+| `aap-operator-ready` | The `AnsibleAutomationPlatform` CRD is established. | OpenShift with the AAP instance; a warning on upgrade |
+| `aap-license-secret` | The `config-as-code-manifest-ig` Secret exists with `license.zip` and the project label. | OpenShift with the AAP bootstrap |
+| `metal3-bmh-crd`, `metal3-watch-all-namespaces` | The `BareMetalHost` CRD exists and the `Provisioning` resource has `watchAllNamespaces: true`. To fix the second: `oc patch provisioning provisioning-configuration --type merge -p '{"spec":{"watchAllNamespaces": true}}'` | BMaaS with `bmf.metal3.enabled` or `bmf.netbox.enabled` |
+| `kubevirt-crds` | OpenShift Virtualization is installed. | VMaaS |
+| `mce-or-acm-crds` | The multicluster engine or RHACM is installed. | CaaS |
+
+**Skipping a check.** Set `preflight.skip.<check_id>` to the reason, for
+example `--set preflight.skip.cert-issuer-ready="created by GitOps after this
+install"`. The report records the reason. A check id that does not exist is
+reported as a warning. `validation.enabled=false` skips every check.
+
+**Access needed.** The preflight reads the cluster with the credentials of
+whoever runs `helm install`: the `kube-system` Namespace (to tell that the
+cluster answers), Nodes, StorageClasses, CustomResourceDefinitions, the
+Operator and custom resources named in the table, and the Secrets, ConfigMaps
+and Services the checks name. If a read is forbidden, Helm stops the render
+with an error such as `namespaces "kube-system" is forbidden: ... cannot get
+resource "namespaces"`, and nothing is installed. Grant the read access, or set
+`validation.enabled=false`, which makes no cluster read at all.
+
+**Modes.** `preflight.mode=enforce` (the default) stops the installation on a
+blocking problem. `strict` also stops on warnings. `report` records problems
+without stopping the installation.
+
+**Reading the result in a script or another tool.** The result is JSON
+(schema `preflight.osac.openshift.io/v1alpha1`):
+
+- After a failed run, the `OSAC-PREFLIGHT-JSON v1:` line in the error output.
+  It always starts at the beginning of a line. The same command gives it on
+  Helm 3 and Helm 4:
 
   ```console
-  $ oc patch provisioning provisioning-configuration --type merge -p '{"spec":{"watchAllNamespaces": true}}'
+  $ helm install osac ... 2>&1 >/dev/null | sed -n 's/^OSAC-PREFLIGHT-JSON v1: //p' | jq '.results[] | select(.blocking)'
   ```
 
-  Or set `bmf.metal3.enabled` to `false`.
-- `No default StorageClass found`: this is a warning, not a failure. Keycloak
-  and PostgreSQL persistent volume claims remain `Pending`. Set a default
-  storage class. See [Section 2.1](#21-cluster-and-access).
+- After a run that passed, the `osac-preflight-report` ConfigMap, key
+  `render.json`, holds the last report that passed. Compare `release.revision`
+  with the deployed revision to know whether it is current.
+- Without installing, on Helm 3, run
+  `helm template osac ... --dry-run=server --set preflight.mode=report -s templates/preflight/report.yaml`.
+  It prints the report as a ConfigMap and exits `0` even when problems exist
+  and the cluster lacks the chart's CRDs. Helm 4 maps every rendered kind to the cluster before it
+  prints anything, so on Helm 4 this fails with `resource mapping not found`
+  on a cluster that lacks a CRD the chart renders; use the error line of a
+  normal run, or `helm install ... --dry-run=server -o json` when the CRDs
+  exist (the report is the `osac-preflight-report` entry of `hooks`).
 
 ### 11.2 A Helm release is stuck in `pending-install` or `pending-upgrade`
 
@@ -1241,14 +1335,14 @@ $ helm show chart oci://ghcr.io/osac-project/charts/osac --version 0.0.17
 
 ### 11.5 The `osac-db-init` hook fails
 
-- `Secret osac-db-config not found`, `has an empty url key`, or
-  `invalid PostgreSQL url`: create the `osac-db-config` and
-  `osac-db-client-cert` Secrets before you install the `osac` chart (see
-  [Section 4.1](#41-preparing-the-cluster)), or enable `bundledPostgres` for
-  testing.
-- `PostgreSQL Service ... has no ready endpoints`: the host in the database URL
-  does not resolve to a running PostgreSQL database. Point `dbInit.host` and the
-  URL at a reachable server.
+- `Secret <name> not found`, `is missing key(s)`, or `is not a valid PostgreSQL
+  URL` from the `db-secrets` preflight check: create the Secret that
+  `service.database.connection` names, with the keys it lists (see
+  [Section 4.1](#41-preparing-the-cluster)).
+- `Service <name> in namespace <namespace> has no ready endpoints` from the
+  `db-init-host-endpoints` preflight check: `dbInit.host` names an in-cluster
+  Service that has no running PostgreSQL behind it. Point `dbInit.host` at a
+  reachable server.
 
 ### 11.6 Certificates never become `Ready`
 

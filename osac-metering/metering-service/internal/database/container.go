@@ -12,11 +12,13 @@ package database
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -26,12 +28,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Container manages a PostgreSQL instance in podman/docker for integration
-// tests. Lives in internal/database (not a _test.go file) because test files
-// in other packages (projection/) import it.
+// Container manages a PostgreSQL instance for integration tests. OpenShell
+// runs a local server; other environments use podman/docker. This lives in
+// internal/database because test files in other packages import it.
 type Container struct {
 	logger        logr.Logger
 	tool          string
+	initdbTool    string
+	local         bool
+	dataDir       string
 	id            string
 	host          string
 	port          string
@@ -46,6 +51,26 @@ type Container struct {
 }
 
 func NewContainer(logger logr.Logger) (*Container, error) {
+	if os.Getenv("OPENSHELL_SANDBOX") != "" {
+		postgres, err := exec.LookPath("postgres")
+		if err != nil {
+			return nil, fmt.Errorf("local PostgreSQL server is not installed: %w", err)
+		}
+		initdb, err := exec.LookPath("initdb")
+		if err != nil {
+			return nil, fmt.Errorf("local PostgreSQL initialization tool is not installed: %w", err)
+		}
+		logger.Info("selected sandbox-local PostgreSQL test server", "tool", postgres)
+		return &Container{
+			logger:        logger,
+			tool:          postgres,
+			initdbTool:    initdb,
+			local:         true,
+			adminPassword: randomHex(),
+			userPassword:  randomHex(),
+		}, nil
+	}
+
 	tool, err := selectTool()
 	if err != nil {
 		return nil, fmt.Errorf("selecting container tool: %w", err)
@@ -61,31 +86,38 @@ func NewContainer(logger logr.Logger) (*Container, error) {
 }
 
 func (c *Container) Start(ctx context.Context) error {
-	configFile, err := createConfigFile()
-	if err != nil {
-		return err
-	}
-	c.configFile = configFile
+	var err error
+	if c.local {
+		if err := c.startLocal(ctx); err != nil {
+			return err
+		}
+	} else {
+		configFile, err := createConfigFile()
+		if err != nil {
+			return err
+		}
+		c.configFile = configFile
 
-	c.id = fmt.Sprintf("osac-metering-db-%08x", rand.Uint32())
-	c.runCmd = exec.Command(
-		c.tool,
-		"run",
-		"--name", c.id,
-		"--env", fmt.Sprintf("POSTGRESQL_ADMIN_PASSWORD=%s", c.adminPassword),
-		"--publish", "5432",
-		"--rm",
-		"--volume", fmt.Sprintf("%s:%s:Z", c.configFile, containerConfigPath),
-		containerImage,
-	)
-	c.runCmd.Stdout = os.Stdout
-	c.runCmd.Stderr = os.Stderr
-	if err := c.runCmd.Start(); err != nil {
-		return fmt.Errorf("starting database container: %w", err)
-	}
+		c.id = fmt.Sprintf("osac-metering-db-%08x", rand.Uint32())
+		c.runCmd = exec.Command(
+			c.tool,
+			"run",
+			"--name", c.id,
+			"--env", fmt.Sprintf("POSTGRESQL_ADMIN_PASSWORD=%s", c.adminPassword),
+			"--publish", "5432",
+			"--rm",
+			"--volume", fmt.Sprintf("%s:%s:Z", c.configFile, containerConfigPath),
+			containerImage,
+		)
+		c.runCmd.Stdout = os.Stdout
+		c.runCmd.Stderr = os.Stderr
+		if err := c.runCmd.Start(); err != nil {
+			return fmt.Errorf("starting database container: %w", err)
+		}
 
-	if err := c.waitForPort(ctx); err != nil {
-		return err
+		if err := c.waitForPort(ctx); err != nil {
+			return err
+		}
 	}
 	if err := c.waitForConnection(ctx); err != nil {
 		return err
@@ -127,6 +159,52 @@ func (c *Container) Start(ctx context.Context) error {
 	return nil
 }
 
+func (c *Container) startLocal(ctx context.Context) (resultErr error) {
+	rootDir, err := os.MkdirTemp("", "osac-metering-postgres-*")
+	if err != nil {
+		return fmt.Errorf("creating local PostgreSQL data directory: %w", err)
+	}
+	c.dataDir = rootDir
+	defer func() {
+		if resultErr != nil {
+			resultErr = errors.Join(resultErr, os.RemoveAll(rootDir))
+			c.dataDir = ""
+		}
+	}()
+	dataDir := filepath.Join(rootDir, "data")
+	passwordFile := filepath.Join(rootDir, "admin-password")
+	if err := os.WriteFile(passwordFile, []byte(c.adminPassword+"\n"), 0600); err != nil {
+		return fmt.Errorf("writing local PostgreSQL password file: %w", err)
+	}
+	initCmd := exec.CommandContext(ctx, c.initdbTool, "-D", dataDir, "-U", "postgres",
+		"--auth-local=scram-sha-256", "--auth-host=scram-sha-256",
+		"--pwfile", passwordFile, "--no-sync")
+	if output, err := initCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("initializing local PostgreSQL: %w: %s", err, output)
+	}
+	if err := os.Remove(passwordFile); err != nil {
+		return fmt.Errorf("removing local PostgreSQL password file: %w", err)
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("selecting local PostgreSQL port: %w", err)
+	}
+	c.host, c.port, err = net.SplitHostPort(listener.Addr().String())
+	_ = listener.Close()
+	if err != nil {
+		return fmt.Errorf("parsing local PostgreSQL port: %w", err)
+	}
+	c.runCmd = exec.Command(c.tool, "-D", dataDir, "-h", c.host, "-p", c.port,
+		"-c", "unix_socket_directories="+dataDir, "-c", "fsync=off")
+	c.runCmd.Stdout = os.Stdout
+	c.runCmd.Stderr = os.Stderr
+	if err := c.runCmd.Start(); err != nil {
+		return fmt.Errorf("starting local PostgreSQL: %w", err)
+	}
+	return nil
+}
+
 func (c *Container) Stop(ctx context.Context) error {
 	defer func() {
 		if c.configFile != "" {
@@ -146,6 +224,9 @@ func (c *Container) Stop(ctx context.Context) error {
 		_, _ = c.adminConn.Exec(ctx, fmt.Sprintf("DROP USER IF EXISTS %s", containerUser))
 		_ = c.adminConn.Close(ctx)
 	}
+	if c.local {
+		return c.stopLocal(ctx)
+	}
 
 	killCmd := exec.Command(c.tool, "kill", c.id)
 	if err := killCmd.Run(); err != nil {
@@ -156,6 +237,29 @@ func (c *Container) Stop(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (c *Container) stopLocal(ctx context.Context) error {
+	var stopErr error
+	if c.runCmd != nil && c.runCmd.Process != nil {
+		if err := c.runCmd.Process.Signal(os.Interrupt); err != nil {
+			stopErr = fmt.Errorf("signaling local PostgreSQL: %w", err)
+			_ = c.runCmd.Process.Kill()
+		}
+		done := make(chan error, 1)
+		go func() { done <- c.runCmd.Wait() }()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			_ = c.runCmd.Process.Kill()
+			<-done
+			stopErr = errors.Join(stopErr, ctx.Err())
+		}
+	}
+	if c.dataDir != "" {
+		stopErr = errors.Join(stopErr, os.RemoveAll(c.dataDir))
+	}
+	return stopErr
 }
 
 type Instance struct {

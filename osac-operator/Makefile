@@ -12,6 +12,13 @@ GO_VERSION ?= 1.26.3
 GOTOOLCHAIN ?= go$(GO_VERSION)
 GOTOOLCHAIN_AUTO ?= $(GOTOOLCHAIN)+auto
 
+# OpenShell mediates signals to owned PIDs but rejects envtest's process-group signals.
+ifdef OPENSHELL_SANDBOX
+ENVTEST_GO_TEST := bash hack/go-test-openshell.sh
+else
+ENVTEST_GO_TEST := go test
+endif
+
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
 GOBIN=$(shell go env GOPATH)/bin
@@ -74,7 +81,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests.
-	GOTOOLCHAIN=$(GOTOOLCHAIN_AUTO) KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v '/test/integration') -coverprofile cover.out
+	GOTOOLCHAIN=$(GOTOOLCHAIN_AUTO) KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" $(ENVTEST_GO_TEST) $$(go list ./... | grep -v '/test/integration') -coverprofile cover.out
 
 .PHONY: helm-lint
 helm-lint: ## Lint Helm charts.
@@ -86,11 +93,12 @@ helm-validate: helm-lint ## Lint and template-render Helm charts.
 	helm template osac-operator-crds charts/operator-crds/
 	helm template osac-operator charts/operator/
 
-# Run integration tests against a pre-existing Kind cluster deployed via
-# the root Makefile's `make dev-env` + `make integration-test-operator`.
+# Run integration tests against a pre-existing Kind cluster with the operator
+# and console proxy deployed. The preflight reports missing access promptly.
 .PHONY: integration-tests
 integration-tests: manifests generate helm-crds ## Run integration tests against a Kind cluster.
-	ginkgo run --timeout 30m -v test/integration
+	bash hack/check-integration-cluster.sh
+	go run github.com/onsi/ginkgo/v2/ginkgo run --timeout 30m -v test/integration
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
@@ -157,7 +165,20 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: image-build
 image-build: ## Build container image with manager and console-proxy.
+
+ifneq ($(origin OPENSHELL_SANDBOX),undefined)
+	@if [ "$(origin IMG)" != file ] || [ "$(origin CONTAINERFILE)" != file ] || [ "$(origin CONTAINER_TOOL)" != file ]; then \
+		printf 'Carbonite image-build does not support IMG, CONTAINERFILE, or CONTAINER_TOOL overrides\n' >&2; \
+		exit 1; \
+	fi
+	@if [ ! -x ../tools/carbonite/host-build ]; then \
+		printf 'Carbonite host-build helper is missing; enable host builds on the host and re-enter the sandbox\n' >&2; \
+		exit 1; \
+	fi
+	@../tools/carbonite/host-build operator
+else
 	$(CONTAINER_TOOL) build -t ${IMG} -f ${CONTAINERFILE} ..
+endif
 
 .PHONY: image-push
 image-push: ## Push container image.

@@ -8,7 +8,19 @@ CONTAINERFILE ?= Containerfile
 
 .PHONY: image-build
 image-build: ## Build the container image.
+ifneq ($(origin OPENSHELL_SANDBOX),undefined)
+	@if [ "$(origin IMG)" != file ] || [ "$(origin CONTAINERFILE)" != file ] || [ "$(origin CONTAINER_TOOL)" != file ]; then \
+		printf 'Carbonite image-build does not support IMG, CONTAINERFILE, or CONTAINER_TOOL overrides\n' >&2; \
+		exit 1; \
+	fi
+	@if [ ! -x ../tools/carbonite/host-build ]; then \
+		printf 'Carbonite host-build helper is missing; enable host builds on the host and re-enter the sandbox\n' >&2; \
+		exit 1; \
+	fi
+	@../tools/carbonite/host-build ui
+else
 	$(CONTAINER_TOOL) build -f $(CONTAINERFILE) -t $(IMG) ..
+endif
 
 .PHONY: image-push
 image-push: ## Push the container image.

@@ -36,7 +36,19 @@ generate:
 # latter reachable only from the repo root). Matches
 # build-metering-service-image.yaml's `context: .`.
 image-build:
+ifneq ($(origin OPENSHELL_SANDBOX),undefined)
+	@if [ "$(origin IMG)" != file ] || [ "$(origin CONTAINER_TOOL)" != file ]; then \
+		printf 'Carbonite image-build does not support IMG or CONTAINER_TOOL overrides\n' >&2; \
+		exit 1; \
+	fi
+	@if [ ! -x ../../tools/carbonite/host-build ]; then \
+		printf 'Carbonite host-build helper is missing; enable host builds on the host and re-enter the sandbox\n' >&2; \
+		exit 1; \
+	fi
+	@../../tools/carbonite/host-build metering-service
+else
 	$(CONTAINER_TOOL) build -t $(IMG) -f Containerfile ../..
+endif
 
 image-push:
 	$(CONTAINER_TOOL) push $(IMG)

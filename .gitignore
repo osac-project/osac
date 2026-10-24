@@ -107,6 +107,8 @@ Thumbs.db
 .artifacts
 .artifacts/
 __pycache__
+# pnpm places its content-addressed store on the mounted checkout filesystem.
+/.pnpm-store/
 
 # proto (shared proto sources + generated Go)
 /proto/.buf

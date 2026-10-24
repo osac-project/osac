@@ -14,7 +14,21 @@ VERSION ?=
 # publish-image.yaml's `context: .`, `file: fulfillment-service/Containerfile`.
 .PHONY: image-build
 image-build: ## Build container image.
+
+ifneq ($(origin OPENSHELL_SANDBOX),undefined)
+	@if [ "$(origin IMG)" != file ] || [ "$(origin CONTAINERFILE)" != file ] || \
+		[ "$(origin CONTAINER_TOOL)" != file ] || [ "$(origin VERSION)" != file ]; then \
+		printf 'Carbonite image-build does not support IMG, CONTAINERFILE, CONTAINER_TOOL, or VERSION overrides\n' >&2; \
+		exit 1; \
+	fi
+	@if [ ! -x ../tools/carbonite/host-build ]; then \
+		printf 'Carbonite host-build helper is missing; enable host builds on the host and re-enter the sandbox\n' >&2; \
+		exit 1; \
+	fi
+	@../tools/carbonite/host-build fulfillment
+else
 	$(CONTAINER_TOOL) build -t ${IMG} -f ${CONTAINERFILE} --build-arg VERSION=$(VERSION) ..
+endif
 
 .PHONY: image-push
 image-push: ## Push container image.

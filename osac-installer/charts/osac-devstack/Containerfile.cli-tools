@@ -5,20 +5,31 @@
 #   podman build --platform linux/amd64,linux/arm64 -t ghcr.io/osac-project/cli-tools:latest -f Containerfile.cli-tools .
 #   podman push ghcr.io/osac-project/cli-tools:latest
 
-FROM registry.k8s.io/kubectl:v1.32.1
+FROM registry.k8s.io/kubectl:v1.32.1 AS kubectl
+
+# The kubectl image has no shell or package manager. Use Debian for the hook
+# tools and copy the architecture-matched kubectl binary from the pinned image.
+FROM debian:bookworm-slim
+
+COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
 
 # Install required tools for dev-full hooks
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
     curl \
     jq \
     python3 \
     ca-certificates \
+    tar \
     && rm -rf /var/lib/apt/lists/*
 
 # Install grpcurl (multi-arch)
 ARG TARGETARCH
-RUN curl -sL "https://github.com/fullstorydev/grpcurl/releases/download/v1.9.1/grpcurl_1.9.1_linux_${TARGETARCH}.tar.gz" \
-    | tar -xz -C /usr/local/bin grpcurl
+RUN case "${TARGETARCH}" in amd64) grpcurl_arch=x86_64 ;; *) grpcurl_arch="${TARGETARCH}" ;; esac && \
+    curl -fsSL "https://github.com/fullstorydev/grpcurl/releases/download/v1.9.1/grpcurl_1.9.1_linux_${grpcurl_arch}.tar.gz" \
+    -o /tmp/grpcurl.tar.gz && \
+    tar --no-same-owner -xzf /tmp/grpcurl.tar.gz -C /usr/local/bin grpcurl && \
+    rm /tmp/grpcurl.tar.gz
 
 # Verify installations
 RUN kubectl version --client && \

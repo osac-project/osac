@@ -16,7 +16,7 @@ test:
 	}
 
 lint:
-	uv run ansible-lint
+	uv run --group development ansible-lint
 
 # Not a generic docker/Containerfile build like the other components --
 # ansible-builder assembles the execution environment image from

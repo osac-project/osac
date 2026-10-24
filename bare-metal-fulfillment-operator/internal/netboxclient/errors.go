@@ -27,6 +27,7 @@ type ErrorKind string
 
 const (
 	ErrorKindInvalidRequest  ErrorKind = "invalid_request"
+	ErrorKindInvalidETag     ErrorKind = "invalid_etag"
 	ErrorKindUnauthorized    ErrorKind = "unauthorized"
 	ErrorKindForbidden       ErrorKind = "forbidden"
 	ErrorKindNotFound        ErrorKind = "not_found"
@@ -54,6 +55,8 @@ func (e *APIError) Error() string {
 	switch e.Kind {
 	case ErrorKindInvalidRequest:
 		return "invalid NetBox API request"
+	case ErrorKindInvalidETag:
+		return "NetBox device ETag is missing or invalid"
 	case ErrorKindUnauthorized:
 		return "NetBox rejected the configured API token (HTTP 401)"
 	case ErrorKindForbidden:

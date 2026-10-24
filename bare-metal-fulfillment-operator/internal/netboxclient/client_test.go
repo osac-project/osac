@@ -543,7 +543,7 @@ var _ = Describe("NetBox client", func() {
 		status := "active"
 
 		_, err := client.PatchDevice(context.Background(), "42", DevicePatch{Status: &status}, " \r\n")
-		expectAPIError(err, ErrorKindInvalidRequest, 0)
+		expectAPIError(err, ErrorKindInvalidETag, 0)
 		Expect(calls.Load()).To(Equal(int32(0)))
 	})
 

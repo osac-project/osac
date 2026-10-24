@@ -667,7 +667,12 @@ class ExternalIPPlaybookTests(unittest.TestCase):
             stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             self._kill_tree(process)
-            process.communicate()
+            try:
+                stdout, stderr = process.communicate(timeout=REAP_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                for stream in (process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
             vars_path.unlink(missing_ok=True)
             self.fail(f"child playbook exceeded the {timeout}s wall timeout")
         vars_path.unlink(missing_ok=True)
@@ -676,9 +681,12 @@ class ExternalIPPlaybookTests(unittest.TestCase):
     def _kill_tree(self, process):
         """Kill the child's process group. uv does not forward SIGKILL to
         its ansible-playbook child, so killing uv alone leaves the job
-        running and holding the captured pipes open."""
+        running and holding the captured pipes open. The group ID is
+        process.pid itself (start_new_session=True) and survives the uv
+        leader exiting, so killpg still reaches a playbook that outlives
+        it; getpgid would fail exactly there."""
         try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            os.killpg(process.pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             with contextlib.suppress(ProcessLookupError):
                 process.kill()

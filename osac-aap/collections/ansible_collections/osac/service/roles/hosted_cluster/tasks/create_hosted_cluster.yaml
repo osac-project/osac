@@ -98,6 +98,14 @@
     tasks_from: "{{ hosted_cluster_modify_definition_hook.tasks_from }}"
   when: hosted_cluster_modify_definition_hook is defined
 
+- name: Stamp control-plane upgrade attempt on HostedCluster
+  ansible.builtin.set_fact:
+    hosted_cluster_definition: >-
+      {{ hosted_cluster_definition | combine({
+        'metadata': {'annotations': {'osac.openshift.io/upgrade-attempt-id': hosted_cluster_control_plane_attempt_id}}
+      }, recursive=true) }}
+  when: hosted_cluster_control_plane_attempt_id | length > 0
+
 - name: Create HostedCluster resource
   kubernetes.core.k8s:
     state: present

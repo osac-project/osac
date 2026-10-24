@@ -104,3 +104,22 @@
           - nodepool_definitions | length == 2
           - nodepool_definitions[0].spec.release.image == 'example.test/control-plane:4.18'
           - nodepool_definitions[1].spec.release.image == 'example.test/control-plane:4.18'
+
+    - name: Set independent upgrade attempts for node sets
+      ansible.builtin.set_fact:
+        nodepool_definitions: []
+        cluster_order:
+          metadata:
+            annotations:
+              osac.openshift.io/upgrade-attempt-ids: '{"controlPlane":"control-plane-id","nodeSets":{"compute":"compute-id","batch":"batch-id"}}'
+
+    - name: Build NodePools with their own attempt IDs
+      ansible.builtin.include_role:
+        name: osac.service.hosted_cluster
+        tasks_from: build_nodepools.yaml
+
+    - name: Verify each NodePool retains its own ID
+      ansible.builtin.assert:
+        that:
+          - nodepool_definitions[0].metadata.annotations['osac.openshift.io/upgrade-attempt-id'] == 'compute-id'
+          - nodepool_definitions[1].metadata.annotations['osac.openshift.io/upgrade-attempt-id'] == 'batch-id'

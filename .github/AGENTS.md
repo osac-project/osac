@@ -35,18 +35,15 @@ plus a native approval on the head commit, and the merge queue.
 
 ## Dependency updates and who may change the pipeline
 
-- `workflows/bot-approve.yml` approves Dependabot and Konflux pull requests as the OSAC CI app (`osac-ci[bot]`) when no
-  person needs to read them (every commit the bot's own, plain and signed; only dependency files changed). It runs every
-  15 minutes and looks at every open dependency update, so an approval comes within about a quarter of an hour. It is a
-  scheduled run on purpose: a run started by a Dependabot pull request only sees Dependabot's secrets, so the app's key
-  would have to be handed to Dependabot too. It is a thin caller of the shared `bot-sweep` workflow of osac-project/osac-ci
-  (`osac-ci bot-decide`), pinned to a full commit SHA of a release. The approval is made with a token minted from the
-  organization secret `OSAC_CI_APP_PRIVATE_KEY` with the pull-request permission only. For a Konflux pull request the
-  sweep also prepares it as the same app, with a token minted for that step (pull-requests, issues and actions write): the
-  title prefix, the `jira/valid-reference` label the Jira reference check needs, and the approval of its held workflow
-  runs once the bot policy approves the commit (an edit by the workflow's own token starts no workflow; one by the app
-  does). It used the secret `MERGE_QUEUE_TOKEN` for this before; the shared sweep still accepts that secret, but this
-  workflow no longer passes it.
+- Dependabot and Konflux pull requests are approved as the OSAC CI app (`osac-ci[bot]`) when no person needs to read them
+  (every commit the bot's own, plain and signed; only dependency files changed; a change to a workflow file never). The
+  sweep runs every 15 minutes from the osac-ci repository (its `sweep-bots.yml`, pinned to nothing: it runs from the
+  default branch of osac-ci), not from a workflow here, so this repository's Actions tab does not fill with a run every 15
+  minutes. The rules (which bots, which files, which commits) are osac-ci's (`docs/RULES.md` there). For a Konflux pull
+  request the sweep also prepares it as the same app: the title prefix, the `jira/valid-reference` label the Jira reference
+  check needs, and the approval of its held workflow runs once the bot policy approves the commit. To run it by hand, use
+  the workflow `sweep-bots.yml` of osac-project/osac-ci (`workflow_dispatch`, repository `osac`, optionally a pull request
+  number).
 - Changes to the files that define the checks (`.github/workflows`, `actions`, `scripts`, `filters`, `e2e-policy.yml`,
   `CODEOWNERS`, `.pre-commit-config.yaml`; Markdown in them excepted) need an approval from `@osac-project/wg-infra`
   (see `CODEOWNERS`). Only the osac-ui lint and typecheck workflows are also approvable by the osac-ui maintainers

@@ -110,7 +110,7 @@ because a push drops the approval, and then runs the E2E once.
 ## Dependency updates
 
 Dependabot and Konflux pull requests are approved by the `osac-ci` bot account when every commit is the bot's own (plain,
-signed) and only dependency files changed (`workflows/bot-approve.yml`, which looks every 15 minutes, so the approval
+signed) and only dependency files changed (a sweep every 15 minutes, run from the osac-ci repository, so the approval
 comes within about a quarter of an hour). Anything else gets a person.
 
 ## Changing the pipeline
@@ -127,9 +127,9 @@ comes within about a quarter of an hour). Anything else gets a person.
   `e2e-pr.yml` and in `e2e-queue.yml` (copy the `vmaas` job). The line on the pull request follows the job of that name
   (waiting for a runner, running, then passed or failed, with a link to its log); a suite the policy did not pick does not
   run and has no line.
-- **The decision and the `E2E` check** (approval, CI result, the wording above), the queue plan and the bot sweep are the
-  shared workflows of [osac-project/osac-ci](https://github.com/osac-project/osac-ci); `e2e-pr.yml`, `e2e-queue.yml` and
-  `bot-approve.yml` here are thin callers that keep the triggers and the suite jobs. A member of the organization can start suites by hand with the comment `/test` (the suites the change needs) or
+- **The decision and the `E2E` check** (approval, CI result, the wording above) and the queue plan are the shared
+  workflows of [osac-project/osac-ci](https://github.com/osac-project/osac-ci); `e2e-pr.yml` and `e2e-queue.yml` here are
+  thin callers that keep the triggers and the suite jobs. The bot sweep runs from osac-ci itself (no file here). A member of the organization can start suites by hand with the comment `/test` (the suites the change needs) or
   `/test vmaas caas` (those suites), or from the comment the decision keeps on a pull request written by a member
   (a checkbox per suite; any approval state, a draft and a fork of a member included; a pull
   request by someone outside the organization gets no comment). The rules they apply are one page:

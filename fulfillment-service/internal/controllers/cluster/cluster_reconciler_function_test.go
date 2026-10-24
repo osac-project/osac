@@ -47,6 +47,20 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+var _ = Describe("upgrade attempt projection", func() {
+	It("projects independent current component IDs", func() {
+		spec := &privatev1.ClusterSpec{}
+		spec.SetControlPlaneAttemptId("control-plane-id")
+		spec.SetNodeSetAttemptIds(map[string]string{"compute": "compute-id", "gpu": "gpu-id"})
+		values := map[string]string{annotations.Tenant: "tenant-1"}
+		Expect(setUpgradeAttemptAnnotations(values, spec)).To(Succeed())
+		Expect(values[osacv1alpha1.UpgradeAttemptIDsAnnotation]).To(Equal(`{"controlPlane":"control-plane-id","nodeSets":{"compute":"compute-id","gpu":"gpu-id"}}`))
+		Expect(values[annotations.Tenant]).To(Equal("tenant-1"))
+		Expect(setUpgradeAttemptAnnotations(values, &privatev1.ClusterSpec{})).To(Succeed())
+		Expect(values).To(Equal(map[string]string{annotations.Tenant: "tenant-1"}))
+	})
+})
+
 var _ = Describe("validateTenant", func() {
 	It("should succeed when a tenant is assigned", func() {
 		t := &task{

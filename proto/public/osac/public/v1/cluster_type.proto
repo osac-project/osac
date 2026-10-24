@@ -206,6 +206,7 @@ message ClusterSpec {
     (google.api.field_behavior) = IMMUTABLE,
     (buf.validate.field).repeated.max_items = 32
   ];
+
 }
 
 // The per-operator status contains the installation state of one add-on operator.
@@ -332,7 +333,7 @@ message ClusterStatus {
   reserved 14;
   reserved "upgrade";
 
-  // Component upgrade attempts in acceptance order. The last entry is the current or most recent attempt.
+  // Component upgrade attempts, newest first. Earlier entries retain their place as their state changes.
   repeated ClusterUpgradeHistoryEntry upgrade_history = 15 [(google.api.field_behavior) = OUTPUT_ONLY];
 
   // Records when fulfillment accepted a change to spec.version. This is the authoritative
@@ -364,6 +365,9 @@ enum ClusterUpgradeState {
 
   // HyperShift reported a terminal error and stopped working toward the requested version.
   CLUSTER_UPGRADE_STATE_FAILED = 5;
+
+  // The node set was removed and its NodePool deleted before the upgrade completed.
+  CLUSTER_UPGRADE_STATE_NODE_SET_REMOVED = 6;
 }
 
 // Identifies the control plane or a node set within the Cluster being upgraded.

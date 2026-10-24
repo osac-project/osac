@@ -5,12 +5,13 @@
       {{ nodepool_definitions | default([]) + [{
         'apiVersion': 'hypershift.openshift.io/v1beta1',
         'kind': 'NodePool',
-        'metadata': {
+        'metadata': ({
           'name': nodepool_prefix + '-' + item.nodeSet,
           'namespace': hosted_cluster_namespace,
           'labels': {agent_instance_type_label: item.bareMetal.instanceType, agent_node_set_label: item.nodeSet}
             | combine(hosted_cluster_default_cluster_order_label)
-        },
+        } | combine({'annotations': {'osac.openshift.io/upgrade-attempt-id': hosted_cluster_node_set_attempt_ids[item.nodeSet]}}
+          if item.nodeSet in hosted_cluster_node_set_attempt_ids else {})),
         'spec': {
           'clusterName': hosted_cluster_name,
           'replicas': item.numberOfNodes | int,

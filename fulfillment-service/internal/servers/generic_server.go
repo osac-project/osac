@@ -554,6 +554,14 @@ func (s *GenericServer[O]) prepareForCreate(ctx context.Context, request any) (O
 		requestObject = proto.Clone(requestObject).(O)
 	}
 
+	// Clear any user-provided status field for public API requests. Status is OUTPUT_ONLY
+	// and should only be set by controllers. This provides defense-in-depth against
+	// malicious or buggy clients. Private API requests from controllers are allowed to
+	// set status on creation.
+	if isPublicAPIView(ctx) {
+		clearStatusField(requestObject)
+	}
+
 	requestMetadata := s.getMetadata(requestObject)
 	if requestMetadata == nil {
 		return nilObject, grpcstatus.Errorf(grpccodes.InvalidArgument, "metadata is required")
@@ -624,6 +632,28 @@ const DryRunHTTPHeader = "X-Dry-Run"
 
 const DryRunMetadataKey = "x-dry-run"
 
+// validateNoStatusInMask checks that the update mask does not contain status paths.
+// Status fields are OUTPUT_ONLY and controller-managed, so public API requests
+// must not include status paths in their update masks.
+func validateNoStatusInMask(mask *fieldmaskpb.FieldMask) error {
+	for _, path := range mask.GetPaths() {
+		// Normalize path: remove spaces and collapse consecutive dots to catch malformed paths
+		normalizedPath := strings.ReplaceAll(strings.TrimSpace(path), " ", "")
+		for strings.Contains(normalizedPath, "..") {
+			normalizedPath = strings.ReplaceAll(normalizedPath, "..", ".")
+		}
+
+		if strings.HasPrefix(normalizedPath, "status.") || normalizedPath == "status" {
+			return grpcstatus.Errorf(
+				grpccodes.InvalidArgument,
+				"update mask path '%s' is not allowed: status fields are OUTPUT_ONLY and cannot be modified by users",
+				path,
+			)
+		}
+	}
+	return nil
+}
+
 func isDryRun(ctx context.Context) bool {
 	md, ok := grpcmetadata.FromIncomingContext(ctx)
 	if !ok {
@@ -636,6 +666,57 @@ func isDryRun(ctx context.Context) bool {
 		}
 	}
 	return false
+}
+
+// applyMaskAndRestoreProtectedFields applies the update mask to merge request fields into the
+// current object, then restores protected fields (reserved metadata and status) based on API type.
+func (s *GenericServer[O]) applyMaskAndRestoreProtectedFields(
+	ctx context.Context,
+	requestObject O,
+	currentObject O,
+	requestMask *fieldmaskpb.FieldMask,
+) (O, error) {
+	var tmpObject O
+
+	if requestMask != nil {
+		// Reject public API requests that attempt to modify status fields via update mask.
+		if isPublicAPIView(ctx) {
+			if err := validateNoStatusInMask(requestMask); err != nil {
+				return tmpObject, err
+			}
+		}
+
+		// Keep the stored object unchanged for comparison and detach any values copied from the request.
+		tmpObject = proto.Clone(currentObject).(O)
+		fieldPaths, err := s.compilePaths(requestMask.GetPaths())
+		if err != nil {
+			return tmpObject, err
+		}
+		for _, fieldPath := range fieldPaths {
+			value, ok := fieldPath.Get(requestObject)
+			if ok {
+				fieldPath.Set(tmpObject, value)
+			} else {
+				fieldPath.Clear(tmpObject)
+			}
+		}
+		tmpObject = proto.Clone(tmpObject).(O)
+	} else {
+		tmpObject = proto.Clone(requestObject).(O)
+	}
+
+	// Restore protected fields based on API type
+	restoreReservedMetadataForPublicAPIView(ctx, currentObject, tmpObject)
+
+	// Restore controller-managed status from the stored object. Status fields are OUTPUT_ONLY
+	// and should never be modified by user input. This provides defense-in-depth protection.
+	// Only restore status for public API (user) requests. Private API requests from controllers
+	// are allowed to update status fields.
+	if isPublicAPIView(ctx) {
+		restoreStatusField(currentObject, tmpObject)
+	}
+
+	return tmpObject, nil
 }
 
 func (s *GenericServer[O]) Update(ctx context.Context, request any, response any) error {
@@ -738,29 +819,11 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 		}
 	}
 
-	// Update the fields indicated in the update mask, or all the fields if there is no update mask:
-	requestMask := requestMsg.GetUpdateMask()
-	var tmpObject O
-	if requestMask != nil {
-		// Keep the stored object unchanged for comparison and detach any values copied from the request.
-		tmpObject = proto.Clone(currentObject).(O)
-		fieldPaths, err := s.compilePaths(requestMask.GetPaths())
-		if err != nil {
-			return err
-		}
-		for _, fieldPath := range fieldPaths {
-			value, ok := fieldPath.Get(requestObject)
-			if ok {
-				fieldPath.Set(tmpObject, value)
-			} else {
-				fieldPath.Clear(tmpObject)
-			}
-		}
-		tmpObject = proto.Clone(tmpObject).(O)
-	} else {
-		tmpObject = proto.Clone(requestObject).(O)
+	// Apply the update mask and restore protected fields:
+	tmpObject, err := s.applyMaskAndRestoreProtectedFields(ctx, requestObject, currentObject, requestMsg.GetUpdateMask())
+	if err != nil {
+		return err
 	}
-	restoreReservedMetadataForPublicAPIView(ctx, currentObject, tmpObject)
 
 	if !prepareBeforeValidation {
 		// Validate the merged object using protovalidate.

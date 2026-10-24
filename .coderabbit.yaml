@@ -1,0 +1,17 @@
+# Repo-local overrides for osac.
+# Inherits all other settings (path_filters, labeling_instructions,
+# request_changes_workflow, base_branches, etc.) from the central
+# osac-project/coderabbit/.coderabbit.yaml.
+#
+# Schema: https://coderabbit.ai/integrations/schema.v2.json
+#
+# Why: osac-ci auto-approves dependency bot PRs that touch only
+# dependency files (policy/flow.yml bot_approve); CodeRabbit reviews
+# on these PRs add no signal beyond what the policy already checks.
+inheritance: true
+
+reviews:
+  auto_review:
+    ignore_usernames:
+      - "dependabot[bot]"
+      - "red-hat-konflux-kflux-prd-rh02[bot]"

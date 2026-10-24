@@ -101,7 +101,7 @@ func createReadyTenantForStorage(ctx context.Context, name, namespace string) {
 
 	Eventually(func(g Gomega) {
 		t := &v1alpha1.Tenant{}
-		g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, t)).To(Succeed())
+		g.Expect(indexedClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, t)).To(Succeed())
 		g.Expect(t.Status.Phase).To(Equal(v1alpha1.TenantPhaseReady))
 	}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
 }
@@ -121,8 +121,11 @@ func createHubSecret(ctx context.Context, tenantName, namespace string) {
 		},
 	}
 	Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+	waitForIndexedClientObject(secret)
 }
 
+// createLabeledStorageClass creates a StorageClass labeled with the given
+// tenant and storage tier and registers a DeferCleanup hook to delete it.
 func createLabeledStorageClass(ctx context.Context, name, tenant, tier string) {
 	sc := &storagev1.StorageClass{
 		ObjectMeta: metav1.ObjectMeta{
@@ -135,9 +138,19 @@ func createLabeledStorageClass(ctx context.Context, name, tenant, tier string) {
 		Provisioner: "kubernetes.io/no-provisioner",
 	}
 	Expect(k8sClient.Create(ctx, sc)).To(Succeed())
+	waitForIndexedClientObject(sc)
 	DeferCleanup(func() {
 		Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, sc))).To(Succeed())
 	})
+}
+
+// waitForStorageClassInCache polls the local manager's cached client until the
+// named StorageClass is visible to controller reads.
+func waitForStorageClassInCache(scName string) {
+	Eventually(func() error {
+		return testMcManager.GetLocalManager().GetClient().Get(context.Background(),
+			client.ObjectKey{Name: scName}, &storagev1.StorageClass{})
+	}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
 }
 
 type mockStorageTiersLister struct {
@@ -223,6 +236,19 @@ func newTestStorageBackendGetResponse(provider string) *privatev1.StorageBackend
 					Username: testBackendUsername,
 					Password: testBackendPassword,
 				}.Build(),
+			}.Build(),
+		}.Build(),
+	}.Build()
+}
+
+// newTestCSPManagedBackendGetResponse builds a StorageBackendsGetResponse fixture
+// for a CSP-managed backend (CspManaged: true, no Endpoint or Credentials).
+func newTestCSPManagedBackendGetResponse(provider string) *privatev1.StorageBackendsGetResponse {
+	return privatev1.StorageBackendsGetResponse_builder{
+		Object: privatev1.StorageBackend_builder{
+			Spec: privatev1.StorageBackendSpec_builder{
+				Provider:   provider,
+				CspManaged: true,
 			}.Build(),
 		}.Build(),
 	}.Build()
@@ -1141,7 +1167,7 @@ var _ = Describe("Storage Controller", func() {
 			))
 		})
 
-		It("should complete StorageClass resolution when tier resolution fails", func() {
+		It("should defer reconciliation and preserve existing storage status when tier resolution fails even without AAP providers", func() {
 			name := "storage-test-tier-resolution-failure"
 			createReadyTenantForStorage(ctx, name, testNamespace)
 			createLabeledStorageClass(ctx, name+"-default-sc", name, "default")
@@ -1157,16 +1183,21 @@ var _ = Describe("Storage Controller", func() {
 					return nil, status.Error(codes.Unavailable, "fulfillment service unreachable")
 				},
 			}
+			r.BackendsClient = registeredBackendsClient(0)
 
 			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
-			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
-			Expect(err).NotTo(HaveOccurred(), "a Tier API failure must not abort StorageClass resolution, which has no dependency on it")
+			res, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(pollInterval))
 
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
-			cond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
-			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(backendCond).NotTo(BeNil())
+			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(backendCond.Reason).To(Equal("TierResolutionFailed"))
+			Expect(backendCond.Message).To(ContainSubstring("fulfillment service unreachable"))
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)).To(BeNil())
 		})
 
 		It("should call resolveTierDefinitions exactly once per handleUpdate invocation", func() {
@@ -1274,6 +1305,133 @@ var _ = Describe("Storage Controller", func() {
 			)
 
 			Expect(result).To(Equal(`tier "archive" has no StorageClass`))
+		})
+
+		It("should resolve a cspManaged backend into cspDefinitions, skip SecretsClient, and omit it from connections", func() {
+			tiersClient := &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("gold", "backend-csp"),
+							newTestStorageTier("silver", "backend-csp"),
+						},
+					}.Build(), nil
+				},
+			}
+			backendsClient := &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					Expect(in.GetId()).To(Equal("backend-csp"))
+					return newTestCSPManagedBackendGetResponse("ceph"), nil
+				},
+			}
+			secretsClient := &mockSecretsClient{
+				getFunc: func(context.Context, *privatev1.SecretsGetRequest, ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
+					Fail("SecretsClient.Get must not be called for a cspManaged backend")
+					return nil, nil
+				},
+			}
+
+			osacDefs, cspDefs, conns, skipped, err := resolveTierDefinitionsWithStatus(ctx, tiersClient, backendsClient, secretsClient)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(skipped).To(BeFalse())
+			Expect(backendsClient.getCallCount).To(Equal(1))
+			Expect(secretsClient.getCallCount).To(Equal(0))
+			Expect(osacDefs).To(BeEmpty())
+			Expect(cspDefs).To(HaveLen(2))
+			Expect(cspDefs[0].Name).To(Equal("gold"))
+			Expect(cspDefs[0].Provider).To(Equal("ceph"))
+			Expect(cspDefs[0].BackendID).To(Equal("backend-csp"))
+			Expect(cspDefs[1].Name).To(Equal("silver"))
+			Expect(conns).To(BeEmpty())
+		})
+
+		It("should resolve STORAGE_PROTOCOL_UNSPECIFIED to an empty protocol for both cspManaged and OSAC-managed tiers", func() {
+			cspTier := newTestStorageTier("csp-unspecified", "backend-csp")
+			cspTier.GetSpec().SetProtocol(privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED)
+			osacTier := newTestStorageTier("osac-unspecified", "backend-vast")
+			osacTier.GetSpec().SetProtocol(privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED)
+
+			tiersClient := &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{cspTier, osacTier},
+					}.Build(), nil
+				},
+			}
+			backendsClient := &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					switch in.GetId() {
+					case "backend-csp":
+						return newTestCSPManagedBackendGetResponse("ceph"), nil
+					case "backend-vast":
+						return newTestStorageBackendGetResponse("vast"), nil
+					default:
+						return nil, status.Error(codes.NotFound, "not found")
+					}
+				},
+			}
+
+			osacDefs, cspDefs, _, skipped, err := resolveTierDefinitionsWithStatus(ctx, tiersClient, backendsClient, nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(skipped).To(BeFalse())
+			Expect(cspDefs).To(HaveLen(1))
+			Expect(cspDefs[0].Name).To(Equal("csp-unspecified"))
+			Expect(cspDefs[0].Protocol).To(Equal(""))
+			Expect(osacDefs).To(HaveLen(1))
+			Expect(osacDefs[0].Name).To(Equal("osac-unspecified"))
+			Expect(osacDefs[0].Protocol).To(Equal(""))
+		})
+
+		It("should inject only non-CSP tiers and backends into AAP context when comingled tiers are resolved", func() {
+			tiersClient := &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-gold", "backend-csp"),
+							newTestStorageTier("osac-fast", "backend-vast"),
+						},
+					}.Build(), nil
+				},
+			}
+			backendsClient := &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					switch in.GetId() {
+					case "backend-csp":
+						return newTestCSPManagedBackendGetResponse("ceph"), nil
+					case "backend-vast":
+						return newTestStorageBackendGetResponse("vast"), nil
+					default:
+						return nil, status.Error(codes.NotFound, "not found")
+					}
+				},
+			}
+			secretsClient := &mockSecretsClient{
+				getFunc: func(context.Context, *privatev1.SecretsGetRequest, ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
+					Fail("SecretsClient.Get must not be called when inline password is set or backend is cspManaged")
+					return nil, nil
+				},
+			}
+
+			injectedCtx, osacTiers, cspTiers, skipped, err := resolveAndPartitionTierContext(ctx, tiersClient, backendsClient, secretsClient, "tenant", "test-tenant")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(skipped).To(BeFalse())
+			Expect(osacTiers).To(HaveLen(1))
+			Expect(osacTiers[0].Name).To(Equal("osac-fast"))
+			Expect(cspTiers).To(HaveLen(1))
+			Expect(cspTiers[0].Name).To(Equal("csp-gold"))
+
+			ctxTiers := provisioning.StorageTierDefinitionsFromContext(injectedCtx)
+			Expect(ctxTiers).To(HaveLen(1))
+			Expect(ctxTiers[0].Name).To(Equal("osac-fast"))
+
+			ctxConns := provisioning.StorageBackendConnectionsFromContext(injectedCtx)
+			Expect(ctxConns).To(HaveLen(1))
+			Expect(ctxConns).To(HaveKeyWithValue("backend-vast", provisioning.BackendConnection{
+				Endpoint: "https://vast.example.com",
+				Username: testBackendUsername,
+				Password: testBackendPassword,
+			}))
+			Expect(ctxConns).NotTo(HaveKey("backend-csp"))
 		})
 	})
 
@@ -1989,6 +2147,7 @@ var _ = Describe("Storage Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+			waitForIndexedClientObject(secret)
 			DeferCleanup(func() {
 				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, secret))).To(Succeed())
 			})
@@ -2116,6 +2275,7 @@ var _ = Describe("Storage Controller", func() {
 				StringData: map[string]string{"provider": "vast"},
 			}
 			Expect(k8sClient.Create(ctx, vastSecret)).To(Succeed())
+			waitForIndexedClientObject(vastSecret)
 			DeferCleanup(func() {
 				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vastSecret))).To(Succeed())
 			})
@@ -2238,8 +2398,39 @@ var _ = Describe("Storage Controller", func() {
 			Expect(tenant.Status.StorageClasses).To(HaveLen(1))
 			Expect(tenant.Status.StorageClasses[0].Tier).To(Equal("local"))
 
+			Expect(tenant.Status.ClusterStorage).To(HaveLen(1))
+			Expect(tenant.Status.ClusterStorage[0].ClusterName).To(Equal(string(mcmanager.LocalCluster)))
+			Expect(tenant.Status.ClusterStorage[0].Ready).To(BeFalse())
+			Expect(tenant.Status.ClusterStorage[0].Reason).To(Equal(v1alpha1.TenantReasonNotFound))
+
 			// Provisioning job should be triggered for missing tiers
 			Expect(tenant.Status.ClusterStorageJobs).To(HaveLen(1))
+
+			By("triggering a new ClusterStorageProvider job via DesiredConfigVersion when a new OSAC tier is added after an initial job succeeded")
+			r.Client = k8sClient
+			tenant.Status.ClusterStorageJobs[0].State = v1alpha1.JobStateSucceeded
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+
+			createLabeledStorageClass(ctx, name+"-block-sc", name, "block")
+			waitForStorageClassInCache(name + "-block-sc")
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("local", "backend-lvms"),
+							newTestStorageTier("block", "backend-vast"),
+							newTestStorageTier("archive", "backend-vast"),
+						},
+					}.Build(), nil
+				},
+			}
+
+			result, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(pollInterval))
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.Status.ClusterStorageJobs).To(HaveLen(2),
+				"DesiredConfigVersion change from new tier must trigger a fresh provision job instead of skipping")
 		})
 
 		It("should requeue without creating new jobs when failed job exists and hub Secret appears", func() {
@@ -2247,13 +2438,7 @@ var _ = Describe("Storage Controller", func() {
 			createReadyTenantForStorage(ctx, name, testNamespace)
 			createHubSecret(ctx, name, secretsNamespace)
 			createLabeledStorageClass(ctx, name+"-local-sc", name, "local")
-			waitForStorageClass := func(scName string) {
-				Eventually(func() error {
-					return testMcManager.GetLocalManager().GetClient().Get(ctx,
-						client.ObjectKey{Name: scName}, &storagev1.StorageClass{})
-				}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
-			}
-			waitForStorageClass(name + "-local-sc")
+			waitForStorageClassInCache(name + "-local-sc")
 
 			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
 			tenant := &v1alpha1.Tenant{}
@@ -2320,6 +2505,7 @@ var _ = Describe("Storage Controller", func() {
 				Labels:    map[string]string{osacTenantKey: name, osacStorageProviderLabel: "vast"},
 			}}
 			Expect(k8sClient.Create(ctx, vastSecret)).To(Succeed())
+			waitForIndexedClientObject(vastSecret)
 			DeferCleanup(func() {
 				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vastSecret))).To(Succeed())
 			})
@@ -2339,7 +2525,7 @@ var _ = Describe("Storage Controller", func() {
 			// Once the missing StorageClass appears, the condition flips to True
 			// without needing a new provisioning job.
 			createLabeledStorageClass(ctx, name+"-block-sc", name, "block")
-			waitForStorageClass(name + "-block-sc")
+			waitForStorageClassInCache(name + "-block-sc")
 			_, err = r.Reconcile(ctx, storageReconcileRequest(nn))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
@@ -3184,6 +3370,1463 @@ var _ = Describe("Storage Controller", func() {
 						"cluster-storage finalizer should be removed even when Stage 1 returns stop=true")
 				}
 			}).Should(Succeed())
+		})
+	})
+
+	Context("CSP-managed storage (pure cspManaged flow)", func() {
+		It("should set StorageOnboardingComplete=True, clear stale OSAC status/conditions, and trigger zero AAP jobs when all csp-managed StorageClasses exist", func() {
+			name := "csp-pure-all-exist"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+
+			// Pre-populate stale OSAC-managed conditions and status fields to verify
+			// pure-CSP reconciliation removes them while preserving NamespaceReady.
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			tenant.SetStatusCondition(v1alpha1.TenantConditionNamespaceReady,
+				metav1.ConditionTrue, v1alpha1.TenantReasonFound, "namespace ready")
+			tenant.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
+				metav1.ConditionFalse, "TierResolutionFailed", "stale backend condition")
+			tenant.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
+				metav1.ConditionFalse, v1alpha1.TenantReasonNotFound, "stale cluster condition")
+			tenant.Status.StorageBackends = []v1alpha1.StorageBackendStatus{{
+				Name: "stale-backend", Provider: "vast", Ready: false,
+			}}
+			tenant.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{{
+				ClusterName: "", Ready: false, Reason: v1alpha1.TenantReasonNotFound,
+			}}
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+
+			createLabeledStorageClass(ctx, "csp-pure-gold-sc", cspManagedTenantValue, "csp-pure-gold")
+			createLabeledStorageClass(ctx, "csp-pure-silver-sc", cspManagedTenantValue, "csp-pure-silver")
+			waitForStorageClassInCache("csp-pure-gold-sc")
+			waitForStorageClassInCache("csp-pure-silver-sc")
+
+			backendTriggers := 0
+			clusterTriggers := 0
+			backendProvider := &mockProvisioningProvider{
+				name: "backend-mock",
+				triggerProvisionFunc: func(context.Context, client.Object) (*provisioning.ProvisionResult, error) {
+					backendTriggers++
+					return &provisioning.ProvisionResult{JobID: "unexpected-be", InitialState: v1alpha1.JobStateRunning}, nil
+				},
+			}
+			clusterProvider := &mockProvisioningProvider{
+				name: "cluster-mock",
+				triggerProvisionFunc: func(context.Context, client.Object) (*provisioning.ProvisionResult, error) {
+					clusterTriggers++
+					return &provisioning.ProvisionResult{JobID: "unexpected-cs", InitialState: v1alpha1.JobStateRunning}, nil
+				},
+			}
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				backendProvider, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-pure-silver", "backend-csp"),
+							newTestStorageTier("csp-pure-gold", "backend-csp"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				listFunc: func(context.Context, *privatev1.StorageBackendsListRequest, ...grpc.CallOption) (*privatev1.StorageBackendsListResponse, error) {
+					return privatev1.StorageBackendsListResponse_builder{
+						Total: 1,
+						Items: []*privatev1.StorageBackend{
+							privatev1.StorageBackend_builder{
+								Spec: privatev1.StorageBackendSpec_builder{
+									Provider:   "aws-ebs",
+									CspManaged: true,
+								}.Build(),
+							}.Build(),
+						},
+					}.Build(), nil
+				},
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					if in.GetId() == "backend-csp" {
+						return newTestCSPManagedBackendGetResponse("aws-ebs"), nil
+					}
+					return nil, status.Error(codes.NotFound, "not found")
+				},
+			}
+
+			res, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeZero())
+
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			Expect(cspCond).NotTo(BeNil())
+			Expect(cspCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cspCond.Reason).To(Equal(v1alpha1.TenantReasonFound))
+			Expect(cspCond.Message).To(ContainSubstring(`tier "csp-pure-gold": StorageClass "csp-pure-gold-sc" (csp-managed)`))
+			Expect(cspCond.Message).To(ContainSubstring(`tier "csp-pure-silver": StorageClass "csp-pure-silver-sc" (csp-managed)`))
+
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)).To(BeNil())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)).To(BeNil())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionNamespaceReady)).NotTo(BeNil(),
+				"non-storage conditions must be preserved")
+			Expect(tenant.Status.StorageBackends).To(BeEmpty())
+			Expect(tenant.Status.ClusterStorage).To(BeEmpty())
+
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "csp-pure-gold-sc", Tier: "csp-pure-gold"},
+				{Name: "csp-pure-silver-sc", Tier: "csp-pure-silver"},
+			}))
+			Expect(backendTriggers).To(BeZero())
+			Expect(clusterTriggers).To(BeZero())
+
+			By("keeping StorageOnboardingComplete=True (one-time transition) while refreshing status.storageClasses if a tier lacks a StorageClass after initial onboarding")
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-pure-gold", "backend-csp"),
+							newTestStorageTier("csp-pure-unprovisioned", "backend-csp"),
+						},
+					}.Build(), nil
+				},
+			}
+			res, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeZero())
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			cspCondAfter := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			Expect(cspCondAfter).NotTo(BeNil())
+			Expect(cspCondAfter.Status).To(Equal(metav1.ConditionTrue),
+				"StorageOnboardingComplete is a one-time transition and must remain True once completed")
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "csp-pure-gold-sc", Tier: "csp-pure-gold"},
+			}), "status.storageClasses must refresh to reflect currently resolved CSP tiers")
+		})
+
+		It("should set StorageOnboardingComplete=False with NotFound and emit MissingStorageTier events when 1-of-2 or 0-of-2 csp-managed StorageClasses are missing", func() {
+			By("0-of-2 missing case")
+			nameZero := "csp-pure-missing-all"
+			createReadyTenantForStorage(ctx, nameZero, testNamespace)
+
+			fakeRecorder := events.NewFakeRecorder(100)
+			backendTriggers := 0
+			clusterTriggers := 0
+			backendProvider := &mockProvisioningProvider{
+				name: "backend-mock",
+				triggerProvisionFunc: func(context.Context, client.Object) (*provisioning.ProvisionResult, error) {
+					backendTriggers++
+					return &provisioning.ProvisionResult{JobID: "unexpected", InitialState: v1alpha1.JobStateRunning}, nil
+				},
+			}
+			clusterProvider := &mockProvisioningProvider{
+				name: "cluster-mock",
+				triggerProvisionFunc: func(context.Context, client.Object) (*provisioning.ProvisionResult, error) {
+					clusterTriggers++
+					return &provisioning.ProvisionResult{JobID: "unexpected", InitialState: v1alpha1.JobStateRunning}, nil
+				},
+			}
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				backendProvider, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.Recorder = fakeRecorder
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-miss-gold", "backend-csp"),
+							newTestStorageTier("csp-miss-silver", "backend-csp"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, _ *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestCSPManagedBackendGetResponse("aws-ebs"), nil
+				},
+			}
+
+			nnZero := types.NamespacedName{Name: nameZero, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nnZero))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenantZero := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nnZero, tenantZero)).To(Succeed())
+			cspCond := tenantZero.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			Expect(cspCond).NotTo(BeNil())
+			Expect(cspCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cspCond.Reason).To(Equal(v1alpha1.TenantReasonNotFound))
+			Expect(cspCond.Message).To(ContainSubstring(`tier "csp-miss-gold" has no StorageClass`))
+			Expect(cspCond.Message).To(ContainSubstring(`tier "csp-miss-silver" has no StorageClass`))
+			Expect(tenantZero.Status.StorageClasses).To(BeNil())
+			Expect(tenantZero.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)).To(BeNil())
+			Expect(tenantZero.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)).To(BeNil())
+
+			var zeroEvents []string
+			for len(fakeRecorder.Events) > 0 {
+				zeroEvents = append(zeroEvents, <-fakeRecorder.Events)
+			}
+			Expect(zeroEvents).To(HaveLen(2))
+			Expect(zeroEvents[0]).To(ContainSubstring(eventReasonMissingStorageTier))
+			Expect(zeroEvents[0]).To(ContainSubstring(`tier "csp-miss-gold" has no StorageClass`))
+			Expect(zeroEvents[1]).To(ContainSubstring(eventReasonMissingStorageTier))
+			Expect(zeroEvents[1]).To(ContainSubstring(`tier "csp-miss-silver" has no StorageClass`))
+
+			By("1-of-2 partial missing case")
+			createLabeledStorageClass(ctx, "csp-miss-gold-sc", cspManagedTenantValue, "csp-miss-gold")
+			waitForStorageClassInCache("csp-miss-gold-sc")
+
+			namePartial := "csp-pure-missing-one"
+			createReadyTenantForStorage(ctx, namePartial, testNamespace)
+			nnPartial := types.NamespacedName{Name: namePartial, Namespace: testNamespace}
+
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nnPartial))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenantPartial := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nnPartial, tenantPartial)).To(Succeed())
+			cspCondPartial := tenantPartial.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			Expect(cspCondPartial).NotTo(BeNil())
+			Expect(cspCondPartial.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cspCondPartial.Reason).To(Equal(v1alpha1.TenantReasonNotFound))
+			Expect(cspCondPartial.Message).To(ContainSubstring(`tier "csp-miss-gold": StorageClass "csp-miss-gold-sc" (csp-managed)`))
+			Expect(cspCondPartial.Message).To(ContainSubstring(`tier "csp-miss-silver" has no StorageClass`))
+			Expect(tenantPartial.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "csp-miss-gold-sc", Tier: "csp-miss-gold"},
+			}))
+			Expect(tenantPartial.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)).To(BeNil())
+			Expect(tenantPartial.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)).To(BeNil())
+			Expect(backendTriggers).To(BeZero())
+			Expect(clusterTriggers).To(BeZero())
+
+			var partialEvents []string
+			for len(fakeRecorder.Events) > 0 {
+				partialEvents = append(partialEvents, <-fakeRecorder.Events)
+			}
+			Expect(partialEvents).To(HaveLen(1))
+			Expect(partialEvents[0]).To(ContainSubstring(eventReasonMissingStorageTier))
+			Expect(partialEvents[0]).To(ContainSubstring(`tier "csp-miss-silver" has no StorageClass`))
+		})
+
+		It("should set StorageOnboardingComplete=False with MultipleFound and emit DuplicateStorageClass event without MissingStorageTier when duplicate csp-managed SCs exist", func() {
+			name := "csp-pure-duplicate-sc"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+
+			createLabeledStorageClass(ctx, "csp-dup-gold-sc-1", cspManagedTenantValue, "csp-dup-gold")
+			createLabeledStorageClass(ctx, "csp-dup-gold-sc-2", cspManagedTenantValue, "csp-dup-gold")
+			waitForStorageClassInCache("csp-dup-gold-sc-1")
+			waitForStorageClassInCache("csp-dup-gold-sc-2")
+
+			fakeRecorder := events.NewFakeRecorder(100)
+			backendTriggers := 0
+			clusterTriggers := 0
+			backendProvider := &mockProvisioningProvider{
+				name: "backend-mock",
+				triggerProvisionFunc: func(context.Context, client.Object) (*provisioning.ProvisionResult, error) {
+					backendTriggers++
+					return &provisioning.ProvisionResult{JobID: "unexpected", InitialState: v1alpha1.JobStateRunning}, nil
+				},
+			}
+			clusterProvider := &mockProvisioningProvider{
+				name: "cluster-mock",
+				triggerProvisionFunc: func(context.Context, client.Object) (*provisioning.ProvisionResult, error) {
+					clusterTriggers++
+					return &provisioning.ProvisionResult{JobID: "unexpected", InitialState: v1alpha1.JobStateRunning}, nil
+				},
+			}
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				backendProvider, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.Recorder = fakeRecorder
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-dup-gold", "backend-csp"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, _ *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestCSPManagedBackendGetResponse("aws-ebs"), nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			Expect(cspCond).NotTo(BeNil())
+			Expect(cspCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cspCond.Reason).To(Equal(v1alpha1.TenantReasonMultipleFound))
+			Expect(cspCond.Message).To(ContainSubstring(`tier "csp-dup-gold": multiple csp-managed StorageClasses`))
+			Expect(tenant.Status.StorageClasses).To(BeNil())
+			Expect(backendTriggers).To(BeZero())
+			Expect(clusterTriggers).To(BeZero())
+
+			var recordedEvents []string
+			for len(fakeRecorder.Events) > 0 {
+				recordedEvents = append(recordedEvents, <-fakeRecorder.Events)
+			}
+			Expect(recordedEvents).To(HaveLen(1))
+			Expect(recordedEvents[0]).To(ContainSubstring(eventReasonDuplicateStorageClass))
+			Expect(recordedEvents[0]).NotTo(ContainSubstring(eventReasonMissingStorageTier))
+		})
+
+		It("should set StorageOnboardingComplete=False with NotFound when one csp-managed tier has duplicate StorageClasses and another is missing", func() {
+			name := "csp-pure-dup-and-missing"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+
+			createLabeledStorageClass(ctx, "csp-combo-dup-sc-1", cspManagedTenantValue, "csp-combo-dup")
+			createLabeledStorageClass(ctx, "csp-combo-dup-sc-2", cspManagedTenantValue, "csp-combo-dup")
+			waitForStorageClassInCache("csp-combo-dup-sc-1")
+			waitForStorageClassInCache("csp-combo-dup-sc-2")
+
+			fakeRecorder := events.NewFakeRecorder(100)
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.Recorder = fakeRecorder
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-combo-dup", "backend-csp"),
+							newTestStorageTier("csp-combo-missing", "backend-csp"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, _ *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestCSPManagedBackendGetResponse("aws-ebs"), nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			Expect(cspCond).NotTo(BeNil())
+			Expect(cspCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cspCond.Reason).To(Equal(v1alpha1.TenantReasonNotFound),
+				"MultipleFound applies only when len(missing) == 0; combined duplicate + missing must report NotFound")
+			Expect(cspCond.Message).To(ContainSubstring(`tier "csp-combo-dup": multiple csp-managed StorageClasses`))
+			Expect(cspCond.Message).To(ContainSubstring(`tier "csp-combo-missing" has no StorageClass`))
+			Expect(cspCond.Message).NotTo(ContainSubstring(`tier "csp-combo-dup" has no StorageClass`))
+
+			var recordedEvents []string
+			for len(fakeRecorder.Events) > 0 {
+				recordedEvents = append(recordedEvents, <-fakeRecorder.Events)
+			}
+			Expect(recordedEvents).To(HaveLen(2))
+			Expect(recordedEvents[0]).To(ContainSubstring(eventReasonDuplicateStorageClass))
+			Expect(recordedEvents[0]).To(ContainSubstring(`tier "csp-combo-dup": multiple csp-managed StorageClasses [csp-combo-dup-sc-1, csp-combo-dup-sc-2]`))
+			Expect(recordedEvents[1]).To(ContainSubstring(eventReasonMissingStorageTier))
+			Expect(recordedEvents[1]).To(ContainSubstring(`tier "csp-combo-missing" has no StorageClass`))
+		})
+
+		It("should ignore csp-managed StorageClasses whose tier is not in the configured cspTiers list and give cspResolved precedence in mergeResolvedStorageClasses on tier collision", func() {
+			name := "csp-pure-ignore-unconfigured-tier"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+
+			createLabeledStorageClass(ctx, "csp-cfg-gold-sc", cspManagedTenantValue, "csp-cfg-gold")
+			createLabeledStorageClass(ctx, "csp-uncfg-extra-sc", cspManagedTenantValue, "csp-uncfg-extra")
+			waitForStorageClassInCache("csp-cfg-gold-sc")
+			waitForStorageClassInCache("csp-uncfg-extra-sc")
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-cfg-gold", "backend-csp"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, _ *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestCSPManagedBackendGetResponse("aws-ebs"), nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			Expect(cspCond).NotTo(BeNil())
+			Expect(cspCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cspCond.Message).NotTo(ContainSubstring("csp-uncfg-extra"))
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "csp-cfg-gold-sc", Tier: "csp-cfg-gold"},
+			}))
+
+			// Verify mergeResolvedStorageClasses deduplicates overlapping Tier names with cspResolved taking precedence.
+			merged := mergeResolvedStorageClasses(
+				[]v1alpha1.ResolvedStorageClass{
+					{Name: "csp-shared-sc", Tier: "shared"},
+					{Name: "csp-gold-sc", Tier: "gold"},
+				},
+				[]v1alpha1.ResolvedStorageClass{
+					{Name: "osac-shared-sc", Tier: "shared"},
+					{Name: "osac-fast-sc", Tier: "fast"},
+				},
+			)
+			Expect(merged).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "osac-fast-sc", Tier: "fast"},
+				{Name: "csp-gold-sc", Tier: "gold"},
+				{Name: "csp-shared-sc", Tier: "shared"},
+			}))
+			Expect(mergeResolvedStorageClasses(nil, nil)).To(BeNil())
+		})
+
+		It("should fan out mapStorageClassToTenant across all Tenants in r.tenantNamespace for osac.openshift.io/tenant=csp-managed", func() {
+			fanoutNS := "csp-fanout-ns"
+			otherNS := "csp-other-ns"
+			for _, nsName := range []string{fanoutNS, otherNS} {
+				ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
+				if err := k8sClient.Create(ctx, ns); err != nil {
+					Expect(client.IgnoreAlreadyExists(err)).To(Succeed())
+				}
+			}
+
+			createReadyTenantForStorage(ctx, "fanout-tenant-1", fanoutNS)
+			createReadyTenantForStorage(ctx, "fanout-tenant-2", fanoutNS)
+			createReadyTenantForStorage(ctx, "other-ns-tenant", otherNS)
+
+			r := NewStorageReconciler(
+				testMcManager, fanoutNS, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+
+			sc := &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "csp-fanout-sc",
+					Labels: map[string]string{
+						osacTenantKey:        cspManagedTenantValue,
+						osacStorageTierLabel: "csp-fanout-tier",
+					},
+				},
+				Provisioner: "kubernetes.io/no-provisioner",
+			}
+
+			requests := r.mapStorageClassToTenant(ctx, sc)
+			Expect(requests).To(ConsistOf(
+				reconcile.Request{NamespacedName: types.NamespacedName{Name: "fanout-tenant-1", Namespace: fanoutNS}},
+				reconcile.Request{NamespacedName: types.NamespacedName{Name: "fanout-tenant-2", Namespace: fanoutNS}},
+			))
+		})
+
+		It("should remove storage finalizer immediately on handleDelete without triggering deprovision jobs for pure-CSP and deleted-CSP-tier tenants", func() {
+			deprovTriggers := 0
+			backendProvider := &mockProvisioningProvider{
+				name: "backend-mock",
+				triggerDeprovisionFunc: func(context.Context, client.Object, []v1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+					deprovTriggers++
+					return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionTriggered, JobID: "unexpected-be-del"}, nil
+				},
+			}
+			clusterProvider := &mockProvisioningProvider{
+				name: "cluster-mock",
+				triggerDeprovisionFunc: func(context.Context, client.Object, []v1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+					deprovTriggers++
+					return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionTriggered, JobID: "unexpected-cs-del"}, nil
+				},
+			}
+
+			By("pure cspManaged tenant deletion")
+			namePure := "csp-delete-pure"
+			createReadyTenantForStorage(ctx, namePure, testNamespace)
+			createLabeledStorageClass(ctx, "csp-del-gold-sc", cspManagedTenantValue, "csp-del-gold")
+			waitForStorageClassInCache("csp-del-gold-sc")
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				backendProvider, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-del-gold", "backend-csp"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, _ *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestCSPManagedBackendGetResponse("aws-ebs"), nil
+				},
+			}
+
+			nnPure := types.NamespacedName{Name: namePure, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nnPure))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenantPure := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nnPure, tenantPure)).To(Succeed())
+			Expect(tenantPure.Finalizers).To(ContainElement(storageFinalizer))
+
+			Expect(k8sClient.Delete(ctx, tenantPure)).To(Succeed())
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nnPure))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(deprovTriggers).To(BeZero())
+
+			err = k8sClient.Get(ctx, nnPure, tenantPure)
+			if err == nil {
+				Expect(tenantPure.Finalizers).NotTo(ContainElement(storageFinalizer))
+			} else {
+				Expect(client.IgnoreNotFound(err)).To(Succeed())
+			}
+
+			By("tenant deletion after cspManaged tiers were already deleted (0 tiers returned)")
+			nameZeroTiers := "csp-delete-zero-tiers"
+			createReadyTenantForStorage(ctx, nameZeroTiers, testNamespace)
+			nnZeroTiers := types.NamespacedName{Name: nameZeroTiers, Namespace: testNamespace}
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nnZeroTiers))
+			Expect(err).NotTo(HaveOccurred())
+
+			// Now simulate all cspManaged tiers having been deleted before Tenant deletion.
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return &privatev1.StorageTiersListResponse{}, nil
+				},
+			}
+			tenantZeroTiers := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nnZeroTiers, tenantZeroTiers)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, tenantZeroTiers)).To(Succeed())
+
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nnZeroTiers))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(deprovTriggers).To(BeZero())
+
+			err = k8sClient.Get(ctx, nnZeroTiers, tenantZeroTiers)
+			if err == nil {
+				Expect(tenantZeroTiers.Finalizers).NotTo(ContainElement(storageFinalizer))
+			} else {
+				Expect(client.IgnoreNotFound(err)).To(Succeed())
+			}
+
+			By("not skipping deprovisioning when an OSAC-managed backend is still registered or a tier was skipped")
+			nameOSACBackendRemains := "csp-delete-osac-backend-remains"
+			createReadyTenantForStorage(ctx, nameOSACBackendRemains, testNamespace)
+			nnRemains := types.NamespacedName{Name: nameOSACBackendRemains, Namespace: testNamespace}
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nnRemains))
+			Expect(err).NotTo(HaveOccurred())
+
+			// Simulate 0 tiers remaining, but an OSAC-managed backend (cspManaged: false) is still registered.
+			r.BackendsClient = &mockStorageBackendsClient{
+				listFunc: func(context.Context, *privatev1.StorageBackendsListRequest, ...grpc.CallOption) (*privatev1.StorageBackendsListResponse, error) {
+					return privatev1.StorageBackendsListResponse_builder{
+						Total: 1,
+						Items: []*privatev1.StorageBackend{
+							privatev1.StorageBackend_builder{
+								Spec: privatev1.StorageBackendSpec_builder{
+									Provider:   "vast",
+									CspManaged: false,
+								}.Build(),
+							}.Build(),
+						},
+					}.Build(), nil
+				},
+			}
+			tenantRemains := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nnRemains, tenantRemains)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, tenantRemains)).To(Succeed())
+
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nnRemains))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(deprovTriggers).To(BeNumerically(">", 0),
+				"must not skip deprovisioning when an OSAC-managed backend is still registered")
+
+			By("not skipping deprovisioning when a tier was skipped by resolveTierDefinitions due to a missing backend secret")
+			deprovTriggers = 0
+			nameSkippedTier := "csp-delete-skipped-tier"
+			createReadyTenantForStorage(ctx, nameSkippedTier, testNamespace)
+			nnSkipped := types.NamespacedName{Name: nameSkippedTier, Namespace: testNamespace}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, _ *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestCSPManagedBackendGetResponse("aws-ebs"), nil
+				},
+			}
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nnSkipped))
+			Expect(err).NotTo(HaveOccurred())
+
+			// Now return a tier whose backend is NotFound (skipped during resolution -> 0 osacTiers, skippedTiers=true).
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("osac-skipped-tier", "backend-missing"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, _ *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return nil, status.Error(codes.NotFound, "backend not found")
+				},
+			}
+			tenantSkipped := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nnSkipped, tenantSkipped)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, tenantSkipped)).To(Succeed())
+
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nnSkipped))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(deprovTriggers).To(BeNumerically(">", 0),
+				"must not skip deprovisioning when a tier was skipped during resolution")
+		})
+
+		It("should fail closed without querying local StorageClasses when r.targetCluster is remote and not registered", func() {
+			name := "csp-remote-fail-closed"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, "csp-remote-local-sc", cspManagedTenantValue, "csp-remote-gold")
+			waitForStorageClassInCache("csp-remote-local-sc")
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, "remote",
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-remote-gold", "backend-csp"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, _ *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestCSPManagedBackendGetResponse("aws-ebs"), nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).To(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)).To(BeNil())
+			Expect(tenant.Status.StorageClasses).To(BeEmpty())
+		})
+
+		It("should return false from backendRegistered and not trigger BackendProvider when only cspManaged backends are registered and no tiers exist yet", func() {
+			name := "csp-pure-backend-only-no-tiers"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+
+			backendTriggers := 0
+			backendProvider := &mockProvisioningProvider{
+				name: "backend-mock",
+				triggerProvisionFunc: func(context.Context, client.Object) (*provisioning.ProvisionResult, error) {
+					backendTriggers++
+					return &provisioning.ProvisionResult{JobID: "unexpected-be", InitialState: v1alpha1.JobStateRunning}, nil
+				},
+			}
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				backendProvider, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return &privatev1.StorageTiersListResponse{}, nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				listFunc: func(context.Context, *privatev1.StorageBackendsListRequest, ...grpc.CallOption) (*privatev1.StorageBackendsListResponse, error) {
+					return privatev1.StorageBackendsListResponse_builder{
+						Total: 1,
+						Items: []*privatev1.StorageBackend{
+							privatev1.StorageBackend_builder{
+								Spec: privatev1.StorageBackendSpec_builder{
+									Provider:   "aws-ebs",
+									CspManaged: true,
+								}.Build(),
+							}.Build(),
+						},
+					}.Build(), nil
+				},
+			}
+
+			registered, err := r.backendRegistered(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(registered).To(BeFalse())
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(backendTriggers).To(BeZero())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(backendCond).NotTo(BeNil())
+			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(backendCond.Reason).To(Equal(v1alpha1.TenantReasonNoProvider))
+			Expect(backendCond.Message).To(ContainSubstring("no storage backend registered"))
+		})
+
+		It("should preserve status.storageClasses and StorageOnboardingComplete=True when tier resolution fails on an already-onboarded pure-CSP tenant", func() {
+			name := "csp-pure-tier-err-preserves-status"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, "csp-preserve-gold-sc", cspManagedTenantValue, "csp-preserve-gold")
+			waitForStorageClassInCache("csp-preserve-gold-sc")
+
+			failTiers := false
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					if failTiers {
+						return nil, status.Error(codes.Unavailable, "fulfillment service unreachable")
+					}
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-preserve-gold", "backend-csp"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, _ *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestCSPManagedBackendGetResponse("aws-ebs"), nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)).NotTo(BeNil())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete).Status).To(Equal(metav1.ConditionTrue))
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "csp-preserve-gold-sc", Tier: "csp-preserve-gold"},
+			}))
+
+			// Simulate transient Tier API outage on subsequent reconcile.
+			failTiers = true
+			res, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(pollInterval))
+
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			Expect(cspCond).NotTo(BeNil(), "existing StorageOnboardingComplete condition must not be wiped on transient tier error")
+			Expect(cspCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "csp-preserve-gold-sc", Tier: "csp-preserve-gold"},
+			}), "existing status.storageClasses must not be wiped on transient tier error")
+			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(backendCond).NotTo(BeNil())
+			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(backendCond.Reason).To(Equal("TierResolutionFailed"))
+		})
+	})
+
+	Context("Comingled storage (cspManaged + OSAC-managed tiers)", func() {
+		configureComingledClients := func(r *StorageReconciler, cspTierName, osacTierName string) {
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier(cspTierName, "backend-csp"),
+							newTestStorageTier(osacTierName, "backend-vast"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				listFunc: func(context.Context, *privatev1.StorageBackendsListRequest, ...grpc.CallOption) (*privatev1.StorageBackendsListResponse, error) {
+					return privatev1.StorageBackendsListResponse_builder{
+						Total: 2,
+						Items: []*privatev1.StorageBackend{
+							privatev1.StorageBackend_builder{
+								Spec: privatev1.StorageBackendSpec_builder{
+									Provider:   "aws-ebs",
+									CspManaged: true,
+								}.Build(),
+							}.Build(),
+							privatev1.StorageBackend_builder{
+								Spec: privatev1.StorageBackendSpec_builder{
+									Provider:   "vast",
+									CspManaged: false,
+								}.Build(),
+							}.Build(),
+						},
+					}.Build(), nil
+				},
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					switch in.GetId() {
+					case "backend-csp":
+						return newTestCSPManagedBackendGetResponse("aws-ebs"), nil
+					case "backend-vast":
+						return newTestStorageBackendGetResponse("vast"), nil
+					default:
+						return nil, status.Error(codes.NotFound, "not found")
+					}
+				},
+			}
+		}
+
+		It("should complete cspManaged onboarding even when Stage 1 stops early to provision OSAC hub Secret", func() {
+			name := "comingled-s1-early-stop"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, "csp-gold-s1-sc", cspManagedTenantValue, "csp-gold-s1")
+			waitForStorageClassInCache("csp-gold-s1-sc")
+
+			var capturedTiers []provisioning.TierDefinition
+			var capturedConns map[string]provisioning.BackendConnection
+			backendTriggers := 0
+			backendProvider := &mockProvisioningProvider{
+				name: "backend-mock",
+				triggerProvisionFunc: func(pCtx context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+					backendTriggers++
+					capturedTiers = provisioning.StorageTierDefinitionsFromContext(pCtx)
+					capturedConns = provisioning.StorageBackendConnectionsFromContext(pCtx)
+					return &provisioning.ProvisionResult{
+						JobID:        "be-job-s1",
+						InitialState: v1alpha1.JobStateRunning,
+					}, nil
+				},
+			}
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				backendProvider, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			configureComingledClients(r, "csp-gold-s1", "osac-fast")
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			res, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(pollInterval))
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			Expect(cspCond).NotTo(BeNil())
+			Expect(cspCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cspCond.Reason).To(Equal(v1alpha1.TenantReasonFound))
+
+			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(backendCond).NotTo(BeNil())
+			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(backendCond.Reason).To(Equal(v1alpha1.TenantReasonNotFound))
+
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "csp-gold-s1-sc", Tier: "csp-gold-s1"},
+			}))
+
+			Expect(backendTriggers).To(Equal(1))
+			Expect(capturedTiers).To(HaveLen(1))
+			Expect(capturedTiers[0].Name).To(Equal("osac-fast"))
+			Expect(capturedConns).To(HaveKey("backend-vast"))
+			Expect(capturedConns).NotTo(HaveKey("backend-csp"))
+		})
+
+		It("should preserve previously resolved OSAC StorageClasses when Stage 1 stops early on an already-onboarded comingled Tenant", func() {
+			name := "comingled-s1-preserve-osac"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, "csp-gold-pres-sc", cspManagedTenantValue, "csp-gold-pres")
+			waitForStorageClassInCache("csp-gold-pres-sc")
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			tenant.Status.StorageClasses = []v1alpha1.ResolvedStorageClass{
+				{Name: "csp-gold-pres-sc", Tier: "csp-gold-pres"},
+				{Name: name + "-osac-fast-sc", Tier: "osac-fast"},
+			}
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+
+			backendProvider := &mockProvisioningProvider{
+				name: "backend-mock",
+				triggerProvisionFunc: func(context.Context, client.Object) (*provisioning.ProvisionResult, error) {
+					return &provisioning.ProvisionResult{
+						JobID:        "be-job-preserve",
+						InitialState: v1alpha1.JobStateRunning,
+					}, nil
+				},
+			}
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				backendProvider, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			configureComingledClients(r, "csp-gold-pres", "osac-fast")
+
+			res, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(pollInterval))
+
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "csp-gold-pres-sc", Tier: "csp-gold-pres"},
+				{Name: name + "-osac-fast-sc", Tier: "osac-fast"},
+			}), "Stage 1 early stop must not clobber existing OSAC-managed StorageClasses on a comingled Tenant")
+		})
+
+		It("should preserve cspResolved in status.storageClasses and isolate ClusterStorageProvider ctx when OSAC StorageClass is missing in Stage 2", func() {
+			name := "comingled-s2-missing-osac"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, "csp-gold-s2-sc", cspManagedTenantValue, "csp-gold-s2")
+			waitForStorageClassInCache("csp-gold-s2-sc")
+
+			vastSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("vast-tenant-config-%s", name),
+					Namespace: secretsNamespace,
+					Labels: map[string]string{
+						osacTenantKey:            name,
+						osacStorageProviderLabel: "vast",
+					},
+				},
+				StringData: map[string]string{"provider": "vast"},
+			}
+			Expect(k8sClient.Create(ctx, vastSecret)).To(Succeed())
+			waitForIndexedClientObject(vastSecret)
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vastSecret))).To(Succeed())
+			})
+
+			var capturedTiers []provisioning.TierDefinition
+			var capturedConns map[string]provisioning.BackendConnection
+			clusterTriggers := 0
+			clusterProvider := &mockProvisioningProvider{
+				name: "cluster-mock",
+				triggerProvisionFunc: func(pCtx context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+					clusterTriggers++
+					capturedTiers = provisioning.StorageTierDefinitionsFromContext(pCtx)
+					capturedConns = provisioning.StorageBackendConnectionsFromContext(pCtx)
+					return &provisioning.ProvisionResult{
+						JobID:        "cs-job-s2",
+						InitialState: v1alpha1.JobStateRunning,
+					}, nil
+				},
+			}
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			configureComingledClients(r, "csp-gold-s2", "osac-fast")
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			res, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(pollInterval))
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			Expect(cspCond).NotTo(BeNil())
+			Expect(cspCond.Status).To(Equal(metav1.ConditionTrue))
+
+			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(backendCond).NotTo(BeNil())
+			Expect(backendCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(tenant.Status.StorageBackends).To(Equal([]v1alpha1.StorageBackendStatus{{
+				Name:     "backend-vast",
+				Provider: "vast",
+				Ready:    true,
+				Message:  fmt.Sprintf("Hub Secret for tenant %q exists", name),
+			}}))
+
+			clusterCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+			Expect(clusterCond).NotTo(BeNil())
+			Expect(clusterCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(clusterCond.Reason).To(Equal(v1alpha1.TenantReasonNotFound))
+			Expect(clusterCond.Message).To(ContainSubstring(`tier "osac-fast" has no StorageClass`))
+			Expect(clusterCond.Message).NotTo(ContainSubstring("csp-gold-s2"))
+
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "csp-gold-s2-sc", Tier: "csp-gold-s2"},
+			}))
+
+			Expect(clusterTriggers).To(Equal(1))
+			Expect(capturedTiers).To(HaveLen(1))
+			Expect(capturedTiers[0].Name).To(Equal("osac-fast"))
+			Expect(capturedConns).To(HaveKey("backend-vast"))
+			Expect(capturedConns).NotTo(HaveKey("backend-csp"))
+		})
+
+		It("should set all three conditions True and merge StorageClasses sorted by Tier when both cspManaged and OSAC StorageClasses exist", func() {
+			name := "comingled-both-exist"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, "csp-gold-s3-sc", cspManagedTenantValue, "csp-gold-s3")
+			createLabeledStorageClass(ctx, name+"-osac-fast-sc", name, "osac-fast")
+			waitForStorageClassInCache("csp-gold-s3-sc")
+			waitForStorageClassInCache(name + "-osac-fast-sc")
+
+			vastSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("vast-tenant-config-%s", name),
+					Namespace: secretsNamespace,
+					Labels: map[string]string{
+						osacTenantKey:            name,
+						osacStorageProviderLabel: "vast",
+					},
+				},
+				StringData: map[string]string{"provider": "vast"},
+			}
+			Expect(k8sClient.Create(ctx, vastSecret)).To(Succeed())
+			waitForIndexedClientObject(vastSecret)
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vastSecret))).To(Succeed())
+			})
+
+			clusterProvider := &mockProvisioningProvider{name: "cluster-mock"}
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			configureComingledClients(r, "csp-gold-s3", "osac-fast")
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete).Status).To(Equal(metav1.ConditionTrue))
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).Status).To(Equal(metav1.ConditionTrue))
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).Status).To(Equal(metav1.ConditionTrue))
+
+			Expect(tenant.Status.StorageBackends).To(HaveLen(1))
+			Expect(tenant.Status.StorageBackends[0].Name).To(Equal("backend-vast"))
+
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "csp-gold-s3-sc", Tier: "csp-gold-s3"},
+				{Name: name + "-osac-fast-sc", Tier: "osac-fast"},
+			}))
+		})
+
+		It("should preserve cspResolved when pre-provisioned OSAC StorageClass is missing and merge both when present (ClusterStorageProvider == nil)", func() {
+			name := "comingled-preprovisioned"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, "csp-gold-preprov-sc", cspManagedTenantValue, "csp-gold-preprov")
+			waitForStorageClassInCache("csp-gold-preprov-sc")
+
+			vastSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("vast-tenant-config-%s", name),
+					Namespace: secretsNamespace,
+					Labels: map[string]string{
+						osacTenantKey:            name,
+						osacStorageProviderLabel: "vast",
+					},
+				},
+				StringData: map[string]string{"provider": "vast"},
+			}
+			Expect(k8sClient.Create(ctx, vastSecret)).To(Succeed())
+			waitForIndexedClientObject(vastSecret)
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vastSecret))).To(Succeed())
+			})
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.Recorder = events.NewFakeRecorder(100)
+			configureComingledClients(r, "csp-gold-preprov", "osac-fast")
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+
+			By("reconciling when pre-provisioned OSAC StorageClass is missing (len(result.resolved) == 0)")
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete).Status).To(Equal(metav1.ConditionTrue))
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).Status).To(Equal(metav1.ConditionTrue))
+
+			clusterCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+			Expect(clusterCond).NotTo(BeNil())
+			Expect(clusterCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(clusterCond.Reason).To(Equal(v1alpha1.TenantReasonNotFound))
+			Expect(clusterCond.Message).To(ContainSubstring(`tier "osac-fast" has no StorageClass`))
+			Expect(clusterCond.Message).NotTo(ContainSubstring("csp-gold-preprov"))
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "csp-gold-preprov-sc", Tier: "csp-gold-preprov"},
+			}))
+
+			By("reconciling after pre-provisioned OSAC StorageClass is created (len(result.resolved) > 0)")
+			createLabeledStorageClass(ctx, name+"-osac-fast-sc", name, "osac-fast")
+			waitForStorageClassInCache(name + "-osac-fast-sc")
+
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			clusterCond = tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+			Expect(clusterCond).NotTo(BeNil())
+			Expect(clusterCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(clusterCond.Reason).To(Equal(v1alpha1.TenantReasonFound))
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "csp-gold-preprov-sc", Tier: "csp-gold-preprov"},
+				{Name: name + "-osac-fast-sc", Tier: "osac-fast"},
+			}))
+		})
+
+		It("should deprovision only OSAC tiers and backends on handleDelete for a comingled Tenant", func() {
+			name := "comingled-delete"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, "csp-gold-del-sc", cspManagedTenantValue, "csp-gold-del")
+			createLabeledStorageClass(ctx, name+"-osac-fast-sc", name, "osac-fast")
+			waitForStorageClassInCache("csp-gold-del-sc")
+			waitForStorageClassInCache(name + "-osac-fast-sc")
+
+			vastSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("vast-tenant-config-%s", name),
+					Namespace: secretsNamespace,
+					Labels: map[string]string{
+						osacTenantKey:            name,
+						osacStorageProviderLabel: "vast",
+					},
+				},
+				StringData: map[string]string{"provider": "vast"},
+			}
+			Expect(k8sClient.Create(ctx, vastSecret)).To(Succeed())
+			waitForIndexedClientObject(vastSecret)
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vastSecret))).To(Succeed())
+			})
+
+			var clusterDeprovTiers, backendDeprovTiers []provisioning.TierDefinition
+			var clusterDeprovConns, backendDeprovConns map[string]provisioning.BackendConnection
+
+			clusterProvider := &mockProvisioningProvider{
+				name: "cluster-mock",
+				triggerDeprovisionFunc: func(dCtx context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+					clusterDeprovTiers = provisioning.StorageTierDefinitionsFromContext(dCtx)
+					clusterDeprovConns = provisioning.StorageBackendConnectionsFromContext(dCtx)
+					return &provisioning.DeprovisionResult{
+						Action: provisioning.DeprovisionTriggered,
+						JobID:  "deprov-cs-comingled",
+					}, nil
+				},
+				getDeprovisionStatusFunc: func(context.Context, client.Object, string) (provisioning.ProvisionStatus, error) {
+					return provisioning.ProvisionStatus{State: v1alpha1.JobStateSucceeded, Message: "done"}, nil
+				},
+			}
+			backendProvider := &mockProvisioningProvider{
+				name: "backend-mock",
+				triggerDeprovisionFunc: func(dCtx context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+					backendDeprovTiers = provisioning.StorageTierDefinitionsFromContext(dCtx)
+					backendDeprovConns = provisioning.StorageBackendConnectionsFromContext(dCtx)
+					return &provisioning.DeprovisionResult{
+						Action: provisioning.DeprovisionTriggered,
+						JobID:  "deprov-be-comingled",
+					}, nil
+				},
+				getDeprovisionStatusFunc: func(context.Context, client.Object, string) (provisioning.ProvisionStatus, error) {
+					return provisioning.ProvisionStatus{State: v1alpha1.JobStateSucceeded, Message: "done"}, nil
+				},
+			}
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				backendProvider, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			configureComingledClients(r, "csp-gold-del", "osac-fast")
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, tenant)).To(Succeed())
+
+			Eventually(func(g Gomega) {
+				_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(clusterDeprovTiers).To(HaveLen(1))
+				g.Expect(backendDeprovTiers).To(HaveLen(1))
+				err = k8sClient.Get(ctx, nn, tenant)
+				if err == nil {
+					g.Expect(tenant.Finalizers).NotTo(ContainElement(storageFinalizer))
+				} else {
+					g.Expect(client.IgnoreNotFound(err)).To(Succeed())
+				}
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			Expect(clusterDeprovTiers[0].Name).To(Equal("osac-fast"))
+			Expect(clusterDeprovConns).To(HaveKey("backend-vast"))
+			Expect(clusterDeprovConns).NotTo(HaveKey("backend-csp"))
+			Expect(backendDeprovTiers[0].Name).To(Equal("osac-fast"))
+			Expect(backendDeprovConns).To(HaveKey("backend-vast"))
+			Expect(backendDeprovConns).NotTo(HaveKey("backend-csp"))
+		})
+
+		It("should leave StorageOnboardingComplete nil (and remove stale condition) in pure OSAC-managed mode", func() {
+			name := "pure-osac-removes-stale-csp-cond"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createHubSecret(ctx, name, secretsNamespace)
+			createLabeledStorageClass(ctx, name+"-lvms-sc", name, "local")
+			waitForStorageClassInCache(name + "-lvms-sc")
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			tenant.SetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete,
+				metav1.ConditionTrue, v1alpha1.TenantReasonFound, "stale csp onboarding condition")
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("local", "backend-lvms"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, _ *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestStorageBackendGetResponse("lvms"), nil
+				},
+			}
+
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)).To(BeNil(),
+				"pure OSAC-managed mode must not set StorageOnboardingComplete and must remove stale condition")
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).Status).To(Equal(metav1.ConditionTrue))
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).Status).To(Equal(metav1.ConditionTrue))
+		})
+
+		It("should not take the pure-CSP branch when an OSAC tier is skipped during resolution and should keep periodic CSP requeue on Stage 1 stop", func() {
+			name := "comingled-skipped-osac-tier"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, "csp-gold-skip-sc", cspManagedTenantValue, "csp-gold-skip")
+			createLabeledStorageClass(ctx, name+"-osac-fast-sc", name, "osac-fast")
+			waitForStorageClassInCache("csp-gold-skip-sc")
+			waitForStorageClassInCache(name + "-osac-fast-sc")
+
+			vastSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("vast-tenant-config-%s", name),
+					Namespace: secretsNamespace,
+					Labels: map[string]string{
+						osacTenantKey:            name,
+						osacStorageProviderLabel: "vast",
+					},
+				},
+				StringData: map[string]string{"provider": "vast"},
+			}
+			Expect(k8sClient.Create(ctx, vastSecret)).To(Succeed())
+			waitForIndexedClientObject(vastSecret)
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vastSecret))).To(Succeed())
+			})
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.Recorder = events.NewFakeRecorder(100)
+			configureComingledClients(r, "csp-gold-skip", "osac-fast")
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			res, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeZero())
+
+			By("simulating a skipped OSAC tier (backend NotFound) while Stage 1 stops early (hub secret removed and BackendProvider == nil)")
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-gold-skip", "backend-csp"),
+							newTestStorageTier("osac-fast", "backend-missing"),
+						},
+					}.Build(), nil
+				},
+			}
+			Expect(k8sClient.Delete(ctx, vastSecret)).To(Succeed())
+			waitForIndexedClientObjectGone(vastSecret)
+
+			res, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeZero())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "csp-gold-skip-sc", Tier: "csp-gold-skip"},
+				{Name: name + "-osac-fast-sc", Tier: "osac-fast"},
+			}), "skipped OSAC tier must not trigger pure-CSP branch or drop existing OSAC StorageClasses")
+			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(backendCond).NotTo(BeNil())
+			Expect(backendCond.Reason).To(Equal(v1alpha1.TenantReasonBackendConfiguredNoProvider))
+
+			By("preventing BackendProvider and ClusterStorageProvider from launching with empty OSAC tier definitions when all OSAC tiers are skipped")
+			provTriggers := 0
+			noopProv := &mockProvisioningProvider{
+				name: "noop-prov",
+				triggerProvisionFunc: func(context.Context, client.Object) (*provisioning.ProvisionResult, error) {
+					provTriggers++
+					return &provisioning.ProvisionResult{JobID: "unexpected-empty-osac-job", InitialState: v1alpha1.JobStateRunning}, nil
+				},
+			}
+			r.BackendProvider = noopProv
+			r.ClusterStorageProvider = noopProv
+			res, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeZero())
+			Expect(provTriggers).To(BeZero(),
+				"AAP provisioning must not run when all OSAC tiers were skipped during resolution")
+
+			By("staying on the pure-CSP path when a global tier is skipped on a pure-CSP Tenant with no OSAC backend or state")
+			pureCSPName := "pure-csp-with-global-skipped-tier"
+			createReadyTenantForStorage(ctx, pureCSPName, testNamespace)
+			tiersClient := &mockStorageTiersLister{
+				listFunc: r.TiersClient.List,
+			}
+			backendsClient := &mockStorageBackendsClient{
+				listFunc: func(context.Context, *privatev1.StorageBackendsListRequest, ...grpc.CallOption) (*privatev1.StorageBackendsListResponse, error) {
+					return privatev1.StorageBackendsListResponse_builder{
+						Total: 1,
+						Items: []*privatev1.StorageBackend{
+							privatev1.StorageBackend_builder{
+								Spec: privatev1.StorageBackendSpec_builder{
+									Provider:   "aws-ebs",
+									CspManaged: true,
+								}.Build(),
+							}.Build(),
+						},
+					}.Build(), nil
+				},
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					if in.GetId() == "backend-csp" {
+						return newTestCSPManagedBackendGetResponse("aws-ebs"), nil
+					}
+					return nil, status.Error(codes.NotFound, "not found")
+				},
+			}
+			r.TiersClient = tiersClient
+			r.BackendsClient = backendsClient
+			pureNN := types.NamespacedName{Name: pureCSPName, Namespace: testNamespace}
+			res, err = r.Reconcile(ctx, storageReconcileRequest(pureNN))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeZero())
+			Expect(provTriggers).To(BeZero(), "pure-CSP Tenant must not trigger AAP provisioning when an unrelated tier is skipped")
+
+			pureTenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, pureNN, pureTenant)).To(Succeed())
+			Expect(pureTenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)).NotTo(BeNil())
+			Expect(pureTenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete).Status).To(Equal(metav1.ConditionTrue))
+			Expect(pureTenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)).To(BeNil())
+			Expect(pureTenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)).To(BeNil())
+
+			By("batching catalog lookups across multiple Tenants via syncCatalog and emitting a catalogEvents notification only when the catalog changes")
+			tiersClient.listCallCount = 0
+			backendsClient.getCallCount = 0
+			changed, err := r.syncCatalog(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(changed).To(BeTrue(), "initial syncCatalog call must report catalog changed")
+			Expect(tiersClient.listCallCount).To(Equal(1))
+			Expect(backendsClient.getCallCount).To(Equal(2))
+			Eventually(r.catalogEvents).Should(Receive())
+
+			// Subsequent syncCatalog with identical catalog state reports changed=false and emits no event.
+			changed, err = r.syncCatalog(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(changed).To(BeFalse(), "unchanged catalog must not re-enqueue Tenants")
+			Consistently(r.catalogEvents, 50*time.Millisecond).ShouldNot(Receive())
+
+			// Reconciling Tenants while cachedCatalog is populated makes 0 additional gRPC calls.
+			tiersBefore := tiersClient.listCallCount
+			backendsBefore := backendsClient.getCallCount
+			_, err = r.Reconcile(ctx, storageReconcileRequest(pureNN))
+			Expect(err).NotTo(HaveOccurred())
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(tiersClient.listCallCount).To(Equal(tiersBefore),
+				"Tenant reconciles must read from the shared catalog snapshot without per-Tenant TiersClient.List calls")
+			Expect(backendsClient.getCallCount).To(Equal(backendsBefore),
+				"Tenant reconciles must read from the shared catalog snapshot without per-Tenant BackendsClient.Get calls")
+
+			reqs := r.mapCatalogEventToTenants(ctx, nil)
+			Expect(reqs).NotTo(BeEmpty())
 		})
 	})
 })

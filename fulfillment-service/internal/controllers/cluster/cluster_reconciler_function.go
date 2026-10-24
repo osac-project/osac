@@ -19,6 +19,7 @@ package cluster
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -304,6 +305,9 @@ func (t *task) update(ctx context.Context) error {
 		orderAnnotations := map[string]string{
 			annotations.Tenant: t.cluster.GetMetadata().GetTenant(),
 		}
+		if err := setUpgradeAttemptAnnotations(orderAnnotations, t.cluster.GetSpec()); err != nil {
+			return err
+		}
 		object := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace:    t.hubNamespace,
@@ -333,6 +337,12 @@ func (t *task) update(ctx context.Context) error {
 		spec.NetworkAttachment = object.Spec.NetworkAttachment
 		update := object.DeepCopy()
 		update.Spec = spec
+		if update.Annotations == nil {
+			update.Annotations = map[string]string{}
+		}
+		if err := setUpgradeAttemptAnnotations(update.Annotations, t.cluster.GetSpec()); err != nil {
+			return err
+		}
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
 		if err != nil {
 			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
@@ -355,6 +365,22 @@ func (t *task) update(ctx context.Context) error {
 	}
 
 	return err
+}
+
+func setUpgradeAttemptAnnotations(values map[string]string, spec *privatev1.ClusterSpec) error {
+	delete(values, osacv1alpha1.UpgradeAttemptIDsAnnotation)
+	ids := osacv1alpha1.ClusterOrderUpgradeAttemptIDs{
+		ControlPlane: spec.GetControlPlaneAttemptId(),
+		NodeSets:     spec.GetNodeSetAttemptIds(),
+	}
+	if ids.ControlPlane != "" || len(ids.NodeSets) > 0 {
+		encoded, err := json.Marshal(ids)
+		if err != nil {
+			return err
+		}
+		values[osacv1alpha1.UpgradeAttemptIDsAnnotation] = string(encoded)
+	}
+	return nil
 }
 
 func (t *task) setDefaults() {

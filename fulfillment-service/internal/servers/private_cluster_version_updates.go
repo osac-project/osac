@@ -19,29 +19,148 @@ import (
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // prepareClusterVersionChange applies the version rules to the completed
 // candidate before it can be persisted.
-func prepareClusterVersionChange(current, candidate *privatev1.Cluster, mask *fieldmaskpb.FieldMask) error {
+func (s *PrivateClustersServer) prepareClusterVersionChange(ctx context.Context,
+	current, candidate *privatev1.Cluster, mask *fieldmaskpb.FieldMask) error {
 	controlPlaneChanged := pinUnsetNodeSetVersionsForUpdate(current, candidate, mask)
 	if err := validateExclusiveVersionUpdate(current, candidate, mask); err != nil {
 		return err
 	}
+	now := timestamppb.Now()
+	change := findClusterVersionChange(current, candidate, controlPlaneChanged)
+	if change == nil || change.target == nil {
+		return nil
+	}
+	version, err := s.clusterVersionSemver(ctx, change.target)
+	if err != nil {
+		return err
+	}
+	appendClusterUpgradeAttempt(candidate, change, version, now)
+	return nil
+}
+
+type clusterVersionChange struct {
+	component     *privatev1.ClusterUpgradeComponent
+	sourceVersion string
+	target        *privatev1.ClusterVersionReference
+}
+
+func findClusterVersionChange(current, candidate *privatev1.Cluster, controlPlaneChanged bool) *clusterVersionChange {
 	if controlPlaneChanged {
-		// Metering splits control-plane version usage at acceptance time, so stamp it in
-		// the same transaction that applies the new control-plane version. An unchanged
-		// selection keeps its stored reference and does not re-stamp.
-		if !candidate.HasStatus() {
-			candidate.SetStatus(privatev1.ClusterStatus_builder{}.Build())
+		component := &privatev1.ClusterUpgradeComponent{}
+		component.SetControlPlane(&emptypb.Empty{})
+		return &clusterVersionChange{
+			component:     component,
+			sourceVersion: current.GetStatus().GetObservedCpVersion(),
+			target:        candidate.GetSpec().GetVersion(),
 		}
-		candidate.GetStatus().SetVersionTransitionTime(timestamppb.Now())
+	}
+	for name, nodeSet := range candidate.GetSpec().GetNodeSets() {
+		stored := current.GetSpec().GetNodeSets()[name]
+		if stored == nil || nodeSet == nil ||
+			!nodeSetVersionChanged(stored, nodeSet, current.GetSpec().GetVersion()) {
+			continue
+		}
+		component := &privatev1.ClusterUpgradeComponent{}
+		component.SetNodeSetId(name)
+		return &clusterVersionChange{
+			component:     component,
+			sourceVersion: current.GetStatus().GetNodeSets()[name].GetObservedVersion(),
+			target:        nodeSet.GetVersion(),
+		}
 	}
 	return nil
+}
+
+func appendClusterUpgradeAttempt(candidate *privatev1.Cluster, change *clusterVersionChange,
+	targetVersion string, now *timestamppb.Timestamp) {
+	if !candidate.HasStatus() {
+		candidate.SetStatus(&privatev1.ClusterStatus{})
+	}
+	if change.component.GetControlPlane() != nil {
+		// Metering splits control-plane version usage at acceptance time. An
+		// unchanged selection does not create an attempt or re-stamp this time.
+		candidate.GetStatus().SetVersionTransitionTime(now)
+	}
+	entry := &privatev1.ClusterUpgradeHistoryEntry{}
+	entry.SetComponent(change.component)
+	entry.SetSourceVersion(change.sourceVersion)
+	entry.SetTargetVersion(targetVersion)
+	entry.SetAcceptedTime(now)
+	entry.SetLastStateTime(now)
+	entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING)
+	entry.SetAttemptId(uuid.New())
+	candidate.GetStatus().SetUpgradeHistory(append(
+		[]*privatev1.ClusterUpgradeHistoryEntry{entry}, candidate.GetStatus().GetUpgradeHistory()...))
+	if change.component.GetControlPlane() != nil {
+		candidate.GetSpec().SetControlPlaneAttemptId(entry.GetAttemptId())
+	} else {
+		candidate.GetSpec().GetNodeSetAttemptIds()[change.component.GetNodeSetId()] = entry.GetAttemptId()
+	}
+}
+
+func (s *PrivateClustersServer) clusterVersionSemver(ctx context.Context,
+	ref *privatev1.ClusterVersionReference) (string, error) {
+	version, err := s.clusterVersionsDao.Get().SetId(ref.GetId()).Do(ctx)
+	if err != nil {
+		return "", err
+	}
+	return version.GetObject().GetSpec().GetVersion(), nil
+}
+
+// mergeClusterUpgradeHistory accepts private status transitions by attempt ID
+// while retaining the server's audit fields and newest-first order.
+func mergeClusterUpgradeHistory(current, candidate *privatev1.Cluster,
+	mask *fieldmaskpb.FieldMask) {
+	stored := current.GetStatus().GetUpgradeHistory()
+	var result []*privatev1.ClusterUpgradeHistoryEntry
+	if updateIncludesField(mask, "status.upgrade_history") {
+		result = mergeClusterUpgradeStateChanges(stored, candidate.GetStatus().GetUpgradeHistory())
+	} else {
+		result = make([]*privatev1.ClusterUpgradeHistoryEntry, len(stored))
+		copy(result, stored)
+	}
+	if !candidate.HasStatus() {
+		candidate.SetStatus(&privatev1.ClusterStatus{})
+	}
+	candidate.GetStatus().SetUpgradeHistory(result)
+}
+
+func mergeClusterUpgradeStateChanges(
+	stored, incoming []*privatev1.ClusterUpgradeHistoryEntry,
+) []*privatev1.ClusterUpgradeHistoryEntry {
+	byID := make(map[string]*privatev1.ClusterUpgradeHistoryEntry, len(incoming))
+	for _, entry := range incoming {
+		if entry.GetAttemptId() != "" {
+			byID[entry.GetAttemptId()] = entry
+		}
+	}
+	result := make([]*privatev1.ClusterUpgradeHistoryEntry, len(stored))
+	for i, entry := range stored {
+		result[i] = entry
+		update := byID[entry.GetAttemptId()]
+		if update == nil || update.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_UNSPECIFIED ||
+			update.GetState() == entry.GetState() || update.GetLastStateTime() == nil ||
+			!update.GetLastStateTime().AsTime().After(entry.GetLastStateTime().AsTime()) {
+			continue
+		}
+		changed := proto.Clone(entry).(*privatev1.ClusterUpgradeHistoryEntry)
+		changed.SetState(update.GetState())
+		changed.SetMessage(update.GetMessage())
+		changed.SetLastStateTime(update.GetLastStateTime())
+		result[i] = changed
+	}
+	return result
 }
 
 func populateUnsetNodeSetVersions(nodeSets map[string]*privatev1.ClusterNodeSet, version *privatev1.ClusterVersionReference) {

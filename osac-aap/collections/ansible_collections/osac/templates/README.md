@@ -179,7 +179,7 @@ extra_var, each tier declares its provider, and the service-layer dispatcher
 template role with the filtered tier subset.
 
 1. Create role structure. The role **MUST** be named `{provider}_storage` (e.g.,
-   `vast_storage`, `netapp_storage`). This naming convention is enforced by the
+   `vast_storage`, `ontap_storage`). This naming convention is enforced by the
    dispatcher at `osac.service.storage_provider`, which constructs the role name
    dynamically: `osac.templates.{{ provider }}_storage`. Using a different naming
    pattern will cause a runtime role-not-found error.
@@ -189,38 +189,44 @@ template role with the filtered tier subset.
 
 2. Define storage provider metadata in `roles/my_provider_storage/meta/osac.yaml`:
    ```yaml
+   name: my-provider-storage
    title: My Storage Provider
+   description: >
+     Provisions storage resources for OSAC tenants. Describe what the role
+     creates and the credentials it manages.
    template_type: storage_provider
    implementation_strategy: my_provider
    capabilities:
-     supports_nfs: true
+     supported_protocols:
+       - nfs
+       - block
      provisioning_targets:
        - vmaas
        # Add caas only when this provider implements guest-cluster provisioning.
    ```
 
-3. Implement the three required action task files. Each receives `_provider_tiers`
-   (filtered tier subset for this provider) and `_provisioning_target` via `vars:`
-   from the dispatcher:
-   - `tasks/setup.yaml` — provision storage backend resources per tier.
+3. Implement the four required action task files. Each receives `_provider_tiers`
+   (filtered tier subset for this provider) and `_provider_backend_connections`
+   via `vars:` from the dispatcher:
+   - `tasks/setup.yaml` — provision or claim storage backend resources per tier.
      Must set `storage_provider_tenant_config` output fact (dict).
-   - `tasks/ensure_storage_class.yaml` — JIT K8s StorageClass provisioning per tier.
-     Must set `storage_provider_storage_class_names` (list of SC names, one per tier).
-     Must apply EP #26 labels (`osac.openshift.io/tenant`, `osac.openshift.io/storage-tier`).
-   - `tasks/teardown.yaml` — cleanup in reverse dependency order.
+   - `tasks/ensure_storage_class.yaml` — K8s StorageClass provisioning per tier.
+     Must set `storage_provider_storage_class_names` (list of SC entries, one per tier).
+     Must apply `osac.openshift.io/tenant`, `osac.openshift.io/storage-tier`, and
+     `osac.openshift.io/storage-provider` labels.
+   - `tasks/teardown_cluster_storage.yaml` — remove cluster-side K8s resources
+     (StorageClasses, VolumeSnapshotClasses, CSI Secrets/configs).
+   - `tasks/teardown_backend.yaml` — remove or release backend resources and hub
+     lifecycle Secrets.
 
-4. Add the provider name to the hardcoded allowlist in
-   `osac.service.storage_provider/tasks/main.yaml`. The allowlist is hardcoded
-   (not a variable) to prevent override via extra_vars.
-
-5. **Credential isolation:** Admin credentials (e.g., VAST VMS admin) must NEVER
+4. **Credential isolation:** Admin credentials (e.g., VAST VMS admin) must NEVER
    appear in tenant-namespace K8s Secrets. Provider roles must create per-tenant
    data-plane credentials and use only those in CSI Secrets. Admin credentials
    arrive via the `storage_provider_backend_connections` extra_var (resolved by
    osac-operator from the Tier API and keyed by `backend_id`) — there is no
    env-var or K8s Secret fallback for admin credentials.
 
-6. **Provisioning targets:** Each provider declares only the targets it implements
+5. **Provisioning targets:** Each provider declares only the targets it implements
    via `meta/osac.yaml`. `caas` is currently supported by the `lvms_storage`
    provider (installs LVMS on the guest cluster, creates per-tenant StorageClasses).
    HCP-level targets (`hcp_control_plane`, `hcp_worker_root`, `hcp_data_plane`)
@@ -274,6 +280,25 @@ The vendored `vastdata.vms` collection has no module for managers, roles, QoS po
 or API tokens — these 4 resources use `ansible.builtin.uri` directly. Per-tenant
 credentials are stored in a hub-cluster Secret and used in CSI Secrets. Password
 rotation requires teardown + re-provisioning.
+
+**ONTAP provider specifics (`ontap_storage`):** The `ontap_storage` role supports two
+per-backend tenancy modes via NetApp Trident (`ontap-san`, block-only on VMaaS):
+- **Shared-TBC mode (`provider_config.profiles`):** Consumes a customer-managed
+  `TridentBackendConfig` (e.g. `trident/customer-fc`) declared under
+  `storage_backend_connections[backend_id].provider_config.profiles` and per-tier
+  `provider_config.{profile, pool_selector}` bindings. `setup` validates profile and
+  selector inputs without cluster or ONTAP network calls; `ensure_storage_class` performs
+  a best-effort `k8s_info` check on the referenced `TridentBackendConfig` (failing fast if
+  visibly `Failed` or misconfigured, pinning `parameters.storagePools: "<backendName>:.*"`
+  when `Bound`, and falling back to `parameters.selector` only when `NotFound`/`Forbidden`)
+  and creates per-tenant per-tier `StorageClass`es without creating or deleting customer
+  TBCs or Secrets.
+- **Dedicated-SVM mode (`tenant_preparation`):** Consumes administrator-prepared per-tenant
+  SVM credentials (`endpoint` + `tenant_preparation.provider_config.{username, password, svm}`,
+  prepared via `osac-installer/scripts/dev-full/prepare-ontap-svm.sh`). `ensure_storage_class`
+  creates a per-tenant CSI `Secret`, `TridentBackendConfig` with labeled virtual pools, and
+  per-tier `StorageClass`es on the target cluster, and `teardown_cluster_storage` removes
+  only OSAC-managed resources (`app.kubernetes.io/managed-by=osac-aap`).
 
 **Block encryption:** When `spec.blockEncryptionPassphrase` is provided in the Tenant CR
 event payload, the passphrase is persisted to the hub Secret during `setup` and used by

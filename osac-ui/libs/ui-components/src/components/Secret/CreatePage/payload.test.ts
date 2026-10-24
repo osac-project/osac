@@ -6,15 +6,10 @@ import { SecretSchema, SecretType } from '@osac/types';
 import { buildSecretCreatePayload, buildSecretUpdatePayload } from './payload';
 import { createSecretDataEntry, getSecretValues } from './values';
 
-const values = (opaque: Array<{ key: string; value: Uint8Array }>) => ({
+const values = (data: Array<{ key: string; value: Uint8Array }>) => ({
   metadata: { name: 'my-secret', project: 'my-project', description: 'foo-desc' },
   type: SecretType.OPAQUE,
-  kubeconfig: createSecretDataEntry('kubeconfig', new Uint8Array()),
-  pullsecret: createSecretDataEntry('.dockerconfigjson', new Uint8Array()),
-  userData: createSecretDataEntry('userdata', new Uint8Array()),
-  opaque: opaque.map((e) => createSecretDataEntry(e.key, e.value)),
-  value: createSecretDataEntry('value', new Uint8Array()),
-  sshPublicKey: createSecretDataEntry('public_key', new Uint8Array()),
+  data: data.map((e) => createSecretDataEntry(e.key, e.value)),
 });
 
 describe('buildSecretCreatePayload', () => {
@@ -45,20 +40,33 @@ describe('buildSecretCreatePayload', () => {
 
   it('uses bytes from a typed secret entry', () => {
     const binaryValue = new Uint8Array([0xff, 0x00, 0x80]);
-    const typedValues = values([]);
+    const typedValues = values([{ key: 'value', value: binaryValue }]);
     typedValues.type = SecretType.VALUE;
-    typedValues.value.value = binaryValue;
 
     const payload = buildSecretCreatePayload(typedValues);
 
     expect(payload.data?.value).toEqual(binaryValue);
   });
 
+  it('merges additional keys into typed secret data', () => {
+    const typedValues = values([
+      { key: 'kubeconfig', value: new TextEncoder().encode('kube-content') },
+      { key: 'token', value: new TextEncoder().encode('abc') },
+    ]);
+    typedValues.type = SecretType.KUBECONFIG;
+
+    const payload = buildSecretCreatePayload(typedValues);
+
+    expect(payload.data).toEqual({
+      kubeconfig: new TextEncoder().encode('kube-content'),
+      token: new TextEncoder().encode('abc'),
+    });
+  });
+
   it('includes public_key data for SSH_PUBLIC_KEY type', () => {
     const keyBytes = new TextEncoder().encode('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA user@host');
-    const typedValues = values([]);
+    const typedValues = values([{ key: 'public_key', value: keyBytes }]);
     typedValues.type = SecretType.SSH_PUBLIC_KEY;
-    typedValues.sshPublicKey.value = keyBytes;
 
     const payload = buildSecretCreatePayload(typedValues);
 
@@ -75,9 +83,9 @@ describe('buildSecretUpdatePayload', () => {
       metadata: { name: 'my-secret', project: 'my-project' },
       data: { certificate: originalValue },
     });
-    const values = getSecretValues(null, secret);
+    const formValues = getSecretValues(null, secret);
 
-    const payload = buildSecretUpdatePayload(values);
+    const payload = buildSecretUpdatePayload(formValues);
 
     expect(payload.data?.certificate).toEqual(originalValue);
   });
@@ -89,10 +97,28 @@ describe('buildSecretUpdatePayload', () => {
       metadata: { name: 'my-secret', project: 'my-project' },
       data: { certificate: originalValue },
     });
-    const values = getSecretValues(null, secret);
+    const formValues = getSecretValues(null, secret);
 
-    expect(values.opaque[0]).toMatchObject({ key: 'certificate', value: originalValue });
-    expect(buildSecretUpdatePayload(values).data?.certificate).toEqual(originalValue);
+    expect(formValues.data[0]).toMatchObject({ key: 'certificate', value: originalValue });
+    expect(buildSecretUpdatePayload(formValues).data?.certificate).toEqual(originalValue);
+  });
+
+  it('splits typed secret data into required entry and additional keys on edit', () => {
+    const kubeBytes = new TextEncoder().encode('kube');
+    const tokenBytes = new TextEncoder().encode('token');
+    const secret = create(SecretSchema, {
+      id: 'secret-id',
+      metadata: { name: 'my-secret', project: 'my-project' },
+      type: SecretType.KUBECONFIG,
+      data: { kubeconfig: kubeBytes, token: tokenBytes },
+    });
+    const formValues = getSecretValues(null, secret);
+
+    expect(formValues.data).toHaveLength(2);
+    expect(formValues.data[0].key).toBe('kubeconfig');
+    expect(Array.from(formValues.data[0].value)).toEqual(Array.from(kubeBytes));
+    expect(formValues.data[1].key).toBe('token');
+    expect(Array.from(formValues.data[1].value)).toEqual(Array.from(tokenBytes));
   });
 
   it('encodes an edited text representation as bytes', () => {
@@ -101,10 +127,10 @@ describe('buildSecretUpdatePayload', () => {
       metadata: { name: 'my-secret', project: 'my-project' },
       data: { username: new TextEncoder().encode('admin') },
     });
-    const values = getSecretValues(null, secret);
-    values.opaque[0].value = new TextEncoder().encode('updated');
+    const formValues = getSecretValues(null, secret);
+    formValues.data[0].value = new TextEncoder().encode('updated');
 
-    const payload = buildSecretUpdatePayload(values);
+    const payload = buildSecretUpdatePayload(formValues);
 
     expect(payload.data?.username).toEqual(new TextEncoder().encode('updated'));
   });

@@ -11,12 +11,7 @@ const emptyEntry = (key: string) => ({ key, value: new Uint8Array() });
 const validValues = {
   metadata: { name: 'my-secret', project: 'my-project' },
   type: SecretType.OPAQUE,
-  kubeconfig: emptyEntry('kubeconfig'),
-  pullsecret: emptyEntry('.dockerconfigjson'),
-  userData: emptyEntry('userdata'),
-  opaque: [{ key: 'username', value: new TextEncoder().encode('admin') }],
-  value: emptyEntry('value'),
-  sshPublicKey: emptyEntry('public_key'),
+  data: [{ key: 'username', value: new TextEncoder().encode('admin') }],
 };
 
 describe('getSecretValidationSchema', () => {
@@ -26,7 +21,7 @@ describe('getSecretValidationSchema', () => {
     await expect(
       schema.isValid({
         ...validValues,
-        opaque: [
+        data: [
           { key: 'username', value: new TextEncoder().encode('admin') },
           { key: 'password', value: new TextEncoder().encode('s3cret') },
         ],
@@ -38,7 +33,7 @@ describe('getSecretValidationSchema', () => {
     await expect(
       schema.isValid({
         ...validValues,
-        opaque: [
+        data: [
           { key: 'username', value: new TextEncoder().encode('admin') },
           { key: 'username', value: new TextEncoder().encode('replacement') },
         ],
@@ -50,7 +45,7 @@ describe('getSecretValidationSchema', () => {
     await expect(
       schema.isValid({
         ...validValues,
-        opaque: [{ key: '', value: new TextEncoder().encode('admin') }],
+        data: [{ key: '', value: new TextEncoder().encode('admin') }],
       }),
     ).resolves.toBe(false);
   });
@@ -59,7 +54,7 @@ describe('getSecretValidationSchema', () => {
     await expect(
       schema.isValid({
         ...validValues,
-        opaque: [{ key: 'certificate', value: new Uint8Array([0xff]) }],
+        data: [{ key: 'certificate', value: new Uint8Array([0xff]) }],
       }),
     ).resolves.toBe(true);
   });
@@ -68,7 +63,7 @@ describe('getSecretValidationSchema', () => {
     await expect(
       schema.isValid({
         ...validValues,
-        opaque: [emptyEntry('certificate')],
+        data: [emptyEntry('certificate')],
       }),
     ).resolves.toBe(false);
   });
@@ -77,7 +72,7 @@ describe('getSecretValidationSchema', () => {
     await expect(
       schema.isValid({
         ...validValues,
-        opaque: [{ key: 'certificate', value: new Uint8Array(SECRET_FILE_MAX_BYTES + 1) }],
+        data: [{ key: 'certificate', value: new Uint8Array(SECRET_FILE_MAX_BYTES + 1) }],
       }),
     ).resolves.toBe(false);
   });
@@ -87,7 +82,7 @@ describe('getSecretValidationSchema', () => {
       schema.isValid({
         ...validValues,
         type: SecretType.VALUE,
-        value: { key: 'value', value: new Uint8Array([0xff]) },
+        data: [{ key: 'value', value: new Uint8Array([0xff]) }],
       }),
     ).resolves.toBe(true);
   });
@@ -97,6 +92,48 @@ describe('getSecretValidationSchema', () => {
       schema.isValid({
         ...validValues,
         type: SecretType.VALUE,
+        data: [{ key: 'value', value: new Uint8Array() }],
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it('accepts unique additional keys on typed secrets', async () => {
+    await expect(
+      schema.isValid({
+        ...validValues,
+        type: SecretType.VALUE,
+        data: [
+          { key: 'value', value: new TextEncoder().encode('main') },
+          { key: 'token', value: new TextEncoder().encode('abc') },
+          { key: 'license', value: new TextEncoder().encode('xyz') },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it('rejects duplicate additional keys on typed secrets', async () => {
+    await expect(
+      schema.isValid({
+        ...validValues,
+        type: SecretType.VALUE,
+        data: [
+          { key: 'value', value: new TextEncoder().encode('main') },
+          { key: 'token', value: new TextEncoder().encode('abc') },
+          { key: 'token', value: new TextEncoder().encode('replacement') },
+        ],
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it('rejects additional keys that duplicate the typed required key', async () => {
+    await expect(
+      schema.isValid({
+        ...validValues,
+        type: SecretType.KUBECONFIG,
+        data: [
+          { key: 'kubeconfig', value: new TextEncoder().encode('kube') },
+          { key: 'kubeconfig', value: new TextEncoder().encode('duplicate') },
+        ],
       }),
     ).resolves.toBe(false);
   });
@@ -108,7 +145,7 @@ describe('getSecretValidationSchema', () => {
       schema.isValid({
         ...validValues,
         type: SecretType.SSH_PUBLIC_KEY,
-        sshPublicKey: { key: 'public_key', value: new TextEncoder().encode(key) },
+        data: [{ key: 'public_key', value: new TextEncoder().encode(key) }],
       }),
     ).resolves.toBe(true);
   });
@@ -118,7 +155,7 @@ describe('getSecretValidationSchema', () => {
       schema.isValid({
         ...validValues,
         type: SecretType.SSH_PUBLIC_KEY,
-        sshPublicKey: { key: 'public_key', value: new TextEncoder().encode('not-a-key') },
+        data: [{ key: 'public_key', value: new TextEncoder().encode('not-a-key') }],
       }),
     ).resolves.toBe(false);
   });
@@ -128,7 +165,7 @@ describe('getSecretValidationSchema', () => {
       schema.isValid({
         ...validValues,
         type: SecretType.SSH_PUBLIC_KEY,
-        sshPublicKey: { key: 'public_key', value: new Uint8Array([0xff, 0xfe, 0x00]) },
+        data: [{ key: 'public_key', value: new Uint8Array([0xff, 0xfe, 0x00]) }],
       }),
     ).resolves.toBe(false);
   });
@@ -138,7 +175,7 @@ describe('getSecretValidationSchema', () => {
       schema.isValid({
         ...validValues,
         type: SecretType.SSH_PUBLIC_KEY,
-        sshPublicKey: { key: 'public_key', value: new TextEncoder().encode('   \n\t  ') },
+        data: [{ key: 'public_key', value: new TextEncoder().encode('   \n\t  ') }],
       }),
     ).resolves.toBe(false);
   });
@@ -148,6 +185,7 @@ describe('getSecretValidationSchema', () => {
       schema.isValid({
         ...validValues,
         type: SecretType.SSH_PUBLIC_KEY,
+        data: [{ key: 'public_key', value: new Uint8Array() }],
       }),
     ).resolves.toBe(false);
   });

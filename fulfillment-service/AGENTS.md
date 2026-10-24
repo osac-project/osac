@@ -117,11 +117,11 @@ If setup fails with `failed to lookup host '...'`, read [README.md — Running i
 
 ### Harness timing and catalog cleanup
 
-Run `go test ./it -run 'TestIntegrationTimings|TestCatalogItemDeletionProbe'`
-for report sanitization, node timing attribution, and deletion observation/signal
-cadence. These unit tests use synthetic reports and API callbacks, not deployed
-services. Run the complete installer `SUITE=fulfillment` command above for real
-archival and dependency-order behavior. Each installer test phase writes a
+Run `go test ./it -run 'TestIntegrationTimings|TestCatalogItemDeletionProbe|TestComputeInstanceMetadataFixture'`
+for report sanitization, node timing attribution, deletion observation/signal
+cadence, and bounded metadata conflict retries. These unit tests use synthetic
+reports, API callbacks, and fake clients, not deployed services. Run the complete
+installer `SUITE=fulfillment` command above for real archival and dependency-order behavior. Each installer test phase writes a
 sanitized JSON report under `logs/timings/`; see
 [report fields and limitations](../docs/INTEGRATION-TESTING.md#fulfillment-integration-timings).
 

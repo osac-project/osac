@@ -191,9 +191,10 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 The `SUITE=fulfillment` installer target writes `service-only.json`,
 `manager-capability.json`, `manager-readiness.json`, and `bmaas-disabled.json`
 under `fulfillment-service/logs/timings/`. CI includes these in its existing
-`logs` artifact. Direct Ginkgo runs can opt in with `IT_TIMING_REPORT` (output
-path) and `IT_TIMING_PHASE` (phase name); `IT_TEST_COMMIT` records the candidate
-revision when supplied. A missing file means no report was produced, not that
+`logs` artifact. The installer passes absolute output paths because Ginkgo
+runs its test binary from `it/`. Direct Ginkgo runs can opt in with
+`IT_TIMING_REPORT` (output path) and `IT_TIMING_PHASE` (phase name);
+`IT_TEST_COMMIT` records the candidate revision when supplied. A missing file means no report was produced, not that
 the phase passed.
 
 Reports contain suite status, dry-run status, seed, elapsed seconds, and per-spec
@@ -207,12 +208,14 @@ for those costs. Captured logs, failure messages and arbitrary report entries
 are excluded from these reports.
 
 From `fulfillment-service/`, run
-`go test ./it -run 'TestIntegrationTimings|TestCatalogItemDeletionProbe'` for
+`go test ./it -run 'TestIntegrationTimings|TestCatalogItemDeletionProbe|TestComputeInstanceMetadataFixture'` for
 unit coverage of attribution, sanitization, cancellation, concurrent archival,
-and signal throttling. These tests use synthetic Ginkgo reports and callback
-doubles, not deployed services. The complete installer command in the tier
-table remains the component-integration check. Catalog cleanup observes every
-500ms, keeps its five-minute bound, and signals no more often than every two
+signal throttling, and bounded metadata conflict retries. These tests use
+synthetic Ginkgo reports, callback doubles, and fake API clients, not deployed
+services. Metadata fixture writes retry only gRPC `Aborted` errors with a fresh
+snapshot and map merge on each attempt; optimistic locking stays enabled.
+The complete installer command in the tier table remains the
+component-integration check. Catalog cleanup observes every 500ms, keeps its five-minute bound, and signals no more often than every two
 seconds; it still waits for archival before removing dependencies. Runtime
 savings require paired deployed runs and are not established by unit tests.
 
@@ -280,7 +283,8 @@ MCE or call an Operator catalog or cluster API.
 
 The `make -C osac-installer kind-runtime-test` unit suite is owned by installer
 implementation work. It uses command stubs to check runtime selection, sudo
-authentication and credential expiry, Makefile/host setup routing, safe
+authentication and credential expiry, Makefile/host setup routing, fulfillment
+timing artifact destinations for all four phases, safe
 credential reset, resuming stopped nodes after storage preparation and waiting
 for API readiness, Helm 3/4 apply flags for devstack and OSAC releases,
 image loading without virtualization prerequisites or

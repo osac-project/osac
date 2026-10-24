@@ -1,6 +1,6 @@
 # Installing OSAC on OpenShift Container Platform (WIP)
 
-**Last Updated**: 2026-09-16
+**Last Updated**: 2026-10-13
 **Audience**: Cloud administrators
 **Status**: WIP — see the TBD notes in [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend)
 and [Section 8.3](#83-registering-the-hub) for what's still open
@@ -813,6 +813,19 @@ backend. For the full variable reference, see
 
 - Create a `BareMetalPool` or `BareMetalInstance` custom resource and confirm
   that the Bare Metal Fulfillment Operator reconciles it.
+
+### 6.4 NetApp ONTAP storage
+
+NetApp integration with OSAC is under development. Storage installation guides
+should be grouped by vendor (NetApp, VAST, Pure, and others) and storage type
+(block, file, object), with separate transport-specific guides where needed.
+Block storage may use FC, FCoE, iSCSI, NVMe/FC, NVMe/TCP, or NVMe/RDMA; file
+and object storage use standard Ethernet/IP networks.
+
+The temporary [NetApp ONTAP and Trident guide](netapp-osac-integration-vmaas.md)
+covers ONTAP file storage over Ethernet/IP (NFS), not block storage over FC.
+Until OSAC Storage supports this combination, customers who need it can use
+this manual procedure. It is not part of the standard install.
 
 ---
 

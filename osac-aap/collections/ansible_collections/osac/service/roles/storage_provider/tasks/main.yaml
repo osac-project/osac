@@ -528,10 +528,15 @@
             native_csi_driver_install_plan_approval: "{{ storage_provider_csi_driver_matrix.netapp.installer.install_plan_approval }}"
 
         - name: Install the Trident OLM operator from the stable channel when no test override is active
+          tags: [provider_csi_driver_install]
           when: not (_netapp_trident_test_install_override_active | bool)
           block:
             - name: Ensure the Trident OLM Subscription uses the stable certified channel
-              ansible.builtin.include_tasks: reconcile_olm_subscription.yaml
+              ansible.builtin.include_tasks:
+                file: reconcile_olm_subscription.yaml
+                apply:
+                  tags: [provider_csi_driver_install]
+              tags: [provider_csi_driver_install]
 
             - name: Resolve and approve the initial Trident operator InstallPlan
               ansible.builtin.include_tasks:

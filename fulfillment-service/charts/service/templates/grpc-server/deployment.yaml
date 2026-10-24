@@ -12,6 +12,8 @@ specific language governing permissions and limitations under the License.
 */}}
 
 {{- $caBundleConfigMap := required "certs.caBundle.configMap is required" .Values.certs.caBundle.configMap }}
+{{- $idpUrl := tpl (required "idp.url is required" .Values.idp.url) . }}
+{{- $idpCredentials := required "idp.credentials is required" .Values.idp.credentials }}
 {{- $vaultEndpoint := tpl (required "vault.endpoint is required" .Values.vault.endpoint) . }}
 {{- $vaultNamespace := required "vault.namespace is required" .Values.vault.namespace }}
 {{- $vaultKVMountPath := required "vault.kvMountPath is required" .Values.vault.kvMountPath }}
@@ -54,6 +56,29 @@ spec:
           items:
           - key: tls.crt
             path: tls.crt
+      - name: idp-credentials
+        projected:
+          sources:
+          {{- range $idpCredentials }}
+          {{- if .configMap }}
+          - configMap:
+              name: {{ .configMap.name }}
+              items:
+              {{- range .configMap.items }}
+              - key: {{ .key }}
+                path: {{ .param }}
+              {{- end }}
+          {{- end }}
+          {{- if .secret }}
+          - secret:
+              name: {{ .secret.name }}
+              items:
+              {{- range .secret.items }}
+              - key: {{ .key }}
+                path: {{ .param }}
+              {{- end }}
+          {{- end }}
+          {{- end }}
       - name: vault-credentials
         projected:
           sources:
@@ -151,6 +176,9 @@ spec:
         volumeMounts:
         - name: cas
           mountPath: /etc/fulfillment-grpc-server/tls/cas
+        - name: idp-credentials
+          mountPath: /etc/fulfillment-grpc-server/idp
+          readOnly: true
         - name: vault-credentials
           mountPath: /etc/fulfillment-grpc-server/vault
           readOnly: true
@@ -193,6 +221,10 @@ spec:
         - --log-headers={{ .Values.log.headers }}
         - --log-bodies={{ .Values.log.bodies }}
         - --ca-file=/etc/fulfillment-grpc-server/tls/cas
+        - --idp-url={{ $idpUrl }}
+        - --auth-issuer-url={{ tpl (required "auth.issuerUrl is required" .Values.auth.issuerUrl) . }}
+        - --idp-client-id-file=/etc/fulfillment-grpc-server/idp/client-id
+        - --idp-client-secret-file=/etc/fulfillment-grpc-server/idp/client-secret
         - --db-url-file=/etc/fulfillment-grpc-server/db
         - --kafka-properties-file=/etc/fulfillment-grpc-server/kafka
         - --grpc-listener-address=0.0.0.0:8000

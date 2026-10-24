@@ -121,6 +121,54 @@ var _ = Describe("Transactions interceptor", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		It("Skips the automatic transaction for configured methods", func() {
+			const method = "/osac.public.v1.ServiceAccounts/Create"
+			interceptor, err := NewTxInterceptor().
+				SetLogger(logger).
+				SetManager(manager).
+				SetMethodsWithoutAutomaticTransaction(method).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			called := false
+			_, err = interceptor.UnaryServer(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method},
+				func(ctx context.Context, _ any) (any, error) {
+					called = true
+					_, txErr := TxFromContext(ctx)
+					Expect(txErr).To(MatchError("failed to get transaction from context"))
+					txManager, managerErr := TxManagerFromContext(ctx)
+					Expect(managerErr).ToNot(HaveOccurred())
+					Expect(txManager).To(BeIdenticalTo(manager))
+					return nil, nil
+				})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(called).To(BeTrue())
+		})
+
+		It("Keeps automatic transactions for methods not configured to skip", func() {
+			const skippedMethod = "/osac.public.v1.ServiceAccounts/Create"
+			tx, err := NewTxInterceptor().
+				SetLogger(logger).
+				SetManager(manager).
+				SetMethodsWithoutAutomaticTransaction(skippedMethod).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			automaticTx := NewMockTx(ctrl)
+			manager.EXPECT().Begin(ctx).Return(automaticTx, nil).Times(1)
+			automaticTx.EXPECT().End(ctx).Return(nil).Times(1)
+
+			_, err = tx.UnaryServer(ctx, nil,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.public.v1.Clusters/List"},
+				func(ctx context.Context, _ any) (any, error) {
+					got, txErr := TxFromContext(ctx)
+					Expect(txErr).ToNot(HaveOccurred())
+					Expect(got).To(BeIdenticalTo(automaticTx))
+					return nil, nil
+				})
+			Expect(err).ToNot(HaveOccurred())
+		})
+
 		It("Returns error if begin fails", func() {
 			// Prepare the manager mock:
 			err := errors.New("tx error")

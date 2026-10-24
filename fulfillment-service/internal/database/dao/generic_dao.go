@@ -39,13 +39,14 @@ type Object interface {
 
 // GenericDAOBuilder is a builder for creating generic data access objects.
 type GenericDAOBuilder[O Object] struct {
-	logger            *slog.Logger
-	table             string
-	defaultLimit      int32
-	maxLimit          int32
-	tenancyLogic      auth.TenancyLogic
-	metricsRegisterer prometheus.Registerer
-	filterDesc        protoreflect.MessageDescriptor
+	logger                         *slog.Logger
+	table                          string
+	persistNonColumnMetadataFields bool
+	defaultLimit                   int32
+	maxLimit                       int32
+	tenancyLogic                   auth.TenancyLogic
+	metricsRegisterer              prometheus.Registerer
+	filterDesc                     protoreflect.MessageDescriptor
 }
 
 // GenericDAO provides generic data access operations for protocol buffers messages. It assumes that objects will be
@@ -62,25 +63,27 @@ type GenericDAOBuilder[O Object] struct {
 //   - `labels` - The labels assigned to the object.
 //   - `annotations` - The annotations assigned to the object.
 //   - `version` - The version number, automatically incremented on every update.
-//   - `data` - The serialized object, using the protocol buffers JSON serialization.
+//   - `data` - The serialized object, using the protocol buffers JSON serialization. A DAO can opt in to storing
+//     metadata fields that do not have dedicated columns here.
 //
 // Objects must have field named `id` of string type.
 type GenericDAO[O Object] struct {
 	// Basic fields:
-	logger           *slog.Logger
-	table            string
-	kind             string
-	defaultLimit     int32
-	maxLimit         int32
-	timestampDesc    protoreflect.MessageDescriptor
-	objectTemplate   protoreflect.Message
-	metadataField    protoreflect.FieldDescriptor
-	metadataTemplate protoreflect.Message
-	jsonEncoder      *json.Encoder
-	marshalOptions   protojson.MarshalOptions
-	unmarshalOptions protojson.UnmarshalOptions
-	filterTranslator *FilterTranslator
-	tenancyLogic     auth.TenancyLogic
+	logger               *slog.Logger
+	table                string
+	kind                 string
+	defaultLimit         int32
+	maxLimit             int32
+	timestampDesc        protoreflect.MessageDescriptor
+	objectTemplate       protoreflect.Message
+	metadataField        protoreflect.FieldDescriptor
+	metadataTemplate     protoreflect.Message
+	metadataFieldsInData []protoreflect.Name
+	jsonEncoder          *json.Encoder
+	marshalOptions       protojson.MarshalOptions
+	unmarshalOptions     protojson.UnmarshalOptions
+	filterTranslator     *FilterTranslator
+	tenancyLogic         auth.TenancyLogic
 
 	// Metrics:
 	opDurationMetric *prometheus.HistogramVec
@@ -179,6 +182,13 @@ func (b *GenericDAOBuilder[O]) SetTableName(value string) *GenericDAOBuilder[O] 
 	return b
 }
 
+// SetPersistNonColumnMetadataFields opts this DAO into storing metadata fields that don't have dedicated database
+// columns in the JSON data column. By default, those fields are omitted from storage.
+func (b *GenericDAOBuilder[O]) SetPersistNonColumnMetadataFields() *GenericDAOBuilder[O] {
+	b.persistNonColumnMetadataFields = true
+	return b
+}
+
 // SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter expressions. This is
 // optional. When unset, the descriptor of the O generic parameter is used. Pass a different descriptor to restrict
 // which fields clients may reference in filters — public servers over private storage pass the public descriptor.
@@ -246,15 +256,23 @@ func (b *GenericDAOBuilder[O]) Build() (result *GenericDAO[O], err error) {
 	// Create the template that we will clone when we need to create a new metadata object:
 	metadataTemplate := objectTemplate.NewField(metadataField).Message()
 
-	// Create the JSON encoder. We need this special encoder in order to ignore the 'id' and 'metadata' fields
-	// because we save those in separate database columns and not in the JSON document where we save everything
-	// else.
+	// Metadata fields stored in columns or omitted are ignored directly during encoding. Callers may opt in to storing
+	// metadata fields that are not represented by one of the dedicated columns.
+	ignoredFields := []any{idField.FullName()}
+	metadataFieldsInData := make([]protoreflect.Name, 0)
+	metadataDescriptors := metadataTemplate.Descriptor().Fields()
+	for i := range metadataDescriptors.Len() {
+		field := metadataDescriptors.Get(i)
+		if b.persistNonColumnMetadataFields && !isMetadataColumnField(field.Name()) {
+			metadataFieldsInData = append(metadataFieldsInData, field.Name())
+			continue
+		}
+		ignoredFields = append(ignoredFields, field.FullName())
+	}
 	jsonEncoder, err := json.NewEncoder().
 		SetLogger(b.logger).
-		AddIgnoredFields(
-			idField.FullName(),
-			metadataField.FullName(),
-		).
+		AddIgnoredFields(ignoredFields...).
+		AddOmitEmptyMessageFields(metadataField.FullName()).
 		Build()
 	if err != nil {
 		err = fmt.Errorf("failed to create JSON encoder: %w", err)
@@ -295,23 +313,34 @@ func (b *GenericDAOBuilder[O]) Build() (result *GenericDAO[O], err error) {
 
 	// Create and populate the object:
 	result = &GenericDAO[O]{
-		logger:           b.logger,
-		table:            b.resolveTableName(),
-		kind:             b.kindName(),
-		defaultLimit:     b.defaultLimit,
-		maxLimit:         b.maxLimit,
-		timestampDesc:    timestampDesc,
-		objectTemplate:   objectTemplate,
-		metadataField:    metadataField,
-		metadataTemplate: metadataTemplate,
-		jsonEncoder:      jsonEncoder,
-		marshalOptions:   marshalOptions,
-		unmarshalOptions: unmarshalOptions,
-		filterTranslator: filterTranslator,
-		tenancyLogic:     b.tenancyLogic,
-		opDurationMetric: opDurationMetric,
+		logger:               b.logger,
+		table:                b.resolveTableName(),
+		kind:                 b.kindName(),
+		defaultLimit:         b.defaultLimit,
+		maxLimit:             b.maxLimit,
+		timestampDesc:        timestampDesc,
+		objectTemplate:       objectTemplate,
+		metadataField:        metadataField,
+		metadataTemplate:     metadataTemplate,
+		metadataFieldsInData: metadataFieldsInData,
+		jsonEncoder:          jsonEncoder,
+		marshalOptions:       marshalOptions,
+		unmarshalOptions:     unmarshalOptions,
+		filterTranslator:     filterTranslator,
+		tenancyLogic:         b.tenancyLogic,
+		opDurationMetric:     opDurationMetric,
 	}
 	return
+}
+
+func isMetadataColumnField(name protoreflect.Name) bool {
+	switch name {
+	case "name", "creation_timestamp", "deletion_timestamp", "finalizers", "creator", "tenant", "project",
+		"labels", "annotations", "version":
+		return true
+	default:
+		return false
+	}
 }
 
 // resolveTableName returns the explicit table name if one was set via SetTableName, otherwise it

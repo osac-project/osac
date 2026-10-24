@@ -105,6 +105,20 @@ update; run it through the `SUITE=fulfillment` installer target. The
 replacement, preserved private metadata, and the concurrent-controller status
 race with real PostgreSQL row locks. Neither suite provisions a real VM.
 
+Service-account CRUD, tenant isolation, one-time credential disclosure, role
+catalog validation, and deletion retry coverage are in
+[`it/it_service_accounts_test.go`](it/it_service_accounts_test.go) and
+[`it/it_service_accounts_failures_test.go`](it/it_service_accounts_failures_test.go).
+The failure suite uses the service in process with real PostgreSQL and Keycloak,
+and injects Keycloak transport failures. Run the focused suite from
+`fulfillment-service/` after deploying a compatible image and setting up the
+required Kind service hostnames and trusted TLS bundle:
+
+```bash
+GOTOOLCHAIN=go1.26.3 go test ./it -timeout 75m -run '^TestIntegration$' \
+  -args -ginkgo.focus='Service-account infrastructure' -ginkgo.v -ginkgo.no-color
+```
+
 ```bash
 export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
 make -C ../osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac

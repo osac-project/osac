@@ -41,6 +41,7 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 		SetExcludedReferencePaths(catalogCreationSourceMethods(), "object.spec.catalog_item", "object.spec.template").
 		SetExcludedReferencePaths(clusterAddOnOperatorMethods(), "object.spec.add_on_operators").
 		SetExcludedReferencePaths(bareMetalInstanceCreationMethods(), "object.spec.network_attachments").
+		SetExcludedReferencePaths(serviceAccountGrantMethods(), "object.spec.roles").
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reference validator: %w", err)
@@ -49,6 +50,15 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 		return nil, err
 	}
 	return validator, nil
+}
+
+func serviceAccountGrantMethods() []string {
+	return []string{
+		publicv1.ServiceAccounts_Create_FullMethodName,
+		privatev1.ServiceAccounts_Create_FullMethodName,
+		publicv1.ServiceAccounts_Update_FullMethodName,
+		privatev1.ServiceAccounts_Update_FullMethodName,
+	}
 }
 
 func bareMetalInstanceCreationMethods() []string {

@@ -602,6 +602,27 @@ message ThingsSignalRequest {
 message ThingsSignalResponse {}
 ```
 
+### Service accounts
+
+`ServiceAccounts` manages machine identities in the caller's tenant. The account ID, tenant,
+client ID, and status are server-controlled. The name is unique within the tenant and remains
+reserved while deletion is pending. Updates may change the display name, description, labels, and
+role references. Projects are not supported.
+
+`Create` is an exception to the usual response shape: its response contains both the created
+`object` and `client_secret`. The REST endpoint `POST /api/fulfillment/v1/service_accounts` returns
+that full envelope, with `clientSecret` as a sibling of `object`. The secret is disclosed only in
+that response; dry-run creation returns an empty secret, and later reads, updates, lists, and change
+events do not contain it.
+
+Role references must use IDs from the predefined catalog. Current assignable roles are
+`tenant-automation`, `tenant-idp-manager`, `tenant-admin`, and `osac-csi-driver`. The
+`tenant-automation` and `osac-csi-driver` roles are machine-only and cannot be bound to human users.
+Managed-token authorization for these grants is tracked separately by
+[OSAC-6554](https://redhat.atlassian.net/browse/OSAC-6554).
+
+`RegenerateSecret` is part of the API contract but currently returns `Unimplemented`.
+
 ## REST transcoding
 
 All methods of all services must have `google.api.http` options that define the REST transcoding.

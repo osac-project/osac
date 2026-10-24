@@ -64,15 +64,16 @@ func restoreReservedMetadataForPublicAPIView(ctx context.Context, current, candi
 
 // GenericServerBuilder contains the data and logic needed to create new generic servers.
 type GenericServerBuilder[O dao.Object] struct {
-	logger            *slog.Logger
-	service           string
-	table             string
-	ignoredFields     []any
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	allowedTenants    collections.Set[string]
-	metricsRegisterer prometheus.Registerer
-	filterDesc        protoreflect.MessageDescriptor
+	logger                         *slog.Logger
+	service                        string
+	table                          string
+	persistNonColumnMetadataFields bool
+	ignoredFields                  []any
+	attributionLogic               auth.AttributionLogic
+	tenancyLogic                   auth.TenancyLogic
+	allowedTenants                 collections.Set[string]
+	metricsRegisterer              prometheus.Registerer
+	filterDesc                     protoreflect.MessageDescriptor
 }
 
 // GenericServer is a gRPC server that knows how to implement the List, Get, Create, Update and Delete operators for
@@ -149,6 +150,13 @@ func (b *GenericServerBuilder[O]) SetService(value string) *GenericServerBuilder
 // protobuf message type name. Use this when the table name does not match the type name.
 func (b *GenericServerBuilder[O]) SetTableName(value string) *GenericServerBuilder[O] {
 	b.table = value
+	return b
+}
+
+// SetPersistNonColumnMetadataFields opts this server into storing metadata fields that don't have dedicated database
+// columns in the JSON data column. It is forwarded to [dao.GenericDAOBuilder.SetPersistNonColumnMetadataFields].
+func (b *GenericServerBuilder[O]) SetPersistNonColumnMetadataFields() *GenericServerBuilder[O] {
+	b.persistNonColumnMetadataFields = true
 	return b
 }
 
@@ -266,6 +274,9 @@ func (b *GenericServerBuilder[O]) Build() (result *GenericServer[O], err error) 
 	daoBuilder.SetLogger(b.logger)
 	if b.table != "" {
 		daoBuilder.SetTableName(b.table)
+	}
+	if b.persistNonColumnMetadataFields {
+		daoBuilder.SetPersistNonColumnMetadataFields()
 	}
 	daoBuilder.SetFilterDesc(b.filterDesc)
 	daoBuilder.SetTenancyLogic(b.tenancyLogic)

@@ -154,6 +154,23 @@ func (mr *MockClientInterfaceMockRecorder) CreateIdentityProvider(ctx, tenantNam
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateIdentityProvider", reflect.TypeOf((*MockClientInterface)(nil).CreateIdentityProvider), ctx, tenantName, idpProvider)
 }
 
+// CreateServiceAccountClient mocks base method.
+func (m *MockClientInterface) CreateServiceAccountClient(ctx context.Context, clientID, tenantID string) (string, string, string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateServiceAccountClient", ctx, clientID, tenantID)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(string)
+	ret2, _ := ret[2].(string)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
+}
+
+// CreateServiceAccountClient indicates an expected call of CreateServiceAccountClient.
+func (mr *MockClientInterfaceMockRecorder) CreateServiceAccountClient(ctx, clientID, tenantID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateServiceAccountClient", reflect.TypeOf((*MockClientInterface)(nil).CreateServiceAccountClient), ctx, clientID, tenantID)
+}
+
 // CreateTenant mocks base method.
 func (m *MockClientInterface) CreateTenant(ctx context.Context, tenant *Tenant) (*Tenant, error) {
 	m.ctrl.T.Helper()
@@ -225,6 +242,20 @@ func (m *MockClientInterface) DeleteIdentityProvider(ctx context.Context, tenant
 func (mr *MockClientInterfaceMockRecorder) DeleteIdentityProvider(ctx, tenantName, alias any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteIdentityProvider", reflect.TypeOf((*MockClientInterface)(nil).DeleteIdentityProvider), ctx, tenantName, alias)
+}
+
+// DeleteServiceAccountClient mocks base method.
+func (m *MockClientInterface) DeleteServiceAccountClient(ctx context.Context, clientID, clientUUID, registrationAccessToken string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteServiceAccountClient", ctx, clientID, clientUUID, registrationAccessToken)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeleteServiceAccountClient indicates an expected call of DeleteServiceAccountClient.
+func (mr *MockClientInterfaceMockRecorder) DeleteServiceAccountClient(ctx, clientID, clientUUID, registrationAccessToken any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteServiceAccountClient", reflect.TypeOf((*MockClientInterface)(nil).DeleteServiceAccountClient), ctx, clientID, clientUUID, registrationAccessToken)
 }
 
 // DeleteTenant mocks base method.

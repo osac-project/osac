@@ -20,9 +20,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/serviceaccounts"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -43,6 +47,7 @@ type PrivateRoleBindingsServer struct {
 
 	logger  *slog.Logger
 	generic *GenericServer[*privatev1.RoleBinding]
+	roles   *dao.GenericDAO[*privatev1.Role]
 }
 
 // NewPrivateRoleBindingsServer creates a new builder for the private role bindings server.
@@ -106,9 +111,17 @@ func (b *PrivateRoleBindingsServerBuilder) Build() (result *PrivateRoleBindingsS
 		return
 	}
 
+	roles, err := dao.NewGenericDAO[*privatev1.Role]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		Build()
+	if err != nil {
+		return
+	}
 	result = &PrivateRoleBindingsServer{
 		logger:  b.logger,
 		generic: generic,
+		roles:   roles,
 	}
 	return
 }
@@ -127,13 +140,13 @@ func (s *PrivateRoleBindingsServer) Get(ctx context.Context,
 
 func (s *PrivateRoleBindingsServer) Create(ctx context.Context,
 	request *privatev1.RoleBindingsCreateRequest) (response *privatev1.RoleBindingsCreateResponse, err error) {
-	err = s.generic.Create(ctx, request, &response)
+	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response, s.validateHumanRole)
 	return
 }
 
 func (s *PrivateRoleBindingsServer) Update(ctx context.Context,
 	request *privatev1.RoleBindingsUpdateRequest) (response *privatev1.RoleBindingsUpdateResponse, err error) {
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, s.validateHumanRole)
 	return
 }
 
@@ -147,4 +160,31 @@ func (s *PrivateRoleBindingsServer) Signal(ctx context.Context,
 	request *privatev1.RoleBindingsSignalRequest) (response *privatev1.RoleBindingsSignalResponse, err error) {
 	err = s.generic.Signal(ctx, request, &response)
 	return
+}
+
+func (s *PrivateRoleBindingsServer) validateHumanRole(ctx context.Context, _, candidate *privatev1.RoleBinding) error {
+	ref := candidate.GetSpec().GetRole()
+	key := ref.GetId()
+	if key == "" {
+		key = ref.GetName()
+	}
+	// The controller resolves either selector as an ID first, then as a name.
+	if serviceaccounts.IsMachineOnlyRole(key) {
+		return status.Error(codes.InvalidArgument, "machine-only roles cannot be assigned to human users")
+	}
+	if key == "" {
+		return nil
+	}
+	response, err := s.roles.Get().SetId(key).Do(ctx)
+	if err != nil {
+		// Preserve the existing behavior for unresolved role references.
+		if _, ok := errors.AsType[*dao.ErrNotFound](err); ok {
+			return nil
+		}
+		return err
+	}
+	if serviceaccounts.IsMachineOnlyRole(response.GetObject().GetMetadata().GetName()) {
+		return status.Error(codes.InvalidArgument, "machine-only roles cannot be assigned to human users")
+	}
+	return nil
 }

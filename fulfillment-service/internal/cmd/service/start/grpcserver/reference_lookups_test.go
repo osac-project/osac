@@ -276,6 +276,27 @@ var _ = Describe("RegisterReferenceLookups", func() {
 				"SecretLocalReference is not registered with the interceptor: %v", err)
 		}
 	})
+
+	It("leaves service-account grants for validation after ownership and mask merging", func() {
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
+		Expect(err).ToNot(HaveOccurred())
+		v, err := newReferenceValidator(logger, tenancy, prometheus.NewRegistry())
+		Expect(err).ToNot(HaveOccurred())
+		for _, method := range []string{publicv1.ServiceAccounts_Create_FullMethodName, publicv1.ServiceAccounts_Update_FullMethodName,
+			privatev1.ServiceAccounts_Create_FullMethodName, privatev1.ServiceAccounts_Update_FullMethodName} {
+			request := privatev1.ServiceAccountsUpdateRequest_builder{Object: privatev1.ServiceAccount_builder{
+				Spec: privatev1.ServiceAccountSpec_builder{Roles: []*privatev1.RoleReference{
+					privatev1.RoleReference_builder{Id: "out-of-mask"}.Build(),
+				}}.Build(),
+			}.Build()}.Build()
+			called := false
+			_, err := v.UnaryServer(context.Background(), request, &grpc.UnaryServerInfo{FullMethod: method},
+				func(context.Context, any) (any, error) { called = true; return nil, nil })
+			Expect(err).ToNot(HaveOccurred(), method)
+			Expect(called).To(BeTrue())
+		}
+	})
 })
 
 func isHandlerOwnedReferenceType(name protoreflect.FullName) bool {

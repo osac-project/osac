@@ -664,6 +664,10 @@ csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider ch
 fulfillment-trust-render-test: helm-deps ## Check verified fulfillment transport renders
 	python3 scripts/test-fulfillment-trust-render.py
 
+.PHONY: service-account-idp-render-test
+service-account-idp-render-test: helm-infra-deps ## Check service-account management credentials and realm permissions
+	python3 scripts/test-service-account-idp-render.py
+
 .PHONY: metering-auth-render-test
 metering-auth-render-test: helm-deps ## Check metering service-account auth renders in supported profiles
 	python3 scripts/test-metering-auth-render.py
@@ -693,7 +697,7 @@ bmf-netbox-render-test: helm-deps ## Check NetBox, Metal3 management, and Secret
 	uv run --project .. python scripts/test-bmf-netbox-render.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \

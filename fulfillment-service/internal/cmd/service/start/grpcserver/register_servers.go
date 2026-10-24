@@ -24,6 +24,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/idp"
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
@@ -41,6 +42,7 @@ type ResourceServerDeps struct {
 	MetricsRegisterer       prometheus.Registerer
 	HubScheme               *runtime.Scheme
 	SecretStore             vault.SecretStore
+	IdpClient               idp.ClientInterface
 	TierResolver            servers.TierResolverFunc
 
 	// PrivateUsersServer is already constructed by the caller — the JIT provisioning interceptor needs it
@@ -723,6 +725,32 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		return nil, fmt.Errorf("failed to create private role bindings server: %w", err)
 	}
 	privatev1.RegisterRoleBindingsServer(registrar, privateRoleBindingsServer)
+
+	serviceAccountsServer, err := servers.NewServiceAccountsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetIdpClient(deps.IdpClient).
+		SetSecretStore(deps.SecretStore).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create service accounts server: %w", err)
+	}
+	publicv1.RegisterServiceAccountsServer(registrar, serviceAccountsServer)
+
+	privateServiceAccountsServer, err := servers.NewPrivateServiceAccountsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetIdpClient(deps.IdpClient).
+		SetSecretStore(deps.SecretStore).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private service accounts server: %w", err)
+	}
+	privatev1.RegisterServiceAccountsServer(registrar, privateServiceAccountsServer)
 
 	// Create the project memberships server:
 	deps.Logger.InfoContext(ctx, "Creating project memberships server")

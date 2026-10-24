@@ -31,6 +31,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/serviceaccounts"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -171,6 +172,20 @@ var _ = Describe("Private secrets server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			return response.GetObject()
 		}
+
+		It("reserves the scoped Keycloak credential name", func() {
+			name := serviceaccounts.RegistrationSecretName("d3c4e3db-95b8-481d-8b5c-963da477da12")
+			_, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{Object: privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+				Data:     map[string][]byte{"registration_access_token": []byte("not-a-real-token")},
+			}.Build()}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+
+			err = server.validateSecretUpdate(ctx, &privatev1.Secret{}, nil, privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		})
 
 		It("Creates and gets a Vault secret", func() {
 			created := createVaultSecret()

@@ -1128,6 +1128,8 @@ func (p *EventPublisher) convertChangeData(field protoreflect.FieldDescriptor, r
 		return
 	}
 	typed.SetId(data.ID)
+	metadata.SetDisplayName(typed.GetMetadata().GetDisplayName())
+	metadata.SetDescription(typed.GetMetadata().GetDescription())
 	typed.SetMetadata(metadata)
 	result = typed
 	return

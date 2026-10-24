@@ -73,6 +73,23 @@ func ToGrpcError(err error) error {
 		"vault operation failed")
 }
 
+// IsSecretNotFound reports whether a Vault operation failed because its secret
+// is absent. It accepts the Vault API errors returned by the secret store and
+// gRPC NotFound errors returned by implementations of SecretStore.
+func IsSecretNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, vaultapi.ErrSecretNotFound) {
+		return true
+	}
+	var responseErr *vaultapi.ResponseError
+	if errors.As(err, &responseErr) && responseErr.StatusCode == http.StatusNotFound {
+		return true
+	}
+	return grpcstatus.Code(err) == grpccodes.NotFound
+}
+
 // isPermissionDeniedError checks if the error is a Vault permission denied error (HTTP 403).
 func isPermissionDeniedError(err error) bool {
 	var respErr *vaultapi.ResponseError

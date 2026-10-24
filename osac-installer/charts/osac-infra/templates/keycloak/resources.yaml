@@ -542,9 +542,14 @@ data:
     #!/bin/bash
     set -euo pipefail
 
+    KEYCLOAK_CA_FILE=/etc/keycloak/ca/ca.crt
+    keycloak_curl() {
+      curl --cacert "${KEYCLOAK_CA_FILE}" "$@"
+    }
+
     echo "Waiting for Keycloak to be ready..."
     for i in $(seq 1 120); do
-      if curl -k -sf https://keycloak:443/realms/osac >/dev/null; then
+      if keycloak_curl -sf https://keycloak:443/realms/osac >/dev/null; then
         echo "Keycloak is ready!"
         break
       fi
@@ -554,61 +559,128 @@ data:
 
     ensure_mcp_client() {
       local token client_uuid payload scope_uuid
-      token="$(curl -k -sf -X POST https://keycloak:443/realms/master/protocol/openid-connect/token \
+      token="$(keycloak_curl -sf -X POST https://keycloak:443/realms/master/protocol/openid-connect/token \
         -H 'Content-Type: application/x-www-form-urlencoded' \
         -d 'grant_type=password' -d 'client_id=admin-cli' \
         --data-urlencode "username=${ADMIN_USERNAME}" \
         --data-urlencode "password=${ADMIN_PASSWORD}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")"
-      client_uuid="$(curl -k -sf 'https://keycloak:443/admin/realms/osac/clients?clientId=osac-mcp-client' \
+      client_uuid="$(keycloak_curl -sf 'https://keycloak:443/admin/realms/osac/clients?clientId=osac-mcp-client' \
         -H "Authorization: Bearer ${token}" | \
         python3 -c "import sys,json; print(next((x['id'] for x in json.load(sys.stdin) if x['clientId']=='osac-mcp-client'), ''))")"
       payload="$(python3 -c 'import json,os; p=json.load(open("/mcp-client/client.json")); p["protocolMappers"]=[{"name":"mcp-resource-audience","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper","consentRequired":False,"config":{"included.client.audience":os.environ["MCP_RESOURCE_URL"],"id.token.claim":"false","access.token.claim":"true"}}]; print(json.dumps(p))')"
       if [[ -n "${client_uuid}" ]]; then
-        curl -k -sf -X PUT "https://keycloak:443/admin/realms/osac/clients/${client_uuid}" \
+        keycloak_curl -sf -X PUT "https://keycloak:443/admin/realms/osac/clients/${client_uuid}" \
           -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' -d "${payload}"
       else
-        curl -k -sf -X POST https://keycloak:443/admin/realms/osac/clients \
+        keycloak_curl -sf -X POST https://keycloak:443/admin/realms/osac/clients \
           -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' -d "${payload}"
-        client_uuid="$(curl -k -sf 'https://keycloak:443/admin/realms/osac/clients?clientId=osac-mcp-client' \
+        client_uuid="$(keycloak_curl -sf 'https://keycloak:443/admin/realms/osac/clients?clientId=osac-mcp-client' \
           -H "Authorization: Bearer ${token}" | \
           python3 -c "import sys,json; print(next((x['id'] for x in json.load(sys.stdin) if x['clientId']=='osac-mcp-client'), ''))")"
       fi
       [[ -n "${client_uuid}" ]] || { echo "MCP client registration failed"; return 1; }
-      scope_uuid="$(curl -k -sf https://keycloak:443/admin/realms/osac/client-scopes \
+      scope_uuid="$(keycloak_curl -sf https://keycloak:443/admin/realms/osac/client-scopes \
         -H "Authorization: Bearer ${token}" | \
         python3 -c "import sys,json; print(next((x['id'] for x in json.load(sys.stdin) if x['name']=='offline_access'), ''))")"
       [[ -n "${scope_uuid}" ]] || { echo "offline_access scope missing"; return 1; }
-      curl -k -sf -X PUT \
+      keycloak_curl -sf -X PUT \
         "https://keycloak:443/admin/realms/osac/clients/${client_uuid}/optional-client-scopes/${scope_uuid}" \
         -H "Authorization: Bearer ${token}"
     }
 
     ensure_mcp_exchange_client() {
       local token client_uuid payload
-      token="$(curl -k -sf -X POST https://keycloak:443/realms/master/protocol/openid-connect/token \
+      token="$(keycloak_curl -sf -X POST https://keycloak:443/realms/master/protocol/openid-connect/token \
         -H 'Content-Type: application/x-www-form-urlencoded' \
         -d 'grant_type=password' -d 'client_id=admin-cli' \
         --data-urlencode "username=${ADMIN_USERNAME}" \
         --data-urlencode "password=${ADMIN_PASSWORD}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")"
-      client_uuid="$(curl -k -sfG 'https://keycloak:443/admin/realms/osac/clients' \
+      client_uuid="$(keycloak_curl -sfG 'https://keycloak:443/admin/realms/osac/clients' \
         --data-urlencode "clientId=${MCP_RESOURCE_URL}" \
         -H "Authorization: Bearer ${token}" | \
         python3 -c 'import sys,json,os; print(next((x["id"] for x in json.load(sys.stdin) if x["clientId"]==os.environ["MCP_RESOURCE_URL"]), ""))')"
       payload="$(python3 -c 'import json,os; print(json.dumps({"clientId":os.environ["MCP_RESOURCE_URL"],"name":"OSAC MCP resource and exchange client","enabled":True,"protocol":"openid-connect","publicClient":False,"secret":os.environ["MCP_EXCHANGE_SECRET"],"standardFlowEnabled":False,"directAccessGrantsEnabled":False,"serviceAccountsEnabled":False,"fullScopeAllowed":True,"defaultClientScopes":["groups","basic","username","organization","roles","osac-api"],"attributes":{"standard.token.exchange.enabled":"true","resource_url":os.environ["MCP_RESOURCE_URL"]}}))')"
       if [[ -n "${client_uuid}" ]]; then
-        printf '%s' "${payload}" | curl -k -sf -X PUT "https://keycloak:443/admin/realms/osac/clients/${client_uuid}" \
+        printf '%s' "${payload}" | keycloak_curl -sf -X PUT "https://keycloak:443/admin/realms/osac/clients/${client_uuid}" \
           -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' --data-binary @-
       else
-        printf '%s' "${payload}" | curl -k -sf -X POST https://keycloak:443/admin/realms/osac/clients \
+        printf '%s' "${payload}" | keycloak_curl -sf -X POST https://keycloak:443/admin/realms/osac/clients \
           -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' --data-binary @-
       fi
+    }
+
+    ensure_controller_idp_roles() {
+      local token realm_management_id controller_id user_id create_role view_role manage_role payload
+      token="$(keycloak_curl -sf -X POST https://keycloak:443/realms/master/protocol/openid-connect/token \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        -d 'grant_type=password' -d 'client_id=admin-cli' \
+        --data-urlencode "username=${ADMIN_USERNAME}" \
+        --data-urlencode "password=${ADMIN_PASSWORD}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")"
+      realm_management_id="$(keycloak_curl -sf 'https://keycloak:443/admin/realms/osac/clients?clientId=realm-management&exact=true' \
+        -H "Authorization: Bearer ${token}" | \
+        python3 -c "import sys,json; print(next((x['id'] for x in json.load(sys.stdin) if x['clientId']=='realm-management'), ''))")"
+      controller_id="$(keycloak_curl -sf 'https://keycloak:443/admin/realms/osac/clients?clientId=osac-controller&exact=true' \
+        -H "Authorization: Bearer ${token}" | \
+        python3 -c "import sys,json; print(next((x['id'] for x in json.load(sys.stdin) if x['clientId']=='osac-controller'), ''))")"
+      [[ -n "${realm_management_id}" && -n "${controller_id}" ]] || { echo "Controller role assignment clients missing"; return 1; }
+      user_id="$(keycloak_curl -sf "https://keycloak:443/admin/realms/osac/clients/${controller_id}/service-account-user" \
+        -H "Authorization: Bearer ${token}" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")"
+      create_role="$(keycloak_curl -sf "https://keycloak:443/admin/realms/osac/clients/${realm_management_id}/roles/create-client" \
+        -H "Authorization: Bearer ${token}")"
+      view_role="$(keycloak_curl -sf "https://keycloak:443/admin/realms/osac/clients/${realm_management_id}/roles/view-clients" \
+        -H "Authorization: Bearer ${token}")"
+      manage_role="$(keycloak_curl -sf "https://keycloak:443/admin/realms/osac/clients/${realm_management_id}/roles/manage-clients" \
+        -H "Authorization: Bearer ${token}")"
+      payload="$(python3 -c 'import json,sys; print(json.dumps([json.loads(sys.argv[1]),json.loads(sys.argv[2])]))' "${create_role}" "${view_role}")"
+      keycloak_curl -sf -X POST \
+        "https://keycloak:443/admin/realms/osac/users/${user_id}/role-mappings/clients/${realm_management_id}" \
+        -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' -d "${payload}"
+      payload="$(python3 -c 'import json,sys; print(json.dumps([json.loads(sys.argv[1])]))' "${manage_role}")"
+      keycloak_curl -sf -X DELETE \
+        "https://keycloak:443/admin/realms/osac/users/${user_id}/role-mappings/clients/${realm_management_id}" \
+        -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' -d "${payload}"
+      echo "Ensured controller Keycloak client roles and revoked manage-clients"
+    }
+
+    # Registration policies are realm-wide; only the controller service account has create-client.
+    ensure_service_account_registration_policies() {
+      local token components provider component component_id
+      token="$(keycloak_curl -sf -X POST https://keycloak:443/realms/master/protocol/openid-connect/token \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        -d 'grant_type=password' -d 'client_id=admin-cli' \
+        --data-urlencode "username=${ADMIN_USERNAME}" \
+        --data-urlencode "password=${ADMIN_PASSWORD}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")"
+      components="$(keycloak_curl -sfG 'https://keycloak:443/admin/realms/osac/components' \
+        --data-urlencode 'type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy' \
+        -H "Authorization: Bearer ${token}")"
+      for provider in allowed-protocol-mappers allowed-client-templates; do
+        component="$(python3 -c '
+    import json
+    import sys
+
+    provider, data = sys.argv[1], json.loads(sys.argv[2])
+    matches = [c for c in data if c.get("providerId") == provider and c.get("subType") == "authenticated"]
+    if len(matches) != 1:
+        raise SystemExit("authenticated client registration policy missing or ambiguous")
+    component = matches[0]
+    config = component.setdefault("config", {})
+    key = "allowed-protocol-mapper-types" if provider == "allowed-protocol-mappers" else "allowed-client-scopes"
+    required = ("oidc-hardcoded-claim-mapper", "oidc-audience-mapper", "oidc-usersessionmodel-note-mapper") if provider == "allowed-protocol-mappers" else ("service_account",)
+    config[key] = list(dict.fromkeys(config.get(key, []) + list(required)))
+    print(json.dumps(component))
+    ' "${provider}" "${components}")"
+        component_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["id"])' "${component}")"
+        keycloak_curl -sf -X PUT "https://keycloak:443/admin/realms/osac/components/${component_id}" \
+          -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' -d "${component}"
+      done
+      echo "Ensured authenticated client-registration policies for service accounts"
     }
 
     set_password() {
       local username=$1
       local password=$2
 
-      TOKEN=$(curl -k -sf -X POST https://keycloak:443/realms/master/protocol/openid-connect/token \
+      TOKEN=$(keycloak_curl -sf -X POST https://keycloak:443/realms/master/protocol/openid-connect/token \
         -H 'Content-Type: application/x-www-form-urlencoded' \
         -d 'grant_type=password' \
         -d 'client_id=admin-cli' \
@@ -616,7 +688,7 @@ data:
         --data-urlencode "password=${ADMIN_PASSWORD}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
       [[ -n "${TOKEN}" ]] || { echo "ERROR: Could not get admin token"; return 1; }
 
-      USER_ID=$(curl -k -sf -X GET "https://keycloak:443/admin/realms/osac/users?username=$username" \
+      USER_ID=$(keycloak_curl -sf -X GET "https://keycloak:443/admin/realms/osac/users?username=$username" \
         -H "Authorization: Bearer $TOKEN" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['id'])")
       [[ -n "${USER_ID}" ]] || { echo "ERROR: Could not find user: $username"; return 1; }
 
@@ -625,7 +697,7 @@ data:
       # safely contain quotes, backslashes, or other JSON-significant chars.
       PAYLOAD=$(python3 -c "import json,sys; print(json.dumps({'type': 'password', 'value': sys.argv[1], 'temporary': False}))" "$password")
 
-      curl -k -sf -X PUT "https://keycloak:443/admin/realms/osac/users/$USER_ID/reset-password" \
+      keycloak_curl -sf -X PUT "https://keycloak:443/admin/realms/osac/users/$USER_ID/reset-password" \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
         -d "$PAYLOAD"
@@ -648,6 +720,8 @@ data:
     echo "All demo-user passwords set"
     ensure_mcp_exchange_client
     ensure_mcp_client
+    ensure_controller_idp_roles
+    ensure_service_account_registration_policies
 ---
 apiVersion: batch/v1
 kind: Job
@@ -717,6 +791,9 @@ spec:
         - name: mcp-client
           mountPath: /mcp-client
           readOnly: true
+        - name: keycloak-ca
+          mountPath: /etc/keycloak/ca
+          readOnly: true
         - name: tmp
           mountPath: /tmp
       volumes:
@@ -727,6 +804,12 @@ spec:
       - name: mcp-client
         configMap:
           name: keycloak-mcp-client
+      - name: keycloak-ca
+        secret:
+          secretName: keycloak-tls-cert
+          items:
+          - key: ca.crt
+            path: ca.crt
       - name: tmp
         emptyDir: {}
 {{- end }}

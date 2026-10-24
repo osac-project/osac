@@ -481,6 +481,13 @@ func redactProtoMessageFields(message protoreflect.Message) {
 	fields := message.Descriptor().Fields()
 	for index := 0; index < fields.Len(); index++ {
 		field := fields.Get(index)
+		if field.Name() == "client_secret" && field.Kind() == protoreflect.StringKind &&
+			isServiceAccountCredentialResponse(message.Descriptor()) {
+			if message.Has(field) {
+				message.Set(field, protoreflect.ValueOfString(redactMark))
+			}
+			continue
+		}
 		if field.IsMap() {
 			if field.Name() == "data" && isSecret(field.ContainingMessage()) {
 				values := message.Mutable(field).Map()
@@ -516,6 +523,16 @@ func redactProtoMessageFields(message protoreflect.Message) {
 func isSecret(message protoreflect.MessageDescriptor) bool {
 	name := message.FullName()
 	return name == publicSecretMessage || name == privateSecretMessage
+}
+
+func isServiceAccountCredentialResponse(message protoreflect.MessageDescriptor) bool {
+	switch message.FullName() {
+	case "osac.public.v1.ServiceAccountsCreateResponse", "osac.private.v1.ServiceAccountsCreateResponse",
+		"osac.public.v1.ServiceAccountsRegenerateSecretResponse", "osac.private.v1.ServiceAccountsRegenerateSecretResponse":
+		return true
+	default:
+		return false
+	}
 }
 
 type interceptorServerStream struct {

@@ -46,6 +46,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/idp"
 	hubscheme "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/scheme"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
@@ -198,6 +199,7 @@ var _ = BeforeSuite(func() {
 		MetricsRegisterer:       metricsRegisterer,
 		HubScheme:               hubScheme,
 		SecretStore:             vault.NewMockSecretStore(ctrl),
+		IdpClient:               idp.NewMockClientInterface(ctrl),
 		TierResolver:            tierResolver,
 		PrivateUsersServer:      privateUsersServer,
 		Services:                &services.Flags{CaaS: true, VMaaS: true, BMaaS: true, MaaS: true},
@@ -461,6 +463,7 @@ func registerWithFlags(svcFlags *services.Flags) (map[string]grpc.ServiceInfo, *
 		MetricsRegisterer:       prometheus.NewRegistry(),
 		HubScheme:               hubScheme,
 		SecretStore:             vault.NewMockSecretStore(ctrl),
+		IdpClient:               idp.NewMockClientInterface(ctrl),
 		TierResolver:            tierResolver,
 		PrivateUsersServer:      nil,
 		Services:                svcFlags,
@@ -520,6 +523,7 @@ var _ = Describe("Conditional service registration", func() {
 		"osac.public.v1.SecurityGroups",
 		"osac.public.v1.Roles",
 		"osac.public.v1.RoleBindings",
+		"osac.public.v1.ServiceAccounts",
 		"osac.public.v1.ProjectMemberships",
 		"osac.public.v1.ExternalIPPools",
 		"osac.public.v1.ExternalIPs",
@@ -538,6 +542,7 @@ var _ = Describe("Conditional service registration", func() {
 		"osac.private.v1.NetworkClasses",
 		"osac.private.v1.Roles",
 		"osac.private.v1.RoleBindings",
+		"osac.private.v1.ServiceAccounts",
 		"osac.private.v1.ProjectMemberships",
 		"osac.private.v1.ExternalIPPools",
 		"osac.private.v1.ExternalIPs",

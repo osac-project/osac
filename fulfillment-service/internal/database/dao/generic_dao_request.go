@@ -341,6 +341,15 @@ func (r *request[O]) setMetadata(object O, metadata metadataIface) {
 	objectReflect := object.ProtoReflect()
 	if metadata != nil {
 		metadataReflect := metadata.ProtoReflect()
+		if objectReflect.Has(r.dao.metadataField) {
+			dataMetadata := objectReflect.Get(r.dao.metadataField).Message()
+			for _, name := range r.dao.metadataFieldsInData {
+				field := dataMetadata.Descriptor().Fields().ByName(name)
+				if field != nil && dataMetadata.Has(field) {
+					metadataReflect.Set(field, dataMetadata.Get(field))
+				}
+			}
+		}
 		objectReflect.Set(r.dao.metadataField, protoreflect.ValueOfMessage(metadataReflect))
 	} else {
 		objectReflect.Clear(r.dao.metadataField)
@@ -356,8 +365,7 @@ func (r *request[O]) cloneObject(object O) O {
 }
 
 func (r *request[O]) marshalData(object O) (result []byte, err error) {
-	result, err = r.dao.jsonEncoder.Marshal(object)
-	return
+	return r.dao.jsonEncoder.Marshal(object)
 }
 
 func (r *request[O]) unmarshalData(data []byte, object O) error {

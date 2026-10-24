@@ -15,7 +15,7 @@ Before changing this component, identify the documents relevant to the change
 below, then read and follow them. These documents are authoritative for their
 respective areas.
 
-- Deployment architecture: [`docs/helm-deployment-guide.md`](docs/helm-deployment-guide.md)
+- Deployment architecture: [`../docs/guides/installation/helm-deployment-guide.md`](../docs/guides/installation/helm-deployment-guide.md)
 - Script behavior: [`README.md`](README.md) and `scripts/`
 - Values and schema: `charts/osac/values.yaml` and `charts/osac/values.schema.json`
 - Changes to installer values or schema: read the
@@ -51,6 +51,7 @@ respective areas.
 | TopoLVM chart dependency download, cache reuse, build scoping, or install preparation | Unit with command stubs | `make kind-runtime-test` |
 | Fulfillment hook commands, CA mounts, or gate rendering | Helm contract | `make fulfillment-trust-render-test` |
 | Fulfillment token helper or dev-full hook credential wiring | Unit and Helm contract | `make fulfillment-auth-test` and `make dev-full-render-test` |
+| Service-account IDP credential mount and Keycloak management roles | Helm contract | `make service-account-idp-render-test` |
 | Deployed dev-full hook authentication | Component integration | Coverage gap tracked by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843); local `install-devstack` invokes the hooks but does not assert token acceptance. |
 | OpenBao security context, podSecurityContext, or Kind/OpenShift UID handling | Helm contract | `make openbao-security-context-test` |
 | Deployed hooks or cross-component startup | Component integration | `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` with a deployed Kind environment; see [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer) |

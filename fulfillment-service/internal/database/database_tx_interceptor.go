@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
@@ -26,14 +27,16 @@ import (
 // TxInterceptorBuilder contains the data and logic needed to build an interceptor that begins and ends transactions
 // automatically. Don't create instances of this type directly, use the NewTxInterceptor function instead.
 type TxInterceptorBuilder struct {
-	logger  *slog.Logger
-	manager TxManager
+	logger                             *slog.Logger
+	manager                            TxManager
+	methodsWithoutAutomaticTransaction []string
 }
 
 // TxInterceptor contains the data needed by the interceptor.
 type TxInterceptor struct {
-	logger  *slog.Logger
-	manager TxManager
+	logger                             *slog.Logger
+	manager                            TxManager
+	methodsWithoutAutomaticTransaction []string
 }
 
 // NewTxInterceptor creates a builder that can then be used to configure and create a transactions interceptor.
@@ -53,6 +56,12 @@ func (b *TxInterceptorBuilder) SetManager(value TxManager) *TxInterceptorBuilder
 	return b
 }
 
+// SetMethodsWithoutAutomaticTransaction configures methods that manage their own short transactions.
+func (b *TxInterceptorBuilder) SetMethodsWithoutAutomaticTransaction(methods ...string) *TxInterceptorBuilder {
+	b.methodsWithoutAutomaticTransaction = append(b.methodsWithoutAutomaticTransaction, methods...)
+	return b
+}
+
 // Build uses the data stored in the builder to create and configure a new interceptor.
 func (b *TxInterceptorBuilder) Build() (result *TxInterceptor, err error) {
 	// Check parameters:
@@ -67,8 +76,9 @@ func (b *TxInterceptorBuilder) Build() (result *TxInterceptor, err error) {
 
 	// Create and populate the object:
 	result = &TxInterceptor{
-		logger:  b.logger,
-		manager: b.manager,
+		logger:                             b.logger,
+		manager:                            b.manager,
+		methodsWithoutAutomaticTransaction: slices.Clone(b.methodsWithoutAutomaticTransaction),
 	}
 	return
 }
@@ -76,6 +86,12 @@ func (b *TxInterceptorBuilder) Build() (result *TxInterceptor, err error) {
 // UnaryServer is the unary server interceptor function.
 func (i *TxInterceptor) UnaryServer(ctx context.Context, request any, info *grpc.UnaryServerInfo,
 	handler grpc.UnaryHandler) (response any, err error) {
+	// The handler still receives the manager so it can open short transactions around database work.
+	handlerCtx := TxManagerIntoContext(ctx, i.manager)
+	if slices.Contains(i.methodsWithoutAutomaticTransaction, info.FullMethod) {
+		return handler(handlerCtx, request)
+	}
+
 	// Begin the transaction:
 	tx, err := i.manager.Begin(ctx)
 	if err != nil {
@@ -117,7 +133,6 @@ func (i *TxInterceptor) UnaryServer(ctx context.Context, request any, info *grpc
 	}()
 
 	// Add the manager and the transaction to the context:
-	handlerCtx := TxManagerIntoContext(ctx, i.manager)
 	handlerCtx = TxIntoContext(handlerCtx, tx)
 
 	// Call the method:

@@ -322,6 +322,7 @@ func buildHandlerList() []handlerRegistrar {
 		publicv1.RegisterExternalIPAttachmentsHandler,
 		publicv1.RegisterRolesHandler,
 		publicv1.RegisterRoleBindingsHandler,
+		publicv1.RegisterServiceAccountsHandler,
 		publicv1.RegisterJsonWebKeySetHandler,
 		publicv1.RegisterStorageTiersHandler,
 		publicv1.RegisterVolumesHandler,
@@ -344,6 +345,7 @@ func buildHandlerList() []handlerRegistrar {
 		privatev1.RegisterExternalIPAttachmentsHandler,
 		privatev1.RegisterRolesHandler,
 		privatev1.RegisterRoleBindingsHandler,
+		privatev1.RegisterServiceAccountsHandler,
 		privatev1.RegisterVolumesHandler,
 		privatev1.RegisterSelfSubjectAccessReviewsHandler,
 		// CaaS:

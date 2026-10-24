@@ -26,6 +26,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/serviceaccounts"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -406,6 +407,9 @@ func (s *PrivateSecretsServer) validateSecretCreate(secret *privatev1.Secret) er
 	if secret.GetMetadata() == nil || secret.GetMetadata().GetName() == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.name' is required")
 	}
+	if serviceaccounts.IsRegistrationSecretName(secret.GetMetadata().GetName()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "secret name is reserved")
+	}
 	if secret.GetType() == privatev1.SecretType_SECRET_TYPE_UNSPECIFIED {
 		secret.SetType(privatev1.SecretType_SECRET_TYPE_OPAQUE)
 	}
@@ -442,6 +446,9 @@ func (s *PrivateSecretsServer) validateHubSecretCreate(secret *privatev1.Secret)
 
 func (s *PrivateSecretsServer) validateSecretUpdate(_ context.Context,
 	newSecret *privatev1.Secret, updateMask *fieldmaskpb.FieldMask, existingSecret *privatev1.Secret) error {
+	if serviceaccounts.IsRegistrationSecretName(existingSecret.GetMetadata().GetName()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "secret name is reserved")
+	}
 	if newSecret.GetBackend() != privatev1.SecretBackend_SECRET_BACKEND_UNSPECIFIED &&
 		newSecret.GetBackend() != existingSecret.GetBackend() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,

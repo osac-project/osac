@@ -196,6 +196,12 @@ func Cmd() *cobra.Command {
 		},
 		emergencyServiceAccountsFlagHelp,
 	)
+	flags.StringVar(&runner.args.idpURL, "idp-url", "", "Keycloak server URL.")
+	flags.StringVar(&runner.args.authIssuerURL, "auth-issuer-url", "", "OAuth issuer for the IDP management credentials.")
+	flags.StringVar(&runner.args.idpClientID, "idp-client-id", "", "IDP management client identifier; mutually exclusive with --idp-client-id-file.")
+	flags.StringVar(&runner.args.idpClientIDFile, "idp-client-id-file", "", "File containing the IDP management client identifier.")
+	flags.StringVar(&runner.args.idpClientSecret, "idp-client-secret", "", "IDP management client secret; mutually exclusive with --idp-client-secret-file.")
+	flags.StringVar(&runner.args.idpClientSecretFile, "idp-client-secret-file", "", "File containing the IDP management client secret.")
 	vault.AddBaseFlags(flags)
 	network.AddGrpcKeepaliveFlags(flags)
 	runner.args.services = services.RegisterFlags(flags)
@@ -207,6 +213,12 @@ type runnerContext struct {
 	logger *slog.Logger
 	flags  *pflag.FlagSet
 	args   struct {
+		idpURL                   string
+		authIssuerURL            string
+		idpClientID              string
+		idpClientIDFile          string
+		idpClientSecret          string
+		idpClientSecretFile      string
 		caFiles                  []string
 		kafkaTopicPrefix         string
 		authType                 string
@@ -271,6 +283,11 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to load trusted CA certificates: %w", err)
+	}
+
+	idpClient, err := c.createIDPClient(ctx, caPool)
+	if err != nil {
+		return fmt.Errorf("failed to configure IDP client: %w", err)
 	}
 
 	// Read the vault flags:
@@ -565,6 +582,10 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	txInterceptor, err := database.NewTxInterceptor().
 		SetLogger(c.logger).
 		SetManager(txManager).
+		SetMethodsWithoutAutomaticTransaction(
+			publicv1.ServiceAccounts_Create_FullMethodName,
+			privatev1.ServiceAccounts_Create_FullMethodName,
+		).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create transactions interceptor: %w", err)
@@ -703,6 +724,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 
 	// Register all filterable resources' public and private servers:
 	resourceServers, err := RegisterResourceServers(ctx, grpcServer, ResourceServerDeps{
+		IdpClient:               idpClient,
 		Logger:                  c.logger,
 		PrivateAttributionLogic: privateAttributionLogic,
 		PublicAttributionLogic:  publicAttributionLogic,

@@ -33,21 +33,23 @@ import (
 
 // EncoderBuilder is a builder for creating JSON encoders.
 type EncoderBuilder struct {
-	logger        *slog.Logger
-	ignoredFields []any
+	logger                 *slog.Logger
+	ignoredFields          []any
+	omitEmptyMessageFields []protoreflect.FullName
 }
 
 // Encoder knows how to convert protocol buffers messages to JSON, with the additional capability to omit some fields.
 type Encoder struct {
-	logger                *slog.Logger
-	ignoredFieldNames     map[protoreflect.Name]bool
-	ignoredFieldFullNames map[protoreflect.FullName]bool
-	anyDesc               protoreflect.MessageDescriptor
-	durationDesc          protoreflect.MessageDescriptor
-	timestampDesc         protoreflect.MessageDescriptor
-	valueDesc             protoreflect.MessageDescriptor
-	structDesc            protoreflect.MessageDescriptor
-	jsonApi               jsoniter.API
+	logger                 *slog.Logger
+	ignoredFieldNames      map[protoreflect.Name]bool
+	ignoredFieldFullNames  map[protoreflect.FullName]bool
+	omitEmptyMessageFields map[protoreflect.FullName]bool
+	anyDesc                protoreflect.MessageDescriptor
+	durationDesc           protoreflect.MessageDescriptor
+	timestampDesc          protoreflect.MessageDescriptor
+	valueDesc              protoreflect.MessageDescriptor
+	structDesc             protoreflect.MessageDescriptor
+	jsonApi                jsoniter.API
 }
 
 // NewEncoder creates a builder that can then be used to configure and create a JSON encoder.
@@ -73,6 +75,12 @@ func (b *EncoderBuilder) SetLogger(value *slog.Logger) *EncoderBuilder {
 // 'private.v1.Cluster.metadata' then only the 'metadata' field of the 'private.v1.Cluster' object will be ignored.
 func (b *EncoderBuilder) AddIgnoredFields(values ...any) *EncoderBuilder {
 	b.ignoredFields = append(b.ignoredFields, values...)
+	return b
+}
+
+// AddOmitEmptyMessageFields omits a message field when all of its fields are ignored.
+func (b *EncoderBuilder) AddOmitEmptyMessageFields(values ...protoreflect.FullName) *EncoderBuilder {
+	b.omitEmptyMessageFields = append(b.omitEmptyMessageFields, values...)
 	return b
 }
 
@@ -104,6 +112,10 @@ func (b *EncoderBuilder) Build() (result *Encoder, err error) {
 	// Create the sets of ignored fields:
 	ignoredFieldNames := make(map[protoreflect.Name]bool)
 	ignoredFieldFullNames := make(map[protoreflect.FullName]bool)
+	omitEmptyMessageFields := make(map[protoreflect.FullName]bool, len(b.omitEmptyMessageFields))
+	for _, field := range b.omitEmptyMessageFields {
+		omitEmptyMessageFields[field] = true
+	}
 	for i, ignoredField := range b.ignoredFields {
 		switch ignoredField := ignoredField.(type) {
 		case string:
@@ -128,15 +140,16 @@ func (b *EncoderBuilder) Build() (result *Encoder, err error) {
 
 	// Create and populate the object:
 	result = &Encoder{
-		logger:                b.logger,
-		ignoredFieldNames:     ignoredFieldNames,
-		ignoredFieldFullNames: ignoredFieldFullNames,
-		anyDesc:               anyDesc,
-		durationDesc:          durationDesc,
-		timestampDesc:         timestampDesc,
-		valueDesc:             valueDesc,
-		structDesc:            structDesc,
-		jsonApi:               jsonApi,
+		logger:                 b.logger,
+		ignoredFieldNames:      ignoredFieldNames,
+		ignoredFieldFullNames:  ignoredFieldFullNames,
+		omitEmptyMessageFields: omitEmptyMessageFields,
+		anyDesc:                anyDesc,
+		durationDesc:           durationDesc,
+		timestampDesc:          timestampDesc,
+		valueDesc:              valueDesc,
+		structDesc:             structDesc,
+		jsonApi:                jsonApi,
 	}
 	return
 }
@@ -177,6 +190,10 @@ func (e *Encoder) marshalMessage(stream *jsoniter.Stream, message protoreflect.M
 		if e.ignoredFieldNames[field.Name()] || e.ignoredFieldFullNames[field.FullName()] {
 			return true
 		}
+		if e.omitEmptyMessageFields[field.FullName()] && field.Kind() == protoreflect.MessageKind &&
+			!field.IsList() && !field.IsMap() && !e.hasIncludedFields(value.Message()) {
+			return true
+		}
 		if !first {
 			stream.WriteMore()
 			if stream.Error != nil {
@@ -205,6 +222,17 @@ func (e *Encoder) marshalMessage(stream *jsoniter.Stream, message protoreflect.M
 		return
 	}
 	return stream.Flush()
+}
+
+func (e *Encoder) hasIncludedFields(message protoreflect.Message) (result bool) {
+	message.Range(func(field protoreflect.FieldDescriptor, _ protoreflect.Value) bool {
+		if e.ignoredFieldNames[field.Name()] || e.ignoredFieldFullNames[field.FullName()] {
+			return true
+		}
+		result = true
+		return false
+	})
+	return
 }
 
 func (e *Encoder) marshalValue(stream *jsoniter.Stream, value protoreflect.Value, field protoreflect.FieldDescriptor) error {

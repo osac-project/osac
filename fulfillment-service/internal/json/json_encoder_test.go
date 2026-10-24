@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	_ "google.golang.org/protobuf/types/known/wrapperspb"
 
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	testsv1 "github.com/osac-project/osac/proto/gen/osac/tests/v1"
 )
 
@@ -343,5 +344,41 @@ var _ = Describe("Encoder", func() {
 				},
 			),
 		)
+	})
+
+	Describe("Omit empty message fields", func() {
+		It("omits metadata after column-backed fields are ignored", func() {
+			object := privatev1.ServiceAccount_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:        "robot",
+					Tenant:      "my-tenant",
+					DisplayName: "Build robot",
+				}.Build(),
+			}.Build()
+			metadataField := object.ProtoReflect().Descriptor().Fields().ByName("metadata")
+			metadataFields := metadataField.Message().Fields()
+			ignoredFields := make([]any, 0, metadataFields.Len())
+			for i := range metadataFields.Len() {
+				field := metadataFields.Get(i)
+				if field.Name() != "display_name" && field.Name() != "description" {
+					ignoredFields = append(ignoredFields, field.FullName())
+				}
+			}
+			encoder, err := NewEncoder().
+				SetLogger(logger).
+				AddIgnoredFields(ignoredFields...).
+				AddOmitEmptyMessageFields(metadataField.FullName()).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			actual, err := encoder.Marshal(object)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(actual).To(MatchJSON(`{"metadata":{"display_name":"Build robot"}}`))
+
+			object.GetMetadata().SetDisplayName("")
+			actual, err = encoder.Marshal(object)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(actual).To(MatchJSON(`{}`))
+		})
 	})
 })

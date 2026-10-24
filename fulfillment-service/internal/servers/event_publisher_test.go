@@ -424,6 +424,29 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(events[0].event.GetProject().GetSpec().GetTitle()).To(Equal("Acme"))
 		})
 
+		It("Preserves descriptive metadata in service account events and trusts SQL ownership", func() {
+			tenant := "machines-" + uuid.New()
+			insertChange("service_accounts", tenant, "sa-1", fmt.Sprintf(`{
+				"id": "sa-1", "name": "robot", "tenant": %q,
+				"data": {"metadata":{"display_name":"Build robot","description":"Build jobs","tenant":"forged"},
+				         "status":{"client_id":"osac-sa-example"},
+				         "client_secret":"event-secret-marker"}
+			}`, tenant))
+			cancel, done := startPublisher(pub)
+			defer stopPublisher(cancel, done)
+			events := collectKafkaEvents(client, DefaultEventTopicPrefix+tenant, 1)
+			account := events[0].event.GetServiceAccount()
+			Expect(account).ToNot(BeNil())
+			Expect(account.GetMetadata().GetDisplayName()).To(Equal("Build robot"))
+			Expect(account.GetMetadata().GetDescription()).To(Equal("Build jobs"))
+			Expect(account.GetMetadata().GetTenant()).To(Equal(tenant))
+			Expect(account.GetMetadata().GetName()).To(Equal("robot"))
+			Expect(account.GetStatus().GetClientId()).To(Equal("osac-sa-example"))
+			payload, err := protojson.Marshal(events[0].event)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(string(payload)).ToNot(ContainSubstring("event-secret-marker"))
+		})
+
 		It("Publishes a worker's owner-reference attribution on the tenant's topic", func() {
 			tenant := "workers-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant
@@ -866,6 +889,16 @@ var _ = Describe("Event publisher", Ordered, func() {
 			return count
 		}
 
+		drainPendingChanges := func() {
+			for {
+				more, err := pub.drain(drainCtx)
+				Expect(err).ToNot(HaveOccurred())
+				if !more {
+					return
+				}
+			}
+		}
+
 		insertTenant := func(id string) {
 			_, err := pool.Exec(drainCtx, `
 				insert into tenants (id, name, tenant, creator, data)
@@ -884,17 +917,21 @@ var _ = Describe("Event publisher", Ordered, func() {
 
 		It("Refreshes the unpublished event count", func() {
 			tenant := "metrics-" + uuid.New()
+			countBefore := countChanges()
 			insertChange(tenant, "p-1", eventPublisherOpInsert)
 			insertChange(tenant, "p-2", eventPublisherOpInsert)
 
 			Expect(testutil.ToFloat64(pub.metrics.unpublishedCount)).To(Equal(float64(0)))
 			err := pub.metricsWorkFunc(drainCtx)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(testutil.ToFloat64(pub.metrics.unpublishedCount)).To(Equal(float64(2)))
+			Expect(testutil.ToFloat64(pub.metrics.unpublishedCount)).To(Equal(float64(countBefore + 2)))
 		})
 
 		It("Reports whether there may be another batch to process", func() {
 			tenant := "more-" + uuid.New()
+			drainPendingChanges()
+			Expect(countChanges()).To(Equal(0))
+
 			Expect(pub.Close()).To(Succeed())
 
 			var err error
@@ -920,6 +957,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 		})
 
 		It("Does not claim a row from an open transaction ahead of a committed higher ID", func() {
+			drainPendingChanges()
 			tenant := "xmin-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant
 			tx, err := pool.Begin(drainCtx)
@@ -971,6 +1009,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 		})
 
 		It("Re-publishes the same row when the process crashes before delete", func() {
+			drainPendingChanges()
 			tenant := "crash-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant
 			changeID := insertChange(tenant, "obj-1", "INSERT")
@@ -1009,6 +1048,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 		})
 
 		It("Rolls back the transaction when processing panics", func() {
+			drainPendingChanges()
 			tenant := "panic-" + uuid.New()
 			insertChange(tenant, "obj-1", eventPublisherOpInsert)
 			Expect(pub.Close()).To(Succeed())
@@ -1077,6 +1117,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 		})
 
 		It("Skips non-Event payloads and continues draining later rows", func() {
+			drainPendingChanges()
 			skipTenant := "skip-" + uuid.New()
 			skipTopic := DefaultEventTopicPrefix + skipTenant
 			tenant := "keep-" + uuid.New()
@@ -1263,6 +1304,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 		})
 
 		It("Waits for a custom table and publishes via a custom channel", func() {
+			drainPendingChanges()
 			table := "custom_changes"
 			channel := "custom_changes_channel"
 			Expect(pub.Close()).To(Succeed())

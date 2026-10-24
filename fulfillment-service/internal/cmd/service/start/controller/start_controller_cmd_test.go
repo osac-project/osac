@@ -99,3 +99,30 @@ func TestFabricDomainEventFilterCompiles(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceAccountEventFilter(t *testing.T) {
+	env, err := cel.NewEnv(cel.Types(&privatev1.Event{}), cel.Variable("event", cel.ObjectType("osac.private.v1.Event")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ast, issues := env.Compile(serviceAccountEventFilter)
+	if issues.Err() != nil {
+		t.Fatal(issues.Err())
+	}
+	program, err := env.Program(ast)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []*privatev1.Event{
+		privatev1.Event_builder{ServiceAccount: privatev1.ServiceAccount_builder{}.Build()}.Build(),
+		privatev1.Event_builder{Role: privatev1.Role_builder{}.Build()}.Build(),
+	} {
+		value, _, err := program.Eval(map[string]any{"event": event})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value != types.Bool(event.HasServiceAccount()) {
+			t.Fatalf("unexpected match: %v", value)
+		}
+	}
+}

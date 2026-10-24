@@ -280,7 +280,9 @@ var _ = Describe("RegisterReferenceLookups", func() {
 
 func isHandlerOwnedReferenceType(name protoreflect.FullName) bool {
 	return name == "osac.private.v1.AddOnOperatorReference" ||
-		name == "osac.public.v1.AddOnOperatorReference"
+		name == "osac.public.v1.AddOnOperatorReference" ||
+		name == "osac.private.v1.SecretReference" ||
+		name == "osac.public.v1.SecretReference"
 }
 
 func newTestReferenceValidator() *references.ReferenceValidator {

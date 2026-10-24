@@ -74,9 +74,8 @@ message ComputeInstanceCatalogItemFields {
   BoolFieldPolicy auto_external_ip_attachment = 8;
   ComputeInstanceDiskListFieldPolicy additional_disks = 9;
 
-  // Optional SSH public key Secret reference for VM access. A caller may provide a tenant-scoped key;
-  // a tenant catalog may also configure a default key.
-  SecretReferenceFieldPolicy ssh_key = 10;
+  // Optional tenant-scoped SSH public key Secret reference for VM access.
+  FullSecretReferenceFieldPolicy ssh_key = 10;
 
   reserved 11;
   reserved "user_data_secret";

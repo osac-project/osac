@@ -68,22 +68,6 @@ const userDataSecretKey = "userdata"
 // instance's state untouched so it doesn't look like a permanent failure while it is retried.
 var errTransientK8sError = errors.New("transient kubernetes error")
 
-// SecretResolutionError classifies a failure while resolving the Secret referenced
-// by the ComputeInstance SSH key field.
-type SecretResolutionError struct {
-	Permanent bool
-	Reason    string
-	Err       error
-}
-
-func (e *SecretResolutionError) Error() string {
-	return fmt.Sprintf("failed to resolve SSH public key Secret: %v", e.Err)
-}
-
-func (e *SecretResolutionError) Unwrap() error {
-	return e.Err
-}
-
 // FunctionBuilder contains the data and logic needed to build a function that reconciles compute instances.
 type FunctionBuilder struct {
 	logger     *slog.Logger
@@ -202,7 +186,7 @@ func (r *function) run(ctx context.Context, computeInstance *privatev1.ComputeIn
 		}
 	}
 	if reconcileErr != nil {
-		var secretErr *SecretResolutionError
+		var secretErr *controllers.SSHKeyResolutionError
 		if errors.As(reconcileErr, &secretErr) {
 			if secretErr.Permanent {
 				t.setReconciliationFailedWithReason(secretErr.Err, secretErr.Reason)
@@ -1105,37 +1089,11 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Compute
 		}
 	}
 	if sshKeyRef := ciSpec.GetSshKey(); sshKeyRef != nil {
-		if sshKeyRef.GetId() == "" {
-			return &SecretResolutionError{
-				Permanent: true,
-				Reason:    "SecretInvalid",
-				Err:       status.Error(codes.InvalidArgument, "ComputeInstance SSH key Secret reference has no id"),
-			}
+		publicKey, err := controllers.ResolveSSHKey(ctx, t.r.secretsClient, sshKeyRef)
+		if err != nil {
+			return err
 		}
-		response, secretErr := t.r.secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{
-			Id: sshKeyRef.GetId(),
-		}.Build())
-		if secretErr != nil {
-			code := status.Code(secretErr)
-			resolutionErr := &SecretResolutionError{Err: secretErr}
-			switch code {
-			case codes.NotFound:
-				resolutionErr.Permanent = true
-				resolutionErr.Reason = "SecretNotFound"
-			case codes.InvalidArgument:
-				resolutionErr.Permanent = true
-				resolutionErr.Reason = "SecretInvalid"
-			}
-			return resolutionErr
-		}
-		if response == nil || response.GetObject() == nil {
-			return &SecretResolutionError{
-				Err: status.Error(codes.Unknown, "Secrets.Get returned no object"),
-			}
-		}
-		secret := response.GetObject()
-		publicKey := secret.GetData()["public_key"]
-		spec.SSHKey = string(publicKey)
+		spec.SSHKey = publicKey
 	}
 	if t.userDataSecretName != "" {
 		spec.UserDataSecretRef = &corev1.LocalObjectReference{

@@ -26,6 +26,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/sshkey"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -213,8 +214,20 @@ func (s *PrivateSecretsServer) Create(ctx context.Context,
 		secret.SetData(nil)
 	}
 
+	prepareCandidate := func(candidateCtx context.Context, _ *privatev1.Secret, candidate *privatev1.Secret) error {
+		if candidate.GetMetadata().GetTenant() != auth.SharedTenant ||
+			candidate.GetType() != privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY {
+			return nil
+		}
+		if authErr := s.authorizePlatformSecretManagement(candidateCtx, candidate); authErr != nil {
+			return authErr
+		}
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"SSH public-key Secrets cannot be created in the shared tenant")
+	}
+
 	create := func(opCtx context.Context) error {
-		if createErr := s.generic.Create(opCtx, request, &response); createErr != nil {
+		if createErr := s.generic.CreateWithCandidatePreparation(opCtx, request, &response, prepareCandidate); createErr != nil {
 			return createErr
 		}
 		created := response.GetObject()
@@ -498,7 +511,7 @@ func validateSecretData(secretType privatev1.SecretType, data map[string][]byte)
 			"secret type %s requires a non-empty data[%q] entry", secretType, key)
 	}
 	if secretType == privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY {
-		if err := validateOpenSSHPublicKey(string(data[key])); err != nil {
+		if err := sshkey.ValidateSSHKeySecretData(secretType, data); err != nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"secret type %s has invalid data[%q]: %s", secretType, key, err)
 		}

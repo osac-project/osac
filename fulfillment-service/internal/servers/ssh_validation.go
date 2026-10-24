@@ -13,20 +13,9 @@ language governing permissions and limitations under the License.
 
 package servers
 
-import (
-	"fmt"
+import "github.com/osac-project/osac/fulfillment-service/internal/sshkey"
 
-	"golang.org/x/crypto/ssh"
-)
-
-// validateOpenSSHPublicKey checks that the provided string is a valid OpenSSH public key.
+// validateOpenSSHPublicKey preserves the server's existing validation call sites.
 func validateOpenSSHPublicKey(key string) error {
-	_, _, _, rest, err := ssh.ParseAuthorizedKey([]byte(key))
-	if err != nil {
-		return fmt.Errorf("invalid OpenSSH public key: %w", err)
-	}
-	if len(rest) > 0 {
-		return fmt.Errorf("invalid OpenSSH public key: unexpected trailing content")
-	}
-	return nil
+	return sshkey.ValidateOpenSSHPublicKey(key)
 }

@@ -8,6 +8,7 @@ import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -523,6 +524,10 @@ def _assert_cluster_deleted(
     )
     assert not k8s.is_present(resource="clusterorder", name=co_name)
     wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
+    # The cluster's control plane stopped billing with its deletion: net usage
+    # past the moment the record was removed is zero, and nothing arrives after.
+    deleted_after = datetime.now(UTC).isoformat()
+    metering.assert_no_events(HEARTBEAT_TYPE, resource_id=uuid, since=deleted_after, within=120)
 
 
 def _assert_catalog_created_cluster(

@@ -12,6 +12,7 @@ compliance with the License. You may obtain a copy of the License at
 package fold
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -24,6 +25,11 @@ import (
 
 	"github.com/osac-project/osac-metering/internal/database"
 )
+
+// ErrForeignTenant marks an event whose payload names a tenant other than the topic it was
+// consumed from. Folding it would bill this tenant for another tenant's resource, so the
+// fold skips the record and reports the mismatch.
+var ErrForeignTenant = errors.New("event of another tenant")
 
 // FactExtractor pulls the billable facts out of events: for each event it walks the
 // payload message against the shared registry of tracked fields, so fulfillment's
@@ -55,6 +61,15 @@ func (e *FactExtractor) Facts(tenant string, event *privatev1.Event) ([]database
 	payload, resourceType := payloadOf(event)
 	if payload == nil || !payload.IsValid() {
 		return nil, nil
+	}
+	// The topic decides the billing tenant. An event whose payload names a different tenant
+	// is misrouted data: folding it would bill this tenant for another tenant's resource.
+	// The fold skips such records; a payload without a tenant keeps trusting the topic.
+	if eventTenant := stringOf(payload, "metadata.tenant"); eventTenant != "" && eventTenant != tenant {
+		return nil, fmt.Errorf(
+			"%w: event %s carries tenant %q on the topic of %q",
+			ErrForeignTenant, event.GetId(), eventTenant, tenant,
+		)
 	}
 	resource, tracked := e.resources[resourceType]
 	if !tracked {

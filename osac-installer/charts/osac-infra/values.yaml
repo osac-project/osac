@@ -84,6 +84,13 @@ metallb:
   enabled: false
   channel: "stable"
 
+# Activate metal3/Ironic so the Bare Metal Fulfillment operator's Metal3
+# inventory backend can reconcile BareMetalHosts. The hook applies the
+# Provisioning CR with no provisioning network and cluster-wide BareMetalHost
+# discovery, the configuration CI and virtual clusters use.
+metal3:
+  enabled: false
+
 cnv:
   enabled: false
   channel: "stable"

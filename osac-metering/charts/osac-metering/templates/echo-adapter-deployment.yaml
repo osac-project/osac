@@ -57,6 +57,13 @@ spec:
               value: /etc/kafka-secrets/password
             - name: METRICS_ADDR
               value: ":8080"
+            {{- with .Values.echoAdapter.maxEvents }}
+            # The ring buffer keeps the most recent heartbeats for the E2E
+            # assertions; a long parallel session evicts old events, so size it
+            # for the session, not for a single test.
+            - name: ECHO_BUFFER_SIZE
+              value: {{ . | quote }}
+            {{- end }}
           volumeMounts:
             - name: kafka-secrets
               mountPath: /etc/kafka-secrets

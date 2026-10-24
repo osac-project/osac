@@ -25,6 +25,8 @@ import (
 
 	"github.com/osac-project/osac-metering/internal/database"
 	"github.com/osac-project/osac-metering/internal/heartbeat"
+	"github.com/osac-project/osac-metering/internal/metrics"
+	"github.com/osac-project/osac-metering/internal/rules"
 	"github.com/osac-project/osac-metering/internal/topics"
 	"github.com/osac-project/osac-metering/internal/usage"
 )
@@ -52,10 +54,27 @@ func roundAlreadyRan(roundTime time.Time, lastRound *time.Time) bool {
 	return lastRound != nil && !roundTime.After(*lastRound)
 }
 
+// Calculator is the subset of the usage calculator a round uses. The service hands the
+// round a swappable implementation, so approving a new rule revision reloads the rules
+// without restarting the tenant loops: every round tick reads whatever set is current.
+type Calculator interface {
+	Revisions() []rules.Revision
+	OwnerOf(resourceType string, facts []database.Fact) (string, string, bool)
+	OwnedFieldOf(rootType string) (string, bool)
+	MeterAt(resourceType, meter string, at time.Time) (rules.Meter, string, bool)
+	Expected(
+		tenant, resourceType, resourceID string, facts []database.Fact, root *usage.Root, upTo time.Time,
+	) ([]usage.Piece, error)
+	Since(
+		tenant, resourceType, resourceID string, facts []database.Fact, root *usage.Root,
+		from, upTo time.Time, ledger []database.LedgerPiece,
+	) ([]usage.Piece, error)
+}
+
 // Round runs a tenant's heartbeat rounds.
 type Round struct {
 	store      *database.Store
-	calculator *usage.Calculator
+	calculator Calculator
 	client     sarama.Client
 	consumer   sarama.Consumer
 	logger     logr.Logger
@@ -77,7 +96,7 @@ type Round struct {
 // heartbeat topic during catch-up.
 func New(
 	store *database.Store,
-	calculator *usage.Calculator,
+	calculator Calculator,
 	client sarama.Client,
 	consumer sarama.Consumer,
 	logger logr.Logger,
@@ -135,7 +154,13 @@ func (r *Round) RunTenant(ctx context.Context, tenant string, interval time.Dura
 			}
 			if err := r.Once(ctx, tenant, roundTime); err != nil && !errors.Is(err, context.Canceled) {
 				r.logger.Error(err, "round failed", "tenant", tenant)
+				metrics.RoundFailed(tenant)
+				continue
 			}
+			// A tick without an error keeps the loop's liveness current, including
+			// the ticks that deliberately did nothing: a tenant whose gauge ages is
+			// a tenant whose billing stopped while the pod stays ready.
+			metrics.RoundSucceeded(tenant, roundTime)
 		}
 	}
 }

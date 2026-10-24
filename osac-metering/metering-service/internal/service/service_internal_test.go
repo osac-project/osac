@@ -726,3 +726,162 @@ func TestRestartKeepsStoppingLoopsInShutdownJoin(t *testing.T) {
 		t.Fatalf("shutdown closed the producer with %d in-flight sends of the evicted loops", got)
 	}
 }
+
+// TestCheckRulesLoadsNewRevision checks the reload path: a revision that appears in the
+// ConfigMaps after startup is validated with the same rules as startup, recorded, and
+// swapped into the calculator the running rounds read, with no restart.
+func TestCheckRulesLoadsNewRevision(t *testing.T) {
+	ctx := context.Background()
+	store := testenv.Database(t)
+
+	dir := t.TempDir()
+	writeRevisionManifest(t, dir, "0001", "1970-01-01T00:00:00Z", testenv.DefaultMetersYAML(t))
+	source := rules.NewDirectorySource(dir)
+
+	svc, err := New(ctx, Config{
+		Store:  store,
+		Rules:  source,
+		Kafka:  kafka.ConnectionConfig{Brokers: testenv.Broker(t)},
+		Logger: logr.Discard(),
+	})
+	if err != nil {
+		t.Fatalf("startup: %v", err)
+	}
+	t.Cleanup(svc.stopAll)
+	if got := len(svc.ruleset.Revisions()); got != 1 {
+		t.Fatalf("the calculator serves %d revisions at startup, want 1", got)
+	}
+
+	// A second revision appears, effective after the billing position, so loading it
+	// now is exactly what a restart would have done.
+	secondMeters := strings.Replace(
+		testenv.DefaultMetersYAML(t), "states: [RUNNING]", "states: [RUNNING, PAUSED]", 1,
+	)
+	writeRevisionManifest(
+		t, dir, "0002", time.Now().UTC().Add(time.Hour).Format(time.RFC3339), secondMeters,
+	)
+
+	if err := svc.checkRules(ctx); err != nil {
+		t.Fatalf("reloading a new revision: %v", err)
+	}
+	if got := len(svc.ruleset.Revisions()); got != 2 {
+		t.Fatalf("the calculator serves %d revisions after the reload, want 2", got)
+	}
+	used, err := store.ListRuleRevisions(ctx)
+	if err != nil {
+		t.Fatalf("listing recorded revisions: %v", err)
+	}
+	recorded := map[string]bool{}
+	for _, row := range used {
+		recorded[row.Revision] = true
+	}
+	if !recorded["0001"] || !recorded["0002"] {
+		t.Fatalf("the reload must record both revisions, got %+v", used)
+	}
+
+	// An unchanged set is a no-op: the check runs every minute and must not rebuild.
+	if err := svc.checkRules(ctx); err != nil {
+		t.Fatalf("rechecking an unchanged set: %v", err)
+	}
+	if got := len(svc.ruleset.Revisions()); got != 2 {
+		t.Fatalf("the calculator serves %d revisions after a no-op check, want 2", got)
+	}
+}
+
+// TestCheckRulesStopsWhenRulesDisagree checks the fatal case: a revision whose effective
+// time the billing position already passed appears for the first time. The spans it
+// covers were never billed under it, so continuing under the loaded rules is wrong; the
+// check must classify the refusal as a disagreement, which stops the service.
+func TestCheckRulesStopsWhenRulesDisagree(t *testing.T) {
+	ctx := context.Background()
+	store := testenv.Database(t)
+
+	dir := t.TempDir()
+	writeRevisionManifest(t, dir, "0001", "1970-01-01T00:00:00Z", testenv.DefaultMetersYAML(t))
+
+	svc, err := New(ctx, Config{
+		Store:  store,
+		Rules:  rules.NewDirectorySource(dir),
+		Kafka:  kafka.ConnectionConfig{Brokers: testenv.Broker(t)},
+		Logger: logr.Discard(),
+	})
+	if err != nil {
+		t.Fatalf("startup: %v", err)
+	}
+	t.Cleanup(svc.stopAll)
+
+	// A tenant's round just ran, so the billing position is now.
+	tenant := strings.ToLower(t.Name())
+	if err := store.EnsureProgress(ctx, tenant); err != nil {
+		t.Fatalf("ensuring progress: %v", err)
+	}
+	tx, err := store.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := database.SetLastRound(ctx, tx, tenant, time.Now().UTC(), 0); err != nil {
+		t.Fatalf("setting the last round: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	// The new revision took effect before the billing position: the rounds after its
+	// effective time were billed under 0001 and cannot be re-based.
+	secondMeters := strings.Replace(
+		testenv.DefaultMetersYAML(t), "states: [RUNNING]", "states: [RUNNING, PAUSED]", 1,
+	)
+	writeRevisionManifest(
+		t, dir, "0002", time.Now().UTC().Add(-30*time.Minute).Format(time.RFC3339), secondMeters,
+	)
+
+	err = svc.checkRules(ctx)
+	if !errors.Is(err, errRulesDisagree) {
+		t.Fatalf("a revision effective before the billing position must disagree, got %v", err)
+	}
+	if got := len(svc.ruleset.Revisions()); got != 1 {
+		t.Fatalf("a disagreement must not swap the calculator, which serves %d revisions", got)
+	}
+}
+
+// failingSource is a rules source whose listing always fails, like a ConfigMap read
+// during an API-server hiccup.
+type failingSource struct{}
+
+func (failingSource) List(context.Context) ([]rules.Revision, error) {
+	return nil, errors.New("api server unavailable")
+}
+
+// TestCheckRulesRetriesListingFailures checks that a failed read of the ConfigMaps is
+// transient: the check returns a listing error rather than a disagreement, and the
+// loaded rules keep serving the rounds until the next check succeeds.
+func TestCheckRulesRetriesListingFailures(t *testing.T) {
+	ctx := context.Background()
+	store := testenv.Database(t)
+
+	dir := t.TempDir()
+	writeRevisionManifest(t, dir, "0001", "1970-01-01T00:00:00Z", testenv.DefaultMetersYAML(t))
+
+	svc, err := New(ctx, Config{
+		Store:  store,
+		Rules:  rules.NewDirectorySource(dir),
+		Kafka:  kafka.ConnectionConfig{Brokers: testenv.Broker(t)},
+		Logger: logr.Discard(),
+	})
+	if err != nil {
+		t.Fatalf("startup: %v", err)
+	}
+	t.Cleanup(svc.stopAll)
+
+	svc.cfg.Rules = failingSource{}
+	err = svc.checkRules(ctx)
+	if !errors.Is(err, errRulesListing) {
+		t.Fatalf("a failed listing must be transient, got %v", err)
+	}
+	if errors.Is(err, errRulesDisagree) {
+		t.Fatal("a failed listing must not be classified as a disagreement")
+	}
+	if got := len(svc.ruleset.Revisions()); got != 1 {
+		t.Fatalf("the calculator serves %d revisions after a failed listing, want 1", got)
+	}
+}

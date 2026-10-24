@@ -56,6 +56,17 @@ func (s *Store) Begin(ctx context.Context) (pgx.Tx, error) {
 	return s.pool.Begin(ctx)
 }
 
+// OutboxDepth counts the tenant's heartbeats the rounds wrote and the relay has not sent
+// yet. The relay reports it after every drain so a backlog is visible while the pod stays
+// ready.
+func (s *Store) OutboxDepth(ctx context.Context, tenant string) (int64, error) {
+	var depth int64
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM outbox WHERE tenant = $1", tenant).Scan(&depth); err != nil {
+		return 0, fmt.Errorf("counting the outbox of %s: %w", tenant, err)
+	}
+	return depth, nil
+}
+
 // Fact is one row of history: a resource's field holds the value since a moment in time.
 type Fact struct {
 	ResourceType string

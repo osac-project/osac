@@ -21,6 +21,7 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/osac-project/osac-metering/internal/database"
+	"github.com/osac-project/osac-metering/internal/metrics"
 	"github.com/osac-project/osac-metering/internal/topics"
 )
 
@@ -62,6 +63,11 @@ func (r *Relay) RunTenant(ctx context.Context, tenant string) error {
 			// A transient error must not stop the relay: the outbox keeps the
 			// heartbeats and the next drain sends them again.
 			r.logger.Error(err, "relay drain failed", "tenant", tenant)
+		}
+		if depth, depthErr := r.store.OutboxDepth(ctx, tenant); depthErr == nil {
+			metrics.OutboxDepth(tenant, depth)
+		} else if ctx.Err() == nil {
+			r.logger.Error(depthErr, "reading the outbox depth", "tenant", tenant)
 		}
 		if sent == 0 {
 			select {

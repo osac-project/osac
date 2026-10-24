@@ -22,6 +22,7 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 
 	"github.com/osac-project/osac-metering/internal/database"
+	"github.com/osac-project/osac-metering/internal/metrics"
 	"github.com/osac-project/osac-metering/internal/topics"
 )
 
@@ -167,18 +168,21 @@ func (f *Fold) apply(ctx context.Context, tenant string, messages []*sarama.Cons
 		if err := proto.Unmarshal(message.Value, event); err != nil {
 			// A record that is not an event can never become one. Skip it and move
 			// on, like the publisher does with changes it cannot convert.
-			f.logger.Error(
-				err, "Skipping undecodable event", "tenant", tenant,
-				"topic", message.Topic, "offset", message.Offset,
-			)
-			if err := database.AdvanceEventOffset(ctx, tx, tenant, message.Offset+1); err != nil {
+			if err := f.skipEvent(ctx, tx, tenant, metrics.SkipUndecodable, err, message); err != nil {
 				return err
 			}
 			continue
 		}
 		facts, err := f.extractor.Facts(tenant, event)
 		if err != nil {
-			return err
+			if !errors.Is(err, ErrForeignTenant) {
+				return err
+			}
+			// Misrouted data: billing it here would bill the wrong customer.
+			if err := f.skipEvent(ctx, tx, tenant, metrics.SkipForeignTenant, err, message); err != nil {
+				return err
+			}
+			continue
 		}
 		if len(facts) == 0 {
 			if err := database.AdvanceEventOffset(ctx, tx, tenant, message.Offset+1); err != nil {
@@ -191,6 +195,19 @@ func (f *Fold) apply(ctx context.Context, tenant string, messages []*sarama.Cons
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// skipEvent drops one record the fold must not bill: an undecodable record, or an event
+// of another tenant. The skip stays loud in the log and the metrics, and the offset
+// still advances, so the fold never stalls on the record.
+func (f *Fold) skipEvent(
+	ctx context.Context, tx database.Querier, tenant, reason string, err error,
+	message *sarama.ConsumerMessage,
+) error {
+	f.logger.Error(err, "Skipping event",
+		"tenant", tenant, "topic", message.Topic, "offset", message.Offset, "reason", reason)
+	metrics.EventsSkipped(tenant, reason, 1)
+	return database.AdvanceEventOffset(ctx, tx, tenant, message.Offset+1)
 }
 
 // startOffset maps a stored next offset to the offset a partition consumer starts at. A tenant
@@ -216,4 +233,5 @@ func (f *Fold) logSkipped(tenant string, skippedFrom, oldest int64) {
 		"skippedFromOffset", skippedFrom, "oldestRetainedOffset", oldest,
 		"skippedEvents", oldest-skippedFrom,
 	)
+	metrics.EventsSkipped(tenant, metrics.SkipRetention, oldest-skippedFrom)
 }

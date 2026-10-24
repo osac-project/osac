@@ -96,6 +96,25 @@ def _dimension_key(event: dict[str, Any]) -> tuple[tuple[str, str], ...]:
     return tuple(sorted((name, str(value)) for name, value in dimensions.items()))
 
 
+def _deduplicate_by_id(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop repeated CloudEvent IDs, keeping the first copy.
+
+    The relay resends a heartbeat with the same ID after a crash, by design:
+    delivery is at-least-once and the provider drops repeats. The echo store
+    keeps every copy it consumed, so counting both would report correct
+    behavior as over-billing. One copy per ID is what the provider bills.
+    """
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for event in events:
+        event_id = event.get("id", "")
+        if event_id in seen:
+            continue
+        seen.add(event_id)
+        unique.append(event)
+    return unique
+
+
 def _net_usage_by_dimension(events: list[dict[str, Any]]) -> dict[tuple[tuple[str, str], ...], Decimal]:
     """Net signed usage per dimension set: each meter's quantities summed.
 
@@ -178,6 +197,7 @@ class MeteringCollector:
         self._matched: set[str] = set()
         self._verified: dict[tuple[str, str], dict[str, Any]] = {}
         self._require_project = True
+        self._expected_tenant: str | None = None
 
     def start(self) -> None:
         """Initialize collection without comparing clocks across runner and pod."""
@@ -189,6 +209,16 @@ class MeteringCollector:
         """Stop requiring the project dimension: resources created without a project
         send none, because the engine emits only the facts a resource carries."""
         self._require_project = False
+        return self
+
+    def with_tenant(self, tenant: str) -> MeteringCollector:
+        """Require every heartbeat to name this tenant.
+
+        The echo adapter aggregates every tenant's topics, so presence alone
+        cannot catch an event published to the wrong tenant's topic: only the
+        value can.
+        """
+        self._expected_tenant = tenant
         return self
 
     def expect(self, event_type: str, resource_id: str, *, timeout: int = 60) -> None:
@@ -237,7 +267,11 @@ class MeteringCollector:
             if _dimension_key(event) in reversed_meters:
                 late_required = set()
             self._validate_structure(
-                event, expected, late_required=late_required, require_project=self._require_project
+                event,
+                expected,
+                late_required=late_required,
+                require_project=self._require_project,
+                expected_tenant=self._expected_tenant,
             )
 
     def verify_event(self, event: dict[str, Any], *, resource_id: str) -> None:
@@ -253,7 +287,13 @@ class MeteringCollector:
         """
         expected = ExpectedEvent(event_type=HEARTBEAT_TYPE, resource_id=resource_id)
         late = LATE_DIMENSIONS.get(event.get("osacresourcetype", ""), ())
-        self._validate_structure(event, expected, late_required=set(late), require_project=self._require_project)
+        self._validate_structure(
+            event,
+            expected,
+            late_required=set(late),
+            require_project=self._require_project,
+            expected_tenant=self._expected_tenant,
+        )
         if event_id := event.get("id", ""):
             self._matched.add(event_id)
         self._verified[(HEARTBEAT_TYPE, resource_id)] = event
@@ -273,16 +313,26 @@ class MeteringCollector:
         past the halt, and the negative correction that follows cancels it, so
         the check is on net usage per dimension set: the resource bills past
         the halt exactly when a meter's net usage past it is not zero.
+
+        The window is polled, not slept through: a late round whose correction
+        lands after one final fetch would otherwise pass, and a round that
+        overruns the window would be missed entirely.
         """
-        time.sleep(within)
-        events = self._fetch_events(event_type, resource_id)
         since_dt = parse_time(since)
         expected = ExpectedEvent(event_type=event_type, resource_id=resource_id)
-        matching = [ev for ev in events if _matches(ev, expected)]
-        nets = net_usage_past_by_dimension(matching, past=since_dt)
-        assert all(abs(net) <= _NET_USAGE_TOLERANCE for net in nets.values()), (
-            f"Expected no {event_type} events for {resource_id} billing past {since}, but net usage past it is {nets}"
-        )
+        deadline = time.monotonic() + within
+        while True:
+            events = self._fetch_events(event_type, resource_id)
+            matching = [ev for ev in events if _matches(ev, expected)]
+            nets = net_usage_past_by_dimension(matching, past=since_dt)
+            if any(abs(net) > _NET_USAGE_TOLERANCE for net in nets.values()):
+                raise AssertionError(
+                    f"Expected no {event_type} events for {resource_id} billing past {since}, "
+                    f"but net usage past it is {nets}"
+                )
+            if time.monotonic() >= deadline:
+                return
+            time.sleep(min(5, max(1, deadline - time.monotonic())))
 
     def get_all_events(self, event_type: str, resource_id: str) -> list[dict[str, Any]]:
         """Return all events matching type and resource_id (for N+1 count assertions)."""
@@ -333,7 +383,8 @@ class MeteringCollector:
             try:
                 req = Request(url)
                 with urlopen(req, timeout=10) as resp:
-                    return json.loads(resp.read().decode("utf-8"))
+                    events = json.loads(resp.read().decode("utf-8"))
+                    return _deduplicate_by_id(events)
             except (urllib.error.URLError, OSError) as exc:
                 last_exc = exc
                 logger.warning("Transient HTTP error fetching events (attempt %d/3): %s", attempt + 1, exc)
@@ -376,6 +427,7 @@ class MeteringCollector:
         *,
         late_required: set[str] | None = None,
         require_project: bool = True,
+        expected_tenant: str | None = None,
     ) -> None:
         late_required = late_required or set()
         assert event.get("specversion") == "1.0", f"Wrong specversion: {event.get('specversion')}"
@@ -397,6 +449,11 @@ class MeteringCollector:
             f"Mismatched resource types: {data.get('resource_type')!r} != {event.get('osacresourcetype')!r}"
         )
         assert data.get("tenant_id"), "Missing tenant_id in data"
+        if expected_tenant is not None:
+            assert data.get("tenant_id") == expected_tenant, (
+                f"Heartbeat names tenant {data.get('tenant_id')!r}, want {expected_tenant!r}: "
+                "the event may be published to the wrong tenant's topic"
+            )
         assert data.get("meter"), "Missing meter in data"
         assert data.get("component"), "Missing component in data"
         assert data.get("heartbeat_time"), "Missing heartbeat_time in data"

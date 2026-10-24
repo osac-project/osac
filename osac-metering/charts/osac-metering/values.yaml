@@ -61,6 +61,10 @@ echoAdapter:
   #   repository: ghcr.io/osac-project/metering-echo-adapter
   #   tag: latest
   #   pullPolicy: Always
+  # How many heartbeats the adapter keeps for the E2E assertions. The default
+  # (1000) fits a single suite; a long parallel session needs more, because the
+  # assertions read a resource's whole history from the first heartbeat on.
+  # maxEvents: 10000
 
 ## M360 adapter — forwards metering events to Monetize360 Usage API.
 m360Adapter:
@@ -73,3 +77,18 @@ m360Adapter:
     apiUrl: ""
     apiKeySecret: ""     # name of K8s Secret with key "api-key"
     apiVersion: "v1"
+
+## Prometheus monitoring. Both require a Prometheus operator or OpenShift
+## user-workload monitoring that selects these resources. The metrics exist
+## because billing can stop while the metering pod stays ready: the round
+## loop logs its errors and keeps going, so liveness alone proves nothing.
+serviceMonitor:
+  enabled: false
+  interval: 60s
+  # Extra labels for Prometheus instances that select monitors by label.
+  labels: {}
+
+prometheusRule:
+  enabled: false
+  # Extra labels for Prometheus instances that select rules by label.
+  labels: {}

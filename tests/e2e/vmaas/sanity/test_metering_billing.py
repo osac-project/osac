@@ -13,24 +13,18 @@ import pytest
 
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
-    allocate_worker_subnet,
     delete_instance_type_if_present,
     unique_name,
     wait_for_cr,
     wait_for_deletion,
-    wait_for_external_ip_allocated,
-    wait_for_external_ip_cr,
-    wait_for_external_ip_deletion,
-    wait_for_external_ip_pool_cr,
-    wait_for_external_ip_pool_deletion,
-    wait_for_external_ip_pool_grpc_ready,
-    wait_for_external_ip_pool_ready,
     wait_for_grpc_removal,
+    wait_for_grpc_security_group_ready,
     wait_for_provision,
     wait_for_restart,
     wait_for_running,
     wait_for_security_group_cr,
     wait_for_security_group_deletion,
+    wait_for_security_group_ready,
     wait_for_subnet_cr,
     wait_for_subnet_deletion,
     wait_for_subnet_ready,
@@ -107,6 +101,11 @@ def metering_network_attachment(
             project=metering_project,
         )
         sg_cr_name = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=sg_id)
+        # The CR existing is not enough: the CR can be Ready and the fulfillment
+        # record still PENDING until the controller feedback lands, and a VM
+        # created against a PENDING security group is rejected.
+        wait_for_security_group_ready(k8s=k8s_hub_client, name=sg_cr_name)
+        wait_for_grpc_security_group_ready(grpc=grpc, sg_id=sg_id)
         yield {"subnet": subnet_id, "security_groups": [sg_id]}
     finally:
         with contextlib.suppress(Exception):
@@ -215,7 +214,13 @@ def test_metering_heartbeat_envelope(
     metering: MeteringCollector,
     metering_project: str,
 ) -> None:
-    """A RUNNING VM bills: heartbeats arrive well-formed and name the running instance type."""
+    """A RUNNING VM bills: heartbeats arrive well-formed and name the running instance type.
+
+    The interval arithmetic itself (quantity equals the exact interval length,
+    contiguity) is proven deterministically by the metering-service component
+    suite; the deployed fact this test witnesses is that rounds keep arriving
+    for a running VM, so a second typed heartbeat is required and nothing more.
+    """
     uuid = _create_vm(
         cli, vm_template=vm_template, network_attachment=metering_network_attachment, project=metering_project
     )
@@ -245,67 +250,24 @@ def test_metering_heartbeat_envelope(
         )
         _, _, quantity = _usage_interval(heartbeat)
         assert quantity > 0, f"quantity is not positive: {quantity}"
-    finally:
-        _delete_vm(cli, grpc, k8s_hub_client, uuid=uuid, ci_name=ci_name)
 
-
-@pytest.mark.metering
-def test_metering_per_interval_continuation(
-    cli: OsacCLI,
-    grpc: GRPCClient,
-    k8s_hub_client: K8sClient,
-    vm_template: str,
-    metering_network_attachment: dict[str, object],
-    metering: MeteringCollector,
-    metering_project: str,
-) -> None:
-    """Billing continues per interval while the VM runs.
-
-    Consecutive heartbeats cover contiguous intervals, and each quantity equals
-    its interval's length in seconds.
-    """
-    uuid = _create_vm(
-        cli, vm_template=vm_template, network_attachment=metering_network_attachment, project=metering_project
-    )
-    ci_name: str | None = None
-    try:
-        ci_name = _wait_for_running_vm(k8s_hub_client, uuid=uuid)
-        # Anchor on a heartbeat that carries the running instance type: early
-        # heartbeats legitimately lack it until the fact lands.
-        heartbeat = metering.heartbeat_with_dimensions(
-            uuid, {"instance_type": cli.default_instance_type}, timeout=HEARTBEAT_TIMEOUT
-        )
-        metering.verify_event(heartbeat, resource_id=uuid)
-
-        # The heartbeats of the typed meter, whose dimension is stable: an early
-        # heartbeat that predates the running-type fact bills on a dimensionless
-        # meter and is corrected onto the typed one, so only the typed meter's
-        # own intervals are contiguous. Wait for two of them: the early
-        # heartbeat and its reversal count as events but not as typed intervals.
-        def typed_intervals() -> list[tuple[datetime, datetime, Decimal]]:
-            return sorted(
-                _usage_interval(event)
-                for event in metering.get_all_events(HEARTBEAT_TYPE, uuid)
-                if event["data"]["billing_dimensions"].get("instance_type") == cli.default_instance_type
-            )
-
-        intervals = poll_until(
-            fn=typed_intervals,
-            until=lambda found: len(found) >= 2,
+        # Billing continues while the VM runs: a second typed heartbeat arrives.
+        # The early untyped heartbeat and its reversal count as events but not
+        # as typed ones, so two typed heartbeats mean at least one full round
+        # after the dimension landed.
+        poll_until(
+            fn=lambda: len(
+                [
+                    event
+                    for event in metering.get_all_events(HEARTBEAT_TYPE, uuid)
+                    if event["data"]["billing_dimensions"].get("instance_type") == cli.default_instance_type
+                ]
+            ),
+            until=lambda count: count >= 2,
             retries=45,
             delay=10,
-            description=f"at least two heartbeats of {uuid} on the {cli.default_instance_type} meter",
+            description=f"two heartbeats of {uuid} on the {cli.default_instance_type} meter",
         )
-        for previous, following in itertools.pairwise(intervals):
-            previous_to = previous[1]
-            next_from = following[0]
-            assert next_from == previous_to, (
-                f"heartbeats are not contiguous: {previous_to.isoformat()} then {next_from.isoformat()}"
-            )
-        for start, end, quantity in intervals:
-            assert quantity == _interval_seconds(start, end), (
-                f"quantity {quantity} does not match the interval {start.isoformat()}..{end.isoformat()}"
-            )
     finally:
         _delete_vm(cli, grpc, k8s_hub_client, uuid=uuid, ci_name=ci_name)
 
@@ -351,12 +313,14 @@ def test_metering_stop_ends_billing(
         # a round would pass a wall-clock check.
         instance = poll_until(
             fn=lambda: grpc.get_compute_instance(ci_id=uuid),
-            until=lambda inst: inst.get("status", {}).get("state") == "COMPUTE_INSTANCE_STATE_STOPPED",
+            until=lambda inst: (
+                inst.get("object", {}).get("status", {}).get("state") == "COMPUTE_INSTANCE_STATE_STOPPED"
+            ),
             retries=30,
             delay=5,
             description=f"{ci_name} instance STOPPED in fulfillment",
         )
-        stopped_at = parse_time(instance["status"]["stateTransitionTime"])
+        stopped_at = parse_time(instance["object"]["status"]["stateTransitionTime"])
 
         # The stop reaches metering through several steps: operator feedback, a
         # fulfillment status change, the event topic, the fold, and a round. A round that
@@ -564,7 +528,14 @@ def test_metering_delete_ends_billing(
     metering: MeteringCollector,
     metering_project: str,
 ) -> None:
-    """Deleting the VM ends its billing: no heartbeats arrive after the deletion."""
+    """Deleting the VM bills the final partial interval exactly once, then stops.
+
+    The billed life is internally consistent and complete: the typed heartbeats
+    collapse into contiguous net intervals whose quantities equal their exact
+    lengths, the last interval reaches at or past the delete request (the final
+    partial interval is billed, not dropped), and nothing bills past the
+    deletion.
+    """
     uuid = _create_vm(
         cli, vm_template=vm_template, network_attachment=metering_network_attachment, project=metering_project
     )
@@ -577,78 +548,72 @@ def test_metering_delete_ends_billing(
             uuid, {"instance_type": cli.default_instance_type}, timeout=HEARTBEAT_TIMEOUT
         )
         metering.verify_event(heartbeat, resource_id=uuid)
+        running_since, _, _ = _usage_interval(heartbeat)
 
+        delete_requested = datetime.now(UTC)
         _delete_vm(cli, grpc, k8s_hub_client, uuid=uuid, ci_name=ci_name)
         # Capture the silence window only after the deletion is fully through, so
         # the final partial-interval heartbeat and any correction it triggers land
         # before the window starts; the stop test uses the same ordering.
         deleted_after = datetime.now(UTC)
 
-        # Past the deletion nothing more arrives. The window spans a full round
-        # plus drain.
-        metering.assert_no_events(HEARTBEAT_TYPE, resource_id=uuid, since=deleted_after.isoformat(), within=120)
+        # The deletion reaches metering through the same steps as a stop, so wait
+        # past a full round before picking the final heartbeat.
+        time.sleep(90)
+
+        # The final heartbeat covers the partial interval up to the recorded
+        # deletion, so its interval ends at or after the delete was requested.
+        final = poll_until(
+            fn=lambda: _final_heartbeat(metering, uuid, delete_requested),
+            until=lambda event: event is not None,
+            retries=HEARTBEAT_TIMEOUT // 10,
+            delay=10,
+            description=f"final partial-interval heartbeat of {uuid}",
+        )
+        _, final_to, _ = _usage_interval(final)
+
+        # The billed life is exact: the typed heartbeats collapse into contiguous
+        # net intervals, each billing exactly its length in seconds, so the total
+        # equals the span from the first typed interval to the final one.
+        typed = [
+            event
+            for event in metering.get_all_events(HEARTBEAT_TYPE, uuid)
+            if event["data"]["billing_dimensions"].get("instance_type")
+        ]
+        net = _net_intervals(typed)
+        assert net, f"no typed heartbeats of {uuid} to assert the billed life on"
+        for start, end, quantity in net:
+            assert quantity == _interval_seconds(start, end), (
+                f"net interval {start}..{end} bills {quantity}, not its exact length"
+            )
+        for (_, previous_end, _), (start, _, _) in itertools.pairwise(net):
+            assert start == previous_end, f"billed intervals are not contiguous: {previous_end} then {start}"
+        billed_total = sum((quantity for _, _, quantity in net), Decimal(0))
+        assert billed_total == _interval_seconds(net[0][0], net[-1][1]), (
+            f"the billed total {billed_total} does not equal the billed span {_interval_seconds(net[0][0], net[-1][1])}"
+        )
+        assert net[-1][1] >= delete_requested, (
+            f"the final interval ends at {net[-1][1]}, before the delete was requested "
+            f"at {delete_requested}: the partial final interval was dropped"
+        )
+        assert net[0][0] <= running_since, (
+            f"billing starts at {net[0][0]}, after the first typed heartbeat at "
+            f"{running_since}: the start of the billed life was dropped"
+        )
+
+        # Nothing bills past the deletion: net usage past the moment the deletion
+        # completed is zero.
+        poll_until(
+            fn=lambda: net_usage_past_by_dimension(metering.get_all_events(HEARTBEAT_TYPE, uuid), past=deleted_after),
+            until=lambda nets: all(abs(net) <= 1 for net in nets.values()),
+            retries=HEARTBEAT_TIMEOUT // 10,
+            delay=10,
+            description=f"net billing of {uuid} to end at the deletion",
+        )
+
+        # Past the final interval nothing more arrives: the meter stopped.
+        metering.assert_no_events(HEARTBEAT_TYPE, resource_id=uuid, since=final_to.isoformat(), within=120)
     except BaseException:
         with contextlib.suppress(Exception):
             _delete_vm(cli, grpc, k8s_hub_client, uuid=uuid, ci_name=ci_name)
         raise
-
-
-@pytest.mark.metering
-def test_metering_external_ip_bills(
-    grpc: GRPCClient,
-    private_grpc: GRPCClient,
-    k8s_hub_client: K8sClient,
-    metering: MeteringCollector,
-    metering_project: str,
-) -> None:
-    """One non-compute resource bills on its own meter and dimensions.
-
-    An allocated ExternalIP bills per second on the allocation meter, with the
-    pool, IP family, and attachment state as its dimensions.
-    """
-    pool_name = f"e2e-metering-pool-{uuid4().hex[:8]}"
-    subnet = allocate_worker_subnet(prefix=24)
-    pool_id: str = private_grpc.create_external_ip_pool(name=pool_name, cidrs=[str(subnet)])
-    pool_cr_name: str | None = None
-    ip_id: str | None = None
-    ip_cr_name: str | None = None
-    try:
-        pool_cr_name = wait_for_external_ip_pool_cr(k8s=k8s_hub_client, uuid=pool_id)
-        wait_for_external_ip_pool_ready(k8s=k8s_hub_client, name=pool_cr_name)
-        wait_for_external_ip_pool_grpc_ready(private_grpc=private_grpc, pool_id=pool_id)
-
-        ip_id = grpc.create_external_ip(
-            name=f"e2e-metering-ip-{uuid4().hex[:8]}", pool=pool_id, project=metering_project
-        )
-        ip_cr_name = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=ip_id)
-        wait_for_external_ip_allocated(k8s=k8s_hub_client, name=ip_cr_name)
-
-        # verify() checks the envelope and the ExternalIP dimension set: pool,
-        # ip_family, attached, and attribution when attached.
-        metering.expect(HEARTBEAT_TYPE, resource_id=ip_id, timeout=HEARTBEAT_TIMEOUT)
-        metering.verify()
-
-        heartbeat = metering.get_event(HEARTBEAT_TYPE, resource_id=ip_id)
-        data = heartbeat["data"]
-        assert data["meter"] == "allocation", f"meter is {data['meter']!r}, want 'allocation'"
-        assert data["usage"]["unit"] == "second", f"unit is {data['usage']['unit']!r}"
-        assert heartbeat["osacresourcetype"] == "external_ip", f"resource type is {heartbeat['osacresourcetype']!r}"
-        dimensions = data["billing_dimensions"]
-        # References render by name in heartbeats: the pool dimension is the pool's
-        # name, the same contract as the instance_type dimension.
-        assert dimensions["pool"] == pool_name, f"pool dimension is {dimensions.get('pool')!r}"
-        assert dimensions["ip_family"] == "ipv4", f"ip_family dimension is {dimensions.get('ip_family')!r}"
-        assert dimensions["project"] == metering_project, (
-            f"project dimension is {dimensions.get('project')!r}, want {metering_project!r}"
-        )
-        _, _, quantity = _usage_interval(heartbeat)
-        assert quantity > 0, f"quantity is not positive: {quantity}"
-    finally:
-        if ip_id is not None:
-            with contextlib.suppress(Exception):
-                grpc.delete_external_ip(external_ip_id=ip_id)
-                if ip_cr_name is not None:
-                    wait_for_external_ip_deletion(k8s=k8s_hub_client, name=ip_cr_name)
-        private_grpc.delete_external_ip_pool(pool_id=pool_id)
-        if pool_cr_name is not None:
-            wait_for_external_ip_pool_deletion(k8s=k8s_hub_client, name=pool_cr_name)

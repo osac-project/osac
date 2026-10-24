@@ -16,6 +16,7 @@ import (
 	"math/rand"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 
 	"github.com/osac-project/osac-metering/internal/database"
 	"github.com/osac-project/osac-metering/internal/fold"
+	"github.com/osac-project/osac-metering/internal/metrics/metertest"
 	"github.com/osac-project/osac-metering/internal/testenv"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -320,6 +322,57 @@ func dumpHistory(t *testing.T, store *database.Store, tenant string) []string {
 		t.Fatalf("dumping history: %v", err)
 	}
 	return lines
+}
+
+// TestFoldSkipsEventsOfAnotherTenant checks that an event whose payload names a different
+// tenant is skipped, not folded: billing it here would bill this tenant for another
+// tenant's resource. The offset still advances past the skipped record, and a payload
+// without a tenant keeps trusting the topic.
+func TestFoldSkipsEventsOfAnotherTenant(t *testing.T) {
+	tenant := "t-foreign"
+	mine := testenv.VMEventOf("vm-mine", "f1",
+		privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED, base, base, "web",
+		"RUNNING", base, "small", base)
+	mine.GetComputeInstance().Metadata.Tenant = tenant
+	foreign := testenv.VMEventOf("vm-foreign", "f2",
+		privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED, base.Add(time.Minute), base, "web",
+		"RUNNING", base, "small", base)
+	foreign.GetComputeInstance().Metadata.Tenant = "beta"
+	unlabeled := testenv.VMEventOf("vm-unlabeled", "f3",
+		privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED, base.Add(2*time.Minute), base, "web",
+		"RUNNING", base, "small", base)
+	unlabeled.GetComputeInstance().Metadata.Tenant = ""
+
+	total := testenv.ProduceEventsAsWritten(t, tenant, []*privatev1.Event{mine, foreign, unlabeled})
+	store := testenv.Database(t)
+	skipsBefore := skippedEvents(t, tenant, "foreign_tenant")
+	foldAll(t, store, tenant, total, false)
+
+	history := stringsJoin(dumpHistory(t, store, tenant))
+	if !strings.Contains(history, "vm-mine") {
+		t.Fatalf("own-tenant event was not folded:\n%s", history)
+	}
+	if !strings.Contains(history, "vm-unlabeled") {
+		t.Fatalf("event without a payload tenant was not folded:\n%s", history)
+	}
+	if strings.Contains(history, "vm-foreign") {
+		t.Fatalf("event of another tenant was folded:\n%s", history)
+	}
+	if skipsAfter := skippedEvents(t, tenant, "foreign_tenant"); skipsAfter != skipsBefore+1 {
+		t.Fatalf(
+			"foreign-tenant skip counter is %v after the fold, want %v: the skip must be visible to alerting",
+			skipsAfter, skipsBefore+1,
+		)
+	}
+}
+
+// skippedEvents reads the fold's skip counter for a tenant and reason.
+func skippedEvents(t *testing.T, tenant, reason string) float64 {
+	t.Helper()
+	return metertest.LabeledValue(
+		t, "osac_metering_events_skipped_total",
+		map[string]string{"tenant": tenant, "reason": reason},
+	)
 }
 
 func TestFoldIsDeterministic(t *testing.T) {

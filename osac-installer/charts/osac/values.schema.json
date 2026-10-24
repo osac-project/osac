@@ -1829,6 +1829,11 @@
                 }
               },
               "additionalProperties": false
+            },
+            "maxEvents": {
+              "type": "integer",
+              "description": "How many heartbeats the echo adapter keeps for E2E assertions; a long parallel session evicts old events below this",
+              "minimum": 1
             }
           },
           "additionalProperties": false
@@ -1900,6 +1905,45 @@
         "global": {
           "type": "object",
           "description": "Helm-injected global values (passed automatically to subcharts)"
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "description": "Prometheus ServiceMonitor for the metering service and adapters. Requires a Prometheus operator or OpenShift user-workload monitoring.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create ServiceMonitors scraping the /metrics endpoints",
+              "default": false
+            },
+            "interval": {
+              "type": "string",
+              "description": "Scrape interval, for example 60s",
+              "default": "60s"
+            },
+            "labels": {
+              "type": "object",
+              "description": "Extra labels for Prometheus instances that select monitors by label",
+              "additionalProperties": { "type": "string" }
+            }
+          },
+          "additionalProperties": false
+        },
+        "prometheusRule": {
+          "type": "object",
+          "description": "PrometheusRule with alert rules over the metering metrics: stalled rounds, round failures, outbox backlog, skipped events, dead-letter depth",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create the PrometheusRule with the metering alerts",
+              "default": false
+            },
+            "labels": {
+              "type": "object",
+              "description": "Extra labels for Prometheus instances that select rules by label",
+              "additionalProperties": { "type": "string" }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

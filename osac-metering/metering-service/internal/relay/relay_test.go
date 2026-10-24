@@ -20,6 +20,7 @@ import (
 	"github.com/IBM/sarama"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/go-logr/logr"
+	"github.com/osac-project/osac-metering/internal/metrics/metertest"
 
 	"github.com/osac-project/osac-metering/internal/database"
 	"github.com/osac-project/osac-metering/internal/heartbeat"
@@ -163,7 +164,11 @@ func TestRunTenantSurvivesSendErrors(t *testing.T) {
 	if len(remaining) != 1 {
 		t.Fatalf("expected the outbox to keep the heartbeat, got %d rows", len(remaining))
 	}
-
+	// The failing loop still reported the backlog: the relay's depth gauge is what makes
+	// an unsent outbox visible while the pod stays ready.
+	if depth := outboxGauge(t, tenant); depth != 1 {
+		t.Fatalf("outbox depth gauge is %v, want 1 while the relay cannot send", depth)
+	}
 	// The real relay then drains the same outbox.
 	relay, err := New(store, testenv.NewProducer(t), logr.Discard())
 	if err != nil {
@@ -437,4 +442,10 @@ func TestRelayDoesNotAdvancePastUnreadHeartbeats(t *testing.T) {
 		t.Fatalf("the round reversed %d micro units, want the three caught-up minutes",
 			quantity)
 	}
+}
+
+// outboxGauge reads the relay's outbox-depth gauge for a tenant.
+func outboxGauge(t *testing.T, tenant string) float64 {
+	t.Helper()
+	return metertest.LabeledValue(t, "osac_metering_outbox_depth", map[string]string{"tenant": tenant})
 }

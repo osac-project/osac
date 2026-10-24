@@ -132,23 +132,42 @@ func syncVolumeUpdate(_ context.Context, obj *v1alpha1.Volume, remote *privatev1
 	return nil
 }
 
-// syncVolumeDelete maps Volume CR status during deletion. Failed volumes
-// report FAILED; all other deletion states report DELETING.
+// syncVolumeDelete maps Volume CR status during deletion. Failed volumes report FAILED,
+// volumes whose vendor cleanup completed report DELETED, and everything else reports
+// DELETING: a volume whose deletion timestamp is set is going away whatever phase its
+// status still carries, including the empty phase of a volume deleted before any
+// controller status write. Erroring on those phases would wedge the delete on data the
+// window cannot have.
 func syncVolumeDelete(_ context.Context, obj *v1alpha1.Volume, remote *privatev1.Volume) error {
-	if err := syncVolumeStateTransitionTime(obj, remote); err != nil {
+	if err := syncVolumeDeletionTransitionTime(obj, remote); err != nil {
 		return err
 	}
 	switch obj.Status.Phase {
 	case v1alpha1.VolumePhaseFailed:
 		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_FAILED)
-	case v1alpha1.VolumePhaseDeleting:
-		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_DELETING)
 	case v1alpha1.VolumePhaseDeleted:
 		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_DELETED)
 	default:
-		return fmt.Errorf("invalid volume phase %q during deletion", obj.Status.Phase)
+		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_DELETING)
 	}
 	syncVolumeStatusMessage(obj, remote)
+	return nil
+}
+
+// syncVolumeDeletionTransitionTime dates the deletion state change. The CR's recorded
+// transition time wins; a volume deleted before any controller status write carries none,
+// and its deletion timestamp is then the time the change started, the same fallback the
+// networking resources use. Fulfillment keeps its stored time when neither the CR nor its
+// deletion carries one, and only that case with no stored time either is an error.
+func syncVolumeDeletionTransitionTime(obj *v1alpha1.Volume, remote *privatev1.Volume) error {
+	at := stateTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
+	if at == nil {
+		if remote.GetStatus().GetStateTransitionTime() != nil {
+			return nil
+		}
+		return fmt.Errorf("volume %s has no state transition time", remote.GetId())
+	}
+	remote.GetStatus().SetStateTransitionTime(at)
 	return nil
 }
 

@@ -22,6 +22,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -33,6 +34,7 @@ import (
 	"github.com/osac-project/osac-metering/internal/database"
 	"github.com/osac-project/osac-metering/internal/fold"
 	kafkaconn "github.com/osac-project/osac-metering/internal/kafka"
+	"github.com/osac-project/osac-metering/internal/metrics"
 	"github.com/osac-project/osac-metering/internal/relay"
 	"github.com/osac-project/osac-metering/internal/round"
 	"github.com/osac-project/osac-metering/internal/rules"
@@ -42,9 +44,24 @@ import (
 // DiscoverInterval is how often the tenant list is refreshed.
 const DiscoverInterval = 30 * time.Second
 
+// RulesCheckInterval is how often the rule revisions are re-read. A revision that appears
+// needs no restart: the next check loads it and the rounds pick it up on their next tick.
+// A revision whose effective time passes unloaded makes the check fail and the service
+// stop, because billing under rules metering never loaded is wrong.
+const RulesCheckInterval = time.Minute
+
 // DeletionPasses is how many passes a tenant's event topic must be missing before its
 // rows are deleted. One incomplete listing must not destroy billing history.
 const DeletionPasses = 3
+
+// errRulesListing marks a failure reading the inputs of a rules check: the ConfigMaps, the
+// recorded revisions, or the billing position. It is transient; the next check retries.
+var errRulesListing = errors.New("reading rule revisions failed")
+
+// errRulesDisagree marks a validation failure: the rule revisions and the billing position
+// contradict each other, so billing under the loaded rules would be wrong. It is fatal;
+// the service exits and the startup check refuses the restart until the rules are fixed.
+var errRulesDisagree = errors.New("rule revisions disagree with the billing position")
 
 // Config configures the service.
 type Config struct {
@@ -68,7 +85,10 @@ type Service struct {
 	client     sarama.Client
 	consumer   sarama.Consumer
 	producer   sarama.SyncProducer
-	calculator *usage.Calculator
+	ruleset    *calculatorSet
+	owners     map[string]usage.OwnerSpec
+	loaded     []rules.Revision
+	rulesMutex sync.Mutex
 
 	// tenants maps each running tenant to its loops. Guarded by lock.
 	lock    sync.Mutex
@@ -113,46 +133,116 @@ func (s *Service) Healthy() bool {
 	return len(s.startFailed) == 0
 }
 
-// New loads the rule revisions, records the ones metering will bill under, and connects to
-// Kafka. It fails when metering must refuse to start.
-func New(ctx context.Context, cfg Config) (*Service, error) {
-	present, err := cfg.Rules.List(ctx)
+// calculatorSet serves the rounds the currently loaded rule revisions. The rules check
+// swaps the calculator when it approves a new revision; a round reads whatever set is
+// current on each of its ticks, so a reload needs no loop restart. It implements the
+// round's Calculator interface by delegation.
+type calculatorSet struct {
+	current atomic.Pointer[usage.Calculator]
+}
+
+func (s *calculatorSet) swap(calculator *usage.Calculator) { s.current.Store(calculator) }
+
+func (s *calculatorSet) Revisions() []rules.Revision { return s.current.Load().Revisions() }
+
+func (s *calculatorSet) OwnerOf(resourceType string, facts []database.Fact) (string, string, bool) {
+	return s.current.Load().OwnerOf(resourceType, facts)
+}
+
+func (s *calculatorSet) OwnedFieldOf(rootType string) (string, bool) {
+	return s.current.Load().OwnedFieldOf(rootType)
+}
+
+func (s *calculatorSet) MeterAt(
+	resourceType, meter string, at time.Time,
+) (rules.Meter, string, bool) {
+	return s.current.Load().MeterAt(resourceType, meter, at)
+}
+
+func (s *calculatorSet) Expected(
+	tenant, resourceType, resourceID string, facts []database.Fact, root *usage.Root, upTo time.Time,
+) ([]usage.Piece, error) {
+	return s.current.Load().Expected(tenant, resourceType, resourceID, facts, root, upTo)
+}
+
+func (s *calculatorSet) Since(
+	tenant, resourceType, resourceID string, facts []database.Fact, root *usage.Root,
+	from, upTo time.Time, ledger []database.LedgerPiece,
+) ([]usage.Piece, error) {
+	return s.current.Load().Since(tenant, resourceType, resourceID, facts, root, from, upTo, ledger)
+}
+
+// approveRules reads the rule revisions, validates them against the database with the
+// same rules as startup, records the approved set, and builds the calculator for it.
+// Startup and the periodic reload both go through it, so a reload cannot accept a
+// revision startup would refuse.
+func approveRules(
+	ctx context.Context, source rules.Source, store *database.Store, deploymentID string,
+	owners map[string]usage.OwnerSpec,
+) ([]rules.Revision, *usage.Calculator, error) {
+	present, err := source.List(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("reading rule revisions: %w", err)
+		return nil, nil, fmt.Errorf("%w: reading the ConfigMaps: %v", errRulesListing, err)
 	}
-	used, err := cfg.Store.ListRuleRevisions(ctx)
+	used, err := store.ListRuleRevisions(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("reading recorded rule revisions: %w", err)
+		return nil, nil, fmt.Errorf("%w: reading the recorded revisions: %v", errRulesListing, err)
 	}
 	// The billing position decides which revisions metering may record, not the wall
 	// clock: a database restored from a backup older than a revision must record it,
 	// because the rounds after the backup were billed under it.
-	lastRound, err := cfg.Store.LastRoundTime(ctx)
+	lastRound, err := store.LastRoundTime(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("reading the database's last round: %w", err)
+		return nil, nil, fmt.Errorf("%w: reading the database's last round: %v", errRulesListing, err)
 	}
 	approved, err := rules.CheckStartup(used, present, lastRound)
 	if err != nil {
-		return nil, fmt.Errorf("checking rule revisions: %w", err)
+		return nil, nil, fmt.Errorf("%w: %v", errRulesDisagree, err)
 	}
 	for _, revision := range approved {
-		if err := cfg.Store.RecordRuleRevision(ctx, database.RuleRevisionRow{
+		if err := store.RecordRuleRevision(ctx, database.RuleRevisionRow{
 			Revision:    revision.Number,
 			EffectiveAt: revision.EffectiveAt,
 			MetersYAML:  revision.MetersYAML,
 		}); err != nil {
-			return nil, err
+			return nil, nil, fmt.Errorf("%w: recording revision %s: %v", errRulesListing, revision.Number, err)
 		}
 	}
+	calculator, err := usage.NewCalculator(approved, deploymentID, owners)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: building the calculator: %v", errRulesListing, err)
+	}
+	return approved, calculator, nil
+}
 
+// sameRevisions reports whether two revision sets carry the same numbers and content.
+func sameRevisions(a, b []rules.Revision) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Number != b[i].Number || a[i].EffectiveAt != b[i].EffectiveAt ||
+			a[i].MetersYAML != b[i].MetersYAML {
+			return false
+		}
+	}
+	return true
+}
+
+// New loads the rule revisions, records the ones metering will bill under, and connects to
+// Kafka. It fails when metering must refuse to start.
+func New(ctx context.Context, cfg Config) (*Service, error) {
 	owners, err := usage.RegistryOwners()
 	if err != nil {
 		return nil, err
 	}
-	calculator, err := usage.NewCalculator(approved, cfg.DeploymentID, owners)
+	approved, calculator, err := approveRules(ctx, cfg.Rules, cfg.Store, cfg.DeploymentID, owners)
 	if err != nil {
 		return nil, err
 	}
+	metrics.RulesLoaded(len(approved))
+	ruleset := &calculatorSet{}
+	ruleset.swap(calculator)
 
 	brokers := kafkaconn.SplitAndTrim(cfg.Kafka.Brokers, ",")
 	saramaConfig, err := kafkaconn.ProducerConfig(cfg.Kafka)
@@ -180,7 +270,9 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		client:      client,
 		consumer:    consumer,
 		producer:    producer,
-		calculator:  calculator,
+		ruleset:     ruleset,
+		owners:      owners,
+		loaded:      approved,
 		tenants:     map[string]*tenantLoops{},
 		startFailed: map[string]bool{},
 		missing:     map[string]int{},
@@ -191,6 +283,12 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 // until the context ends. A tenant that onboards appears on the next pass.
 func (s *Service) Run(ctx context.Context) error {
 	defer s.stopAll()
+
+	// A rules disagreement is fatal: Run returns the error, the process exits, and the
+	// startup check refuses the restart until the rules are fixed. Billing under rules
+	// metering never loaded would be wrong.
+	rulesFatal := make(chan error, 1)
+	go s.watchRules(ctx, rulesFatal)
 
 	ticker := time.NewTicker(DiscoverInterval)
 	defer ticker.Stop()
@@ -205,9 +303,61 @@ func (s *Service) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case err := <-rulesFatal:
+			return err
 		case <-ticker.C:
 		}
 	}
+}
+
+// watchRules re-runs the startup validation every RulesCheckInterval. Listing failures
+// are transient and retried; a validation disagreement stops the service through the
+// fatal channel.
+func (s *Service) watchRules(ctx context.Context, fatal chan<- error) {
+	ticker := time.NewTicker(RulesCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if err := s.checkRules(ctx); err != nil {
+			if errors.Is(err, errRulesDisagree) {
+				s.cfg.Logger.Error(err,
+					"rule revisions disagree with the billing position; stopping so billing "+
+						"does not continue under rules metering never loaded",
+				)
+				fatal <- err
+				return
+			}
+			metrics.RulesReloadFailed("list")
+			s.cfg.Logger.Error(err, "checking rule revisions; retrying on the next check")
+		}
+	}
+}
+
+// checkRules approves whatever the ConfigMaps now hold and swaps the calculator when the
+// approved set changed. The swap is atomic: a round either computes with the whole old
+// set or the whole new one.
+func (s *Service) checkRules(ctx context.Context) error {
+	s.rulesMutex.Lock()
+	defer s.rulesMutex.Unlock()
+	approved, calculator, err := approveRules(ctx, s.cfg.Rules, s.cfg.Store, s.cfg.DeploymentID, s.owners)
+	if err != nil {
+		return err
+	}
+	if sameRevisions(s.loaded, approved) {
+		return nil
+	}
+	s.ruleset.swap(calculator)
+	s.loaded = approved
+	metrics.RulesLoaded(len(approved))
+	s.cfg.Logger.Info(
+		"loaded rule revisions", "revisions", len(approved),
+		"latest", approved[len(approved)-1].Number,
+	)
+	return nil
 }
 
 // stopAll cancels every tenant's loops and waits for them, then closes the Kafka
@@ -370,7 +520,7 @@ func (s *Service) runTenantLoops(ctx context.Context, tenant string, loops *tena
 		return
 	}
 	roundLoop, err := round.New(
-		s.cfg.Store, s.calculator, s.client, s.consumer,
+		s.cfg.Store, s.ruleset, s.client, s.consumer,
 		s.cfg.Logger.WithValues("loop", "round"),
 	)
 	if err != nil {

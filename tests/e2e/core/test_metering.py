@@ -23,7 +23,6 @@ import pytest
 
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
 from tests.e2e.vmaas.regression import test_compute_instance_creation as creation
-from tests.e2e.vmaas.regression import test_compute_instance_heartbeat as heartbeat_journey
 from tests.e2e.vmaas.sanity import test_metering_billing as billing
 
 START = datetime(2026, 10, 5, 10, tzinfo=UTC)
@@ -94,31 +93,6 @@ def _patch_billing_waits(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(billing, wait_name, lambda **_kwargs: None)
 
 
-def test_heartbeat_journey_accepts_a_projectless_vm(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The heartbeat journey creates its VM without a project, so its heartbeats
-    carry no project dimension: verification must accept them, as the creation
-    journey already does."""
-    collector = _serve(
-        monkeypatch, [_heartbeat("beat-1", START, START + timedelta(minutes=1), "60.000000", project=None)]
-    )
-    cli = SimpleNamespace(
-        create_compute_instance=lambda **_kwargs: "vm-7", delete_compute_instance=lambda **_kwargs: None
-    )
-    monkeypatch.setattr(heartbeat_journey, "wait_for_cr", lambda **_kwargs: "cr-vm-7")
-    for wait_name in ("wait_for_provision", "wait_for_running", "wait_for_deletion", "wait_for_grpc_removal"):
-        monkeypatch.setattr(heartbeat_journey, wait_name, lambda **_kwargs: None)
-
-    heartbeat_journey.test_compute_instance_heartbeat(
-        cli=cli,
-        grpc=SimpleNamespace(),
-        k8s_hub_client=SimpleNamespace(),
-        k8s_virt_client=SimpleNamespace(),
-        vm_template="vm-template",
-        default_network_attachment={},
-        metering=collector,
-    )
-
-
 def test_creation_journey_uses_the_typed_heartbeat(monkeypatch: pytest.MonkeyPatch) -> None:
     """An early untyped heartbeat stays the cached answer after its reversal and
     the typed replacement arrive: the journey must wait for the typed one
@@ -150,9 +124,10 @@ def test_creation_journey_uses_the_typed_heartbeat(monkeypatch: pytest.MonkeyPat
     )
 
 
-def test_continuation_journey_waits_for_two_typed_heartbeats(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_envelope_journey_waits_for_two_typed_heartbeats(monkeypatch: pytest.MonkeyPatch) -> None:
     """An early untyped heartbeat and its reversal satisfy a wait for any two
-    events: the journey must wait for two intervals of the typed meter."""
+    events: the envelope journey's second-heartbeat poll must wait for two
+    intervals of the typed meter."""
     early = _heartbeat("early", START, START + timedelta(seconds=15), "15.000000", instance_type=None)
     reversal = _heartbeat("reverse-early", START, START + timedelta(seconds=15), "-15.000000", instance_type=None)
     typed1 = _heartbeat("typed-1", START, START + timedelta(minutes=1), "60.000000")
@@ -169,7 +144,7 @@ def test_continuation_journey_waits_for_two_typed_heartbeats(monkeypatch: pytest
     _patch_billing_waits(monkeypatch)
     monkeypatch.setattr(billing.time, "sleep", lambda *_args: None)
 
-    billing.test_metering_per_interval_continuation(
+    billing.test_metering_heartbeat_envelope(
         cli=SimpleNamespace(
             default_instance_type="m-small",
             create_compute_instance=lambda **_kwargs: "vm-7",
@@ -178,7 +153,7 @@ def test_continuation_journey_waits_for_two_typed_heartbeats(monkeypatch: pytest
         grpc=SimpleNamespace(),
         k8s_hub_client=SimpleNamespace(),
         vm_template="vm-template",
-        default_network_attachment={},
+        metering_network_attachment={},
         metering=collector,
         metering_project="billing",
     )
@@ -216,15 +191,27 @@ def test_stop_journey_accepts_corrected_net_usage(monkeypatch: pytest.MonkeyPatc
     collector = _serve(monkeypatch, events)
     _patch_billing_waits(monkeypatch)
     monkeypatch.setattr(billing.time, "sleep", lambda *_args: None)
+    # The silence window is polled for its whole duration; clamp it to zero so
+    # the harness check needs no wall time (it still runs its polling loop once).
+    original_assert_no_events = MeteringCollector.assert_no_events
+
+    def immediate_assert_no_events(
+        self: MeteringCollector, event_type: str, resource_id: str, *, since: str, within: int = 60
+    ) -> None:
+        original_assert_no_events(self, event_type, resource_id, since=since, within=0)
+
+    monkeypatch.setattr(MeteringCollector, "assert_no_events", immediate_assert_no_events)
     monkeypatch.setattr(
         billing, "datetime", SimpleNamespace(now=lambda *_args, **_kwargs: START + timedelta(seconds=40))
     )
     grpc = SimpleNamespace(
         update_compute_instance_run_strategy=lambda **_kwargs: None,
         get_compute_instance=lambda **_kwargs: {
-            "status": {
-                "state": "COMPUTE_INSTANCE_STATE_STOPPED",
-                "stateTransitionTime": (START + timedelta(seconds=45)).isoformat(),
+            "object": {
+                "status": {
+                    "state": "COMPUTE_INSTANCE_STATE_STOPPED",
+                    "stateTransitionTime": (START + timedelta(seconds=45)).isoformat(),
+                }
             }
         },
     )
@@ -239,7 +226,7 @@ def test_stop_journey_accepts_corrected_net_usage(monkeypatch: pytest.MonkeyPatc
         k8s_hub_client=SimpleNamespace(get_compute_instance_vm_namespace=lambda **_kwargs: "vm-ns"),
         k8s_virt_client=SimpleNamespace(get_vm_printable_status=lambda **_kwargs: "Stopped"),
         vm_template="vm-template",
-        default_network_attachment={},
+        metering_network_attachment={},
         metering=collector,
         metering_project="billing",
     )
@@ -310,7 +297,7 @@ def test_resize_journey_nets_canceled_old_type_tails(monkeypatch: pytest.MonkeyP
         private_grpc=SimpleNamespace(create_instance_type=lambda **_kwargs: None),
         k8s_hub_client=k8s_hub_client,
         vm_template="vm-template",
-        default_network_attachment={},
+        metering_network_attachment={},
         metering=collector,
         metering_project="billing",
     )
@@ -338,7 +325,7 @@ def test_envelope_journey_cleans_up_the_vm_when_a_setup_wait_fails(monkeypatch: 
             grpc=SimpleNamespace(),
             k8s_hub_client=SimpleNamespace(),
             vm_template="vm-template",
-            default_network_attachment={},
+            metering_network_attachment={},
             metering=None,
             metering_project="billing",
         )

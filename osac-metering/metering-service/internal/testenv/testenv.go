@@ -23,6 +23,7 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/go-logr/logr"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac-metering/internal/database"
@@ -166,7 +167,21 @@ func DefaultRevision(t *testing.T) rules.Revision {
 }
 
 // ProduceEvents writes events to the tenant's event topic and returns the record count.
+// Each event's payload is stamped with the topic's tenant first, the invariant the
+// publisher keeps: an event's payload tenant is the tenant of the topic it was written to.
 func ProduceEvents(t *testing.T, tenant string, events []*privatev1.Event) int {
+	t.Helper()
+	return produceEvents(t, tenant, events, true)
+}
+
+// ProduceEventsAsWritten writes events without stamping the payload tenant. Tests of
+// misrouted events need the payload to disagree with the topic it lands on.
+func ProduceEventsAsWritten(t *testing.T, tenant string, events []*privatev1.Event) int {
+	t.Helper()
+	return produceEvents(t, tenant, events, false)
+}
+
+func produceEvents(t *testing.T, tenant string, events []*privatev1.Event, stamp bool) int {
 	t.Helper()
 	topic := topics.Events(tenant)
 	if err := Kafka(t).CreateTopic(topic); err != nil {
@@ -174,6 +189,9 @@ func ProduceEvents(t *testing.T, tenant string, events []*privatev1.Event) int {
 	}
 	producer := NewProducer(t)
 	for _, event := range events {
+		if stamp {
+			StampTenant(event, tenant)
+		}
 		value, err := proto.Marshal(event)
 		if err != nil {
 			t.Fatalf("marshaling event: %v", err)
@@ -186,6 +204,31 @@ func ProduceEvents(t *testing.T, tenant string, events []*privatev1.Event) int {
 		}
 	}
 	return len(events)
+}
+
+// StampTenant sets the payload's metadata tenant. It walks the event's payload oneof, so
+// every resource type is covered without enumerating them.
+func StampTenant(event *privatev1.Event, tenant string) {
+	message := event.ProtoReflect()
+	payloadOneof := message.Descriptor().Oneofs().ByName("payload")
+	if payloadOneof == nil {
+		return
+	}
+	payloadField := message.WhichOneof(payloadOneof)
+	if payloadField == nil {
+		return
+	}
+	payload := message.Get(payloadField).Message()
+	metadataField := payload.Descriptor().Fields().ByName("metadata")
+	if metadataField == nil {
+		return
+	}
+	metadata := payload.Mutable(metadataField).Message()
+	tenantField := metadata.Descriptor().Fields().ByName("tenant")
+	if tenantField == nil {
+		return
+	}
+	metadata.Set(tenantField, protoreflect.ValueOfString(tenant))
 }
 
 // ConsumeAll reads every record of a topic from the beginning.

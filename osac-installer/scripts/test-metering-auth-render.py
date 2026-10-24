@@ -48,6 +48,13 @@ def check_profile(profile: str) -> None:
     assert "validationActions:" in binding, profile
     assert 'validationActions: ["Deny"]' in binding, profile
 
+    # Billing history survives a release uninstall: the ConfigMap, the policy,
+    # and the binding are all kept. Removing them is always manual.
+    keep = '"helm.sh/resource-policy": keep'
+    assert keep in rules, f"{profile}: rules ConfigMap must be kept on uninstall"
+    assert keep in policy, f"{profile}: rules policy must be kept on uninstall"
+    assert keep in binding, f"{profile}: rules binding must be kept on uninstall"
+
 
 if __name__ == "__main__":
     for profile in PROFILES:

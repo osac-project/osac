@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import itertools
 import subprocess
 from collections.abc import Callable
+from datetime import datetime
 from uuid import uuid4
 
 import pytest
@@ -35,6 +37,7 @@ class TestExternalIPPoolLifecycle:
         private_grpc: GRPCClient,
         k8s_hub_client: K8sClient,
         metering: MeteringCollector,
+        ip_project: str,
     ) -> None:
         pool_id, pool_cr_name = external_ip_pool
         pool_name = private_grpc.get_external_ip_pool(pool_id=pool_id)["object"]["metadata"]["name"]
@@ -44,17 +47,20 @@ class TestExternalIPPoolLifecycle:
         assert pool_id in private_grpc.list_external_ip_pool_ids()
         assert ip_id in grpc.list_external_ip_ids()
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=ip_cr_name)
-        # The IP was created without a project, so its heartbeats carry no
-        # project dimension: the engine emits only the facts a resource carries.
-        metering.without_project()
+        # The IP's heartbeats carry the project it was created in, so the
+        # project dimension is a real attribution check.
         metering.expect(HEARTBEAT_TYPE, resource_id=ip_id, timeout=180)
         metering.verify()
         allocated = metering.get_event(HEARTBEAT_TYPE, resource_id=ip_id)
+        assert allocated["data"]["meter"] == "allocation", f"meter is {allocated['data']['meter']!r}, want 'allocation'"
         # References render by name in heartbeats: the pool dimension is the pool's
         # name, the same contract as the instance_type dimension.
         assert allocated["data"]["billing_dimensions"]["pool"] == pool_name
         assert allocated["data"]["billing_dimensions"]["ip_family"] == "ipv4"
         assert allocated["data"]["billing_dimensions"]["attached"] == "false"
+        assert allocated["data"]["billing_dimensions"]["project"] == ip_project, (
+            f"project dimension is {allocated['data']['billing_dimensions'].get('project')!r}, want {ip_project!r}"
+        )
 
         # --- Attach ExternalIP to ComputeInstance 1 ---
         att_id: str = grpc.create_external_ip_attachment(
@@ -127,6 +133,28 @@ class TestExternalIPPoolLifecycle:
         assert ip_obj["object"]["status"]["address"] == attached_ip_address, (
             "Re-attached ExternalIP should keep the same address"
         )
+
+        # The attached and unattached meters are disjoint: the net intervals each
+        # dimension set bills never overlap, so no second is billed on both during
+        # a transition. A wrong attachment transition time bills both meters over
+        # the same span, which the per-phase existence checks above cannot see.
+        spans_by_dimensions: dict[tuple[tuple[str, str], ...], list[tuple[datetime, datetime]]] = {}
+        for event in metering.get_all_events(HEARTBEAT_TYPE, ip_id):
+            dimensions = event.get("data", {}).get("billing_dimensions", {})
+            key = tuple(sorted((name, str(value)) for name, value in dimensions.items()))
+            usage = event["data"]["usage"]
+            spans_by_dimensions.setdefault(key, []).append((parse_time(usage["from"]), parse_time(usage["to"])))
+        for spans in spans_by_dimensions.values():
+            spans.sort()
+        dimension_sets = list(spans_by_dimensions.values())
+        for first, second in itertools.combinations(dimension_sets, 2):
+            for first_start, first_end in first:
+                for second_start, second_end in second:
+                    overlaps = first_start < second_end and second_start < first_end
+                    assert not overlaps, (
+                        f"two attachment meters billed the same span: "
+                        f"{first_start}..{first_end} overlaps {second_start}..{second_end}"
+                    )
 
         # --- Cleanup: delete attachment, ExternalIP, then pool ---
         grpc.delete_external_ip_attachment(attachment_id=att2_id)

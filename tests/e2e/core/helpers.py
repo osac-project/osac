@@ -17,6 +17,7 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until, run_unchecked
 
 _POOL_READY_STATE = "EXTERNAL_IP_POOL_STATE_READY"
+_SECURITY_GROUP_READY_STATE = "SECURITY_GROUP_STATE_READY"
 _SUBNET_READY_STATE = "SUBNET_STATE_READY"
 _BMI_RUNNING_RETRIES = 180
 _BMI_RUNNING_DELAY = 10
@@ -330,6 +331,31 @@ def wait_for_grpc_subnet_ready(*, grpc: GRPCClient, subnet_id: str) -> None:
         retries=60,
         delay=2,
         description=f"Subnet {subnet_id} gRPC READY",
+    )
+
+
+def wait_for_grpc_security_group_ready(*, grpc: GRPCClient, sg_id: str) -> None:
+    """Poll the gRPC API until the security group state is READY.
+
+    Mirrors ``wait_for_grpc_subnet_ready``: the K8s CR may report Ready
+    before the fulfillment-service database has been updated by the
+    feedback controller.  Polling via gRPC avoids FailedPrecondition when
+    a cluster or BareMetalInstance references the security group.
+    """
+
+    def _state() -> str:
+        try:
+            sg = grpc.get_security_group(sg_id=sg_id)
+        except subprocess.CalledProcessError:
+            return ""
+        return sg.get("object", {}).get("status", {}).get("state", "")
+
+    poll_until(
+        fn=_state,
+        until=lambda v: v == _SECURITY_GROUP_READY_STATE,
+        retries=60,
+        delay=2,
+        description=f"SecurityGroup {sg_id} gRPC READY",
     )
 
 

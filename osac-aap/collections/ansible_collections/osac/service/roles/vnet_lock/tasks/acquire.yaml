@@ -57,10 +57,11 @@
             definition:
               apiVersion: coordination.k8s.io/v1
               kind: Lease
-              metadata:
-                name: "{{ vnet_lock_name }}"
-                namespace: "{{ vnet_lock_namespace }}"
-                resourceVersion: "{{ _vnet_lock_resource_version }}"
+              # Keep resourceVersion as a string under native Jinja by
+              # rendering the containing mapping as one value.
+              metadata: "{{ {'name': vnet_lock_name,
+                'namespace': vnet_lock_namespace,
+                'resourceVersion': _vnet_lock_resource_version | string} }}"
               spec:
                 holderIdentity: "{{ vnet_lock_holder }}"
                 leaseDurationSeconds: "{{ _vnet_lock_duration | int }}"

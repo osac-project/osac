@@ -1,0 +1,8 @@
+---
+- name: Report a sanitized Netris job failure
+  ansible.builtin.fail:
+    msg: >-
+      Netris {{ _netris_failure_operation }} for
+      {{ _netris_failure_resource_type }} '{{ _netris_failure_resource_name }}'
+      failed in task '{{ _netris_failure_task }}'
+      ({{ _netris_failure_result | netris.controller.netris_safe_error_detail }}).

@@ -1,0 +1,167 @@
+---
+- name: Verify Netris idempotency and recovery through top-level playbooks
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    fixture_namespace: >-
+      osac-netris-idem-{{ lookup('env', 'POD_UID') | default('local', true)
+      | regex_replace('[^a-z0-9]', '') | truncate(8, true, '') }}
+    tenant_id: integration-tenant
+    vnet_uuid: 88888888-8888-4888-8888-888888888888
+    subnet_uuid: 99999999-9999-4999-8999-999999999999
+    tenant_vnet_name: netris-idem-subnet
+  tasks:
+    - name: Verify the dedicated Kind API is in use
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'KUBECONFIG') is search('kubeconfig-osac-test')
+          - lookup('env', 'K8S_AUTH_KUBECONFIG') is search('kubeconfig-osac-test')
+        fail_msg: >-
+          This target creates OSAC custom resources and a Lease. Run it via
+          `make test` from osac-aap/, or after
+          `./setup_test_env.sh` from tests/integration/ with the dedicated
+          kubeconfig-osac-test paths.
+
+    - name: Create the isolated fixture namespace and OSAC resources
+      block:
+        - name: Create the fixture namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ fixture_namespace }}"
+            state: present
+
+        - name: Create the parent VirtualNetwork used by Subnet create tests
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: VirtualNetwork
+              metadata:
+                name: netris-idem-parent
+                namespace: "{{ fixture_namespace }}"
+                labels:
+                  osac.openshift.io/virtualnetwork-uuid: "{{ vnet_uuid }}"
+                annotations:
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+              spec:
+                region: integration
+                networkClass: netris
+                ipv4Cidr: 10.231.0.0/16
+
+        - name: Set the fixture VirtualNetwork Netris VPC ID
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - patch
+              - virtualnetwork
+              - netris-idem-parent
+              - --namespace
+              - "{{ fixture_namespace }}"
+              - --subresource=status
+              - --type=merge
+              - --patch
+              - '{"status":{"backendNetworkId":"101"}}'
+          changed_when: true
+
+        - name: Create the Subnet used by create and attachment move tests
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: Subnet
+              metadata:
+                name: "{{ tenant_vnet_name }}"
+                namespace: "{{ fixture_namespace }}"
+                labels:
+                  osac.openshift.io/subnet-uuid: "{{ subnet_uuid }}"
+                annotations:
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+                  osac.openshift.io/implementation-strategy: netris
+              spec:
+                virtualNetwork: "{{ vnet_uuid }}"
+                ipv4Cidr: 10.231.1.0/24
+
+        - name: Mark the fixture Subnet ready for attachment move tests
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - patch
+              - subnet
+              - "{{ tenant_vnet_name }}"
+              - --namespace
+              - "{{ fixture_namespace }}"
+              - --subresource=status
+              - --type=merge
+              - --patch
+              - '{"status":{"phase":"Ready"}}'
+          changed_when: true
+
+        - name: Verify the fixture Subnet is ready
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: Subnet
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ tenant_vnet_name }}"
+          register: fixture_subnet_read
+
+        - name: Assert the fixture Subnet is ready before moving attachments
+          ansible.builtin.assert:
+            that:
+              - fixture_subnet_read.resources | length == 1
+              - fixture_subnet_read.resources[0].status.phase == 'Ready'
+
+        - name: Create the allocated ExternalIP used by SNAT and DNAT tests
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIP
+              metadata:
+                name: netris-idem-eip
+                namespace: "{{ fixture_namespace }}"
+                annotations:
+                  osac.openshift.io/allocated-address: 198.51.100.25
+                  osac.openshift.io/externalippool-name: netris-idem-pool
+              spec:
+                pool: netris-idem-pool
+
+        - name: Create the V-Net lock required by the top-level move playbook
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: coordination.k8s.io/v1
+              kind: Lease
+              metadata:
+                name: "netris-vnet-lock-{{ tenant_vnet_name }}"
+                namespace: "{{ fixture_namespace }}"
+              spec:
+                holderIdentity: ""
+                leaseDurationSeconds: 120
+
+        - name: Run the real top-level Netris playbook scenarios against a local API fixture
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - python
+              - "{{ playbook_dir }}/../files/verify_netris_idempotency.py"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          environment:
+            NETRIS_IDEMPOTENCY_NAMESPACE: "{{ fixture_namespace }}"
+          changed_when: false
+          register: netris_idempotency_result
+
+        - name: Display Netris idempotency scenario results
+          ansible.builtin.debug:
+            var: netris_idempotency_result.stderr_lines
+      always:
+        - name: Remove only the dedicated fixture namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ fixture_namespace }}"
+            state: absent
+            wait: true

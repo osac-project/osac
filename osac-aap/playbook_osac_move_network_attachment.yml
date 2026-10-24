@@ -115,11 +115,29 @@
         - not offboard
         - _resolved_attachments | default([]) | selectattr('tenant_vnet', 'equalto', '') | list | length > 0
 
-    - name: Move each fabric port (with V-Net locking)
-      ansible.builtin.include_tasks: _move_one_attachment.yaml
-      loop: "{{ _resolved_attachments | default([]) }}"
-      loop_control:
-        label: >-
-          {{ item.interface | default('default') }}:
-          {{ offboard | ternary(item.tenant_vnet ~ ' -> ' ~ provisioning_vnet,
-                                provisioning_vnet ~ ' -> ' ~ item.tenant_vnet) }}
+    - name: Move each fabric port with sanitized failure details
+      block:
+        - name: Move each fabric port (with V-Net locking)
+          ansible.builtin.include_tasks: _move_one_attachment.yaml
+          loop: "{{ _resolved_attachments | default([]) }}"
+          loop_control:
+            label: >-
+              {{ item.interface | default('default') }}:
+              {{ offboard | ternary(item.tenant_vnet ~ ' -> ' ~ provisioning_vnet,
+                                    provisioning_vnet ~ ' -> ' ~ item.tenant_vnet) }}
+      rescue:
+        - name: Report network attachment move failure
+          ansible.builtin.include_role:
+            name: osac.templates.netris
+            tasks_from: _report_failure
+          vars:
+            _netris_failure_operation: move
+            _netris_failure_resource_type: network attachment
+            _netris_failure_resource_name: "{{ resource_name }}"
+            _netris_failure_task: "{{ ansible_failed_task.name | default('unknown provider task') }}"
+            _netris_failure_result: "{{ ansible_failed_result | default({}) }}"
+          when: implementation_strategy == 'netris'
+        - name: Re-raise original failure for another networking manager
+          ansible.builtin.fail:
+            msg: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('operation failed')) }}"
+          when: implementation_strategy != 'netris'

@@ -71,6 +71,7 @@ ROLE_TESTS=(
   "netris_subnet_delete"
   "netris_parent_delete"
   "netris_protected_launch"
+  "netris_idempotency"
 )
 
 ROLE_SCENARIO_TESTS=(

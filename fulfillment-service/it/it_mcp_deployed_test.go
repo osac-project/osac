@@ -126,29 +126,44 @@ var _ = Describe("deployed MCP server", func() {
 
 		clientID, original, err := getKeycloakClient(ctx, "osac-mcp-client")
 		Expect(err).ToNot(HaveOccurred())
+
+		// Build the short-lived variant and record the original
+		// lifespan so the restore can explicitly replace it.
 		shortLived, err := cloneJSONMap(original)
 		Expect(err).ToNot(HaveOccurred())
-		attributes, ok := shortLived["attributes"].(map[string]interface{})
-		if !ok {
-			attributes = make(map[string]interface{})
-			shortLived["attributes"] = attributes
-		}
-		attributes["access.token.lifespan"] = "1"
+		origLifespan := setKeycloakAttribute(
+			shortLived, "access.token.lifespan", "1",
+		)
 		Expect(updateKeycloakClient(ctx, clientID, shortLived)).To(Succeed())
-		DeferCleanup(func() {
-			Expect(updateKeycloakClient(context.Background(), clientID, original)).To(Succeed())
-		})
+
+		// restoreLifespan puts the original value back.
+		// Keycloak's admin PUT replaces a present attribute
+		// but silently keeps an override whose key is absent
+		// from the PUT body. We therefore always PUT the
+		// restore value explicitly, using the original value
+		// when one existed and a safe fallback otherwise.
+		restoreLifespan := func() {
+			_, cur, gErr := getKeycloakClient(
+				context.Background(), "osac-mcp-client",
+			)
+			Expect(gErr).ToNot(HaveOccurred())
+			restoreKeycloakAttribute(
+				cur, "access.token.lifespan", origLifespan,
+			)
+			Expect(updateKeycloakClient(
+				context.Background(), clientID, cur,
+			)).To(Succeed())
+		}
+		DeferCleanup(restoreLifespan)
 
 		resourceURL := endpoint + "/"
 		token, err := tool.SimulateMCPLogin(ctx, resourceURL, userUsername, usersPassword)
 		Expect(err).ToNot(HaveOccurred())
-		claims, err := parseJWTClaims(token)
-		Expect(err).ToNot(HaveOccurred())
-		issuedAt, err := claims.GetIssuedAt()
-		Expect(err).ToNot(HaveOccurred())
-		expiresAt, err := claims.GetExpirationTime()
-		Expect(err).ToNot(HaveOccurred())
-		Expect(expiresAt.Time.Sub(issuedAt.Time)).To(BeNumerically("<=", 3*time.Second))
+		tokenLifetime := mcpTokenLifetime(token)
+		Expect(tokenLifetime).To(
+			BeNumerically("<=", 3*time.Second),
+			"token lifespan should reflect the 1-second override",
+		)
 
 		Eventually(func() int {
 			statusCode, err := postMCPAuthorizationProbe(ctx, endpoint, token)
@@ -157,6 +172,12 @@ var _ = Describe("deployed MCP server", func() {
 			}
 			return statusCode
 		}, 20*time.Second, 250*time.Millisecond).Should(Equal(http.StatusUnauthorized))
+
+		// Restore immediately so the next spec cannot inherit
+		// the short-lived lifespan. Verify the restore took
+		// effect by reading the attribute back from Keycloak.
+		restoreLifespan()
+		verifyMCPClientLifespanRestored(ctx, clientID)
 	})
 
 	It("rejects a token issued for a different MCP resource", func() {
@@ -273,6 +294,20 @@ var _ = Describe("deployed MCP server", func() {
 		resourceURL := endpoint + "/"
 		token, err := tool.SimulateMCPLogin(ctx, resourceURL, userUsername, usersPassword)
 		Expect(err).ToNot(HaveOccurred())
+
+		// Guard: verify the token carries a normal lifetime.
+		// If a prior spec leaked a short access.token.lifespan
+		// into the MCP OAuth client, the token would expire
+		// before the Keycloak-down window and produce a 401
+		// instead of the expected structured unavailable error.
+		tokenLifetime := mcpTokenLifetime(token)
+		Expect(tokenLifetime).To(
+			BeNumerically(">=", 30*time.Second),
+			"token lifetime too short — the MCP OAuth client "+
+				"may still carry a leaked short lifespan "+
+				"(exp-iat=%s)", tokenLifetime,
+		)
+
 		_, err = callDeployedMCPTool[mcpserver.CheckConnectionOutput](
 			ctx, endpoint, token, "check_connection", mcpserver.CheckConnectionInput{},
 		)
@@ -563,6 +598,102 @@ func setKeycloakReplicas(ctx context.Context, replicas int32) error {
 	deployment.Spec.Replicas = &replicas
 	_, err = deployments.Update(ctx, deployment, metav1.UpdateOptions{})
 	return err
+}
+
+// keycloakAttrFallback is the value written into the
+// access.token.lifespan attribute when the original client had
+// no explicit override. Keycloak silently preserves an existing
+// attribute when the PUT body omits it, so the restore must
+// always include the key. Keycloak treats the empty string as
+// "use realm default" (the attribute is effectively cleared).
+const keycloakAttrFallback = ""
+
+// setKeycloakAttribute sets a Keycloak client attribute and
+// returns the previous value. If the attribute was absent,
+// the returned string is empty and the bool is false.
+func setKeycloakAttribute(
+	client map[string]any, key, value string,
+) (prev string) {
+	attrs, ok := client["attributes"].(map[string]any)
+	if !ok {
+		attrs = make(map[string]any)
+		client["attributes"] = attrs
+	}
+	if v, has := attrs[key]; has {
+		prev, _ = v.(string)
+	}
+	attrs[key] = value
+	return prev
+}
+
+// restoreKeycloakAttribute sets a Keycloak client attribute to
+// its original value. If origVal is empty the attribute is set
+// to keycloakAttrFallback so the PUT body still contains the
+// key — Keycloak silently keeps the previous override when the
+// key is absent from the PUT body.
+func restoreKeycloakAttribute(
+	client map[string]any, key, origVal string,
+) {
+	attrs, ok := client["attributes"].(map[string]any)
+	if !ok {
+		attrs = make(map[string]any)
+		client["attributes"] = attrs
+	}
+	if origVal != "" {
+		attrs[key] = origVal
+	} else {
+		attrs[key] = keycloakAttrFallback
+	}
+}
+
+// mcpTokenLifetime parses a JWT access token without
+// verification and returns exp − iat. It fails the current
+// Ginkgo spec when the token is malformed or the claims are
+// missing, without logging the token content itself.
+func mcpTokenLifetime(token string) time.Duration {
+	claims, err := parseJWTClaims(token)
+	Expect(err).ToNot(HaveOccurred(),
+		"failed to parse MCP token claims")
+	iat, err := claims.GetIssuedAt()
+	Expect(err).ToNot(HaveOccurred(),
+		"MCP token missing or invalid 'iat' claim")
+	Expect(iat).ToNot(BeNil(),
+		"MCP token 'iat' claim is absent")
+	exp, err := claims.GetExpirationTime()
+	Expect(err).ToNot(HaveOccurred(),
+		"MCP token missing or invalid 'exp' claim")
+	Expect(exp).ToNot(BeNil(),
+		"MCP token 'exp' claim is absent")
+	return exp.Sub(iat.Time)
+}
+
+// verifyMCPClientLifespanRestored confirms that the
+// osac-mcp-client OAuth client no longer carries the 1-second
+// access.token.lifespan override. Call this after eagerly
+// restoring the client to catch a failed restore before the
+// next spec runs.
+func verifyMCPClientLifespanRestored(
+	ctx context.Context, clientID string,
+) {
+	code, body, err := tool.KeycloakAdminRequest(
+		ctx, http.MethodGet,
+		"/clients/"+clientID, nil,
+	)
+	Expect(err).ToNot(HaveOccurred())
+	Expect(code).To(Equal(http.StatusOK))
+	var client map[string]any
+	Expect(json.Unmarshal(body, &client)).To(Succeed())
+	attrs, ok := client["attributes"].(map[string]any)
+	if !ok {
+		return // no attributes — lifespan is cleared
+	}
+	v, exists := attrs["access.token.lifespan"]
+	if !exists {
+		return // attribute absent — uses realm default
+	}
+	Expect(v).ToNot(Equal("1"),
+		"MCP client still has 1-second lifespan "+
+			"after restore")
 }
 
 type bearerRoundTripper struct {

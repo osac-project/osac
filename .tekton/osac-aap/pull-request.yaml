@@ -254,7 +254,7 @@ spec:
           # ansible-builder, unrelated to the EE's own UBI10 base image
           # (execution-environment.yaml's base_image, baked into the
           # generated Containerfile independently of this step).
-          image: registry.access.redhat.com/ubi9/python-312:latest@sha256:f793a102147ffa00b45ccb88ae91d726c17ac2f7e70214eef0cbfdc32816ec01
+          image: registry.access.redhat.com/ubi9/python-312:latest@sha256:5fc7dac68a887a7232428421a7e4b62a98843c80c52ff2adc1821564d209f9f3
           workingDir: /var/workdir/source/osac-aap
           # use-trusted-artifact's image runs as a different non-root user
           # ("notroot") than this image's own default (uid 1001), so the

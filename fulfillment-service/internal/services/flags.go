@@ -19,6 +19,15 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// serviceFlagNames contains the names of the command-line flags that control
+// service tier enablement. Keep in sync with RegisterFlags.
+var serviceFlagNames = []string{
+	"enable-caas",
+	"enable-vmaas",
+	"enable-bmaas",
+	"enable-maas",
+}
+
 type Flags struct {
 	CaaS  bool
 	VMaaS bool
@@ -39,7 +48,19 @@ func RegisterFlags(flags *pflag.FlagSet) *Flags {
 	return f
 }
 
-func (f *Flags) EnableAllIfNoneSet() {
+// EnableAllIfNoneSet enables all services when no enable flag was supplied.
+// When flags is non-nil and any enable flag was explicitly provided, the
+// explicit values are preserved as given, including all-false configurations.
+// A nil flag set keeps the legacy behavior of enabling all services when every
+// field is false, for callers that build Flags programmatically.
+func (f *Flags) EnableAllIfNoneSet(flags *pflag.FlagSet) {
+	if flags != nil {
+		for _, name := range serviceFlagNames {
+			if flags.Changed(name) {
+				return
+			}
+		}
+	}
 	if !f.CaaS && !f.VMaaS && !f.BMaaS && !f.MaaS {
 		f.CaaS = true
 		f.VMaaS = true
@@ -49,6 +70,10 @@ func (f *Flags) EnableAllIfNoneSet() {
 }
 
 func (f *Flags) Validate() error {
+	if !f.CaaS && !f.VMaaS && !f.BMaaS && !f.MaaS {
+		return fmt.Errorf(
+			"at least one of CaaS, VMaaS, BMaaS, or MaaS must be enabled")
+	}
 	if f.CaaS && !f.VMaaS && !f.BMaaS {
 		return fmt.Errorf("CaaS requires at least one of VMaaS or BMaaS")
 	}

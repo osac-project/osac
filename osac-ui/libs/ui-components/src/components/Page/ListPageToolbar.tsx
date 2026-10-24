@@ -3,6 +3,8 @@ import { Button, Content, Flex, FlexItem, Stack, StackItem } from '@patternfly/r
 import FieldSeparator from '@osac/ui-components/components/Primitives/FieldSeparator';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
+import './ListPageToolbar.css';
+
 type ListPageToolbar = {
   filteredText?: string;
   isFiltered?: boolean;
@@ -18,7 +20,7 @@ const ListPageToolbar = ({
   const { t } = useTranslation();
 
   return (
-    <Stack hasGutter>
+    <Stack className="osac-list-page-toolbar">
       <StackItem>{children}</StackItem>
       <>
         {filteredText ? (

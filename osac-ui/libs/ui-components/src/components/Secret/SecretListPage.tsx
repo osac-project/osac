@@ -1,9 +1,14 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
+  Button,
+  EmptyState,
+  EmptyStateBody,
   Gallery,
   GalleryItem,
   SearchInput,
+  Stack,
+  StackItem,
   Toolbar,
   ToolbarContent,
   ToolbarGroup,
@@ -13,12 +18,14 @@ import {
 import { Secret, Secrets } from '@osac/types';
 import { cel } from '@osac/ui-components/api/cel';
 import { useListResource } from '@osac/ui-components/api/use-resource';
+import ListPageToolbar from '@osac/ui-components/components/Page/ListPageToolbar';
 import {
   SEARCH_PARAM,
   useArrayPageFilter,
   usePageFilter,
 } from '@osac/ui-components/hooks/use-page-filter';
 import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
+import { PROJECT_FILTER_PARAM, useSession } from '@osac/ui-components/hooks/use-session';
 import { useViewType } from '@osac/ui-components/hooks/use-view-type';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
@@ -37,14 +44,15 @@ import ListPageBody from '../Page/ListPageBody';
 import ProjectFilter from '../Page/ProjectFilter';
 import CreateButton from '../Primitives/CreateButton.tsx';
 import ViewSwitcher from '../Primitives/ViewSwitcher.tsx';
-import { SubtleContent } from '../SubtleContent/SubtleContent';
 
 const SECRETS_VIEW_KEY = 'secrets';
 
 const SecretListPage = () => {
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const [, setSearchParams] = useSearchParams();
   const [deleteTarget, setDeleteTarget] = useState<Secret>();
+  const { projects, setProjects } = useSession();
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
   const [type, setType, clearTypeFilter] = useArrayPageFilter<TypeFilterValue>(
     TYPE_PARAM,
@@ -67,10 +75,62 @@ const SecretListPage = () => {
     ),
   });
 
+  const { data: totalsData, error: totalsError } = useListResource(Secrets, {
+    filter: projectFilter,
+    limit: 0,
+  });
+
   const items = data?.items ?? [];
+  const totalItems = totalsData?.total;
+  const hasTotals = totalsData !== undefined && !totalsError;
 
   const handleEdit = (secret: Secret) => navigate(`/secrets/${secret.id}/edit`);
   const handleDelete = (secret: Secret) => setDeleteTarget(secret);
+
+  const isFiltered = Boolean(search || projects.length || typeFilter.length);
+
+  const showEmptyState = !isLoading && !error && items.length === 0;
+
+  const clearAllFilters = () => {
+    setProjects([]);
+    requestAnimationFrame(() => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete(SEARCH_PARAM);
+          next.delete(PROJECT_FILTER_PARAM);
+          next.delete(TYPE_PARAM);
+          return next;
+        },
+        { replace: true },
+      );
+    });
+  };
+
+  const emptyState =
+    (totalItems ?? 0) === 0 && !isFiltered ? (
+      <EmptyState titleText={t('No secrets found')} headingLevel="h2">
+        <EmptyStateBody>{t('No secrets are available yet.')}</EmptyStateBody>
+      </EmptyState>
+    ) : (
+      <EmptyState titleText={t('No secrets match your filters')} headingLevel="h2">
+        <EmptyStateBody>
+          {t('Try a different project, type, or search term.')}{' '}
+          <Button variant="link" isInline onClick={clearAllFilters}>
+            {t('Clear all filters')}
+          </Button>
+        </EmptyStateBody>
+      </EmptyState>
+    );
+
+  const filteredText = hasTotals
+    ? items.length === totalItems
+      ? t('{{count}} secret', { count: totalItems })
+      : t('{{shown}} of {{count}} secret', {
+          shown: items.length,
+          count: totalItems,
+        })
+    : undefined;
 
   return (
     <>
@@ -93,45 +153,44 @@ const SecretListPage = () => {
         }
         error={error}
       >
-        <ListPageBody isLoading={isLoading} error={error}>
-          <Toolbar>
-            <ToolbarContent>
-              <ToolbarGroup>
-                <ToolbarItem>
-                  <ProjectFilter />
-                </ToolbarItem>
-                <ToolbarItem>
-                  <TypeFilter type={type} onClear={clearTypeFilter} onToggle={setType} />
-                </ToolbarItem>
-                <ToolbarItem>
-                  <SearchInput
-                    placeholder={t('Search secrets')}
-                    value={search}
-                    onChange={(_e, v) => setSearch(v)}
-                    onClear={() => setSearch('')}
-                    aria-label={t('Search secrets')}
-                  />
-                </ToolbarItem>
-              </ToolbarGroup>
-              <ToolbarGroup align={{ default: 'alignEnd' }}>
-                <ToolbarItem>
-                  <ViewSwitcher pageKey={SECRETS_VIEW_KEY} />
-                </ToolbarItem>
-              </ToolbarGroup>
-            </ToolbarContent>
-          </Toolbar>
-          {!items.length ? (
-            <SubtleContent component="p">
-              {search || projectFilter || type.length
-                ? t('No secrets match your search.')
-                : t('No secrets yet. Create one to get started.')}
-            </SubtleContent>
-          ) : (
-            <>
-              <SubtleContent component="p">
-                {t('{{count}} secret', { count: items.length })}
-              </SubtleContent>
-              {viewType === 'cards' ? (
+        <Stack hasGutter>
+          <StackItem>
+            <ListPageToolbar
+              filteredText={showEmptyState ? undefined : filteredText}
+              isFiltered={isFiltered}
+              onClearAllFilters={clearAllFilters}
+            >
+              <Toolbar>
+                <ToolbarContent>
+                  <ToolbarGroup>
+                    <ToolbarItem>
+                      <ProjectFilter />
+                    </ToolbarItem>
+                    <TypeFilter type={type} onClear={clearTypeFilter} onToggle={setType} />
+                    <ToolbarItem>
+                      <SearchInput
+                        placeholder={t('Search secrets')}
+                        value={search}
+                        onChange={(_e, v) => setSearch(v)}
+                        onClear={() => setSearch('')}
+                        aria-label={t('Search secrets')}
+                      />
+                    </ToolbarItem>
+                  </ToolbarGroup>
+                  <ToolbarGroup align={{ default: 'alignEnd' }}>
+                    <ToolbarItem>
+                      <ViewSwitcher pageKey={SECRETS_VIEW_KEY} />
+                    </ToolbarItem>
+                  </ToolbarGroup>
+                </ToolbarContent>
+              </Toolbar>
+            </ListPageToolbar>
+          </StackItem>
+          <StackItem>
+            <ListPageBody isLoading={isLoading} error={error}>
+              {showEmptyState ? (
+                emptyState
+              ) : viewType === 'cards' ? (
                 <Gallery hasGutter minWidths={{ default: '300px' }} maxWidths={{ default: '1fr' }}>
                   {items.map((secret) => (
                     <GalleryItem key={secret.id}>
@@ -146,9 +205,9 @@ const SecretListPage = () => {
               ) : (
                 <SecretTable items={items} onEdit={handleEdit} onDelete={handleDelete} />
               )}
-            </>
-          )}
-        </ListPageBody>
+            </ListPageBody>
+          </StackItem>
+        </Stack>
       </ListPage>
     </>
   );

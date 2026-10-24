@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "playwright": "playwright test",
+    "playwright": "playwright test --project=smoke --project=chromium",
     "playwright:setup": "playwright test --project=setup",
     "playwright:run": "playwright test --project=chromium --no-deps",
     "typecheck": "tsc --noEmit"

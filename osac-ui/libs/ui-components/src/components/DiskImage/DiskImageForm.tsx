@@ -17,6 +17,7 @@ import { SourceType } from '@osac/types';
 import { Tenants } from '@osac/types/private';
 
 import { architectureLabels, guestOsFamilyLabels } from './DiskImageTable';
+import { diskImageFieldIds } from './fieldIds';
 import { getDiskImageCreateSchema } from './validation';
 import { DiskImageFormValues, diskImageCreateValues } from './values';
 import { useListResource } from '../../api/use-resource';
@@ -122,29 +123,29 @@ const DiskImageForm = () => {
           <Stack hasGutter>
             <StackItem>
               <OsacForm>
-                <NameField />
+                <NameField fieldId={diskImageFieldIds.name} />
                 <ReadOnlyField
                   label={t('Source type')}
-                  fieldId="disk-image-source-type"
+                  fieldId={diskImageFieldIds.sourceType}
                   value={SourceType[SourceType.REGISTRY]}
                 />
                 <InputField
                   name="spec.sourceRef"
                   label={t('Source reference')}
-                  fieldId="disk-image-source-ref"
+                  fieldId={diskImageFieldIds.sourceReference}
                   isRequired
                 />
                 <SelectField
                   name="spec.guestOsFamily"
                   label={t('Guest OS family')}
-                  fieldId="disk-image-guest-os-family"
+                  fieldId={diskImageFieldIds.guestOsFamily}
                   isRequired
                   options={guestOsFamilyOptions}
                 />
                 <MultiSelectField
                   name="spec.architecture"
                   label={t('Architecture')}
-                  fieldId="disk-image-architecture"
+                  fieldId={diskImageFieldIds.architecture}
                   isRequired
                   options={architectureOptions}
                 />
@@ -152,7 +153,7 @@ const DiskImageForm = () => {
                   <SelectField
                     name="metadata.tenant"
                     label={t('Scope')}
-                    fieldId="disk-image-scope"
+                    fieldId={diskImageFieldIds.scope}
                     options={scopeOptions}
                   />
                 )}

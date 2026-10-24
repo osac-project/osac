@@ -10,6 +10,7 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 
+import { deleteResourceModalIds } from './deleteResourceModalIds';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
 
@@ -52,12 +53,12 @@ const DeleteResourceModal = <TVariables,>({
       variant="small"
       isOpen
       onClose={isPending ? undefined : () => handleClosing(onClose)}
-      aria-labelledby="delete-confirm-title"
+      aria-labelledby={deleteResourceModalIds.title}
     >
       <ModalHeader
         title={t('Delete {{name}}?', { name: resourceName })}
         titleIconVariant="warning"
-        labelId="delete-confirm-title"
+        labelId={deleteResourceModalIds.title}
       />
       <ModalBody>
         <Stack hasGutter>

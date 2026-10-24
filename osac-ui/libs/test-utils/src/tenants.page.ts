@@ -164,7 +164,8 @@ export const deleteTenant = async (page: Page, tenantName: string): Promise<void
     if (matchingRows === 0) {
       throw new Error(
         `Cannot delete tenant "${tenantName}": no matching tenant was found. ` +
-          `Available tenants: ${availableTenants}. Check OSAC_TENANT_NAME or create the tenant first.`,
+          `Available tenants: ${availableTenants}. Check tenant_name in ` +
+          `apps/e2e-tests/extravars.yaml or create the tenant first.`,
       );
     }
 

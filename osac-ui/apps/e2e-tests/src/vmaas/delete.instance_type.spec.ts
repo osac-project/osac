@@ -1,6 +1,6 @@
 import { test } from '@playwright/test';
 
-import { instanceTypeTestData } from './test_data';
+import { instanceTypeTestData, tenantNameOrSkip } from './test_data';
 import { openAndLoginWithEnvironment } from '../../../../libs/test-utils/src/general/open_and_login';
 import {
   deleteInstanceType,
@@ -10,6 +10,9 @@ import { openInstanceTypesPage } from '../../../../libs/test-utils/src/main.page
 
 test('deletes the requested instance type', async ({ page }) => {
   test.setTimeout(120_000);
+  if (!tenantNameOrSkip()) {
+    return;
+  }
 
   // 1. Open the browser and log in.
   await openAndLoginWithEnvironment(page, '/');

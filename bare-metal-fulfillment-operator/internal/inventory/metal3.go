@@ -66,6 +66,11 @@ type Metal3Client struct {
 	hostClass string
 }
 
+// Close is a no-op because the controller-runtime client has no explicit close operation.
+func (*Metal3Client) Close() error {
+	return nil
+}
+
 // NewMetal3ClientForTest creates a Metal3Client with an injected client for testing.
 func NewMetal3ClientForTest(k8sClient client.Client, namespace, hostClass string) *Metal3Client {
 	return &Metal3Client{

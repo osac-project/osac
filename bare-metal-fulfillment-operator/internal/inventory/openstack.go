@@ -60,6 +60,11 @@ type OpenStackClient struct {
 	hostClass string
 }
 
+// Close is a no-op because gophercloud manages its HTTP connection pool.
+func (*OpenStackClient) Close() error {
+	return nil
+}
+
 // NewOpenStackClient creates a new OpenStack inventory client
 func NewOpenStackClient(ctx context.Context, cfg *Config) (Client, error) {
 	opts := cfg.Options

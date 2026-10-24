@@ -139,6 +139,11 @@ func NewBCMClient(client BCMAPI, bmhManager baremetalhost.BMHLifecycleManager, h
 	}
 }
 
+// Close is a no-op because the BCM API client has no explicit shutdown operation.
+func (*BCMClient) Close() error {
+	return nil
+}
+
 // SetBMCDiscoverer sets the Redfish discoverer used for Priority 2 BMC
 // address resolution. When nil, Redfish-compatible protocols return an
 // error; only IPMI (static URL) works without a discoverer.

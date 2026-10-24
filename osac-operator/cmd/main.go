@@ -534,6 +534,7 @@ func setupComputeInstanceControllers(
 	mgr mcmanager.Manager,
 	grpcConn grpc.ClientConnInterface,
 	maxJobHistory int,
+	storageControllerEnabled bool,
 ) error {
 	localMgr := mgr.GetLocalManager()
 	computeInstanceNamespace := os.Getenv(envComputeInstanceNamespace)
@@ -562,6 +563,7 @@ func setupComputeInstanceControllers(
 		statusPollInterval,
 		maxJobHistory,
 		targetCluster,
+		storageControllerEnabled,
 	)
 	if grpcConn != nil {
 		ciReconciler.TiersClient = privatev1.NewStorageTiersClient(grpcConn)
@@ -708,7 +710,7 @@ func setupControllers(
 		}
 	}
 	if flags.ComputeInstance {
-		if err := setupComputeInstanceControllers(mgr, grpcConn, maxJobHistory); err != nil {
+		if err := setupComputeInstanceControllers(mgr, grpcConn, maxJobHistory, flags.Storage); err != nil {
 			return fmt.Errorf("computeinstance controllers: %w", err)
 		}
 	}

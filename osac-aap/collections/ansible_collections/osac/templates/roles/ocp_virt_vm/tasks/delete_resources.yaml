@@ -31,17 +31,24 @@
   when: vm_exists.resources | length > 0
 
 - name: Wait for VirtualMachineInstance to stop
-  # CRITICAL: Must wait for the VirtualMachineInstance (VMI) to fully disappear before
-  # deleting the VirtualMachine (VM) definition. A VM with runStrategy=Halted can report
-  # Ready=False while its VMI is still terminating, creating a race condition where
-  # KubeVirt rejects the VM delete operation with "Virtual machine is still running".
+  # CRITICAL: Must wait for the VMI to fully disappear before
+  # deleting the VM definition. A VM with runStrategy=Halted can
+  # report Ready=False while its VMI is still terminating, creating
+  # a race where KubeVirt rejects the VM delete with
+  # "Virtual machine is still running".
   #
-  # KubeVirt architecture: VM (desired state) -> VMI (running instance)
-  # Per KubeVirt API design, the VMI must be absent before VM deletion succeeds.
-  # Reference: https://kubevirt.io/api-reference/v1.3.1/definitions.html#_v1_virtualmachine
-  #            https://github.com/kubevirt/kubevirt/blob/main/docs/devel/deletion.md
+  # KubeVirt architecture: VM (desired state) -> VMI (running
+  # instance).  Per KubeVirt API design, the VMI must be absent
+  # before VM deletion succeeds.
+  # Ref: https://kubevirt.io/api-reference/main/definitions.html
+  #      #_v1_virtualmachineinstance
   #
-  # This task polls for VMI absence (resources | length == 0) with 60 retries × 5s = 5 min timeout.
+  # Polls for VMI absence using ocp_virt_vm_graceful_wait_retries
+  # (default 60) x 5 s delay.  Integration tests override the
+  # retry count to avoid the full production wait.
+  # If the VMI is still present after the graceful window (e.g.
+  # virt-launcher crash left a stuck finalizer), the recovery block
+  # below handles bounded forceful cleanup.
   kubernetes.core.k8s_info:
     kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     api_version: kubevirt.io/v1
@@ -50,9 +57,227 @@
     namespace: "{{ compute_instance_target_namespace }}"
   register: vmi_stopped
   until: vmi_stopped.resources | length == 0
-  retries: 60
+  retries: "{{ ocp_virt_vm_graceful_wait_retries }}"
   delay: 5
   when: vm_exists.resources | length > 0
+  ignore_errors: true
+
+# --- Bounded recovery for stuck VMI after graceful timeout ---
+#
+# When the graceful wait above times out (vmi_stopped.failed is
+# true), the VMI is stuck — typically because virt-launcher crashed
+# and KubeVirt's foregroundDeleteVirtualMachine finalizer cannot
+# complete.  The recovery block below:
+#
+#   1. Re-reads VMI state and the virt-launcher pod.
+#   2. Proceeds ONLY when deletion is already requested (VMI has a
+#      deletionTimestamp) AND the launcher is terminal or absent.
+#   3. Uses supported KubeVirt forceful VMI deletion (grace-period 0,
+#      Background propagation) — the same mechanism as
+#      `kubectl delete vmi --grace-period=0 --force`.
+#   4. Confirms VMI absence before continuing to dependent resources.
+#   5. Otherwise fails with diagnostics so the operator retains the
+#      finalizer and BlockDeletionOnFailure keeps the CR safe.
+#
+# When all guards pass, the recovery removes only the
+# kubevirt.io/foregroundDeleteVirtualMachine finalizer
+# so Kubernetes can garbage-collect the VMI.  All other
+# finalizers are preserved.  This does NOT disable
+# BlockDeletionOnFailure.
+#
+# KubeVirt VMI deletion and finalizer behavior:
+#   https://kubevirt.io/user-guide/compute/life-cycle/
+#     #foreground-finalizer
+
+- name: Recover stuck VMI after graceful timeout
+  when:
+    - vm_exists.resources | length > 0
+    - vmi_stopped is failed
+  block:
+    - name: Re-read VMI state for recovery classification
+      kubernetes.core.k8s_info:
+        kubeconfig: >-
+          {{ remote_cluster_kubeconfig | default(omit) }}
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstance
+        name: "{{ compute_instance_name }}"
+        namespace: "{{ compute_instance_target_namespace }}"
+      register: vmi_recovery_state
+
+    - name: Set VMI recovery facts
+      ansible.builtin.set_fact:
+        _vmi_exists: >-
+          {{ vmi_recovery_state.resources | length > 0 }}
+        _vmi_has_deletion_ts: >-
+          {{ (vmi_recovery_state.resources | length > 0)
+             and (vmi_recovery_state.resources[0]
+                  .metadata.deletionTimestamp
+                  | default('') | length > 0) }}
+        _vmi_phase: >-
+          {{ vmi_recovery_state.resources[0].status.phase
+             | default('Unknown')
+             if vmi_recovery_state.resources | length > 0
+             else 'Absent' }}
+
+    - name: Look up virt-launcher pod
+      kubernetes.core.k8s_info:
+        kubeconfig: >-
+          {{ remote_cluster_kubeconfig | default(omit) }}
+        api_version: v1
+        kind: Pod
+        namespace: "{{ compute_instance_target_namespace }}"
+        label_selectors:
+          - >-
+            kubevirt.io/domain={{ compute_instance_name }}
+      register: launcher_pod_info
+      when: _vmi_exists | bool
+
+    - name: Classify launcher pod state
+      ansible.builtin.set_fact:
+        _launcher_terminal: >-
+          {{ (launcher_pod_info.resources | default([])
+              | map(attribute='status.phase',
+                    default='Unknown')
+              | reject('in', ['Succeeded', 'Failed'])
+              | list | length) == 0 }}
+        _launcher_phase: >-
+          {{ (launcher_pod_info.resources | default([])
+              | map(attribute='status.phase',
+                    default='Unknown')
+              | list | join(','))
+             or 'NotFound' }}
+      when: _vmi_exists | bool
+
+    - name: Log recovery diagnostics
+      ansible.builtin.debug:
+        msg:
+          - "VMI recovery: entering stuck-VMI handler"
+          - "VMI phase: {{ _vmi_phase }}"
+          - "VMI deletionTimestamp: {{ _vmi_has_deletion_ts }}"
+          - >-
+            Launcher phase:
+            {{ _launcher_phase | default('N/A') }}
+          - >-
+            Launcher terminal:
+            {{ _launcher_terminal | default('N/A') }}
+
+    - name: VMI already gone — nothing to recover
+      ansible.builtin.set_fact:
+        _recovery_skipped: true
+      when: not (_vmi_exists | bool)
+
+    - name: >-
+        Fail — launcher still running, cannot force-delete
+      ansible.builtin.fail:
+        msg: >-
+          VMI stuck after graceful timeout but
+          virt-launcher is still in phase
+          '{{ _launcher_phase }}'. Recovery requires the
+          launcher to be terminal (Succeeded/Failed) or
+          absent. Retaining finalizer for operator retry.
+      when:
+        - _vmi_exists | bool
+        - not (_launcher_terminal | bool)
+
+    - name: >-
+        Fail — VMI not marked for deletion, cannot
+        force-delete
+      ansible.builtin.fail:
+        msg: >-
+          VMI exists (phase={{ _vmi_phase }}) but has no
+          deletionTimestamp. Graceful shutdown may not have
+          been requested. Retaining finalizer for operator
+          retry.
+      when:
+        - _vmi_exists | bool
+        - _launcher_terminal | bool
+        - not (_vmi_has_deletion_ts | bool)
+
+    - name: >-
+        Remove foreground-delete finalizer (launcher
+        terminal)
+      # The foreground-delete finalizer blocks VMI
+      # garbage collection even with --force
+      # --grace-period=0 (Kubernetes always waits for
+      # finalizers).  Since deletionTimestamp is set,
+      # the API server only allows removing finalizers
+      # — never adding — so a test-and-replace JSON
+      # patch is safe against concurrent modification.
+      # We remove only
+      # kubevirt.io/foregroundDeleteVirtualMachine;
+      # every other finalizer is preserved.
+      vars:
+        _current_finalizers: >-
+          {{ vmi_recovery_state.resources[0]
+             .metadata.finalizers | default([]) }}
+        _target_fin: >-
+          kubevirt.io/foregroundDeleteVirtualMachine
+        _cleaned_finalizers: >-
+          {{ _current_finalizers
+             | difference([_target_fin]) }}
+      kubernetes.core.k8s_json_patch:
+        kubeconfig: >-
+          {{ remote_cluster_kubeconfig | default(omit) }}
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstance
+        name: "{{ compute_instance_name }}"
+        namespace: >-
+          {{ compute_instance_target_namespace }}
+        patch:
+          - op: test
+            path: /metadata/finalizers
+            value: "{{ _current_finalizers }}"
+          - op: replace
+            path: /metadata/finalizers
+            value: "{{ _cleaned_finalizers }}"
+      when:
+        - _vmi_exists | bool
+        - _launcher_terminal | bool
+        - _vmi_has_deletion_ts | bool
+        - >-
+          _target_fin in
+          (vmi_recovery_state.resources[0]
+           .metadata.finalizers | default([]))
+
+    - name: Force-delete stuck VMI (launcher is terminal)
+      # Defensive delete after finalizer removal.  Once
+      # the foreground-delete finalizer is gone,
+      # Kubernetes garbage-collects the VMI.  This task
+      # handles the rare case where other finalizers or
+      # timing delays keep it alive.
+      kubernetes.core.k8s:
+        kubeconfig: >-
+          {{ remote_cluster_kubeconfig | default(omit) }}
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstance
+        name: "{{ compute_instance_name }}"
+        namespace: "{{ compute_instance_target_namespace }}"
+        state: absent
+        delete_options:
+          gracePeriodSeconds: 0
+          propagationPolicy: Background
+        wait: true
+        wait_timeout: 60
+      when:
+        - _vmi_exists | bool
+        - _launcher_terminal | bool
+        - _vmi_has_deletion_ts | bool
+
+    - name: Confirm VMI absence after force deletion
+      kubernetes.core.k8s_info:
+        kubeconfig: >-
+          {{ remote_cluster_kubeconfig | default(omit) }}
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstance
+        name: "{{ compute_instance_name }}"
+        namespace: "{{ compute_instance_target_namespace }}"
+      register: vmi_post_recovery
+      until: vmi_post_recovery.resources | length == 0
+      retries: 12
+      delay: 5
+      when:
+        - _vmi_exists | bool
+        - _recovery_skipped is not defined
 
 - name: Delete VirtualMachine
   kubernetes.core.k8s:
@@ -66,10 +291,12 @@
     wait_timeout: 300
 
 - name: Delete VM load balancer service
-  # This Service is created only when a post-create hook provisions a load-balancer
-  # Service for the VM. It is not created by the default create flow, so it may not
-  # exist on every delete run. The kubernetes.core.k8s module with state: absent is
-  # idempotent and handles missing resources gracefully (returns changed=false).
+  # This Service is created only when a post-create hook
+  # provisions a load-balancer Service for the VM. It is not
+  # created by the default create flow, so it may not exist on
+  # every delete run. The kubernetes.core.k8s module with
+  # state: absent is idempotent and handles missing resources
+  # gracefully (returns changed=false).
   kubernetes.core.k8s:
     kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     api_version: v1
@@ -99,10 +326,13 @@
     state: absent
     wait: true
     wait_timeout: 300
-  loop: "{{ compute_instance.spec.additionalDisks | default([]) }}"
+  loop: >-
+    {{ compute_instance.spec.additionalDisks | default([]) }}
   loop_control:
     index_var: idx
-  when: (compute_instance.spec.additionalDisks | default([])) | length > 0
+  when: >-
+    (compute_instance.spec.additionalDisks
+     | default([])) | length > 0
 
 - name: Delete user-data secret
   kubernetes.core.k8s:
@@ -116,7 +346,9 @@
   failed_when:
     - delete_user_data_secret.failed is defined
     - delete_user_data_secret.failed
-    - "'not found' not in (delete_user_data_secret.msg | default(''))"
+    - >-
+      'not found' not in
+      (delete_user_data_secret.msg | default(''))
 
 - name: Delete cloud-init secret
   kubernetes.core.k8s:
@@ -130,7 +362,9 @@
   failed_when:
     - delete_cloud_init_secret.failed is defined
     - delete_cloud_init_secret.failed
-    - "'not found' not in (delete_cloud_init_secret.msg | default(''))"
+    - >-
+      'not found' not in
+      (delete_cloud_init_secret.msg | default(''))
 
 - name: Delete ssh public key secret (Linux)
   kubernetes.core.k8s:
@@ -144,7 +378,9 @@
   failed_when:
     - delete_ssh_secret.failed is defined
     - delete_ssh_secret.failed
-    - "'not found' not in (delete_ssh_secret.msg | default(''))"
+    - >-
+      'not found' not in
+      (delete_ssh_secret.msg | default(''))
   when: guest_os_family == 'linux'
 
 - name: Delete sysprep Secret (Windows)
@@ -159,12 +395,16 @@
   failed_when:
     - delete_sysprep_secret.failed is defined
     - delete_sysprep_secret.failed
-    - "'not found' not in (delete_sysprep_secret.msg | default(''))"
+    - >-
+      'not found' not in
+      (delete_sysprep_secret.msg | default(''))
   when: guest_os_family == 'windows'
 
 - name: Display deletion status
   ansible.builtin.debug:
     msg:
-      - "Virtual Machine '{{ compute_instance_name }}' deletion completed"
+      - >-
+        Virtual Machine '{{ compute_instance_name }}'
+        deletion completed
       - "Namespace: {{ compute_instance_target_namespace }}"
       - "All associated resources have been removed"

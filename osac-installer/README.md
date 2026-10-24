@@ -162,6 +162,24 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 | `DRY_RUN=1` | Render all releases from `make install` with `helm template`; no cluster connections or cluster commands are used |
 | `DRY_RUN_CLUSTER_DOMAIN` | Cluster ingress domain required for an OpenShift dry run |
 | `DRY_RUN_OCP_VERSION` | OpenShift major.minor version required for an OpenShift dry run, e.g. `4.20` |
+| `USE_LOCAL_OPERATOR=true` | Kind only. Build the operator from this checkout, load it into the Kind node, and install that image instead of the registry image the values files pin. |
+| `OPERATOR_IMAGE_TAG` | Tag for the local operator image when `USE_LOCAL_OPERATOR=true` (default `it`). |
+
+`USE_LOCAL_OPERATOR=true` is for testing an operator change without publishing
+an image. Each `install-osac` (and each `make install` that includes it) first
+runs `local-operator-image`, which rebuilds the operator and loads it into the
+cluster, so expect a full Go build on every install:
+
+```bash
+make install-osac PLATFORM=kind PROFILE=dev NS=osac USE_LOCAL_OPERATOR=true
+```
+
+The flag's `--set` values are applied after `EXTRA_HELM_ARGS`, so it wins over
+an `EXTRA_HELM_ARGS` image override. Each build gets a tag unique to that
+invocation, so a rebuilt image always changes the Deployment and rolls the
+operator pod instead of leaving the previous one running; set
+`OPERATOR_IMAGE_TAG` to choose a tag yourself. It is rejected for
+`PLATFORM=openshift`, where a localhost image cannot be pulled.
 
 To preview the full Kind install and enable the CSI driver without making cluster
 changes:

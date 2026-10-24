@@ -107,6 +107,10 @@ Thumbs.db
 .artifacts
 .artifacts/
 __pycache__
+# Session scratch (handoff and triage notes) and ad-hoc tool binaries kept
+# outside the tracked tool cache; a bare `git add -A` must not pick them up.
+.tmp/
+/bin/
 
 # proto (shared proto sources + generated Go)
 /proto/.buf

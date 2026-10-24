@@ -1,0 +1,1891 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://osac-project.org/schemas/coverage-report/v1/report.schema.json",
+  "title": "OSAC hybrid coverage report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "tool_version",
+    "generated_at",
+    "repo",
+    "scope",
+    "metric_versions",
+    "summary",
+    "features",
+    "metrics",
+    "evidence",
+    "behaviors",
+    "inventories",
+    "gaps",
+    "diagnostics",
+    "comparison"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "coverage-report/v1"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^run-[0-9a-f]{16}$"
+    },
+    "tool_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generated_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha",
+        "sha_source"
+      ],
+      "properties": {
+        "sha": {
+          "type": "string",
+          "minLength": 4
+        },
+        "sha_source": {
+          "type": "string",
+          "enum": [
+            "git",
+            "cli"
+          ]
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input",
+        "matched_by",
+        "features",
+        "sha",
+        "sha_source"
+      ],
+      "properties": {
+        "input": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "matched_by": {
+          "type": "string",
+          "enum": [
+            "key",
+            "name",
+            "alias",
+            "full_plan"
+          ]
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sha": {
+          "type": "string",
+          "minLength": 4
+        },
+        "sha_source": {
+          "type": "string",
+          "enum": [
+            "git",
+            "cli"
+          ]
+        }
+      }
+    },
+    "metric_versions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "summary": {
+      "$ref": "#/$defs/summary"
+    },
+    "features": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/feature"
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/metric"
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence"
+      }
+    },
+    "behaviors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/behavior"
+      }
+    },
+    "inventories": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/inventory"
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/gap"
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    },
+    "comparison": {
+      "$ref": "#/$defs/comparison"
+    }
+  },
+  "$defs": {
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "feature",
+        "tier",
+        "metric_version",
+        "state",
+        "numerator",
+        "denominator",
+        "value_percent",
+        "excluded",
+        "unassessable",
+        "tier_unassigned",
+        "provisional_percent",
+        "reason",
+        "inputs",
+        "formula",
+        "inventory_revision"
+      ],
+      "properties": {
+        "feature": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tier": {
+          "type": "string",
+          "enum": [
+            "unit",
+            "integration",
+            "e2e"
+          ]
+        },
+        "metric_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "value",
+            "zero",
+            "na",
+            "unavailable",
+            "stale",
+            "blocked"
+          ]
+        },
+        "numerator": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "denominator": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "value_percent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0.0,
+          "maximum": 100.0
+        },
+        "excluded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unassessable": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tier_unassigned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "provisional_percent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0.0,
+          "maximum": 100.0
+        },
+        "reason": {
+          "type": "string"
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "formula": {
+          "type": "string"
+        },
+        "inventory_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "collector",
+        "kind",
+        "evidence_class",
+        "tier",
+        "feature",
+        "subject",
+        "source",
+        "revision",
+        "timestamp",
+        "freshness",
+        "confidence",
+        "heuristic",
+        "boundary",
+        "details"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^ev-[0-9a-f]{16}$"
+        },
+        "collector": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_class": {
+          "type": "string",
+          "enum": [
+            "measured",
+            "observed_execution",
+            "declared_mapping",
+            "inferred_mapping",
+            "gap_unknown"
+          ]
+        },
+        "tier": {
+          "type": "string",
+          "enum": [
+            "unit",
+            "integration",
+            "e2e"
+          ]
+        },
+        "feature": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timestamp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "freshness": {
+          "type": "string",
+          "enum": [
+            "current",
+            "stale",
+            "unknown"
+          ]
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "heuristic": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "boundary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "real",
+            "simulated"
+          ],
+          "properties": {
+            "real": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "simulated": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "details": {
+          "type": "object"
+        }
+      }
+    },
+    "behavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "requirement_anchor",
+        "priority",
+        "automation",
+        "required_tier",
+        "tier_origin",
+        "tier_reviewed",
+        "required_boundary",
+        "assessable",
+        "exclusion_reason",
+        "tier_label",
+        "tier_note",
+        "execution"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requirement_anchor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priority": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "automation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "required_tier": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "unit",
+            "integration",
+            "e2e",
+            null
+          ]
+        },
+        "tier_origin": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "testplan",
+            "mapping-config",
+            null
+          ]
+        },
+        "tier_reviewed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "required_boundary": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "real",
+              "simulated"
+            ]
+          }
+        },
+        "assessable": {
+          "type": "boolean"
+        },
+        "exclusion_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tier_label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tier_note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "execution": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "feature_behavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "requirement_anchor",
+        "priority",
+        "automation",
+        "required_tier",
+        "tier_origin",
+        "tier_reviewed",
+        "required_boundary",
+        "assessable",
+        "exclusion_reason",
+        "tiers",
+        "tier_label",
+        "tier_note",
+        "execution"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requirement_anchor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priority": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "automation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "required_tier": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "unit",
+            "integration",
+            "e2e",
+            null
+          ]
+        },
+        "required_boundary": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "real",
+              "simulated"
+            ]
+          }
+        },
+        "assessable": {
+          "type": "boolean"
+        },
+        "exclusion_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tiers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "integration": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "reason",
+                "evidence_class",
+                "evidence_ids",
+                "candidate_ids",
+                "execution_status",
+                "boundary"
+              ],
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "covered",
+                    "gap",
+                    "excluded",
+                    "unassessable",
+                    "tier-unassigned"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "evidence_class": {
+                  "type": "string",
+                  "enum": [
+                    "measured",
+                    "observed_execution",
+                    "declared_mapping",
+                    "inferred_mapping",
+                    "gap_unknown",
+                    "none"
+                  ]
+                },
+                "evidence_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "candidate_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "execution_status": {
+                  "type": "string",
+                  "enum": [
+                    "executed-pass-current",
+                    "executed-fail",
+                    "stale",
+                    "not-executed",
+                    "unknown"
+                  ]
+                },
+                "boundary": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "real",
+                    "simulated"
+                  ],
+                  "properties": {
+                    "real": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "simulated": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "e2e": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "reason",
+                "evidence_class",
+                "evidence_ids",
+                "candidate_ids",
+                "execution_status",
+                "boundary"
+              ],
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "covered",
+                    "gap",
+                    "excluded",
+                    "unassessable",
+                    "tier-unassigned"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "evidence_class": {
+                  "type": "string",
+                  "enum": [
+                    "measured",
+                    "observed_execution",
+                    "declared_mapping",
+                    "inferred_mapping",
+                    "gap_unknown",
+                    "none"
+                  ]
+                },
+                "evidence_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "candidate_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "execution_status": {
+                  "type": "string",
+                  "enum": [
+                    "executed-pass-current",
+                    "executed-fail",
+                    "stale",
+                    "not-executed",
+                    "unknown"
+                  ]
+                },
+                "boundary": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "real",
+                    "simulated"
+                  ],
+                  "properties": {
+                    "real": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "simulated": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "unit": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "reason",
+                "evidence_class",
+                "evidence_ids",
+                "candidate_ids",
+                "execution_status",
+                "boundary"
+              ],
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "covered",
+                    "gap",
+                    "excluded",
+                    "unassessable",
+                    "tier-unassigned"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "evidence_class": {
+                  "type": "string",
+                  "enum": [
+                    "measured",
+                    "observed_execution",
+                    "declared_mapping",
+                    "inferred_mapping",
+                    "gap_unknown",
+                    "none"
+                  ]
+                },
+                "evidence_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "candidate_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "execution_status": {
+                  "type": "string",
+                  "enum": [
+                    "executed-pass-current",
+                    "executed-fail",
+                    "stale",
+                    "not-executed",
+                    "unknown"
+                  ]
+                },
+                "boundary": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "real",
+                    "simulated"
+                  ],
+                  "properties": {
+                    "real": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "simulated": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tier_origin": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "testplan",
+            "mapping-config",
+            null
+          ]
+        },
+        "tier_reviewed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "tier_label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tier_note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "execution": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "feature",
+        "path",
+        "revision",
+        "behavior_count",
+        "duplicate_ids"
+      ],
+      "properties": {
+        "feature": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "behavior_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "duplicate_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "feature",
+        "behavior",
+        "behavior_title",
+        "subject_kind",
+        "tier",
+        "priority",
+        "reason",
+        "candidates",
+        "requirement_anchor",
+        "testplan",
+        "next_action"
+      ],
+      "properties": {
+        "feature": {
+          "type": "string",
+          "minLength": 1
+        },
+        "behavior": {
+          "type": "string"
+        },
+        "behavior_title": {
+          "type": "string"
+        },
+        "subject_kind": {
+          "type": "string",
+          "enum": [
+            "behavior",
+            "package"
+          ]
+        },
+        "tier": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "unit",
+            "integration",
+            "e2e",
+            null
+          ]
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "no-mapping",
+            "inferred-only",
+            "wrong-tier",
+            "boundary-simulated",
+            "test-missing",
+            "not-executed",
+            "package-missing",
+            "low-statement-coverage",
+            "tier-unassigned",
+            "planned-not-implemented"
+          ]
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "evidence_id",
+              "source",
+              "tier",
+              "confidence",
+              "heuristic"
+            ],
+            "properties": {
+              "evidence_id": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "unit",
+                  "integration",
+                  "e2e"
+                ]
+              },
+              "confidence": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0.0,
+                "maximum": 1.0
+              },
+              "heuristic": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "requirement_anchor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "testplan": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_action": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "feature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "name",
+        "components",
+        "testplan",
+        "tier_unassigned",
+        "tiers",
+        "alternative_metrics",
+        "inventories",
+        "denominator_breakdown",
+        "behaviors",
+        "gaps",
+        "unit_behaviors",
+        "behavior_counts",
+        "unassessable_by_tier",
+        "mapping_file"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "testplan": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tier_unassigned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tiers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "unit",
+            "integration",
+            "e2e"
+          ],
+          "properties": {
+            "unit": {
+              "$ref": "#/$defs/metric"
+            },
+            "integration": {
+              "$ref": "#/$defs/metric"
+            },
+            "e2e": {
+              "$ref": "#/$defs/metric"
+            }
+          }
+        },
+        "alternative_metrics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/metric"
+          }
+        },
+        "inventories": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/inventory"
+          }
+        },
+        "denominator_breakdown": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "unit",
+            "integration",
+            "e2e"
+          ],
+          "properties": {
+            "unit": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "tier": {
+                  "type": "string"
+                },
+                "denominator": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required_tier": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "tier_unassigned": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "provisional_percent": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0.0,
+                  "maximum": 100.0
+                },
+                "excluded": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "unassessable": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "integration": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "tier": {
+                  "type": "string"
+                },
+                "denominator": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required_tier": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "tier_unassigned": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "provisional_percent": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0.0,
+                  "maximum": 100.0
+                },
+                "excluded": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "unassessable": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "e2e": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "tier": {
+                  "type": "string"
+                },
+                "denominator": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required_tier": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "tier_unassigned": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "provisional_percent": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0.0,
+                  "maximum": 100.0
+                },
+                "excluded": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "unassessable": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        },
+        "behaviors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/feature_behavior"
+          }
+        },
+        "gaps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/gap"
+          }
+        },
+        "unit_behaviors": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "behavior_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "unit",
+            "integration",
+            "e2e",
+            "tier_unassigned"
+          ],
+          "properties": {
+            "unit": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "integration": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "e2e": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "tier_unassigned": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "unassessable_by_tier": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "unit",
+            "integration",
+            "e2e",
+            "tier_unassigned"
+          ],
+          "properties": {
+            "unit": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "integration": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "e2e": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "tier_unassigned": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "mapping_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "summary_feature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "verdict",
+        "critical_gaps",
+        "high_gaps",
+        "gaps",
+        "unavailable_metrics",
+        "stale_metrics",
+        "blocked_metrics",
+        "zero_metrics",
+        "tier_unassigned",
+        "missing_inventory_metrics"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "ready",
+            "not ready",
+            "insufficient evidence"
+          ]
+        },
+        "critical_gaps": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "high_gaps": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gaps": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unavailable_metrics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stale_metrics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blocked_metrics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "zero_metrics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tier_unassigned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missing_inventory_metrics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "features",
+        "totals",
+        "methodology",
+        "top_actions"
+      ],
+      "properties": {
+        "features": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/summary_feature"
+          }
+        },
+        "totals": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "critical_gaps",
+            "high_gaps",
+            "gaps"
+          ],
+          "properties": {
+            "critical_gaps": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "high_gaps": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "gaps": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "methodology": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "metric_versions",
+            "require_execution",
+            "pending_review_mappings",
+            "unit_low_coverage_percent",
+            "notes",
+            "tier_unassigned",
+            "unreviewed_tier_overrides"
+          ],
+          "properties": {
+            "metric_versions": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "require_execution": {
+              "type": "boolean"
+            },
+            "pending_review_mappings": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unit_low_coverage_percent": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 100.0
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tier_unassigned": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unreviewed_tier_overrides": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "top_actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "feature",
+              "tier",
+              "subject",
+              "priority",
+              "reason",
+              "action"
+            ],
+            "properties": {
+              "feature": {
+                "type": "string"
+              },
+              "tier": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "subject": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "action": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "previous_run_id",
+        "previous_generated_at",
+        "has_previous",
+        "metrics",
+        "metrics_added",
+        "metrics_removed",
+        "behaviors_added",
+        "behaviors_removed",
+        "mapping_class_changes",
+        "execution_status_changes",
+        "availability_changes"
+      ],
+      "properties": {
+        "previous_run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "previous_generated_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "has_previous": {
+          "type": "boolean"
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "feature",
+              "tier",
+              "trend",
+              "reason",
+              "previous",
+              "current"
+            ],
+            "properties": {
+              "feature": {
+                "type": "string"
+              },
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "unit",
+                  "integration",
+                  "e2e"
+                ]
+              },
+              "trend": {
+                "type": "string",
+                "enum": [
+                  "changed",
+                  "not-comparable"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "previous": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "state": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "numerator": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "denominator": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "value_percent": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "metric_version": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "inventory_revision": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "current": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "state": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "numerator": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "denominator": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "value_percent": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "metric_version": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "inventory_revision": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "metrics_added": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "feature",
+              "tier",
+              "trend"
+            ],
+            "properties": {
+              "feature": {
+                "type": "string"
+              },
+              "tier": {
+                "type": "string"
+              },
+              "trend": {
+                "type": "string",
+                "const": "added"
+              }
+            }
+          }
+        },
+        "metrics_removed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "feature",
+              "tier",
+              "trend"
+            ],
+            "properties": {
+              "feature": {
+                "type": "string"
+              },
+              "tier": {
+                "type": "string"
+              },
+              "trend": {
+                "type": "string",
+                "const": "removed"
+              }
+            }
+          }
+        },
+        "behaviors_added": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "behaviors_removed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mapping_class_changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "evidence_id",
+              "previous",
+              "current"
+            ],
+            "properties": {
+              "evidence_id": {
+                "type": "string"
+              },
+              "previous": {
+                "type": "string"
+              },
+              "current": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "execution_status_changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "feature",
+              "behavior",
+              "tier",
+              "previous",
+              "current"
+            ],
+            "properties": {
+              "feature": {
+                "type": "string"
+              },
+              "behavior": {
+                "type": "string"
+              },
+              "tier": {
+                "type": "string"
+              },
+              "previous": {
+                "type": "string"
+              },
+              "current": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "availability_changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "feature",
+              "tier",
+              "previous",
+              "current"
+            ],
+            "properties": {
+              "feature": {
+                "type": "string"
+              },
+              "tier": {
+                "type": "string"
+              },
+              "previous": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "current": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "collector",
+        "operation",
+        "code",
+        "message",
+        "severity",
+        "recovery",
+        "duration_ms"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "collector": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warning",
+            "info"
+          ]
+        },
+        "recovery": {
+          "type": "string"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

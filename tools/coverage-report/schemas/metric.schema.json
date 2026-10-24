@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://osac-project.org/schemas/coverage-report/v1/metric.schema.json",
+  "title": "OSAC coverage metric",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "feature",
+    "tier",
+    "metric_version",
+    "state",
+    "numerator",
+    "denominator",
+    "value_percent",
+    "excluded",
+    "unassessable",
+    "tier_unassigned",
+    "provisional_percent",
+    "reason",
+    "inputs",
+    "formula",
+    "inventory_revision"
+  ],
+  "properties": {
+    "feature": {"type": "string", "minLength": 1},
+    "tier": {
+      "type": "string",
+      "enum": ["unit", "integration", "e2e"]
+    },
+    "metric_version": {"type": "string", "minLength": 1},
+    "state": {
+      "type": "string",
+      "enum": ["value", "zero", "na", "unavailable", "stale", "blocked"]
+    },
+    "numerator": {"type": ["integer", "null"], "minimum": 0},
+    "denominator": {"type": ["integer", "null"], "minimum": 0},
+    "value_percent": {"type": ["number", "null"], "minimum": 0.0, "maximum": 100.0},
+    "excluded": {"type": "integer", "minimum": 0},
+    "unassessable": {"type": "integer", "minimum": 0},
+    "tier_unassigned": {"type": "integer", "minimum": 0},
+    "provisional_percent": {
+      "type": ["number", "null"],
+      "minimum": 0.0,
+      "maximum": 100.0
+    },
+    "reason": {"type": "string"},
+    "inputs": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "formula": {"type": "string"},
+    "inventory_revision": {"type": ["string", "null"]}
+  }
+}

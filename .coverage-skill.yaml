@@ -1,0 +1,36 @@
+# Conventions for the deterministic coverage reporter.
+#
+# Precedence is CLI flags > this file > built-in defaults. Every effective value
+# and the layer that supplied it are recorded in run-manifest.json.
+#
+# The reporter performs no network access and makes no Jira calls. A Jira key is
+# only a lookup key into tools/coverage-report/config/features.yaml.
+version: 1
+
+features_file: tools/coverage-report/config/features.yaml
+
+enhancement_roots:
+  - enhancement-proposals/enhancements
+  - .artifacts/design
+
+artifacts:
+  # Glob patterns are consumed by collectors in later waves; explicit paths can
+  # also be passed with --coverprofile / --junit.
+  coverprofiles: []
+  junit: []
+
+metric_versions:
+  # legacy-package-average-v1 or statement-weighted-v2
+  unit: statement-weighted-v2
+  integration: behavior-inventory-v1
+  e2e: behavior-inventory-v1
+
+policy:
+  # v1: a declared mapping counts even when no execution is joined. Execution
+  # status is still reported per behavior. Set true to require a current
+  # passing run in the numerator.
+  require_execution: false
+  # A measured unit package below this statement percentage becomes a gap.
+  unit_low_coverage_percent: 50
+
+output_dir: .artifacts/coverage-report

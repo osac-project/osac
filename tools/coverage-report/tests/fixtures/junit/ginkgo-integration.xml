@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="3" failures="1" errors="0" time="1.9">
+  <testsuite name="DiskImage API" tests="3" failures="1" errors="0" time="1.9" timestamp="2026-10-20T10:00:00Z">
+    <properties>
+      <property name="revision" value="REVISION_PLACEHOLDER"/>
+    </properties>
+    <testcase name="[It] DiskImage API creates a disk image" classname="DiskImage API" time="0.5" status="passed"/>
+    <testcase name="[It] DiskImage API rejects a duplicate name" classname="DiskImage API" time="0.4" status="failed">
+      <failure message="expected status 409 but got 200">expected status 409 but got 200
+  at diskimage_suite_test.go:42</failure>
+    </testcase>
+    <testcase name="[It] DiskImage API skips the slow provider path" classname="DiskImage API" time="0" status="skipped">
+      <skipped message="pending"/>
+    </testcase>
+  </testsuite>
+</testsuites>

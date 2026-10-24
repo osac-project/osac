@@ -1,0 +1,79 @@
+{
+  "profile": "tests/fixtures/ginkgo/coverprofile.txt",
+  "features": {
+    "OSAC-1000": {
+      "packages": {
+        "example.com/mod/pkg/alpha": {
+          "statements": 5,
+          "covered": 2,
+          "blocks": 2,
+          "percent": 40.0
+        },
+        "example.com/mod/pkg/beta": {
+          "statements": 4,
+          "covered": 2,
+          "blocks": 3,
+          "percent": 50.0
+        }
+      },
+      "missing": [],
+      "legacy-package-average-v1": {
+        "state": "value",
+        "value_percent": 45.0,
+        "numerator": 900,
+        "denominator": 20
+      },
+      "statement-weighted-v2": {
+        "state": "value",
+        "value_percent": 44.4,
+        "numerator": 4,
+        "denominator": 9
+      }
+    },
+    "OSAC-2000": {
+      "packages": {
+        "example.com/mod/pkg/gamma": {
+          "statements": 4,
+          "covered": 0,
+          "blocks": 1,
+          "percent": 0.0
+        },
+        "example.com/mod/pkg/shared": {
+          "statements": 4,
+          "covered": 4,
+          "blocks": 2,
+          "percent": 100.0
+        }
+      },
+      "missing": [],
+      "legacy-package-average-v1": {
+        "state": "value",
+        "value_percent": 50.0,
+        "numerator": 1000,
+        "denominator": 20
+      },
+      "statement-weighted-v2": {
+        "state": "value",
+        "value_percent": 50.0,
+        "numerator": 4,
+        "denominator": 8
+      }
+    },
+    "OSAC-3000": {
+      "packages": {},
+      "missing": ["example.com/mod/pkg/absent"],
+      "legacy-package-average-v1": {
+        "state": "blocked",
+        "value_percent": null,
+        "numerator": null,
+        "denominator": null
+      },
+      "statement-weighted-v2": {
+        "state": "blocked",
+        "value_percent": null,
+        "numerator": null,
+        "denominator": null
+      }
+    }
+  }
+}

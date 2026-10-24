@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://osac-project.org/schemas/coverage-report/v1/diagnostic.schema.json",
+  "title": "OSAC coverage diagnostic",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "collector",
+    "operation",
+    "code",
+    "message",
+    "severity",
+    "recovery",
+    "duration_ms"
+  ],
+  "properties": {
+    "run_id": {"type": "string", "minLength": 1},
+    "collector": {"type": "string", "minLength": 1},
+    "operation": {"type": "string", "minLength": 1},
+    "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+    "message": {"type": "string", "minLength": 1},
+    "severity": {
+      "type": "string",
+      "enum": ["error", "warning", "info"]
+    },
+    "recovery": {"type": "string"},
+    "duration_ms": {"type": "integer", "minimum": 0}
+  }
+}

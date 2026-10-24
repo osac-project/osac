@@ -1,0 +1,12 @@
+version: 1
+features:
+  - key: OSAC-1000
+    name: alpha
+    aliases:
+      - shared
+    suites: {}
+  - key: OSAC-2000
+    name: beta
+    aliases:
+      - shared
+    suites: {}

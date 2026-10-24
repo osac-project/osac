@@ -1,0 +1,21 @@
+version: 1
+features:
+  - key: OSAC-1000
+    name: alpha-feature
+    unit_packages:
+      - package: example.com/mod/pkg/alpha
+        rationale: owns the alpha behaviour
+      - package: example.com/mod/pkg/beta
+        rationale: owns the beta behaviour
+  - key: OSAC-2000
+    name: gamma-feature
+    unit_packages:
+      - package: example.com/mod/pkg/gamma
+        rationale: owns the gamma behaviour
+      - package: example.com/mod/pkg/shared
+        rationale: shared helper explicitly listed by this feature
+  - key: OSAC-3000
+    name: missing-feature
+    unit_packages:
+      - package: example.com/mod/pkg/absent
+        rationale: mapped but absent from the profile

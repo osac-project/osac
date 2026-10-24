@@ -1,0 +1,12 @@
+version: 1
+features_file: config/features.yaml
+enhancement_roots:
+  - enhancement-proposals/enhancements
+artifacts:
+  coverprofiles: []
+  junit: []
+metric_versions:
+  unit: statement-weighted-v2
+  integration: behavior-inventory-v1
+  e2e: behavior-inventory-v1
+output_dir: .artifacts/coverage-report

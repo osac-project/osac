@@ -1,0 +1,26 @@
+version: 1
+features:
+  - key: OSAC-2540
+    name: disk-image
+    aliases:
+      - diskimage
+    testplan: docs/testplan.md
+    components:
+      - fulfillment-service
+    unit_packages: []
+    suites:
+      integration:
+        - fulfillment-service/it
+      e2e:
+        - tests/e2e
+  - key: OSAC-3000
+    name: virtual-machine
+    aliases:
+      - vm
+    testplan: docs/vm-testplan.md
+    components:
+      - osac-operator
+    unit_packages: []
+    suites:
+      integration: []
+      e2e: []

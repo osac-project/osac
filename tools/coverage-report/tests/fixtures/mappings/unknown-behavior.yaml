@@ -1,0 +1,10 @@
+version: 1
+feature: OSAC-1111
+reviewed_by: "@qe-team"
+mappings:
+  - behavior: TC-FR99-01
+    tests:
+      - path: fulfillment-service/it/it_disk_images_api_test.go
+        name: DiskImage API
+        tier: integration
+    rationale: "Refers to a test case the test plan does not define."

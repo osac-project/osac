@@ -1,0 +1,10 @@
+version: 1
+feature: OSAC-1111
+reviewed_by: "@qe-team"
+mappings:
+  - behavior: TC-FR1-01
+    tests:
+      - path: fulfillment-service/it/it_disk_images_removed_test.go
+        name: DiskImage API removed suite
+        tier: integration
+    rationale: "The named file was deleted or renamed."

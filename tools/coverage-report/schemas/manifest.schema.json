@@ -1,0 +1,365 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://osac-project.org/schemas/coverage-report/v1/manifest.schema.json",
+  "title": "OSAC coverage run manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "tool_version",
+    "generated_at",
+    "repo",
+    "feature_resolution",
+    "effective_config",
+    "config_origins",
+    "config_file",
+    "features_file",
+    "input_digests",
+    "collectors",
+    "metric_versions",
+    "inventories",
+    "command_line"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "run-manifest/v1"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^run-[0-9a-f]{16}$"
+    },
+    "tool_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generated_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha",
+        "sha_source"
+      ],
+      "properties": {
+        "sha": {
+          "type": "string",
+          "minLength": 4
+        },
+        "sha_source": {
+          "type": "string",
+          "enum": [
+            "git",
+            "cli"
+          ]
+        }
+      }
+    },
+    "feature_resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input",
+        "matched_by",
+        "features"
+      ],
+      "properties": {
+        "input": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "matched_by": {
+          "type": "string",
+          "enum": [
+            "key",
+            "name",
+            "alias",
+            "full_plan"
+          ]
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "effective_config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "features_file",
+        "enhancement_roots",
+        "artifacts",
+        "metric_versions",
+        "output_dir",
+        "policy"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer"
+        },
+        "features_file": {
+          "type": "string"
+        },
+        "enhancement_roots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "artifacts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "coverprofiles",
+            "junit"
+          ],
+          "properties": {
+            "coverprofiles": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "junit": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "metric_versions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "output_dir": {
+          "type": "string"
+        },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "require_execution",
+            "unit_low_coverage_percent"
+          ],
+          "properties": {
+            "require_execution": {
+              "type": "boolean"
+            },
+            "unit_low_coverage_percent": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 100.0
+            }
+          }
+        }
+      }
+    },
+    "config_origins": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "enum": [
+          "cli",
+          "repo",
+          "default"
+        ]
+      }
+    },
+    "config_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "features_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "input_digests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "path",
+          "sha256",
+          "size_bytes"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "coverprofile",
+              "junit",
+              "config",
+              "features",
+              "testplan",
+              "mapping",
+              "integration-testing-doc"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "collectors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "status",
+          "diagnostic_codes"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "error"
+            ]
+          },
+          "diagnostic_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "metric_versions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "inventories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "feature",
+          "path",
+          "revision",
+          "behavior_count",
+          "duplicate_ids"
+        ],
+        "properties": {
+          "feature": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "behavior_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "duplicate_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "command_line": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "previous_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

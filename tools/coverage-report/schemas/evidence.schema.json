@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://osac-project.org/schemas/coverage-report/v1/evidence.schema.json",
+  "title": "OSAC coverage evidence record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "collector",
+    "kind",
+    "evidence_class",
+    "tier",
+    "feature",
+    "subject",
+    "source",
+    "revision",
+    "timestamp",
+    "freshness",
+    "confidence",
+    "heuristic",
+    "boundary",
+    "details"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^ev-[0-9a-f]{16}$"
+    },
+    "collector": {"type": "string", "minLength": 1},
+    "kind": {"type": "string", "minLength": 1},
+    "evidence_class": {
+      "type": "string",
+      "enum": [
+        "measured",
+        "observed_execution",
+        "declared_mapping",
+        "inferred_mapping",
+        "gap_unknown"
+      ]
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["unit", "integration", "e2e"]
+    },
+    "feature": {"type": "string", "minLength": 1},
+    "subject": {"type": "string", "minLength": 1},
+    "source": {"type": "string", "minLength": 1},
+    "revision": {"type": ["string", "null"]},
+    "timestamp": {"type": ["string", "null"]},
+    "freshness": {
+      "type": "string",
+      "enum": ["current", "stale", "unknown"]
+    },
+    "confidence": {"type": ["number", "null"], "minimum": 0.0, "maximum": 1.0},
+    "heuristic": {"type": ["string", "null"]},
+    "boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["real", "simulated"],
+      "properties": {
+        "real": {"type": "array", "items": {"type": "string"}},
+        "simulated": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "details": {"type": "object"}
+  }
+}

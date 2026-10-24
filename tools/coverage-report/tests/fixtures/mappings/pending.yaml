@@ -1,0 +1,11 @@
+version: 1
+feature: OSAC-1111
+reviewed_by: PENDING-REVIEW
+mappings:
+  - behavior: TC-FR1-01
+    tests:
+      - path: fulfillment-service/it/it_disk_images_api_test.go
+        name: DiskImage API
+        tier: integration
+    boundary: {real: [fulfillment-api], simulated: []}
+    rationale: "Suggested by the coverage note; nobody has signed off yet."

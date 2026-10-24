@@ -1,0 +1,41 @@
+version: 1
+features:
+  - key: OSAC-2540
+    name: disk-image
+    aliases:
+      - diskimage
+    testplan: enhancement-proposals/enhancements/OSAC-2540-disk-image/testplan.md
+    components:
+      - fulfillment-service
+    # Filled in W1 with per-package rationale. Entries may be a plain package
+    # string or a {package, rationale} mapping.
+    unit_packages:
+      - package: github.com/osac-project/osac/fulfillment-service/internal/servers
+        rationale: >-
+          public and private DiskImages gRPC servers plus disk image state
+          validation; shared package that also serves every other resource, so
+          its percentage understates DiskImage-specific coverage
+      - package: github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/diskimage
+        rationale: CLI create command dedicated to DiskImage resources
+      - package: github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/diskimage
+        rationale: CLI describe command dedicated to DiskImage resources
+    suites:
+      integration:
+        - fulfillment-service/it
+      e2e:
+        - tests/e2e
+  - key: OSAC-5731
+    name: mcp-server
+    aliases:
+      - mcp
+    testplan: enhancement-proposals/enhancements/OSAC-5731-mcp-server/testplan.md
+    components:
+      - fulfillment-service
+    unit_packages:
+      - package: github.com/osac-project/osac/fulfillment-service/internal/cmd/service/start/mcpserver
+        rationale: dedicated package implementing the MCP server, its tools and transport
+    suites:
+      integration:
+        - fulfillment-service/it
+      e2e:
+        - tests/e2e

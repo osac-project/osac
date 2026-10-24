@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="pytest" errors="0" failures="0" skipped="1" tests="3" time="2.5" timestamp="2026-10-20T11:00:00Z">
+    <properties>
+      <property name="git_sha" value="REVISION_PLACEHOLDER"/>
+    </properties>
+    <testcase classname="tests.e2e.vm.test_lifecycle" name="test_vm_create" file="tests/e2e/vm/test_lifecycle.py" line="12" time="1.5"/>
+    <testcase classname="tests.e2e.vm.test_lifecycle" name="test_vm_delete" file="tests/e2e/vm/test_lifecycle.py" line="40" time="0.9"/>
+    <testcase classname="tests.e2e.cluster.test_cluster" name="test_cluster_create" file="tests/e2e/cluster/test_cluster.py" line="8" time="0.1">
+      <skipped message="requires a deployed profile"/>
+    </testcase>
+  </testsuite>
+</testsuites>

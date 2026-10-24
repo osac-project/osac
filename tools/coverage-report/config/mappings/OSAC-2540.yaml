@@ -1,0 +1,101 @@
+# Test-to-behavior mappings for OSAC-2540 (DiskImage).
+#
+# These entries are UNREVIEWED. They were derived from the coverage note
+# "DiskImage API-only workflows" in docs/INTEGRATION-TESTING.md, section
+# "fulfillment-service", and from the test names and docstrings that exist at
+# the time of writing. The mappings collector treats reviewed_by
+# PENDING-REVIEW as INFERRED_MAPPING (heuristic "unreviewed-config") so no AI
+# suggestion can masquerade as a reviewed claim.
+#
+# To promote an entry, replace reviewed_by with a GitHub user handle (@name) or
+# a team (org/team, optionally @org/team) after checking that the named test
+# actually asserts the behavior. A bare user name is not accepted.
+# Mapping at Describe granularity (name: DiskImage API) means "this file and
+# suite cover the case", not that one spec asserts every step.
+version: 1
+feature: OSAC-2540
+reviewed_by: PENDING-REVIEW
+mappings:
+  - behavior: TC-FR1-01
+    tests: [{path: fulfillment-service/it/it_disk_images_api_test.go, name: DiskImage API, tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql], simulated: []}
+    rationale: "Coverage note claims public CRUD for provider admin/shared images in this file."
+  - behavior: TC-FR1-02
+    tests: [{path: fulfillment-service/it/it_disk_images_api_test.go, name: DiskImage API, tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql], simulated: []}
+    rationale: "Coverage note claims public CRUD, which includes list, for admin/shared images."
+  - behavior: TC-FR1-03
+    tests: [{path: fulfillment-service/it/it_disk_images_api_test.go, name: DiskImage API, tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql], simulated: []}
+    rationale: "Coverage note claims public CRUD, which includes get, for admin/shared images."
+  - behavior: TC-FR1-04
+    tests: [{path: fulfillment-service/it/it_disk_images_api_test.go, name: DiskImage API, tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql], simulated: []}
+    rationale: "Coverage note claims public CRUD, which includes update, for admin/shared images."
+  - behavior: TC-FR1-05
+    tests: [{path: fulfillment-service/it/it_disk_images_api_test.go, name: DiskImage API, tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql], simulated: []}
+    rationale: "Coverage note claims public CRUD, which includes delete, for admin/shared images."
+  - behavior: TC-FR4-01
+    tests: [{path: fulfillment-service/it/it_disk_images_tenant_isolation_test.go, name: Global DiskImage visible to all tenants, tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql], simulated: []}
+    rationale: "Spec name matches the case; coverage note assigns tenant visibility to this file."
+  - behavior: TC-FR4-02
+    tests: [{path: fulfillment-service/it/it_disk_images_tenant_isolation_test.go, name: Tenant-scoped DiskImage isolated to its tenant, tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql], simulated: []}
+    rationale: "Spec name matches the case; coverage note assigns tenant visibility to this file."
+  - behavior: TC-FR5-01
+    tests: [{path: fulfillment-service/it/it_disk_images_tenant_isolation_test.go, name: Tenant User can CRUD DiskImages within own tenant, tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql, keycloak-identities], simulated: []}
+    rationale: "Spec name matches tenant-user CRUD; the file uses the real test identities."
+  - behavior: TC-FR6-01
+    tests: [{path: fulfillment-service/it/it_disk_images_api_test.go, name: "deprecates, hides obsolete images, filters explicitly, and reactivates", tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql], simulated: []}
+    rationale: "The spec sets the lifecycle to DEPRECATED and checks the resulting timestamps."
+  - behavior: TC-FR6-02
+    tests: [{path: fulfillment-service/it/it_disk_images_api_test.go, name: "deprecates, hides obsolete images, filters explicitly, and reactivates", tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql], simulated: []}
+    rationale: "The spec sets the lifecycle to OBSOLETE and checks the resulting timestamps."
+  - behavior: TC-FR6-03
+    tests: [{path: fulfillment-service/it/it_disk_images_api_test.go, name: "deprecates, hides obsolete images, filters explicitly, and reactivates", tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql], simulated: []}
+    rationale: "The spec reactivates an obsolete image; the title does not say whether deprecation is cleared."
+  - behavior: TC-FR7-01
+    tests: [{path: tests/e2e/vmaas/regression/test_compute_instance_disk_image.py, name: test_compute_instance_with_disk_image, tier: e2e}]
+    boundary: {real: [fulfillment-api, osac-operator, vmaas-provider], simulated: []}
+    rationale: "The test docstring cites TC-FR7-01 and verifies the VM runs the referenced image."
+  - behavior: TC-FR7-04
+    tests: [{path: fulfillment-service/it/it_disk_image_lifecycle_test.go, name: obsolete image rejects creation without persistence, tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql], simulated: [storage-backend]}
+    rationale: "Coverage note assigns obsolete-image rejection to this file; the suite uses a fake storage backend."
+  - behavior: TC-FR7-05
+    tests: [{path: fulfillment-service/it/it_disk_image_lifecycle_test.go, name: deprecated image permits creation with a warning, tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql], simulated: [storage-backend]}
+    rationale: "Coverage note assigns deprecated-image warnings to this file; the suite uses a fake storage backend."
+  - behavior: TC-FR8-01
+    tests: [{path: fulfillment-service/it/it_disk_images_api_test.go, name: "resolves template image defaults by name and protects the image until the template is deleted", tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql], simulated: []}
+    rationale: "The spec name states template image default resolution."
+  - behavior: TC-FR12-01
+    tests: [{path: tests/e2e/vmaas/regression/test_compute_instance_disk_image.py, name: test_disk_image_deletion_protection, tier: e2e}]
+    boundary: {real: [fulfillment-api, osac-operator, vmaas-provider], simulated: []}
+    rationale: "The test docstring cites TC-FR12-01 and exercises deletion protection end to end."
+  - behavior: TC-FR12-02
+    tests: [{path: fulfillment-service/it/it_disk_images_api_test.go, name: "resolves template image defaults by name and protects the image until the template is deleted", tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql], simulated: []}
+    rationale: "The spec name states the image stays protected until the template is deleted."
+  - behavior: TC-FR12-04
+    tests: [{path: tests/e2e/vmaas/regression/test_compute_instance_disk_image.py, name: test_disk_image_deletion_protection, tier: e2e}]
+    boundary: {real: [fulfillment-api, osac-operator, vmaas-provider], simulated: []}
+    rationale: "The test docstring cites TC-FR12-04 and deletes the image after removing references."
+  - behavior: TC-FR13-01
+    tests: [{path: fulfillment-service/it/it_disk_images_api_test.go, name: "deprecates, hides obsolete images, filters explicitly, and reactivates", tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql], simulated: []}
+    rationale: "The spec name states obsolete images are hidden from the default list."
+  - behavior: TC-FR13-02
+    tests: [{path: fulfillment-service/it/it_disk_images_api_test.go, name: "deprecates, hides obsolete images, filters explicitly, and reactivates", tier: integration}]
+    boundary: {real: [fulfillment-api, postgresql], simulated: []}
+    rationale: "The spec name states obsolete images are reachable with an explicit filter."
+# Not mapped on purpose: tests/e2e/bmaas/sanity/test_baremetal_instance_lifecycle.py
+# (named in the same coverage note) exercises BMH image selection and
+# deprecated-image provisioning, which no OSAC-2540 test case describes.

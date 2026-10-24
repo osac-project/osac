@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://osac-project.org/schemas/coverage-report/v1/config.schema.json",
+  "title": "OSAC coverage reporter configuration (.coverage-skill.yaml)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "features_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "enhancement_roots": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "coverprofiles": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "junit": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "metric_versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "unit": {
+          "type": "string",
+          "enum": ["legacy-package-average-v1", "statement-weighted-v2"]
+        },
+        "integration": {
+          "type": "string",
+          "enum": ["behavior-inventory-v1"]
+        },
+        "e2e": {
+          "type": "string",
+          "enum": ["behavior-inventory-v1"]
+        }
+      }
+    },
+    "output_dir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "require_execution": {
+          "type": "boolean"
+        },
+        "unit_low_coverage_percent": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 100.0
+        }
+      }
+    }
+  }
+}

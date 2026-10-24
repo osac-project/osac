@@ -1,0 +1,12 @@
+mode: count
+example.com/mod/pkg/alpha/a.go:1.1,2.2 2 1
+example.com/mod/pkg/alpha/a.go:3.1,4.2 3 0
+example.com/mod/pkg/alpha/a.go:1.1,2.2 2 0
+example.com/mod/pkg/beta/b.go:1.1,2.2 1 1
+example.com/mod/pkg/beta/b.go:3.1,4.2 1 1
+example.com/mod/pkg/beta/b.go:5.1,6.2 2 0
+example.com/mod/pkg/beta/b.go:3.1,4.2 1 0
+example.com/mod/pkg/gamma/g.go:1.1,2.2 4 0
+example.com/mod/pkg/shared/s.go:1.1,2.2 2 1
+example.com/mod/pkg/shared/s.go:3.1,4.2 2 1
+this line is not a coverprofile block

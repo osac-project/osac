@@ -107,6 +107,34 @@ wrong-tier coverage as unresolved even when all requirement and interface IDs
 have mappings. A documented provider gap does not require real hardware for
 an unrelated status-projection change; scope the test to the changed behavior.
 
+### Coverage reporting
+
+[`tools/coverage-report/`](../tools/coverage-report/README.md) turns the
+artifacts this guide describes into a per-feature, per-tier report. Run it from
+the repository root with `make coverage-report FEATURE=OSAC-2540` (or omit
+`FEATURE` for the full registry). It needs a Go coverprofile for unit
+percentages and JUnit XML for execution status; neither is required to see the
+integration and E2E mapping gaps.
+
+- Every `TC-*` case in the feature test plan is a behavior. Its declared `Tier`
+  selects the denominator. A case with no tier is tier-unassigned: it is
+  excluded from both denominators, emits one gap, and blocks the tier metrics
+  with a provisional percentage instead of being counted twice.
+- `config/mappings/<KEY>.yaml` links a case to a test and records its boundary.
+  A file whose `reviewed_by` is `PENDING-REVIEW` is reported as inferred and
+  never counts. The coverage notes below are the prose source for those
+  mappings; update the mapping when a note or its test changes. In a merged
+  test plan under `enhancement-proposals/`, an `Execution` or matrix path that
+  is not marked proposed and exists in the checkout also counts as declared; a
+  proposed path becomes a `planned-not-implemented` gap.
+- Mapping coverage and execution are separate claims. A reviewed mapping says a
+  test ought to cover the behavior; only JUnit execution evidence says it ran,
+  and with `policy.require_execution: false` (the default) execution does not
+  change the numerator.
+
+See the [tool README](../tools/coverage-report/README.md) for configuration,
+metric formulas, states, and the gap actions.
+
 ### Evidence checks before completing a phase
 
 Apply these checks during generation and self-review, then correct the artifacts

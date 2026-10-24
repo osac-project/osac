@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from types import SimpleNamespace
 from unittest.mock import Mock, call
 
 import pytest
@@ -18,8 +19,7 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     def sleep(seconds: float) -> None:
         elapsed[0] += seconds
 
-    monkeypatch.setattr(runner.time, "sleep", sleep)
-    monkeypatch.setattr(runner.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(runner, "time", SimpleNamespace(sleep=sleep, monotonic=lambda: elapsed[0]))
     return elapsed
 
 

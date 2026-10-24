@@ -9,7 +9,6 @@
 # to avoid Helm ownership conflicts and lease contention.
 csi_driver_install_enabled: false
 
-
 csi_driver_install_chart_registry: "oci://ghcr.io/osac-project/charts"
 
 # The osac-csi-driver/v0.0.1 release publishes this chart to GHCR.

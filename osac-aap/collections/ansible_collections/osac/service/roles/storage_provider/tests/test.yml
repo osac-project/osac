@@ -62,6 +62,97 @@
             success_msg: "Validation passed -- dispatch failed as expected in unit test context"
 
 # ──────────────────────────────────────────────────────────────
+# Test 1a: Caller cannot override native CSI provider or OLM policy
+# Expected: the role rejects an untrusted OLM channel before any cluster access
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- reject overridden native CSI image
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run with caller-supplied OLM channel
+      block:
+        - name: Include storage_provider with an untrusted installer override
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: trident-block
+                protocol: block
+                provider: netapp
+            storage_provider_action: ensure_csi_driver
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+            storage_provider_csi_driver_matrix:
+              netapp:
+                protocols:
+                  block: csi.trident.netapp.io
+                installer:
+                  method: olm
+                  package: trident-operator
+                  channel: preview
+                  namespace: trident-operator
+                  operator_group: trident-operator-group
+                  install_plan_approval: Manual
+                  catalog_source: certified-operators
+                  catalog_namespace: openshift-marketplace
+                  trident_namespace: trident
+              vast:
+                protocols:
+                  nfs: csi.vastdata.com
+                  block: block.csi.vastdata.com
+                installer:
+                  method: olm
+                  namespace: vast-csi-system
+                  package: vast-csi-operator
+                  channel: stable
+                  install_plan_approval: Manual
+                  catalog_source: certified-operators
+                  catalog_namespace: openshift-marketplace
+              lvms: {}
+
+        - name: Fail if the caller-supplied installer override was accepted
+          ansible.builtin.fail:
+            msg: "Role accepted an untrusted native CSI installer matrix"
+
+      rescue:
+        - name: Verify the default native CSI policy rejected the override
+          ansible.builtin.assert:
+            that:
+              - "'configured in defaults' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              The caller-supplied native CSI OLM policy was rejected for an
+              unexpected reason: {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Role rejected an untrusted OLM policy before cluster access"
+
+# ──────────────────────────────────────────────────────────────
+# Test 1b: Providers without a native CSI handler are skipped
+# Expected: OSAC CSI tiers do not block native driver setup for other providers
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- skip providers without native CSI handlers
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Ensure the OSAC CSI provider is skipped by native driver setup
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_tiers:
+          - name: osac-csi-block
+            protocol: block
+            provider: osac-csi
+        storage_provider_action: ensure_csi_driver
+        tenant_name: tenant-acme
+        tenant_namespace: osac-tenants
+
+    - name: Verify OSAC CSI is skipped by native driver setup
+      ansible.builtin.assert:
+        that:
+          - _native_csi_driver_unknown_providers == ['osac_csi']
+        success_msg: "OSAC CSI was skipped because it has no native OLM install handler"
+
+# ──────────────────────────────────────────────────────────────
 # Test 2: Empty tier list -- error path
 # Expected: role fails with non-empty list message
 # ──────────────────────────────────────────────────────────────
@@ -1095,7 +1186,7 @@
                 backend_id: be-null-ep
             storage_provider_backend_connections:
               be-null-ep:
-                endpoint: null
+                endpoint:
                 username: "admin"
                 password: "not-a-real-credential"
             storage_provider_action: setup
@@ -1140,7 +1231,7 @@
             storage_provider_backend_connections:
               be-null-user:
                 endpoint: "vast.example.com"
-                username: null
+                username:
                 password: "not-a-real-credential"
             storage_provider_action: setup
             tenant_name: "tenant-null-user"
@@ -1185,7 +1276,7 @@
               be-null-pw:
                 endpoint: "vast.example.com"
                 username: "admin"
-                password: null
+                password:
             storage_provider_action: setup
             tenant_name: "tenant-null-pw"
             tenant_namespace: "osac-tenants"
@@ -1227,12 +1318,12 @@
               - name: default
                 protocol: nfs
                 provider: vast
-                backend_id: null
+                backend_id:
             storage_provider_backend_connections:
               placeholder:
-                endpoint: null
-                username: null
-                password: null
+                endpoint:
+                username:
+                password:
             storage_provider_action: setup
             tenant_name: "tenant-null-bid"
             tenant_namespace: "osac-tenants"

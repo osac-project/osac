@@ -99,9 +99,6 @@
     - name: Read per-tenant credentials and config from hub Secret
       ansible.builtin.include_tasks: read_tenant_credentials.yaml
 
-    - name: Ensure VAST CSI Operator is installed
-      ansible.builtin.include_tasks: ensure_csi_operator.yaml
-
     # ── Ensure per-tier VMS resources exist (views, QoS, view policies) ──
     # These are created here (not just in setup) so JIT tiers get their backing
     # VMS resources. Uses admin creds for VMS API access.

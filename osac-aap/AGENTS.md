@@ -62,7 +62,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-aap
 | Windows sysprep Secret copying and VM-spec wiring | Component integration ([DEV] OSAC-6182) | `compute_instance_create:sysprep_secret_copy` in `make test`; real Kind Secrets and `create_secrets.yaml`, including missing-tenant rejection; VM creation and readiness are overridden |
 | Execution-environment definition or dependency inputs | Build/package validation plus applicable integration tests | `make execution-environment-build`, then `make test` |
 | AAP, OpenStack, KubeVirt/RHACM, or provider provisioning | Contract or real-provider integration | Use the qualifying [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) suite |
-| Storage-provider behavior | Component integration (focused) plus real-provider coverage when required | Tenant target-routing runs in `make test`; provider tests require `STORAGE_TESTS_ENABLED=true make test` (or the relevant storage target and provider suite) |
+| Storage-provider behavior | Component integration (focused) plus real OLM coverage | Tenant target-routing runs in `make test`; stubbed storage-provider wiring runs with `STORAGE_TESTS_ENABLED=true make test` (`run_tests.sh` enables test-only installer overrides via `OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES`); deployed NetApp/VAST OLM installation is covered by the full-install VMaaS E2E `tests/e2e/vmaas/regression/test_native_csi_driver_install.py` and does not exercise array provisioning |
 
 Storage integration requires `STORAGE_TESTS_ENABLED=true`; image builds are separate build/package validation.
 

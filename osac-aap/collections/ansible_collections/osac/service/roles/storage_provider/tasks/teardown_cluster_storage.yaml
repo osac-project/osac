@@ -11,4 +11,4 @@
       loop: "{{ _unique_providers }}"
       loop_control:
         loop_var: _current_provider
-      ignore_errors: true  # noqa: ignore-errors
+      ignore_errors: true # noqa: ignore-errors

@@ -25,17 +25,19 @@ argument_specs:
         required: true
         choices:
           - setup
+          - ensure_csi_driver
           - ensure_storage_class
           - teardown_cluster_storage
           - teardown_backend
         description: >
           Which storage operation to perform. setup provisions provider-side
-          resources. ensure_storage_class creates K8s Secret and StorageClass
-          on the target cluster. teardown_cluster_storage removes cluster-side
-          K8s resources (StorageClasses, VolumeSnapshotClasses, CSI Secret)
+          resources. ensure_csi_driver installs or verifies provider-native CSI
+          drivers on the selected target cluster. ensure_storage_class creates
+          provider configuration, K8s Secrets, and StorageClasses on the target
+          cluster. teardown_cluster_storage removes cluster-side K8s resources
           without touching backend resources or hub Secret. teardown_backend
-          removes backend resources (VAST tenant, views, quotas) and hub
-          Secret without touching cluster-side K8s resources.
+          removes provider backend resources and hub Secret without touching
+          cluster-side K8s resources.
       storage_provider_block_encryption_passphrase:
         type: str
         required: false
@@ -68,8 +70,9 @@ argument_specs:
         type: str
         required: false
         description: >
-          Optional kubeconfig path for cluster-side storage resources. When omitted,
-          Kubernetes modules use the execution environment's default context.
+          Optional kubeconfig path for cluster-side storage resources, including
+          native CSI driver installation. When omitted, Kubernetes modules use
+          the execution environment's default context.
       storage_provider_target_kubeconfig_insecure:
         type: bool
         required: false

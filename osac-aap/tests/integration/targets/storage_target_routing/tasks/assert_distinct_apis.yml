@@ -1,48 +1,131 @@
 ---
 - name: Assert the workload kubeconfig reaches a distinct Kubernetes API
   hosts: localhost
-  gather_facts: false
+  gather_facts: true
+
+  vars:
+    tenant_name: storage-route-native-driver
+    tenant_namespace: osac-system
+    storage_provider_netapp_trident_install_override:
+      name: osac.test_overrides.csi_driver_install_hooks
+      tasks_from: install.yaml
 
   tasks:
-    - name: Create a marker namespace on the workload API
-      kubernetes.core.k8s:
-        kubeconfig: "{{ routing_test_kubeconfig_path }}"
-        state: present
-        definition:
-          apiVersion: v1
-          kind: Namespace
-          metadata:
+    - name: Verify workload API routing and native CSI installation
+      block:
+        - name: Create a marker namespace on the workload API
+          kubernetes.core.k8s:
+            kubeconfig: "{{ routing_test_kubeconfig_path }}"
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: "{{ routing_test_marker_namespace }}"
+
+        - name: Check the marker namespace is absent from management
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Namespace
             name: "{{ routing_test_marker_namespace }}"
+          register: _routing_management_marker
 
-    - name: Check the marker namespace is absent from management
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Namespace
-        name: "{{ routing_test_marker_namespace }}"
-      register: _routing_management_marker
+        - name: Check the marker namespace exists on workload
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ routing_test_kubeconfig_path }}"
+            api_version: v1
+            kind: Namespace
+            name: "{{ routing_test_marker_namespace }}"
+          register: _routing_workload_marker
 
-    - name: Check the marker namespace exists on workload
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ routing_test_kubeconfig_path }}"
-        api_version: v1
-        kind: Namespace
-        name: "{{ routing_test_marker_namespace }}"
-      register: _routing_workload_marker
+        - name: Assert the API endpoints are distinct
+          ansible.builtin.assert:
+            that:
+              - _routing_management_marker.resources | length == 0
+              - _routing_workload_marker.resources | length == 1
+            fail_msg: >-
+              Workload marker namespace must exist only on the workload API; observed
+              management/workload counts {{ _routing_management_marker.resources | length }}/
+              {{ _routing_workload_marker.resources | length }}.
 
-    - name: Assert the API endpoints are distinct
-      ansible.builtin.assert:
-        that:
-          - _routing_management_marker.resources | length == 0
-          - _routing_workload_marker.resources | length == 1
-        fail_msg: >-
-          Workload marker namespace must exist only on the workload API; observed
-          management/workload counts {{ _routing_management_marker.resources | length }}/
-          {{ _routing_workload_marker.resources | length }}.
+        - name: Ensure the NetApp block driver through the selected workload kubeconfig
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: ensure_csi_driver
+            storage_provider_tiers:
+              - name: fast
+                protocol: block
+                provider: netapp
+                backend_id: be-routing-test
+            storage_provider_target_kubeconfig: "{{ routing_test_kubeconfig_path }}"
+            storage_provider_target_kubeconfig_insecure: false
 
-    - name: Remove the workload marker namespace
-      kubernetes.core.k8s:
-        kubeconfig: "{{ routing_test_kubeconfig_path }}"
-        state: absent
-        api_version: v1
-        kind: Namespace
-        name: "{{ routing_test_marker_namespace }}"
+        - name: Check Trident CSIDriver on the workload API
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ routing_test_kubeconfig_path }}"
+            api_version: storage.k8s.io/v1
+            kind: CSIDriver
+            name: csi.trident.netapp.io
+          register: _routing_workload_trident_driver
+
+        - name: Check Trident CSIDriver on the management API
+          kubernetes.core.k8s_info:
+            api_version: storage.k8s.io/v1
+            kind: CSIDriver
+            name: csi.trident.netapp.io
+          register: _routing_management_trident_driver
+
+        - name: Assert native driver setup changed only the workload cluster
+          ansible.builtin.assert:
+            that:
+              - _routing_workload_trident_driver.resources | length == 1
+              - _routing_management_trident_driver.resources | length == 0
+            fail_msg: >-
+              Trident must be registered only on the selected workload API; observed
+              workload/management counts {{ _routing_workload_trident_driver.resources | length }}/
+              {{ _routing_management_trident_driver.resources | length }}.
+      always:
+        - name: Delete the test Trident CSIDriver from the workload API
+          kubernetes.core.k8s:
+            kubeconfig: "{{ routing_test_kubeconfig_path }}"
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: CSIDriver
+            name: csi.trident.netapp.io
+          failed_when: false
+
+        - name: Delete the test TridentBackendConfig CRD from the workload API
+          kubernetes.core.k8s:
+            kubeconfig: "{{ routing_test_kubeconfig_path }}"
+            state: absent
+            api_version: apiextensions.k8s.io/v1
+            kind: CustomResourceDefinition
+            name: tridentbackendconfigs.trident.netapp.io
+            wait: true
+          failed_when: false
+
+        - name: Delete the test Trident namespace from the workload API
+          kubernetes.core.k8s:
+            kubeconfig: "{{ routing_test_kubeconfig_path }}"
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: trident
+            wait: true
+          failed_when: false
+
+        - name: Delete the native driver override log
+          ansible.builtin.file:
+            path: /tmp/osac_test_overrides.log
+            state: absent
+          failed_when: false
+
+        - name: Remove the workload marker namespace
+          kubernetes.core.k8s:
+            kubeconfig: "{{ routing_test_kubeconfig_path }}"
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: "{{ routing_test_marker_namespace }}"
+          failed_when: false

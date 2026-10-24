@@ -1,0 +1,144 @@
+---
+- name: Validate OLM install target matches the selected provider
+  ansible.builtin.assert:
+    that:
+      - storage_provider_olm_operator_subscription == storage_provider_olm_operator_package
+      - >-
+        (storage_provider_olm_operator_package == 'trident-operator'
+         and storage_provider_olm_operator_namespace == 'trident-operator')
+        or
+        (storage_provider_olm_operator_package == 'vast-csi-operator'
+         and storage_provider_olm_operator_namespace == 'vast-csi-system')
+    fail_msg: "Refusing to approve an InstallPlan outside the supported CSI operators"
+
+- name: Wait for OLM to resolve the provider's current channel bundle
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    name: "{{ storage_provider_olm_operator_subscription }}"
+    namespace: "{{ storage_provider_olm_operator_namespace }}"
+    kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
+    validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
+  register: _storage_provider_olm_subscription
+  retries: 30
+  delay: 10
+  until: >-
+    _storage_provider_olm_subscription.resources | length > 0
+    and (
+      (_storage_provider_olm_subscription.resources[0].status.installedCSV | default('') | length > 0)
+      or (
+        _storage_provider_olm_subscription.resources[0].status.installPlanRef.name is defined
+        and _storage_provider_olm_subscription.resources[0].status.currentCSV | default('', true) | length > 0
+      )
+    )
+
+- name: Determine whether the provider operator already has an installed CSV
+  ansible.builtin.set_fact:
+    _storage_provider_olm_installed_csv: >-
+      {{ _storage_provider_olm_subscription.resources[0].status.installedCSV | default('', true) }}
+
+- name: Read the Subscription's initial InstallPlan
+  when: _storage_provider_olm_installed_csv | length == 0
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: InstallPlan
+    name: "{{ _storage_provider_olm_subscription.resources[0].status.installPlanRef.name }}"
+    namespace: "{{ storage_provider_olm_operator_namespace }}"
+    kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
+    validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
+  register: _storage_provider_olm_install_plan
+  retries: 30
+  delay: 10
+  # OLM records bundle lookups on the InstallPlan status, not the Subscription status.
+  until: >-
+    _storage_provider_olm_install_plan.resources | length > 0
+    and _storage_provider_olm_install_plan.resources[0].status.bundleLookups | default([], true) | length > 0
+
+- name: Resolve the current operator CSV from the stable-channel Subscription status
+  when: _storage_provider_olm_installed_csv | length == 0
+  ansible.builtin.set_fact:
+    _storage_provider_olm_target_csv: >-
+      {{ _storage_provider_olm_subscription.resources[0].status.currentCSV }}
+
+- name: Validate the initial InstallPlan matches the current stable-channel resolution
+  when: _storage_provider_olm_installed_csv | length == 0
+  ansible.builtin.assert:
+    that:
+      - _storage_provider_olm_target_csv is match('^' ~ storage_provider_olm_operator_package ~ '\.')
+      - >-
+        _storage_provider_olm_install_plan.resources[0].spec.clusterServiceVersionNames
+        | default([]) == [_storage_provider_olm_target_csv]
+      - >-
+        (_storage_provider_olm_install_plan.resources[0].status.bundleLookups
+         | default([], true)
+         | selectattr('identifier', 'equalto', _storage_provider_olm_target_csv)
+         | list | length) == 1
+      - >-
+        _storage_provider_olm_subscription.resources[0].status.currentCSV
+        == _storage_provider_olm_target_csv
+      - >-
+        (_storage_provider_olm_install_plan.resources[0].metadata.ownerReferences | default([])
+         | selectattr('kind', 'equalto', 'Subscription')
+         | selectattr('name', 'equalto', storage_provider_olm_operator_subscription)
+         | selectattr('uid', 'equalto', _storage_provider_olm_subscription.resources[0].metadata.uid)
+         | list | length) == 1
+      - >-
+        _storage_provider_olm_install_plan.resources[0].status.bundleLookups
+        | default([], true) | rejectattr('catalogSourceRef.name', 'equalto', storage_provider_olm_subscription_installer.catalog_source)
+        | list | length == 0
+      - >-
+        _storage_provider_olm_install_plan.resources[0].status.bundleLookups
+        | default([], true) | rejectattr('catalogSourceRef.namespace', 'equalto', storage_provider_olm_subscription_installer.catalog_namespace)
+        | list | length == 0
+    fail_msg: >-
+      The initial InstallPlan for '{{ storage_provider_olm_operator_subscription }}' must match the
+      Subscription's current stable-channel CSV, belong to the current Subscription, and resolve
+      from '{{ storage_provider_olm_subscription_installer.catalog_source }}' in
+      '{{ storage_provider_olm_subscription_installer.catalog_namespace }}'.
+
+- name: Set the CSV selected by the current stable channel
+  ansible.builtin.set_fact:
+    _storage_provider_olm_target_csv: >-
+      {{ _storage_provider_olm_installed_csv
+         if _storage_provider_olm_installed_csv | length > 0
+         else _storage_provider_olm_subscription.resources[0].status.currentCSV }}
+
+- name: Approve the initial InstallPlan selected by OLM
+  when:
+    - _storage_provider_olm_installed_csv | length == 0
+    - not (_storage_provider_olm_install_plan.resources[0].spec.approved | default(false) | bool)
+  kubernetes.core.k8s:
+    state: patched
+    kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
+    validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: InstallPlan
+      metadata:
+        name: "{{ _storage_provider_olm_install_plan.resources[0].metadata.name }}"
+        namespace: "{{ storage_provider_olm_operator_namespace }}"
+      spec:
+        approved: true
+
+- name: Wait for the selected operator CSV to succeed
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: ClusterServiceVersion
+    name: "{{ _storage_provider_olm_target_csv }}"
+    namespace: "{{ storage_provider_olm_operator_namespace }}"
+    kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
+    validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
+  register: _storage_provider_olm_csv
+  retries: 30
+  delay: 10
+  until: >-
+    _storage_provider_olm_csv.resources | length > 0
+    and _storage_provider_olm_csv.resources[0].status.phase | default('') == 'Succeeded'
+
+- name: Record the OLM-selected provider version
+  ansible.builtin.debug:
+    msg: >-
+      Installed {{ storage_provider_olm_operator_package }} CSV
+      {{ _storage_provider_olm_target_csv }}
+      (version {{ _storage_provider_olm_csv.resources[0].spec.version }}); later channel upgrades
+      remain Manual and require a separate approval.

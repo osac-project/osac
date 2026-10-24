@@ -15,6 +15,10 @@ export POD_NAMESPACE="osac-system"
 export POD_NAME="test-runner"
 export POD_UID="00000000-0000-0000-0000-000000000000"
 
+# Test-only installer overrides are enabled in this local integration process.
+# Production AAP launches cannot select an arbitrary role/task through extra vars.
+export OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES=true
+
 # Suppress inventory parsing warnings
 export ANSIBLE_INVENTORY_UNPARSED_WARNING=False
 export ANSIBLE_LOCALHOST_WARNING=False

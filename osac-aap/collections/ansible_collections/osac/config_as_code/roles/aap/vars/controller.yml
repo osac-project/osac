@@ -446,6 +446,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
       - "{{ aap_prefix }}-storage-operations-ig"
     allow_simultaneous: false
     ask_variables_on_launch: true
+    ask_tags_on_launch: false
     verbosity: 0
   - name: "{{ aap_prefix }}-delete-tenant-cluster-storage"
     project: "{{ aap_prefix }}"

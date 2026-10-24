@@ -4,8 +4,9 @@ import logging
 import os
 import subprocess
 import time
-from collections.abc import Callable
-from typing import TypeVar
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from typing import IO, TypeVar
 
 T = TypeVar("T")
 
@@ -16,6 +17,27 @@ logger = logging.getLogger(__name__)
 # to ~60 minutes for a bare-metal cluster to become Ready) would otherwise
 # print nothing until they finish or time out.
 _PROGRESS_LOG_INTERVAL_S = 30
+
+
+@contextmanager
+def managed_process(
+    *args: str, stdout: int | IO[str] | None = None, stderr: int | IO[str] | None = None, terminate_timeout: float = 10
+) -> Iterator[subprocess.Popen[str]]:
+    """Run a subprocess and always terminate it before leaving the context."""
+    process = subprocess.Popen(args, stdout=stdout, stderr=stderr, text=True)
+    try:
+        yield process
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=terminate_timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=terminate_timeout)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
 
 
 def run(*args: str, timeout: int = 300) -> str:

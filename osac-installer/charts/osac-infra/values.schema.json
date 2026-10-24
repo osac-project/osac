@@ -94,6 +94,25 @@
         }
       }
     },
+    "keycloak": {
+      "type": "object",
+      "description": "Keycloak deployment configuration.",
+      "properties": {
+        "oidcIdpTrust": {
+          "type": "object",
+          "description": "CA certificates for external OIDC identity providers. Keycloak adds these to its server-wide truststore for outbound TLS connections.",
+          "properties": {
+            "caPem": {
+              "type": "string",
+              "description": "Optional PEM-encoded CA certificate bundle for external OIDC identity providers. These certificates are added to Keycloak's server-wide truststore.",
+              "default": ""
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
+    },
     "bundledVault": {
       "type": "object",
       "description": "Bundled OpenBao (Vault-compatible) secret store for testing and CI. Not intended for production.",

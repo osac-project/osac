@@ -38,6 +38,19 @@ metadata:
 data:
   realm.json: |
 {{ .Files.Get "files/realm.json" | indent 4 }}
+{{- if .Values.keycloak.oidcIdpTrust.caPem }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-oidc-idp-ca-bundle
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+data:
+  ca-bundle.pem: |
+{{ .Values.keycloak.oidcIdpTrust.caPem | indent 4 }}
+{{- end }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -349,6 +362,10 @@ spec:
     metadata:
       labels:
         app: keycloak-service
+      {{- if .Values.keycloak.oidcIdpTrust.caPem }}
+      annotations:
+        checksum/keycloak-oidc-idp-ca-bundle: {{ .Values.keycloak.oidcIdpTrust.caPem | sha256sum | quote }}
+      {{- end }}
     spec:
       serviceAccountName: keycloak-service
       volumes:
@@ -367,6 +384,11 @@ spec:
       - name: tls-cert
         secret:
           secretName: keycloak-tls-cert
+      {{- if .Values.keycloak.oidcIdpTrust.caPem }}
+      - name: oidc-idp-ca-bundle
+        configMap:
+          name: keycloak-oidc-idp-ca-bundle
+      {{- end }}
       initContainers:
       - name: wait-for-database
         image: {{ .Values.keycloak.images.postgres }}
@@ -423,6 +445,11 @@ spec:
         - name: tls-cert
           mountPath: /secrets/tls
           readOnly: true
+        {{- if .Values.keycloak.oidcIdpTrust.caPem }}
+        - name: oidc-idp-ca-bundle
+          mountPath: /etc/keycloak/truststore
+          readOnly: true
+        {{- end }}
         env:
         - name: KEYCLOAK_ADMIN
           valueFrom:
@@ -458,6 +485,10 @@ spec:
           value: keycloak
         - name: KC_DB_PASSWORD
           value: ""
+        {{- if .Values.keycloak.oidcIdpTrust.caPem }}
+        - name: KC_TRUSTSTORE_PATHS
+          value: "/etc/keycloak/truststore/ca-bundle.pem"
+        {{- end }}
         {{- if .Values.keycloak.realmOverwrite }}
         - name: KC_SPI_IMPORT_REALM_FILE_STRATEGY
           value: OVERWRITE

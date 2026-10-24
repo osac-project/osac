@@ -468,7 +468,7 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 				}
 			})
 
-			It("Provisions a new user on first stream authentication", func() {
+			It("Skips provisioning and calls handler for authenticated stream", func() {
 				token := createKeycloakUserToken("tenant1", "alice-stream", jwt.MapClaims{
 					"email":          "alice-stream@example.com",
 					"email_verified": true,
@@ -494,41 +494,10 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(streamHandlerCalled).To(BeTrue())
 
-				// Verify provisioner was called:
-				Expect(mockProvisioner.callCount).To(Equal(1))
-				Expect(mockProvisioner.lastUsername).To(Equal("alice-stream"))
-				Expect(mockProvisioner.lastTenant).To(Equal("tenant1"))
-			})
-
-			It("Fails stream request when provisioner fails", func() {
-				token := createKeycloakUserToken("tenant1", "bob-stream", nil)
-				ctx = ContextWithToken(ctx, token)
-				subject := &Subject{
-					User:    "bob-stream",
-					Tenants: collections.NewSet("tenant1"),
-				}
-				ctx = ContextWithSubject(ctx, subject)
-
-				// Configure provisioner to return error:
-				mockProvisioner.provisionFunc = func(ctx context.Context, username, tenant string, claims jwt.MapClaims) error {
-					return errors.New("database unavailable")
-				}
-
-				stream := &mockServerStream{ctx: ctx}
-				err := interceptor.StreamServer(
-					nil,
-					stream,
-					&grpc.StreamServerInfo{
-						FullMethod: "/osac.public.v1.Clusters/Watch",
-					},
-					streamHandler,
-				)
-				// Provisioning failure should block the stream
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("user provisioning failed"))
-				Expect(err.Error()).To(ContainSubstring("database unavailable"))
-				Expect(streamHandlerCalled).To(BeFalse())
-				Expect(mockProvisioner.callCount).To(Equal(1))
+				// Provisioner must not be called for streaming RPCs: TxInterceptor
+				// does not cover streaming calls, so there is never a DB transaction
+				// in context. Provisioning happens on the user's first unary call.
+				Expect(mockProvisioner.callCount).To(Equal(0))
 			})
 
 			It("Does not provision when subject has multiple tenants", func() {

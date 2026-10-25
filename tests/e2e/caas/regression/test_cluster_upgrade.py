@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 import pytest
@@ -39,6 +38,15 @@ SELECTED_NODE_SET = "compute"
 SIBLING_NODE_SET = "gpu"
 INSTANCE_TYPES = {SELECTED_NODE_SET: "ci-worker-bm", SIBLING_NODE_SET: "ci-worker-bm-gpu"}
 _TERMINAL_JOB_FAILURES = {"Failed", "Canceled"}
+_PHASES = (
+    "preparing",
+    "control-plane-requested",
+    "control-plane-started",
+    "control-plane-completed",
+    "node-pool-requested",
+    "node-pool-started",
+    "node-pool-completed",
+)
 _T = TypeVar("_T")
 logger = logging.getLogger(__name__)
 
@@ -50,10 +58,6 @@ class _ClusterRefs:
     namespace: str
     hc_name: str
     pool_names: dict[str, str]
-
-
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _wait_elapsed(
@@ -132,7 +136,7 @@ def _new_provision_job(snapshot: dict[str, Any], previous_ids: set[str]) -> dict
 
 def _check_job(job: dict[str, Any], component: str) -> None:
     if job.get("state") in _TERMINAL_JOB_FAILURES:
-        raise AssertionError(f"{component} AAP provision job {job.get('jobID')} ended {job['state']}")
+        raise AssertionError(f"{component} AAP provision job failed")
 
 
 def _check_hypershift_failure(resource: dict[str, Any], component: str) -> None:
@@ -146,8 +150,7 @@ def _check_hypershift_failure(resource: dict[str, Any], component: str) -> None:
             or (kind == "UpdatingVersion" and status == "False" and "Fail" in reason)
         )
         if failed:
-            safe_reason = reason if reason.isalnum() else "unknown"
-            raise AssertionError(f"{component} HyperShift condition {kind} failed: {safe_reason}")
+            raise AssertionError(f"{component} HyperShift reported a failure condition")
 
 
 def _assert_unchanged(
@@ -226,16 +229,6 @@ def _np_completed(pool: dict[str, Any], old_transition: str, target_image: str) 
     )
 
 
-def _optional_runtime_revisions() -> dict[str, str]:
-    keys = {
-        "fulfillment_image_digest": "OSAC_TEST_FULFILLMENT_IMAGE_DIGEST",
-        "operator_image_digest": "OSAC_TEST_OPERATOR_IMAGE_DIGEST",
-        "aap_project_revision": "OSAC_TEST_AAP_PROJECT_REVISION",
-        "aap_ee_image_digest": "OSAC_TEST_AAP_EE_IMAGE_DIGEST",
-    }
-    return {field: os.environ[name] for field, name in keys.items() if os.environ.get(name)}
-
-
 def _create_cluster(
     *, cli: OsacCLI, source_name: str, cluster_template: str, pull_secret_name: str, ssh_public_key_path: str
 ) -> str:
@@ -287,24 +280,6 @@ def _ready_baseline(*, k8s: K8sClient, grpc: GRPCClient, refs: _ClusterRefs) -> 
     )
 
 
-def _record_baseline(evidence: dict[str, Any], refs: _ClusterRefs, baseline: dict[str, Any]) -> None:
-    evidence.update(
-        {
-            "cluster_id": refs.uuid,
-            "tenant": baseline["cluster"]["metadata"]["tenant"],
-            "cluster_order": refs.co_name,
-            "hosted_cluster": f"{refs.namespace}/{refs.hc_name}",
-            "node_pools": {name: f"{refs.namespace}/{pool}" for name, pool in refs.pool_names.items()},
-            "baseline_state": baseline["cluster"]["status"]["state"],
-            "baseline_utc": _utc_now(),
-            "baseline_image": baseline["hosted"]["spec"]["release"]["image"],
-            "baseline_node_pool_versions": {
-                name: pool["status"]["version"] for name, pool in baseline["pools"].items()
-            },
-        }
-    )
-
-
 def _upgrade_control_plane(
     *,
     refs: _ClusterRefs,
@@ -329,7 +304,7 @@ def _upgrade_control_plane(
         },
     )
     accepted = time.monotonic()
-    evidence["cp_request_accepted_utc"] = _utc_now()
+    evidence["phase"] = "control-plane-requested"
 
     def observe() -> tuple[dict[str, Any], dict[str, Any]]:
         current = _snapshot(k8s=k8s, grpc=grpc, refs=refs)
@@ -340,7 +315,7 @@ def _upgrade_control_plane(
         _check_job(job, "control plane")
         return current, job
 
-    started = _wait_elapsed(
+    _wait_elapsed(
         component="control plane start",
         accepted_at=accepted,
         limit_seconds=START_LIMIT_SECONDS,
@@ -351,8 +326,7 @@ def _upgrade_control_plane(
             and _cp_started(pair[0]["hosted"], target_image)
         ),
     )
-    evidence["cp_started_utc"] = _utc_now()
-    evidence["cp_aap_job"] = {"id": started[1]["jobID"], "state": started[1].get("state")}
+    evidence["phase"] = "control-plane-started"
     completed = _wait_elapsed(
         component="control plane completion",
         accepted_at=accepted,
@@ -360,10 +334,8 @@ def _upgrade_control_plane(
         observe=observe,
         ready=lambda pair: _cp_completed(pair[0]["hosted"], target_image),
     )
-    evidence["cp_completed_utc"] = _utc_now()
+    evidence["phase"] = "control-plane-completed"
     evidence["cp_elapsed_seconds"] = round(time.monotonic() - accepted, 1)
-    evidence["cp_observed_image"] = completed[0]["hosted"]["spec"]["release"]["image"]
-    evidence["cp_aap_job"]["state"] = completed[1].get("state")
     return completed[0]
 
 
@@ -396,7 +368,7 @@ def _upgrade_node_pool(
         },
     )
     accepted = time.monotonic()
-    evidence["np_request_accepted_utc"] = _utc_now()
+    evidence["phase"] = "node-pool-requested"
 
     def observe() -> tuple[dict[str, Any], dict[str, Any]]:
         current = _snapshot(k8s=k8s, grpc=grpc, refs=refs)
@@ -414,7 +386,7 @@ def _upgrade_node_pool(
         _check_job(job, "selected node pool")
         return current, job
 
-    started = _wait_elapsed(
+    _wait_elapsed(
         component="selected node pool start",
         accepted_at=accepted,
         limit_seconds=START_LIMIT_SECONDS,
@@ -428,19 +400,35 @@ def _upgrade_node_pool(
             and _np_started(pair[0]["pools"][SELECTED_NODE_SET], old_transition, target_image)
         ),
     )
-    evidence["np_started_utc"] = _utc_now()
-    evidence["np_aap_job"] = {"id": started[1]["jobID"], "state": started[1].get("state")}
-    completed = _wait_elapsed(
+    evidence["phase"] = "node-pool-started"
+    _wait_elapsed(
         component="selected node pool completion",
         accepted_at=accepted,
         limit_seconds=NP_LIMIT_SECONDS_PER_NODE * int(selected_before["spec"]["replicas"]),
         observe=observe,
         ready=lambda pair: _np_completed(pair[0]["pools"][SELECTED_NODE_SET], old_transition, target_image),
     )
-    evidence["np_completed_utc"] = _utc_now()
+    evidence["phase"] = "node-pool-completed"
     evidence["np_elapsed_seconds"] = round(time.monotonic() - accepted, 1)
-    evidence["np_observed_image"] = completed[0]["pools"][SELECTED_NODE_SET]["spec"]["release"]["image"]
-    evidence["np_aap_job"]["state"] = completed[1].get("state")
+
+
+def _safe_evidence(evidence: dict[str, Any]) -> dict[str, str | float]:
+    """Allow only fixed states, approved fixture versions, and elapsed times into logs."""
+    phase = evidence.get("phase")
+    outcome = evidence.get("outcome")
+    cleanup = evidence.get("cleanup")
+    safe: dict[str, str | float] = {
+        "phase": phase if phase in _PHASES else "unknown",
+        "outcome": outcome if outcome in ("failed", "succeeded") else "unknown",
+        "cleanup": cleanup if cleanup in ("failed", "completed") else "unknown",
+        "source_release_version": SOURCE_VERSION,
+        "target_release_version": TARGET_VERSION,
+    }
+    for field in ("cp_elapsed_seconds", "np_elapsed_seconds"):
+        elapsed = evidence.get(field)
+        if isinstance(elapsed, float) and math.isfinite(elapsed) and 0 <= elapsed <= 24 * 60 * 60:
+            safe[field] = elapsed
+    return safe
 
 
 def _cleanup(
@@ -479,7 +467,7 @@ def _cleanup(
     else:
         evidence["cleanup"] = "completed"
     finally:
-        logger.info("CaaS upgrade evidence: %s", json.dumps(evidence, sort_keys=True))
+        logger.info("CaaS upgrade evidence: %s", json.dumps(_safe_evidence(evidence), sort_keys=True))
 
 
 def test_control_plane_then_named_node_pool_upgrade(
@@ -493,13 +481,7 @@ def test_control_plane_then_named_node_pool_upgrade(
     ssh_public_key_path: str,
 ) -> None:
     """Upgrade the control plane, then one named pool, on a dedicated Cluster."""
-    evidence: dict[str, Any] = {
-        "procedure": "uv run pytest -n 0 tests/e2e/caas/regression/test_cluster_upgrade.py::"
-        "test_control_plane_then_named_node_pool_upgrade",
-        "boundary": "real tenant API, PostgreSQL, operator, AAP, HyperShift, and provider; controlled catalog",
-        "outcome": "failed",
-        **_optional_runtime_revisions(),
-    }
+    evidence: dict[str, Any] = {"phase": "preparing", "outcome": "failed"}
     uuid: str | None = None
     co_name: str | None = None
     created_version_ids: list[str] = []
@@ -519,16 +501,6 @@ def test_control_plane_then_named_node_pool_upgrade(
         )
         if target_created:
             created_version_ids.append(target_version["id"])
-        evidence["catalog"] = {
-            "source_id": source_version["id"],
-            "source_version": SOURCE_VERSION,
-            "source_image": source_version["image"],
-            "target_id": target_version["id"],
-            "target_version": TARGET_VERSION,
-            "target_image": target_version["image"],
-            "target_created": target_created,
-        }
-
         uuid = _create_cluster(
             cli=cli,
             source_name=source_version["name"],
@@ -539,7 +511,6 @@ def test_control_plane_then_named_node_pool_upgrade(
         co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=uuid)
         refs = _cluster_references(k8s=k8s_hub_client, uuid=uuid, co_name=co_name)
         baseline = _ready_baseline(k8s=k8s_hub_client, grpc=grpc, refs=refs)
-        _record_baseline(evidence, refs, baseline)
 
         cp_snapshot = _upgrade_control_plane(
             refs=refs,

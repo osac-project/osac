@@ -1,0 +1,82 @@
+"""Regression checks for the CaaS upgrade evidence log."""
+
+from __future__ import annotations
+
+import json
+import logging
+from contextlib import nullcontext
+from unittest.mock import Mock
+
+import pytest
+
+from tests.e2e.caas.regression import test_cluster_upgrade as scenario
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_cleanup_logs_only_allowlisted_upgrade_evidence(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, cleanup_fails: bool
+) -> None:
+    """Sensitive deployment data cannot reach the success or failure log."""
+    cli, grpc, private_grpc, k8s = (Mock() for _ in range(4))
+    if cleanup_fails:
+        cli.delete_cluster.side_effect = RuntimeError("secret-cleanup-error")
+    monkeypatch.setattr(scenario, "wait_for_cluster_deletion_without_cleanup", lambda **_kwargs: None)
+    monkeypatch.setattr(scenario, "wait_for_cluster_grpc_removal", lambda **_kwargs: None)
+    monkeypatch.setenv("OSAC_TEST_AAP_PROJECT_REVISION", "secret-env-revision")
+    evidence = {
+        "phase": "node-pool-completed",
+        "outcome": "succeeded",
+        "cp_elapsed_seconds": 12.5,
+        "np_elapsed_seconds": "secret-elapsed-value",
+        "tenant": "secret-tenant",
+        "cluster_id": "secret-cluster-uuid",
+        "cluster_order": "secret-cluster-order",
+        "hosted_cluster": "secret-namespace/secret-hosted-cluster",
+        "node_pools": {"compute": "secret-node-pool"},
+        "cp_aap_job": {"id": "secret-job-id"},
+        "catalog": {"source_id": "secret-catalog-id", "source_image": "registry.internal.example.test/secret-image"},
+        "aap_project_revision": "secret-env-revision",
+        "token": "secret-token",
+    }
+    expected_error = pytest.raises(RuntimeError, match="secret-cleanup-error") if cleanup_fails else nullcontext()
+
+    with caplog.at_level(logging.INFO, logger=scenario.logger.name), expected_error:
+        scenario._cleanup(
+            cli=cli,
+            grpc=grpc,
+            private_grpc=private_grpc,
+            k8s=k8s,
+            uuid="secret-cluster-uuid",
+            co_name="secret-cluster-order",
+            created_version_ids=["secret-catalog-id"],
+            evidence=evidence,
+        )
+
+    messages = [record.getMessage() for record in caplog.records if record.name == scenario.logger.name]
+    assert len(messages) == 1
+    assert messages[0].startswith("CaaS upgrade evidence: ")
+    assert json.loads(messages[0].removeprefix("CaaS upgrade evidence: ")) == {
+        "phase": "node-pool-completed",
+        "outcome": "failed" if cleanup_fails else "succeeded",
+        "cleanup": "failed" if cleanup_fails else "completed",
+        "source_release_version": scenario.SOURCE_VERSION,
+        "target_release_version": scenario.TARGET_VERSION,
+        "cp_elapsed_seconds": 12.5,
+    }
+    for secret in (
+        "secret-cleanup-error",
+        "secret-elapsed-value",
+        "secret-tenant",
+        "secret-cluster-uuid",
+        "secret-cluster-order",
+        "secret-namespace",
+        "secret-hosted-cluster",
+        "secret-node-pool",
+        "secret-job-id",
+        "secret-catalog-id",
+        "registry.internal.example.test",
+        "secret-env-revision",
+        "secret-token",
+    ):
+        assert secret not in caplog.text
+    private_grpc.delete_cluster_version.assert_called_once_with(version_id="secret-catalog-id")

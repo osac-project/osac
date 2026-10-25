@@ -63,7 +63,10 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
     """
     for operator in _OPERATORS:
         assert not _resource_exists(
-            k8s=k8s_hub_client, resource="subscription", name=operator["subscription"], namespace=operator["namespace"]
+            k8s=k8s_hub_client,
+            resource="subscriptions.operators.coreos.com",
+            name=operator["subscription"],
+            namespace=operator["namespace"],
         ), f"Expected a clean CI cluster; Subscription {operator['namespace']}/{operator['subscription']} exists"
         for driver in operator["drivers"]:
             assert not _resource_exists(k8s=k8s_hub_client, resource="csidriver", name=driver), (
@@ -144,7 +147,9 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
             for operator in _OPERATORS:
                 subscription = poll_until(
                     fn=lambda operator=operator: k8s_hub_client.get_json(
-                        resource="subscription", name=operator["subscription"], namespace=operator["namespace"]
+                        resource="subscriptions.operators.coreos.com",
+                        name=operator["subscription"],
+                        namespace=operator["namespace"],
                     ),
                     until=lambda item, operator=operator: (
                         item.get("spec", {}).get("source") == "certified-operators"
@@ -258,7 +263,9 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
 
             for operator in _OPERATORS:
                 subscription = k8s_hub_client.get_json(
-                    resource="subscription", name=operator["subscription"], namespace=operator["namespace"]
+                    resource="subscriptions.operators.coreos.com",
+                    name=operator["subscription"],
+                    namespace=operator["namespace"],
                 )
                 expected = before_noop[operator["subscription"]]
                 assert subscription.get("spec", {}) == expected["spec"], (

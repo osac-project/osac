@@ -1546,3 +1546,45 @@
         that:
           - _all_tenant_configs['netapp-backend-1'].provider == 'netapp'
           - _all_tenant_configs['pure-backend-1'].provider == 'pure'
+
+# ──────────────────────────────────────────────────────────────
+# Regression: the legacy CaaS VAST path validates the native CSI matrix.
+# This lives last so run_tests.sh's second invocation exercises it after its
+# start-at-task split around the invalid-provider runner failure.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- validate matrix for legacy CaaS VAST installation
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run legacy CaaS install with an overridden native CSI matrix
+      block:
+        - name: Include storage_provider with a legacy VAST matrix override
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: legacy-nfs
+                protocol: nfs
+                provider: vast
+                backend_id: be-vast
+            storage_provider_action: ensure_storage_class
+            storage_provider_caas_legacy_vast_csi_install_enabled: true
+            storage_provider_csi_driver_matrix: {}
+            storage_provider_target_kubeconfig: /path/that/must/not/be/used
+            tenant_name: tenant-acme
+            tenant_namespace: osac-tenants
+
+        - name: Fail if the legacy path accepts the matrix override
+          ansible.builtin.fail:
+            msg: "Legacy CaaS VAST installation accepted an untrusted native CSI matrix"
+
+      rescue:
+        - name: Verify the legacy path rejected the matrix before dispatch
+          ansible.builtin.assert:
+            that:
+              - "'configured in defaults' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Legacy CaaS VAST validation failed for an unexpected reason:
+              {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Legacy CaaS VAST installation rejected the matrix override before dispatch"

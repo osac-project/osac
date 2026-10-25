@@ -153,7 +153,9 @@
   when: storage_provider_action not in ['setup', 'ensure_csi_driver', 'ensure_storage_class', 'teardown_cluster_storage', 'teardown_backend']
 
 - name: Validate the native CSI installer matrix before cluster mutation
-  when: storage_provider_action == 'ensure_csi_driver'
+  when: >-
+    storage_provider_action == 'ensure_csi_driver'
+    or (storage_provider_caas_legacy_vast_csi_install_enabled | default(false) | bool)
   ansible.builtin.assert:
     that:
       - storage_provider_csi_driver_matrix.keys() | sort == ['lvms', 'netapp', 'vast']

@@ -3,7 +3,7 @@ import { screen, waitFor } from '@testing-library/react';
 import { Formik } from 'formik';
 import { describe, expect, it } from 'vitest';
 
-import { DiskImageLifecycle, DiskImageSchema } from '@osac/types';
+import { DiskImageLifecycle, DiskImageSchema, GuestOSFamily } from '@osac/types';
 
 import DiskImageField from './DiskImageField';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
@@ -26,12 +26,17 @@ describe('DiskImageField', () => {
   it('stores the selected disk image id and name in Formik', async () => {
     const { user } = renderWithProviders(
       <Formik
-        initialValues={{ spec: { diskImage: emptyResourceSelectValue() } }}
+        initialValues={{
+          spec: {
+            diskImage: emptyResourceSelectValue(),
+            guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
+          },
+        }}
         onSubmit={() => undefined}
       >
         {({ values }) => (
           <>
-            <DiskImageField name="spec.diskImage" />
+            <DiskImageField name="spec.diskImage" guestOsFamilyName="spec.guestOsFamily" />
             <output aria-label="selected-image">{JSON.stringify(values.spec.diskImage)}</output>
           </>
         )}
@@ -39,7 +44,7 @@ describe('DiskImageField', () => {
       { apiFixtures: { diskImages } },
     );
 
-    const toggle = await screen.findByLabelText(/^Disk image/);
+    const toggle = await screen.findByLabelText(/^Select the image reference/);
     await user.click(toggle);
     await user.click(screen.getByRole('option', { name: /rhel/ }));
 

@@ -1,4 +1,4 @@
-import type { BareMetalInstanceCatalogItem } from '@osac/types';
+import { type BareMetalInstanceCatalogItem, GuestOSFamily } from '@osac/types';
 
 import {
   type ResourceSelectValue,
@@ -16,6 +16,7 @@ import {
 import { catalogValueFromPolicy } from '../catalogItemPolicy';
 
 export interface BareMetalCatalogItemValues extends CatalogGeneralValues {
+  guestOsFamily: GuestOSFamily;
   instanceType: ProvisioningFieldValue<string>;
   diskImage: ProvisioningFieldValue<ResourceSelectValue>;
   userDataSource: ProvisioningFieldValue<'inline' | 'secret'>;
@@ -44,6 +45,7 @@ const readStringValue = (value: unknown): string => {
 
 export const emptyBareMetalCatalogItemValues = (): BareMetalCatalogItemValues => ({
   ...catalogGeneralValues(),
+  guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
   instanceType: provisioningFieldValue(''),
   diskImage: provisioningFieldValue(emptyResourceSelectValue()),
   userDataSource: provisioningFieldValue('inline'),
@@ -62,6 +64,7 @@ export const getBareMetalCatalogItemInitialValues = (
 
   return {
     ...catalogGeneralValuesFromItem(item),
+    guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
     instanceType: catalogValueFromPolicy(fields?.instanceType, readInstanceTypeValue, ''),
     diskImage: catalogValueFromPolicy(
       fields?.diskImage,

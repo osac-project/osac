@@ -30,7 +30,13 @@ const VmGeneralStep = () => {
       />
       <NameField />
       <ProvisioningField name={VM_DISK_IMAGE_FORM_PATH}>
-        {({ valueName, isDisabled }) => <DiskImageField name={valueName} isDisabled={isDisabled} />}
+        {({ valueName, isDisabled }) => (
+          <DiskImageField
+            name={valueName}
+            guestOsFamilyName="spec.guestOsFamily"
+            isDisabled={isDisabled}
+          />
+        )}
       </ProvisioningField>
     </OsacForm>
   );

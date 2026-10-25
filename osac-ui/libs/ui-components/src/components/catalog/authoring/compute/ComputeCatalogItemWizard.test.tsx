@@ -122,6 +122,29 @@ describe('ComputeCatalogItemWizard', () => {
     expect(screen.queryByRole('radio', { name: 'Enter value' })).not.toBeInTheDocument();
   });
 
+  it('shows guest OS family cards and selects a guest OS family', async () => {
+    const { user } = renderWizard();
+
+    await fillGeneralStep(user, 'my-item');
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+
+    const guestOsGroup = await screen.findByRole('radiogroup', {
+      name: 'Select guest operating system',
+    });
+    const diskImageSection = screen.getByRole('group', { name: 'Disk image' });
+    expect(within(diskImageSection).getByRole('switch', { name: 'Editable' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Select the image reference')).toBeInTheDocument();
+    expect(
+      within(guestOsGroup).getByText('Linux-based guest operating systems'),
+    ).toBeInTheDocument();
+    expect(within(guestOsGroup).getByRole('radio', { name: /^Linux/ })).toBeChecked();
+
+    await user.click(within(guestOsGroup).getByText('Microsoft Windows'));
+
+    expect(within(guestOsGroup).getByRole('radio', { name: /^Microsoft Windows/ })).toBeChecked();
+    expect(within(guestOsGroup).getByText('Selected')).toBeInTheDocument();
+  });
+
   it('shows the Storage step description', async () => {
     const { user } = renderWizard();
 

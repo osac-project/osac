@@ -89,3 +89,25 @@ def test_config_as_code_secret_always_tracks_netris_ca_configmap():
         secret = yaml.safe_load(result.stdout)
 
         assert secret["stringData"]["NETRIS_CA_CONFIGMAP"] == config_map
+
+
+def test_config_as_code_secret_tracks_osac_service_account():
+    chart_path = Path(__file__).resolve().parents[2] / "charts/aap"
+    result = subprocess.run(
+        [
+            "helm",
+            "template",
+            "aap-test",
+            str(chart_path),
+            "--show-only",
+            "templates/config-as-code-secret.yaml",
+            "--set-string",
+            "serviceAccounts.osacSa=customer-aap-sa",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    secret = yaml.safe_load(result.stdout)
+
+    assert secret["stringData"]["AAP_OSAC_SERVICE_ACCOUNT"] == "customer-aap-sa"

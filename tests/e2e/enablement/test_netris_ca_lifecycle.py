@@ -14,12 +14,11 @@ installation, not a shared environment.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import random
 import subprocess
-import time
-from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -44,6 +43,7 @@ pytestmark = [
 
 POLICY_MESSAGE = "Only authorized platform administrators may modify or delete the active Netris CA ConfigMap."
 CA_VALUE = "global.networking.netris.caBundle.configMap"
+NETRIS_CA_PATH = "/etc/netris/ca/bundle.pem"
 
 
 def _helm_release() -> str:
@@ -64,6 +64,22 @@ def _current_ca_configmap(namespace: str) -> str:
     active = configured or os.environ.get("OSAC_NETRIS_CA_ACTIVE_CONFIGMAP", "")
     assert active, f"{CA_VALUE} is empty and OSAC_NETRIS_CA_ACTIVE_CONFIGMAP is not set"
     return active
+
+
+def _expected_osac_service_account(namespace: str) -> str:
+    values = json.loads(run("helm", "get", "values", _helm_release(), "-n", namespace, "-o", "json"))
+    return (
+        values.get("aap", {})
+        .get("serviceAccounts", {})
+        .get("osacSa", "osac-sa")
+    )
+
+
+def _configmap_bundle(k8s: K8sClient, configmap: str) -> str:
+    data = k8s.get_json(resource="configmap", name=configmap).get("data", {})
+    bundle = data.get("bundle.pem")
+    assert bundle, f"ConfigMap {configmap} has no bundle.pem"
+    return bundle
 
 
 def _upgrade_ca(namespace: str, configmap: str) -> None:
@@ -122,40 +138,141 @@ def _apply(k8s: K8sClient, manifest: str) -> None:
     )
 
 
-def _pods_mounting(k8s: K8sClient, configmap: str, since: float) -> list[str]:
-    names: list[str] = []
-    for pod in k8s.list_json(resource="pods", namespace=k8s.namespace)["items"]:
-        created = pod.get("metadata", {}).get("creationTimestamp", "")
-        if not created:
-            continue
-        if datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp() < since:
-            continue
-        for volume in pod.get("spec", {}).get("volumes", []):
-            if volume.get("configMap", {}).get("name") == configmap:
-                names.append(pod["metadata"]["name"])
-    return names
+def _latest_virtual_network_job_id(k8s: K8sClient, name: str) -> str:
+    status = k8s.get_json(resource="virtualnetwork", name=name).get("status", {})
+    jobs = [
+        job for job in status.get("provisioningJobs", [])
+        if job.get("type") == "provision"
+    ]
+    if not jobs:
+        return ""
+    return sorted(jobs, key=lambda job: job.get("timestamp", ""), reverse=True)[0].get("jobID", "")
 
 
-def _wait_for_ca_mount(k8s: K8sClient, configmap: str, since: float) -> list[str]:
+def _wait_for_virtual_network_job_id(k8s: K8sClient, name: str) -> str:
     return poll_until(
-        fn=lambda: _pods_mounting(k8s, configmap, since),
-        until=lambda pods: bool(pods),
+        fn=lambda: _latest_virtual_network_job_id(k8s, name),
+        until=bool,
         retries=120,
         delay=2,
-        description=f"AAP job pod mounting CA ConfigMap {configmap}",
+        description=f"AAP job for VirtualNetwork {name}",
     )
 
 
-def _exercise_netris(grpc: GRPCClient, k8s: K8sClient, configmap: str) -> None:
+def _job_pod_mounting(k8s: K8sClient, configmap: str, job_id: str) -> dict | None:
+    for pod in k8s.list_json(resource="pods", namespace=k8s.namespace)["items"]:
+        labels = pod.get("metadata", {}).get("labels", {})
+        pod_job_ids = {
+            labels.get("ansible_job", "").removeprefix("job-"),
+            labels.get("ansible_job_id", "").removeprefix("job-"),
+        }
+        if job_id not in pod_job_ids:
+            continue
+        for volume in pod.get("spec", {}).get("volumes", []):
+            if volume.get("configMap", {}).get("name") == configmap:
+                return pod
+    return None
+
+
+def _wait_for_job_pod(k8s: K8sClient, configmap: str, job_id: str) -> dict:
+    pod = poll_until(
+        fn=lambda: _job_pod_mounting(k8s, configmap, job_id),
+        until=lambda value: value is not None,
+        retries=120,
+        delay=2,
+        description=f"AAP job {job_id} pod mounting CA ConfigMap {configmap}",
+    )
+    assert pod is not None
+    return pod
+
+
+def _pod_environment(pod: dict) -> dict[str, str]:
+    worker = next(container for container in pod["spec"]["containers"] if container["name"] == "worker")
+    return {item["name"]: item.get("value", "") for item in worker.get("env", [])}
+
+
+def _assert_job_pod_contract(pod: dict, configmap: str, service_account: str) -> None:
+    name = pod["metadata"]["name"]
+    spec = pod["spec"]
+    environment = _pod_environment(pod)
+
+    assert spec["serviceAccountName"] == service_account, (
+        f"{name} uses ServiceAccount {spec['serviceAccountName']}, expected {service_account}"
+    )
+    assert environment["NETRIS_CONTROLLER_URL"].startswith("https://"), (
+        f"{name} must target Netris over HTTPS"
+    )
+    assert environment["NETRIS_VALIDATE_CERTS"] == "true", (
+        f"{name} must validate the Netris TLS certificate"
+    )
+    assert environment["NETRIS_CA_PATH"] == NETRIS_CA_PATH
+
+    mounts = [
+        mount for mount in spec["containers"][0].get("volumeMounts", [])
+        if mount.get("name") == "netris-ca-bundle"
+    ]
+    assert len(mounts) == 1, f"{name} must mount one Netris CA bundle"
+    assert mounts[0]["mountPath"] == NETRIS_CA_PATH
+    assert mounts[0]["subPath"] == "bundle.pem"
+    assert mounts[0]["readOnly"] is True
+
+    volumes = [
+        volume for volume in spec.get("volumes", [])
+        if volume.get("name") == "netris-ca-bundle"
+    ]
+    assert len(volumes) == 1, f"{name} must reference one Netris CA ConfigMap volume"
+    assert volumes[0]["configMap"]["name"] == configmap
+
+
+def _read_job_bundle(k8s: K8sClient, pod_name: str) -> tuple[str, str]:
+    script = 'printf "%s\\n" "$NETRIS_VALIDATE_CERTS"; sha256sum "$NETRIS_CA_PATH" | cut -d " " -f 1'
+    output, returncode = run_unchecked(
+        *k8s._base(), "exec", pod_name, "-n", k8s.namespace, "--", "sh", "-c", script
+    )
+    if returncode != 0:
+        return "", ""
+    lines = output.splitlines()
+    if len(lines) < 2:
+        return "", ""
+    return lines[-2], lines[-1]
+
+
+def _bundle_sha256(bundle: str) -> str:
+    return hashlib.sha256(bundle.encode("utf-8")).hexdigest()
+
+
+def _wait_for_bundle_in_job_pod(k8s: K8sClient, pod_name: str, expected_bundle: str) -> None:
+    expected_hash = _bundle_sha256(expected_bundle)
+    validation, actual_hash = poll_until(
+        fn=lambda: _read_job_bundle(k8s, pod_name),
+        until=lambda value: value == ("true", expected_hash),
+        retries=60,
+        delay=2,
+        retry_on_error=True,
+        description=f"AAP job pod {pod_name} reading the expected Netris CA bundle",
+    )
+    assert validation == "true", f"{pod_name} did not enable Netris certificate validation"
+    assert actual_hash == expected_hash, f"{pod_name} mounted the wrong Netris CA bundle"
+
+
+def _exercise_netris(
+    grpc: GRPCClient,
+    k8s: K8sClient,
+    configmap: str,
+    expected_bundle: str,
+    expected_service_account: str,
+) -> None:
     name = unique_name("netris-ca-probe")
     cidr = f"10.{random.randint(100, 250)}.{random.randint(0, 255)}.0/24"
-    started = time.time()
     vnet_id = grpc.create_virtual_network(name=name, ipv4_cidr=cidr)
     cr_name = name
     try:
         cr_name = wait_for_virtual_network_cr(k8s=k8s, uuid=vnet_id)
+        job_id = _wait_for_virtual_network_job_id(k8s, cr_name)
+        pod = _wait_for_job_pod(k8s, configmap, job_id)
+        _assert_job_pod_contract(pod, configmap, expected_service_account)
+        _wait_for_bundle_in_job_pod(k8s, pod["metadata"]["name"], expected_bundle)
         wait_for_virtual_network_ready(k8s=k8s, name=cr_name)
-        assert _wait_for_ca_mount(k8s, configmap, started), f"AAP job did not mount {configmap}"
     finally:
         grpc.delete_virtual_network(vn_id=vnet_id)
         wait_for_virtual_network_deletion(k8s=k8s, name=cr_name)
@@ -174,6 +291,8 @@ def test_netris_ca_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, namesp
     assert "BEGIN CERTIFICATE" in new_pem, f"{new_pem_path} does not contain a PEM certificate"
 
     active = _current_ca_configmap(namespace)
+    active_bundle = _configmap_bundle(k8s_hub_client, active)
+    service_account = _expected_osac_service_account(namespace)
     next_name = f"{active[:40]}-next-{unique_name('ca')[-8:]}"
     probe_sa = unique_name("netris-ca-probe")
 
@@ -260,6 +379,7 @@ def test_netris_ca_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, namesp
 
         _apply(k8s_hub_client, _configmap_manifest(next_name, namespace, new_pem))
         created_next = True
+        next_bundle = _configmap_bundle(k8s_hub_client, next_name)
         rotated = True
         _upgrade_ca(namespace, next_name)
 
@@ -284,11 +404,11 @@ def test_netris_ca_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, namesp
             "-n",
             namespace,
         )
-        _exercise_netris(grpc, k8s_hub_client, next_name)
+        _exercise_netris(grpc, k8s_hub_client, next_name, next_bundle, service_account)
 
         _upgrade_ca(namespace, active)
         rotated = False
-        _exercise_netris(grpc, k8s_hub_client, active)
+        _exercise_netris(grpc, k8s_hub_client, active, active_bundle, service_account)
     finally:
         try:
             if rotated:

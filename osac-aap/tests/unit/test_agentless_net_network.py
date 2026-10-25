@@ -272,6 +272,7 @@ def test_network_worker_reuses_config_and_secret_environment(remote_secret):
         netris_ca_path="",
         netris_controller_url="",
         netris_validate_certs=True,
+        osac_sa_name="osac-sa",
     ))
     worker = pod["spec"]["containers"][0]
     assert pod["spec"]["serviceAccountName"] == "osac-sa"
@@ -296,3 +297,21 @@ def test_network_worker_reuses_config_and_secret_environment(remote_secret):
     assert {"name": "NETRIS_CA_PATH", "value": ""} in worker["env"]
     assert all(volume["name"] != "agentless-net-inventory" for volume in pod["spec"]["volumes"])
     assert all(mount["name"] != "agentless-net-inventory" for mount in worker["volumeMounts"])
+
+
+def test_network_worker_uses_configured_service_account():
+    template_path = (MODULE_UTILS.parents[2] / "config_as_code" / "roles" / "aap"
+                     / "templates" / "networking-operations-ig.j2")
+    template = Environment(undefined=StrictUndefined).from_string(template_path.read_text())
+    pod = yaml.safe_load(template.render(
+        aap_ee_image="example.invalid/osac-ee:test",
+        remote_cluster_kubeconfig_secret_name="",
+        remote_cluster_kubeconfig_secret_key="kubeconfig",
+        netris_ca_config_map_name="",
+        netris_ca_path="",
+        netris_controller_url="",
+        netris_validate_certs=True,
+        osac_sa_name="customer-aap-sa",
+    ))
+
+    assert pod["spec"]["serviceAccountName"] == "customer-aap-sa"

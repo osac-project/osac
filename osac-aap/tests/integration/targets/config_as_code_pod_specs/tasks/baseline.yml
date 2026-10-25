@@ -6,6 +6,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: ""
     _template_path: >-
       {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/compute-instance-operations-ig.j2
@@ -56,6 +57,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: remote-cluster-kubeconfig
     remote_cluster_kubeconfig_secret_key: kubeconfig
     _template_path: >-
@@ -78,6 +80,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: ""
     remote_cluster_kubeconfig_secret_key: kubeconfig
     _template_path: >-
@@ -113,6 +116,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: remote-cluster-kubeconfig
     remote_cluster_kubeconfig_secret_key: kubeconfig
     _template_path: >-
@@ -155,6 +159,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     netris_controller_url: https://managed.example
     netris_ca_config_map_name: ""
     netris_validate_certs: true
@@ -213,6 +218,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: netris-ca-contract-sa
     netris_controller_url: https://managed.example
     netris_ca_config_map_name: customer-netris-ca
     netris_validate_certs: true
@@ -240,6 +246,7 @@
     - name: Assert the Netris CA is mounted and exported
       ansible.builtin.assert:
         that:
+          - _networking_pod_with_ca.spec.serviceAccountName == 'netris-ca-contract-sa'
           - >-
             _networking_pod_with_ca.spec.containers[0].volumeMounts
             | selectattr('name', 'equalto', 'netris-ca-bundle')
@@ -274,6 +281,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     netris_controller_url: https://managed.example
     netris_ca_config_map_name: customer-netris-ca
     netris_validate_certs: true
@@ -349,6 +357,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     netris_controller_url: https://managed.example
     netris_ca_config_map_name: customer-netris-ca
     netris_validate_certs: false

@@ -33,6 +33,7 @@ where applicable):
 | `AAP_PROJECT_GIT_BRANCH` | Git branch to use for the project | `main` |
 | `AAP_PROJECT_ARCHIVE_URI` | Optional archive URL instead of git (e.g. tarball) | — |
 | `AAP_EE_IMAGE` | Registry URL of the execution environment image | `ghcr.io/osac/osac-aap:latest` |
+| `AAP_OSAC_SERVICE_ACCOUNT` | Kubernetes ServiceAccount mounted into OSAC-managed AAP job pods | `osac-sa` |
 | `LICENSE_MANIFEST_PATH` | Path to the license manifest file to register the AAP instance ([Red Hat account](https://access.redhat.com/management/subscription_allocations)) | `/var/secrets/config-as-code-manifest/license.zip` |
 | `REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME` | Name of the secret holding the kubeconfig for the remote cluster (compute, networking, and storage operations) | — |
 | `REMOTE_CLUSTER_KUBECONFIG_SECRET_KEY` | Key within that secret for the kubeconfig file | `kubeconfig` |

@@ -10,7 +10,7 @@ import {
 import { openAndLoginWithEnvironment } from '../../../../libs/test-utils/src/general/open_and_login';
 import { openDiskImagesPage } from '../../../../libs/test-utils/src/main.page';
 
-test('creates a VM-ready disk image from Infrastructure', async ({ page }) => {
+test(`creates disk image ${diskImagesTestData.name} from Infrastructure`, async ({ page }) => {
   // Allow remote login, navigation, and disk image creation to complete.
   test.setTimeout(120_000);
   if (!tenantNameOrSkip()) {

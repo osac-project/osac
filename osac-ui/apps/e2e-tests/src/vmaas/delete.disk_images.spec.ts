@@ -9,7 +9,7 @@ import {
 import { openAndLoginWithEnvironment } from '../../../../libs/test-utils/src/general/open_and_login';
 import { openDiskImagesPage } from '../../../../libs/test-utils/src/main.page';
 
-test('deletes the configured disk image', async ({ page }) => {
+test(`deletes disk image ${diskImagesTestData.name}`, async ({ page }) => {
   // Allow the 120-second deletion wait plus login and UI actions to complete.
   test.setTimeout(180_000);
   if (!tenantNameOrSkip()) {

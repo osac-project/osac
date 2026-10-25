@@ -16,6 +16,7 @@ instance_type:
     pci_device_selector: '10DE:20B0'
 
 disk_image:
+  # Playwright appends a per-run suffix so teardown only targets this run's image.
   name: 'disk-image-e2e'
   source_type: 'Registry'
   source_ref: 'quay.io/containerdisks/fedora:41'

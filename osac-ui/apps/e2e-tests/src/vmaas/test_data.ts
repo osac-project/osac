@@ -27,7 +27,7 @@ interface RawInstanceType {
 
 interface RawDiskImage {
   name: string;
-  source_type: string;
+  source_type: 'Registry';
   source_ref: string;
   guest_os_family: string;
   architectures: [string, ...string[]];
@@ -70,6 +70,15 @@ const requiredString = (value: unknown, field: string): string => {
   }
 
   return value;
+};
+
+const registrySourceType = (value: unknown): 'Registry' => {
+  const sourceType = requiredString(value, 'disk_image.source_type');
+  if (sourceType !== 'Registry') {
+    throw new Error('Invalid e2e extravars: disk_image.source_type must be Registry.');
+  }
+
+  return sourceType;
 };
 
 const optionalString = (value: unknown, field: string): string | undefined => {
@@ -146,7 +155,7 @@ const parseExtravars = (value: unknown): RawExtravars => {
     },
     disk_image: {
       name: requiredString(diskImage.name, 'disk_image.name'),
-      source_type: requiredString(diskImage.source_type, 'disk_image.source_type'),
+      source_type: registrySourceType(diskImage.source_type),
       source_ref: requiredString(diskImage.source_ref, 'disk_image.source_ref'),
       guest_os_family: requiredString(diskImage.guest_os_family, 'disk_image.guest_os_family'),
       architectures: stringTuple(diskImage.architectures, 'disk_image.architectures'),
@@ -167,6 +176,10 @@ const {
   lifecycle_actions: rawLifecycleActions,
   tenant_name: rawTenantName,
 } = parseExtravars(parse(readFileSync(extravarsPath, 'utf8')));
+const diskImageTestRunId = requiredString(
+  process.env.OSAC_DISK_IMAGE_TEST_RUN_ID,
+  'OSAC_DISK_IMAGE_TEST_RUN_ID',
+);
 
 export const tenantName: string | undefined = rawTenantName;
 
@@ -195,7 +208,7 @@ export const instanceTypeTestData: InstanceTypeTestData = {
 };
 
 export const diskImagesTestData: DiskImageTestData = {
-  name: rawDiskImage.name,
+  name: `${rawDiskImage.name}-${diskImageTestRunId}`,
   sourceType: rawDiskImage.source_type,
   sourceRef: rawDiskImage.source_ref,
   guestOsFamily: rawDiskImage.guest_os_family,

@@ -10,7 +10,7 @@ import {
 
 export interface DiskImageCreateParams {
   name: string;
-  sourceType: string;
+  sourceType: 'Registry';
   sourceRef: string;
   guestOsFamily: string;
   architectures: readonly [string, ...string[]];

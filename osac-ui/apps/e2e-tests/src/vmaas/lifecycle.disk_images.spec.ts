@@ -9,7 +9,7 @@ import {
 import { openAndLoginWithEnvironment } from '../../../../libs/test-utils/src/general/open_and_login';
 import { openDiskImagesPage } from '../../../../libs/test-utils/src/main.page';
 
-test('exercises disk image lifecycle transitions', async ({ page }) => {
+test(`exercises lifecycle transitions for ${diskImagesTestData.name}`, async ({ page }) => {
   // Allow remote login and lifecycle updates to complete.
   test.setTimeout(180_000);
   if (!tenantNameOrSkip()) {

@@ -110,6 +110,10 @@ create project's teardown deletes the image after the lifecycle project
 finishes, including when the lifecycle test fails. To run only the cleanup
 against an existing obsolete image, use
 `--project=vmaas-disk-image-delete --no-deps`; this deletes the named image.
+Each run appends a unique suffix to `disk_image.name`, and the full name appears
+in the test title. To clean up an interrupted run, set
+`OSAC_DISK_IMAGE_TEST_RUN_ID` to that run's suffix when invoking the delete
+project.
 
 Use `--headed` when a graphical display is available. Run these commands from
 the repository root; pass only the spec filename because the Playwright

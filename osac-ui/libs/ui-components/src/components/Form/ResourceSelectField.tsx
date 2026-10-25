@@ -19,7 +19,7 @@ export interface ResourceListItem {
   metadata?: { name?: string; description?: string };
 }
 
-export interface ResourceSelectFieldProps {
+export interface ResourceSelectFieldProps<TResource extends ResourceListItem = ResourceListItem> {
   name: string;
   label: string;
   fieldId: string;
@@ -36,17 +36,18 @@ export interface ResourceSelectFieldProps {
   emptyTitle?: string;
   emptyDescription?: string;
   autoSelectFirstOption?: boolean;
+  showOptionDescriptions?: boolean;
   /** Called after a new resource is selected or the field is cleared. Use to trigger cascade resets. */
-  onSelectResource?: (value: ResourceSelectValue) => void;
+  onSelectResource?: (value: ResourceSelectValue, resource?: TResource) => void;
   /** Client-side filter applied after the list response (e.g. GPU-class). */
-  filterItems?: (item: ResourceListItem) => boolean;
+  filterItems?: (item: TResource) => boolean;
   /** Label for options and the closed toggle. Defaults to metadata.name. */
-  formatOptionLabel?: (item: ResourceListItem) => string;
+  formatOptionLabel?: (item: TResource) => string;
 }
 
 const defaultOptionLabel = (item: ResourceListItem): string => item.metadata?.name ?? item.id;
 
-export const ResourceSelectField = ({
+export const ResourceSelectField = <TResource extends ResourceListItem = ResourceListItem>({
   name,
   label,
   fieldId,
@@ -63,16 +64,17 @@ export const ResourceSelectField = ({
   emptyTitle,
   emptyDescription,
   autoSelectFirstOption = false,
+  showOptionDescriptions = true,
   onSelectResource,
   filterItems,
   formatOptionLabel = defaultOptionLabel,
-}: ResourceSelectFieldProps) => {
+}: ResourceSelectFieldProps<TResource>) => {
   const idFieldName = `${name}.id`;
   const nameFieldName = `${name}.name`;
   const { values, setFieldValue } = useFormikContext<Record<string, unknown>>();
   const { data, isLoading, error: loadError } = useListResource(service, request);
   const items = useMemo(() => {
-    const listed = ((data as { items?: ResourceListItem[] } | undefined)?.items ?? []).filter(
+    const listed = ((data as { items?: TResource[] } | undefined)?.items ?? []).filter(
       (item) => item.id,
     );
     return filterItems ? listed.filter(filterItems) : listed;
@@ -98,6 +100,7 @@ export const ResourceSelectField = ({
     void setFieldValue(nameFieldName, resourceName, false);
     onSelectResource?.(
       selectedId ? { id: selectedId, name: resourceName } : emptyResourceSelectValue(),
+      item,
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
@@ -149,9 +152,9 @@ export const ResourceSelectField = ({
       items.map((item) => ({
         value: item.id,
         content: formatOptionLabel(item),
-        description: item.metadata?.description,
+        description: showOptionDescriptions ? item.metadata?.description : undefined,
       })),
-    [formatOptionLabel, items],
+    [formatOptionLabel, items, showOptionDescriptions],
   );
 
   return (

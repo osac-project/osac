@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useRef } from 'react';
+import { type ReactElement, type ReactNode, useEffect, useMemo, useRef } from 'react';
 import { Alert, Content } from '@patternfly/react-core';
 import { getIn, useFormikContext } from 'formik';
 
@@ -28,6 +28,7 @@ export interface ResourceSelectFieldProps<TResource extends ResourceListItem = R
   isRequired?: boolean;
   isDisabled?: boolean;
   labelInfo?: ReactNode;
+  labelHelp?: ReactElement;
   description?: string;
   placeholder?: string;
   loadingPlaceholder?: string;
@@ -50,6 +51,7 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
   isRequired = false,
   isDisabled = false,
   labelInfo,
+  labelHelp,
   description,
   placeholder = '',
   loadingPlaceholder = 'Loading...',
@@ -167,6 +169,7 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
         isRequired={isRequired}
         isDisabled={controlDisabled}
         labelInfo={labelInfo}
+        labelHelp={labelHelp}
         description={description}
         placeholder={effectivePlaceholder}
       />

@@ -90,6 +90,20 @@ describe('CatalogGeneralStep', () => {
     ).toBeInTheDocument();
   });
 
+  it('shows provisioning template help information', async () => {
+    const { user } = renderStep(false);
+
+    await user.click(
+      screen.getByRole('button', { name: 'More information for Provisioning template' }),
+    );
+
+    expect(
+      screen.getByText(
+        'Infrastructure automation that fulfills a VM request by resolving infrastructure dependencies, creating VM and storage resources, applying provider-specific integrations, and exposing the status.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   describe('for a tenant-admin session', () => {
     it('shows the project field and no scope cards or tenant field', () => {
       renderStep(false);

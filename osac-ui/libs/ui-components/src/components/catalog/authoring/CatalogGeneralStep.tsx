@@ -91,12 +91,14 @@ interface CatalogGeneralStepProps {
   isEdit: boolean;
   templateService: ResourceSelectFieldProps['service'];
   templateFieldId: string;
+  heading?: string;
 }
 
 const CatalogGeneralStep = ({
   isEdit,
   templateService,
   templateFieldId,
+  heading,
 }: CatalogGeneralStepProps) => {
   const { t } = useTranslation();
   const { role } = useSession();
@@ -115,7 +117,7 @@ const CatalogGeneralStep = ({
     <Stack hasGutter>
       <StackItem>
         <Title headingLevel="h2" size="lg">
-          {t('General')}
+          {heading ?? t('General')}
         </Title>
       </StackItem>
       <StackItem>

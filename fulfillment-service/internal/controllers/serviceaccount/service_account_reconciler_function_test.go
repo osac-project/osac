@@ -291,7 +291,7 @@ var _ = Describe("Service-account reconciler", func() {
 		Expect(clientSecret.GetMetadata().GetAnnotations()).To(HaveKeyWithValue(tenantAnnotation, "tenant-a"))
 		Expect(clientSecret.GetMetadata().GetAnnotations()).To(HaveKeyWithValue(ownerReferenceAnnotation, accountID))
 		Expect(registrationSecret).ToNot(BeNil())
-		Expect(registrationSecret.GetMetadata().GetName()).To(Equal("robot"))
+		Expect(registrationSecret.GetMetadata().GetName()).To(Equal(serviceaccounts.RegistrationSecretName(accountID, 0)))
 		Expect(registrationSecret.GetMetadata().GetAnnotations()).To(BeEmpty())
 		Expect(registrationSecret.GetData()[serviceaccounts.RegistrationServiceAccountIDKey]).To(Equal([]byte(accountID)))
 		Expect(secretAPI.creates).To(HaveLen(2))
@@ -323,27 +323,28 @@ var _ = Describe("Service-account reconciler", func() {
 		Expect(request.GetUpdateMask().GetPaths()).To(Equal([]string{"status.state", "status.message"}))
 	})
 
-	It("uses a numeric suffix when the service-account name is already taken", func() {
+	It("uses a suffix only when the account-ID-derived Secret name is occupied", func() {
 		account.GetMetadata().ClearDeletionTimestamp()
 		account.GetStatus().SetKeycloakClientUuid("")
 		account.GetStatus().SetState(privatev1.ServiceAccountState_SERVICE_ACCOUNT_STATE_PENDING)
-		seedSecret("robot", auth.SystemTenant, "other-registration-secret", map[string][]byte{
+		seedSecret(serviceaccounts.RegistrationSecretName(accountID, 0), auth.SystemTenant, "other-registration-secret", map[string][]byte{
 			serviceaccounts.RegistrationServiceAccountIDKey: []byte("another-account"),
 		})
 		idpClient.EXPECT().CreateServiceAccountClient(gomock.Any(), clientID, "tenant-a").
 			Return(clientUUID, "client-secret", registrationToken, nil)
 
 		Expect(run(context.Background(), account)).To(Succeed())
-		Expect(account.GetStatus().GetRegistrationSecret().GetName()).To(Equal("robot-1"))
+		expectedName := serviceaccounts.RegistrationSecretName(accountID, 1)
+		Expect(account.GetStatus().GetRegistrationSecret().GetName()).To(Equal(expectedName))
 		found := false
 		for _, secret := range secretAPI.items {
-			found = found || secret.GetMetadata().GetName() == "robot-1"
+			found = found || secret.GetMetadata().GetName() == expectedName
 		}
 		Expect(found).To(BeTrue())
 		for _, update := range updates() {
 			if slices.Contains(update.GetUpdateMask().GetPaths(), "status.registration_secret") {
 				Expect(update.GetObject().GetStatus().GetRegistrationSecret().GetId()).ToNot(BeEmpty())
-				Expect(update.GetObject().GetStatus().GetRegistrationSecret().GetName()).To(Equal("robot-1"))
+				Expect(update.GetObject().GetStatus().GetRegistrationSecret().GetName()).To(Equal(expectedName))
 			}
 		}
 	})
@@ -389,11 +390,12 @@ var _ = Describe("Service-account reconciler", func() {
 })
 
 var _ = Describe("Registration Secret naming", func() {
-	It("uses the service-account name and adds a suffix while keeping DNS name length", func() {
-		Expect(serviceaccounts.RegistrationSecretName("robot", 0)).To(Equal("robot"))
-		Expect(serviceaccounts.RegistrationSecretName("robot", 1)).To(Equal("robot-1"))
-		Expect(serviceaccounts.RegistrationSecretName(strings.Repeat("a", 63), 2)).To(Equal(strings.Repeat("a", 61) + "-2"))
-		Expect(serviceaccounts.RegistrationSecretName("robot", 999999999999)).To(Equal("robot-999999999999"))
+	It("uses account IDs and keeps suffixes within DNS name length", func() {
+		accountID := "d3c4e3db-95b8-481d-8b5c-963da477da12"
+		Expect(serviceaccounts.RegistrationSecretName(accountID, 0)).To(Equal("osac-registration-" + accountID))
+		Expect(serviceaccounts.RegistrationSecretName(accountID, 1)).To(Equal("osac-registration-" + accountID + "-1"))
+		Expect(len(serviceaccounts.RegistrationSecretName(strings.Repeat("a", 63), 2))).To(BeNumerically("<=", 63))
+		Expect(len(serviceaccounts.RegistrationSecretName(accountID, 999999999999))).To(BeNumerically("<=", 63))
 	})
 })
 

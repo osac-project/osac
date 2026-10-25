@@ -69,7 +69,6 @@ const DiskImageField = ({
       title={t('Disk image')}
       titleId={`${fieldId}-group`}
       actions={labelInfo}
-      hasDivider
     >
       <GuestOsFamilyField name={guestOsFamilyName} isDisabled={isDisabled} />
       <ResourceSelectField<DiskImage>

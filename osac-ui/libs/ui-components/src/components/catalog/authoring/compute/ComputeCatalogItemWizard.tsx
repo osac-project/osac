@@ -19,6 +19,7 @@ import ComputeCatalogAccessStep from './ComputeCatalogAccessStep';
 import ComputeCatalogConfigurationStep from './ComputeCatalogConfigurationStep';
 import ComputeCatalogReviewStep from './ComputeCatalogReviewStep';
 import ComputeCatalogStorageStep from './ComputeCatalogStorageStep';
+import ComputeCatalogWizardFooter from './ComputeCatalogWizardFooter';
 import {
   buildComputeCatalogItemCreatePayload,
   buildComputeCatalogItemUpdatePayload,
@@ -34,7 +35,6 @@ import { useSession } from '../../../../hooks/use-session';
 import { useTranslation } from '../../../../hooks/useTranslation';
 import { FieldValidationProvider } from '../../../Form/FieldValidationContext';
 import LeaveFormConfirmation from '../../../Form/LeaveFormConfirmation';
-import { OSACWizardFooter } from '../../../Wizard/OSACWizardFooter';
 import CatalogGeneralStep from '../CatalogGeneralStep';
 
 interface ComputeCatalogItemWizardProps {
@@ -124,7 +124,8 @@ const ComputeCatalogItemWizard = ({ item }: ComputeCatalogItemWizardProps) => {
               navAriaLabel={t('Create compute catalog item steps')}
               isVisitRequired
               footer={
-                <OSACWizardFooter
+                <ComputeCatalogWizardFooter
+                  currentStep={currentStep}
                   onCancel={() => navigate('/catalog')}
                   stepHasErrors={computeCatalogStepHasErrors}
                   isEdit={!!item}
@@ -156,7 +157,7 @@ const ComputeCatalogItemWizard = ({ item }: ComputeCatalogItemWizardProps) => {
                 {currentStep === 'access-init' && <ComputeCatalogAccessStep />}
               </WizardStep>
               <WizardStep id="review" name={t('Review')}>
-                {currentStep === 'review' && <ComputeCatalogReviewStep />}
+                {currentStep === 'review' && <ComputeCatalogReviewStep item={item} />}
               </WizardStep>
             </Wizard>
           </PageSection>

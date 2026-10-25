@@ -27,6 +27,7 @@ const CatalogField = ({ name, children }: CatalogFieldProps) => {
       id={`${name}-editable`}
       label={isEditable ? t('Editable') : t('Locked')}
       isChecked={isEditable}
+      hasCheckIcon
       onChange={(_event, checked) => {
         void helpers.setValue({ ...field.value, locked: !checked });
       }}

@@ -113,6 +113,13 @@ func (p *DefaultTenancyLogic) DetermineVisibility(ctx context.Context) (result *
 	builder := NewVisibility()
 	builder.AddVisibleTenant(SharedTenant)
 	builder.AddVisibleTenants(subject.Tenants.Inclusions()...)
+	if subject.ManagedServiceAccount {
+		for _, tenant := range subject.Tenants.Inclusions() {
+			builder.SetTotalProjectVisibility(tenant)
+		}
+		result, err = builder.Build()
+		return
+	}
 
 	// Check if the user has the tenant-admin role. If so, grant full access to all projects in their tenants.
 	if p.isTenantAdmin(ctx) {

@@ -1,11 +1,10 @@
 import type { ReactNode } from 'react';
-import { Divider, Flex, FlexItem, FormSection, Title } from '@patternfly/react-core';
+import { Flex, FlexItem, FormSection, Title } from '@patternfly/react-core';
 
 interface ProvisioningFieldGroupProps {
   title: string;
   titleId: string;
   actions?: ReactNode;
-  hasDivider?: boolean;
   children: ReactNode;
 }
 
@@ -13,11 +12,9 @@ const ProvisioningFieldGroup = ({
   title,
   titleId,
   actions,
-  hasDivider = false,
   children,
 }: ProvisioningFieldGroupProps) => (
   <>
-    {hasDivider ? <Divider /> : null}
     <FormSection
       aria-labelledby={titleId}
       title={

@@ -35,14 +35,4 @@ describe('ProvisioningFieldGroup', () => {
 
     expect(screen.getByRole('button', { name: 'Remove node set' })).toBeInTheDocument();
   });
-
-  it('renders an optional divider', () => {
-    renderWithProviders(
-      <ProvisioningFieldGroup title="Disk image" titleId="disk-image" hasDivider>
-        <p>Disk image selector</p>
-      </ProvisioningFieldGroup>,
-    );
-
-    expect(screen.getByRole('separator')).toBeInTheDocument();
-  });
 });

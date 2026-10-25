@@ -271,7 +271,12 @@ def _ready_baseline(*, k8s: K8sClient, grpc: GRPCClient, refs: _ClusterRefs) -> 
         fn=lambda: _snapshot(k8s=k8s, grpc=grpc, refs=refs),
         until=lambda value: (
             bool(value["hosted"])
-            and all(value["pools"].values())
+            and all(
+                pool
+                and _condition(pool, "Ready").get("status") == "True"
+                and _condition(pool, "AllMachinesReady").get("status") == "True"
+                for pool in value["pools"].values()
+            )
             and value["cluster"].get("status", {}).get("state") == "CLUSTER_STATE_READY"
         ),
         retries=60,
@@ -379,6 +384,7 @@ def _upgrade_node_pool(
             versions={SIBLING_NODE_SET: sibling["status"]["version"]},
             hosted_image=target_image,
         )
+        assert _cp_completed(current["hosted"], target_image), "Control plane is not completed and healthy"
         assert current["cluster"]["spec"]["nodeSets"][SELECTED_NODE_SET]["version"]["name"] == target["name"]
         assert current["order"]["spec"].get("releaseImage") == target_image
         _check_hypershift_failure(current["pools"][SELECTED_NODE_SET], "selected node pool")

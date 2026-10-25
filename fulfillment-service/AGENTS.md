@@ -85,15 +85,6 @@ If a fresh environment is needed, confirm that `osac-dev` is a disposable test c
 
 If setup fails with `failed to lookup host '...'`, read [README.md — Running integration tests](README.md#running-integration-tests) for host entries.
 
-### Catalog cleanup and integration reports
-
-Run `go test ./it -run TestCatalogItemDeletionProbe` for deletion observation,
-signal cadence, cancellation, and archival races using API callbacks. Run the
-complete installer `SUITE=fulfillment` command above for real archival and
-dependency-order behavior. The installer uses Ginkgo's native JSON reporting
-for each phase; reporting and analysis stay outside the test suite. See
-[report usage and limitations](../docs/INTEGRATION-TESTING.md#fulfillment-integration-timings).
-
 ## Writing tests
 
 - Prefer Ginkgo/Gomega, following existing test conventions. Use `DescribeTable` with named `Entry` cases when setup and assertions are shared.

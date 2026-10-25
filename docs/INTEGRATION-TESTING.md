@@ -203,7 +203,10 @@ suite configuration, and node events support analysis outside the test suite.
 For example, list executed specs from a downloaded report with:
 
 ```bash
-jq '.[] | .SpecReports[] | select(.State != "skipped") | {name: ((.ContainerHierarchyTexts + [.LeafNodeText]) | join(" ")), seconds: (.RunTime / 1000000000)}' service-only.json
+jq '.[] | .SpecReports[]
+    | select(.LeafNodeType == "It" and .State != "skipped" and .State != "pending")
+    | {name: ((.ContainerHierarchyTexts + [.LeafNodeText]) | join(" ")),
+       seconds: (.RunTime / 1000000000)}' service-only.json
 ```
 
 Native reports include captured output, failures, and report entries, and
@@ -289,8 +292,8 @@ MCE or call an Operator catalog or cluster API.
 
 The `make -C osac-installer kind-runtime-test` unit suite is owned by installer
 implementation work. It uses command stubs to check runtime selection, sudo
-authentication and credential expiry, Makefile/host setup routing, fulfillment
-timing artifact destinations for all four phases, safe
+authentication and credential expiry, Makefile/host setup routing, native
+Ginkgo report-path configuration for all four phases, safe
 credential reset, resuming stopped nodes after storage preparation and waiting
 for API readiness, Helm 3/4 apply flags for devstack and OSAC releases,
 image loading without virtualization prerequisites or

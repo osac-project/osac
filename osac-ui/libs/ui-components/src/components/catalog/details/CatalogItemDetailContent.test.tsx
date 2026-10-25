@@ -157,15 +157,17 @@ const bareMetalItem = create(BareMetalInstanceCatalogItemSchema, {
 });
 
 describe('CatalogItemDetailContent', () => {
-  it('shows VM detail cards with lookups, governance, and safe access summaries', async () => {
-    renderWithProviders(<VmCatalogItemDetailContent item={vmItem} />, {
+  it('shows VM detail columns with lookups, governance, and safe access summaries', async () => {
+    const { container } = renderWithProviders(<VmCatalogItemDetailContent item={vmItem} />, {
       apiFixtures: catalogApiFixtures,
     });
 
-    expect(screen.getByRole('region', { name: 'Overview' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Configuration' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Access & Initial run' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Storage' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Configuration' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Access & Initial run' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Storage' })).toBeInTheDocument();
+    expect(screen.getAllByRole('separator')).toHaveLength(1);
+    expect(container.querySelector('.pf-v6-c-card')).toBeNull();
     expect(screen.getByText('Virtual machines')).toBeInTheDocument();
     expect(screen.getByText('template-1')).toBeInTheDocument();
     expect(screen.getByText('foo')).toBeInTheDocument();
@@ -235,7 +237,7 @@ describe('CatalogItemDetailContent', () => {
     expect(screen.queryByText('Run strategy')).not.toBeInTheDocument();
   });
 
-  it('renders all VM cards with safe empty values when fields are unconfigured', () => {
+  it('renders all VM sections with safe empty values when fields are unconfigured', () => {
     const item = create(ComputeInstanceCatalogItemSchema, {
       id: 'catalog-empty',
       metadata: { name: 'catalog-empty', tenant: 'tenant-1' },
@@ -246,10 +248,10 @@ describe('CatalogItemDetailContent', () => {
       apiFixtures: catalogApiFixtures,
     });
 
-    expect(screen.getByRole('region', { name: 'Overview' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Configuration' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Access & Initial run' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Storage' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Configuration' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Access & Initial run' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Storage' })).toBeInTheDocument();
     expect(screen.getAllByText('Not set').length).toBeGreaterThan(0);
     expect(screen.queryByText(/cloud-config|script|userdata/i)).not.toBeInTheDocument();
   });

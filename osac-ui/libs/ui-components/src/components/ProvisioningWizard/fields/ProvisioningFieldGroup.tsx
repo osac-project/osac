@@ -23,7 +23,7 @@ const ProvisioningFieldGroup = ({
           justifyContent={{ default: 'justifyContentSpaceBetween' }}
         >
           <FlexItem>
-            <Title headingLevel="h3" size="md" id={titleId}>
+            <Title headingLevel="h2" size="md" id={titleId}>
               {title}
             </Title>
           </FlexItem>

@@ -44,6 +44,13 @@
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
 
+    - name: Read any pre-existing VAST CSIDriver fixture
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.vastdata.com
+      register: _pre_existing_vast_driver
+
     - name: Remove any pre-existing VAST CSIDriver fixture
       kubernetes.core.k8s:
         state: absent
@@ -258,6 +265,18 @@
             api_version: storage.k8s.io/v1
             kind: CSIDriver
             name: csi.vastdata.com
+
+        - name: Restore the pre-existing VAST CSIDriver fixture
+          when: _pre_existing_vast_driver.resources | length > 0
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: storage.k8s.io/v1
+              kind: CSIDriver
+              metadata:
+                name: csi.vastdata.com
+              spec:
+                attachRequired: false
 
         - name: Delete the JIT VastCSIDriver CRD fixture
           kubernetes.core.k8s:

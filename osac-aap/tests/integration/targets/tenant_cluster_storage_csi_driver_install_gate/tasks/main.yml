@@ -1746,6 +1746,18 @@
             - block.csi.vastdata.com
           failed_when: false
 
+        - name: Restore the VAST NFS CSI driver fixture from test setup
+          when: hostvars['localhost']._native_csi_fixture_vast_driver.resources | length > 0
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: storage.k8s.io/v1
+              kind: CSIDriver
+              metadata:
+                name: csi.vastdata.com
+              spec:
+                attachRequired: false
+
         - name: Delete the VAST operator namespace fixture
           kubernetes.core.k8s:
             state: absent

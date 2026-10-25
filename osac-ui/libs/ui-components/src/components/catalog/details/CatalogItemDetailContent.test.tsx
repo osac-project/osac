@@ -8,13 +8,16 @@ import {
   ClusterCatalogItemSchema,
   ClusterVersionReferenceSchema,
   ComputeInstanceCatalogItemSchema,
+  ComputeInstanceTemplateReferenceSchema,
   DiskImageSchema,
+  GpuSpecSchema,
   GuestOSFamily,
   InstanceTypeSchema,
   InstanceTypeState,
 } from '@osac/types';
 
 import { CatalogItemDetailContent } from './CatalogItemDetailContent';
+import VmCatalogItemDetailContent from './ComputeCatalogItemDetailContent';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
 const INSTANCE_TYPE_ID = 'it-4-8';
@@ -24,7 +27,12 @@ const catalogApiFixtures = {
     create(InstanceTypeSchema, {
       id: INSTANCE_TYPE_ID,
       metadata: { name: 'standard-4-8' },
-      spec: { vcpus: 4, memoryGib: 8, state: InstanceTypeState.ACTIVE },
+      spec: {
+        vcpus: 4,
+        memoryGib: 8,
+        state: InstanceTypeState.ACTIVE,
+        gpu: create(GpuSpecSchema, { count: 2, resourceName: 'nvidia.com/A100' }),
+      },
     }),
   ],
   diskImages: [
@@ -46,13 +54,17 @@ const vmItem = create(ComputeInstanceCatalogItemSchema, {
   },
   title: 'RHEL 9 catalog',
   description: 'RHEL 9 base image',
+  template: create(ComputeInstanceTemplateReferenceSchema, { id: 'template-1' }),
   published: true,
   fields: {
     instanceType: {
       behavior: { case: 'locked', value: { id: INSTANCE_TYPE_ID, name: 'standard-4-8' } },
     },
     diskImage: {
-      behavior: { case: 'editable', value: {} },
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { id: 'di-rhel-10', name: 'RHEL 10' } },
+      },
     },
     userData: {
       behavior: { case: 'locked', value: '#cloud-config' },
@@ -145,32 +157,35 @@ const bareMetalItem = create(BareMetalInstanceCatalogItemSchema, {
 });
 
 describe('CatalogItemDetailContent', () => {
-  it('shows configured compute fields with governance and omits excluded policies', () => {
-    renderWithProviders(<CatalogItemDetailContent item={vmItem} />, {
+  it('shows VM detail cards with lookups, governance, and safe access summaries', async () => {
+    renderWithProviders(<VmCatalogItemDetailContent item={vmItem} />, {
       apiFixtures: catalogApiFixtures,
     });
 
-    expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Publishing' })).toBeInTheDocument();
-    expect(screen.getByText('Virtual Machine')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Overview' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Configuration' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Access & Initial run' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Storage' })).toBeInTheDocument();
+    expect(screen.getByText('Virtual machines')).toBeInTheDocument();
+    expect(screen.getByText('template-1')).toBeInTheDocument();
     expect(screen.getByText('foo')).toBeInTheDocument();
-    const detailsCard = screen.getByRole('region', { name: 'Details' });
-    const configurationCard = screen.getByRole('region', { name: 'Configuration' });
-    expect(detailsCard).toHaveClass('pf-m-full-height');
-    expect(detailsCard.querySelector('dl')).toHaveClass('pf-m-compact');
-    expect(detailsCard.querySelector('dl')).not.toHaveClass('pf-m-horizontal');
-    expect(configurationCard).toHaveClass('pf-m-secondary');
-    expect(configurationCard.querySelector('dl')).toHaveClass('pf-m-compact');
-    expect(configurationCard.querySelector('dl')).not.toHaveClass('pf-m-horizontal');
+    expect(screen.getByText('Live')).toBeInTheDocument();
 
     expect(screen.getByText('Instance type')).toBeInTheDocument();
     expect(screen.getByText('standard-4-8')).toBeInTheDocument();
+    expect(screen.getByText('RHEL 10')).toBeInTheDocument();
+    expect(await screen.findByText('Linux')).toBeInTheDocument();
     expect(screen.getByText('Disk image')).toBeInTheDocument();
-    expect(screen.getByText('User data')).toBeInTheDocument();
-    expect(screen.getByText('#cloud-config')).toBeInTheDocument();
+    expect(screen.getByText('Cloud-init')).toBeInTheDocument();
+    expect(screen.getByText('Configured')).toBeInTheDocument();
+    expect(screen.queryByText('#cloud-config')).not.toBeInTheDocument();
     expect(screen.getByText('64 GiB')).toBeInTheDocument();
     expect(screen.getByText('fast')).toBeInTheDocument();
-    expect(screen.getByText('100 GiB (fast)')).toBeInTheDocument();
+    expect(screen.getByText('Disk set 1: 100 GiB · fast')).toBeInTheDocument();
+    expect(screen.getByText('GPU count')).toBeInTheDocument();
+    expect(await screen.findByText('2')).toBeInTheDocument();
+    expect(screen.getByText('Resource name')).toBeInTheDocument();
+    expect(await screen.findByText('nvidia.com/A100')).toBeInTheDocument();
     expect(screen.getAllByText('Locked').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Editable').length).toBeGreaterThan(0);
     expect(screen.queryByText('Run strategy')).not.toBeInTheDocument();
@@ -220,17 +235,22 @@ describe('CatalogItemDetailContent', () => {
     expect(screen.queryByText('Run strategy')).not.toBeInTheDocument();
   });
 
-  it('shows an empty state when no supported fields are governed', () => {
+  it('renders all VM cards with safe empty values when fields are unconfigured', () => {
     const item = create(ComputeInstanceCatalogItemSchema, {
       id: 'catalog-empty',
       metadata: { name: 'catalog-empty', tenant: 'tenant-1' },
       fields: {},
     });
 
-    renderWithProviders(<CatalogItemDetailContent item={item} />, {
+    renderWithProviders(<VmCatalogItemDetailContent item={item} />, {
       apiFixtures: catalogApiFixtures,
     });
 
-    expect(screen.getByText('No governed configuration')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Overview' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Configuration' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Access & Initial run' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Storage' })).toBeInTheDocument();
+    expect(screen.getAllByText('Not set').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/cloud-config|script|userdata/i)).not.toBeInTheDocument();
   });
 });

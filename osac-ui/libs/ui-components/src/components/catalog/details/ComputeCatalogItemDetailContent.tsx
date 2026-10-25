@@ -36,6 +36,7 @@ import {
   formatComputeCatalogVCpu,
   int32ValueFromPolicy,
 } from '../computeCatalogItemResourceDisplay';
+import CatalogStorageTable, { type CatalogStorageTableRow } from './CatalogStorageTable';
 
 interface VmCatalogItemDetailContentProps {
   item: ComputeInstanceCatalogItem;
@@ -47,7 +48,7 @@ interface DetailSectionProps {
 }
 
 interface DetailRowProps {
-  label: string;
+  label: ReactNode;
   children: ReactNode;
 }
 
@@ -111,26 +112,17 @@ const referenceLabel = (reference: unknown): string | undefined => {
   return value.name?.trim() || value.id?.trim() || undefined;
 };
 
-const formatAdditionalDisks = (value: unknown, t: TFunction): string => {
-  if (!value || typeof value !== 'object') {
-    return t('Not set');
-  }
-  const items = (
-    value as {
-      items?: Array<{ sizeGib?: number; storageTier?: { id?: string; name?: string } }>;
-    }
-  ).items;
-  if (!items?.length) {
-    return t('Not set');
-  }
+interface AdditionalDisk {
+  sizeGib?: number;
+  storageTier?: { id?: string; name?: string };
+}
 
-  return items
-    .map((item, index) => {
-      const size = item.sizeGib === undefined ? t('Not set') : `${item.sizeGib} GiB`;
-      const tier = referenceLabel(item.storageTier) ?? t('Not set');
-      return `${t('Disk set {{number}}', { number: index + 1 })}: ${size} · ${tier}`;
-    })
-    .join('; ');
+const additionalDisksFromPolicy = (value: unknown): AdditionalDisk[] => {
+  if (!value || typeof value !== 'object') {
+    return [];
+  }
+  const items = (value as { items?: AdditionalDisk[] }).items;
+  return items ?? [];
 };
 
 const configuredUserData = (item: ComputeInstanceCatalogItem): boolean => {
@@ -179,7 +171,12 @@ const VmCatalogItemDetailContent = ({ item }: VmCatalogItemDetailContentProps) =
   const gpu = instanceType?.spec?.gpu;
   const userDataValue = configuredUserData(item) ? t('Configured') : t('Not set');
   const bootDiskSizeValue = formatComputeCatalogStorage(fields, bootDiskSize, t) ?? t('Not set');
-  const additionalDisksValue = formatAdditionalDisks(policyValue(fields?.additionalDisks), t);
+  const additionalDisks = additionalDisksFromPolicy(policyValue(fields?.additionalDisks));
+  const additionalDiskRows: CatalogStorageTableRow[] = additionalDisks.map((disk, index) => ({
+    id: `additional-disk-${index}`,
+    size: disk.sizeGib === undefined ? t('Not set') : `${disk.sizeGib} GiB`,
+    storageTier: referenceLabel(disk.storageTier) ?? t('Not set'),
+  }));
 
   return (
     <Grid hasGutter>
@@ -242,8 +239,16 @@ const VmCatalogItemDetailContent = ({ item }: VmCatalogItemDetailContentProps) =
               policy={fields?.bootDisk?.storageTier}
             />
           </DetailRow>
-          <DetailRow label={t('Additional disks')}>
-            <GovernedDetailValue value={additionalDisksValue} policy={fields?.additionalDisks} />
+          <DetailRow
+            label={
+              <GovernedDetailValue value={t('Additional disks')} policy={fields?.additionalDisks} />
+            }
+          >
+            {additionalDiskRows.length ? (
+              <CatalogStorageTable rows={additionalDiskRows} />
+            ) : (
+              t('Not set')
+            )}
           </DetailRow>
         </DetailSection>
       </GridItem>

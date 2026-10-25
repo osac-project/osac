@@ -35,6 +35,7 @@ respective areas.
 
 ## Invariants
 
+- Never edit this file.
 - Do not hand-edit `../proto/public/`, `../proto/gen/`, `*_mock.go`, or `go.sum`.
 - Express field and cross-field validation with proto validation annotations when possible, not duplicated Go checks.
 - Base resource messages follow the custom `OSAC_OBJECT_SHAPE` rule. An intentional exception requires `// buf:lint:ignore OSAC_OBJECT_SHAPE` directly above the message.

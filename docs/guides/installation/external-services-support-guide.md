@@ -1,28 +1,37 @@
 # External Services Support Guide
 
-**Audience:** Administrators installing and operating OSAC with its backing
+**Audience:** Administrators deploying and operating OSAC with its backing
 services — PostgreSQL, OpenBao, Keycloak, and Kafka — running **outside**
 the OpenShift/Kubernetes cluster, for example as podman containers on a
 services host.
 
-This guide covers the full lifecycle: when to externalize, common
-prerequisites, the per-service **external-mode configuration** (exactly
-which files and parameters to modify on the cluster side), data migration,
-verification, backups, upgrades, and rollback. Ready-to-run container
-recipes for all four services are collected in
-[Appendix A](#appendix-a-running-the-services-as-containers). Section 6
-implements the broker contract from the [external Kafka configuration
-guide](kafka-configuration.md); for OpenBao/Vault background see the
-[secrets management configuration
+The main body of this guide is written for a **clean deployment**: the
+external-services values are set before the first `helm install`, so OSAC
+comes up against external services from the start. That is what a customer
+needs to know — common prerequisites, the per-service **external-mode
+configuration** (exactly which files and parameters to modify),
+verification, and surviving `helm upgrade`. Ready-to-run container recipes
+for all four services are collected in
+[Appendix A](#appendix-a-running-the-services-as-containers). Already
+running OSAC on the bundled services and moving them out instead? That
+path — quiesce, data migration, cutover, backup, restore, and rollback —
+is [Appendix B](#appendix-b-migrating-a-bundled-deployment-to-external-services).
+Section 6 implements the broker contract from the [external Kafka
+configuration guide](kafka-configuration.md); for OpenBao/Vault background
+see the [secrets management configuration
 guide](secrets-management-configuration.md), and for the OSAC realm layout
 see the [Keycloak configuration guide](../keycloak-configuration.md).
 
 Every procedure was validated end-to-end on a lab deployment (single-node
-OpenShift hub plus a podman services host, October 2026, installer chart pin
-`fc7a09f`; PostgreSQL 18, Keycloak 26.6.4, OpenBao 2.6.2, Kafka 4.2.0).
-Appendix A carries generic versions of the same recipes; the as-deployed
-scripts and live values from that deployment are collected in an internal
-site-specific companion runbook.
+OpenShift hub plus a podman services host, October 2026, installer chart
+pin `fc7a09f`; PostgreSQL 18, Keycloak 26.6.4, OpenBao 2.6.2, Kafka
+4.2.0) — in its migration form: a live bundled deployment moved to
+external services (the sequencing Appendix B carries). The clean-install
+values-first flow in the main body uses the same chart interface but was
+not separately exercised end-to-end; prove it on a scratch install before
+relying on it in production. Appendix A carries generic versions of the
+same recipes; the as-deployed scripts and live values from that
+deployment are collected in an internal site-specific companion runbook.
 
 This guide contains no credentials: secrets always appear as
 `<placeholders>`, and each section names where the real value lives
@@ -43,9 +52,9 @@ This guide contains no credentials: secrets always appear as
 9. [Verification battery](#9-verification-battery)
 10. [Backups](#10-backups)
 11. [Gotchas compendium](#11-gotchas-compendium)
-12. [Rollback matrix](#12-rollback-matrix)
 
 Appendix A. [Running the services as containers](#appendix-a-running-the-services-as-containers)
+Appendix B. [Migrating a bundled deployment to external services](#appendix-b-migrating-a-bundled-deployment-to-external-services)
 
 **Conventions used throughout:** `<host-ip>` is the address on the services
 host that cluster nodes can reach; `<keycloak-route-host>` is the Keycloak
@@ -93,6 +102,13 @@ PostgreSQL cert-auth case below). For Keycloak, combine B with C and you
 avoid re-pointing deployments, OpenBao JWT config, and client Secrets
 entirely.
 
+> **Clean install vs migration:** everything in §3–§6 assumes the values
+> are set before the first `helm install` — pattern A from the start, no
+> bundled instance to remove, nothing to re-apply but the Keycloak
+> endpoints. Moving a deployment that already runs the bundled services is
+> the same values plus sequencing (quiesce, data migration, rollback
+> points): [Appendix B](#appendix-b-migrating-a-bundled-deployment-to-external-services).
+
 **Why Keycloak has no pattern-A row:** the chart exposes no external-IdP
 values mode — no endpoint knob exists to point at an external Keycloak —
 and the one flag it does have works against you: `keycloak.enabled: false`
@@ -107,10 +123,11 @@ values path appears.
 The in-cluster consumers verify identity, not location:
 
 - **PostgreSQL**: clients authenticate with **client certificates** and
-  connect to the DNS name in `osac-db-config`. The external server must use
-  a server certificate valid for that same DNS name and the same CA, and the
-  same HBA rules — then the `osac-db-config` / `osac-db-client-cert`
-  Secrets keep working verbatim.
+  connect to the address in `osac-db-config` (on a clean install that is
+  `<host-ip>`; under pattern B it stays the in-cluster DNS name). The
+  external server must use a server certificate valid for that same
+  address and the same CA, and the same HBA rules — then the
+  `osac-db-config` / `osac-db-client-cert` Secrets keep working verbatim.
 - **Keycloak**: JWT issuer URLs (`https://<keycloak-route-host>/realms/osac`)
   are baked into deployments and the OpenBao JWT auth config. Keep the
   hostname and realm keys identical and nothing needs re-pointing.
@@ -175,13 +192,6 @@ nodes (`token issue time is in the future`). Check with
 own chrony drift independently — that is a cluster-side symptom of the same
 problem.
 
-### 2.4 The migration-day checklist
-
-Before any cutover: record the Helm revision you can roll back to
-(`helm status <release> -n <ns> | awk '/^REVISION:/{print $2}'`), snapshot
-the data you are about to move, and quiesce the writers (scale down the
-osac deployments, keeping a record of replica counts to restore).
-
 ---
 
 ## 3. PostgreSQL
@@ -193,10 +203,11 @@ The external server must be interchangeable with the bundled instance:
 - PostgreSQL major version matching the bundled chart (validated:
   PostgreSQL 18 — run recipe in
   [Appendix A.2](#a2-postgresql)).
-- **Server certificate valid for the DNS name clients dial** (the URL in
-  `osac-db-config`, e.g. `postgres.osac-infra.svc.cluster.local`) — extract
-  the bundled instance's server cert, CA, and client certs from the
-  in-cluster Secrets before cutover and reuse them verbatim.
+- **Server certificate valid for the address clients dial** (the URL in
+  `osac-db-config`) — on a clean install that is `<host-ip>`; when
+  migrating under pattern B it is the in-cluster DNS name, in which case
+  extract the bundled instance's server cert, CA, and client certs from
+  the in-cluster Secrets and reuse them verbatim (B.2.1).
 - **Client-certificate (mutual TLS) auth** preserved — the HBA rules in
   Appendix A.2 are what the chart's bundled instance uses; keep them
   identical.
@@ -206,19 +217,21 @@ The external server must be interchangeable with the bundled instance:
 
 ### 3.2 External-mode configuration — what to modify
 
-Apply these changes when cutting over to the external instance (after the
-data migration in §3.3). Pick **one** integration pattern (§1.2); the table
-lists every file, object, and parameter involved:
+On a clean install, set these values before the first `helm install`: the
+db-init job then runs against the external instance and the chart-consumed
+Secrets point at it from the start — no cutover, nothing to re-apply.
+Pick **one** integration pattern (§1.2); the table lists every file,
+object, and parameter involved:
 
 | # | Where | Object / file | Parameter | Value |
 |---|---|---|---|---|
 | 1 | `osac-infra` release | values | `bundledPostgres.enabled` | `false` — pattern A and B |
 | 2 | `osac` release | values | `dbInit.host` | `<host-ip>` (port 5432) — **pattern A only** |
-| 3 | ns `osac-infra` | Service `postgres` | `spec.selector` | **removed** — pattern B only |
-| 4 | ns `osac-infra` | Endpoints `postgres` | `subsets` | `[{ip: <host-ip>, port: 5432}]` — pattern B only |
+| 3 | ns `osac-infra` | Service `postgres` | `spec.selector` | **removed** — pattern B only (B.2.1) |
+| 4 | ns `osac-infra` | Endpoints `postgres` | `subsets` | `[{ip: <host-ip>, port: 5432}]` — pattern B only (B.2.1) |
 | 5 | ns `osac` | Secrets `osac-db-config`, `osac-db-client-cert` | — | **unchanged** — client-cert auth keeps working |
 
-**Option 1 — supported values path (preferred).** Point the chart at the
+**Pattern A — supported values path (preferred).** Point the chart at the
 external database and disable the bundled one:
 
 ```yaml
@@ -229,61 +242,16 @@ dbInit:
 ```
 
 The `osac-db-config` (URL) and `osac-db-client-cert` (tls.crt/tls.key/ca.crt)
-Secrets in ns `osac` are chart-consumed; if you keep their URL pointing at
-the in-cluster DNS name, use option 2 instead.
+Secrets in ns `osac` are chart-consumed. On a clean install they are created
+against `dbInit.host` from the start. When migrating a deployment whose
+Secrets still point at the in-cluster DNS name, keep that name valid with
+the selectorless Service instead — [B.2.1](#b21-postgresql).
 
-**Option 2 — selectorless Service + manual Endpoints (zero in-cluster
-change).** The Service `postgres` in `osac-infra` keeps its name and
-ClusterIP; only its backing address changes:
+Use a current installer chart pin: pins that predate the fulfillment OAuth
+wiring crashloop the operator and metering after any database move until
+the credentials are patched in ([B.1](#b1-before-any-migration)).
 
-```bash
-oc -n osac-infra patch svc postgres --type=json -p '[{"op":"remove","path":"/spec/selector"}]'
-oc -n osac-infra patch endpoints postgres --type=merge \
-  -p '{"subsets":[{"addresses":[{"ip":"<host-ip>"}],"ports":[{"name":"postgres","port":5432,"protocol":"TCP"}]}]}'
-oc -n osac-infra delete endpointslice -l kubernetes.io/service-name=postgres
-```
-
-The EndpointSlice delete forces the mirroring controller to rebuild the
-slices from the new Endpoints (a stale slice from the pod era otherwise
-keeps steering traffic — the #1 cause of "cutover did nothing" symptoms).
-Then stop the bundled instance for good and bring the writers back:
-
-```bash
-helm upgrade osac-infra <infra-chart> -n osac-infra --reuse-values \
-  --set bundledPostgres.enabled=false
-bash quiesce-undo   # scale the writers back up (recorded in §3.3)
-```
-
-> **Chart-version caveat:** installer chart revisions between roughly
-> October 8 and October 14, 2026 predate the OAuth wiring that injects
-> `fulfillment-controller-credentials` into the operator and metering
-> deployments. On such pins, both crashloop after any database move until
-> the credentials are patched in (env `OSAC_FULFILLMENT_CLIENT_ID` /
-> `OSAC_FULFILLMENT_CLIENT_SECRET` + `--fulfillment-ca-file` for the
-> operator; a credentials volume + issuer/client env for metering). The
-> exact patch script is in the companion runbook; the durable fix is a
-> newer chart pin.
-
-### 3.3 Migrate the data
-
-```bash
-export KUBECONFIG=<hub-kubeconfig>
-
-# 1. quiesce the writers, recording replica counts for the scale-back
-oc -n osac get deploy -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas \
-  | awk 'NR>1 && $2>0 {print "oc -n osac scale deployment/"$1" --replicas=0"}' > quiesce.sh
-bash quiesce.sh   # keep the file — it doubles as the undo record
-
-# 2. dump everything from the bundled instance
-oc -n osac-infra exec deploy/postgres -- pg_dumpall -U postgres > dumpall.sql
-
-# 3. restore into the external instance
-podman exec -i osac-postgres psql -U postgres < dumpall.sql
-
-# 4. verify identical per-table row counts in osac_service and osac_metering
-```
-
-### 3.4 Verify
+### 3.3 Verify
 
 ```bash
 # connections arrive on the external instance from the expected users
@@ -295,33 +263,6 @@ podman exec osac-postgres psql -U postgres -Atc \
   "select datname, xact_commit from pg_stat_database where datname like 'osac_%'"
 ```
 
-### 3.5 Backup and restore
-
-Nightly `pg_dumpall`, gzipped, online (no stop needed):
-
-```bash
-#!/usr/bin/env bash
-# /usr/local/sbin/osac-pg-backup.sh — nightly full dump, keep 14
-set -euo pipefail
-DIR=/var/lib/osac/backups; mkdir -p "$DIR"
-podman exec osac-postgres pg_dumpall -U postgres | gzip \
-  > "$DIR/osac-pg-$(date +%Y%m%d-%H%M%S).sql.gz"
-ls -1t "$DIR"/osac-pg-*.sql.gz | tail -n +15 | xargs -r rm -f
-```
-
-```cron
-17 2 * * * root /usr/local/sbin/osac-pg-backup.sh
-```
-
-Restore: `gunzip -c <dump>.sql.gz | podman exec -i osac-postgres psql -U postgres`.
-
-### 3.6 Rollback
-
-`helm upgrade osac-infra … --set bundledPostgres.enabled=true` (the chart
-restores the deployment and the Service selector), restore a dump into the
-restarted bundled instance, restart the osac deployments. Anything written
-to the external instance after cutover is lost unless re-dumped.
-
 ---
 
 ## 4. OpenBao
@@ -331,14 +272,14 @@ to the external instance after cutover is lost unless re-dumped.
 - A TLS listener on `<host-ip>:8200` with a certificate the cluster trusts
   (§2.2) — the run recipe is in
   [Appendix A.3](#a3-openbao).
-- If you migrate the bundled instance's data (§4.3, path 1): nothing else —
-  the init state (unseal key, root token, `osac` namespace, JWT auth
-  config, lifecycle policy and role) moves with the data directory.
-- If you bootstrap fresh (§4.3, path 2), create the objects the values in
-  §4.2 expect: the `osac` namespace,
-  `secrets enable -namespace=osac kv-v2`, the transit mount, JWT auth, and
-  the `lifecycle` policy and role (bound to the Keycloak issuer, audience
-  `osac-api`).
+- Bootstrap the server and create the objects the values in §4.2 expect:
+  the `osac` namespace, `secrets enable -namespace=osac kv-v2`, the
+  transit mount, JWT auth, and the `lifecycle` policy and role (bound to
+  the Keycloak issuer, audience `osac-api`).
+- Migrating a bundled instance that already holds real state instead?
+  Nothing else is needed — the init state (unseal key, root token, `osac`
+  namespace, JWT auth config, lifecycle policy and role) moves with the
+  data directory ([B.2.2](#b22-openbao)).
 
 ### 4.2 External-mode configuration — what to modify
 
@@ -374,27 +315,7 @@ service:
     lifecycleRole: lifecycle
 ```
 
-### 4.3 Bring the state over — two paths
-
-**Path 1 — migrate an existing instance (recommended when the bundled
-OpenBao already holds real state).** With file storage on both sides, move
-the data directory wholesale:
-
-```bash
-oc -n osac-infra scale deploy/openbao --replicas=0
-oc -n osac-infra exec <openbao-pod> -- tar cf - -C <storage-path> . | tar xf - -C /root/bao-data
-systemctl start container-osac-openbao.service
-curl -sk https://<host-ip>:8200/v1/sys/health    # 200 = initialized, unsealed, active
-```
-
-The init state moves with the data, so the **unseal key, root token, `osac`
-namespace, JWT auth config, lifecycle policy and role all carry over** — no
-re-bootstrap. (Tarball the pre-migration state first as the rollback point.)
-
-**Path 2 — fresh bootstrap.** Init the server, then create the objects
-listed in §4.1.
-
-### 4.4 Verify
+### 4.3 Verify
 
 `/v1/sys/health` returning 200 only proves the server. Prove the **write
 path**: create a throwaway tenant in the UI/API and watch the controller
@@ -402,38 +323,6 @@ provision its vault namespace (namespace + KV mount + transit + JWT auth +
 policy + role + break-glass secret) — e.g. list
 `<namespace>/sys/mounts` with the root token — then read the tenant's
 break-glass secret with a front-door tenant token.
-
-### 4.5 Backup and restore
-
-File-storage OpenBao has no snapshot API; back up the data directory with a
-brief stop (a few seconds). The contents are encrypted at rest — protect the
-backups like the unseal key.
-
-```bash
-#!/usr/bin/env bash
-# /root/bao-backup/backup-openbao.sh — stop, tar, start, verify (keep 14)
-set -euo pipefail
-DIR=/root/bao-backup; STAMP=$(date +%Y%m%d-%H%M%S); mkdir -p "$DIR"
-systemctl stop container-osac-openbao.service
-tar -czf "$DIR/bao-data-$STAMP.tar.gz" -C /root bao-data
-systemctl start container-osac-openbao.service
-for i in $(seq 1 30); do
-  sleep 2
-  [ "$(curl -sk -o /dev/null -w '%{http_code}' https://<host-ip>:8200/v1/sys/health)" = 200 ] && break
-done
-curl -sk https://<host-ip>:8200/v1/sys/health | grep -q '"sealed":false'
-echo "OK bao-data-$STAMP.tar.gz"
-find "$DIR" -name 'bao-data-*.tar.gz' -mtime +14 -delete
-```
-
-Restore: `systemctl stop`, swap the data dir, `systemctl start` (the unseal
-drop-in re-seals→unseals; the `:z` mounts relabel), health-check.
-
-### 4.6 Rollback
-
-`--set bundledVault.enabled=true`, point `service.vault.endpoint` back at
-the in-cluster URL, restore the data-dir tarball if needed. Secrets written
-after cutover exist only in the external data dir.
 
 ---
 
@@ -463,8 +352,8 @@ worth it if you cannot reuse the hostname.
 
 ### 5.2 External-mode configuration — what to modify
 
-Apply these changes when cutting over (after the realm migration in §5.3).
-Every object and parameter involved:
+Apply after the external instance serves the realm on the route hostname
+(§5.3). Every object and parameter involved:
 
 | # | Where | Object / parameter | Value |
 |---|---|---|---|
@@ -494,33 +383,15 @@ oc -n keycloak scale sts keycloak-database --replicas=0
 must keep owning the Service and route; that ownership is what preserves
 the hostname. Re-apply the endpoints after every `helm upgrade` (§8).
 
-### 5.3 Bring the realm over
+### 5.3 Seed the realm
 
-**From an existing instance — full export (keeps users with password
-hashes, organizations, client fixups, and realm keys):**
+Import the chart's `realm.json` with its `__OSAC_*__` placeholders resolved
+from the `keycloak-client-secrets` Secret, then apply the post-import
+fixups (UI client redirect URIs, `profile` and `email` scopes).
 
-```bash
-oc -n keycloak exec <kc-pod> -- /opt/keycloak/bin/kc.sh export \
-  --realm=osac --file=/tmp/osac-realm-export.json
-oc -n keycloak exec <kc-pod> -- cat /tmp/osac-realm-export.json > osac-realm-export.json
-
-KC="https://<host-ip>:8443"
-TOKEN=$(curl -sk -d "client_id=admin-cli&username=admin&password=<kc-admin-password>&grant_type=password" \
-  "${KC}/realms/master/protocol/openid-connect/token" \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-curl -sk -X POST -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" \
-  -d @osac-realm-export.json "${KC}/admin/realms"
-```
-
-`kc.sh export` does **not** carry LDAP federations or organization
-memberships — replay them after import: create the LDAP user federation per
-tenant directory, run sync, create the organizations (their names must
-match the fulfillment tenants — the platform maps the token's
-`organization` claim to a tenant by name), assign memberships, and grant
-the tenant-admin role. From **scratch** instead: import the chart's
-`realm.json` with its `__OSAC_*__` placeholders resolved from the
-`keycloak-client-secrets` Secret, then apply the post-import fixups (UI
-client redirect URIs, `profile` and `email` scopes).
+Migrating an instance that already holds users instead? A full export
+keeps users with password hashes, organizations, client fixups, and realm
+keys — [B.2.3](#b23-keycloak).
 
 ### 5.4 Verify
 
@@ -537,55 +408,6 @@ curl -sk -d "client_id=admin-cli&username=<user>&password=<password>&grant_type=
 Then one UI login (full OIDC PKCE) and one API call with the resulting
 token. From a node inside the cluster, probe routes with
 `curl --resolve <route-host>:443:127.0.0.1` (SNI).
-
-### 5.5 Backup
-
-Partial exports (structure survives restarts better than full ones) plus a
-data-dir tarball with a brief stop:
-
-```bash
-#!/usr/bin/env bash
-# /root/kc-backup/backup-keycloak.sh — partial exports + data tar (keep 7/3)
-set -euo pipefail
-export PATH=/usr/sbin:/usr/sbin:$PATH     # cron PATH lacks iptables etc.
-DIR=/root/kc-backup; STAMP=$(date +%Y%m%d-%H%M%S); mkdir -p "$DIR"
-KC_PASS=$(podman inspect keycloak-external --format \
-  '{{range .Config.Env}}{{println .}}{{end}}' | grep '^KEYCLOAK_ADMIN_PASSWORD=' | cut -d= -f2-)
-KCMD() { podman exec keycloak-external /opt/keycloak/bin/kcadm.sh \
-  config credentials --server http://localhost:8080 --realm master \
-  --user admin --password "$KC_PASS" >/dev/null; }
-
-for PART in "realms/osac/partialExport?exportClients=true&exportGroupsAndRoles=true:realm" \
-            "realms/osac/users:users"; do :; done   # partialExport via kcadm, then:
-#   kcadm.sh create realms/osac/partialExport ... > realm-$STAMP.json
-#   repeat for users, orgs, org-members, LDAP components
-podman stop keycloak-external
-tar -czf "$DIR/kc-data-$STAMP.tar.gz" -C /root kc-data
-podman start keycloak-external
-# prune: keep newest 7 JSON exports, 3 data tars
-```
-
-(The companion runbook carries the complete working script; the sketch
-above shows the shape: credential sourced at runtime, partial exports,
-brief stop for the data tar, pruned retention. Restore scenarios —
-container lost, data corrupted, total loss — re-import the JSON or untar
-the data dir.)
-
-### 5.6 Rollback
-
-```bash
-oc -n keycloak scale deploy keycloak-service --replicas=1
-oc -n keycloak rollout status deploy/keycloak-service
-oc -n keycloak patch svc keycloak --type=merge \
-  -p '{"spec":{"selector":{"app":"keycloak-service"}}}'
-oc -n keycloak patch svc keycloak --type=json \
-  -p '[{"op":"replace","path":"/spec/ports/0/targetPort","value":8001}]'
-oc -n keycloak delete endpoints keycloak
-oc -n keycloak delete endpointslice -l kubernetes.io/service-name=keycloak
-```
-
-Users and orgs created after cutover exist only in the external H2 —
-re-create or re-export them first.
 
 ---
 
@@ -690,10 +512,12 @@ metering:
     clusterNamespace: osac
 ```
 
-Cutover: apply the objects, then one surgical upgrade
-(`helm upgrade osac <chart> -n osac --reuse-values --timeout 20m`, with
-`set -o pipefail` before any `| tail` pipeline — the AAP bootstrap hook
-needs the 20 m timeout), then the reapply script (§8), then verify.
+On a clean install these values and objects are in place before the first
+`helm install`. On a running deployment, apply the objects, then one
+surgical upgrade (`helm upgrade osac <chart> -n osac --reuse-values
+--timeout 20m`, with `set -o pipefail` before any `| tail` pipeline — the
+AAP bootstrap hook needs the 20 m timeout), then the reapply script (§8),
+then verify.
 
 ### 6.3 Verify
 
@@ -712,25 +536,7 @@ kafka-consumer-groups.sh … --describe --group <group>
 oc -n osac get deploy fulfillment-event-publisher -o jsonpath='{.spec.template.spec.volumes[0].projected.sources}'
 ```
 
-### 6.4 Removing the bundled Strimzi stack
-
-Only after the external broker is verified. Order matters:
-
-1. Back up all `kafka.strimzi.io` CRDs and objects (the operator's
-   finalizers make un-backup'd recovery painful).
-2. Delete the `KafkaNodePool`, then the `Kafka` CR **while the operator
-   still runs** (it processes the finalizers).
-3. Delete the broker PVCs (this is where the storage win is banked).
-4. `helm upgrade osac-infra … --set kafka.enabled=false` **first** (the
-   listener Certificate deletes while its namespace still lives), then
-   `osac-deps … --set kafka.enabled=false` (OLM removes the CSV/operator;
-   the `osac-kafka` namespace terminates).
-5. Re-apply the CRDs if OLM garbage-collected them — the `osac` release
-   renders `KafkaTopic`/`KafkaUser` kinds ungated, so its upgrades need the
-   CRDs to exist.
-6. Run the reapply script (§8) and re-verify the canary.
-
-### 6.5 Certificates
+### 6.4 Certificates
 
 Prefer §2.2 option 1: a cert-manager `Certificate` with an IP SAN of
 `<host-ip>`, PKCS#8, copied out of the Secret onto the host — the full
@@ -862,6 +668,10 @@ What belongs in it, and when each line retires:
 | chart-bug workarounds (envoy ALPN order, operator memory, missing RBAC rules) | the corresponding upstream fixes ship |
 | rollout + wiring verification | never — this part is the point |
 
+On a clean install configured with pattern A from the start, the PostgreSQL
+line never exists — only the Keycloak endpoints (and any chart-bug
+workarounds of the day) get re-applied.
+
 The companion runbook's `reapply-after-helm-upgrade.sh` (150 lines) is a
 complete working example with eight sections.
 
@@ -914,8 +724,9 @@ camelCase 404s and prove nothing.
 Stagger the cron times so nothing overlaps; have each script verify its own
 output (a backup that silently produced nothing is worse than none). All
 secrets in the backups are encrypted at rest or hashed — but treat the
-backup files as root-only anyway. Full working scripts: §3.5, §4.5, §5.5,
-and the companion runbook.
+backup files as root-only anyway. The scripts, restore procedures, and the
+rollback matrix are collected in
+[Appendix B.3](#b3-backup-restore-and-rollback).
 
 ---
 
@@ -935,7 +746,7 @@ and the companion runbook.
 5. **Keycloak image runs as uid 1000** — root-owned TLS key files abort
    startup with `AccessDeniedException`.
 6. **Keycloak `kc.sh export` drops LDAP federations and org memberships** —
-   replay them after import (§5.3).
+   replay them after import (B.2.3).
 7. **Kafka listener-name casing** — `listener.name.*` keys are lowercase;
    a listener named `SASL_SSL` never picks up its config and the broker
    dies with a JAAS lookup error.
@@ -972,20 +783,6 @@ and the companion runbook.
 17. **Routes from a cluster node need `--resolve`** for SNI (§5.4).
 18. **cron PATH is minimal** — scripts run from cron need an explicit PATH
     export or host tools (`iptables` in `/usr/sbin`) silently disappear.
-
----
-
-## 12. Rollback matrix
-
-| Service | Rollback | Data caveat |
-|---|---|---|
-| PostgreSQL | `bundledPostgres.enabled=true` (chart restores deploy + Service selector) + restore a dump | writes to the external instance since cutover are lost unless re-dumped |
-| OpenBao | `bundledVault.enabled=true` + `service.vault.endpoint` back to in-cluster URL (+ data-dir restore) | secrets written since cutover exist only in the external data dir |
-| Keycloak | restore the Service selector + targetPort, scale the bundled instance up (§5.6) | users/orgs created since cutover exist only in the external H2 |
-| Kafka | `helm rollback osac <pre-cutover-rev>` + `kafka.enabled=true` in deps/infra (Strimzi re-installs fresh) | events on the external broker are not migrated back |
-
-General rule: the rollback point is a Helm revision — record it before any
-cutover, and tarball any data directory before you move it.
 
 ---
 
@@ -1192,9 +989,10 @@ systemctl daemon-reload && systemctl enable container-keycloak-external.service
 ```
 
 `start` (production mode) is deliberate — HTTPS issuer URLs require it. The
-H2 database lives in the bind-mounted `/root/kc-data`; on migration, copy
-the old H2 files in (and delete stale `*.lock.db`) or import the realm
-export as in §5.3. If the container starts and dies with
+H2 database lives in the bind-mounted `/root/kc-data`; on a clean install,
+seed the realm per §5.3; when migrating an instance that already holds
+users, see B.2.3 (copy the H2 files in and delete stale `*.lock.db`, or
+import a realm export). If the container starts and dies with
 `AccessDeniedException` on the key file, the chown/chmod above did not
 happen.
 
@@ -1458,3 +1256,260 @@ A full produce/consume self-test as `fulfillment-service` (auto-created
 topic, consumer group, cleanup) is in the companion runbook; when running
 it by hand remember the `-i` trap: piping into `kafka-console-producer`
 through `podman run` without `-i` silently sends nothing.
+
+---
+
+## Appendix B: Migrating a bundled deployment to external services
+
+The main body assumes a clean install: pattern-A values before the first
+`helm install`, no bundled instance to remove, no data to move. This
+appendix is the other starting point — OSAC is already installed and
+running on the bundled services, and you are moving one or more of them
+out. The values and objects are exactly the ones in §3–§6; what migration
+adds is sequencing: quiesce the writers, move the data, cut over, verify,
+and keep a rollback point at every step.
+
+### B.1 Before any migration
+
+- Record the Helm revision you can roll back to
+  (`helm status <release> -n <ns> | awk '/^REVISION:/{print $2}'`).
+- Snapshot the data you are about to move — the per-service backup
+  procedures are in [B.3](#b3-backup-restore-and-rollback).
+- Quiesce the writers: scale down the osac deployments, keeping a record
+  of replica counts to restore.
+
+> **Chart-version caveat:** installer chart revisions between roughly
+> October 8 and October 14, 2026 predate the OAuth wiring that injects
+> `fulfillment-controller-credentials` into the operator and metering
+> deployments. On such pins, both crashloop after any database move until
+> the credentials are patched in (env `OSAC_FULFILLMENT_CLIENT_ID` /
+> `OSAC_FULFILLMENT_CLIENT_SECRET` + `--fulfillment-ca-file` for the
+> operator; a credentials volume + issuer/client env for metering). The
+> exact patch script is in the companion runbook; the durable fix is a
+> newer chart pin.
+
+### B.2 Per-service migration
+
+#### B.2.1 PostgreSQL
+
+Quiesce and move the data (the writers are the osac deployments — B.1):
+
+```bash
+export KUBECONFIG=<hub-kubeconfig>
+
+# 1. quiesce the writers, recording replica counts for the scale-back
+oc -n osac get deploy -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas \
+  | awk 'NR>1 && $2>0 {print "oc -n osac scale deployment/"$1" --replicas=0"}' > quiesce.sh
+bash quiesce.sh   # keep the file — it doubles as the undo record
+
+# 2. dump everything from the bundled instance
+oc -n osac-infra exec deploy/postgres -- pg_dumpall -U postgres > dumpall.sql
+
+# 3. restore into the external instance
+podman exec -i osac-postgres psql -U postgres < dumpall.sql
+
+# 4. verify identical per-table row counts in osac_service and osac_metering
+```
+
+Then pick the integration pattern (§3.2). Pattern A (values) is preferred;
+if the chart-consumed Secrets still point at the in-cluster DNS name,
+pattern B keeps that name valid with zero in-cluster change:
+
+```bash
+oc -n osac-infra patch svc postgres --type=json -p '[{"op":"remove","path":"/spec/selector"}]'
+oc -n osac-infra patch endpoints postgres --type=merge \
+  -p '{"subsets":[{"addresses":[{"ip":"<host-ip>"}],"ports":[{"name":"postgres","port":5432,"protocol":"TCP"}]}]}'
+oc -n osac-infra delete endpointslice -l kubernetes.io/service-name=postgres
+```
+
+The EndpointSlice delete forces the mirroring controller to rebuild the
+slices from the new Endpoints (a stale slice from the pod era otherwise
+keeps steering traffic — the #1 cause of "cutover did nothing" symptoms).
+Then stop the bundled instance for good and bring the writers back:
+
+```bash
+helm upgrade osac-infra <infra-chart> -n osac-infra --reuse-values \
+  --set bundledPostgres.enabled=false
+bash quiesce-undo   # scale the writers back up (recorded above)
+```
+
+#### B.2.2 OpenBao
+
+With file storage on both sides, move the data directory wholesale:
+
+```bash
+oc -n osac-infra scale deploy/openbao --replicas=0
+oc -n osac-infra exec <openbao-pod> -- tar cf - -C <storage-path> . | tar xf - -C /root/bao-data
+systemctl start container-osac-openbao.service
+curl -sk https://<host-ip>:8200/v1/sys/health    # 200 = initialized, unsealed, active
+```
+
+The init state moves with the data, so the **unseal key, root token, `osac`
+namespace, JWT auth config, lifecycle policy and role all carry over** — no
+re-bootstrap. (Tarball the pre-migration state first as the rollback point.)
+
+#### B.2.3 Keycloak
+
+**Full export from the existing instance (keeps users with password
+hashes, organizations, client fixups, and realm keys):**
+
+```bash
+oc -n keycloak exec <kc-pod> -- /opt/keycloak/bin/kc.sh export \
+  --realm=osac --file=/tmp/osac-realm-export.json
+oc -n keycloak exec <kc-pod> -- cat /tmp/osac-realm-export.json > osac-realm-export.json
+
+KC="https://<host-ip>:8443"
+TOKEN=$(curl -sk -d "client_id=admin-cli&username=admin&password=<kc-admin-password>&grant_type=password" \
+  "${KC}/realms/master/protocol/openid-connect/token" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+curl -sk -X POST -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" \
+  -d @osac-realm-export.json "${KC}/admin/realms"
+```
+
+`kc.sh export` does **not** carry LDAP federations or organization
+memberships — replay them after import: create the LDAP user federation per
+tenant directory, run sync, create the organizations (their names must
+match the fulfillment tenants — the platform maps the token's
+`organization` claim to a tenant by name), assign memberships, and grant
+the tenant-admin role.
+
+#### B.2.4 Kafka
+
+Only after the external broker is verified. Order matters:
+
+1. Back up all `kafka.strimzi.io` CRDs and objects (the operator's
+   finalizers make un-backup'd recovery painful).
+2. Delete the `KafkaNodePool`, then the `Kafka` CR **while the operator
+   still runs** (it processes the finalizers).
+3. Delete the broker PVCs (this is where the storage win is banked).
+4. `helm upgrade osac-infra … --set kafka.enabled=false` **first** (the
+   listener Certificate deletes while its namespace still lives), then
+   `osac-deps … --set kafka.enabled=false` (OLM removes the CSV/operator;
+   the `osac-kafka` namespace terminates).
+5. Re-apply the CRDs if OLM garbage-collected them — the `osac` release
+   renders `KafkaTopic`/`KafkaUser` kinds ungated, so its upgrades need the
+   CRDs to exist.
+6. Run the reapply script (§8) and re-verify the canary.
+
+### B.3 Backup, restore, and rollback
+
+The strategy table is §10; the procedures, restore paths, and rollback
+matrix live here.
+
+#### B.3.1 PostgreSQL backup and rollback
+
+Nightly `pg_dumpall`, gzipped, online (no stop needed):
+
+```bash
+#!/usr/bin/env bash
+# /usr/local/sbin/osac-pg-backup.sh — nightly full dump, keep 14
+set -euo pipefail
+DIR=/var/lib/osac/backups; mkdir -p "$DIR"
+podman exec osac-postgres pg_dumpall -U postgres | gzip \
+  > "$DIR/osac-pg-$(date +%Y%m%d-%H%M%S).sql.gz"
+ls -1t "$DIR"/osac-pg-*.sql.gz | tail -n +15 | xargs -r rm -f
+```
+
+```cron
+17 2 * * * root /usr/local/sbin/osac-pg-backup.sh
+```
+
+Restore: `gunzip -c <dump>.sql.gz | podman exec -i osac-postgres psql -U postgres`.
+
+Rollback to the bundled instance: `helm upgrade osac-infra … --set
+bundledPostgres.enabled=true` (the chart restores the deployment and the
+Service selector), restore a dump into the restarted bundled instance,
+restart the osac deployments. Anything written to the external instance
+after cutover is lost unless re-dumped.
+
+#### B.3.2 OpenBao backup and rollback
+
+File-storage OpenBao has no snapshot API; back up the data directory with a
+brief stop (a few seconds). The contents are encrypted at rest — protect the
+backups like the unseal key.
+
+```bash
+#!/usr/bin/env bash
+# /root/bao-backup/backup-openbao.sh — stop, tar, start, verify (keep 14)
+set -euo pipefail
+DIR=/root/bao-backup; STAMP=$(date +%Y%m%d-%H%M%S); mkdir -p "$DIR"
+systemctl stop container-osac-openbao.service
+tar -czf "$DIR/bao-data-$STAMP.tar.gz" -C /root bao-data
+systemctl start container-osac-openbao.service
+for i in $(seq 1 30); do
+  sleep 2
+  [ "$(curl -sk -o /dev/null -w '%{http_code}' https://<host-ip>:8200/v1/sys/health)" = 200 ] && break
+done
+curl -sk https://<host-ip>:8200/v1/sys/health | grep -q '"sealed":false'
+echo "OK bao-data-$STAMP.tar.gz"
+find "$DIR" -name 'bao-data-*.tar.gz' -mtime +14 -delete
+```
+
+Restore: `systemctl stop`, swap the data dir, `systemctl start` (the unseal
+drop-in re-seals→unseals; the `:z` mounts relabel), health-check.
+
+Rollback to the bundled instance: `--set bundledVault.enabled=true`, point
+`service.vault.endpoint` back at the in-cluster URL, restore the data-dir
+tarball if needed. Secrets written after cutover exist only in the external
+data dir.
+
+#### B.3.3 Keycloak backup and rollback
+
+Partial exports (structure survives restarts better than full ones) plus a
+data-dir tarball with a brief stop:
+
+```bash
+#!/usr/bin/env bash
+# /root/kc-backup/backup-keycloak.sh — partial exports + data tar (keep 7/3)
+set -euo pipefail
+export PATH=/usr/sbin:/usr/sbin:$PATH     # cron PATH lacks iptables etc.
+DIR=/root/kc-backup; STAMP=$(date +%Y%m%d-%H%M%S); mkdir -p "$DIR"
+KC_PASS=$(podman inspect keycloak-external --format \
+  '{{range .Config.Env}}{{println .}}{{end}}' | grep '^KEYCLOAK_ADMIN_PASSWORD=' | cut -d= -f2-)
+KCMD() { podman exec keycloak-external /opt/keycloak/bin/kcadm.sh \
+  config credentials --server http://localhost:8080 --realm master \
+  --user admin --password "$KC_PASS" >/dev/null; }
+
+for PART in "realms/osac/partialExport?exportClients=true&exportGroupsAndRoles=true:realm" \
+            "realms/osac/users:users"; do :; done   # partialExport via kcadm, then:
+#   kcadm.sh create realms/osac/partialExport ... > realm-$STAMP.json
+#   repeat for users, orgs, org-members, LDAP components
+podman stop keycloak-external
+tar -czf "$DIR/kc-data-$STAMP.tar.gz" -C /root kc-data
+podman start keycloak-external
+# prune: keep newest 7 JSON exports, 3 data tars
+```
+
+(The companion runbook carries the complete working script; the sketch
+above shows the shape: credential sourced at runtime, partial exports,
+brief stop for the data tar, pruned retention. Restore scenarios —
+container lost, data corrupted, total loss — re-import the JSON or untar
+the data dir.)
+
+Rollback to the bundled instance:
+
+```bash
+oc -n keycloak scale deploy keycloak-service --replicas=1
+oc -n keycloak rollout status deploy/keycloak-service
+oc -n keycloak patch svc keycloak --type=merge \
+  -p '{"spec":{"selector":{"app":"keycloak-service"}}}'
+oc -n keycloak patch svc keycloak --type=json \
+  -p '[{"op":"replace","path":"/spec/ports/0/targetPort","value":8001}]'
+oc -n keycloak delete endpoints keycloak
+oc -n keycloak delete endpointslice -l kubernetes.io/service-name=keycloak
+```
+
+Users and orgs created after cutover exist only in the external H2 —
+re-create or re-export them first.
+
+#### B.3.4 The rollback matrix
+
+| Service | Rollback | Data caveat |
+|---|---|---|
+| PostgreSQL | `bundledPostgres.enabled=true` (chart restores deploy + Service selector) + restore a dump | writes to the external instance since cutover are lost unless re-dumped |
+| OpenBao | `bundledVault.enabled=true` + `service.vault.endpoint` back to in-cluster URL (+ data-dir restore) | secrets written since cutover exist only in the external data dir |
+| Keycloak | restore the Service selector + targetPort, scale the bundled instance up (B.3.3) | users/orgs created since cutover exist only in the external H2 |
+| Kafka | `helm rollback osac <pre-cutover-rev>` + `kafka.enabled=true` in deps/infra (Strimzi re-installs fresh) | events on the external broker are not migrated back |
+
+General rule: the rollback point is a Helm revision — record it before any
+cutover, and tarball any data directory before you move it.

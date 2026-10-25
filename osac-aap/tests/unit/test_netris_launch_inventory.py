@@ -44,7 +44,7 @@ def test_config_as_code_group_reads_mutable_netris_settings_from_secret():
         if "secretRef" in source
     }
 
-    assert "config-as-code-ig" in secret_refs
+    assert secret_refs == {"{{ aap_config_as_code_secret_name }}"}
     assert "NETRIS_CONTROLLER_URL" not in env
     assert "NETRIS_VALIDATE_CERTS" not in env
     assert env["NETRIS_CA_PATH"] == "{{ netris_ca_path }}"

@@ -74,7 +74,7 @@ def render(*extra_args: str) -> str:
         *extra_args,
     ]
     return subprocess.run(
-        command, check=True, capture_output=True, text=True
+        command, check=True, capture_output=True, text=True, timeout=300
     ).stdout
 
 
@@ -358,7 +358,11 @@ class ValidationScriptTests(unittest.TestCase):
             "CHECK_IDENTITY": "true" if check_identity else "false",
         }
         return subprocess.run(
-            ["sh", str(SCRIPT)], env=env, capture_output=True, text=True
+            ["sh", str(SCRIPT)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
 
     def assert_failure(self, result: subprocess.CompletedProcess, code: str) -> None:

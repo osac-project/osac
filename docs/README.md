@@ -21,7 +21,7 @@ see [Configuring an external Kafka cluster](guides/installation/kafka-configurat
   inventory onboarding, membership changes, cleanup, and troubleshooting.
 - [Labels and annotations](guides/admin/metadata.md): reserved metadata,
   private/public API behavior, permissions, filters, and compatibility.
-- [Storage](storage/): concepts and configuration for tenant storage —
+- [Storage](storage/): concepts and configuration for tenant storage:
   StorageBackends, StorageTiers, ownership models, tenancy models, provider
   integrations, and tenant onboarding.
 

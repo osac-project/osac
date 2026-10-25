@@ -34,7 +34,7 @@ Before tenants consume CSP-managed storage, the CSP:
 
 Provider-specific prerequisites are listed on the provider pages.
 
-## What OSAC does — and does not do
+## What OSAC does and does not do
 
 OSAC:
 
@@ -47,7 +47,7 @@ OSAC:
 OSAC does **not**:
 
 - Create, update, or delete CSP-owned StorageClasses, CSI configuration, or
-  the storage system itself — including during tenant teardown.
+  the storage system itself, including during tenant teardown.
 - Use backend management credentials, even if supplied. Endpoint and
   credentials are optional on a CSP-managed backend and are never used on the
   CSP-managed runtime path.
@@ -67,7 +67,7 @@ validate the transport, the CSI driver's health, or the backing system.
 
 ## See also
 
-- [CSP-managed NetApp, shared](../guides/csp-managed-netapp-shared.md) — the
+- [CSP-managed NetApp, shared](../guides/csp-managed-netapp-shared.md): the
   Dev Preview profile guide
 - [Responsibility matrix](../architecture/responsibility-matrix.md)
-- [StorageBackend](../concepts/storagebackend.md) — the `cspManaged` field
+- [StorageBackend](../concepts/storagebackend.md): the `cspManaged` field

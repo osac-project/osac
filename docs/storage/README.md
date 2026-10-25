@@ -23,14 +23,14 @@ A storage setup  =  PROVIDER   x   OWNERSHIP        x   TENANCY
                     (vast)         (osac-managed)      (dedicated)
 ```
 
-- **Provider** — which storage vendor and CSI integration is used
+- **Provider**: which storage vendor and CSI integration is used
   ([providers/](providers/))
-- **Ownership** — who operates the storage: the cloud provider or OSAC
+- **Ownership**: who operates the storage: the cloud provider or OSAC
   ([ownership/](ownership/))
-- **Tenancy** — how OSAC tenants map to storage-side tenancy
+- **Tenancy**: how OSAC tenants map to storage-side tenancy
   ([tenancy/](tenancy/))
 
-The concepts underneath — backend, tier, StorageClass, volume, file — are the
+The concepts underneath (backend, tier, StorageClass, volume, file) are the
 same regardless of these choices ([concepts/](concepts/)). A concrete
 deployment is a *profile* that combines one choice from each dimension; the
 [guides/](guides/) directory contains the profile walkthroughs.
@@ -55,7 +55,7 @@ deployment is a *profile* that combines one choice from each dimension; the
 1. [StorageBackend](concepts/storagebackend.md)
 2. [StorageTier](concepts/storagetier.md)
 3. [StorageClasses and labels](concepts/storageclass.md)
-4. [Ownership models](ownership/osac-managed.md) — start with
+4. [Ownership models](ownership/osac-managed.md): start with
    [OSAC-managed](ownership/osac-managed.md), then
    [CSP-managed](ownership/csp-managed.md)
 5. [Tenant storage onboarding](guides/tenant-onboarding.md)
@@ -69,18 +69,18 @@ deployment is a *profile* that combines one choice from each dimension; the
 
 **Tenant user (consuming storage)**
 
-1. [StorageTier](concepts/storagetier.md) — what a tier is
-2. [Storage tier selection](../guides/developer/computeinstance-guide.md#storage-tier-selection)
-   — choosing a tier per disk when creating a VM
-3. [Readiness and conditions](concepts/readiness.md) — how to tell when
+1. [StorageTier](concepts/storagetier.md): what a tier is
+2. [Storage tier selection](../guides/developer/computeinstance-guide.md#storage-tier-selection):
+   choosing a tier per disk when creating a VM
+3. [Readiness and conditions](concepts/readiness.md): how to tell when
    storage is available
 
 ## Contents
 
-- [concepts/](concepts/) — the storage vocabulary: backend, tier,
+- [concepts/](concepts/): the storage vocabulary: backend, tier,
   StorageClass, volume, file, readiness
-- [ownership/](ownership/) — OSAC-managed and CSP-managed ownership models
-- [tenancy/](tenancy/) — dedicated and shared tenant mapping
-- [providers/](providers/) — vendor integration requirements
-- [architecture/](architecture/) — how the OSAC storage control plane works
-- [guides/](guides/) — lifecycle guides and deployment profiles
+- [ownership/](ownership/): OSAC-managed and CSP-managed ownership models
+- [tenancy/](tenancy/): dedicated and shared tenant mapping
+- [providers/](providers/): vendor integration requirements
+- [architecture/](architecture/): how the OSAC storage control plane works
+- [guides/](guides/): lifecycle guides and deployment profiles

@@ -93,7 +93,7 @@ When a tenant is deleted:
 |---|---|---|
 | Tenant onboarding incomplete (`NotFound`) | A configured tier has no matching StorageClass on the target cluster | `kubectl get tenant <name> -o jsonpath='{.status.conditions}'`; check the tier's class labels |
 | Condition `False` with `MultipleFound` | More than one class matches a tier | Condition message names the duplicates; remove or relabel one |
-| Readiness not evaluated; operator logs show target access errors | The operator's configured target is unreachable or access is missing | Operator logs; verify the target access configuration — the operator fails closed and never queries the local cluster as a fallback |
+| Readiness not evaluated; operator logs show target access errors | The operator's configured target is unreachable or access is missing | Operator logs; verify the target access configuration (the operator fails closed and never queries the local cluster as a fallback) |
 | Tier not selectable by a tenant user | The tier is not configured in OSAC | `osac get storagetier` |
 | Workload creation fails on a tier that previously worked | The tier's class changed or was removed after onboarding | Re-check `status.storageClasses`; provisioning uses the current resolved classes |
 

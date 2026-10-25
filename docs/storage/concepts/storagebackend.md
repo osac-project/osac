@@ -52,8 +52,8 @@ CSP-managed storage is currently limited to NetApp (see
 Credentials authenticate against the storage system's *management* API. They
 consist of a `username` and exactly one of:
 
-- `password` — an inline value, or
-- `passwordSecret` — a reference to a Secret of type `VALUE` in the same
+- `password`: an inline value, or
+- `passwordSecret`: a reference to a Secret of type `VALUE` in the same
   tenant, whose `value` data key holds the password.
 
 Validation rules:
@@ -99,8 +99,8 @@ osac describe storagebackend netapp-prod
 
 ## See also
 
-- [StorageTier](storagetier.md) — how tiers reference a backend
-- [Ownership models](../ownership/osac-managed.md) — what each mode means in
+- [StorageTier](storagetier.md): how tiers reference a backend
+- [Ownership models](../ownership/osac-managed.md): what each mode means in
   practice
-- [Storage control plane](../architecture/control-plane.md) — how backends
+- [Storage control plane](../architecture/control-plane.md): how backends
   flow through OSAC components

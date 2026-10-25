@@ -23,5 +23,5 @@ backups are not supported in this phase.
 
 ## See also
 
-- [StorageTier](storagetier.md) — how a disk selects its storage
-- [Volume lifecycle](../guides/volume-lifecycle.md) — Dev Preview semantics
+- [StorageTier](storagetier.md): how a disk selects its storage
+- [Volume lifecycle](../guides/volume-lifecycle.md): Dev Preview semantics

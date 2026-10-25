@@ -84,7 +84,7 @@ See [ownership/osac-managed.md](../ownership/osac-managed.md) and
 
 ## See also
 
-- [Readiness and conditions](readiness.md) — how resolution results surface
+- [Readiness and conditions](readiness.md): how resolution results surface
   as tenant status
-- [Tenant storage onboarding](../guides/tenant-onboarding.md) — the
+- [Tenant storage onboarding](../guides/tenant-onboarding.md): the
   end-to-end flow

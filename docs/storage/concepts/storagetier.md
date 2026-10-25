@@ -1,7 +1,7 @@
 # StorageTier
 
 A StorageTier is the tenant-facing storage offering. It advertises a class of
-storage service — a name tenants can select when creating workloads — without
+storage service as a name tenants can select when creating workloads, without
 exposing backend details. Tiers are admin-managed catalog resources: the
 Cloud Provider Admin controls which tiers exist, and tenant users select them
 by name.
@@ -40,8 +40,8 @@ Each backend association records:
 | `encryptionEnabled` | Whether data at rest is encrypted on this backend. |
 
 > **Note on protocol:** the tier protocol distinguishes file-based (`NFS`)
-> from volume-based (`BLOCK`) access. Transport-level details — Fibre
-> Channel, iSCSI, NVMe/TCP, Ethernet — are provider data-plane choices and
+> from volume-based (`BLOCK`) access. Transport-level details (Fibre
+> Channel, iSCSI, NVMe/TCP, Ethernet) are provider data-plane choices and
 > are not part of the OSAC API. See
 > [providers/netapp.md](../providers/netapp.md) for supported transports.
 
@@ -82,8 +82,8 @@ for the full resolution order, including catalog-item and template defaults.
 
 ## See also
 
-- [StorageBackend](storagebackend.md) — what a tier references
-- [StorageClasses and labels](storageclass.md) — how a tier resolves to a
+- [StorageBackend](storagebackend.md): what a tier references
+- [StorageClasses and labels](storageclass.md): how a tier resolves to a
   concrete StorageClass
-- [Readiness and conditions](readiness.md) — tier readiness at tenant
+- [Readiness and conditions](readiness.md): tier readiness at tenant
   onboarding

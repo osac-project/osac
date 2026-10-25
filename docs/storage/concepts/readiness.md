@@ -44,8 +44,8 @@ problems.
   StorageClass on the target cluster.
 - It **stays** `True` afterwards. Adding a tier later, or a class changing,
   does not reset the milestone.
-- Latching means the condition proves the *initial* onboarding succeeded —
-  not that every class remains present forever. Workload provisioning
+- Latching means the condition proves the *initial* onboarding succeeded.
+  It does not prove that every class remains present forever. Workload provisioning
   consumes the tenant's current resolved classes; strict gating of
   ComputeInstance creation on this condition, with a live check of the
   requested tier, is in development.
@@ -61,8 +61,8 @@ with one of these reasons:
 The condition message names the affected tier and, for duplicates, the
 matching class names. Kubernetes events on the Tenant record the same details.
 
-If OSAC cannot query the target cluster at all — for example, the target
-access is missing or the API is unreachable — the check has not completed.
+If OSAC cannot query the target cluster at all (for example, the target
+access is missing or the API is unreachable), the check has not completed.
 This is reported separately from a confirmed missing class.
 
 ## Inspecting readiness
@@ -87,5 +87,5 @@ readiness is surfaced to administrators on the management cluster.
 ## See also
 
 - [Tenant storage onboarding](../guides/tenant-onboarding.md)
-- [Storage control plane](../architecture/control-plane.md) — which component
+- [Storage control plane](../architecture/control-plane.md): which component
   computes and projects readiness

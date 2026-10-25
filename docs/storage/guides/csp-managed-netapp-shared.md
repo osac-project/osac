@@ -8,9 +8,9 @@
 This page is being expanded with prerequisites, the exact StorageClass
 contract, and troubleshooting for this profile. In the meantime, refer to:
 
-- [CSP-managed storage](../ownership/csp-managed.md) — the ownership model's
+- [CSP-managed storage](../ownership/csp-managed.md): the ownership model's
   requirements and boundaries
-- [NetApp](../providers/netapp.md) — provider integration requirements
-- [Shared tenancy](../tenancy/shared.md) — the tenancy model
-- [Tenant storage onboarding](tenant-onboarding.md) — the onboarding flow and
+- [NetApp](../providers/netapp.md): provider integration requirements
+- [Shared tenancy](../tenancy/shared.md): the tenancy model
+- [Tenant storage onboarding](tenant-onboarding.md): the onboarding flow and
   readiness inspection

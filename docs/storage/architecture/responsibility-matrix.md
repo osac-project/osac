@@ -32,8 +32,8 @@ the platform (Fulfillment API, operator, automation provider).
 ## Guarantees
 
 - In CSP-managed mode, OSAC never creates, updates, or deletes CSP-owned
-  resources — StorageClasses, CSI configuration, the shared backend, or the
-  storage system — including during tenant teardown.
+  resources (StorageClasses, CSI configuration, the shared backend, or the
+  storage system), including during tenant teardown.
 - CSP-managed readiness never depends on hub Secrets, backend credentials, or
   storage-provider automation jobs.
 - The operator checks its explicitly configured target cluster and fails

@@ -49,6 +49,6 @@ OSAC-managed readiness is reported through the `StorageBackendReady` and
 
 ## See also
 
-- [Responsibility matrix](../architecture/responsibility-matrix.md) — a
+- [Responsibility matrix](../architecture/responsibility-matrix.md): a
   side-by-side comparison with CSP-managed storage
 - [Storage control plane](../architecture/control-plane.md)

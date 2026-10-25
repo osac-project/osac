@@ -46,8 +46,8 @@ The operator's storage reconciler runs for each tenant:
    CSP-managed sets. Backend management credentials are resolved only for
    OSAC-managed backends.
 2. **Resolve StorageClasses.** The reconciler lists StorageClasses on the
-   operator's configured target cluster — explicitly configured, with no
-   local-cluster fallback — and matches them against the tier sets using the
+   operator's explicitly configured target cluster (with no
+   local-cluster fallback) and matches them against the tier sets using the
    [label contract](../concepts/storageclass.md). CSP-managed tiers match
    classes labeled `osac.openshift.io/tenant=csp-managed`; OSAC-managed tiers
    match classes labeled with the tenant's name.

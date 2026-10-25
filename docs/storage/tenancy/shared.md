@@ -21,7 +21,7 @@ Concretely:
   instead of a tenant name. Every tenant on the shared system resolves the
   same class for a given tier.
 - The storage operator (the CSP) is responsible for enforcing tenant
-  isolation *within* the shared storage tenant — for example, through the
+  isolation *within* the shared storage tenant, for example through the
   provider's own quota and access controls.
 
 > **Important:** The `osac.openshift.io/tenant=csp-managed` label is a
@@ -38,5 +38,5 @@ this phase.
 
 ## See also
 
-- [Dedicated tenancy](dedicated.md) — the contrasting model
+- [Dedicated tenancy](dedicated.md): the contrasting model
 - [StorageClasses and labels](../concepts/storageclass.md)

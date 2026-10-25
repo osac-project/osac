@@ -16,7 +16,7 @@ Concretely:
   in a tenant-scoped hub Secret.
 - StorageClasses are tenant-specific and labeled with the tenant's name:
   `osac.openshift.io/tenant=<tenant-name>`.
-- Isolation is enforced by the storage system's own tenant boundary —
+- Isolation is enforced by the storage system's own tenant boundary:
   separate accounts, virtual machines, or pools, depending on the provider.
 
 Dedicated tenancy is the default for
@@ -28,5 +28,5 @@ tenants and classes) is a possible future combination; it is not implemented.
 
 ## See also
 
-- [Shared tenancy](shared.md) — the contrasting model
+- [Shared tenancy](shared.md): the contrasting model
 - [StorageClasses and labels](../concepts/storageclass.md)

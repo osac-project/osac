@@ -695,7 +695,7 @@ the cluster. Then follow [Section 4](#4-installing-osac).
 
    The OSAC chart does not deploy the OSAC CSI routing meta-driver. Provider CSI
    setup and tenant storage provisioning are handled separately by the storage
-   workflow.
+   workflow; see the [storage documentation](../../storage/README.md).
 
    ```yaml
    global:

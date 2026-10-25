@@ -112,6 +112,21 @@
               name: >-
                 virt-launcher-{{
                 compute_instance_name }}
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
 
         - name: "S2: Create stuck VMI"
           kubernetes.core.k8s:
@@ -232,6 +247,86 @@
                         requests:
                           memory: 128Mi
 
+        - name: "S2: Create dependent resource fixtures"
+          kubernetes.core.k8s:
+            state: present
+            definition: "{{ item }}"
+          loop:
+            - apiVersion: v1
+              kind: Service
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-load-balancer
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                ports:
+                  - port: 22
+                    targetPort: 22
+            - apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-root-disk
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                source:
+                  blank: {}
+                pvc:
+                  accessModes:
+                    - ReadWriteOnce
+                  resources:
+                    requests:
+                      storage: 1Mi
+            - apiVersion: v1
+              kind: Secret
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-cloud-init
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              type: Opaque
+              data:
+                userdata: ""
+
+        - name: "S2: Verify fixtures exist"
+          kubernetes.core.k8s_info:
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s2_fixture_check
+          failed_when: >-
+            _s2_fixture_check.resources
+            | length == 0
+          loop:
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+
         - name: "S2: Run delete_resources"
           ansible.builtin.include_role:
             name: osac.templates.ocp_virt_vm
@@ -248,13 +343,87 @@
           failed_when: >-
             s2_vmi_after.resources | length > 0
 
+        - name: "S2: Verify VM and dependents deleted"
+          kubernetes.core.k8s_info:
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s2_dep_check
+          failed_when: >-
+            _s2_dep_check.resources | length > 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+
         - name: "S2: Assert recovery succeeded"
           ansible.builtin.debug:
             msg: >-
               Scenario 2 passed: crashed launcher VMI
-              force-deleted successfully.
+              force-deleted, VM and dependents cleaned
+              up successfully.
 
       always:
+        - name: "S2: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s2_cleanup_vmi
+          failed_when: false
+
+        - name: >-
+            S2: Remove foreground-delete finalizer
+            for cleanup
+          vars:
+            _s2_fins: >-
+              {{ _s2_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s2_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s2_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s2_fins
+                     | difference([_s2_target]) }}
+          when: >-
+            _s2_cleanup_vmi.resources | length > 0
+            and
+            'kubevirt.io/foregroundDeleteVirtualMachine'
+            in (_s2_cleanup_vmi.resources[0]
+                .metadata.finalizers | default([]))
+          failed_when: false
+
         - name: "S2: Cleanup"
           kubernetes.core.k8s:
             state: absent
@@ -277,6 +446,21 @@
               name: >-
                 virt-launcher-{{
                 compute_instance_name }}
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
           failed_when: false
 
 # ============================================================
@@ -365,6 +549,86 @@
                         requests:
                           memory: 128Mi
 
+        - name: "S3: Create dependent resource fixtures"
+          kubernetes.core.k8s:
+            state: present
+            definition: "{{ item }}"
+          loop:
+            - apiVersion: v1
+              kind: Service
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-load-balancer
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                ports:
+                  - port: 22
+                    targetPort: 22
+            - apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-root-disk
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                source:
+                  blank: {}
+                pvc:
+                  accessModes:
+                    - ReadWriteOnce
+                  resources:
+                    requests:
+                      storage: 1Mi
+            - apiVersion: v1
+              kind: Secret
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-cloud-init
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              type: Opaque
+              data:
+                userdata: ""
+
+        - name: "S3: Verify fixtures exist"
+          kubernetes.core.k8s_info:
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s3_fixture_check
+          failed_when: >-
+            _s3_fixture_check.resources
+            | length == 0
+          loop:
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+
         - name: "S3: Run delete_resources"
           ansible.builtin.include_role:
             name: osac.templates.ocp_virt_vm
@@ -381,13 +645,87 @@
           failed_when: >-
             s3_vmi_after.resources | length > 0
 
+        - name: "S3: Verify VM and dependents deleted"
+          kubernetes.core.k8s_info:
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s3_dep_check
+          failed_when: >-
+            _s3_dep_check.resources | length > 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+
         - name: "S3: Assert recovery succeeded"
           ansible.builtin.debug:
             msg: >-
               Scenario 3 passed: launcher-absent VMI
-              force-deleted successfully.
+              force-deleted, VM and dependents cleaned
+              up successfully.
 
       always:
+        - name: "S3: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s3_cleanup_vmi
+          failed_when: false
+
+        - name: >-
+            S3: Remove foreground-delete finalizer
+            for cleanup
+          vars:
+            _s3_fins: >-
+              {{ _s3_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s3_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s3_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s3_fins
+                     | difference([_s3_target]) }}
+          when: >-
+            _s3_cleanup_vmi.resources | length > 0
+            and
+            'kubevirt.io/foregroundDeleteVirtualMachine'
+            in (_s3_cleanup_vmi.resources[0]
+                .metadata.finalizers | default([]))
+          failed_when: false
+
         - name: "S3: Cleanup"
           kubernetes.core.k8s:
             state: absent
@@ -405,6 +743,21 @@
             - api: kubevirt.io/v1
               kind: VirtualMachineInstance
               name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
           failed_when: false
 
 # ============================================================
@@ -1047,6 +1400,7 @@
   vars:
     compute_instance_name: test-vmi-s6
     compute_instance_target_namespace: test-subnet
+    guest_os_family: linux
     compute_instance:
       spec: {}
     ocp_virt_vm_graceful_wait_retries: 2
@@ -1073,6 +1427,21 @@
               name: >-
                 virt-launcher-{{
                 compute_instance_name }}-alien
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
           failed_when: false
 
         - name: "S6: Create stuck VMI"
@@ -1221,6 +1590,86 @@
                         requests:
                           memory: 128Mi
 
+        - name: "S6: Create dependent resource fixtures"
+          kubernetes.core.k8s:
+            state: present
+            definition: "{{ item }}"
+          loop:
+            - apiVersion: v1
+              kind: Service
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-load-balancer
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                ports:
+                  - port: 22
+                    targetPort: 22
+            - apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-root-disk
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                source:
+                  blank: {}
+                pvc:
+                  accessModes:
+                    - ReadWriteOnce
+                  resources:
+                    requests:
+                      storage: 1Mi
+            - apiVersion: v1
+              kind: Secret
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-cloud-init
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              type: Opaque
+              data:
+                userdata: ""
+
+        - name: "S6: Verify fixtures exist"
+          kubernetes.core.k8s_info:
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s6_fixture_check
+          failed_when: >-
+            _s6_fixture_check.resources
+            | length == 0
+          loop:
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+
         - name: "S6: Run delete_resources"
           ansible.builtin.include_role:
             name: osac.templates.ocp_virt_vm
@@ -1256,15 +1705,89 @@
             s6_alien_after.resources[0].status.phase
             != 'Running'
 
+        - name: "S6: Verify VM and dependents deleted"
+          kubernetes.core.k8s_info:
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s6_dep_check
+          failed_when: >-
+            _s6_dep_check.resources | length > 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+
         - name: "S6: Assert identity boundary"
           ansible.builtin.debug:
             msg: >-
               Scenario 6 passed: recovery ignored
               Running wrong-UID launcher (still
               Running), recovered target VMI via
-              absent-launcher path.
+              absent-launcher path; VM and dependents
+              cleaned up.
 
       always:
+        - name: "S6: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s6_cleanup_vmi
+          failed_when: false
+
+        - name: >-
+            S6: Remove foreground-delete finalizer
+            for cleanup
+          vars:
+            _s6_fins: >-
+              {{ _s6_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s6_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s6_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s6_fins
+                     | difference([_s6_target]) }}
+          when: >-
+            _s6_cleanup_vmi.resources | length > 0
+            and
+            'kubevirt.io/foregroundDeleteVirtualMachine'
+            in (_s6_cleanup_vmi.resources[0]
+                .metadata.finalizers | default([]))
+          failed_when: false
+
         - name: "S6: Cleanup"
           kubernetes.core.k8s:
             state: absent
@@ -1287,4 +1810,19 @@
               name: >-
                 virt-launcher-{{
                 compute_instance_name }}-alien
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
           failed_when: false

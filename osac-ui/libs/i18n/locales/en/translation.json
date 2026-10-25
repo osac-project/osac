@@ -903,8 +903,6 @@
   "The create wizard for this catalog item type is not available yet.": "The create wizard for this catalog item type is not available yet.",
   "The external IP attachment could not be provisioned.": "The external IP attachment could not be provisioned.",
   "The Model service is not enabled on this server.": "The Model service is not enabled on this server.",
-  "The provisioning template cannot be changed after the catalog item is created.": "The provisioning template cannot be changed after the catalog item is created.",
-  "The selected template is the provisioning template used to create resources from this catalog item.": "The selected template is the provisioning template used to create resources from this catalog item.",
   "The service is not enabled on this server.": "The service is not enabled on this server.",
   "The system will auto-create an ExternalIP and ExternalIPAttachment bound to the primary attachment. Auto-created resources are deleted when the instance is deleted.": "The system will auto-create an ExternalIP and ExternalIPAttachment bound to the primary attachment. Auto-created resources are deleted when the instance is deleted.",
   "The virtual machine reports an external IP, but its attachment resource is missing.": "The virtual machine reports an external IP, but its attachment resource is missing.",

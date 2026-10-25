@@ -80,16 +80,6 @@ describe('CatalogGeneralStep', () => {
     expect(screen.getByRole('textbox', { name: 'Description' })).toHaveAttribute('rows', '4');
   });
 
-  it('shows the provisioning template helper text', () => {
-    renderStep(false);
-
-    expect(
-      screen.getByText(
-        'The selected template is the provisioning template used to create resources from this catalog item.',
-      ),
-    ).toBeInTheDocument();
-  });
-
   it('shows provisioning template help information', async () => {
     const { user } = renderStep(false);
 
@@ -200,15 +190,6 @@ describe('CatalogGeneralStep', () => {
       expect(screen.getByRole('button', { name: 'Tenant' })).toBeInTheDocument();
     });
 
-    it('shows the edit-mode template helper text', () => {
-      renderStep(true, [], [makeTemplate('template-1', 'Template One')]);
-
-      expect(
-        screen.getByText(
-          'The provisioning template cannot be changed after the catalog item is created.',
-        ),
-      ).toBeInTheDocument();
-    });
   });
 });
 

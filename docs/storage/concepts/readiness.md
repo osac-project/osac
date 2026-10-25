@@ -28,6 +28,17 @@ problems.
 
 `StorageOnboardingComplete` is a **latched initial-onboarding milestone**:
 
+```
+ onboarding              every configured tier has
+   not yet                exactly one matching class
+   complete   ───────────────────────────────────►  True (latched)
+     │                                                  │
+     │ NotFound (a tier has no class)                   │ stays True when
+     │ MultipleFound (a tier has 2+ classes)            │ tiers are added
+     ▼                                                  ▼
+   False   ◄── re-checked until resolved         milestone stays True
+```
+
 - It becomes `True` when every initially configured CSP-managed
   [StorageTier](storagetier.md) resolves to exactly one matching
   StorageClass on the target cluster.
@@ -50,9 +61,9 @@ with one of these reasons:
 The condition message names the affected tier and, for duplicates, the
 matching class names. Kubernetes events on the Tenant record the same details.
 
-If OSAC cannot query the target cluster at all — for example, the configured
-target access is missing or the API is unreachable — the check has not
-completed, and this is reported separately from a confirmed missing class.
+If OSAC cannot query the target cluster at all — for example, the target
+access is missing or the API is unreachable — the check has not completed.
+This is reported separately from a confirmed missing class.
 
 ## Inspecting readiness
 

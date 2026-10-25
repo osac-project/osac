@@ -42,6 +42,21 @@ provisioner: csi.trident.netapp.io
 During tenant onboarding and workload provisioning, OSAC lists the
 StorageClasses on the target cluster and resolves each configured tier:
 
+```
+ list classes on the target cluster, per tier label
+              │
+   ┌──────────┼───────────────┬─────────────────┐
+   ▼          ▼               ▼                 ▼
+ exactly    no match      more than one    tier not configured
+ one match                 match             in OSAC
+   │          │               │                 │
+   ▼          ▼               ▼                 ▼
+ resolved   unresolved    ambiguous         ignored
+ (recorded   (onboarding   (onboarding       (no effect on
+  on tenant   incomplete)   incomplete)       readiness)
+  status)
+```
+
 - **Exactly one** matching class per tier: the tier resolves, and the class
   name is recorded on the tenant status.
 - **No** matching class: the tier is unresolved; onboarding stays incomplete.

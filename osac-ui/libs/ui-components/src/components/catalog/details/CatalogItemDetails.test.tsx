@@ -1,11 +1,18 @@
 import { Route, Routes } from 'react-router-dom';
+import { create } from '@bufbuild/protobuf';
+import { createRouterTransport } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ComputeInstanceCatalogItem } from '@osac/types';
+import {
+  type ComputeInstanceCatalogItem,
+  ComputeInstanceCatalogItemSchema,
+  ComputeInstanceCatalogItems,
+} from '@osac/types';
 
 import CatalogItemDetails from './CatalogItemDetails';
 import VmCatalogItemDetailContent from './ComputeCatalogItemDetailContent';
+import { useGetResource } from '../../../api/use-resource';
 import { CatalogItemIcon } from '../../../icons';
 import type { UserRole } from '../../../shellTypes';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
@@ -57,6 +64,17 @@ const renderDetails = (
     </Routes>,
     { routerEntries: ['/catalog/vm/catalog-vm'], transportOverrides: transportOverrides as never },
   );
+
+const QueriedCatalogItemDetails = () => {
+  const { data: response } = useGetResource(ComputeInstanceCatalogItems, { id: 'catalog-vm' });
+  const item = response?.object;
+
+  return item ? (
+    <CatalogItemDetails item={item}>
+      <div>{item.published ? 'Live' : 'Unpublished'}</div>
+    </CatalogItemDetails>
+  ) : null;
+};
 
 describe('CatalogItemDetails', () => {
   beforeEach(() => {
@@ -121,5 +139,33 @@ describe('CatalogItemDetails', () => {
     await waitFor(() => {
       expect(sentObject).toMatchObject({ id: 'catalog-vm', published: true });
     });
+  });
+
+  it('refreshes the detail view after publishing', async () => {
+    const item = create(ComputeInstanceCatalogItemSchema, {
+      id: 'catalog-vm',
+      metadata: { name: 'catalog-vm', tenant: 'tenant-1' },
+      published: false,
+    });
+    let published = item.published;
+    const transport = createRouterTransport((router) => {
+      router.service(ComputeInstanceCatalogItems, {
+        get: () => ({ object: { ...item, published } }),
+        update: (request) => {
+          published = request.object?.published ?? false;
+          return { object: { ...item, published } };
+        },
+      });
+    });
+    const { user } = renderWithProviders(
+      <Routes>
+        <Route path="/catalog/vm/catalog-vm" element={<QueriedCatalogItemDetails />} />
+      </Routes>,
+      { routerEntries: ['/catalog/vm/catalog-vm'], transport },
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'Publish' }));
+
+    expect(await screen.findByRole('button', { name: 'Unpublish' })).toBeInTheDocument();
   });
 });

@@ -236,7 +236,7 @@ ptyprocess==0.7.0
     # via pexpect
 py-pure-client==1.94.2
     # via osac-aap (pyproject.toml)
-pycparser==3.0
+pycparser==3.12
     # via cffi
 pydantic==2.12.5
     # via

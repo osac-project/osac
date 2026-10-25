@@ -189,8 +189,8 @@ static_resources:
           "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
           common_tls_context:
             alpn_protocols:
-            - http1.1
             - h2
+            - http/1.1
             tls_certificates:
             - certificate_chain:
                 filename: /etc/envoy/tls/tls.crt
@@ -312,8 +312,8 @@ static_resources:
           "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
           common_tls_context:
             alpn_protocols:
-            - http1.1
             - h2
+            - http/1.1
             tls_certificates:
             - certificate_chain:
                 filename: /etc/envoy/tls/tls.crt

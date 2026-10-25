@@ -36,21 +36,13 @@ describe('ProvisioningFieldGroup', () => {
     expect(screen.getByRole('button', { name: 'Remove node set' })).toBeInTheDocument();
   });
 
-  it('renders an optional divider and description', () => {
+  it('renders an optional divider', () => {
     renderWithProviders(
-      <ProvisioningFieldGroup
-        title="Disk image"
-        titleId="disk-image"
-        hasDivider
-        description="Choose the guest operating system and disk image."
-      >
+      <ProvisioningFieldGroup title="Disk image" titleId="disk-image" hasDivider>
         <p>Disk image selector</p>
       </ProvisioningFieldGroup>,
     );
 
     expect(screen.getByRole('separator')).toBeInTheDocument();
-    expect(
-      screen.getByText('Choose the guest operating system and disk image.'),
-    ).toBeInTheDocument();
   });
 });

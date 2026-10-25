@@ -171,7 +171,6 @@
   "Choose file": "Choose file",
   "Choose how this application looks for you. Changes apply immediately.": "Choose how this application looks for you. Changes apply immediately.",
   "Choose one or more statuses above to filter virtual machines.": "Choose one or more statuses above to filter virtual machines.",
-  "Choose the guest operating system and disk image for this virtual machine.": "Choose the guest operating system and disk image for this virtual machine.",
   "CIDR": "CIDR",
   "CIDR {{number}}": "CIDR {{number}}",
   "CIDR is required": "CIDR is required",

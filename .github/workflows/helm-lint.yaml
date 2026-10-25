@@ -178,7 +178,7 @@ jobs:
 
     - name: Test Netris CA lifecycle contracts
       working-directory: osac-installer
-      run: python3 scripts/test-netris-ca-lifecycle.py
+      run: uv run --project .. python scripts/test-netris-ca-lifecycle.py
 
     - name: Test MCE rendering
       working-directory: osac-installer

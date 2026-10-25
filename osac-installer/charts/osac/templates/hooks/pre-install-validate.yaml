@@ -21,6 +21,17 @@ spec:
       containers:
       - name: validate
         image: {{ .Values.cliImage }}
+        {{- if and (eq .Values.global.networking.fabricManager "netris") .Values.global.networking.netris.caBundle.configMap }}
+        env:
+        - name: CA_CONFIGMAP_NAME
+          value: {{ .Values.global.networking.netris.caBundle.configMap | quote }}
+        - name: AAP_NAMESPACE
+          value: {{ .Release.Namespace | quote }}
+        - name: CA_EXECUTION_IDENTITY
+          value: {{ printf "system:serviceaccount:%s:%s" .Release.Namespace (default "osac-sa" .Values.aap.serviceAccounts.osacSa) | quote }}
+        - name: CHECK_IDENTITY
+          value: "false"
+        {{- end }}
         command:
         - /bin/sh
         - -c
@@ -79,10 +90,6 @@ spec:
           {{- end }}
 
           {{- if and (eq .Values.global.networking.fabricManager "netris") .Values.global.networking.netris.caBundle.configMap }}
-          export CA_CONFIGMAP_NAME={{ .Values.global.networking.netris.caBundle.configMap | quote }}
-          export AAP_NAMESPACE={{ .Release.Namespace | quote }}
-          export CA_EXECUTION_IDENTITY="system:serviceaccount:{{ .Release.Namespace }}:{{ default "osac-sa" .Values.aap.serviceAccounts.osacSa }}"
-          export CHECK_IDENTITY=false
 {{ .Files.Get "files/validate-netris-ca.sh" | nindent 10 }}
           {{ end }}
           echo "=== Validation passed ==="

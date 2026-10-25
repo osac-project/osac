@@ -25,7 +25,7 @@ spec:
   - name: target
     expression: "request.operation == 'DELETE' ? oldObject : object"
   validations:
-  - expression: "variables.target.metadata.name != variables.activeName || request.userInfo.groups.exists(g, g in variables.adminGroups)"
+  - expression: "variables.target.metadata.name != variables.activeName || request.userInfo.groups.exists(g, g in variables.adminGroups) || (request.operation == 'DELETE' && request.userInfo.username == 'system:serviceaccount:kube-system:namespace-controller')"
     message: "Only authorized platform administrators may modify or delete the active Netris CA ConfigMap."
 ---
 apiVersion: admissionregistration.k8s.io/v1

@@ -1,5 +1,5 @@
 import { create } from '@bufbuild/protobuf';
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -181,9 +181,20 @@ describe('CatalogItemDetailContent', () => {
     expect(screen.getByText('Cloud-init')).toBeInTheDocument();
     expect(screen.getByText('Configured')).toBeInTheDocument();
     expect(screen.queryByText('#cloud-config')).not.toBeInTheDocument();
+    expect(screen.getByText('Boot disk size')).toBeInTheDocument();
+    expect(screen.getByText('Boot storage tier')).toBeInTheDocument();
+    const additionalDisksTerm = screen.getByText('Additional disks').closest('dt');
+    expect(additionalDisksTerm).not.toBeNull();
+    expect(within(additionalDisksTerm as HTMLElement).getByText('Locked')).toBeInTheDocument();
+    const storageTable = screen.getByRole('grid', { name: 'Additional disks' });
+    expect(within(storageTable).getAllByRole('columnheader')).toHaveLength(2);
+    expect(within(storageTable).getByRole('columnheader', { name: 'Size' })).toBeInTheDocument();
+    expect(
+      within(storageTable).getByRole('columnheader', { name: 'Storage tier' }),
+    ).toBeInTheDocument();
     expect(screen.getByText('64 GiB')).toBeInTheDocument();
-    expect(screen.getByText('fast')).toBeInTheDocument();
-    expect(screen.getByText('Disk set 1: 100 GiB · fast')).toBeInTheDocument();
+    expect(within(storageTable).getByText('100 GiB')).toBeInTheDocument();
+    expect(screen.getAllByText('fast')).toHaveLength(2);
     expect(screen.getByText('GPU count')).toBeInTheDocument();
     expect(await screen.findByText('2')).toBeInTheDocument();
     expect(screen.getByText('Resource name')).toBeInTheDocument();
@@ -252,6 +263,8 @@ describe('CatalogItemDetailContent', () => {
     expect(screen.getByRole('heading', { name: 'Configuration' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Access & Initial run' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Storage' })).toBeInTheDocument();
+    expect(screen.queryByRole('grid', { name: 'Additional disks' })).not.toBeInTheDocument();
+    expect(screen.getByText('Additional disks')).toBeInTheDocument();
     expect(screen.getAllByText('Not set').length).toBeGreaterThan(0);
     expect(screen.queryByText(/cloud-config|script|userdata/i)).not.toBeInTheDocument();
   });

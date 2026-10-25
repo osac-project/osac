@@ -94,13 +94,14 @@ describe('ComputeCatalogItemWizard', () => {
     vi.mocked(useSession).mockReturnValue(makeSession('tenant-admin'));
   });
 
-  it('shows General, Compute configuration, Storage, and Review steps and no Networking step', () => {
+  it('shows Details, Compute configuration, Storage, Access & Initial run, and Review steps', () => {
     renderWizard();
 
     const nav = screen.getByRole('navigation', { name: 'Create compute catalog item steps' });
-    expect(within(nav).getByText('General')).toBeInTheDocument();
+    expect(within(nav).getByText('Details')).toBeInTheDocument();
     expect(within(nav).getByText('Compute configuration')).toBeInTheDocument();
     expect(within(nav).getByText('Storage')).toBeInTheDocument();
+    expect(within(nav).getByText('Access & Initial run')).toBeInTheDocument();
     expect(within(nav).getByText('Review')).toBeInTheDocument();
     expect(within(nav).queryByText('Networking')).not.toBeInTheDocument();
   });
@@ -113,13 +114,12 @@ describe('ComputeCatalogItemWizard', () => {
 
     expect(
       await screen.findByText(
-        'Optionally set instance type defaults for this catalog item. Leave fields Not set if tenants should choose when creating a virtual machine.',
+        'Set the default disk image and instance type for virtual machines created from this catalog item. Leave fields Not set if tenants should choose when creating a virtual machine.',
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Compute configuration' })).toBeInTheDocument();
     expect(screen.queryByText(/run strategy/i)).not.toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Enter value' })).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'Select secret' })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Enter value' })).not.toBeInTheDocument();
   });
 
   it('shows the Storage step description', async () => {
@@ -137,9 +137,26 @@ describe('ComputeCatalogItemWizard', () => {
     expect(screen.getByRole('button', { name: 'Boot storage tier' })).toBeInTheDocument();
   });
 
+  it('shows the Access & Initial run step with user data choices', async () => {
+    const { user } = renderWizard();
+
+    await fillGeneralStep(user, 'my-item');
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+
+    expect(
+      await screen.findByText('Add optional user data, or skip this step to continue.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Access & Initial run' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Enter value' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Select secret' })).toBeInTheDocument();
+  });
+
   describe('Review step', () => {
     const goToReview = async (user: ReturnType<typeof renderWizard>['user'], name = 'my-item') => {
       await fillGeneralStep(user, name);
+      await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));
@@ -172,6 +189,7 @@ describe('ComputeCatalogItemWizard', () => {
       await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
 
       expect(
         await screen.findByText(
@@ -197,12 +215,11 @@ describe('ComputeCatalogItemWizard', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        'Optionally set instance type defaults for this catalog item. Leave fields Not set if tenants should choose when creating a virtual machine.',
+        'Set the default disk image and instance type for virtual machines created from this catalog item. Leave fields Not set if tenants should choose when creating a virtual machine.',
       ),
     ).toBeInTheDocument();
     expect(screen.getByText('Disk image is required when locked')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
-    expect(screen.getByRole('textbox', { name: 'User data' })).toBeInTheDocument();
   });
 
   it('creates the catalog item with empty editable fields omitted from the request', async () => {
@@ -212,6 +229,7 @@ describe('ComputeCatalogItemWizard', () => {
     const { user } = renderWizard(undefined, { onComputeInstanceCatalogItemCreate: onCreate });
 
     await fillGeneralStep(user, 'my-item');
+    await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
@@ -236,10 +254,11 @@ describe('ComputeCatalogItemWizard', () => {
 
     await fillGeneralStep(user, 'my-item');
     await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
 
     await user.type(screen.getByRole('textbox', { name: 'User data' }), 'echo hi');
 
-    await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Create' }));
 
@@ -259,6 +278,7 @@ describe('ComputeCatalogItemWizard', () => {
     const { user } = renderWizard(undefined, { onComputeInstanceCatalogItemCreate: onCreate });
 
     await fillGeneralStep(user, 'my-item');
+    await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
@@ -289,6 +309,7 @@ describe('ComputeCatalogItemWizard', () => {
 
       expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('existing-item');
 
+      await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));

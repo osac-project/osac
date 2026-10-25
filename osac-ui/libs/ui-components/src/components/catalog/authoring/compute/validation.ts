@@ -7,7 +7,12 @@ import { resourceNameSchema } from '../../../../validation/resource-name';
 import type { CatalogItemScope } from '../CatalogGeneralStep';
 import type { ComputeCatalogItemValues } from './values';
 
-export type ComputeCatalogWizardStepId = 'general' | 'configuration' | 'storage' | 'review';
+export type ComputeCatalogWizardStepId =
+  | 'details'
+  | 'configuration'
+  | 'storage'
+  | 'access-init'
+  | 'review';
 
 const requiredResourceSelectValue = (message: string) =>
   yup
@@ -69,7 +74,7 @@ export const buildComputeCatalogStepSchema = (
   const isAdmin = role === 'admin';
 
   switch (stepId) {
-    case 'general':
+    case 'details':
       return yup.object({
         scope: yup.string(),
         metadata: yup
@@ -98,7 +103,6 @@ export const buildComputeCatalogStepSchema = (
       return yup.object({
         diskImage: catalogLockedResourceField(t('Disk image is required when locked')),
         instanceType: catalogLockedResourceField(t('Instance type is required when locked')),
-        userData: catalogLockedStringField(yup.string(), t('User data is required when locked')),
       });
     case 'storage':
       return yup.object({
@@ -116,6 +120,32 @@ export const buildComputeCatalogStepSchema = (
           }),
         }),
       });
+    case 'access-init':
+      return yup
+        .object({
+          userData: yup.object({ locked: yup.boolean(), value: yup.string() }),
+          userDataSource: yup.object({ value: yup.string() }),
+          userDataSecret: yup.object({ value: yup.string() }),
+        })
+        .test(
+          'user-data-required-when-locked',
+          t('User data is required when locked'),
+          function userDataRequiredWhenLocked(values) {
+            if (!values?.userData?.locked) {
+              return true;
+            }
+            const source = values.userDataSource?.value === 'secret' ? 'secret' : 'inline';
+            const value =
+              source === 'secret' ? values.userDataSecret?.value : values.userData?.value;
+            if (typeof value === 'string' && value.trim()) {
+              return true;
+            }
+            return this.createError({
+              path: source === 'secret' ? 'userDataSecret.value' : 'userData.value',
+              message: t('User data is required when locked'),
+            });
+          },
+        );
     case 'review':
       return undefined;
     default:
@@ -128,14 +158,16 @@ export const computeCatalogStepHasErrors = (
   errors: FormikErrors<ComputeCatalogItemValues>,
 ): boolean => {
   switch (stepId) {
-    case 'general':
+    case 'details':
       return Boolean(errors.scope || errors.metadata || errors.template);
     case 'configuration':
-      return Boolean(errors.diskImage || errors.instanceType || errors.userData);
+      return Boolean(errors.diskImage || errors.instanceType);
     case 'storage':
       return Boolean(
         errors.bootDiskSizeGib || errors.bootDiskStorageTier || errors.additionalDisks,
       );
+    case 'access-init':
+      return Boolean(errors.userData || errors.userDataSecret);
     default:
       return false;
   }

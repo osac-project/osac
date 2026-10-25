@@ -31,6 +31,14 @@ const ComputeCatalogReviewStep = () => {
     { sizeGib: values.bootDiskSizeGib.value, storageTier: values.bootDiskStorageTier.value },
     values.additionalDisks.value,
   );
+  const userDataReview =
+    values.userDataSource.value === 'secret'
+      ? values.userDataSecret.value.trim()
+        ? values.userDataSecret.value
+        : t('Not set')
+      : values.userData.value.trim()
+        ? t('Configured')
+        : t('Not set');
 
   return (
     <Stack hasGutter>
@@ -107,11 +115,16 @@ const ComputeCatalogReviewStep = () => {
               )}
             </DescriptionListDescription>
           </DescriptionListGroup>
+        </DescriptionList>
+      </StackItem>
+      <StackItem>
+        <Title headingLevel="h3">{t('Access & Initial run')}</Title>
+      </StackItem>
+      <StackItem>
+        <DescriptionList isHorizontal isCompact aria-label={t('Access & Initial run')}>
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('User data')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {formatReviewScalar(values.userData.value)}
-            </DescriptionListDescription>
+            <DescriptionListTerm>{t('Cloud-init')}</DescriptionListTerm>
+            <DescriptionListDescription>{userDataReview}</DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>
       </StackItem>

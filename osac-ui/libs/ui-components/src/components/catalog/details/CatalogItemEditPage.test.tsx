@@ -42,7 +42,7 @@ describe('CatalogItemEditPage', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'Edit catalog item' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Details' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('catalog-vm');
   });
 });

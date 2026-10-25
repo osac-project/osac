@@ -15,6 +15,7 @@ import { Formik } from 'formik';
 import type { ComputeInstanceCatalogItem } from '@osac/types';
 import { ComputeInstanceCatalogItems, ComputeInstanceTemplates } from '@osac/types';
 
+import ComputeCatalogAccessStep from './ComputeCatalogAccessStep';
 import ComputeCatalogConfigurationStep from './ComputeCatalogConfigurationStep';
 import ComputeCatalogReviewStep from './ComputeCatalogReviewStep';
 import ComputeCatalogStorageStep from './ComputeCatalogStorageStep';
@@ -44,7 +45,7 @@ const ComputeCatalogItemWizard = ({ item }: ComputeCatalogItemWizardProps) => {
   const { t } = useTranslation();
   const { role } = useSession();
   const navigate = useNavigate();
-  const [currentStep, setCurrentStep] = useState<ComputeCatalogWizardStepId>('general');
+  const [currentStep, setCurrentStep] = useState<ComputeCatalogWizardStepId>('details');
 
   const {
     mutateAsync: createAsync,
@@ -135,12 +136,13 @@ const ComputeCatalogItemWizard = ({ item }: ComputeCatalogItemWizardProps) => {
                 setCurrentStep(step.id as ComputeCatalogWizardStepId);
               }}
             >
-              <WizardStep id="general" name={t('General')}>
-                {currentStep === 'general' && (
+              <WizardStep id="details" name={t('Details')}>
+                {currentStep === 'details' && (
                   <CatalogGeneralStep
                     isEdit={!!item}
                     templateService={ComputeInstanceTemplates}
                     templateFieldId="compute-catalog-item-template"
+                    heading={t('Details')}
                   />
                 )}
               </WizardStep>
@@ -149,6 +151,9 @@ const ComputeCatalogItemWizard = ({ item }: ComputeCatalogItemWizardProps) => {
               </WizardStep>
               <WizardStep id="storage" name={t('Storage')}>
                 {currentStep === 'storage' && <ComputeCatalogStorageStep />}
+              </WizardStep>
+              <WizardStep id="access-init" name={t('Access & Initial run')}>
+                {currentStep === 'access-init' && <ComputeCatalogAccessStep />}
               </WizardStep>
               <WizardStep id="review" name={t('Review')}>
                 {currentStep === 'review' && <ComputeCatalogReviewStep />}

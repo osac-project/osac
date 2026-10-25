@@ -65,7 +65,8 @@ Reasons to externalize: free cluster storage (a bundled PG + OpenBao + Kafka
 easily holds 300+ Gi of PVCs), host-level backup and ops tooling, isolating
 stateful services from cluster reinstalls, and lab resource constraints.
 What typically **stays** in-cluster: AAP, CNV/KubeVirt, cert-manager,
-trust-manager, MetalLB, the operator, the UI, and the workload clusters.
+trust-manager, MetalLB, MCE (multicluster engine for Kubernetes) with the
+workload clusters it manages, the operator, and the UI.
 
 ### 1.2 The three integration patterns
 

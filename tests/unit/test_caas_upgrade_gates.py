@@ -39,6 +39,7 @@ def test_baseline_waits_for_both_node_pool_readiness_conditions(monkeypatch: pyt
     def poll_without_sleep(
         *, fn: Callable[[], dict[str, Any]], until: Callable[[dict[str, Any]], bool], **_kwargs: object
     ) -> dict[str, Any]:
+        """Evaluate each prepared snapshot without delaying the unit test."""
         for _ in snapshots:
             value = fn()
             accepted.append(until(value))
@@ -87,6 +88,7 @@ def test_node_pool_poll_rejects_later_control_plane_degradation(monkeypatch: pyt
     def observe_once(
         *, observe: Callable[[], tuple[dict[str, Any], dict[str, Any]]], **_kwargs: object
     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Take one stage observation without waiting for wall-clock time."""
         return observe()
 
     monkeypatch.setattr(scenario, "_wait_elapsed", observe_once)

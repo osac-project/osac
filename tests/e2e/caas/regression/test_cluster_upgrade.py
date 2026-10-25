@@ -97,6 +97,7 @@ def _catalog_version(
 
 
 def _condition(resource: dict[str, Any], kind: str) -> dict[str, Any]:
+    """Return the named status condition, or an empty mapping if absent."""
     return next((item for item in resource.get("status", {}).get("conditions", []) if item.get("type") == kind), {})
 
 
@@ -115,6 +116,7 @@ def _pool_identity(k8s: K8sClient, namespace: str, co_name: str) -> dict[str, st
 
 
 def _snapshot(*, k8s: K8sClient, grpc: GRPCClient, refs: _ClusterRefs) -> dict[str, Any]:
+    """Read test-owned API and HyperShift resources for one observation."""
     hosted = k8s.list_json(resource="hostedclusters.hypershift.openshift.io", namespace=refs.namespace).get("items", [])
     pools = k8s.list_json(resource="nodepools.hypershift.openshift.io", namespace=refs.namespace).get("items", [])
     return {
@@ -129,17 +131,20 @@ def _snapshot(*, k8s: K8sClient, grpc: GRPCClient, refs: _ClusterRefs) -> dict[s
 
 
 def _new_provision_job(snapshot: dict[str, Any], previous_ids: set[str]) -> dict[str, Any]:
+    """Select the latest provision job absent before the upgrade request."""
     jobs = snapshot["order"].get("status", {}).get("provisioningJobs", [])
     new = [job for job in jobs if job.get("type") == "provision" and job.get("jobID") not in previous_ids]
     return max(new, key=lambda job: job.get("timestamp", ""), default={})
 
 
 def _check_job(job: dict[str, Any], component: str) -> None:
+    """Fail when AAP reports a terminal provision-job failure."""
     if job.get("state") in _TERMINAL_JOB_FAILURES:
         raise AssertionError(f"{component} AAP provision job failed")
 
 
 def _check_hypershift_failure(resource: dict[str, Any], component: str) -> None:
+    """Fail on HyperShift conditions that explicitly report upgrade failure."""
     for condition in resource.get("status", {}).get("conditions", []):
         kind = condition.get("type", "")
         reason = condition.get("reason", "")
@@ -161,6 +166,7 @@ def _assert_unchanged(
     versions: dict[str, str],
     hosted_image: str | None = None,
 ) -> None:
+    """Keep the Cluster state and unselected components at their baseline."""
     assert snapshot["cluster"].get("status", {}).get("state") == state, "Cluster provisioning state changed"
     if hosted_image is not None:
         assert snapshot["hosted"].get("spec", {}).get("release", {}).get("image") == hosted_image, (
@@ -177,6 +183,7 @@ def _assert_unchanged(
 
 
 def _cp_started(hosted: dict[str, Any], target_image: str) -> bool:
+    """Require target-image intent and observed HyperShift progress."""
     if hosted.get("spec", {}).get("release", {}).get("image") != target_image:
         return False
     version = hosted.get("status", {}).get("version", {})
@@ -194,6 +201,7 @@ def _cp_started(hosted: dict[str, Any], target_image: str) -> bool:
 
 
 def _cp_completed(hosted: dict[str, Any], target_image: str) -> bool:
+    """Require completed target history and an available control plane."""
     if not _cp_started(hosted, target_image):
         return False
     version = hosted["status"]["version"]
@@ -209,6 +217,7 @@ def _cp_completed(hosted: dict[str, Any], target_image: str) -> bool:
 
 
 def _np_started(pool: dict[str, Any], old_transition: str, target_image: str) -> bool:
+    """Require the target image and a fresh update or completed version."""
     if pool.get("spec", {}).get("release", {}).get("image") != target_image:
         return False
     if pool.get("status", {}).get("version") == TARGET_VERSION:
@@ -218,6 +227,7 @@ def _np_started(pool: dict[str, Any], old_transition: str, target_image: str) ->
 
 
 def _np_completed(pool: dict[str, Any], old_transition: str, target_image: str) -> bool:
+    """Require the selected NodePool at the target version and ready."""
     if not _np_started(pool, old_transition, target_image):
         return False
     return (
@@ -232,6 +242,7 @@ def _np_completed(pool: dict[str, Any], old_transition: str, target_image: str) 
 def _create_cluster(
     *, cli: OsacCLI, source_name: str, cluster_template: str, pull_secret_name: str, ssh_public_key_path: str
 ) -> str:
+    """Create a test-owned Cluster with two one-node worker sets."""
     return cli.create_cluster(
         name=unique_name("e2e-cluster-upgrade"),
         template=cluster_template,
@@ -246,6 +257,7 @@ def _create_cluster(
 
 
 def _cluster_references(*, k8s: K8sClient, uuid: str, co_name: str) -> _ClusterRefs:
+    """Resolve the test-owned HostedCluster and NodePool names."""
     namespace, hc_name = poll_until(
         fn=lambda: (
             k8s.get_cluster_order_namespace(name=co_name),
@@ -267,6 +279,7 @@ def _cluster_references(*, k8s: K8sClient, uuid: str, co_name: str) -> _ClusterR
 
 
 def _ready_baseline(*, k8s: K8sClient, grpc: GRPCClient, refs: _ClusterRefs) -> dict[str, Any]:
+    """Wait for a ready Cluster with both NodePools healthy."""
     return poll_until(
         fn=lambda: _snapshot(k8s=k8s, grpc=grpc, refs=refs),
         until=lambda value: (
@@ -295,6 +308,7 @@ def _upgrade_control_plane(
     k8s: K8sClient,
     evidence: dict[str, Any],
 ) -> dict[str, Any]:
+    """Submit the control-plane version edit and await HyperShift completion."""
     old_images = {name: pool["spec"]["release"]["image"] for name, pool in baseline["pools"].items()}
     old_versions = {name: pool["status"]["version"] for name, pool in baseline["pools"].items()}
     initial_state = baseline["cluster"]["status"]["state"]
@@ -312,6 +326,7 @@ def _upgrade_control_plane(
     evidence["phase"] = "control-plane-requested"
 
     def observe() -> tuple[dict[str, Any], dict[str, Any]]:
+        """Read control-plane progress while rejecting unrelated changes."""
         current = _snapshot(k8s=k8s, grpc=grpc, refs=refs)
         _assert_unchanged(current, state=initial_state, images=old_images, versions=old_versions)
         assert current["cluster"]["spec"]["version"]["name"] == target["name"]
@@ -355,6 +370,7 @@ def _upgrade_node_pool(
     k8s: K8sClient,
     evidence: dict[str, Any],
 ) -> None:
+    """Upgrade one named NodePool while preserving its sibling and control plane."""
     initial_state = baseline["cluster"]["status"]["state"]
     sibling = baseline["pools"][SIBLING_NODE_SET]
     selected_before = cp_snapshot["pools"][SELECTED_NODE_SET]
@@ -376,6 +392,7 @@ def _upgrade_node_pool(
     evidence["phase"] = "node-pool-requested"
 
     def observe() -> tuple[dict[str, Any], dict[str, Any]]:
+        """Read NodePool progress and recheck sibling and control-plane health."""
         current = _snapshot(k8s=k8s, grpc=grpc, refs=refs)
         _assert_unchanged(
             current,
@@ -448,6 +465,7 @@ def _cleanup(
     created_version_ids: list[str],
     evidence: dict[str, Any],
 ) -> None:
+    """Try cluster and catalog deletion, then log the sanitized outcome."""
     try:
         first_error: BaseException | None = None
         try:

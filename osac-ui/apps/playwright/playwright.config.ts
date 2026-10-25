@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,6 +28,14 @@ if (parsedBaseURL.protocol !== 'http:' && parsedBaseURL.protocol !== 'https:') {
 if (parsedBaseURL.username || parsedBaseURL.password) {
   throw invalidBaseURLError;
 }
+
+// Share one unique ID across Playwright projects so teardown only targets this run's image.
+const diskImageTestRunId =
+  process.env.OSAC_DISK_IMAGE_TEST_RUN_ID ?? randomUUID().replace(/-/g, '').slice(0, 12);
+if (!/^[a-z0-9]{1,32}$/i.test(diskImageTestRunId)) {
+  throw new Error('OSAC_DISK_IMAGE_TEST_RUN_ID must contain 1-32 letters or digits.');
+}
+process.env.OSAC_DISK_IMAGE_TEST_RUN_ID = diskImageTestRunId.toLowerCase();
 
 // Ad hoc specs (typically written by an AI agent to manually verify a change)
 // live in this gitignored scratch directory, never under src/ — that keeps
@@ -119,6 +128,26 @@ export default defineConfig({
       testMatch: /delete\.tenant\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       dependencies: ['vmaas'],
+    },
+    {
+      name: 'vmaas-disk-image',
+      testDir: vmaasDir,
+      testMatch: /create\.disk_images\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      teardown: 'vmaas-disk-image-delete',
+    },
+    {
+      name: 'vmaas-disk-image-lifecycle',
+      testDir: vmaasDir,
+      testMatch: /lifecycle\.disk_images\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['vmaas-disk-image'],
+    },
+    {
+      name: 'vmaas-disk-image-delete',
+      testDir: vmaasDir,
+      testMatch: /delete\.disk_images\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
   ],
 });

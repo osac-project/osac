@@ -1,6 +1,6 @@
 import { test } from '@playwright/test';
 
-import { instanceTypeTestData } from './test_data';
+import { instanceTypeTestData, tenantNameOrSkip } from './test_data';
 import { openAndLoginWithEnvironment } from '../../../../libs/test-utils/src/general/open_and_login';
 import {
   createInstanceType,
@@ -12,6 +12,9 @@ import { openInstanceTypesPage } from '../../../../libs/test-utils/src/main.page
 test('creates an instance type from Infrastructure', async ({ page }) => {
   // Allow login and page navigation to complete on a remote cluster.
   test.setTimeout(120_000);
+  if (!tenantNameOrSkip()) {
+    return;
+  }
 
   // 1. Open the browser and log in.
   await openAndLoginWithEnvironment(page, '/');

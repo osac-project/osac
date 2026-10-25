@@ -1,26 +1,31 @@
 ---
-# ExternalIP deletion — removes the /32 IPAM subnet that reserved the IP
+# ExternalIP delete entry point. Dispatches by the persisted contract
+# version annotation: empty/missing routes to the legacy name-based
+# tasks, explicit v1 routes to the shared v1 tasks, and any other
+# nonempty version fails before any provider I/O.
 
-- name: Extract ExternalIP name
+- name: Resolve ExternalIP contract version
   ansible.builtin.set_fact:
-    eip_name: "{{ external_ip.metadata.name }}"
+    eip_contract_version: >-
+      {{ external_ip.metadata.annotations
+         ['osac.openshift.io/externalip-contract-version']
+         | default('', true) | trim }}
 
-- name: Display deletion information
-  ansible.builtin.debug:
-    msg: "Deleting Netris IPAM subnet for ExternalIP '{{ eip_name }}'"
+- name: Route unversioned ExternalIP delete to the legacy tasks
+  ansible.builtin.include_tasks: _delete_external_ip_legacy.yaml
+  when: eip_contract_version | length == 0
 
-- name: Ensure Netris auth
-  ansible.builtin.include_role:
-    name: netris.controller.auth
-  when: netris_session_cookie is not defined
-
-- name: Delete /32 IPAM subnet from Netris controller
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: delete_subnet
+- name: Route v1 ExternalIP delete to the shared v1 tasks
+  ansible.builtin.include_tasks: _external_ip_v1.yaml
+  when: eip_contract_version == 'v1'
   vars:
-    ipam_name: "{{ eip_name }}"
+    external_ip_v1_operation: external_ip.release
 
-- name: Display deletion result
-  ansible.builtin.debug:
-    msg: "IPAM subnet '{{ eip_name }}' deletion completed"
+- name: Fail on unsupported ExternalIP contract version
+  ansible.builtin.fail:
+    msg: >-
+      Unsupported ExternalIP contract version '{{ eip_contract_version }}'.
+      Expected an empty value (legacy) or 'v1'.
+  when:
+    - eip_contract_version | length > 0
+    - eip_contract_version != 'v1'

@@ -124,26 +124,46 @@ var _ = Describe("deployed MCP server", func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 
-		clientID, original, err := getKeycloakClient(ctx, "osac-mcp-client")
+		_, original, err := getKeycloakClient(ctx, "osac-mcp-client")
 		Expect(err).ToNot(HaveOccurred())
 		shortLived, err := cloneJSONMap(original)
 		Expect(err).ToNot(HaveOccurred())
+		testClientName := "mcp-expired-" + uuid.New()
+		delete(shortLived, "id")
+		if protocolMappers, ok := shortLived["protocolMappers"].([]any); ok {
+			for _, value := range protocolMappers {
+				if mapper, ok := value.(map[string]any); ok {
+					delete(mapper, "id")
+				}
+			}
+		}
+		shortLived["clientId"] = testClientName
+		shortLived["name"] = "MCP expired-token integration test"
 		attributes, ok := shortLived["attributes"].(map[string]interface{})
 		if !ok {
 			attributes = make(map[string]interface{})
 			shortLived["attributes"] = attributes
 		}
 		attributes["access.token.lifespan"] = "1"
-		Expect(updateKeycloakClient(ctx, clientID, shortLived)).To(Succeed())
+		code, _, err := tool.KeycloakAdminRequest(ctx, http.MethodPost, "/clients", shortLived)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(code).To(Equal(http.StatusCreated))
 		DeferCleanup(func() {
-			Expect(updateKeycloakClient(context.Background(), clientID, original)).To(Succeed())
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cleanupCancel()
+			testClientID, _, err := getKeycloakClient(cleanupCtx, testClientName)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(deleteKeycloakClient(cleanupCtx, testClientID)).To(Succeed())
 		})
 
 		resourceURL := endpoint + "/"
-		token, err := tool.SimulateMCPLogin(ctx, resourceURL, userUsername, usersPassword)
+		token, err := tool.simulateOIDCLogin(
+			ctx, testClientName, "http://localhost:8091/callback", resourceURL, "", userUsername, usersPassword,
+		)
 		Expect(err).ToNot(HaveOccurred())
 		claims, err := parseJWTClaims(token)
 		Expect(err).ToNot(HaveOccurred())
+		Expect(jwtAudiences(claims)).To(ContainElement(resourceURL))
 		issuedAt, err := claims.GetIssuedAt()
 		Expect(err).ToNot(HaveOccurred())
 		expiresAt, err := claims.GetExpirationTime()

@@ -45,7 +45,8 @@ run playwright`.) None of these have defaults — each is required, so a missing
 value fails immediately with a clear error instead of silently pointing at the
 wrong environment. `pnpm playwright` logs in, runs the [smoke
 test](#smoke-test), and runs every spec under `scratch/` — see [Writing a
-test](#writing-a-test).
+test](#writing-a-test). Tracked UI flows are excluded from this default
+command; select a project explicitly in the [flow instructions](#tenant-and-disk-image-flow-tests).
 
 For iterating on a `scratch/` spec, logging in on every run is slow and adds a
 real Keycloak request each time. Log in once, then re-run just the spec as
@@ -60,32 +61,38 @@ pnpm playwright:run     # ...repeat as many times as you're iterating
 `pnpm playwright:run` never re-authenticates — if `.auth/user.json` is missing
 or the session has expired, re-run `pnpm playwright:setup` first.
 
-### Tenant flow tests
+### Tenant and disk image flow tests
 
-The tenant create and delete specs require these additional environment
-variables:
+The create, lifecycle, and delete specs read resource names and disk image
+values from `apps/e2e-tests/extravars.yaml`. Before running, set `tenant_name`
+to a tenant that does not already exist and set `disk_image.name` to a unique
+name for the target cluster.
 
-| Variable           | Description                                                                                                                                        |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OSAC_TENANT_NAME` | Tenant name used by the create and delete flows. The create flow requires that it does not already exist; the delete flow requires that it exists. |
+The tenant create flow requires that the configured tenant does not already
+exist; the delete flow requires that it exists. The disk image create, lifecycle,
+and delete flows use the configured disk image values and lifecycle actions.
+All VMaaS specs are skipped before browser actions when `tenant_name` is unset or
+empty.
+The create project owns the delete project as teardown, so cleanup runs after
+the lifecycle project even if a lifecycle assertion fails.
 
-Set all variables before running the tenant tests:
+Set the deployment and login variables from the [Running](#running) section,
+then run the flows:
 
 ```bash
 export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
 export OSAC_USERNAME=<keycloak-user>
 read -rs OSAC_PASSWORD && export OSAC_PASSWORD
-export OSAC_TENANT_NAME=tenant1
 ```
 
-Run the create and delete flow together. The `vmaas-delete` project depends on
-`vmaas`, so creation runs before deletion:
+Run the tenant create and delete flows together. The `vmaas-delete` project
+depends on `vmaas`, so creation runs before deletion:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test --project=vmaas-delete
 ```
 
-Run the flows separately:
+Run the tenant and disk image flows:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
@@ -93,7 +100,20 @@ pnpm --filter @osac/playwright exec playwright test \
 
 pnpm --filter @osac/playwright exec playwright test \
   delete.tenant.spec.ts --project=vmaas-delete --no-deps
+
+pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-disk-image-lifecycle
 ```
+
+The `vmaas-disk-image-lifecycle` project depends on `vmaas-disk-image`. The
+create project's teardown deletes the image after the lifecycle project
+finishes, including when the lifecycle test fails. To run only the cleanup
+against an existing obsolete image, use
+`--project=vmaas-disk-image-delete --no-deps`; this deletes the named image.
+Each run appends a unique suffix to `disk_image.name`, and the full name appears
+in the test title. To clean up an interrupted run, set
+`OSAC_DISK_IMAGE_TEST_RUN_ID` to that run's suffix when invoking the delete
+project.
 
 Use `--headed` when a graphical display is available. Run these commands from
 the repository root; pass only the spec filename because the Playwright

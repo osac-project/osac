@@ -1,0 +1,16 @@
+---
+- name: Verify Netris ExternalIP v1 and legacy playbooks handle provider responses
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Exercise the ExternalIP create and delete playbooks
+      ansible.builtin.command:
+        argv:
+          - uv
+          - run
+          - python
+          - "{{ playbook_dir }}/../files/verify_external_ip.py"
+      args:
+        chdir: "{{ playbook_dir }}/../../../../../"
+      changed_when: false

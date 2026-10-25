@@ -846,12 +846,13 @@ type ClusterSpec_builder struct {
 	// Reference to a cluster catalog item. Mutually exclusive with template on Create; retained as immutable provenance afterward.
 	// When set, the server fetches the catalog item and applies its typed field policies.
 	CatalogItem *ClusterCatalogItemReference
-	// Network attachment connecting this cluster to a tenant subnet.
+	// Network attachment connecting this cluster to a tenant subnet. Clients may
+	// omit this field.
 	//
 	// When provided, all node sets of the cluster will be connected to the specified subnet. Only one network attachment
 	// is supported per cluster.
 	//
-	// When not provided, the system will populate this field with the tenant's default subnet and security groups during
+	// When omitted, the system will populate this field with the tenant's default subnet and security groups during
 	// cluster creation.
 	//
 	// The complete attachment, including subnet and security group references, is immutable after creation.

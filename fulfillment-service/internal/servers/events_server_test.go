@@ -420,7 +420,7 @@ var _ = Describe("Events server visibility", Ordered, func() {
 		watchCtx, cancel := context.WithCancel(context.Background())
 		DeferCleanup(cancel)
 		stream, err := client.Watch(watchCtx, publicv1.EventsWatchRequest_builder{
-			Filter: new("!('admin.osac.openshift.io/managed' in event.cluster.metadata.labels)"),
+			Filter: new("event.cluster.metadata.labels == {'ordinary': 'visible'}"),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		collector := &eventsCollector{}
@@ -442,12 +442,24 @@ var _ = Describe("Events server visibility", Ordered, func() {
 			}.Build(),
 		}.Build()
 		sendEvent(privateEvent)
+		changedPrivateEvent := proto.Clone(privateEvent).(*privatev1.Event)
+		changedPrivateEvent.SetId(uuid.New())
+		changedPrivateEvent.GetCluster().GetMetadata().SetLabels(map[string]string{
+			"admin.osac.openshift.io/managed": "changed",
+			"ordinary":                        "visible",
+		})
+		sendEvent(changedPrivateEvent)
 
-		Eventually(collector.Events, time.Second).Should(HaveLen(1))
-		publicLabels := collector.Events()[0].GetCluster().GetMetadata().GetLabels()
-		Expect(publicLabels).To(Equal(map[string]string{"ordinary": "visible"}))
+		Eventually(collector.Events, 5*time.Second).Should(HaveLen(2))
+		for _, publicEvent := range collector.Events() {
+			publicLabels := publicEvent.GetCluster().GetMetadata().GetLabels()
+			Expect(publicLabels).To(Equal(map[string]string{"ordinary": "visible"}))
+		}
 		Expect(privateEvent.GetCluster().GetMetadata().GetLabels()).To(HaveKeyWithValue(
 			"admin.osac.openshift.io/managed", "system",
+		))
+		Expect(changedPrivateEvent.GetCluster().GetMetadata().GetLabels()).To(HaveKeyWithValue(
+			"admin.osac.openshift.io/managed", "changed",
 		))
 	})
 
@@ -544,5 +556,33 @@ var _ = Describe("Events server visibility", Ordered, func() {
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+	})
+
+	It("rejects reserved metadata references when a public watch is opened", func() {
+		_, client := startServer(makeTenancy("tenant-a"))
+		watchCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		watchStream, err := client.Watch(watchCtx, publicv1.EventsWatchRequest_builder{
+			Filter: new(`event.cluster.metadata.labels['admin.osac.openshift.io/managed'] == 'system'`),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = watchStream.Recv()
+		Expect(err).To(HaveOccurred())
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+	})
+
+	It("rejects reserved label and annotation references throughout watch predicates", func() {
+		server, _ := startServer(makeTenancy("tenant-a"))
+		for _, filter := range []string{
+			`event.cluster.metadata.labels['admin.osac.openshift.io/managed'] == 'system'`,
+			`'controller.admin.osac.openshift.io/managed' in event.cluster.metadata.annotations`,
+			`event.id == 'known' && event.cluster.metadata.annotations['admin.osac.openshift.io/managed'] != 'system'`,
+		} {
+			_, err := server.compileFilter(context.Background(), filter)
+			Expect(err).To(MatchError(ContainSubstring("reserved metadata key")), "filter %q", filter)
+		}
 	})
 })

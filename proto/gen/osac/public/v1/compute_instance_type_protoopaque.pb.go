@@ -747,8 +747,10 @@ type ComputeInstanceSpec_builder struct {
 	AdditionalDisks *ComputeInstanceDiskList
 	// Run strategy for the compute instance.
 	RunStrategy *ComputeInstanceRunStrategy
-	// Network attachments: one entry per NIC. The complete attachment list, including
-	// subnet and security group references, is immutable after creation.
+	// Optional: clients may omit this field or send an empty list to request the
+	// tenant's default Subnet and SecurityGroup. At most one network attachment
+	// is accepted. The complete attachment list, including subnet and security
+	// group references, is immutable after creation.
 	NetworkAttachments []*ComputeNetworkAttachment
 	// Reference to a compute instance catalog item. Mutually exclusive with template on Create; retained as immutable provenance afterward.
 	// When set, the server fetches the catalog item and applies its typed field policies.

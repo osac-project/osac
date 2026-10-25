@@ -129,6 +129,7 @@ networkManagers:
   fabricManagers:
     netris:
       enabled: false
+      externalIPContractVersion: v1
       description: >-
         Netris SDN controller for physical fabric management.
         Manages VLAN/VxLAN segments, ACLs, public IP allocation, and NAT gateways.

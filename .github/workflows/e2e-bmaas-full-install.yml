@@ -103,7 +103,8 @@ jobs:
         { "repo": "${{ inputs.repo || github.repository }}", "ref": "${{ inputs.sha || github.sha }}", "containerfile": "osac-aap/execution-environment/execution-environment.yaml", "imageKey": "aap.bootstrap.image", "buildType": "ansible-builder" },
         { "repo": "${{ inputs.repo || github.repository }}", "ref": "${{ inputs.sha || github.sha }}", "containerfile": "osac-aap/execution-environment/execution-environment.yaml", "imageKey": "aap.configAsCode.eeImage", "buildType": "ansible-builder" },
         { "repo": "${{ inputs.repo || github.repository }}", "ref": "${{ inputs.sha || github.sha }}", "containerfile": "bare-metal-fulfillment-operator/Containerfile", "context": ".", "imageKey": "bmf.image.repository" },
-        { "repo": "${{ inputs.repo || github.repository }}", "ref": "${{ inputs.sha || github.sha }}", "containerfile": "osac-metering/metering-service/Containerfile", "context": ".", "imageKey": "metering.image.repository" }
+        { "repo": "${{ inputs.repo || github.repository }}", "ref": "${{ inputs.sha || github.sha }}", "containerfile": "osac-metering/metering-service/Containerfile", "context": ".", "imageKey": "metering.image.repository" },
+        { "repo": "${{ inputs.repo || github.repository }}", "ref": "${{ inputs.sha || github.sha }}", "containerfile": "osac-metering/adapters/Containerfile.echo-adapter", "context": ".", "imageKey": "metering.echoAdapter.image.repository" }
         ]
       pr-number: ${{ inputs.pr-number }}
       # A fork pull request is authorized by the suite (an org member, or the ok-to-test label) before it gets any

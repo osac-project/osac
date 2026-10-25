@@ -338,17 +338,6 @@
       {% endfor -%}
       {{ names | unique | sort | list }}
 
-- name: Require an explicit target kubeconfig for native CSI drivers
-  when:
-    - storage_provider_action == 'ensure_csi_driver'
-    - _native_csi_driver_required_names | length > 0
-  ansible.builtin.assert:
-    that:
-      - storage_provider_target_kubeconfig | default('', true) | length > 0
-    fail_msg: >-
-      storage_provider_target_kubeconfig is required when native CSI drivers
-      must be checked or installed.
-
 - name: Check required native CSI drivers before acquiring the install lock
   when:
     - storage_provider_action == 'ensure_csi_driver'

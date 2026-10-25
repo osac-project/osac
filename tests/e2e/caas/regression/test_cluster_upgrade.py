@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -455,7 +454,6 @@ def _cleanup(
     created_version_ids: list[str],
     evidence: dict[str, Any],
 ) -> None:
-    cleanup_failed = False
     try:
         if uuid is not None:
             cli.delete_cluster(uuid=uuid)
@@ -464,14 +462,13 @@ def _cleanup(
             wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
         for version_id in reversed(created_version_ids):
             private_grpc.delete_cluster_version(version_id=version_id)
-    except (subprocess.SubprocessError, TimeoutError, AssertionError):
-        cleanup_failed = True
+    except BaseException:
         evidence["cleanup"] = "failed"
         evidence["outcome"] = "failed"
         raise
+    else:
+        evidence["cleanup"] = "completed"
     finally:
-        if not cleanup_failed:
-            evidence["cleanup"] = "completed"
         logger.info("CaaS upgrade evidence: %s", json.dumps(evidence, sort_keys=True))
 
 

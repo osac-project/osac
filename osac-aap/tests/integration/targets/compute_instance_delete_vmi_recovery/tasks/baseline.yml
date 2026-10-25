@@ -2,7 +2,7 @@
 # OSAC-6689: Integration tests for stuck VMI recovery during
 # ComputeInstance deletion.
 #
-# Validates five paths in delete_resources.yaml:
+# Validates six paths in delete_resources.yaml:
 #   1. Normal: VMI absent before timeout — no recovery needed.
 #   2. Crashed launcher recovery: VMI stuck with deletion
 #      timestamp, launcher pod Failed — finalizer removed
@@ -16,6 +16,10 @@
 #   5. Mixed launcher pods: one Failed + one Running —
 #      recovery refused because not all launchers are
 #      terminal.
+#   6. Cross-VMI identity boundary: a Running launcher
+#      with a different VMI UID is ignored by the
+#      UID-scoped selector — recovery sees "absent" and
+#      proceeds; alien pod is untouched.
 #
 # The Kind cluster has KubeVirt CRDs (operator scaled to 0),
 # so VMI/Pod resources can be created directly.  No real
@@ -1042,8 +1046,7 @@
   gather_facts: false
   vars:
     compute_instance_name: test-vmi-s6
-    compute_instance_target_namespace: >-
-      osac-vmi-recovery-test
+    compute_instance_target_namespace: test-subnet
     compute_instance:
       spec: {}
     ocp_virt_vm_graceful_wait_retries: 2

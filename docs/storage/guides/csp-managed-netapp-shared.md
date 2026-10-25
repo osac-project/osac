@@ -44,7 +44,7 @@ Complete these before onboarding tenants to the storage service:
 - [ ] A shared TridentBackendConfig connecting Trident to the SVM
 - [ ] One StorageClass per offered tier with the
       `osac.openshift.io/tenant=csp-managed` and
-      `osac.openshift.io/storage-tier=<tier>` labels — see
+      `osac.openshift.io/storage-tier=<tier>` labels. See
       [providers/netapp.md](../providers/netapp.md#storageclass-contract)
 
 **OSAC side**
@@ -103,7 +103,7 @@ kubectl get tenant <tenant-name> -o jsonpath='{.status.storageClasses}'
 ```
 
 `StorageOnboardingComplete=True` means every configured tier resolved to
-exactly one class. The condition is a latched milestone — it stays `True`
+exactly one class. The condition is a latched milestone: it stays `True`
 when tiers are added later. See
 [concepts/readiness.md](../concepts/readiness.md) for the full semantics.
 
@@ -118,7 +118,7 @@ does **not**:
 
 - Create, update, or delete the shared StorageClasses, the shared
   TridentBackendConfig, Trident, the SVM, or anything else on the storage
-  system — including during tenant teardown.
+  system, including during tenant teardown.
 - Use backend management credentials, even if they were supplied when the
   backend was registered.
 - Validate the transport (Fibre Channel zoning, iSCSI networking), Trident
@@ -129,7 +129,7 @@ does **not**:
 
 | Symptom | Cause | Resolution |
 |---|---|---|
-| `StorageOnboardingComplete=False`, reason `NotFound`; message names a tier | The tier has no matching StorageClass on the target cluster | Create the class with both labels (`osac.openshift.io/tenant=csp-managed`, `osac.openshift.io/storage-tier=<tier>`) — see the contract above |
+| `StorageOnboardingComplete=False`, reason `NotFound`; message names a tier | The tier has no matching StorageClass on the target cluster | Create the class with both labels (`osac.openshift.io/tenant=csp-managed`, `osac.openshift.io/storage-tier=<tier>`). See the contract above |
 | `StorageOnboardingComplete=False`, reason `MultipleFound`; message lists class names | More than one class matches a tier | Remove or relabel the duplicate so exactly one class matches |
 | Readiness not evaluated; operator logs show target access errors | The operator cannot reach its configured target cluster | Check the operator's target access configuration; the operator fails closed and never queries the local cluster as a fallback. Remote-target deployment wiring is in development |
 | A class exists but the tier still doesn't resolve | The class is labeled for a different tier, or the tier isn't configured in OSAC | Verify both label values; check `osac get storagetier` |

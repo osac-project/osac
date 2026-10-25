@@ -26,7 +26,7 @@ Preparing NetApp storage for OSAC involves:
 2. **Virtual storage pools** on the SVM that back the offered tiers. Each
    pool's service characteristics (for example, media type and QoS) map to an
    OSAC StorageTier.
-3. **Transport** between the VMaaS target cluster's hosts and the SVM —
+3. **Transport** between the VMaaS target cluster's hosts and the SVM:
    Fibre Channel or iSCSI for block volumes, Ethernet for NFS. Zoning,
    networking, and multipathing are configured and validated by the storage
    operator. OSAC does not validate the transport (see below).
@@ -34,7 +34,7 @@ Preparing NetApp storage for OSAC involves:
    cluster. OSAC does not install or operate Trident.
 5. **TridentBackendConfig** connecting Trident to the SVM and its pools. In
    the shared-tenancy profile, one shared backend config serves all tenants.
-6. **StorageClasses** — one per offered tier, carrying the OSAC labels (see
+6. **StorageClasses**: one per offered tier, carrying the OSAC labels (see
    [StorageClass contract](#storageclass-contract)) and the
    `csi.trident.netapp.io` provisioner.
 

@@ -1,4 +1,4 @@
-import type { ComputeInstanceCatalogItem } from '@osac/types';
+import { type ComputeInstanceCatalogItem, GuestOSFamily } from '@osac/types';
 
 import {
   type ResourceSelectValue,
@@ -17,6 +17,7 @@ import {
 import { catalogValueFromPolicy } from '../catalogItemPolicy';
 
 export interface ComputeCatalogItemValues extends CatalogGeneralValues {
+  guestOsFamily: GuestOSFamily;
   diskImage: ProvisioningFieldValue<ResourceSelectValue>;
   instanceType: ProvisioningFieldValue<ResourceSelectValue>;
   userDataSource: ProvisioningFieldValue<'inline' | 'secret'>;
@@ -55,6 +56,7 @@ const readDiskListValue = (value: unknown): ComputeInstanceDiskValues[] => {
 
 export const emptyComputeCatalogItemValues = (): ComputeCatalogItemValues => ({
   ...catalogGeneralValues(),
+  guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
   diskImage: provisioningFieldValue(emptyResourceSelectValue()),
   instanceType: provisioningFieldValue(emptyResourceSelectValue()),
   userDataSource: provisioningFieldValue('inline'),
@@ -76,6 +78,7 @@ export const getComputeCatalogItemInitialValues = (
 
   return {
     ...catalogGeneralValuesFromItem(item),
+    guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
     diskImage: catalogValueFromPolicy(
       fields?.diskImage,
       readResourceReference,

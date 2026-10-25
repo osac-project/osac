@@ -117,7 +117,7 @@ describe('BareMetalCatalogItemWizard', () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByLabelText('Instance type')).toBeInTheDocument();
-    expect(screen.getByLabelText('Disk image')).toBeInTheDocument();
+    expect(screen.getByLabelText('Select the image reference')).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'User data' })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Enter value' })).toBeChecked();
     expect(screen.getByRole('radio', { name: 'Select secret' })).toBeInTheDocument();

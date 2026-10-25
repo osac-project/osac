@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ValidationError } from 'yup';
 
 import type { ComputeInstanceCatalogItem } from '@osac/types';
-import { ComputeInstanceTemplateReferenceSchema } from '@osac/types';
+import { ComputeInstanceTemplateReferenceSchema, GuestOSFamily } from '@osac/types';
 import { tIdentity } from '@osac/ui-components/test-utils/i18n';
 
 import type { ComputeInstanceWizardValues } from './fields';
@@ -41,6 +41,7 @@ const emptyValues: ComputeInstanceWizardValues = {
   metadata: { name: '', project: '' },
   spec: {
     sshKey: provisioningFieldValue(''),
+    guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
     diskImage: provisioningFieldValue(emptyResourceSelectValue()),
     instanceType: provisioningFieldValue(''),
     userDataSource: provisioningFieldValue('inline'),

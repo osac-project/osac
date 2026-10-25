@@ -29,6 +29,7 @@ const ComputeCatalogConfigurationStep = () => {
             {({ valueName, isDisabled, isRequired, labelInfo }) => (
               <DiskImageField
                 name={valueName}
+                guestOsFamilyName="guestOsFamily"
                 fieldId="compute-catalog-disk-image"
                 isDisabled={isDisabled}
                 isRequired={isRequired}

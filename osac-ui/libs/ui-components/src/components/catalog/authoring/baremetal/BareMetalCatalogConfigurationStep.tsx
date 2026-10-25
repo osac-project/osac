@@ -45,6 +45,7 @@ const BareMetalCatalogConfigurationStep = () => {
             {({ valueName, isDisabled, isRequired, labelInfo }) => (
               <DiskImageField
                 name={valueName}
+                guestOsFamilyName="guestOsFamily"
                 fieldId="bare-metal-catalog-disk-image"
                 isDisabled={isDisabled}
                 isRequired={isRequired}

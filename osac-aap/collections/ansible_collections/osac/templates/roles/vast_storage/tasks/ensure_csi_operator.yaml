@@ -1,5 +1,7 @@
 ---
 # Ensures required VAST CSI drivers are installed through the stable OLM channel.
+# Used by the explicit Tenant/VMaaS driver action and the opt-in legacy CaaS
+# ClusterOrder path in ensure_storage_class.yaml.
 # Existing required CSIDrivers are left untouched. A missing driver triggers an
 # initial Manual InstallPlan approval for the latest bundle resolved by OLM.
 #
@@ -103,7 +105,7 @@
       ansible.builtin.fail:
         msg: >-
           CatalogSource '{{ vast_storage_csi_operator_catalog_source }}' was not found
-          in namespace '{{ vast_storage_csi_operator_catalog_namespace }}' on the VMaaS target cluster.
+          in namespace '{{ vast_storage_csi_operator_catalog_namespace }}' on the target cluster.
 
     - name: Ensure VAST CSI Operator namespace exists
       kubernetes.core.k8s:

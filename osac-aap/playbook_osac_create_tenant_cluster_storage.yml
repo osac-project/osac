@@ -27,6 +27,11 @@
       {{ osac_job_vars.resource.metadata.namespace }}
       {%- endif -%}
     tenant_uid: "{{ osac_job_vars.resource.metadata.uid }}"
+    # ClusterOrder is the legacy CaaS guest-cluster path. Keep its VAST CSI
+    # installation in the VAST provider role until OSAC CSI is ready for CaaS;
+    # the separate provider-native install action below remains Tenant/VMaaS-only.
+    storage_provider_caas_legacy_vast_csi_install_enabled: >-
+      {{ osac_job_vars.resource.kind == 'ClusterOrder' }}
   pre_tasks:
     - name: Show resource metadata
       tags: [always]
@@ -111,8 +116,9 @@
 
   tasks:
     # Tenant storage uses the selected VMaaS target resolved above. ClusterOrder
-    # storage is the separate CaaS guest-cluster path and does not run this native
-    # VMaaS driver setup action.
+    # storage is the separate CaaS guest-cluster path and does not run this new
+    # provider-native setup action. Existing VAST ClusterOrders retain their
+    # legacy install through ensure_storage_class, enabled explicitly below.
     - name: Ensure provider-native CSI drivers on the selected VMaaS cluster
       tags: [provider_csi_driver_install]
       when: osac_job_vars.resource.kind == 'Tenant'

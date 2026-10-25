@@ -5,6 +5,8 @@
 # sends a Tenant) and CaaS/guest-cluster storage (handleCaaSUpdate, sends a ClusterOrder).
 # csi_driver_install must fire for the Tenant (hub) case and NEVER for the ClusterOrder
 # (guest-cluster) case, since it always targets the hub's default kubeconfig context.
+# Legacy ClusterOrder VAST tiers still use the VAST provider's installer on the guest
+# cluster until OSAC CSI support for CaaS is complete.
 #
 # Verifies the playbook's when: osac_job_vars.resource.kind == 'Tenant' gate by stubbing
 # the real Helm install via csi_driver_install_override (same override mechanism
@@ -80,6 +82,15 @@
         name: csi.trident.netapp.io
       register: _native_csi_fixture_trident_driver
 
+    - name: Read any pre-existing VAST NFS CSIDriver fixture
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.vastdata.com
+      register: _native_csi_fixture_vast_driver
+      # setup_test_env.sh seeds this registration to isolate unrelated VAST tests.
+      # The ClusterOrder scenario temporarily removes and then restores it below.
+
     - name: Read any pre-existing TridentBackendConfig CRD fixture
       kubernetes.core.k8s_info:
         api_version: apiextensions.k8s.io/v1
@@ -92,6 +103,13 @@
         api_version: operators.coreos.com/v1
         kind: OperatorGroup
       register: _native_csi_fixture_operator_groups
+
+    - name: Read any pre-existing marketplace namespace fixture
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: openshift-marketplace
+      register: _native_csi_fixture_marketplace_namespace
 
     - name: Require clean OLM and Trident fixtures before mutation
       ansible.builtin.assert:
@@ -113,6 +131,7 @@
             | list | length == 0
           - _native_csi_fixture_trident_crd.resources | length == 0
           - _native_csi_fixture_trident_driver.resources | length == 0
+          - _native_csi_fixture_marketplace_namespace.resources | length == 0
         fail_msg: >-
           Native CSI fixture resources already exist in osac-test. Clean the
           dedicated test cluster before rerunning this target.
@@ -581,6 +600,16 @@
         csi_driver_install_override:
           name: osac.test_overrides.csi_driver_install_hooks
           tasks_from: install.yaml
+        vast_storage_csi_operator_install_override:
+          name: osac.test_overrides.csi_driver_install_hooks
+          tasks_from: install.yaml
+
+    - name: Remove the setup VAST registration so legacy CaaS install is exercised
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.vastdata.com
 
 - name: Run tenant cluster storage playbook with a ClusterOrder dispatch (negative case)
   ansible.builtin.import_playbook: ../../../../../playbook_osac_create_tenant_cluster_storage.yml
@@ -602,12 +631,39 @@
     - name: "Assert csi_driver_install's override did NOT fire for the ClusterOrder (guest-cluster) dispatch"
       ansible.builtin.assert:
         that:
-          - "'csi_driver_install' not in _override_log_co"
+          - "'| csi_driver_install |' not in _override_log_co"
         fail_msg: >-
           csi_driver_install override fired for a ClusterOrder dispatch -- it must only ever
           target the hub's default kubeconfig context and must never run for CaaS/guest-cluster
           storage. Log: {{ _override_log_co }}
         success_msg: "csi_driver_install correctly skipped for the ClusterOrder (guest-cluster) dispatch"
+
+    - name: Assert legacy VAST CSI installation remains enabled for ClusterOrder
+      ansible.builtin.assert:
+        that:
+          - "'native_csi_driver_install' in _override_log_co"
+          - "'drivers=[\"csi.vastdata.com\"]' in _override_log_co"
+          - "'package=vast-csi-operator' in _override_log_co"
+          - "'providers=[\"vast\"]' in _override_log_co"
+        fail_msg: >-
+          The legacy CaaS VAST install must use the provider-native VAST installer
+          without invoking the generic Tenant/VMaaS csi_driver_install path.
+          Log: {{ _override_log_co }}
+        success_msg: "Legacy VAST CSI installation ran for the CaaS ClusterOrder guest cluster"
+
+    - name: Read the VAST NFS CSI driver created by the legacy installer override
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.vastdata.com
+      register: _co_vast_csi_driver
+
+    - name: Assert legacy VAST installation registered the CSI driver
+      ansible.builtin.assert:
+        that:
+          - _co_vast_csi_driver.resources | length == 1
+        fail_msg: "The legacy CaaS VAST installer did not register csi.vastdata.com"
+        success_msg: "The legacy CaaS VAST CSI driver is registered on the guest cluster"
 
     - name: Read StorageClass created by the real storage_provider dispatch that still ran
       kubernetes.core.k8s_info:
@@ -648,6 +704,26 @@
         name: "vast-csi-test-tcs-clusterorder-be-tcs-clusterorder"
         namespace: "openshift-osac-storage"
       failed_when: false
+
+    - name: Delete the VAST NFS CSI driver fixture
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.vastdata.com
+      failed_when: false
+
+    - name: Restore the VAST NFS CSI driver fixture from test setup
+      when: _native_csi_fixture_vast_driver.resources | length > 0
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: CSIDriver
+          metadata:
+            name: csi.vastdata.com
+          spec:
+            attachRequired: false
 
     - name: Delete hub Secret
       kubernetes.core.k8s:
@@ -1516,6 +1592,30 @@
             kind: CSIDriver
             name: block.csi.vastdata.com
 
+        - name: Create marketplace namespace for the OLM policy fixture
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: openshift-marketplace
+
+        - name: Create a certified CatalogSource fixture for Subscription policy checks
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: operators.coreos.com/v1alpha1
+              kind: CatalogSource
+              metadata:
+                name: certified-operators
+                namespace: openshift-marketplace
+              spec:
+                sourceType: grpc
+                image: registry.invalid/osac-test/certified-operators:latest
+                displayName: OSAC test certified operators
+                publisher: OSAC test
+
         - name: Set installedCSV on the existing unmanaged VAST Subscription
           ansible.builtin.command:
             argv:
@@ -1530,7 +1630,9 @@
               - --subresource=status
               - --type=merge
               - --patch
-              - '{"status":{"installedCSV":"vast-csi-operator.v2.5.0"}}'
+              - >-
+                {"status":{"installedCSV":"vast-csi-operator.v2.5.0",
+                "lastUpdated":"2024-01-01T00:00:00Z"}}
           changed_when: true
 
         - name: Reject an installed unmanaged VAST Subscription
@@ -1678,6 +1780,24 @@
             api_version: v1
             kind: Namespace
             name: vast-csi-system
+            wait: true
+          failed_when: false
+
+        - name: Delete the test certified CatalogSource fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: operators.coreos.com/v1alpha1
+            kind: CatalogSource
+            name: certified-operators
+            namespace: openshift-marketplace
+          failed_when: false
+
+        - name: Delete the marketplace namespace fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: openshift-marketplace
             wait: true
           failed_when: false
 

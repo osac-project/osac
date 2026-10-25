@@ -83,3 +83,12 @@ argument_specs:
           Disable TLS certificate validation for the target kubeconfig. Used for
           ClusterOrder guest clusters reached through routes whose certificate
           does not match the kubeconfig CA.
+      storage_provider_caas_legacy_vast_csi_install_enabled:
+        type: bool
+        required: false
+        default: false
+        description: >
+          Preserve the legacy VAST CSI installation for CaaS ClusterOrder storage
+          while OSAC CSI support for CaaS is incomplete. This only affects the
+          VAST ensure_storage_class dispatch and does not enable the new generic
+          ensure_csi_driver action for ClusterOrder resources.

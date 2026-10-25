@@ -189,12 +189,21 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 ### Fulfillment integration timings
 
 The `SUITE=fulfillment` installer target uses Ginkgo's native `--json-report`
-flag to write `service-only.json`, `manager-capability.json`,
-`manager-readiness.json`, and `bmaas-disabled.json` under
-`fulfillment-service/logs/timings/`. CI includes these in its existing `logs`
-artifact. Reports use absolute paths and distinct names for each phase. Prior
-reports are removed before a run; a missing report does not imply a passing
-phase. Use the originating Actions run to identify the tested revision.
+flag when `FULFILLMENT_IT_REPORT_DIR` is set. The default is empty: local runs
+neither generate nor clear reports. To opt in from the repository root, run:
+
+```bash
+make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment FULFILLMENT_IT_REPORT_DIR=../fulfillment-service/logs/timings
+```
+
+Relative directories resolve from `osac-installer/`. CI sets an absolute
+`FULFILLMENT_IT_REPORT_DIR` under `fulfillment-service/logs/timings/`, which its
+existing `logs` artifact includes. The four phases write `service-only.json`,
+`manager-capability.json`, `manager-readiness.json`, and `bmaas-disabled.json`.
+When reporting is enabled, those four prior files are cleared before the run
+so a reused local directory cannot retain stale reports for unreached phases.
+A missing report does not imply a passing phase. Use the originating Actions
+run to identify the tested revision.
 
 These reports are for maintainers investigating CI runtime or comparing fixture
 costs before and after an optimization. Download the artifact and inspect its
@@ -223,7 +232,7 @@ by unit tests.
 Run `go test ./it -run TestCatalogItemDeletionProbe` from `fulfillment-service/`
 for unit coverage of deletion observation, signal throttling, cancellation, and
 concurrent archival using callback doubles. Catalog cleanup observes every
-500ms, keeps its five-minute bound, and signals no more often than every two
+200ms, keeps its five-minute bound, and signals no more often than every two
 seconds; it waits for archival before removing dependencies. The complete
 installer command in the tier table remains the component-integration check.
 
@@ -293,7 +302,7 @@ MCE or call an Operator catalog or cluster API.
 The `make -C osac-installer kind-runtime-test` unit suite is owned by installer
 implementation work. It uses command stubs to check runtime selection, sudo
 authentication and credential expiry, Makefile/host setup routing, native
-Ginkgo report-path configuration for all four phases, safe
+Ginkgo report opt-in and output-path configuration for all four phases, safe
 credential reset, resuming stopped nodes after storage preparation and waiting
 for API readiness, Helm 3/4 apply flags for devstack and OSAC releases,
 image loading without virtualization prerequisites or

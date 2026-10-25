@@ -128,6 +128,7 @@ jobs:
         env:
           CONTAINER_TOOL: docker
           MCP_TEST_ENABLED: "true"
+          FULFILLMENT_IT_REPORT_DIR: ${{ github.workspace }}/fulfillment-service/logs/timings
         run: |
           echo '127.0.0.1 fulfillment-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
           echo '127.0.0.1 fulfillment-internal-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null

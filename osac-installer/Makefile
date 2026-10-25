@@ -30,6 +30,8 @@ SHELL := /usr/bin/env bash -o pipefail
 # Extra helm --set/--set-string args appended to the OSAC chart command.
 EXTRA_HELM_ARGS ?=
 FULFILLMENT_GINKGO_ARGS ?=
+FULFILLMENT_IT_REPORT_DIR ?=
+fulfillment-json-report = $(if $(strip $(FULFILLMENT_IT_REPORT_DIR)),--json-report="$(abspath $(FULFILLMENT_IT_REPORT_DIR)/$(1).json)")
 MCP_TEST_ENABLED ?= false
 
 ifeq ($(MCP_TEST_ENABLED),true)
@@ -496,8 +498,10 @@ ifeq ($(SUITE),all)
 	$(MAKE) test SUITE=bmf
 endif
 ifeq ($(SUITE),fulfillment)
-# Do not upload reports left over from a previous run if a later phase is never reached.
-	rm -f ../fulfillment-service/logs/timings/service-only.json ../fulfillment-service/logs/timings/manager-capability.json ../fulfillment-service/logs/timings/manager-readiness.json ../fulfillment-service/logs/timings/bmaas-disabled.json
+ifneq ($(strip $(FULFILLMENT_IT_REPORT_DIR)),)
+# A reused local output directory must not retain old reports for phases a failed run never reaches.
+	rm -f $(foreach phase,service-only manager-capability manager-readiness bmaas-disabled,"$(abspath $(FULFILLMENT_IT_REPORT_DIR)/$(phase).json)")
+endif
 # Exercise event-driven reconciliation without full synchronization in every test phase.
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
 	$(call kind-load-image,localhost/fulfillment-service:it)
@@ -507,16 +511,16 @@ ifeq ($(SUITE),fulfillment)
 		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=false --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false $(MCP_TEST_HELM_ARGS)"
 	@for f in ../fulfillment-service/it/crds/*.yaml; do kubectl apply --server-side --field-manager=helm --force-conflicts -f "$$f"; done
 # Manager capability discovery and readiness both require the operator, so keep them isolated from the service-only suite.
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_MCP_DEPLOYED_URL="$(MCP_TEST_URL)" ginkgo run --json-report="$(abspath ../fulfillment-service/logs/timings/service-only.json)" --timeout 1h15m -v --skip 'NetworkClass manager (capability discovery|readiness)' $(FULFILLMENT_GINKGO_ARGS) it
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_MCP_DEPLOYED_URL="$(MCP_TEST_URL)" ginkgo run $(call fulfillment-json-report,service-only) --timeout 1h15m -v --skip 'NetworkClass manager (capability discovery|readiness)' $(FULFILLMENT_GINKGO_ARGS) it
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false"
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run --json-report="$(abspath ../fulfillment-service/logs/timings/manager-capability.json)" --timeout 1h -v --focus 'NetworkClass manager capability discovery' it
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run $(call fulfillment-json-report,manager-capability) --timeout 1h -v --focus 'NetworkClass manager capability discovery' it
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.controllers.tenant=false --set operator.controllers.storage=false --set operator.controllers.volume=false --set operator.controllers.networking=true --set operator.controllers.networkingProvisioning=false --set operator.networkManagers.enabled=true --set operator.networkManagers.fabricManagers.netris.enabled=true --set global.services.caas.enabled=false --set global.services.vmaas.enabled=false --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false --set global.networking.networkClass.enabled=false --set aap.instanceGroups.publishTemplates.enabled=false"
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run --json-report="$(abspath ../fulfillment-service/logs/timings/manager-readiness.json)" --timeout 15m -v --focus 'NetworkClass manager readiness' it
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run $(call fulfillment-json-report,manager-readiness) --timeout 15m -v --focus 'NetworkClass manager readiness' it
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set global.services.bmaas.enabled=false --set operator.enabled=false --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false"
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=bmaas-disabled ginkgo run --json-report="$(abspath ../fulfillment-service/logs/timings/bmaas-disabled.json)" --timeout 1h -v --focus 'Service enablement' it
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=bmaas-disabled ginkgo run $(call fulfillment-json-report,bmaas-disabled) --timeout 1h -v --focus 'Service enablement' it
 endif
 ifeq ($(SUITE),operator)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)

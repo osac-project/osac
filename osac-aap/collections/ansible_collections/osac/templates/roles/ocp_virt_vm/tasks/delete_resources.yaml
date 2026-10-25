@@ -118,8 +118,33 @@
              | default('Unknown')
              if vmi_recovery_state.resources | length > 0
              else 'Absent' }}
+        _vmi_uid: >-
+          {{ vmi_recovery_state.resources[0]
+             .metadata.uid | default('')
+             if vmi_recovery_state.resources | length > 0
+             else '' }}
+
+    - name: >-
+        Fail — VMI UID missing, cannot identify launcher
+      ansible.builtin.fail:
+        msg: >-
+          VMI exists but has no metadata.uid.
+          Cannot safely identify the owning
+          virt-launcher pod. Retaining finalizer
+          for operator retry.
+      when:
+        - _vmi_exists | bool
+        - (_vmi_uid | trim) == ''
 
     - name: Look up virt-launcher pod
+      # KubeVirt sets labels kubevirt.io=virt-launcher
+      # and kubevirt.io/created-by=<VMI UID> on every
+      # launcher pod (pkg/virt-controller/services/
+      # template.go).  kubevirt.io/domain is an
+      # annotation, not a label, so label_selectors
+      # must use the two labels above.  Using the VMI
+      # UID ensures we never match a launcher that
+      # belongs to a different VMI.
       kubernetes.core.k8s_info:
         kubeconfig: >-
           {{ remote_cluster_kubeconfig | default(omit) }}
@@ -127,8 +152,10 @@
         kind: Pod
         namespace: "{{ compute_instance_target_namespace }}"
         label_selectors:
+          - kubevirt.io=virt-launcher
           - >-
-            kubevirt.io/domain={{ compute_instance_name }}
+            kubevirt.io/created-by={{
+            _vmi_uid | trim }}
       register: launcher_pod_info
       when: _vmi_exists | bool
 

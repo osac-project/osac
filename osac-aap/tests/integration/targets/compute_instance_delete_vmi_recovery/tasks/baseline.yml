@@ -154,6 +154,12 @@
             (s2_vmi_check.resources[0].metadata.deletionTimestamp
             | default('')) == ''
 
+        - name: "S2: Capture VMI UID for launcher labels"
+          ansible.builtin.set_fact:
+            _s2_vmi_uid: >-
+              {{ s2_vmi_check.resources[0]
+                 .metadata.uid }}
+
         - name: "S2: Create failed launcher pod"
           kubernetes.core.k8s:
             state: present
@@ -169,6 +175,10 @@
                   compute_instance_target_namespace
                   }}
                 labels:
+                  kubevirt.io: virt-launcher
+                  kubevirt.io/created-by: >-
+                    {{ _s2_vmi_uid }}
+                annotations:
                   kubevirt.io/domain: >-
                     {{ compute_instance_name }}
               spec:
@@ -466,6 +476,21 @@
           register: s4_delete_result
           failed_when: false
 
+        - name: "S4: Capture VMI UID for launcher labels"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s4_vmi_check
+
+        - name: "S4: Set VMI UID fact"
+          ansible.builtin.set_fact:
+            _s4_vmi_uid: >-
+              {{ s4_vmi_check.resources[0]
+                 .metadata.uid }}
+
         - name: "S4: Create Running launcher pod"
           kubernetes.core.k8s:
             state: present
@@ -481,6 +506,10 @@
                   compute_instance_target_namespace
                   }}
                 labels:
+                  kubevirt.io: virt-launcher
+                  kubevirt.io/created-by: >-
+                    {{ _s4_vmi_uid }}
+                annotations:
                   kubevirt.io/domain: >-
                     {{ compute_instance_name }}
               spec:
@@ -736,6 +765,21 @@
           register: s5_delete_result
           failed_when: false
 
+        - name: "S5: Capture VMI UID for launcher labels"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s5_vmi_check
+
+        - name: "S5: Set VMI UID fact"
+          ansible.builtin.set_fact:
+            _s5_vmi_uid: >-
+              {{ s5_vmi_check.resources[0]
+                 .metadata.uid }}
+
         - name: "S5: Create Failed launcher pod"
           kubernetes.core.k8s:
             state: present
@@ -751,6 +795,10 @@
                   compute_instance_target_namespace
                   }}
                 labels:
+                  kubevirt.io: virt-launcher
+                  kubevirt.io/created-by: >-
+                    {{ _s5_vmi_uid }}
+                annotations:
                   kubevirt.io/domain: >-
                     {{ compute_instance_name }}
               spec:
@@ -794,6 +842,10 @@
                   compute_instance_target_namespace
                   }}
                 labels:
+                  kubevirt.io: virt-launcher
+                  kubevirt.io/created-by: >-
+                    {{ _s5_vmi_uid }}
+                annotations:
                   kubevirt.io/domain: >-
                     {{ compute_instance_name }}
               spec:
@@ -973,4 +1025,263 @@
               name: >-
                 virt-launcher-{{
                 compute_instance_name }}-running
+          failed_when: false
+
+# Scenario 6 — Cross-VMI identity boundary: a RUNNING
+# launcher pod labelled with a DIFFERENT VMI UID must not
+# be matched by the recovery selector.  Recovery should
+# see "launcher absent" (zero pods match) and proceed
+# with cleanup.  If the UID selector were omitted, this
+# Running pod would be matched, _launcher_terminal would
+# be false, and recovery would incorrectly refuse.
+
+- name: >-
+    Scenario 6: Cross-VMI identity boundary
+    (wrong UID ignored)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    compute_instance_name: test-vmi-s6
+    compute_instance_target_namespace: >-
+      osac-vmi-recovery-test
+    compute_instance:
+      spec: {}
+    ocp_virt_vm_graceful_wait_retries: 2
+  tasks:
+    - name: "S6: Run test with cleanup"
+      block:
+        - name: "S6: Clean up previous resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}-alien
+          failed_when: false
+
+        - name: "S6: Create stuck VMI"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                finalizers:
+                  - >-
+                    kubevirt.io/foregroundDeleteVirtualMachine
+              spec:
+                domain:
+                  devices: {}
+                  resources:
+                    requests:
+                      memory: 128Mi
+
+        - name: "S6: Request VMI deletion"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s6_delete_result
+          failed_when: false
+
+        - name: "S6: Verify VMI is stuck"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s6_vmi_check
+          failed_when: >
+            s6_vmi_check.resources | length == 0 or
+            (s6_vmi_check.resources[0]
+            .metadata.deletionTimestamp
+            | default('')) == ''
+
+        - name: "S6: Capture VMI UID"
+          ansible.builtin.set_fact:
+            _s6_vmi_uid: >-
+              {{ s6_vmi_check.resources[0]
+                 .metadata.uid }}
+
+        - name: >-
+            S6: Create Running launcher with WRONG UID
+          # This pod carries kubevirt.io=virt-launcher
+          # but kubevirt.io/created-by points to a
+          # fabricated UID that does not belong to our
+          # VMI.  It stays Running (pause image), so if
+          # the selector omits created-by, this pod
+          # would match and _launcher_terminal would be
+          # false, blocking recovery — exactly what the
+          # correct selector must avoid.
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: >-
+                  virt-launcher-{{
+                  compute_instance_name }}-alien
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                labels:
+                  kubevirt.io: virt-launcher
+                  kubevirt.io/created-by: >-
+                    00000000-0000-0000-0000-ffffffffffff
+                annotations:
+                  kubevirt.io/domain: >-
+                    {{ compute_instance_name }}
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: compute
+                    image: >-
+                      registry.k8s.io/pause:3.9
+
+        - name: "S6: Wait for alien launcher Running"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              virt-launcher-{{
+              compute_instance_name }}-alien
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s6_alien_wait
+          until: >
+            s6_alien_wait.resources | length > 0 and
+            (s6_alien_wait.resources[0].status.phase
+            | default('')) == 'Running'
+          retries: 30
+          delay: 2
+
+        - name: >-
+            S6: Assert alien pod has wrong UID and is
+            Running
+          ansible.builtin.assert:
+            that:
+              - >-
+                s6_alien_wait.resources[0].status.phase
+                == 'Running'
+              - >-
+                s6_alien_wait.resources[0]
+                .metadata.labels['kubevirt.io/created-by']
+                != (_s6_vmi_uid | trim)
+            fail_msg: >-
+              Alien launcher fixture must be Running
+              with a UID that differs from the target
+              VMI.
+
+        - name: "S6: Create minimal VM fixture"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                runStrategy: Always
+                template:
+                  spec:
+                    domain:
+                      devices: {}
+                      resources:
+                        requests:
+                          memory: 128Mi
+
+        - name: "S6: Run delete_resources"
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: delete_resources.yaml
+
+        - name: "S6: Verify VMI cleaned up"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s6_vmi_after
+          failed_when: >-
+            s6_vmi_after.resources | length > 0
+
+        - name: >-
+            S6: Verify alien pod still Running
+          # The Running alien launcher must still exist
+          # and still be Running — the UID selector
+          # must not have matched it.
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              virt-launcher-{{
+              compute_instance_name }}-alien
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s6_alien_after
+          failed_when: >-
+            s6_alien_after.resources | length == 0 or
+            s6_alien_after.resources[0].status.phase
+            != 'Running'
+
+        - name: "S6: Assert identity boundary"
+          ansible.builtin.debug:
+            msg: >-
+              Scenario 6 passed: recovery ignored
+              Running wrong-UID launcher (still
+              Running), recovered target VMI via
+              absent-launcher path.
+
+      always:
+        - name: "S6: Cleanup"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            delete_options:
+              gracePeriodSeconds: 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}-alien
           failed_when: false

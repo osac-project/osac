@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.e2e.core.aap_job_pods import job_pod_mounting as _job_pod_mounting
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     unique_name,
@@ -157,21 +158,6 @@ def _wait_for_virtual_network_job_id(k8s: K8sClient, name: str) -> str:
         delay=2,
         description=f"AAP job for VirtualNetwork {name}",
     )
-
-
-def _job_pod_mounting(k8s: K8sClient, configmap: str, job_id: str) -> dict | None:
-    for pod in k8s.list_json(resource="pods", namespace=k8s.namespace)["items"]:
-        labels = pod.get("metadata", {}).get("labels", {})
-        pod_job_ids = {
-            labels.get("ansible_job", "").removeprefix("job-"),
-            labels.get("ansible_job_id", "").removeprefix("job-"),
-        }
-        if job_id not in pod_job_ids:
-            continue
-        for volume in pod.get("spec", {}).get("volumes", []):
-            if volume.get("configMap", {}).get("name") == configmap:
-                return pod
-    return None
 
 
 def _wait_for_job_pod(k8s: K8sClient, configmap: str, job_id: str) -> dict:

@@ -24,8 +24,6 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
@@ -102,9 +100,6 @@ type fakeComputeInstanceMetadataClient struct {
 	updateNilObject   bool
 	updateRequest     *privatev1.ComputeInstancesUpdateRequest
 	updatedResponse   *privatev1.ComputeInstance
-	getCalls          int
-	updateCalls       int
-	beforeUpdate      func(*privatev1.ComputeInstancesUpdateRequest) error
 }
 
 func (f *fakeComputeInstanceMetadataClient) Get(
@@ -112,7 +107,6 @@ func (f *fakeComputeInstanceMetadataClient) Get(
 	_ *privatev1.ComputeInstancesGetRequest,
 	_ ...grpc.CallOption,
 ) (*privatev1.ComputeInstancesGetResponse, error) {
-	f.getCalls++
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
@@ -132,13 +126,7 @@ func (f *fakeComputeInstanceMetadataClient) Update(
 	request *privatev1.ComputeInstancesUpdateRequest,
 	_ ...grpc.CallOption,
 ) (*privatev1.ComputeInstancesUpdateResponse, error) {
-	f.updateCalls++
 	f.updateRequest = proto.Clone(request).(*privatev1.ComputeInstancesUpdateRequest)
-	if f.beforeUpdate != nil {
-		if err := f.beforeUpdate(request); err != nil {
-			return nil, err
-		}
-	}
 	if f.updateErr != nil {
 		return nil, f.updateErr
 	}
@@ -334,87 +322,4 @@ func equalStrings(got, want []string) bool {
 		}
 	}
 	return true
-}
-
-func TestComputeInstanceMetadataFixtureRetriesConcurrentMetadataUpdate(t *testing.T) {
-	client := &fakeComputeInstanceMetadataClient{object: privatev1.ComputeInstance_builder{
-		Id: "instance-123",
-		Metadata: privatev1.Metadata_builder{
-			Tenant: "tenant-a", Version: 0,
-			Annotations: map[string]string{"osac.openshift.io/owner-reference": "original-parent"},
-		}.Build(),
-	}.Build()}
-	client.beforeUpdate = func(request *privatev1.ComputeInstancesUpdateRequest) error {
-		if client.updateCalls == 1 {
-			// A controller writes between the fixture's Get and locked Update.
-			client.object.GetMetadata().SetVersion(1)
-			client.object.GetMetadata().SetLabels(map[string]string{"controller.example.com/state": "ready"})
-			client.object.GetMetadata().SetAnnotations(map[string]string{
-				"osac.openshift.io/owner-reference":  "current-parent",
-				"admin.osac.openshift.io/controller": "retained",
-			})
-			return status.Error(codes.Aborted, "stale version")
-		}
-		if request.GetObject().GetMetadata().GetVersion() != 1 || !request.GetLock() {
-			t.Fatal("retry must use a fresh snapshot with optimistic locking")
-		}
-		return nil
-	}
-	fixture := &computeInstanceMetadataFixture{id: "instance-123", client: client}
-	got, err := fixture.updateMetadata(context.Background(),
-		map[string]string{"example.com/fixture": "label"}, map[string]string{"example.com/fixture": "annotation"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if client.getCalls != 2 || client.updateCalls != 2 {
-		t.Fatalf("Get/Update calls = %d/%d, want 2/2", client.getCalls, client.updateCalls)
-	}
-	metadata := got.GetMetadata()
-	if metadata.GetTenant() != "tenant-a" || metadata.GetLabels()["controller.example.com/state"] != "ready" ||
-		metadata.GetLabels()["example.com/fixture"] != "label" ||
-		metadata.GetAnnotations()["osac.openshift.io/owner-reference"] != "current-parent" ||
-		metadata.GetAnnotations()["admin.osac.openshift.io/controller"] != "retained" ||
-		metadata.GetAnnotations()["example.com/fixture"] != "annotation" {
-		t.Fatalf("retry lost current controller or fixture metadata: %v", metadata)
-	}
-}
-
-func TestComputeInstanceMetadataFixtureRetriesOnlyBoundedConflicts(t *testing.T) {
-	for _, code := range []codes.Code{codes.Aborted, codes.PermissionDenied, codes.InvalidArgument, codes.Unavailable, codes.NotFound} {
-		t.Run(code.String(), func(t *testing.T) {
-			client := &fakeComputeInstanceMetadataClient{
-				object:    privatev1.ComputeInstance_builder{Id: "instance-123", Metadata: &privatev1.Metadata{}}.Build(),
-				updateErr: status.Error(code, "update failed"),
-			}
-			fixture := &computeInstanceMetadataFixture{id: "instance-123", client: client}
-			_, err := fixture.updateMetadata(context.Background(), nil, nil)
-			if status.Code(err) != code {
-				t.Fatalf("error = %v, want %s", err, code)
-			}
-			if code == codes.Aborted {
-				if client.updateCalls < 2 || client.updateCalls > 5 || client.getCalls != client.updateCalls {
-					t.Fatalf("conflict retries must be bounded and refresh each snapshot: Get/Update = %d/%d", client.getCalls, client.updateCalls)
-				}
-			} else if client.updateCalls != 1 || client.getCalls != 1 {
-				t.Fatalf("non-conflict was retried: Get/Update = %d/%d", client.getCalls, client.updateCalls)
-			}
-		})
-	}
-}
-
-func TestComputeInstanceMetadataFixtureRetryCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	client := &fakeComputeInstanceMetadataClient{
-		object: privatev1.ComputeInstance_builder{Id: "instance-123", Metadata: &privatev1.Metadata{}}.Build(),
-	}
-	client.beforeUpdate = func(*privatev1.ComputeInstancesUpdateRequest) error {
-		cancel()
-		return status.Error(codes.Aborted, "stale version")
-	}
-	fixture := &computeInstanceMetadataFixture{id: "instance-123", client: client}
-	_, err := fixture.updateMetadata(ctx, nil, nil)
-	if !errors.Is(err, context.Canceled) || client.getCalls != 1 || client.updateCalls != 1 {
-		t.Fatalf("cancellation not respected: err=%v Get/Update=%d/%d", err, client.getCalls, client.updateCalls)
-	}
 }

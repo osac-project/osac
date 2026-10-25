@@ -144,7 +144,7 @@ const ComputeCatalogItemWizard = ({ item }: ComputeCatalogItemWizardProps) => {
                   />
                 )}
               </WizardStep>
-              <WizardStep id="configuration" name={t('Compute Configuration')}>
+              <WizardStep id="configuration" name={t('Compute configuration')}>
                 {currentStep === 'configuration' && <ComputeCatalogConfigurationStep />}
               </WizardStep>
               <WizardStep id="storage" name={t('Storage')}>

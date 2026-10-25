@@ -17,7 +17,7 @@ const ComputeCatalogConfigurationStep = () => {
     <Stack hasGutter>
       <StackItem>
         <Title headingLevel="h2" size="lg">
-          {t('Compute Configuration')}
+          {t('Compute configuration')}
         </Title>
       </StackItem>
       <StackItem>

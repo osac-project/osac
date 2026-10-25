@@ -6,6 +6,10 @@ import { describe, expect, it } from 'vitest';
 import { DiskImageLifecycle, DiskImageSchema, GuestOSFamily } from '@osac/types';
 
 import DiskImageField from './DiskImageField';
+import type {
+  MockApiFixtures,
+  MockTransportOverrides,
+} from '../../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 import { emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 
@@ -13,14 +17,66 @@ const diskImages = [
   create(DiskImageSchema, {
     id: 'disk-image-fedora',
     metadata: { name: 'fedora' },
-    spec: { lifecycle: DiskImageLifecycle.AVAILABLE, sourceRef: 'quay.io/fedora:latest' },
+    spec: {
+      guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
+      lifecycle: DiskImageLifecycle.AVAILABLE,
+      sourceRef: 'quay.io/fedora:latest',
+    },
   }),
   create(DiskImageSchema, {
     id: 'disk-image-rhel',
     metadata: { name: 'rhel' },
-    spec: { lifecycle: DiskImageLifecycle.AVAILABLE, sourceRef: 'quay.io/rhel:latest' },
+    spec: {
+      guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
+      lifecycle: DiskImageLifecycle.AVAILABLE,
+      sourceRef: 'quay.io/rhel:latest',
+    },
+  }),
+  create(DiskImageSchema, {
+    id: 'disk-image-windows',
+    metadata: { name: 'windows' },
+    spec: {
+      guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_WINDOWS,
+      lifecycle: DiskImageLifecycle.AVAILABLE,
+      sourceRef: 'quay.io/windows:latest',
+    },
+  }),
+  create(DiskImageSchema, {
+    id: 'disk-image-unspecified',
+    metadata: { name: 'unspecified' },
+    spec: {
+      guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED,
+      lifecycle: DiskImageLifecycle.AVAILABLE,
+      sourceRef: 'quay.io/unspecified:latest',
+    },
   }),
 ];
+
+const filterDiskImagesByGuestOsFamily = (images: typeof diskImages, filter?: string) => {
+  const guestOsFamily = filter?.match(/this\.spec\.guest_os_family == (\d+)/)?.[1];
+  return guestOsFamily === undefined
+    ? images
+    : images.filter((image) => image.spec?.guestOsFamily === Number(guestOsFamily));
+};
+
+const renderDiskImageField = (
+  apiFixtures: MockApiFixtures,
+  transportOverrides: MockTransportOverrides,
+) =>
+  renderWithProviders(
+    <Formik
+      initialValues={{
+        spec: {
+          diskImage: emptyResourceSelectValue(),
+          guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
+        },
+      }}
+      onSubmit={() => undefined}
+    >
+      <DiskImageField name="spec.diskImage" guestOsFamilyName="spec.guestOsFamily" />
+    </Formik>,
+    { apiFixtures, transportOverrides },
+  );
 
 describe('DiskImageField', () => {
   it('stores the selected disk image id and name in Formik', async () => {
@@ -53,5 +109,70 @@ describe('DiskImageField', () => {
         '{"id":"disk-image-rhel","name":"rhel"}',
       );
     });
+  });
+
+  it.each([
+    [GuestOSFamily.GUEST_OS_FAMILY_LINUX, 'Linux', 'fedora'],
+    [GuestOSFamily.GUEST_OS_FAMILY_WINDOWS, 'Microsoft Windows', 'windows'],
+    [GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED, 'Unspecified', 'unspecified'],
+  ] as const)('filters disk images for %s', async (guestOsFamily, optionName, imageName) => {
+    const { user } = renderWithProviders(
+      <Formik
+        initialValues={{
+          spec: {
+            diskImage: emptyResourceSelectValue(),
+            guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
+          },
+        }}
+        onSubmit={() => undefined}
+      >
+        <DiskImageField name="spec.diskImage" guestOsFamilyName="spec.guestOsFamily" />
+      </Formik>,
+      {
+        apiFixtures: { diskImages },
+        transportOverrides: {
+          onDiskImageList: (request) => {
+            const items = filterDiskImagesByGuestOsFamily(diskImages, request.filter);
+            return { items, size: items.length, total: items.length };
+          },
+        },
+      },
+    );
+
+    if (guestOsFamily !== GuestOSFamily.GUEST_OS_FAMILY_LINUX) {
+      await user.click(screen.getByText(optionName));
+    }
+
+    await user.click(await screen.findByLabelText(/^Select the image reference/));
+
+    expect(await screen.findByRole('option', { name: imageName })).toBeInTheDocument();
+    expect(screen.getAllByRole('option')).toHaveLength(
+      guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_LINUX ? 2 : 1,
+    );
+  });
+
+  it('identifies the selected guest OS family in the empty warning', async () => {
+    const windowsOnlyDiskImages = [diskImages[2]];
+    renderDiskImageField(
+      { diskImages: [diskImages[2]] },
+      {
+        onDiskImageList: (request) => {
+          const items = filterDiskImagesByGuestOsFamily(windowsOnlyDiskImages, request.filter);
+          return { items, size: items.length, total: items.length };
+        },
+      },
+    );
+
+    expect(
+      await screen.findByText('No disk images available of guest OS family: Linux'),
+    ).toBeInTheDocument();
+  });
+
+  it('shows the empty warning when no disk images are available', async () => {
+    renderDiskImageField({ diskImages: [] }, {});
+
+    expect(
+      await screen.findByText('No disk images available of guest OS family: Linux'),
+    ).toBeInTheDocument();
   });
 });

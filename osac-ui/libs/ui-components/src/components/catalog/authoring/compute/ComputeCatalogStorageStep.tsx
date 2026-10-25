@@ -1,4 +1,4 @@
-import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
+import { Content, Divider, Stack, StackItem, Title } from '@patternfly/react-core';
 
 import { useTranslation } from '../../../../hooks/useTranslation';
 import OsacForm from '../../../Form/OsacForm';
@@ -38,6 +38,7 @@ const ComputeCatalogStorageStep = () => {
               />
             )}
           </CatalogField>
+          <Divider />
           <CatalogField name="bootDiskStorageTier">
             {({ valueName, isDisabled, labelInfo }) => (
               <BootStorageTierField
@@ -47,6 +48,7 @@ const ComputeCatalogStorageStep = () => {
               />
             )}
           </CatalogField>
+          <Divider />
           <CatalogField name="additionalDisks">
             {({ valueName, isDisabled, labelInfo }) => (
               <ProvisioningFieldGroup

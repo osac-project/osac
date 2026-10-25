@@ -1,0 +1,70 @@
+---
+# The BMaaS suite of a pull request, as a run of its own. The decision of e2e-pr.yml (osac-ci) starts it with
+# workflow_dispatch for the commit that was approved, because the policy names this file for the suite
+# (`workflow: e2e-pr-bmaas.yml` in .github/e2e-policy.yml). It is a run of its own so that a failed BMaaS suite can be run
+# again at once (GitHub's "Re-run" of this run, or `/test bmaas`) without waiting for the other suites. It does
+# what the `bmaas` job of e2e-pr.yml did: it calls e2e-bmaas-full-install.yml with the same arguments; nothing else runs here.
+#
+# The inputs are given by the decision and checked by `verify` (osac-ci) against the pull request: anyone with write
+# access can start this workflow with any inputs, and the fork author and association, which decide whether a fork's code
+# may run with secrets, are read from the pull request, not taken from the inputs. The name of the run is how its end is
+# recognised again (`E2E suite · <suite id> · #<pull request> · <commit>`, quoted because an unquoted ` #` starts a YAML
+# comment), so it must keep that exact format. The workflow runs from the default branch, while the code under test is the
+# commit. See .github/CI.md.
+name: E2E BMaaS PR suite
+run-name: "E2E suite · bmaas · #${{ inputs.pr-number }} · ${{ inputs.sha }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: The repository that holds the commit (a fork for a fork pull request), owner/name
+        required: true
+        type: string
+      sha:
+        description: The head commit to test
+        required: true
+        type: string
+      pr-number:
+        description: The pull request number
+        required: true
+        type: string
+      # The decision sends these two with every suite. They are not used: `verify` reads the author and association from
+      # the pull request, so a dispatch cannot claim to be a member.
+      fork-pr-author:
+        description: Ignored (read from the pull request)
+        required: false
+        type: string
+        default: ""
+      fork-pr-author-association:
+        description: Ignored (read from the pull request)
+        required: false
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  verify:
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: osac-project/osac-ci/.github/workflows/suite-inputs.yml@e828bb79701e26aa3448dcc620614ccaf8ebf5ef  # v1.3.3
+    with:
+      repo: ${{ inputs.repo }}
+      sha: ${{ inputs.sha }}
+      pr-number: ${{ inputs.pr-number }}
+
+  # Named after the suite id of .github/e2e-policy.yml: the line of the suite follows the deepest job of this run.
+  bmaas:
+    needs: verify
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/e2e-bmaas-full-install.yml
+    with:
+      repo: ${{ inputs.repo }}
+      sha: ${{ inputs.sha }}
+      pr-number: ${{ inputs.pr-number }}
+      fork-pr-author: ${{ needs.verify.outputs.fork-author }}
+      fork-pr-author-association: ${{ needs.verify.outputs.fork-association }}

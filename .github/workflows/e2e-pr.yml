@@ -31,7 +31,7 @@ run-name: >-
 
 on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out; the suites run the approved commit
   workflow_run:
-    workflows: ["CI", "E2E review relay", "E2E comment", "E2E VMaaS PR suite"]  # keep in step with the workflow names the decision takes as inputs; the last: vmaas runs as a run of its own
+    workflows: ["CI", "E2E review relay", "E2E comment", "E2E VMaaS PR suite", "E2E CaaS PR suite", "E2E BMaaS PR suite", "E2E Netris PR suite"]  # keep in step with the workflow names the decision takes as inputs; the last four: the suites, each a run of its own
     types: [requested, completed]
     # The CI run of a merge queue entry is on a branch GitHub names gh-readonly-queue/...: it is no pull request, the
     # decision ignores it, and it only added a run with a long title for every entry.
@@ -73,56 +73,10 @@ jobs:
     secrets:
       OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
 
-  # The vmaas suite is not a job here: the decision starts it as a run of its own (e2e-pr-vmaas.yml, named by the policy).
-  caas:
-    needs: decide
-    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"caas"')
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/e2e-caas-full-install.yml
-    with:
-      # "full" when the box "CaaS Full Install · sanity + regression" started it (a variant of this suite in the policy)
-      tier: ${{ fromJSON(needs.decide.outputs.tiers).caas || '' }}
-      repo: ${{ needs.decide.outputs.head-repo }}
-      sha: ${{ needs.decide.outputs.sha }}
-      pr-number: ${{ needs.decide.outputs.number }}
-      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
-      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
-
-  bmaas:
-    needs: decide
-    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"bmaas"')
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/e2e-bmaas-full-install.yml
-    with:
-      repo: ${{ needs.decide.outputs.head-repo }}
-      sha: ${{ needs.decide.outputs.sha }}
-      pr-number: ${{ needs.decide.outputs.number }}
-      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
-      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
-
-  # Only a checked box starts this one (the policy marks it manual_only): it is never in the decision's own list.
-  netris:
-    needs: decide
-    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"netris"')
-    permissions:
-      contents: read
-      id-token: write
-      checks: write
-      pull-requests: read
-    uses: ./.github/workflows/e2e-bmaas-netris-full-install.yml
-    with:
-      repo: ${{ needs.decide.outputs.head-repo }}
-      sha: ${{ needs.decide.outputs.sha }}
-      pr-number: ${{ needs.decide.outputs.number }}
-      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
-      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
+  # No suite is a job here: the decision starts each as a run of its own (e2e-pr-<suite>.yml, named by `workflow:` in the policy).
 
   finish:
-    needs: [decide, track, caas, bmaas, netris]
+    needs: [decide, track]
     if: always() && needs.decide.outputs.start == 'true'
     uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@e828bb79701e26aa3448dcc620614ccaf8ebf5ef  # v1.3.3
     permissions:

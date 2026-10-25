@@ -25,6 +25,7 @@ jobs:
     kind: e2e
     check: "E2E / CaaS Full Install"
     suite: caas
+    workflow: e2e-pr-caas.yml  # a run of its own, started by the decision (see CI.md)
     filters: [caas-outside-known-safe]
     filters_any: [e2e-code, e2e-suite]
   # A second box for the CaaS suite, for someone adding or changing a regression test: it starts the same suite, on the same
@@ -42,6 +43,7 @@ jobs:
     kind: e2e
     check: "E2E / BMaaS Full Install"
     suite: bmaas
+    workflow: e2e-pr-bmaas.yml  # a run of its own, started by the decision (see CI.md)
     filters: [bmaas-outside-known-safe]
     filters_any: [e2e-code, e2e-suite]
   # A suite that is only started by hand (the checkbox in the comment of the pull request): a real Netris lab, slow and
@@ -50,4 +52,5 @@ jobs:
     kind: e2e
     check: "E2E / BMaaS Netris Full Install"
     suite: netris
+    workflow: e2e-pr-netris.yml  # a run of its own, started by the decision (see CI.md)
     manual_only: true

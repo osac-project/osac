@@ -21,10 +21,10 @@ plus a native approval on the head commit, and the merge queue.
   suites for a merge queue entry. `workflows/e2e-review-relay.yml` only finishes, so a review wakes `e2e-pr.yml`. `workflows/e2e-comment.yml` posts the placeholder of the control comment when a pull request opens (its finished run is deleted by `e2e-pr.yml`). The same run turns on auto-merge for a pull request that has an approval that counts, so it adds no check.
 - The `e2e-<suite>-full-install.yml` workflows hold one job each, no gating; they run on a schedule (every 5 hours), by hand
   and when called.
-- `workflow_run` lists workflows by exact name (`CI`, `E2E review relay`, `E2E comment`, `E2E VMaaS PR suite` in `e2e-pr.yml`): keep the
+- `workflow_run` lists workflows by exact name (`CI`, `E2E review relay`, `E2E comment` and the four `E2E <Suite> PR suite` workflows in `e2e-pr.yml`): keep the
   list in step when one is renamed.
-- A suite whose policy job names a `workflow:` (VMaaS: `workflows/e2e-pr-vmaas.yml`) runs as a run of its own, started by the
-  decision with `workflow_dispatch`; it has no job in `e2e-pr.yml`. See `.github/CI.md`.
+- Every suite's policy job names a `workflow:` (`workflows/e2e-pr-<suite>.yml`): on a pull request it runs as a run of its own,
+  started by the decision with `workflow_dispatch`, and has no job in `e2e-pr.yml` (the merge queue still runs it as a job). See `.github/CI.md`.
 - Path filters: `tests/e2e/**` is the full-install suite and must still make the E2E apply (`e2e-suite` filter). Do not fold
   `tests/e2e` back into an ignore list.
 - No Prow labels (`/lgtm`, `/approve`, `/hold`, `/e2e-ready`, `/ok-to-test`) are read. Prow still sets `jira/valid-reference`

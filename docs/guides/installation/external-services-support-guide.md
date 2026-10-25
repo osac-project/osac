@@ -747,6 +747,21 @@ once-a-career task, but put it in the calendar.
 Consolidated external-services keys across the three installer releases
 (`osac`, `osac-infra`, `osac-deps`). Full values: `helm get values <release>`.
 
+Two different kinds of keys are mixed below, and the difference matters:
+
+- **`*.enabled` flags** do one job: stop the chart from deploying its own
+  bundled copy of that service. They are only *half* of pattern A.
+- **Endpoint keys** (`dbInit.host`, `service.vault.endpoint`,
+  `service.kafka.connection`) are the other half — they tell the OSAC
+  components where the external instance lives.
+
+PostgreSQL, OpenBao, and Kafka have both halves, so `enabled: false` plus
+an endpoint key is the whole integration (pattern A). Keycloak has
+neither: no endpoint key exists, and `keycloak.enabled: false` would
+*uninstall* the Service and route rather than externalize them — so it
+stays `true` and the wiring happens behind the chart-owned Service
+instead (patterns B+C, §1.2).
+
 ```yaml
 # ── osac-infra ──────────────────────────────────────────────────────────
 bundledPostgres:

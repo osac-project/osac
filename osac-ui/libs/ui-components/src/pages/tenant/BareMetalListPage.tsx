@@ -16,8 +16,8 @@ import {
 } from '@patternfly/react-core';
 
 import { type BareMetalInstance, BareMetalInstances } from '@osac/types';
-import { type CelFilter } from '@osac/ui-components/api/cel';
-import { useBareMetalInstances } from '@osac/ui-components/api/v1/baremetal-instance';
+import { type CelFilter, cel } from '@osac/ui-components/api/cel';
+import { useListResource } from '@osac/ui-components/api/use-resource';
 import { isBareMetalPowerStateFilter } from '@osac/ui-components/components/BareMetalInstance/bareMetalInstanceDisplay';
 import { buildBareMetalListFilter } from '@osac/ui-components/components/BareMetalInstance/ListPage/baremetal-instance-list-filter';
 import BareMetalInstanceCard from '@osac/ui-components/components/BareMetalInstance/ListPage/BareMetalInstanceCard';
@@ -32,6 +32,7 @@ import ProjectFilter from '@osac/ui-components/components/Page/ProjectFilter';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
 import ViewSwitcher from '@osac/ui-components/components/Primitives/ViewSwitcher';
 import { SEARCH_PARAM, usePageFilter } from '@osac/ui-components/hooks/use-page-filter';
+import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
 import { PROJECT_FILTER_PARAM, useSession } from '@osac/ui-components/hooks/use-session';
 import { useViewType } from '@osac/ui-components/hooks/use-view-type';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
@@ -68,12 +69,22 @@ export const BareMetalListPage = () => {
     [diskImageFilterParam, instanceTypeFilterParam, powerStateFilter, search],
   );
 
-  const {
-    instances,
-    isLoading,
-    error: instancesError,
-    totalItems,
-  } = useBareMetalInstances(listFilter);
+  const projectFilter = useProjectFilterQuery<BareMetalInstance>();
+  const filter = useMemo(
+    () => cel<BareMetalInstance>((builder) => builder.and(projectFilter, listFilter)),
+    [listFilter, projectFilter],
+  );
+  const totalsFilter = useMemo(
+    () => cel<BareMetalInstance>((builder) => builder.and(projectFilter)),
+    [projectFilter],
+  );
+
+  const filteredBmsQuery = useListResource(BareMetalInstances, { filter });
+  const totalBmsQuery = useListResource(BareMetalInstances, { filter: totalsFilter, limit: 0 });
+  const instances = filteredBmsQuery.data?.items ?? [];
+  const totalItems = totalBmsQuery.data?.total ?? 0;
+  const isLoading = filteredBmsQuery.isLoading || totalBmsQuery.isLoading;
+  const instancesError = filteredBmsQuery.error || totalBmsQuery.error;
 
   const isFiltered = Boolean(
     search ||

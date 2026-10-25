@@ -9,11 +9,11 @@ import { isCatalogItemKind } from '../catalogItemDisplay.ts';
 
 export const CatalogItemDetailPage = () => {
   const { t } = useTranslation();
-  const { kind: kindParam, id } = useParams() as { kind?: string; id?: string };
+  const { kind: kindParam, id = '' } = useParams() as { kind?: string; id?: string };
   const kind = isCatalogItemKind(kindParam) && kindParam !== 'vm' ? kindParam : undefined;
   const { data: item, isLoading, isError, error, refetch } = useCatalogItemByKind(kind, id);
 
-  if (!kind || !id?.trim()) {
+  if (!kind || !id) {
     return (
       <ResourceDetailsPageError
         parentTo="/catalog"

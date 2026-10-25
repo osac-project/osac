@@ -1,8 +1,10 @@
 import { useParams } from 'react-router-dom';
 
+import { ComputeInstanceCatalogItems } from '@osac/types';
+
 import CatalogItemDetails from './CatalogItemDetails';
 import VmCatalogItemDetailContent from './ComputeCatalogItemDetailContent';
-import { useComputeInstanceCatalogItem } from '../../../api/v1/compute-instance-catalog-item.ts';
+import { useGetResource } from '../../../api/use-resource';
 import { useTranslation } from '../../../hooks/useTranslation.ts';
 import { CatalogItemIcon } from '../../../icons';
 import ResourceDetailsPage from '../../Resource/ResourceDetailsPage.tsx';
@@ -10,8 +12,15 @@ import { ResourceDetailsPageError } from '../../Resource/ResourceDetailsPageErro
 
 export const VmCatalogItemDetailPage = () => {
   const { t } = useTranslation();
-  const { id } = useParams() as { id?: string };
-  const { data: item, isLoading, isError, error, refetch } = useComputeInstanceCatalogItem(id);
+  const { id = '' } = useParams() as { id?: string };
+  const {
+    data: response,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useGetResource(ComputeInstanceCatalogItems, { id }, { enabled: Boolean(id) });
+  const item = response?.object;
 
   if (!id) {
     return (

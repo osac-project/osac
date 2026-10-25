@@ -1,4 +1,4 @@
-import { type ReactNode, useMemo } from 'react';
+import { type ReactElement, type ReactNode, useMemo } from 'react';
 import { FormGroup } from '@patternfly/react-core';
 import { TypeaheadSelect, type TypeaheadSelectOption } from '@patternfly/react-templates';
 import { useField } from 'formik';
@@ -17,6 +17,7 @@ interface TypeaheadSelectFieldProps {
   isRequired?: boolean;
   isDisabled?: boolean;
   labelInfo?: ReactNode;
+  labelHelp?: ReactElement;
   placeholder?: string;
   description?: string;
   noOptionsFoundMessage?: (filter: string) => string;
@@ -32,6 +33,7 @@ export const TypeaheadSelectField = ({
   isRequired = false,
   isDisabled = false,
   labelInfo,
+  labelHelp,
   placeholder,
   description,
   noOptionsFoundMessage,
@@ -53,6 +55,7 @@ export const TypeaheadSelectField = ({
       fieldId={fieldId}
       isRequired={isRequired}
       labelInfo={labelInfo}
+      labelHelp={labelHelp}
     >
       <TypeaheadSelect
         id={fieldId}

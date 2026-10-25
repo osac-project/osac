@@ -1,5 +1,12 @@
 import { useEffect } from 'react';
-import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
+import {
+  Content,
+  FormGroupLabelHelp,
+  Popover,
+  Stack,
+  StackItem,
+  Title,
+} from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 
 import { Tenants } from '@osac/types/private';
@@ -175,6 +182,18 @@ const CatalogGeneralStep = ({
             isDisabled={isEdit}
             placeholder={t('Select a provisioning template')}
             loadErrorTitle={t('Failed to fetch provisioning templates')}
+            labelHelp={
+              <Popover
+                aria-label={t('Provisioning template information')}
+                bodyContent={t(
+                  'Infrastructure automation that fulfills a VM request by resolving infrastructure dependencies, creating VM and storage resources, applying provider-specific integrations, and exposing the status.',
+                )}
+                headerContent={t('Provisioning template')}
+                position="right"
+              >
+                <FormGroupLabelHelp aria-label={t('More information for Provisioning template')} />
+              </Popover>
+            }
             description={
               isEdit
                 ? t(

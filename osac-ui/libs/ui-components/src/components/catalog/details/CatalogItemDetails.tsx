@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -26,9 +27,19 @@ import {
 
 interface CatalogItemDetailsProps {
   item: CatalogItem;
+  children?: ReactNode;
+  showStatus?: boolean;
+  titleAddon?: ReactNode;
+  titlePrefix?: ReactNode;
 }
 
-const CatalogItemDetails = ({ item }: CatalogItemDetailsProps) => {
+const CatalogItemDetails = ({
+  item,
+  children,
+  showStatus = true,
+  titleAddon,
+  titlePrefix,
+}: CatalogItemDetailsProps) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { role, tenantId } = useSession();
@@ -62,10 +73,15 @@ const CatalogItemDetails = ({ item }: CatalogItemDetailsProps) => {
                   parentLabel={t('Catalog')}
                   resourceName={resourceName}
                   description={item.description?.trim() || item.metadata?.description?.trim()}
+                  titlePrefix={titlePrefix}
                   titleAddon={
-                    <Label color={item.published ? 'green' : undefined}>
-                      {item.published ? t('Live') : t('Unpublished')}
-                    </Label>
+                    showStatus
+                      ? (titleAddon ?? (
+                          <Label color={item.published ? 'green' : undefined}>
+                            {item.published ? t('Live') : t('Unpublished')}
+                          </Label>
+                        ))
+                      : titleAddon
                   }
                 />
               </FlexItem>
@@ -115,7 +131,7 @@ const CatalogItemDetails = ({ item }: CatalogItemDetailsProps) => {
         </Stack>
       </PageSection>
       <PageSection hasBodyWrapper={false}>
-        <CatalogItemDetailContent item={item} />
+        {children ?? <CatalogItemDetailContent item={item} />}
       </PageSection>
     </>
   );

@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComputeInstanceCatalogItem } from '@osac/types';
 
 import CatalogItemDetails from './CatalogItemDetails';
+import VmCatalogItemDetailContent from './ComputeCatalogItemDetailContent';
+import { CatalogItemIcon } from '../../../icons';
 import type { UserRole } from '../../../shellTypes';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
@@ -38,7 +40,18 @@ const renderDetails = (
 ) =>
   renderWithProviders(
     <Routes>
-      <Route path="/catalog/vm/catalog-vm" element={<CatalogItemDetails item={item} />} />
+      <Route
+        path="/catalog/vm/catalog-vm"
+        element={
+          <CatalogItemDetails
+            item={item}
+            showStatus={false}
+            titlePrefix={<CatalogItemIcon kind="vm" isActive />}
+          >
+            <VmCatalogItemDetailContent item={item} />
+          </CatalogItemDetails>
+        }
+      />
       <Route path="/catalog/vm/catalog-vm/edit" element={<div>Edit catalog item page</div>} />
       <Route path="/catalog" element={<div>Catalog page</div>} />
     </Routes>,

@@ -187,3 +187,49 @@ def test_config_as_code_secret_accepts_an_https_netris_controller_url(url):
 
     assert result.returncode == 0, result.stderr
     assert yaml.safe_load(result.stdout)["stringData"]["NETRIS_CONTROLLER_URL"] == url
+
+
+def test_config_as_code_secret_tracks_osac_service_account():
+    chart_path = Path(__file__).resolve().parents[2] / "charts/aap"
+    result = subprocess.run(
+        [
+            "helm",
+            "template",
+            "aap-test",
+            str(chart_path),
+            "--show-only",
+            "templates/config-as-code-secret.yaml",
+            "--set-string",
+            "serviceAccounts.osacSa=customer-aap-sa",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    secret = yaml.safe_load(result.stdout)
+
+    assert secret["stringData"]["AAP_OSAC_SERVICE_ACCOUNT"] == "customer-aap-sa"
+
+
+
+def test_config_as_code_secret_tracks_its_own_name():
+    chart_path = Path(__file__).resolve().parents[2] / "charts/aap"
+    result = subprocess.run(
+        [
+            "helm",
+            "template",
+            "aap-test",
+            str(chart_path),
+            "--show-only",
+            "templates/config-as-code-secret.yaml",
+            "--set-string",
+            "configAsCode.secret=customer-config-as-code",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    secret = yaml.safe_load(result.stdout)
+
+    assert secret["metadata"]["name"] == "customer-config-as-code"
+    assert secret["stringData"]["AAP_CONFIG_AS_CODE_SECRET"] == "customer-config-as-code"

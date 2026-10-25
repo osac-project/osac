@@ -136,6 +136,7 @@ def _apply(k8s: K8sClient, manifest: str) -> None:
         capture_output=True,
         text=True,
         check=True,
+        timeout=300,
     )
 
 

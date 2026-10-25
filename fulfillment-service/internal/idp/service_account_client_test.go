@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -45,9 +46,10 @@ var _ = Describe("Service-account Keycloak client", func() {
 	var failureStatus int
 	var existenceFailureStatus int
 	var clientMissing bool
-	var lookupClientFound bool
+	var lookupClientFound atomic.Bool
 	var lookupFailureStatus int
 	var response string
+	var dropRegistrationResponse bool
 
 	BeforeEach(func() {
 		calls = nil
@@ -56,9 +58,10 @@ var _ = Describe("Service-account Keycloak client", func() {
 		failureStatus = http.StatusInternalServerError
 		existenceFailureStatus = 0
 		clientMissing = false
-		lookupClientFound = false
+		lookupClientFound.Store(false)
 		lookupFailureStatus = 0
 		response = ""
+		dropRegistrationResponse = false
 		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			call := r.Method + " " + r.URL.Path
 			calls = append(calls, call)
@@ -66,6 +69,13 @@ var _ = Describe("Service-account Keycloak client", func() {
 			case "POST " + registrationPath:
 				Expect(r.Header.Get("Authorization")).To(Equal("Bearer test-token"))
 				Expect(json.NewDecoder(r.Body).Decode(&created)).To(Succeed())
+				if dropRegistrationResponse {
+					lookupClientFound.Store(true)
+					connection, _, err := w.(http.Hijacker).Hijack()
+					Expect(err).ToNot(HaveOccurred())
+					Expect(connection.Close()).To(Succeed())
+					return
+				}
 				if call == failure {
 					w.WriteHeader(failureStatus)
 					_, _ = fmt.Fprint(w, credential+" "+registrationToken)
@@ -107,7 +117,7 @@ var _ = Describe("Service-account Keycloak client", func() {
 					return
 				}
 				clients := []keycloakClient{}
-				if lookupClientFound {
+				if lookupClientFound.Load() {
 					clients = append(clients, keycloakClient{ID: clientUUID, ClientID: clientID})
 				}
 				w.WriteHeader(http.StatusOK)
@@ -177,7 +187,34 @@ var _ = Describe("Service-account Keycloak client", func() {
 	It("reports an existing client when registration fails after Keycloak created it", func() {
 		failure = "POST " + registrationPath
 		failureStatus = http.StatusConflict
-		lookupClientFound = true
+		lookupClientFound.Store(true)
+		id, secret, scopedToken, err := client.CreateServiceAccountClient(context.Background(), clientID, "tenant-a")
+		Expect(errors.Is(err, ErrServiceAccountClientAlreadyExists)).To(BeTrue())
+		Expect(id).To(BeEmpty())
+		Expect(secret).To(BeEmpty())
+		Expect(scopedToken).To(BeEmpty())
+		Expect(calls).To(Equal([]string{
+			"POST " + registrationPath,
+			"GET /admin/realms/osac/clients",
+		}))
+	})
+
+	It("reports an existing client when the registration response is lost", func() {
+		dropRegistrationResponse = true
+		id, secret, scopedToken, err := client.CreateServiceAccountClient(context.Background(), clientID, "tenant-a")
+		Expect(errors.Is(err, ErrServiceAccountClientAlreadyExists)).To(BeTrue())
+		Expect(id).To(BeEmpty())
+		Expect(secret).To(BeEmpty())
+		Expect(scopedToken).To(BeEmpty())
+		Expect(calls).To(Equal([]string{
+			"POST " + registrationPath,
+			"GET /admin/realms/osac/clients",
+		}))
+	})
+
+	It("reports an existing client when the registration response is unusable", func() {
+		response = "not-json"
+		lookupClientFound.Store(true)
 		id, secret, scopedToken, err := client.CreateServiceAccountClient(context.Background(), clientID, "tenant-a")
 		Expect(errors.Is(err, ErrServiceAccountClientAlreadyExists)).To(BeTrue())
 		Expect(id).To(BeEmpty())
@@ -190,13 +227,13 @@ var _ = Describe("Service-account Keycloak client", func() {
 	})
 
 	It("finds only the exact deterministic client ID", func() {
-		lookupClientFound = true
+		lookupClientFound.Store(true)
 		id, found, err := client.FindServiceAccountClient(context.Background(), clientID, "tenant-a")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(found).To(BeTrue())
 		Expect(id).To(Equal(clientUUID))
 
-		lookupClientFound = false
+		lookupClientFound.Store(false)
 		id, found, err = client.FindServiceAccountClient(context.Background(), clientID, "tenant-a")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(found).To(BeFalse())

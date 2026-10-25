@@ -871,6 +871,7 @@ var _ = Describe("Reflection helper", func() {
 			Expect(helper.Lookup("virtualnetwork").IsTenantScoped()).To(BeTrue())
 			Expect(helper.Lookup("subnet").IsTenantScoped()).To(BeTrue())
 			Expect(helper.Lookup("project").IsTenantScoped()).To(BeTrue())
+			Expect(helper.Lookup("serviceaccount").IsTenantScoped()).To(BeTrue())
 		})
 
 		It("Reports platform-scoped types correctly", func() {
@@ -895,6 +896,7 @@ var _ = Describe("Reflection helper", func() {
 			Expect(helper.Lookup("cluster").IsProjectScoped()).To(BeTrue())
 			Expect(helper.Lookup("computeinstance").IsProjectScoped()).To(BeTrue())
 			Expect(helper.Lookup("project").IsProjectScoped()).To(BeTrue())
+			Expect(helper.Lookup("serviceaccount").IsProjectScoped()).To(BeFalse())
 		})
 
 		It("Reports platform-scoped types as not project-scoped", func() {

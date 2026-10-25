@@ -434,16 +434,18 @@ func (i *GrpcAuthzInterceptor) buildSubjectFromDecision(decision *AuthzDecision)
 	for _, tenant := range decision.SubjectTenants {
 		if tenant == "*" {
 			result = &Subject{
-				User:    decision.SubjectUser,
-				Tenants: AllTenants,
+				User:                  decision.SubjectUser,
+				Tenants:               AllTenants,
+				ManagedServiceAccount: decision.ManagedServiceAccount,
 			}
 			return
 		}
 	}
 
 	result = &Subject{
-		User:    decision.SubjectUser,
-		Tenants: collections.NewSet(decision.SubjectTenants...),
+		User:                  decision.SubjectUser,
+		Tenants:               collections.NewSet(decision.SubjectTenants...),
+		ManagedServiceAccount: decision.ManagedServiceAccount,
 	}
 	return
 }

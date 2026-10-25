@@ -419,7 +419,8 @@ func (h *helper) scanService(serviceDesc protoreflect.ServiceDescriptor) {
 	// conceptually project-scoped — exclude them so that List does not inject a project filter
 	// that would hide these resources when a project is selected.
 	projectScoped := false
-	if metadataFieldDesc != nil && !platformScopedTypes[objectDesc.Name()] {
+	if metadataFieldDesc != nil && !platformScopedTypes[objectDesc.Name()] &&
+		!nonProjectScopedTypes[objectDesc.Name()] {
 		metadataMsg := metadataFieldDesc.Message()
 		if metadataMsg != nil && metadataMsg.Fields().ByName(projectFieldName) != nil {
 			projectScoped = true
@@ -1086,4 +1087,10 @@ var platformScopedTypes = map[protoreflect.Name]bool{
 	"StorageTier":      true,
 	"Tenant":           true,
 	"User":             true,
+}
+
+// nonProjectScopedTypes are tenant-scoped resources whose metadata still has a project field,
+// but which are not associated with any project.
+var nonProjectScopedTypes = map[protoreflect.Name]bool{
+	"ServiceAccount": true,
 }

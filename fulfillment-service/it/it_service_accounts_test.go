@@ -128,6 +128,7 @@ var _ = Describe("Service-account infrastructure", Serial, func() {
 		code, _, err := tool.KeycloakAdminRequest(ctx, http.MethodGet, "/clients/"+kc["id"].(string), nil)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(code).To(Equal(http.StatusNotFound))
+		assertServiceAccountID(id)
 		Expect(serviceAccountSQL(ctx, fmt.Sprintf(`select count(*) from archived_service_accounts where id='%s'`, id))).To(Equal("1"))
 		Expect(keycloakClient(ctx, "osac-controller")).To(Equal(before))
 		afterSecret := keycloakClientSecret(ctx, "osac-controller")

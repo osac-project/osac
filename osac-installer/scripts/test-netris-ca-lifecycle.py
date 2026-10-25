@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -94,6 +95,11 @@ def command_of(job: dict) -> str:
     return "\n".join(container.get("command", []))
 
 
+def env_of(job: dict) -> dict[str, str]:
+    container = job["spec"]["template"]["spec"]["containers"][0]
+    return {item["name"]: item["value"] for item in container.get("env", [])}
+
+
 class RenderContractTests(unittest.TestCase):
     def test_no_ca_resources_when_config_map_is_empty(self) -> None:
         docs = documents(render(*NETRIS_ARGS))
@@ -113,8 +119,13 @@ class RenderContractTests(unittest.TestCase):
 
         pre_install = find(docs, "Job", "osac-pre-install-validate")
         pre_command = command_of(pre_install)
-        self.assertIn('CA_CONFIGMAP_NAME="customer-netris-ca"', pre_command)
-        self.assertIn("CHECK_IDENTITY=false", pre_command)
+        pre_env = env_of(pre_install)
+        self.assertEqual(pre_env["CA_CONFIGMAP_NAME"], "customer-netris-ca")
+        self.assertEqual(pre_env["AAP_NAMESPACE"], "default")
+        self.assertEqual(
+            pre_env["CA_EXECUTION_IDENTITY"], "system:serviceaccount:default:osac-sa"
+        )
+        self.assertEqual(pre_env["CHECK_IDENTITY"], "false")
         self.assertIn("NETRIS_CA_", pre_command)
 
         identity = find(docs, "Job", "osac-netris-ca-identity-validate")
@@ -125,7 +136,7 @@ class RenderContractTests(unittest.TestCase):
         self.assertEqual(
             identity["metadata"]["annotations"]["helm.sh/hook-weight"], "0"
         )
-        self.assertIn("CHECK_IDENTITY=true", command_of(identity))
+        self.assertEqual(env_of(identity)["CHECK_IDENTITY"], "true")
 
         hook_role = find(docs, "ClusterRole", "osac-validate-default")
         self.assertFalse(
@@ -180,12 +191,14 @@ class RenderContractTests(unittest.TestCase):
         binding = find(docs, "RoleBinding", "osac-netris-ca-read")
         self.assertEqual(binding["subjects"][0]["name"], "custom-sa")
         identity = find(docs, "Job", "osac-netris-ca-identity-validate")
-        self.assertIn(
-            "system:serviceaccount:default:custom-sa", command_of(identity)
+        self.assertEqual(
+            env_of(identity)["CA_EXECUTION_IDENTITY"],
+            "system:serviceaccount:default:custom-sa",
         )
         pre_install = find(docs, "Job", "osac-pre-install-validate")
-        self.assertIn(
-            "system:serviceaccount:default:custom-sa", command_of(pre_install)
+        self.assertEqual(
+            env_of(pre_install)["CA_EXECUTION_IDENTITY"],
+            "system:serviceaccount:default:custom-sa",
         )
 
     def test_admission_policy_protects_the_active_name(self) -> None:
@@ -203,6 +216,10 @@ class RenderContractTests(unittest.TestCase):
         self.assertEqual(json.loads(variables["adminGroups"]), ["system:masters"])
         self.assertIn(
             "request.userInfo.groups.exists", policy["spec"]["validations"][0]["expression"]
+        )
+        self.assertIn(
+            "system:serviceaccount:kube-system:namespace-controller",
+            policy["spec"]["validations"][0]["expression"],
         )
 
         binding = find(
@@ -286,8 +303,11 @@ class ValidationScriptTests(unittest.TestCase):
                         sys.exit(0)
                     sys.exit(1)
 
-                if args[:2] == ["auth", "can-i"]:
-                    print("no" if mode == "denied" else "yes")
+                if args[:1] == ["create"]:
+                    request = sys.stdin.read()
+                    if "kind: SubjectAccessReview" not in request:
+                        sys.exit(1)
+                    print("false" if mode == "denied" else "true")
                     sys.exit(0)
 
                 sys.exit(1)
@@ -326,7 +346,7 @@ class ValidationScriptTests(unittest.TestCase):
     def run_script(self, mode: str, *, check_identity: bool = True) -> subprocess.CompletedProcess:
         env = {
             **os.environ,
-            "PATH": f"{self.bin}:/usr/bin:/bin",
+            "PATH": f"{self.bin}:{Path(sys.executable).parent}:/usr/bin:/bin",
             "STUB_MODE": mode,
             "STUB_BUNDLE": VALID_PEM,
             "CA_CONFIGMAP_NAME": "customer-netris-ca",

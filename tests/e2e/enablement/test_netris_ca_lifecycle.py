@@ -164,11 +164,11 @@ def _exercise_netris(grpc: GRPCClient, k8s: K8sClient, configmap: str) -> None:
 def test_netris_ca_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, namespace: str) -> None:
     chart = _helm_chart()
     if not Path(chart).exists():
-        pytest.skip(f"Helm chart not found at {chart}; set OSAC_NETRIS_CA_HELM_CHART")
+        pytest.fail(f"Helm chart not found at {chart}; set OSAC_NETRIS_CA_HELM_CHART")
 
     pem_path_value = os.environ.get("OSAC_NETRIS_CA_NEW_PEM_PATH")
     if not pem_path_value:
-        pytest.skip("Set OSAC_NETRIS_CA_NEW_PEM_PATH to a trusted replacement CA certificate")
+        pytest.fail("Set OSAC_NETRIS_CA_NEW_PEM_PATH to a trusted replacement CA certificate")
     new_pem_path = Path(pem_path_value)
     new_pem = new_pem_path.read_text(encoding="utf-8")
     assert "BEGIN CERTIFICATE" in new_pem, f"{new_pem_path} does not contain a PEM certificate"
@@ -212,6 +212,18 @@ def test_netris_ca_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, namesp
         allowed = unique_name("netris-ca-probe-allowed")
         _apply(k8s_hub_client, _configmap_manifest(allowed, namespace, new_pem))
         try:
+            output, returncode = run_unchecked(
+                *_probe_base(k8s_hub_client, probe_sa),
+                "label",
+                "configmap",
+                allowed,
+                f"probe={probe_sa}",
+                "-n",
+                namespace,
+            )
+            assert returncode == 0, (
+                f"Non-active ConfigMap must stay writable, got: {output}"
+            )
             _expect_denied(
                 k8s_hub_client,
                 probe_sa,
@@ -248,8 +260,8 @@ def test_netris_ca_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, namesp
 
         _apply(k8s_hub_client, _configmap_manifest(next_name, namespace, new_pem))
         created_next = True
-        _upgrade_ca(namespace, next_name)
         rotated = True
+        _upgrade_ca(namespace, next_name)
 
         _expect_denied(
             k8s_hub_client,
@@ -278,26 +290,44 @@ def test_netris_ca_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, namesp
         rotated = False
         _exercise_netris(grpc, k8s_hub_client, active)
     finally:
-        if rotated:
-            _upgrade_ca(namespace, active)
-        if created_next:
-            run(*k8s_hub_client._base(), "delete", "configmap", next_name, "-n", namespace, "--ignore-not-found")
-        run(
-            *k8s_hub_client._base(),
-            "delete",
-            "rolebinding",
-            probe_sa,
-            "-n",
-            namespace,
-            "--ignore-not-found",
-        )
-        run(*k8s_hub_client._base(), "delete", "role", probe_sa, "-n", namespace, "--ignore-not-found")
-        run(
-            *k8s_hub_client._base(),
-            "delete",
-            "serviceaccount",
-            probe_sa,
-            "-n",
-            namespace,
-            "--ignore-not-found",
-        )
+        try:
+            if rotated:
+                _upgrade_ca(namespace, active)
+            if created_next:
+                run(
+                    *k8s_hub_client._base(),
+                    "delete",
+                    "configmap",
+                    next_name,
+                    "-n",
+                    namespace,
+                    "--ignore-not-found",
+                )
+        finally:
+            run(
+                *k8s_hub_client._base(),
+                "delete",
+                "rolebinding",
+                probe_sa,
+                "-n",
+                namespace,
+                "--ignore-not-found",
+            )
+            run(
+                *k8s_hub_client._base(),
+                "delete",
+                "role",
+                probe_sa,
+                "-n",
+                namespace,
+                "--ignore-not-found",
+            )
+            run(
+                *k8s_hub_client._base(),
+                "delete",
+                "serviceaccount",
+                probe_sa,
+                "-n",
+                namespace,
+                "--ignore-not-found",
+            )

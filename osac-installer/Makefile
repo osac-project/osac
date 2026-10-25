@@ -883,7 +883,7 @@ bmf-netbox-render-test: helm-deps ## Check NetBox, Metal3 management, and Secret
 
 .PHONY: netris-ca-lifecycle-test
 netris-ca-lifecycle-test: helm-deps ## Check Netris CA validation and protection
-	python3 scripts/test-netris-ca-lifecycle.py
+	uv run --project .. python scripts/test-netris-ca-lifecycle.py
 
 .PHONY: chart-name-independence-render-test
 chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/cert names survive repackaging under a different Chart.yaml name

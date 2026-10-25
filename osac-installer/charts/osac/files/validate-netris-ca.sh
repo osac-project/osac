@@ -44,8 +44,23 @@ validate_bundle_pem() {
 }
 
 check_execution_identity() {
-  result=$("$KUBECTL" auth can-i get "configmaps/${CA_CONFIGMAP_NAME}" -n "$AAP_NAMESPACE" --as="$CA_EXECUTION_IDENTITY" 2>/dev/null || true)
-  [ "$result" = "yes" ] || \
+  sa_namespace=${CA_EXECUTION_IDENTITY#system:serviceaccount:}
+  sa_namespace=${sa_namespace%%:*}
+  result=$("$KUBECTL" create --validate=false \
+    -o jsonpath='{.status.allowed}' -f - 2>/dev/null <<EOF || true
+apiVersion: authorization.k8s.io/v1
+kind: SubjectAccessReview
+spec:
+  user: "${CA_EXECUTION_IDENTITY}"
+  groups: ["system:serviceaccounts", "system:serviceaccounts:${sa_namespace}", "system:authenticated"]
+  resourceAttributes:
+    namespace: "${AAP_NAMESPACE}"
+    verb: get
+    resource: configmaps
+    name: "${CA_CONFIGMAP_NAME}"
+EOF
+)
+  [ "$result" = "true" ] || \
     fail IDENTITY_DENIED "${CA_EXECUTION_IDENTITY} cannot read ConfigMap ${AAP_NAMESPACE}/${CA_CONFIGMAP_NAME}"
 }
 

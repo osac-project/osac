@@ -13,7 +13,7 @@ vi.mock('../../../hooks/use-session', () => ({
 }));
 
 describe('VmCatalogItemDetailPage', () => {
-  it('loads a VM catalog item and renders its four detail cards', async () => {
+  it('loads a VM catalog item and renders its four detail sections', async () => {
     const item = create(ComputeInstanceCatalogItemSchema, {
       id: 'catalog-vm',
       metadata: { name: 'catalog-vm', tenant: 'tenant-1' },
@@ -33,9 +33,9 @@ describe('VmCatalogItemDetailPage', () => {
     expect(
       await screen.findByRole('heading', { name: 'catalog-vm', level: 1 }),
     ).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Overview' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Configuration' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Access & Initial run' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Storage' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Configuration' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Access & Initial run' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Storage' })).toBeInTheDocument();
   });
 });

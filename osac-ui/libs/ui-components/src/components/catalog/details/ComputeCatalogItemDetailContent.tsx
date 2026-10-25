@@ -1,17 +1,18 @@
 import type { ReactNode } from 'react';
 import {
-  Card,
-  CardBody,
-  CardTitle,
   DescriptionList,
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
+  Divider,
   Flex,
   FlexItem,
   Grid,
   GridItem,
   Label,
+  Stack,
+  StackItem,
+  Title,
 } from '@patternfly/react-core';
 import type { TFunction } from 'i18next';
 
@@ -40,9 +41,8 @@ interface VmCatalogItemDetailContentProps {
   item: ComputeInstanceCatalogItem;
 }
 
-interface DetailCardProps {
+interface DetailSectionProps {
   title: string;
-  titleId: string;
   children: ReactNode;
 }
 
@@ -56,13 +56,17 @@ interface GovernedDetailValueProps {
   policy: unknown;
 }
 
-const DetailCard = ({ title, titleId, children }: DetailCardProps) => (
-  <Card component="section" isFullHeight aria-labelledby={titleId}>
-    <CardTitle id={titleId}>{title}</CardTitle>
-    <CardBody>
+const DetailSection = ({ title, children }: DetailSectionProps) => (
+  <Stack hasGutter>
+    <StackItem>
+      <Title headingLevel="h2" size="lg">
+        {title}
+      </Title>
+    </StackItem>
+    <StackItem>
       <DescriptionList isCompact>{children}</DescriptionList>
-    </CardBody>
-  </Card>
+    </StackItem>
+  </Stack>
 );
 
 const DetailRow = ({ label, children }: DetailRowProps) => (
@@ -179,8 +183,8 @@ const VmCatalogItemDetailContent = ({ item }: VmCatalogItemDetailContentProps) =
 
   return (
     <Grid hasGutter>
-      <GridItem md={6} lg={4}>
-        <DetailCard title={t('Overview')} titleId="catalog-item-overview-card-title">
+      <GridItem md={4}>
+        <DetailSection title={t('Overview')}>
           <DetailRow label={t('Service')}>{t('Virtual machines')}</DetailRow>
           <DetailRow label={t('Status')}>
             <Label color={item.published ? 'green' : undefined} isCompact>
@@ -192,11 +196,11 @@ const VmCatalogItemDetailContent = ({ item }: VmCatalogItemDetailContentProps) =
           <DetailRow label={t('Created')}>
             <Timestamp value={item.metadata?.creationTimestamp} fallback={t('Not set')} />
           </DetailRow>
-        </DetailCard>
+        </DetailSection>
       </GridItem>
 
-      <GridItem md={6} lg={4}>
-        <DetailCard title={t('Configuration')} titleId="catalog-item-configuration-card-title">
+      <GridItem md={4}>
+        <DetailSection title={t('Configuration')}>
           <DetailRow label={t('Guest OS family')}>{guestOsValue}</DetailRow>
           <DetailRow label={t('Disk image')}>
             <GovernedDetailValue value={diskImageValue} policy={fields?.diskImage} />
@@ -212,19 +216,23 @@ const VmCatalogItemDetailContent = ({ item }: VmCatalogItemDetailContentProps) =
               <DetailRow label={t('Resource name')}>{gpu.resourceName || t('Not set')}</DetailRow>
             </>
           ) : null}
-        </DetailCard>
+        </DetailSection>
       </GridItem>
 
-      <GridItem md={6} lg={4}>
-        <DetailCard title={t('Access & Initial run')} titleId="catalog-item-access-card-title">
+      <GridItem md={4}>
+        <DetailSection title={t('Access & Initial run')}>
           <DetailRow label={t('Cloud-init')}>
             <GovernedDetailValue value={userDataValue} policy={fields?.userData} />
           </DetailRow>
-        </DetailCard>
+        </DetailSection>
       </GridItem>
 
       <GridItem md={12}>
-        <DetailCard title={t('Storage')} titleId="catalog-item-storage-card-title">
+        <Divider />
+      </GridItem>
+
+      <GridItem md={12}>
+        <DetailSection title={t('Storage')}>
           <DetailRow label={t('Boot disk size')}>
             <GovernedDetailValue value={bootDiskSizeValue} policy={fields?.bootDisk?.sizeGib} />
           </DetailRow>
@@ -237,7 +245,7 @@ const VmCatalogItemDetailContent = ({ item }: VmCatalogItemDetailContentProps) =
           <DetailRow label={t('Additional disks')}>
             <GovernedDetailValue value={additionalDisksValue} policy={fields?.additionalDisks} />
           </DetailRow>
-        </DetailCard>
+        </DetailSection>
       </GridItem>
     </Grid>
   );

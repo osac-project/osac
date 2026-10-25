@@ -31,7 +31,7 @@ run-name: >-
 
 on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out; the suites run the approved commit
   workflow_run:
-    workflows: ["CI", "E2E review relay", "E2E comment"]  # keep in step with the workflow names the decision takes as inputs
+    workflows: ["CI", "E2E review relay", "E2E comment", "E2E VMaaS PR suite"]  # keep in step with the workflow names the decision takes as inputs; the last: vmaas runs as a run of its own
     types: [requested, completed]
     # The CI run of a merge queue entry is on a branch GitHub names gh-readonly-queue/...: it is no pull request, the
     # decision ignores it, and it only added a run with a long title for every entry.
@@ -48,7 +48,7 @@ permissions: {}
 
 jobs:
   decide:
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-decide.yml@f6e649d70e2d496e3d2aba6c65c7e0fff409b5b1  # v1.3.0
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-decide.yml@e828bb79701e26aa3448dcc620614ccaf8ebf5ef  # v1.3.3
     with:
       lines-kind: statuses
     permissions:
@@ -62,30 +62,18 @@ jobs:
   track:
     needs: decide
     if: needs.decide.outputs.start == 'true'
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-track.yml@f6e649d70e2d496e3d2aba6c65c7e0fff409b5b1  # v1.3.0
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-track.yml@e828bb79701e26aa3448dcc620614ccaf8ebf5ef  # v1.3.3
     permissions:
       contents: read
     with:
       lines-kind: statuses
       sha: ${{ needs.decide.outputs.sha }}
       suite-checks: ${{ needs.decide.outputs.suite-checks }}
+      dispatched-runs: ${{ needs.decide.outputs.dispatched-runs }}
     secrets:
       OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
 
-  vmaas:
-    needs: decide
-    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"vmaas"')
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/e2e-vmaas-full-install.yml
-    with:
-      repo: ${{ needs.decide.outputs.head-repo }}
-      sha: ${{ needs.decide.outputs.sha }}
-      pr-number: ${{ needs.decide.outputs.number }}
-      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
-      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
-
+  # The vmaas suite is not a job here: the decision starts it as a run of its own (e2e-pr-vmaas.yml, named by the policy).
   caas:
     needs: decide
     if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"caas"')
@@ -134,9 +122,9 @@ jobs:
       fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
 
   finish:
-    needs: [decide, track, vmaas, caas, bmaas, netris]
+    needs: [decide, track, caas, bmaas, netris]
     if: always() && needs.decide.outputs.start == 'true'
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@f6e649d70e2d496e3d2aba6c65c7e0fff409b5b1  # v1.3.0
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@e828bb79701e26aa3448dcc620614ccaf8ebf5ef  # v1.3.3
     permissions:
       contents: read
       pull-requests: write
@@ -145,6 +133,8 @@ jobs:
       sha: ${{ needs.decide.outputs.sha }}
       suites: ${{ needs.decide.outputs.suites }}
       suite-checks: ${{ needs.decide.outputs.suite-checks }}
+      dispatched: ${{ needs.decide.outputs.dispatched }}
+      all-suite-checks: ${{ needs.decide.outputs.all-suite-checks }}
       number: ${{ needs.decide.outputs.number }}
       manual: ${{ needs.decide.outputs.manual }}
       selected-checks: ${{ needs.decide.outputs.selected-checks }}

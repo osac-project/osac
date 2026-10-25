@@ -127,6 +127,16 @@ comes within about a quarter of an hour). Anything else gets a person.
   `e2e-pr.yml` and in `e2e-queue.yml` (copy the `vmaas` job). The line on the pull request follows the job of that name
   (waiting for a runner, running, then passed or failed, with a link to its log); a suite the policy did not pick does not
   run and has no line.
+- **A suite as a run of its own:** a suite whose policy job names a `workflow:` (VMaaS: `e2e-pr-vmaas.yml`) is not a job of
+  `e2e-pr.yml`: the decision starts that workflow with `workflow_dispatch` for the approved commit, so a failed suite can be
+  run again at once (GitHub's Re-run of its run, or `/test vmaas`) without waiting for the others, and the `E2E` check is
+  still the sum of the suites' lines. The workflow takes the inputs `repo`, `sha`, `pr-number` (and ignores `fork-pr-author`
+  and `fork-pr-author-association`, which the decision also sends), names its run
+  `"E2E suite · <suite id> · #<pr> · <sha>"` (the format is how its end is recognised), starts with the shared `verify` job
+  of osac-ci (`suite-inputs.yml`: the commit must be the head of the pull request; the fork author and association come
+  from the pull request) and calls the suite's `e2e-<suite>-full-install.yml` with `needs: verify`. Its name goes into the
+  `workflow_run` list of `e2e-pr.yml`. The merge queue still runs the suite as a job of `e2e-queue.yml`. To make another
+  suite one, copy `e2e-pr-vmaas.yml`, add `workflow:` to its policy job and drop its job from `e2e-pr.yml`.
 - **The decision and the `E2E` check** (approval, CI result, the wording above) and the queue plan are the shared
   workflows of [osac-project/osac-ci](https://github.com/osac-project/osac-ci); `e2e-pr.yml` and `e2e-queue.yml` here are
   thin callers that keep the triggers and the suite jobs. The bot sweep runs from osac-ci itself (no file here). A member of the organization can start suites by hand with the comment `/test` (the suites the change needs) or
@@ -136,7 +146,7 @@ comes within about a quarter of an hour). Anything else gets a person.
   osac-ci `docs/RULES.md`. The callers pin a full commit of an osac-ci release (the tag in a comment); the Dependabot group
   `osac-ci` opens one pull request per release, reviewed by wg-infra.
 - **Emergency:** setting the repository variable `CI_GATING_ENABLED` to `false` makes `CI` run every part.
-- `workflow_run` lists workflows by exact name. `e2e-pr.yml` lists `CI`, `E2E review relay` and `E2E comment`; renaming any of them
-  needs the list changed.
+- `workflow_run` lists workflows by exact name. `e2e-pr.yml` lists `CI`, `E2E review relay`, `E2E comment` and `E2E VMaaS PR suite`;
+  renaming any of them needs the list changed.
 - Changes to `.github/workflows`, `.github/actions`, `.github/scripts`, `.github/filters` and `CODEOWNERS` need a code
   owner's approval.

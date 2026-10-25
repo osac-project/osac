@@ -18,6 +18,7 @@ jobs:
     kind: e2e
     check: "E2E / VMaaS Full Install"
     suite: vmaas
+    workflow: e2e-pr-vmaas.yml  # a run of its own, started by the decision (see CI.md)
     filters: [vmaas-outside-known-safe]
     filters_any: [e2e-code, e2e-suite]
   e2e-caas:

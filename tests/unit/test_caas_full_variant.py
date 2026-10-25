@@ -143,8 +143,11 @@ def test_the_caas_job_passes_the_tier_the_decision_gives_and_nothing_else_does()
     jobs = _load(".github/workflows/e2e-pr.yml")["jobs"]
     assert jobs["caas"]["with"]["tier"] == "${{ fromJSON(needs.decide.outputs.tiers).caas || '' }}"
     assert "caas-full" not in jobs and "caas-regression" not in jobs, "a variant has no job of its own"
-    for other in ("vmaas", "bmaas"):
-        assert "tier" not in jobs[other]["with"]
+    assert "vmaas" not in jobs, "vmaas runs as a run of its own (e2e-pr-vmaas.yml), started by the decision"
+    assert "tier" not in jobs["bmaas"]["with"]
+    vmaas = _load(".github/workflows/e2e-pr-vmaas.yml")
+    assert "tier" not in vmaas[True]["workflow_dispatch"]["inputs"], "only the caas suite has a variant"
+    assert "tier" not in vmaas["jobs"]["vmaas"]["with"]
     queue = _load(".github/workflows/e2e-queue.yml")["jobs"]
     assert not any("tier" in (job.get("with") or {}) for job in queue.values()), "the queue gets the sanity tests alone"
     assert "caas-full" not in queue, "a variant has no job in the queue either"

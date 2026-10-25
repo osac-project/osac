@@ -1,4 +1,5 @@
-import { useField } from 'formik';
+import { useEffect, useRef } from 'react';
+import { useField, useFormikContext } from 'formik';
 
 import { type DiskImage, DiskImages, GuestOSFamily } from '@osac/types';
 import { DISK_IMAGE_NON_OBSOLETE_FILTER } from '@osac/ui-components/api/v1/disk-image';
@@ -9,6 +10,7 @@ import ProvisioningFieldGroup from './ProvisioningFieldGroup';
 import type { ProvisioningFieldControlProps } from './provisioningFieldValue';
 import { cel } from '../../../api/cel';
 import { useTranslation } from '../../../hooks/useTranslation';
+import { emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 
 interface DiskImageFieldProps extends ProvisioningFieldControlProps {
   fieldId?: string;
@@ -25,6 +27,7 @@ const DiskImageField = ({
 }: DiskImageFieldProps) => {
   const { t } = useTranslation();
   const [guestOsFamilyField] = useField<GuestOSFamily>(guestOsFamilyName);
+  const { setFieldValue } = useFormikContext();
   const guestOsFamily = guestOsFamilyField.value ?? GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED;
   const guestOsFamilyLabel =
     {
@@ -32,22 +35,45 @@ const DiskImageField = ({
       [GuestOSFamily.GUEST_OS_FAMILY_WINDOWS]: t('Microsoft Windows'),
       [GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED]: t('Unspecified'),
     }[guestOsFamily] ?? t('Unspecified');
-  // OSAC-6054: prevent selecting a disk image for a different guest OS family.
-  const diskImageFilter = cel<DiskImage>((filter) =>
-    filter.and(
-      DISK_IMAGE_NON_OBSOLETE_FILTER,
-      filter.field('spec.guestOsFamily').equals(guestOsFamily),
-    ),
-  );
+  const previousGuestOsFamily = useRef(guestOsFamily);
+  const synchronizedGuestOsFamily = useRef<GuestOSFamily | undefined>(undefined);
+
+  useEffect(() => {
+    if (previousGuestOsFamily.current === guestOsFamily) {
+      return;
+    }
+
+    previousGuestOsFamily.current = guestOsFamily;
+    if (synchronizedGuestOsFamily.current === guestOsFamily) {
+      synchronizedGuestOsFamily.current = undefined;
+      return;
+    }
+
+    if (guestOsFamily !== GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED) {
+      void setFieldValue(name, emptyResourceSelectValue(), false);
+    }
+  }, [guestOsFamily, name, setFieldValue]);
+
+  const diskImageFilter =
+    guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED
+      ? DISK_IMAGE_NON_OBSOLETE_FILTER
+      : cel<DiskImage>((filter) =>
+          filter.and(
+            DISK_IMAGE_NON_OBSOLETE_FILTER,
+            filter.field('spec.guestOsFamily').equals(guestOsFamily),
+          ),
+        );
 
   return (
     <ProvisioningFieldGroup
       title={t('Disk image')}
       titleId={`${fieldId}-group`}
       actions={labelInfo}
+      hasDivider
+      description={t('Choose the guest operating system and disk image for this virtual machine.')}
     >
       <GuestOsFamilyField name={guestOsFamilyName} isDisabled={isDisabled} />
-      <ResourceSelectField
+      <ResourceSelectField<DiskImage>
         name={name}
         label={t('Select the image reference')}
         fieldId={fieldId}
@@ -55,8 +81,20 @@ const DiskImageField = ({
         request={{ filter: diskImageFilter }}
         isRequired={isRequired}
         isDisabled={isDisabled}
+        showOptionDescriptions={false}
         placeholder={t('Select a disk image')}
         loadErrorTitle={t('Could not load disk images')}
+        onSelectResource={(_, diskImage) => {
+          const selectedGuestOsFamily = diskImage?.spec?.guestOsFamily;
+          if (
+            guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED &&
+            selectedGuestOsFamily !== undefined &&
+            selectedGuestOsFamily !== GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED
+          ) {
+            synchronizedGuestOsFamily.current = selectedGuestOsFamily;
+            void setFieldValue(guestOsFamilyName, selectedGuestOsFamily);
+          }
+        }}
         emptyTitle={t('No disk images available of guest OS family: {{guestOsFamily}}', {
           guestOsFamily: guestOsFamilyLabel,
         })}

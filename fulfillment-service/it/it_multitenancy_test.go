@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -564,6 +565,30 @@ func listClusters(ctx context.Context, conn *grpc.ClientConn) *publicv1.Clusters
 	Expect(err).ToNot(HaveOccurred(), "error listing clusters")
 
 	return response
+}
+
+func deleteCluster(ctx context.Context, clusterId string) error {
+	clusterClient := privatev1.NewClustersClient(tool.InternalView().AdminConn())
+	_, err := clusterClient.Delete(ctx, privatev1.ClustersDeleteRequest_builder{
+		Id: clusterId,
+	}.Build())
+	if err != nil && grpcstatus.Code(err) != grpccodes.NotFound {
+		return err
+	}
+
+	// Cluster deletion is asynchronous. Wait for the Cluster to be archived
+	// before the suite tears down its referenced network resources.
+	Eventually(func(g Gomega) {
+		_, getErr := clusterClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: clusterId}.Build())
+		if grpcstatus.Code(getErr) == grpccodes.NotFound {
+			return
+		}
+		g.Expect(getErr).ToNot(HaveOccurred())
+
+		_, signalErr := clusterClient.Signal(ctx, privatev1.ClustersSignalRequest_builder{Id: clusterId}.Build())
+		g.Expect(signalErr).ToNot(HaveOccurred())
+	}, 5*time.Minute, time.Second).Should(Succeed())
+	return nil
 }
 
 // calculateResponseSize calculates the response size based on a tenant-resource mapping and a user's tenant membership

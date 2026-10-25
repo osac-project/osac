@@ -42,19 +42,19 @@ func TestCatalogItemDeletionProbe(t *testing.T) {
 			return nil
 		})
 		ctx := context.Background()
-		for i := range 6 {
+		for i := range 16 {
 			done, err := probe(ctx)
 			if done || err != nil {
 				t.Fatalf("existing resource treated as gone: done=%v err=%v", done, err)
 			}
-			wantSignals := 1 + i/4
+			wantSignals := 1 + i/10
 			if signals != wantSignals {
 				t.Fatalf("poll %d: signals=%d, want %d", i, signals, wantSignals)
 			}
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(200 * time.Millisecond)
 		}
 		deleted = true
-		if done, err := probe(ctx); !done || err != nil || signals != 2 || reads != 7 {
+		if done, err := probe(ctx); !done || err != nil || signals != 2 || reads != 17 {
 			t.Fatalf("archival observation waits for next signal: done=%v err=%v reads=%d signals=%d", done, err, reads, signals)
 		}
 	})

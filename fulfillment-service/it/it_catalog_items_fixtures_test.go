@@ -81,7 +81,7 @@ func deferCatalogItemFixtureDeletion(deleteDependency func(context.Context) erro
 					return true, nil
 				}
 				return removed, err
-			}, 5*time.Minute, 500*time.Millisecond).WithContext(ctx).Should(BeTrue(), "fixture was not removed")
+			}, 5*time.Minute, 200*time.Millisecond).WithContext(ctx).Should(BeTrue(), "fixture was not removed")
 		}
 	})
 }

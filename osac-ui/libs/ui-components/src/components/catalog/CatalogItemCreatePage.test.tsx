@@ -33,7 +33,7 @@ describe('CatalogItemCreatePage', () => {
   it('renders the compute catalog item wizard for the vm kind', () => {
     renderCreatePage(['/catalog/vm/create']);
 
-    expect(screen.getByRole('heading', { name: 'Create catalog item' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Create VM Catalog Item' })).toBeInTheDocument();
   });
 
   it('shows a not-found page for an unrecognized catalog item kind', () => {

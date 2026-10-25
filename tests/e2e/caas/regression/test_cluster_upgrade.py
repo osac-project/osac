@@ -455,13 +455,23 @@ def _cleanup(
     evidence: dict[str, Any],
 ) -> None:
     try:
-        if uuid is not None:
-            cli.delete_cluster(uuid=uuid)
-            if co_name is not None:
-                wait_for_cluster_deletion_without_cleanup(k8s=k8s, name=co_name)
-            wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
+        first_error: BaseException | None = None
+        try:
+            if uuid is not None:
+                cli.delete_cluster(uuid=uuid)
+                if co_name is not None:
+                    wait_for_cluster_deletion_without_cleanup(k8s=k8s, name=co_name)
+                wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
+        except BaseException as exc:
+            first_error = exc
         for version_id in reversed(created_version_ids):
-            private_grpc.delete_cluster_version(version_id=version_id)
+            try:
+                private_grpc.delete_cluster_version(version_id=version_id)
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
     except BaseException:
         evidence["cleanup"] = "failed"
         evidence["outcome"] = "failed"

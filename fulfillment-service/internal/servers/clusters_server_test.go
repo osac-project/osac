@@ -1153,17 +1153,20 @@ var _ = Describe("Clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
 			name := object.GetMetadata().GetName()
-			// Try to update the status:
+			// Try to update the status while changing an independent mutable field:
 			updateResponse, err := server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 				Object: publicv1.Cluster_builder{
-					Id:       object.GetId(),
-					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+					Id: object.GetId(),
+					Metadata: publicv1.Metadata_builder{
+						Name:   name,
+						Labels: map[string]string{"test": "value"},
+					}.Build(),
 					Status: publicv1.ClusterStatus_builder{
 						ApiUrl:     "https://my.api.com",
 						ConsoleUrl: "https://my.console.com",
 					}.Build(),
 				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.api_url", "status.console_url"}},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object = updateResponse.GetObject()

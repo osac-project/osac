@@ -75,6 +75,7 @@ describe('CatalogItemDetails', () => {
     expect(screen.getByRole('button', { name: 'Publish' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Launch instance' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('separator')).toHaveLength(2);
   });
 
   it('shows launch and management actions for a tenant admin in the item tenant', () => {

@@ -212,7 +212,7 @@ class RenderContractTests(unittest.TestCase):
         self.assertEqual(rule["resources"], ["configmaps"])
 
         variables = {item["name"]: item["expression"] for item in policy["spec"]["variables"]}
-        self.assertEqual(variables["activeName"], "customer-netris-ca")
+        self.assertEqual(json.loads(variables["activeName"]), "customer-netris-ca")
         self.assertEqual(json.loads(variables["adminGroups"]), ["system:masters"])
         self.assertIn(
             "request.userInfo.groups.exists", policy["spec"]["validations"][0]["expression"]

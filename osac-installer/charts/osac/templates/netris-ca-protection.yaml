@@ -19,7 +19,7 @@ spec:
         kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
   variables:
   - name: activeName
-    expression: {{ .Values.global.networking.netris.caBundle.configMap | quote }}
+    expression: {{ .Values.global.networking.netris.caBundle.configMap | toJson | quote }}
   - name: adminGroups
     expression: {{ .Values.global.networking.netris.caBundle.adminGroups | toJson | quote }}
   - name: target

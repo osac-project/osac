@@ -194,15 +194,6 @@ const CatalogGeneralStep = ({
                 <FormGroupLabelHelp aria-label={t('More information for Provisioning template')} />
               </Popover>
             }
-            description={
-              isEdit
-                ? t(
-                    'The provisioning template cannot be changed after the catalog item is created.',
-                  )
-                : t(
-                    'The selected template is the provisioning template used to create resources from this catalog item.',
-                  )
-            }
           />
         </OsacForm>
       </StackItem>

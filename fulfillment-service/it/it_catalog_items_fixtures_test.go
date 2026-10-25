@@ -75,16 +75,12 @@ func deferCatalogItemFixtureDeletion(deleteDependency func(context.Context) erro
 		}
 		Expect(err).NotTo(HaveOccurred())
 		if deleted != nil {
-			Eventually(func() bool {
+			Eventually(func() (bool, error) {
 				removed, err := deleted(ctx)
-				if err != nil {
-					if status.Code(err) == codes.NotFound {
-						return true
-					}
-					// Transient error during async deletion — retry.
-					return false
+				if status.Code(err) == codes.NotFound {
+					return true, nil
 				}
-				return removed
+				return removed, err
 			}, 5*time.Minute, 500*time.Millisecond).WithContext(ctx).Should(BeTrue(), "fixture was not removed")
 		}
 	})

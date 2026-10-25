@@ -70,7 +70,6 @@ const DiskImageField = ({
       titleId={`${fieldId}-group`}
       actions={labelInfo}
       hasDivider
-      description={t('Choose the guest operating system and disk image for this virtual machine.')}
     >
       <GuestOsFamilyField name={guestOsFamilyName} isDisabled={isDisabled} />
       <ResourceSelectField<DiskImage>

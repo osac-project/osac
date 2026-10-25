@@ -22,7 +22,7 @@ The BMaaS Netris end-to-end test (a real Netris lab on an AWS box) is not part o
 required: the policy marks it `manual_only`, so the decision never chooses it and the `E2E` check does not wait for it.
 Start it on a pull request with the comment `/test netris` (any member of the organization, any approval state), or by
 checking its box in the E2E comment of the pull request; the suite has its own line, `E2E / BMaaS Netris Full Install`, and
-`e2e-pr.yml` runs it through `workflows/e2e-bmaas-netris-full-install.yml`. It can also be started from the Actions page
+the decision runs it through `workflows/e2e-pr-netris.yml`, which calls `workflows/e2e-bmaas-netris-full-install.yml`. It can also be started from the Actions page
 ("E2E BMaaS Netris Full Install", Run workflow, with the pull request's number, repository, branch and commit). A label no longer
 starts it. A new commit does not cancel a run that is already going.
 
@@ -54,8 +54,8 @@ regression, with the CaaS references).
 - A suite asked for by name runs again whatever it ended with; the bare `/test` only starts what has not passed.
 - The decision never chooses it, so a pull request still gets the CaaS sanity tests alone by default, and the merge queue
   does not run it. VMaaS and BMaaS already run their regression tests on every pull request that needs their suite.
-- In the policy it is `e2e-caas-full` (`variant_of: caas`, `tier: full`); the `caas` job of `e2e-pr.yml` passes the tier to
-  the wrapper (`e2e-caas-full-install.yml`, input `tier`).
+- In the policy it is `e2e-caas-full` (`variant_of: caas`, `tier: full`); the decision starts `e2e-pr-caas.yml` with the input
+  `tier` (`full`), and that workflow passes it to the wrapper (`e2e-caas-full-install.yml`, input `tier`).
 
 ## Approvals after a rebase, and pull requests from forks
 
@@ -124,9 +124,9 @@ comes within about a quarter of an hour). Anything else gets a person.
   netris) costs the other pull requests nothing.
 - **Add an E2E suite:** (1) an entry in `e2e-policy.yml` with its `suite` id, a `check` name (`E2E / <Suite> Full Install`)
   and its `filters` / `filters_any`; (2) its workflow `e2e-<suite>-full-install.yml`; (3) one job named after the suite id in
-  `e2e-queue.yml` (copy the `vmaas` job) and a run-of-its-own workflow `e2e-pr-<suite>.yml` for pull requests (copy `e2e-pr-vmaas.yml`, see below). The line on the pull request follows the job of that name
-  (waiting for a runner, running, then passed or failed, with a link to its log); a suite the policy did not pick does not
-  run and has no line.
+  `e2e-queue.yml` (copy the `vmaas` job) and, for pull requests, a run-of-its-own workflow `e2e-pr-<suite>.yml` (copy
+  `e2e-pr-vmaas.yml`, see below). The line on the pull request follows that run (waiting for a runner, running, then passed
+  or failed, with a link to its log); a suite the policy did not pick does not run and has no line.
 - **A suite as a run of its own:** every suite (its policy job names a `workflow:`: `e2e-pr-vmaas.yml`, `e2e-pr-caas.yml`, `e2e-pr-bmaas.yml`,
   `e2e-pr-netris.yml`) is not a job of `e2e-pr.yml`: the decision starts that workflow with `workflow_dispatch` for the approved commit, so a failed suite can be
   run again at once (GitHub's Re-run of its run, or `/test vmaas`) without waiting for the others, and the `E2E` check is

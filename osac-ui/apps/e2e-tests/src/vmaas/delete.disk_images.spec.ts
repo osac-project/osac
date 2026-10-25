@@ -1,8 +1,9 @@
 import { test } from '@playwright/test';
 
-import { diskImagesTestData, tenantNameOrSkip } from './test_data';
+import { diskImageNameOrSkip, diskImagesTestData } from './test_data';
 import {
   deleteDiskImage,
+  ensureDiskImageExists,
   includeObsoleteDiskImages,
   openDiskImageDetails,
 } from '../../../../libs/test-utils/src/disk_images.page';
@@ -10,20 +11,24 @@ import { openAndLoginWithEnvironment } from '../../../../libs/test-utils/src/gen
 import { openDiskImagesPage } from '../../../../libs/test-utils/src/main.page';
 
 test(`deletes disk image ${diskImagesTestData.name}`, async ({ page }) => {
-  // Allow the 120-second deletion wait plus login and UI actions to complete.
-  test.setTimeout(180_000);
-  if (!tenantNameOrSkip()) {
+  // Allow image creation when needed, deletion, login, and UI actions to complete.
+  test.setTimeout(300_000);
+  const diskImageName = diskImageNameOrSkip();
+  if (!diskImageName) {
     return;
   }
 
   // 1. Open the browser and log in.
   await openAndLoginWithEnvironment(page, '/');
 
-  // 2. Open Infrastructure > Disk images and the configured image.
+  // 2. Open Infrastructure > Disk images and ensure the configured image exists.
   await openDiskImagesPage(page);
-  await includeObsoleteDiskImages(page);
-  await openDiskImageDetails(page, diskImagesTestData.name);
+  await ensureDiskImageExists(page, { ...diskImagesTestData, name: diskImageName });
 
-  // 3. Confirm deletion and verify that the image is no longer in the table.
-  await deleteDiskImage(page, diskImagesTestData.name);
+  // 3. Open the configured image, including if it is already obsolete.
+  await includeObsoleteDiskImages(page);
+  await openDiskImageDetails(page, diskImageName);
+
+  // 4. Confirm deletion and verify that the image is no longer in the table.
+  await deleteDiskImage(page, diskImageName);
 });

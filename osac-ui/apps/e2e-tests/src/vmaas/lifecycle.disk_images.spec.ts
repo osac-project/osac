@@ -1,6 +1,6 @@
 import { test } from '@playwright/test';
 
-import { diskImagesTestData, tenantNameOrSkip } from './test_data';
+import { diskImageNameOrSkip, diskImagesTestData } from './test_data';
 import {
   expectDiskImageLifecycle,
   openDiskImageDetails,
@@ -12,7 +12,8 @@ import { openDiskImagesPage } from '../../../../libs/test-utils/src/main.page';
 test(`exercises lifecycle transitions for ${diskImagesTestData.name}`, async ({ page }) => {
   // Allow remote login and lifecycle updates to complete.
   test.setTimeout(180_000);
-  if (!tenantNameOrSkip()) {
+  const diskImageName = diskImageNameOrSkip();
+  if (!diskImageName) {
     return;
   }
 
@@ -21,7 +22,7 @@ test(`exercises lifecycle transitions for ${diskImagesTestData.name}`, async ({ 
 
   // 2. Open Infrastructure > Disk images and the requested image's details.
   await openDiskImagesPage(page);
-  await openDiskImageDetails(page, diskImagesTestData.name);
+  await openDiskImageDetails(page, diskImageName);
 
   // 3. Verify both lifecycle paths using the shared actions from extravars.yaml. Button-state
   // assertions are paused for OSAC-6385; each call clicks the action and checks the lifecycle.

@@ -45,6 +45,12 @@ disk_image:
     - 'amd64'
   scope: 'Global'
 
+storage_tier:
+  name: 'storage-tier-e2e'
+  description: 'Storage tier created by e2e test'
+  backend: 'local'
+  protocol: 'Block'
+
 lifecycle_actions:
   - 'Deprecate'
   - 'Obsolete'

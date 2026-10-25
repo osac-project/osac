@@ -1,6 +1,6 @@
 import { test } from '@playwright/test';
 
-import { instanceTypeTestData, tenantNameOrSkip } from './test_data';
+import { instanceTypeNameOrSkip, instanceTypeTestData } from './test_data';
 import { openAndLoginWithEnvironment } from '../../../../libs/test-utils/src/general/open_and_login';
 import {
   createInstanceType,
@@ -12,7 +12,8 @@ import { openInstanceTypesPage } from '../../../../libs/test-utils/src/main.page
 test('creates an instance type from Infrastructure', async ({ page }) => {
   // Allow login and page navigation to complete on a remote cluster.
   test.setTimeout(120_000);
-  if (!tenantNameOrSkip()) {
+  const instanceTypeName = instanceTypeNameOrSkip();
+  if (!instanceTypeName) {
     return;
   }
 
@@ -23,7 +24,7 @@ test('creates an instance type from Infrastructure', async ({ page }) => {
   await openInstanceTypesPage(page);
 
   // 3. Fail clearly if a previous run already created the requested instance type.
-  await expectInstanceTypeNotToExist(page, instanceTypeTestData.name);
+  await expectInstanceTypeNotToExist(page, instanceTypeName);
 
   // 4. Open the create page and verify its title.
   await openCreateInstanceTypePage(page);
@@ -31,7 +32,7 @@ test('creates an instance type from Infrastructure', async ({ page }) => {
   // 5. Fill and submit the instance type defined in extravars.yaml.
   await createInstanceType(
     page,
-    instanceTypeTestData.name,
+    instanceTypeName,
     instanceTypeTestData.description,
     instanceTypeTestData.vcpus,
     instanceTypeTestData.memoryGib,

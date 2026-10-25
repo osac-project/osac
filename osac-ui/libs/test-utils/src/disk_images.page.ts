@@ -171,12 +171,19 @@ export const openDiskImageDetails = async (page: Page, diskImageName: string): P
   await expect(page.getByRole('heading', { name: diskImageName, exact: true })).toBeVisible();
 };
 
-/** Include obsolete images in the disk image list. */
-export const includeObsoleteDiskImages = async (page: Page): Promise<void> => {
+/** Include obsolete images in the disk image list, optionally filtering by name. */
+export const includeObsoleteDiskImages = async (page: Page, searchTerm?: string): Promise<void> => {
   const listUrl = new URL(page.url());
   listUrl.searchParams.set('showObsolete', 'true');
+  if (searchTerm !== undefined) {
+    listUrl.searchParams.set('search', searchTerm);
+  }
   await page.goto(listUrl.toString());
 
+  // The list table is rendered after the filtered API query completes.
+  await expect(page.getByRole(...DiskImagesMainPage.diskImagesTable)).toBeVisible({
+    timeout: 15_000,
+  });
   const showObsolete = page.locator(...DiskImagesMainPage.showObsolete);
   await expect(showObsolete).toBeChecked();
 };
@@ -186,12 +193,33 @@ export const expectDiskImageNotToExist = async (
   page: Page,
   diskImageName: string,
 ): Promise<void> => {
-  await includeObsoleteDiskImages(page);
-  await page.getByRole('textbox', { name: 'Search disk images', exact: true }).fill(diskImageName);
+  await includeObsoleteDiskImages(page, diskImageName);
   await expectRowNotToExist(
     diskImageLink(page, diskImageName),
     `Cannot create disk image "${diskImageName}": a disk image with this name already exists.`,
   );
+};
+
+/** Ensure the configured image exists before a standalone delete run. */
+export const ensureDiskImageExists = async (
+  page: Page,
+  diskImage: DiskImageCreateParams,
+): Promise<void> => {
+  await includeObsoleteDiskImages(page, diskImage.name);
+
+  const imageLink = diskImageLink(page, diskImage.name);
+  const matchingImages = await imageLink.count();
+  if (matchingImages === 1) {
+    return;
+  }
+  if (matchingImages > 1) {
+    throw new Error('Multiple disk images match the configured name.');
+  }
+
+  // Keep deletion self-contained when the requested image is absent.
+  await openCreateDiskImagePage(page);
+  await createDiskImage(page, diskImage);
+  await expectDiskImageListed(page, diskImage.name);
 };
 
 /** Confirm deletion and verify the disk image is absent, including obsolete rows. */

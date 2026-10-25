@@ -1,6 +1,6 @@
 import { test } from '@playwright/test';
 
-import { diskImagesTestData, tenantNameOrSkip } from './test_data';
+import { diskImageNameOrSkip, diskImagesTestData } from './test_data';
 import {
   createDiskImage,
   expectDiskImageListed,
@@ -13,11 +13,12 @@ import { openDiskImagesPage } from '../../../../libs/test-utils/src/main.page';
 test(`creates disk image ${diskImagesTestData.name} from Infrastructure`, async ({ page }) => {
   // Allow remote login, navigation, and disk image creation to complete.
   test.setTimeout(120_000);
-  if (!tenantNameOrSkip()) {
+  const diskImageName = diskImageNameOrSkip();
+  if (!diskImageName) {
     return;
   }
 
-  const diskImage = diskImagesTestData;
+  const diskImage = { ...diskImagesTestData, name: diskImageName };
 
   // 1. Open the browser and log in.
   await openAndLoginWithEnvironment(page, '/');

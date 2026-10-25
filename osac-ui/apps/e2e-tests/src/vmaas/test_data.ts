@@ -10,6 +10,10 @@ import {
   type LifecycleAction,
   lifecycleActionOrder,
 } from '../../../../libs/test-utils/src/lifecycle';
+import type {
+  StorageTierCreateParams,
+  StorageTierProtocol,
+} from '../../../../libs/test-utils/src/storage.page';
 
 interface RawInstanceTypeGpu {
   count: number;
@@ -18,7 +22,7 @@ interface RawInstanceTypeGpu {
 }
 
 interface RawInstanceType {
-  name: string;
+  name?: string;
   description: string;
   vcpus: number;
   memory_gib: number;
@@ -26,7 +30,7 @@ interface RawInstanceType {
 }
 
 interface RawDiskImage {
-  name: string;
+  name?: string;
   source_type: 'Registry';
   source_ref: string;
   guest_os_family: string;
@@ -63,10 +67,18 @@ interface RawCatalog {
   fields: RawCatalogFields;
 }
 
+interface RawStorageTier {
+  name?: string;
+  description: string;
+  backend: string;
+  protocol: StorageTierProtocol;
+}
+
 interface RawExtravars {
   catalog: RawCatalog;
   instance_type: RawInstanceType;
   disk_image: RawDiskImage;
+  storage_tier: RawStorageTier;
   lifecycle_actions: LifecycleAction[];
   tenant_name?: string;
 }
@@ -146,6 +158,15 @@ const registrySourceType = (value: unknown): 'Registry' => {
   return sourceType;
 };
 
+const storageTierProtocol = (value: unknown): StorageTierProtocol => {
+  const protocol = requiredString(value, 'storage_tier.protocol');
+  if (protocol !== 'NFS' && protocol !== 'Block') {
+    throw new Error('Invalid e2e extravars: storage_tier.protocol must be NFS or Block.');
+  }
+
+  return protocol;
+};
+
 const optionalString = (value: unknown, field: string): string | undefined => {
   if (value === undefined) {
     return undefined;
@@ -200,6 +221,7 @@ const parseExtravars = (value: unknown): RawExtravars => {
   const catalogDiskImage = asRecord(catalogFields.disk_image, 'catalog.fields.disk_image');
   const instanceType = asRecord(root.instance_type, 'instance_type');
   const diskImage = asRecord(root.disk_image, 'disk_image');
+  const storageTier = asRecord(root.storage_tier, 'storage_tier');
   const gpu =
     instanceType.gpu === undefined ? undefined : asRecord(instanceType.gpu, 'instance_type.gpu');
 
@@ -236,7 +258,7 @@ const parseExtravars = (value: unknown): RawExtravars => {
     },
     tenant_name: optionalString(root.tenant_name, 'tenant_name'),
     instance_type: {
-      name: requiredString(instanceType.name, 'instance_type.name'),
+      name: optionalString(instanceType.name, 'instance_type.name'),
       description: requiredString(instanceType.description, 'instance_type.description'),
       vcpus: positiveInteger(instanceType.vcpus, 'instance_type.vcpus'),
       memory_gib: positiveInteger(instanceType.memory_gib, 'instance_type.memory_gib'),
@@ -254,12 +276,18 @@ const parseExtravars = (value: unknown): RawExtravars => {
         : {}),
     },
     disk_image: {
-      name: requiredString(diskImage.name, 'disk_image.name'),
+      name: optionalString(diskImage.name, 'disk_image.name'),
       source_type: registrySourceType(diskImage.source_type),
       source_ref: requiredString(diskImage.source_ref, 'disk_image.source_ref'),
       guest_os_family: requiredString(diskImage.guest_os_family, 'disk_image.guest_os_family'),
       architectures: stringTuple(diskImage.architectures, 'disk_image.architectures'),
       scope: requiredString(diskImage.scope, 'disk_image.scope'),
+    },
+    storage_tier: {
+      name: optionalString(storageTier.name, 'storage_tier.name'),
+      description: requiredString(storageTier.description, 'storage_tier.description'),
+      backend: requiredString(storageTier.backend, 'storage_tier.backend'),
+      protocol: storageTierProtocol(storageTier.protocol),
     },
     lifecycle_actions: lifecycleActions(root.lifecycle_actions),
   };
@@ -276,6 +304,7 @@ const {
   catalog: rawCatalog,
   instance_type: rawInstanceType,
   disk_image: rawDiskImage,
+  storage_tier: rawStorageTier,
   lifecycle_actions: rawLifecycleActions,
   tenant_name: rawTenantName,
 } = rawExtravars;
@@ -283,6 +312,16 @@ const diskImageTestRunId = requiredString(
   process.env.OSAC_DISK_IMAGE_TEST_RUN_ID,
   'OSAC_DISK_IMAGE_TEST_RUN_ID',
 );
+const storageTierTestRunId = requiredString(
+  process.env.OSAC_STORAGE_TIER_TEST_RUN_ID,
+  'OSAC_STORAGE_TIER_TEST_RUN_ID',
+);
+const diskImageTestName = rawDiskImage.name
+  ? `${rawDiskImage.name}-${diskImageTestRunId}`
+  : undefined;
+const storageTierTestName = rawStorageTier.name
+  ? `${rawStorageTier.name}-${storageTierTestRunId}`
+  : undefined;
 
 export const tenantName: string | undefined = rawTenantName;
 
@@ -292,6 +331,33 @@ export const tenantNameOrSkip = (): string | undefined => {
   }
 
   test.skip(true, 'tenant_name is not set in apps/e2e-tests/extravars.yaml.');
+  return undefined;
+};
+
+export const instanceTypeNameOrSkip = (): string | undefined => {
+  if (rawInstanceType.name !== undefined) {
+    return rawInstanceType.name;
+  }
+
+  test.skip(true, 'instance_type.name is not set in apps/e2e-tests/extravars.yaml.');
+  return undefined;
+};
+
+export const diskImageNameOrSkip = (): string | undefined => {
+  if (diskImageTestName !== undefined) {
+    return diskImageTestName;
+  }
+
+  test.skip(true, 'disk_image.name is not set in apps/e2e-tests/extravars.yaml.');
+  return undefined;
+};
+
+export const storageTierNameOrSkip = (): string | undefined => {
+  if (storageTierTestName !== undefined) {
+    return storageTierTestName;
+  }
+
+  test.skip(true, 'storage_tier.name is not set in apps/e2e-tests/extravars.yaml.');
   return undefined;
 };
 
@@ -326,7 +392,7 @@ export const catalogTestData: CatalogTestData = {
 };
 
 export const instanceTypeTestData: InstanceTypeTestData = {
-  name: rawInstanceType.name,
+  name: rawInstanceType.name ?? '',
   description: rawInstanceType.description,
   vcpus: rawInstanceType.vcpus,
   memoryGib: rawInstanceType.memory_gib,
@@ -341,11 +407,18 @@ export const instanceTypeTestData: InstanceTypeTestData = {
 };
 
 export const diskImagesTestData: DiskImageTestData = {
-  name: `${rawDiskImage.name}-${diskImageTestRunId}`,
+  name: diskImageTestName ?? '',
   sourceType: rawDiskImage.source_type,
   sourceRef: rawDiskImage.source_ref,
   guestOsFamily: rawDiskImage.guest_os_family,
   architectures: rawDiskImage.architectures,
   scope: rawDiskImage.scope,
   lifecycleActions: rawLifecycleActions,
+};
+
+export const storageTierTestData: StorageTierCreateParams = {
+  name: storageTierTestName ?? '',
+  description: rawStorageTier.description,
+  backend: rawStorageTier.backend,
+  protocol: rawStorageTier.protocol,
 };

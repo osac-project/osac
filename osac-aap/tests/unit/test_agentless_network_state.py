@@ -2546,6 +2546,29 @@ def test_subnet_delete_waits_for_nat_gateway_cleanup_when_gateway_is_deleting(
     assert cleanup_called is False
 
 
+def test_nat_gateway_subnet_claim_queries_are_scoped_to_the_virtual_network():
+    class RecordingConnection:
+        def __init__(self):
+            self.queries = []
+
+        def execute(self, query, parameters=()):
+            self.queries.append((query, parameters))
+            return []
+
+    connection = RecordingConnection()
+    assert not StateStore._subnet_has_nat_gateway_claim(
+        connection, SECOND_SUBNET_UID, VIRTUAL_NETWORK_FULFILLMENT_ID
+    )
+    StateStore._require_subnet_not_claimed_by_deleting_nat_gateway(
+        connection, SECOND_SUBNET_UID, VIRTUAL_NETWORK_FULFILLMENT_ID
+    )
+
+    assert len(connection.queries) == 2
+    assert all("virtual_network_uid = ?" in query for query, _ in connection.queries)
+    assert connection.queries[0][1] == (VIRTUAL_NETWORK_FULFILLMENT_ID,)
+    assert connection.queries[1][1] == (VIRTUAL_NETWORK_FULFILLMENT_ID,)
+
+
 @pytest.mark.parametrize(
     ("action", "method"),
     [

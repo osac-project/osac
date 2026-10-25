@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/netip"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -113,11 +112,17 @@ func buildNATGatewayContext(
 		externalIP.Status.State != v1alpha1.ExternalIPStateAllocated || externalIP.Status.Address == "" {
 		return provisioning.NATGatewayContext{}, true, nil
 	}
-	if !canonicalNATGatewayIPv4(externalIP.Status.Address) {
-		return provisioning.NATGatewayContext{}, false, fmt.Errorf("ExternalIP address must be canonical IPv4")
+	if _, err := canonicalIPv4Address(externalIP.Status.Address); err != nil {
+		return provisioning.NATGatewayContext{}, false, fmt.Errorf(
+			"NATGateway ExternalIP address: %w", err,
+		)
 	}
-	if !canonicalNATGatewayIPv4CIDR(virtualNetwork.Spec.IPv4CIDR) {
-		return provisioning.NATGatewayContext{}, false, fmt.Errorf("VirtualNetwork IPv4 CIDR must be canonical IPv4")
+	if _, err := provisioning.ValidateExternalIPPoolCIDR(
+		[]string{virtualNetwork.Spec.IPv4CIDR},
+	); err != nil {
+		return provisioning.NATGatewayContext{}, false, fmt.Errorf(
+			"NATGateway VirtualNetwork IPv4 CIDR: %w", err,
+		)
 	}
 
 	return provisioning.NATGatewayContext{
@@ -135,16 +140,6 @@ func buildNATGatewayContext(
 			IPv4CIDR: virtualNetwork.Spec.IPv4CIDR, Phase: string(virtualNetwork.Status.Phase),
 		},
 	}, false, nil
-}
-
-func canonicalNATGatewayIPv4(value string) bool {
-	address, err := netip.ParseAddr(value)
-	return err == nil && address.Is4() && !address.IsUnspecified() && address.String() == value
-}
-
-func canonicalNATGatewayIPv4CIDR(value string) bool {
-	prefix, err := netip.ParsePrefix(value)
-	return err == nil && prefix.Addr().Is4() && prefix == prefix.Masked() && prefix.String() == value
 }
 
 func (r *NATGatewayReconciler) currentNATGatewayContext(
@@ -270,16 +265,13 @@ func validateNATGatewaySubmittedIdentity(
 	if jobType == v1alpha1.JobTypeDeprovision && (current.DeletionTimestamp.IsZero() || !submitted.deleting) {
 		return fmt.Errorf("NATGateway is not deleting")
 	}
-	job := provisioning.FindLatestJobByType(expected.Status.ProvisioningJobs, jobType)
-	if job == nil || job.JobID != status.JobID {
-		return fmt.Errorf("NATGateway result does not match the latest job")
-	}
-	if status.State != v1alpha1.JobStateSucceeded {
-		return fmt.Errorf("NATGateway provider job did not succeed")
-	}
-	if jobType == v1alpha1.JobTypeProvision &&
-		(job.ConfigVersion == "" || job.ConfigVersion != expected.Status.DesiredConfigVersion) {
-		return fmt.Errorf("NATGateway job does not match the current configuration")
+	if err := provisioning.ValidateProviderJobResult(
+		expected.Status.ProvisioningJobs,
+		jobType,
+		status,
+		expected.Status.DesiredConfigVersion,
+	); err != nil {
+		return fmt.Errorf("NATGateway provider result is invalid: %w", err)
 	}
 	return nil
 }

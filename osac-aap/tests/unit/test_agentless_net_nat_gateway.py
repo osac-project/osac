@@ -80,6 +80,12 @@ def test_rule_builders_scope_snat_forwarding_and_bypass_by_identity():
     ]
 
 
+def test_ipv4_network_wraps_the_shared_parser_error():
+    assert nat_gateway._ipv4_network("10.0.1.0/24", "NATGateway source CIDR") == "10.0.1.0/24"
+    with pytest.raises(nat_gateway.NATGatewayProviderError, match="source CIDR must be an IPv4 CIDR"):
+        nat_gateway._ipv4_network("2001:db8::/64", "NATGateway source CIDR")
+
+
 def test_reconcile_installs_explicit_snat_and_host_rules_before_route(monkeypatch):
     events = []
     gateway = gateway_state()
@@ -97,7 +103,13 @@ def test_reconcile_installs_explicit_snat_and_host_rules_before_route(monkeypatc
         "_ensure_rule",
         lambda table, chain, rule, **kwargs: events.append(("rule", table, chain, rule)) or True,
     )
-    monkeypatch.setattr(nat_gateway, "_verify_rule_present", lambda *_args, **_kwargs: None)
+
+    def ensure_rules(_runner, table, chain, rules, **_kwargs):
+        for rule in rules:
+            events.append(("rule", table, chain, rule))
+        return bool(rules)
+
+    monkeypatch.setattr(nat_gateway.network, "ensure_iptables_rules", ensure_rules)
     monkeypatch.setattr(
         nat_gateway,
         "agentless_net_external_ip",

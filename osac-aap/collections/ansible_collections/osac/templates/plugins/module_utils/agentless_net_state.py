@@ -27,9 +27,11 @@ from ansible_collections.osac.templates.plugins.module_utils.agentless_net_netwo
     link_details,
     NetworkCommandError,
     namespace_exists,
+    parse_canonical_ipv4_network,
     parse_json_object_list,
     remove_repeated_rule,
     run_command,
+    validate_ipv4_address,
 )
 from ansible_collections.osac.templates.plugins.module_utils import agentless_net_external_ip
 from ansible_collections.osac.templates.plugins.module_utils import agentless_net_nat_gateway
@@ -162,14 +164,11 @@ def _is_valid_tenant_id(value: Any) -> bool:
 
 
 def _parse_canonical_ipv4_network(value: Any) -> ipaddress.IPv4Network:
-    if not isinstance(value, str):
-        raise TypeError("VirtualNetwork CIDR must be a string")
-    network = ipaddress.ip_network(value, strict=True)
-    if not isinstance(network, ipaddress.IPv4Network):
-        raise ValueError("AgentlessNet VirtualNetworks require IPv4 CIDRs")
-    if str(network) != value:
-        raise ValueError("VirtualNetwork CIDR must be canonical")
-    return network
+    return parse_canonical_ipv4_network(
+        value,
+        context="VirtualNetwork CIDR",
+        wrong_family_message="AgentlessNet VirtualNetworks require IPv4 CIDRs",
+    )
 
 
 def _external_ip_pool_entry(
@@ -189,16 +188,10 @@ def _external_ip_pool_entry(
         raise StateError("ExternalIPPool IP family must be IPv4")
     if not isinstance(cidrs, list) or len(cidrs) != 1:
         raise StateError("ExternalIPPool must contain exactly one canonical IPv4 CIDR")
-    if not isinstance(cidrs[0], str):
-        raise StateError("ExternalIPPool must contain exactly one canonical IPv4 CIDR")
     try:
-        network = ipaddress.ip_network(cidrs[0], strict=True)
-    except ValueError as error:
-        raise StateError(
-            "ExternalIPPool must contain exactly one canonical IPv4 CIDR"
-        ) from error
-    if not isinstance(network, ipaddress.IPv4Network) or str(network) != cidrs[0]:
-        raise StateError("ExternalIPPool must contain exactly one canonical IPv4 CIDR")
+        network = parse_canonical_ipv4_network(cidrs[0], context="ExternalIPPool IPv4 CIDR")
+    except (TypeError, ValueError) as error:
+        raise StateError("ExternalIPPool must contain exactly one canonical IPv4 CIDR") from error
     return {
         "uid": uid,
         "fulfillment_id": fulfillment_id,
@@ -238,14 +231,10 @@ def _external_ip_entry(
     address: Any,
 ) -> dict[str, str]:
     identity = _external_ip_identity(uid, fulfillment_id, tenant_id, pool_uid)
-    if not isinstance(address, str):
-        raise StateError("ExternalIP address must be canonical IPv4")
     try:
-        parsed = ipaddress.ip_address(address)
-    except ValueError as error:
+        validate_ipv4_address(address, "ExternalIP address", error_type=StateError)
+    except StateError as error:
         raise StateError("ExternalIP address must be canonical IPv4") from error
-    if not isinstance(parsed, ipaddress.IPv4Address) or str(parsed) != address:
-        raise StateError("ExternalIP address must be canonical IPv4")
     return {**identity, "address": address}
 
 
@@ -304,29 +293,34 @@ def _external_ip_attachment_context(value: Any, tenant_id: str) -> dict[str, Any
     ):
         raise StateError("ExternalIPAttachment networking resources must share a namespace")
     try:
-        external_address = ipaddress.ip_address(external_ip["address"])
-        target_address = ipaddress.ip_address(target["ip_address"])
-        subnet_network = ipaddress.ip_network(subnet["ipv4_cidr"], strict=True)
-    except ValueError as error:
+        external_address = validate_ipv4_address(
+            external_ip["address"],
+            "ExternalIPAttachment ExternalIP address",
+            reject_unspecified=True,
+            error_type=StateError,
+        )
+    except StateError as error:
+        raise StateError(
+            "ExternalIPAttachment ExternalIP address must be canonical IPv4"
+        ) from error
+    try:
+        target_address = validate_ipv4_address(
+            target["ip_address"],
+            "ExternalIPAttachment target address",
+            reject_unspecified=True,
+            error_type=StateError,
+        )
+    except StateError as error:
+        raise StateError(
+            "ExternalIPAttachment target address must be canonical IPv4"
+        ) from error
+    try:
+        subnet_network = parse_canonical_ipv4_network(
+            subnet["ipv4_cidr"], context="ExternalIPAttachment Subnet CIDR"
+        )
+    except (TypeError, ValueError) as error:
         raise StateError("ExternalIPAttachment addresses or Subnet CIDR are invalid") from error
-    if (
-        not isinstance(external_address, ipaddress.IPv4Address)
-        or str(external_address) != external_ip["address"]
-        or external_address.is_unspecified
-    ):
-        raise StateError("ExternalIPAttachment ExternalIP address must be canonical IPv4")
-    if (
-        not isinstance(target_address, ipaddress.IPv4Address)
-        or str(target_address) != target["ip_address"]
-        or target_address.is_unspecified
-    ):
-        raise StateError("ExternalIPAttachment target address must be canonical IPv4")
-    if (
-        not isinstance(subnet_network, ipaddress.IPv4Network)
-        or str(subnet_network) != subnet["ipv4_cidr"]
-        or not subnet_network.prefixlen <= 30
-        or target_address not in subnet_network
-    ):
+    if subnet_network.prefixlen > 30 or target_address not in subnet_network:
         raise StateError("ExternalIPAttachment target address is outside its canonical IPv4 Subnet")
     return context
 
@@ -388,11 +382,15 @@ def _validate_external_ip_attachment_entry(entry: Any) -> None:
     if entry["phase"] not in ATTACHMENT_PHASES:
         raise StateCorrupt("ExternalIPAttachment provider phase is invalid")
     try:
-        address = ipaddress.ip_address(entry["external_address"])
-    except (TypeError, ValueError) as error:
-        raise StateCorrupt("ExternalIPAttachment external address is invalid") from error
-    if not isinstance(address, ipaddress.IPv4Address) or str(address) != entry["external_address"]:
-        raise StateCorrupt("ExternalIPAttachment external address must be canonical IPv4")
+        validate_ipv4_address(
+            entry["external_address"],
+            "ExternalIPAttachment external address",
+            error_type=StateCorrupt,
+        )
+    except StateCorrupt as error:
+        raise StateCorrupt(
+            "ExternalIPAttachment external address must be canonical IPv4"
+        ) from error
     try:
         context = _external_ip_attachment_context(entry["context"], entry["tenant_id"])
     except StateError as error:
@@ -454,18 +452,22 @@ def _nat_gateway_context(value: Any, tenant_id: str) -> dict[str, Any]:
             if item["state"] != "Allocated":
                 raise StateError("NATGateway ExternalIP must be Allocated")
             try:
-                address = ipaddress.ip_address(item["address"])
-            except ValueError as error:
-                raise StateError("NATGateway ExternalIP address must be IPv4") from error
-            if not isinstance(address, ipaddress.IPv4Address) or str(address) != item["address"]:
-                raise StateError("NATGateway ExternalIP address must be canonical IPv4")
+                validate_ipv4_address(
+                    item["address"],
+                    "NATGateway ExternalIP address",
+                    error_type=StateError,
+                )
+            except StateError as error:
+                raise StateError(
+                    "NATGateway ExternalIP address must be canonical IPv4"
+                ) from error
         else:
             try:
-                network = ipaddress.ip_network(item["ipv4_cidr"], strict=True)
-            except ValueError as error:
+                parse_canonical_ipv4_network(
+                    item["ipv4_cidr"], context="NATGateway VirtualNetwork CIDR"
+                )
+            except (TypeError, ValueError) as error:
                 raise StateError("NATGateway VirtualNetwork CIDR must be IPv4") from error
-            if not isinstance(network, ipaddress.IPv4Network) or str(network) != item["ipv4_cidr"]:
-                raise StateError("NATGateway VirtualNetwork CIDR must be canonical IPv4")
         context[section] = dict(item)
     if context["external_ip"]["namespace"] != context["virtual_network"]["namespace"]:
         raise StateError("NATGateway dependencies must share a namespace")
@@ -486,11 +488,9 @@ def _nat_gateway_source_cidrs(value: Any) -> list[dict[str, str]]:
         if not _is_canonical_uuid(uid):
             raise StateError("NATGateway source Subnet UID must be a canonical UUID")
         try:
-            network = ipaddress.ip_network(cidr, strict=True)
+            parse_canonical_ipv4_network(cidr, context="NATGateway source CIDR")
         except (TypeError, ValueError) as error:
             raise StateError("NATGateway source CIDR must be IPv4") from error
-        if not isinstance(network, ipaddress.IPv4Network) or str(network) != cidr:
-            raise StateError("NATGateway source CIDR must be canonical IPv4")
         if uid in seen_uids or cidr in seen_cidrs:
             raise StateError("NATGateway source CIDRs must be unique")
         seen_uids.add(uid)
@@ -532,11 +532,13 @@ def _validate_nat_gateway_entry(entry: Any) -> None:
     if entry["phase"] not in NAT_GATEWAY_PHASES:
         raise StateCorrupt("NATGateway provider phase is invalid")
     try:
-        address = ipaddress.ip_address(entry["external_address"])
-    except (TypeError, ValueError) as error:
-        raise StateCorrupt("NATGateway external address is invalid") from error
-    if not isinstance(address, ipaddress.IPv4Address) or str(address) != entry["external_address"]:
-        raise StateCorrupt("NATGateway external address must be canonical IPv4")
+        validate_ipv4_address(
+            entry["external_address"],
+            "NATGateway external address",
+            error_type=StateCorrupt,
+        )
+    except StateCorrupt as error:
+        raise StateCorrupt("NATGateway external address must be canonical IPv4") from error
     try:
         context = _nat_gateway_context(entry["context"], entry["tenant_id"])
     except StateError as error:
@@ -597,16 +599,12 @@ def _subnet_payload(
     if not _is_valid_tenant_id(tenant_id):
         raise StateError("Subnet tenant ID is required")
     try:
-        network = ipaddress.ip_network(cidr, strict=True)
+        network = parse_canonical_ipv4_network(cidr, context="Subnet CIDR")
     except (TypeError, ValueError) as error:
         raise StateError(
             "Subnet CIDR must be a canonical IPv4 prefix of /30 or shorter for gateway and DHCP support"
         ) from error
-    if (
-        not isinstance(network, ipaddress.IPv4Network)
-        or network.prefixlen > 30
-        or str(network) != cidr
-    ):
+    if network.prefixlen > 30:
         raise StateError(
             "Subnet CIDR must be a canonical IPv4 prefix of /30 or shorter for gateway and DHCP support"
         )
@@ -626,13 +624,11 @@ def _subnet_payload(
     dhcp_end = network.broadcast_address - 1
     if vip_cidr:
         try:
-            vip_network = ipaddress.ip_network(vip_cidr, strict=True)
+            vip_network = parse_canonical_ipv4_network(vip_cidr, context="Subnet VIP CIDR")
         except (TypeError, ValueError) as error:
             raise StateError("Subnet VIP CIDR must be a canonical upper-end IPv4 block") from error
         if (
-            not isinstance(vip_network, ipaddress.IPv4Network)
-            or str(vip_network) != vip_cidr
-            or vip_network.prefixlen <= network.prefixlen
+            vip_network.prefixlen <= network.prefixlen
             or not vip_network.subnet_of(network)
             or vip_network.broadcast_address != network.broadcast_address
         ):
@@ -1267,14 +1263,12 @@ class StateStore:
         ):
             raise StateCorrupt("VirtualNetwork transit endpoint is invalid")
         try:
-            transit_cidr = ipaddress.ip_network(transit["cidr"], strict=True)
+            transit_cidr = parse_canonical_ipv4_network(
+                transit["cidr"], context="VirtualNetwork transit CIDR"
+            )
         except (TypeError, ValueError) as error:
             raise StateCorrupt("VirtualNetwork transit CIDR is invalid") from error
-        if (
-            not isinstance(transit_cidr, ipaddress.IPv4Network)
-            or transit_cidr.prefixlen != 31
-            or str(transit_cidr) != transit["cidr"]
-        ):
+        if transit_cidr.prefixlen != 31:
             raise StateCorrupt("VirtualNetwork transit CIDR must be an IPv4 /31")
         try:
             virtual_network_cidr = _parse_canonical_ipv4_network(
@@ -1302,14 +1296,12 @@ class StateStore:
         if not _is_valid_tenant_id(entry["tenant_id"]):
             raise StateCorrupt("Subnet tenant ID is invalid")
         try:
-            network = ipaddress.ip_network(entry["ipv4_cidr"], strict=True)
+            network = parse_canonical_ipv4_network(
+                entry["ipv4_cidr"], context="Subnet IPv4 CIDR"
+            )
         except (TypeError, ValueError) as error:
             raise StateCorrupt("Subnet IPv4 CIDR is invalid") from error
-        if (
-            not isinstance(network, ipaddress.IPv4Network)
-            or network.prefixlen > 30
-            or str(network) != entry["ipv4_cidr"]
-        ):
+        if network.prefixlen > 30:
             raise StateCorrupt("Subnet IPv4 CIDR must be canonical and no smaller than /30")
         if isinstance(entry["vlan_id"], bool) or not isinstance(entry["vlan_id"], int):
             raise StateCorrupt("Subnet VLAN ID is invalid")
@@ -1333,13 +1325,13 @@ class StateStore:
             raise StateCorrupt("Subnet VIP CIDR is invalid")
         if vip_cidr:
             try:
-                vip_network = ipaddress.ip_network(vip_cidr, strict=True)
+                vip_network = parse_canonical_ipv4_network(
+                    vip_cidr, context="Subnet VIP CIDR"
+                )
             except (TypeError, ValueError) as error:
                 raise StateCorrupt("Subnet VIP CIDR is invalid") from error
             if (
-                not isinstance(vip_network, ipaddress.IPv4Network)
-                or str(vip_network) != vip_cidr
-                or vip_network.prefixlen <= network.prefixlen
+                vip_network.prefixlen <= network.prefixlen
                 or not vip_network.subnet_of(network)
                 or vip_network.broadcast_address != network.broadcast_address
             ):
@@ -1431,6 +1423,17 @@ class StateStore:
             raise StateCorrupt("VirtualNetwork indexed state does not match its payload")
         return entry
 
+    @staticmethod
+    def _subnet_entry_for_row(row: tuple[Any, ...]) -> dict[str, Any]:
+        try:
+            entry = json.loads(row[7])
+        except (json.JSONDecodeError, TypeError) as error:
+            raise StateCorrupt("malformed Subnet state payload") from error
+        StateStore._validate_subnet_entry(entry)
+        if row != StateStore._row_for_subnet_entry(entry) or entry["uid"] != row[0]:
+            raise StateCorrupt("Subnet indexed state does not match its payload")
+        return entry
+
     def _subnet_for_uid(self, connection: sqlite3.Connection, uid: str):
         row = connection.execute(
             """SELECT uid, virtual_network_uid, tenant_id, vlan_id,
@@ -1438,16 +1441,7 @@ class StateStore:
                FROM subnets WHERE uid = ?""",
             (uid,),
         ).fetchone()
-        if row is None:
-            return None
-        try:
-            entry = json.loads(row[7])
-        except (json.JSONDecodeError, TypeError) as error:
-            raise StateCorrupt("malformed Subnet state payload") from error
-        self._validate_subnet_entry(entry)
-        if row != self._row_for_subnet_entry(entry) or entry["uid"] != uid:
-            raise StateCorrupt("Subnet indexed state does not match its payload")
-        return entry
+        return None if row is None else self._subnet_entry_for_row(row)
 
     @staticmethod
     def _attachment_for_uid(connection: sqlite3.Connection, uid: str):
@@ -1540,11 +1534,12 @@ class StateStore:
         self, connection: sqlite3.Connection, virtual_network_uid: str
     ) -> list[dict[str, Any]]:
         rows = connection.execute(
-            "SELECT uid FROM subnets WHERE virtual_network_uid = ? ORDER BY uid",
+            """SELECT uid, virtual_network_uid, tenant_id, vlan_id,
+                      vlan_interface, ipv4_cidr, phase, payload
+               FROM subnets WHERE virtual_network_uid = ? ORDER BY uid""",
             (virtual_network_uid,),
         ).fetchall()
-        entries = [self._subnet_for_uid(connection, row[0]) for row in rows]
-        return [entry for entry in entries if entry is not None]
+        return [self._subnet_entry_for_row(row) for row in rows]
 
     def _parent_uid_for_subnet(
         self, uid: str, tenant_id: str, *, check_mode: bool = False
@@ -1691,7 +1686,9 @@ class StateStore:
                     parent_network = _parse_canonical_ipv4_network(
                         parent["virtual_network_cidr"]
                     )
-                    subnet_network = ipaddress.ip_network(subnet_cidr, strict=True)
+                    subnet_network = parse_canonical_ipv4_network(
+                        subnet_cidr, context="Subnet CIDR"
+                    )
                     transit_network = ipaddress.ip_network(parent["transit"]["cidr"])
                 except (TypeError, ValueError) as error:
                     raise StateCorrupt("saved VirtualNetwork CIDR state is invalid") from error
@@ -1884,7 +1881,9 @@ class StateStore:
                         "SELECT 1 FROM attachments WHERE subnet_uid = ? LIMIT 1", (uid,)
                     ).fetchone() is not None:
                         raise StateError("Subnet still has an ExternalIPAttachment")
-                    self._require_subnet_not_claimed_by_deleting_nat_gateway(connection, uid)
+                    self._require_subnet_not_claimed_by_deleting_nat_gateway(
+                        connection, uid, virtual_network_uid
+                    )
             if entry["phase"] != "deleting":
                 entry = {**entry, "phase": "deleting"}
             return entry, True
@@ -1973,7 +1972,9 @@ class StateStore:
                         "SELECT 1 FROM attachments WHERE subnet_uid = ? LIMIT 1", (uid,)
                     ).fetchone() is not None:
                         raise StateError("Subnet still has an ExternalIPAttachment")
-                    if self._subnet_has_nat_gateway_claim(connection, uid):
+                    if self._subnet_has_nat_gateway_claim(
+                        connection, uid, virtual_network_uid
+                    ):
                         raise StateError("Subnet still has an AgentlessNet NATGateway SNAT rule")
             if entry["phase"] != "deleting":
                 raise StateError("AgentlessNet Subnet must be deleting before VLAN release")
@@ -1992,7 +1993,9 @@ class StateStore:
                     "SELECT 1 FROM attachments WHERE subnet_uid = ? LIMIT 1", (uid,)
                 ).fetchone() is not None:
                     raise StateError("Subnet still has an ExternalIPAttachment")
-                if self._subnet_has_nat_gateway_claim(connection, uid):
+                if self._subnet_has_nat_gateway_claim(
+                    connection, uid, virtual_network_uid
+                ):
                     raise StateError("Subnet still has an AgentlessNet NATGateway SNAT rule")
                 if entry["phase"] != "deleting":
                     raise StateError("AgentlessNet Subnet must be deleting before VLAN release")
@@ -2111,22 +2114,7 @@ class StateStore:
             "ExternalIPAttachment Fulfillment identity is already reserved",
         )
 
-    def _attachment_provider_state(
-        self,
-        virtual_network: dict[str, Any],
-        external_interface: str,
-    ) -> dict[str, str]:
-        if not isinstance(external_interface, str) or not SAFE_INTERFACE_NAME.fullmatch(external_interface):
-            raise StateError("AgentlessNet external interface is invalid")
-        return {
-            "namespace_name": virtual_network["namespace_name"],
-            "namespace_interface": virtual_network["uplink"]["namespace_interface"],
-            "host_interface": virtual_network["uplink"]["host_interface"],
-            "external_interface": external_interface,
-            "next_hop": virtual_network["transit"]["namespace_ip"],
-        }
-
-    def _nat_gateway_provider_state(
+    def _provider_state(
         self,
         virtual_network: dict[str, Any],
         external_interface: str,
@@ -2166,29 +2154,30 @@ class StateStore:
     def _subnet_has_nat_gateway_claim(
         connection: sqlite3.Connection,
         subnet_uid: str,
+        virtual_network_uid: str,
     ) -> bool:
-        gateway_uids = [
-            row[0]
-            for row in connection.execute("SELECT uid FROM nat_gateways")
-        ]
-        return any(
-            (entry := StateStore._nat_gateway_for_uid(connection, gateway_uid)) is not None
-            and subnet_uid in StateStore._nat_gateway_source_uids(entry)
-            for gateway_uid in gateway_uids
+        gateway_uids = connection.execute(
+            "SELECT uid FROM nat_gateways WHERE virtual_network_uid = ? ORDER BY uid",
+            (virtual_network_uid,),
         )
+        for (gateway_uid,) in gateway_uids:
+            entry = StateStore._nat_gateway_for_uid(connection, gateway_uid)
+            if entry is not None and subnet_uid in StateStore._nat_gateway_source_uids(entry):
+                return True
+        return False
 
     @staticmethod
     def _require_subnet_not_claimed_by_deleting_nat_gateway(
         connection: sqlite3.Connection,
         subnet_uid: str,
+        virtual_network_uid: str,
     ) -> None:
-        gateway_uids = [
-            row[0]
-            for row in connection.execute(
-                "SELECT uid FROM nat_gateways WHERE phase = 'deleting'"
-            )
-        ]
-        for gateway_uid in gateway_uids:
+        gateway_uids = connection.execute(
+            """SELECT uid FROM nat_gateways
+               WHERE virtual_network_uid = ? AND phase = 'deleting' ORDER BY uid""",
+            (virtual_network_uid,),
+        )
+        for (gateway_uid,) in gateway_uids:
             entry = StateStore._nat_gateway_for_uid(connection, gateway_uid)
             if entry is not None and subnet_uid in StateStore._nat_gateway_source_uids(entry):
                 raise StateError(
@@ -2343,7 +2332,7 @@ class StateStore:
                 )
                 if virtual_network is None or subnet is None or external_ip is None:
                     raise StateError("AgentlessNet attachment dependency state is missing")
-                provider = self._attachment_provider_state(
+                provider = self._provider_state(
                     virtual_network, external_interface
                 )
                 requested = _external_ip_attachment_entry(
@@ -2610,7 +2599,7 @@ class StateStore:
                     )):
                         raise StateError("NATGateway context does not match saved provider dependencies")
 
-                    provider = self._nat_gateway_provider_state(virtual_network, external_interface)
+                    provider = self._provider_state(virtual_network, external_interface)
                     requested = {
                         "uid": uid,
                         "fulfillment_id": fulfillment_id,

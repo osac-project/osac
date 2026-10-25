@@ -539,6 +539,12 @@
                     "description": "ExternalIPAttachment input/result contract supported by this manager. Empty uses the unversioned flow.",
                     "enum": ["", "v1"],
                     "default": ""
+                  },
+                  "natGatewayContractVersion": {
+                    "type": "string",
+                    "description": "NATGateway input/result contract supported by this manager. Empty uses the unversioned flow.",
+                    "enum": ["", "v1"],
+                    "default": ""
                   }
                 },
                 "additionalProperties": false
@@ -578,6 +584,12 @@
                   "externalIPAttachmentContractVersion": {
                     "type": "string",
                     "description": "ExternalIPAttachment input/result contract supported by this manager. Empty uses the unversioned flow.",
+                    "enum": ["", "v1"],
+                    "default": ""
+                  },
+                  "natGatewayContractVersion": {
+                    "type": "string",
+                    "description": "NATGateway input/result contract supported by this manager. Empty uses the unversioned flow.",
                     "enum": ["", "v1"],
                     "default": ""
                   }

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import ipaddress
 import re
-import shlex
 from typing import Any
 
 from ansible_collections.osac.templates.plugins.module_utils import agentless_net_external_ip
@@ -31,27 +29,23 @@ def _run(command: list[str], *, check: bool = True):
 
 
 def _ipv4(value: Any, context: str) -> str:
-    if not isinstance(value, str):
-        raise NATGatewayProviderError(f"{context} must be IPv4")
-    try:
-        address = ipaddress.ip_address(value)
-    except ValueError as error:
-        raise NATGatewayProviderError(f"{context} must be IPv4") from error
-    if not isinstance(address, ipaddress.IPv4Address) or str(address) != value:
-        raise NATGatewayProviderError(f"{context} must be canonical IPv4")
-    return value
+    return str(
+        network.validate_ipv4_address(
+            value,
+            context,
+            error_type=NATGatewayProviderError,
+        )
+    )
 
 
 def _ipv4_network(value: Any, context: str) -> str:
-    if not isinstance(value, str):
-        raise NATGatewayProviderError(f"{context} must be an IPv4 CIDR")
     try:
-        prefix = ipaddress.ip_network(value, strict=True)
+        prefix = network.parse_canonical_ipv4_network(value, context=context)
     except ValueError as error:
         raise NATGatewayProviderError(f"{context} must be an IPv4 CIDR") from error
-    if not isinstance(prefix, ipaddress.IPv4Network) or str(prefix) != value:
-        raise NATGatewayProviderError(f"{context} must be canonical IPv4")
-    return value
+    except TypeError as error:
+        raise NATGatewayProviderError(f"{context} must be an IPv4 CIDR") from error
+    return str(prefix)
 
 
 def _interface(value: Any, context: str) -> str:
@@ -74,10 +68,7 @@ def _owner(uid: str, kind: str) -> str:
 
 
 def _iptables_prefix(table: str, namespace: str | None = None) -> list[str]:
-    prefix = ["iptables", "-w", "-t", table]
-    if namespace is not None:
-        return ["ip", "netns", "exec", namespace, *prefix]
-    return prefix
+    return network.iptables_prefix(table, namespace)
 
 
 def _ensure_rule(
@@ -88,14 +79,15 @@ def _ensure_rule(
     namespace: str | None = None,
     insert: bool = False,
 ) -> bool:
-    prefix = _iptables_prefix(table, namespace)
-    if _run([*prefix, "-C", chain, *rule], check=False).returncode == 0:
-        return False
-    action = ["-I", chain, "1"] if insert else ["-A", chain]
-    _run([*prefix, *action, *rule])
-    if _run([*prefix, "-C", chain, *rule], check=False).returncode != 0:
-        raise NATGatewayProviderError(f"owned iptables rule did not converge in {chain}")
-    return True
+    return network.ensure_iptables_rule(
+        _run,
+        table,
+        chain,
+        rule,
+        namespace=namespace,
+        insert=insert,
+        error_type=NATGatewayProviderError,
+    )
 
 
 def _delete_rule(
@@ -105,26 +97,19 @@ def _delete_rule(
     *,
     namespace: str | None = None,
 ) -> bool:
-    prefix = _iptables_prefix(table, namespace)
-    return network.remove_repeated_rule(
+    return network.delete_iptables_rule(
         _run,
-        [*prefix, "-C", chain, *rule],
-        [*prefix, "-D", chain, *rule],
+        table,
+        chain,
+        rule,
+        namespace=namespace,
         error_message=f"too many duplicate owned NATGateway rules in {chain}",
         error_type=NATGatewayProviderError,
     )
 
 
 def _chain_rules(table: str, chain: str, *, namespace: str | None = None) -> list[list[str]]:
-    result = _run([*_iptables_prefix(table, namespace), "-S", chain], check=False)
-    if result.returncode != 0:
-        return []
-    rules = []
-    for line in result.stdout.splitlines():
-        parts = shlex.split(line)
-        if parts[:2] == ["-A", chain]:
-            rules.append(parts[2:])
-    return rules
+    return network.iptables_chain_rules(_run, table, chain, namespace=namespace)
 
 
 def _rule_comment(rule: list[str]) -> str:
@@ -249,11 +234,6 @@ def _validate_parent(parent: dict[str, Any], gateway: dict[str, Any]) -> None:
     expected_next_hop = parent["transit"]["namespace_ip"]
     if provider["next_hop"] != expected_next_hop:
         raise NATGatewayProviderError("NATGateway route next hop does not match saved VirtualNetwork state")
-
-
-def _verify_rule_present(table: str, chain: str, rule: list[str], *, namespace: str | None = None) -> None:
-    if _run([*_iptables_prefix(table, namespace), "-C", chain, *rule], check=False).returncode != 0:
-        raise NATGatewayProviderError(f"NATGateway rule did not converge in {chain}")
 
 
 def _verify_owned_forward_chain() -> None:
@@ -410,8 +390,13 @@ def reconcile_nat_gateway(
                 raise NATGatewayProviderError("duplicate NATGateway SNAT rules exist")
             if existing_by_subnet.get(subnet_uid) and existing_by_subnet[subnet_uid][0] != rule:
                 raise NATGatewayProviderError("NATGateway SNAT rule changed under the same owner")
-            changed = _ensure_rule("nat", "POSTROUTING", rule, namespace=namespace) or changed
-            _verify_rule_present("nat", "POSTROUTING", rule, namespace=namespace)
+        changed = network.ensure_iptables_rules(
+            _run,
+            "nat",
+            "POSTROUTING",
+            list(desired_snat.values()),
+            namespace=namespace,
+        ) or changed
 
         outbound, inbound = _forward_rules(gateway)
         for rule, kind in ((outbound, "forward-out"), (inbound, "forward-in")):
@@ -419,14 +404,12 @@ def reconcile_nat_gateway(
             if len(owned) > 1 or (owned and owned[0] != rule):
                 raise NATGatewayProviderError("NATGateway forwarding rule changed under the same owner")
             changed = _ensure_rule("filter", SNAT_FORWARD_CHAIN, rule) or changed
-            _verify_rule_present("filter", SNAT_FORWARD_CHAIN, rule)
 
         bypass = _bypass_rule(gateway)
         owned_bypass = [item for item, _kind in _owned_rules("nat", SNAT_BYPASS_CHAIN, uid)]
         if len(owned_bypass) > 1 or (owned_bypass and owned_bypass[0] != bypass):
             raise NATGatewayProviderError("NATGateway bypass rule changed under the same owner")
         changed = _ensure_rule("nat", SNAT_BYPASS_CHAIN, bypass) or changed
-        _verify_rule_present("nat", SNAT_BYPASS_CHAIN, bypass)
 
         # Keep the old source rules live until every new SNAT rule is installed.
         for rule, kind in existing_snat:

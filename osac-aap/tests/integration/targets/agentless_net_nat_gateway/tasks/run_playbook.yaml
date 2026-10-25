@@ -1,58 +1,24 @@
 ---
-- name: Invoke an AgentlessNet NATGateway playbook
-  ansible.builtin.command:
-    argv:
-      - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
-      - -i
-      - localhost,
-      - "{{ playbook_dir }}/../../../../../playbook_osac_{{ agentless_natgw_playbook }}.yml"
-      - -e
-      - "{{ {'osac_job_vars': agentless_natgw_job_vars} | to_json }}"
-      - -e
-      - >-
-        {{ {'ansible_connection': 'local', 'ansible_become': false,
-            'ansible_python_interpreter': ansible_playbook_python} | to_json }}
-  args:
-    chdir: "{{ playbook_dir }}/../../../../../"
-  environment:
-    AGENTLESS_NET_VN_INVENTORY: "{{ agentless_natgw_inventory | to_json }}"
-    AGENTLESS_NET_STATE_FILE: "{{ agentless_natgw_state_file }}"
-    AGENTLESS_NET_SSH_PRIVATE_KEY: ""
-    ANSIBLE_CONFIG: "{{ playbook_dir }}/../../../../../ansible.cfg"
-    ANSIBLE_COLLECTIONS_PATH: "{{ playbook_dir }}/../../../../../collections:{{ playbook_dir }}/../../../../../vendor"
-    ANSIBLE_STDOUT_CALLBACK: ansible.posix.json
-    ANSIBLE_SHOW_CUSTOM_STATS: "true"
-    PYTHONPATH: "{{ playbook_dir }}/../files/python"
-    OSAC_AGENTLESS_NATGW_TEST_MODE: "true"
-    OSAC_AGENTLESS_NATGW_FAIL_DELETE: "{{ agentless_natgw_fail_delete | default(false) | ternary('true', 'false') }}"
-    KUBECONFIG: /tmp/osac-agentless-natgw-no-kubeconfig
-    K8S_AUTH_KUBECONFIG: /tmp/osac-agentless-natgw-no-kubeconfig
-    K8S_AUTH_HOST: https://127.0.0.1:1
-  register: agentless_natgw_playbook_result
-  changed_when: false
-  failed_when: false
+- name: Run and validate the NATGateway provider playbook
+  block:
+    - name: Run shared AgentlessNet provider playbook checks
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/../../../common/run_agentless_provider_playbook.yaml"
 
-- name: Check the AgentlessNet NATGateway playbook outcome
-  ansible.builtin.assert:
-    that:
-      - (agentless_natgw_playbook_result.rc == 0) == (agentless_natgw_should_succeed | bool)
-    fail_msg: >-
-      child playbook outcome was unexpected (rc={{ agentless_natgw_playbook_result.rc }}):
-      {{ agentless_natgw_playbook_result.stderr | default('') }}
-      {{ agentless_natgw_playbook_result.stdout[-1200:] | default('') }}
-
-- name: Read the NATGateway result artifact
-  ansible.builtin.set_fact:
-    agentless_natgw_result: >-
-      {{ ((agentless_natgw_playbook_result.stdout | from_json).global_custom_stats | default({})).osac_result | default({}) }}
-  when: agentless_natgw_should_succeed | bool
-
-- name: Validate the NATGateway result envelope
-  ansible.builtin.assert:
-    that:
-      - agentless_natgw_result.schemaVersion == 'v1'
-      - agentless_natgw_result.operation == agentless_natgw_operation
-      - agentless_natgw_result.resourceUID == agentless_natgw_resource.metadata.uid
-      - agentless_natgw_result.observedGeneration | int == agentless_natgw_resource.metadata.generation | int
-      - agentless_natgw_result.data == {}
-  when: agentless_natgw_should_succeed | bool
+    - name: Expose NATGateway result for scenario assertions
+      ansible.builtin.set_fact:
+        agentless_natgw_result: "{{ agentless_provider_result }}"
+      when: agentless_natgw_should_succeed | bool
+  vars:
+    agentless_provider_playbook: "{{ agentless_natgw_playbook }}"
+    agentless_provider_job_vars: "{{ agentless_natgw_job_vars }}"
+    agentless_provider_inventory: "{{ agentless_natgw_inventory }}"
+    agentless_provider_state_file: "{{ agentless_natgw_state_file }}"
+    agentless_provider_kubeconfig: /tmp/osac-agentless-natgw-no-kubeconfig
+    agentless_provider_extra_environment:
+      OSAC_AGENTLESS_NATGW_TEST_MODE: "true"
+      OSAC_AGENTLESS_NATGW_FAIL_DELETE: >-
+        {{ agentless_natgw_fail_delete | default(false) | ternary('true', 'false') }}
+    agentless_provider_should_succeed: "{{ agentless_natgw_should_succeed }}"
+    agentless_provider_operation: "{{ agentless_natgw_operation }}"
+    agentless_provider_resource: "{{ agentless_natgw_resource }}"

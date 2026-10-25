@@ -128,7 +128,6 @@ jobs:
         env:
           CONTAINER_TOOL: docker
           MCP_TEST_ENABLED: "true"
-          IT_TEST_COMMIT: ${{ inputs.commit || github.sha }}
         run: |
           echo '127.0.0.1 fulfillment-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
           echo '127.0.0.1 fulfillment-internal-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null

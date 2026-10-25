@@ -115,15 +115,14 @@ If a fresh environment is needed, confirm that `osac-dev` is a disposable test c
 
 If setup fails with `failed to lookup host '...'`, read [README.md — Running integration tests](README.md#running-integration-tests) for host entries.
 
-### Harness timing and catalog cleanup
+### Catalog cleanup and integration reports
 
-Run `go test ./it -run 'TestIntegrationTimings|TestCatalogItemDeletionProbe|TestComputeInstanceMetadataFixture'`
-for report sanitization, node timing attribution, deletion observation/signal
-cadence, and bounded metadata conflict retries. These unit tests use synthetic
-reports, API callbacks, and fake clients, not deployed services. Run the complete
-installer `SUITE=fulfillment` command above for real archival and dependency-order behavior. Each installer test phase writes a
-sanitized JSON report under `logs/timings/`; see
-[report fields and limitations](../docs/INTEGRATION-TESTING.md#fulfillment-integration-timings).
+Run `go test ./it -run TestCatalogItemDeletionProbe` for deletion observation,
+signal cadence, cancellation, and archival races using API callbacks. Run the
+complete installer `SUITE=fulfillment` command above for real archival and
+dependency-order behavior. The installer uses Ginkgo's native JSON reporting
+for each phase; reporting and analysis stay outside the test suite. See
+[report usage and limitations](../docs/INTEGRATION-TESTING.md#fulfillment-integration-timings).
 
 ## Writing tests
 

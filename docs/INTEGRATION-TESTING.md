@@ -188,36 +188,41 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 
 ### Fulfillment integration timings
 
-The `SUITE=fulfillment` installer target writes `service-only.json`,
-`manager-capability.json`, `manager-readiness.json`, and `bmaas-disabled.json`
-under `fulfillment-service/logs/timings/`. CI includes these in its existing
-`logs` artifact. The installer passes absolute output paths because Ginkgo
-runs its test binary from `it/`. Direct Ginkgo runs can opt in with
-`IT_TIMING_REPORT` (output path) and `IT_TIMING_PHASE` (phase name);
-`IT_TEST_COMMIT` records the candidate revision when supplied. A missing file means no report was produced, not that
-the phase passed.
+The `SUITE=fulfillment` installer target uses Ginkgo's native `--json-report`
+flag to write `service-only.json`, `manager-capability.json`,
+`manager-readiness.json`, and `bmaas-disabled.json` under
+`fulfillment-service/logs/timings/`. CI includes these in its existing `logs`
+artifact. Reports use absolute paths and distinct names for each phase. Prior
+reports are removed before a run; a missing report does not imply a passing
+phase. Use the originating Actions run to identify the tested revision.
 
-Reports contain suite status, dry-run status, seed, elapsed seconds, and per-spec
-status, attempts, setup/body/cleanup durations and unattributed time. Only
-completed Ginkgo node events contribute to the breakdown; nested `By` events
-are not double-counted. Fixtures called inside an `It` remain part of its body,
-and `BeforeAll`/`AfterAll` work is charged to the spec that runs that node.
-Suite setup/cleanup have separate rows. Build, deployment and test compilation
-time are outside suite timing; use the Actions step timestamps and build logs
-for those costs. Captured logs, failure messages and arbitrary report entries
-are excluded from these reports.
+These reports are for maintainers investigating CI runtime or comparing fixture
+costs before and after an optimization. Download the artifact and inspect its
+native Ginkgo suite and spec reports. Total runtime, status, attempts, seed,
+suite configuration, and node events support analysis outside the test suite.
+For example, list executed specs from a downloaded report with:
 
-From `fulfillment-service/`, run
-`go test ./it -run 'TestIntegrationTimings|TestCatalogItemDeletionProbe|TestComputeInstanceMetadataFixture'` for
-unit coverage of attribution, sanitization, cancellation, concurrent archival,
-signal throttling, and bounded metadata conflict retries. These tests use
-synthetic Ginkgo reports, callback doubles, and fake API clients, not deployed
-services. Metadata fixture writes retry only gRPC `Aborted` errors with a fresh
-snapshot and map merge on each attempt; optimistic locking stays enabled.
-The complete installer command in the tier table remains the
-component-integration check. Catalog cleanup observes every 500ms, keeps its five-minute bound, and signals no more often than every two
-seconds; it still waits for archival before removing dependencies. Runtime
-savings require paired deployed runs and are not established by unit tests.
+```bash
+jq '.[] | .SpecReports[] | select(.State != "skipped") | {name: ((.ContainerHierarchyTexts + [.LeafNodeText]) | join(" ")), seconds: (.RunTime / 1000000000)}' service-only.json
+```
+
+Native reports include captured output, failures, and report entries, and
+should be handled as CI diagnostic logs. They are not sanitized timing-only
+summaries. Ginkgo documents the format in
+[machine-readable reporting](https://onsi.github.io/ginkgo/#generating-machine-readable-reports).
+
+Fixtures called inside an `It` remain part of its body; node timings do not
+separate that fixture work. Build, deployment and test compilation time are
+outside suite runtime; use Actions step timestamps and build logs for those
+costs. Runtime savings require comparable deployed runs and are not established
+by unit tests.
+
+Run `go test ./it -run TestCatalogItemDeletionProbe` from `fulfillment-service/`
+for unit coverage of deletion observation, signal throttling, cancellation, and
+concurrent archival using callback doubles. Catalog cleanup observes every
+500ms, keeps its five-minute bound, and signals no more often than every two
+seconds; it waits for archival before removing dependencies. The complete
+installer command in the tier table remains the component-integration check.
 
 ### Coverage notes
 

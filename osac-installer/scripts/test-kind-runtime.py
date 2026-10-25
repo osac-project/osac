@@ -597,7 +597,7 @@ create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
         self.assertIn('KIND_PROFILE="dev-full"', result.stdout)
         self.assertNotIn("kind load docker-image", result.stdout)
 
-    def test_fulfillment_reports_resolve_to_uploaded_logs_from_suite_directory(self):
+    def test_fulfillment_reports_resolve_to_uploaded_logs_from_module_directory(self):
         checkout = self.directory / "checkout"
         installer = checkout / "osac-installer"
         suite = checkout / "fulfillment-service/it"
@@ -610,18 +610,18 @@ create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
             env=self.env, text=True, capture_output=True, timeout=15,
         )
         self.assert_success(result)
-        phases = []
+        outputs = []
         for line in result.stdout.splitlines():
-            if "IT_TIMING_REPORT=" not in line:
+            if "ginkgo run " not in line:
                 continue
-            values = dict(word.split("=", 1) for word in shlex.split(line)
-                          if word.startswith(("IT_TIMING_REPORT=", "IT_TIMING_PHASE=")))
-            phase = values["IT_TIMING_PHASE"]
-            phases.append(phase)
-            # Ginkgo executes the test binary in it/, not the module directory.
-            output = (suite / values["IT_TIMING_REPORT"]).resolve()
-            self.assertEqual(output, (checkout / "fulfillment-service/logs/timings" / f"{phase}.json").resolve())
-        self.assertEqual(phases, ["service-only", "manager-capability", "manager-readiness", "bmaas-disabled"])
+            reports = [word.split("=", 1)[1] for word in shlex.split(line)
+                       if word.startswith("--json-report=")]
+            self.assertEqual(len(reports), 1, line)
+            # Native CLI reports resolve from the module where ginkgo runs.
+            outputs.append((suite.parent / reports[0]).resolve())
+        expected = ["service-only", "manager-capability", "manager-readiness", "bmaas-disabled"]
+        self.assertEqual(outputs, [(checkout / "fulfillment-service/logs/timings" / f"{phase}.json").resolve()
+                                   for phase in expected])
 
     def prepare_helm_dependencies(self):
         installer = self.directory / "installer"

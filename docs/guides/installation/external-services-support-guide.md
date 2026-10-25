@@ -93,6 +93,15 @@ PostgreSQL cert-auth case below). For Keycloak, combine B with C and you
 avoid re-pointing deployments, OpenBao JWT config, and client Secrets
 entirely.
 
+**Why Keycloak has no pattern-A row:** the chart exposes no external-IdP
+values mode — no endpoint knob exists to point at an external Keycloak —
+and the one flag it does have works against you: `keycloak.enabled: false`
+deletes the Service and route whose hostname every issuer URL depends on
+(§1.3). The only chart-supported Keycloak externalization today is keeping
+it enabled and swapping the Service's backing address (B) while preserving
+hostname, certificate, and realm (C). §8's retirement table tracks when a
+values path appears.
+
 ### 1.3 What must not change
 
 The in-cluster consumers verify identity, not location:

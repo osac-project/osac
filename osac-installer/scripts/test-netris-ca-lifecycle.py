@@ -5,15 +5,14 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
+from pathlib import Path
 
 import yaml
-
 
 INSTALLER = Path(__file__).resolve().parents[1]
 CHART = INSTALLER / "charts/osac"
@@ -199,6 +198,10 @@ class RenderContractTests(unittest.TestCase):
         self.assertEqual(
             env_of(pre_install)["CA_EXECUTION_IDENTITY"],
             "system:serviceaccount:default:custom-sa",
+        )
+        config_as_code = find(docs, "Secret", "config-as-code-ig")
+        self.assertEqual(
+            config_as_code["stringData"]["AAP_OSAC_SERVICE_ACCOUNT"], "custom-sa"
         )
 
     def test_admission_policy_protects_the_active_name(self) -> None:

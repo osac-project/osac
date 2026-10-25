@@ -4,7 +4,7 @@ metadata:
   labels:
     ansible_job: ''
 spec:
-  serviceAccountName: osac-sa
+  serviceAccountName: {{ osac_sa_name }}
   affinity:
     podAntiAffinity:
       preferredDuringSchedulingIgnoredDuringExecution:

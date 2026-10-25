@@ -1,8 +1,8 @@
 import { Route, Routes } from 'react-router-dom';
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError, createRouterTransport } from '@connectrpc/connect';
-import { screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { screen, waitFor, within } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   BareMetalInstanceCatalogItem,
@@ -15,6 +15,7 @@ import {
   ComputeInstanceCatalogItems,
   ComputeInstanceTemplateReferenceSchema,
   Metadata,
+  MetadataSchema,
   ServiceTier,
 } from '@osac/types';
 import { getViewTypePrefKey } from '@osac/ui-components/hooks/use-view-type';
@@ -785,6 +786,29 @@ describe('CatalogPage', () => {
         `/catalog/cluster/${clusterCatalogItem.id}`,
       );
     });
+  });
+
+  it('omits the unsupported Source column for tenant admins', async () => {
+    setMockSession(allCatalogServiceTiers, 'tenant-admin');
+    localStorage.setItem(catalogItemsViewPrefKey, 'list');
+
+    const catalogItem = {
+      ...vmCatalogItem,
+      metadata: create(MetadataSchema, {
+        name: vmCatalogItem.metadata?.name,
+        creator: 'creator-user-id',
+      }),
+    };
+
+    renderCatalogPage(createCatalogPageTransport({ vmItems: [catalogItem], clusterItems: [] }), [
+      '/catalog?types=vm',
+    ]);
+
+    const table = await screen.findByRole('grid', { name: 'Catalog items' });
+
+    expect(within(table).queryByRole('columnheader', { name: 'Source' })).not.toBeInTheDocument();
+    expect(within(table).getByRole('columnheader', { name: 'Added' })).toBeInTheDocument();
+    expect(within(table).queryByText('creator-user-id')).not.toBeInTheDocument();
   });
 
   describe('Create catalog item action', () => {

@@ -27,7 +27,6 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
   const configurationLabel = t('Configuration');
   const tenantLabel = t('Visibility');
   const createdLabel = t('Created');
-  const sourceLabel = t('Source');
   const addedLabel = t('Added');
   const actionsLabel = t('Actions');
 
@@ -45,7 +44,6 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
             </>
           ) : role === 'tenant-admin' ? (
             <>
-              <Th>{sourceLabel}</Th>
               <Th>{addedLabel}</Th>
             </>
           ) : null}
@@ -81,7 +79,6 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
               </>
             ) : role === 'tenant-admin' ? (
               <>
-                <Td dataLabel={sourceLabel}>{item.metadata?.creator || '-'}</Td>
                 <Td dataLabel={addedLabel}>
                   <Timestamp value={item.metadata?.creationTimestamp} format="Date" />
                 </Td>

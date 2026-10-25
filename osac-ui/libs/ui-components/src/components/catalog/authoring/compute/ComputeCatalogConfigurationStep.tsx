@@ -1,4 +1,4 @@
-import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
+import { Content, Divider, Stack, StackItem, Title } from '@patternfly/react-core';
 
 import { useTranslation } from '../../../../hooks/useTranslation';
 import OsacForm from '../../../Form/OsacForm';
@@ -37,6 +37,7 @@ const ComputeCatalogConfigurationStep = () => {
               />
             )}
           </CatalogField>
+          <Divider />
           <CatalogField name="instanceType">
             {({ valueName, isDisabled, isRequired, labelInfo }) => (
               <ComputeInstanceTypeField

@@ -120,6 +120,7 @@ describe('ComputeCatalogItemWizard', () => {
     expect(screen.getByRole('heading', { name: 'Compute configuration' })).toBeInTheDocument();
     expect(screen.queryByText(/run strategy/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('radio', { name: 'Enter value' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('separator')).toHaveLength(1);
   });
 
   it('shows guest OS family cards and selects a guest OS family', async () => {
@@ -158,6 +159,7 @@ describe('ComputeCatalogItemWizard', () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Boot storage tier' })).toBeInTheDocument();
+    expect(screen.getAllByRole('separator')).toHaveLength(2);
   });
 
   it('shows the Access & Initial run step with user data choices', async () => {

@@ -15,6 +15,7 @@ import {
 } from '@patternfly/react-core';
 
 import { useTranslation } from '../../../hooks/useTranslation.ts';
+import { Timestamp } from '../../Primitives/Timestamp';
 import {
   type CatalogItem,
   GLOBAL_TENANT_VALUE,
@@ -22,7 +23,6 @@ import {
 } from '../catalogItemDisplay.ts';
 import { useCatalogItemResourceLookups } from '../catalogItemResourceLookups.ts';
 import CatalogItemConfiguration from './CatalogItemConfiguration';
-import { Timestamp } from '../../Primitives/Timestamp';
 
 interface CatalogItemDetailContentProps {
   item: CatalogItem;
@@ -31,6 +31,7 @@ interface CatalogItemDetailContentProps {
 export const CatalogItemDetailContent = ({ item }: CatalogItemDetailContentProps) => {
   const { t } = useTranslation();
   const resourceLookups = useCatalogItemResourceLookups();
+
   const tenant = item.metadata?.tenant?.trim();
   const detailsTitleId = 'catalog-item-details-card-title';
   const configurationTitleId = 'catalog-item-configuration-card-title';

@@ -1,6 +1,6 @@
 import { useParams } from 'react-router-dom';
 
-import { useCatalogItemByKind } from './CatalogItemDetailPage';
+import { useCatalogItemByKind } from './useCatalogItemByKind';
 import { useTranslation } from '../../../hooks/useTranslation';
 import ResourceDetailsPage from '../../Resource/ResourceDetailsPage';
 import { ResourceDetailsPageError } from '../../Resource/ResourceDetailsPageError';

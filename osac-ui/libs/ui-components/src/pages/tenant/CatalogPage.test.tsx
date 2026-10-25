@@ -26,6 +26,7 @@ import {
   catalogItemMatchesListFilter,
 } from '../../api/v1/catalog-item-list-filter';
 import { CatalogItemDetailPage } from '../../components/catalog/details/CatalogItemDetailPage.tsx';
+import { VmCatalogItemDetailPage } from '../../components/catalog/details/VmCatalogItemDetailPage.tsx';
 import type { UserRole } from '../../shellTypes';
 import { wrapWithAuthInterceptor } from '../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../test-utils/TestProviders';
@@ -269,6 +270,7 @@ const renderCatalogPageWithDetailRoutes = (
   renderWithProviders(
     <Routes>
       <Route path="/catalog" element={<CatalogPage />} />
+      <Route path="/catalog/vm/:id" element={<VmCatalogItemDetailPage />} />
       <Route path="/catalog/:kind/:id" element={<CatalogItemDetailPage />} />
       <Route path="/clusters/create/:catalogItemId" element={<div>Create cluster page</div>} />
       <Route path="/vms/create/:catalogItemId" element={<div>Create virtual machine page</div>} />

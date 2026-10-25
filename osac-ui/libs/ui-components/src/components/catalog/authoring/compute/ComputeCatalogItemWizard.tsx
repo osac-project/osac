@@ -105,11 +105,11 @@ const ComputeCatalogItemWizard = ({ item }: ComputeCatalogItemWizardProps) => {
               </Button>
             </BreadcrumbItem>
             <BreadcrumbItem isActive>
-              {item ? t('Edit catalog item') : t('Create catalog item')}
+              {item ? t('Edit catalog item') : t('Create VM Catalog Item')}
             </BreadcrumbItem>
           </Breadcrumb>
           <Title headingLevel="h1" size="3xl">
-            {item ? t('Edit catalog item') : t('Create catalog item')}
+            {item ? t('Edit catalog item') : t('Create VM Catalog Item')}
           </Title>
         </PageSection>
         <FieldValidationProvider>

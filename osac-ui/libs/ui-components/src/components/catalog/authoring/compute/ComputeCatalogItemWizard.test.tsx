@@ -9,6 +9,12 @@ import {
   type ComputeInstanceTemplate,
   type DiskImage,
   type InstanceType,
+  SecretSchema,
+  SecretType,
+  StorageProtocol,
+  type StorageTier,
+  StorageTierSchema,
+  StorageTierState,
 } from '@osac/types';
 import type { Tenant } from '@osac/types/private';
 
@@ -62,6 +68,12 @@ const makeDiskImage = (id: string, name: string): DiskImage =>
 const TEMPLATE = makeTemplate('template-1', 'VM template');
 const INSTANCE_TYPE = makeInstanceType('it-1', 'standard-4-8');
 const DISK_IMAGE = makeDiskImage('image-1', 'rhel-9');
+const STORAGE_TIER = create(StorageTierSchema, {
+  id: 'tier-1',
+  metadata: { name: 'fast' },
+  spec: { protocol: StorageProtocol.BLOCK },
+  status: { state: StorageTierState.ACTIVE },
+});
 
 const apiFixtures = {
   computeInstanceTemplates: [TEMPLATE],
@@ -187,20 +199,40 @@ describe('ComputeCatalogItemWizard', () => {
       await user.click(screen.getByRole('button', { name: 'Next' }));
     };
 
-    it('ends with the purple "Starts as unpublished" alert with the tenant-admin body', async () => {
+    it('shows the UX review sections, tenant scope details, status, and governance labels', async () => {
       const { user } = renderWizard();
 
       await goToReview(user);
 
-      expect(await screen.findByText('Starts as unpublished')).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'Review and create' })).toBeInTheDocument();
       expect(
         screen.getByText(
-          'New catalog items are saved as unpublished. Publish from the catalog when you are ready for users in your tenant to use this offering.',
+          'Confirm your settings before creating the catalog item. It will be saved as unpublished until you publish it. Click a section title to edit.',
         ),
       ).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Details' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Compute configuration' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Storage' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Access & Initial run' })).toBeInTheDocument();
+      expect(screen.getByText('Name')).toBeInTheDocument();
+      expect(screen.getByText('Description')).toBeInTheDocument();
+      expect(screen.getByText('Provisioning template')).toBeInTheDocument();
+      expect(screen.getByText('Guest operating system')).toBeInTheDocument();
+      expect(screen.getByText('Disk image')).toBeInTheDocument();
+      expect(screen.getByText('Instance type')).toBeInTheDocument();
+      expect(screen.getByText('Boot disk size')).toBeInTheDocument();
+      expect(screen.getByText('Boot storage tier')).toBeInTheDocument();
+      expect(screen.getByText('Additional disks')).toBeInTheDocument();
+      expect(screen.getByText('Cloud-init')).toBeInTheDocument();
+      expect(screen.getByText('Linux')).toBeInTheDocument();
+      expect(screen.getAllByText('Not set').length).toBeGreaterThan(0);
+      expect(screen.getByText('Unpublished')).toBeInTheDocument();
+      expect(screen.getAllByText('Editable')).toHaveLength(5);
+      expect(screen.getByRole('button', { name: 'Create catalog item' })).toBeInTheDocument();
+      expect(screen.queryByText('Project')).not.toBeInTheDocument();
     });
 
-    it('shows the cloud provider admin body for an admin session', async () => {
+    it('shows the global scope row for an administrator', async () => {
       vi.mocked(useSession).mockReturnValue(makeSession('admin'));
       const { user } = renderWithProviders(<ComputeCatalogItemWizard />, {
         apiFixtures: {
@@ -216,11 +248,97 @@ describe('ComputeCatalogItemWizard', () => {
       await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));
 
+      expect(await screen.findByText('Global')).toBeInTheDocument();
+      expect(screen.getByText('Scope')).toBeInTheDocument();
+      expect(screen.getByText('Unpublished')).toBeInTheDocument();
+    });
+
+    it('navigates from each review section title back to its wizard step', async () => {
+      const { user } = renderWizard();
+
+      await goToReview(user);
+
+      const returnToReview = async (nextCount: number) => {
+        for (let index = 0; index < nextCount; index += 1) {
+          await user.click(screen.getByRole('button', { name: 'Next' }));
+        }
+      };
+
+      await user.click(screen.getByRole('button', { name: 'Edit Details' }));
+      expect(await screen.findByRole('textbox', { name: 'Name' })).toBeInTheDocument();
+      await returnToReview(4);
+
+      await user.click(screen.getByRole('button', { name: 'Edit Compute configuration' }));
       expect(
-        await screen.findByText(
-          'New catalog items are saved as unpublished. Publish from the catalog when you are ready for tenants to use this offering.',
-        ),
+        await screen.findByRole('heading', { name: 'Compute configuration' }),
       ).toBeInTheDocument();
+      await returnToReview(3);
+
+      await user.click(screen.getByRole('button', { name: 'Edit Storage' }));
+      expect(await screen.findByRole('heading', { name: 'Storage' })).toBeInTheDocument();
+      await returnToReview(2);
+
+      await user.click(screen.getByRole('button', { name: 'Edit Access & Initial run' }));
+      expect(
+        await screen.findByRole('heading', { name: 'Access & Initial run' }),
+      ).toBeInTheDocument();
+    });
+
+    it('shows configured Cloud-init without exposing its inline contents', async () => {
+      const { user } = renderWizard();
+
+      await fillGeneralStep(user, 'my-item');
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.type(screen.getByRole('textbox', { name: 'User data' }), 'secret inline value');
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+
+      expect(await screen.findByText('Configured')).toBeInTheDocument();
+      expect(screen.queryByText('secret inline value')).not.toBeInTheDocument();
+    });
+
+    it('shows a selected Cloud-init secret by reference without exposing secret data', async () => {
+      const secret = create(SecretSchema, {
+        id: 'secret-1',
+        metadata: { name: 'cloud-init-secret', project: 'test-tenant' },
+        type: SecretType.USER_DATA,
+      });
+      const { user } = renderWithProviders(<ComputeCatalogItemWizard />, {
+        apiFixtures: { ...apiFixtures, secrets: [secret] },
+      });
+
+      await fillGeneralStep(user, 'my-item');
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('radio', { name: 'Select secret' }));
+      await user.click(await screen.findByRole('button', { name: 'Select a user data secret' }));
+      await user.click(screen.getByRole('option', { name: 'cloud-init-secret' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+
+      expect(await screen.findByText('cloud-init-secret')).toBeInTheDocument();
+      expect(screen.queryByText('Configured')).not.toBeInTheDocument();
+    });
+
+    it('formats configured storage defaults as concise disk-set summaries', async () => {
+      const { user } = renderWithProviders(<ComputeCatalogItemWizard />, {
+        apiFixtures: { ...apiFixtures, publicStorageTiers: [STORAGE_TIER] as StorageTier[] },
+      });
+
+      await fillGeneralStep(user, 'my-item');
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.clear(screen.getByRole('spinbutton', { name: 'Boot disk size' }));
+      await user.type(screen.getByRole('spinbutton', { name: 'Boot disk size' }), '40');
+      await user.click(screen.getByRole('button', { name: 'Add disk' }));
+      await user.click(await screen.findByRole('button', { name: 'Storage tier' }));
+      await user.click(screen.getByRole('option', { name: 'fast' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+
+      expect(await screen.findByText('40 GiB')).toBeInTheDocument();
+      expect(screen.getByText('Disk set 1: 30 GiB · fast')).toBeInTheDocument();
     });
   });
 
@@ -258,7 +376,7 @@ describe('ComputeCatalogItemWizard', () => {
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
-    await user.click(screen.getByRole('button', { name: 'Create' }));
+    await user.click(screen.getByRole('button', { name: 'Create catalog item' }));
 
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     const request = onCreate.mock.calls[0][0] as {
@@ -285,7 +403,7 @@ describe('ComputeCatalogItemWizard', () => {
     await user.type(screen.getByRole('textbox', { name: 'User data' }), 'echo hi');
 
     await user.click(screen.getByRole('button', { name: 'Next' }));
-    await user.click(screen.getByRole('button', { name: 'Create' }));
+    await user.click(screen.getByRole('button', { name: 'Create catalog item' }));
 
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     const request = onCreate.mock.calls[0][0] as {
@@ -307,10 +425,10 @@ describe('ComputeCatalogItemWizard', () => {
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
-    await user.click(screen.getByRole('button', { name: 'Create' }));
+    await user.click(screen.getByRole('button', { name: 'Create catalog item' }));
 
     expect(await screen.findByText('Failed to create resource')).toBeInTheDocument();
-    expect(await screen.findByText('Starts as unpublished')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Review and create' })).toBeInTheDocument();
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
@@ -326,19 +444,43 @@ describe('ComputeCatalogItemWizard', () => {
       },
     });
 
-    it('prefills from the item and submits an update without the template', async () => {
+    it('shows no changes and disables Save changes when the edit is pristine', async () => {
+      const { user } = renderWizard(existingItem);
+
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+
+      expect(
+        await screen.findByRole('heading', { name: 'Review your changes before saving' }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText('No changes yet. Update a step to see a before-and-after summary here.'),
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+    });
+
+    it('prefills from the item and submits changed fields without the template', async () => {
       const onUpdate = vi.fn((req: { object?: unknown }) => ({
         object: { ...(req.object as object), id: 'catalog-item-1' },
       }));
       const { user } = renderWizard(existingItem, { onComputeInstanceCatalogItemUpdate: onUpdate });
 
-      expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('existing-item');
+      const description = screen.getByRole('textbox', { name: 'Description' });
+      expect(description).toHaveValue('An existing item');
+      await user.clear(description);
+      await user.type(description, 'Updated description');
 
       await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));
-      await user.click(screen.getByRole('button', { name: 'Edit' }));
+
+      expect(screen.getByText('An existing item')).toBeInTheDocument();
+      expect(screen.getByText('Updated description')).toBeInTheDocument();
+      expect(screen.queryByText(/cloud-init/i)).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
       await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
       const request = onUpdate.mock.calls[0][0] as {
@@ -351,6 +493,27 @@ describe('ComputeCatalogItemWizard', () => {
       expect(request.updateMask?.paths).not.toContain('metadata.name');
       expect(request.updateMask?.paths).not.toContain('metadata.tenant');
       expect(mockNavigate).toHaveBeenCalledWith('/catalog/vm/catalog-item-1');
+    });
+
+    it('stays on the edit review after a failed submission', async () => {
+      const onUpdate = vi.fn(() => {
+        throw new ConnectError('boom', Code.Internal);
+      });
+      const { user } = renderWizard(existingItem, { onComputeInstanceCatalogItemUpdate: onUpdate });
+
+      await user.clear(screen.getByRole('textbox', { name: 'Description' }));
+      await user.type(screen.getByRole('textbox', { name: 'Description' }), 'Updated description');
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+      expect(await screen.findByText('Failed to edit resource')).toBeInTheDocument();
+      expect(
+        await screen.findByRole('heading', { name: 'Review your changes before saving' }),
+      ).toBeInTheDocument();
+      expect(mockNavigate).not.toHaveBeenCalled();
     });
   });
 });

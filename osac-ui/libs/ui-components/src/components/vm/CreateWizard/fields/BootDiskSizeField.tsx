@@ -18,7 +18,7 @@ const BootDiskSizeField = ({
   return (
     <InputField
       name={name}
-      label={t('Boot disk')}
+      label={t('Boot disk size')}
       fieldId={fieldId}
       type="number"
       isRequired={isRequired}

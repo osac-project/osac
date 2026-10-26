@@ -405,13 +405,14 @@ def reconcile_nat_gateway(
             owned = [item for item, owner_kind in _owned_rules("filter", SNAT_FORWARD_CHAIN, uid) if owner_kind == kind]
             if len(owned) > 1 or (owned and owned[0] != rule):
                 raise NATGatewayProviderError("NATGateway forwarding rule changed under the same owner")
-            changed = _ensure_rule("filter", SNAT_FORWARD_CHAIN, rule) or changed
+            # Keep owned rules before the chain's terminal RETURN sentinel.
+            changed = _ensure_rule("filter", SNAT_FORWARD_CHAIN, rule, insert=True) or changed
 
         bypass = _bypass_rule(gateway)
         owned_bypass = [item for item, _kind in _owned_rules("nat", SNAT_BYPASS_CHAIN, uid)]
         if len(owned_bypass) > 1 or (owned_bypass and owned_bypass[0] != bypass):
             raise NATGatewayProviderError("NATGateway bypass rule changed under the same owner")
-        changed = _ensure_rule("nat", SNAT_BYPASS_CHAIN, bypass) or changed
+        changed = _ensure_rule("nat", SNAT_BYPASS_CHAIN, bypass, insert=True) or changed
 
         # Keep the old source rules live until every new SNAT rule is installed.
         for rule, kind in existing_snat:

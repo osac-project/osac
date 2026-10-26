@@ -86,16 +86,31 @@ def test_ipv4_network_wraps_the_shared_parser_error():
         nat_gateway._ipv4_network("2001:db8::/64", "NATGateway source CIDR")
 
 
-def test_reconcile_installs_explicit_snat_and_host_rules_before_route(monkeypatch):
+@pytest.mark.parametrize(
+    ("sources", "expected_rule_count"),
+    [(source_state(), 4), ([], 3)],
+    ids=("with-subnet", "empty-virtual-network"),
+)
+def test_reconcile_keeps_shared_chain_return_rules_last_before_route(
+    monkeypatch: pytest.MonkeyPatch,
+    sources: list[dict[str, str]],
+    expected_rule_count: int,
+) -> None:
     events = []
     chains = {}
     gateway = gateway_state()
 
     monkeypatch.setattr(nat_gateway, "_validate_parent", lambda *_args: None)
 
-    def ensure_chain(table, _parent_chain, chain, **_kwargs):
+    def ensure_chain(
+        table: str, parent_chain: str, chain: str, *, namespace: str | None = None
+    ) -> bool:
         events.append(("chain", table, chain))
-        chains[(table, chain)] = [["-j", "RETURN"]]
+        chains.setdefault((table, parent_chain), [])
+        chains.setdefault((table, chain), [["-j", "RETURN"]])
+        hook = ["-j", chain]
+        if hook not in chains[(table, parent_chain)]:
+            chains[(table, parent_chain)].insert(0, hook)
         return True
 
     monkeypatch.setattr(nat_gateway, "_ensure_shared_chain", ensure_chain)
@@ -104,16 +119,21 @@ def test_reconcile_installs_explicit_snat_and_host_rules_before_route(monkeypatc
         "_chain_rules",
         lambda table, chain, *, namespace=None: [] if namespace else chains.get((table, chain), []),
     )
-    monkeypatch.setattr(nat_gateway, "_verify_owned_forward_chain", lambda: None)
-    monkeypatch.setattr(nat_gateway, "verify_snat_forwarding_hook", lambda: None)
-    monkeypatch.setattr(nat_gateway, "verify_snat_bypass_hook", lambda: None)
-    monkeypatch.setattr(nat_gateway, "_verify_bypass_chain", lambda: None)
     monkeypatch.setattr(nat_gateway, "_existing_snat_rules", lambda *_args: [])
 
-    def ensure_rule(table, chain, rule, **_kwargs):
-        events.append(("rule", table, chain, rule))
+    def ensure_rule(
+        table: str,
+        chain: str,
+        rule: list[str],
+        *,
+        insert: bool = False,
+    ) -> bool:
+        events.append(("rule", table, chain, rule, insert))
         rules = chains[(table, chain)]
-        rules.insert(rules.index(["-j", "RETURN"]), rule)
+        if insert:
+            rules.insert(0, rule)
+        else:
+            rules.append(rule)
         return True
 
     monkeypatch.setattr(nat_gateway, "_ensure_rule", ensure_rule)
@@ -125,22 +145,33 @@ def test_reconcile_installs_explicit_snat_and_host_rules_before_route(monkeypatc
 
     monkeypatch.setattr(nat_gateway.network, "ensure_iptables_rules", ensure_rules)
     monkeypatch.setattr(
-        nat_gateway,
-        "agentless_net_external_ip",
-        SimpleNamespace(
-            ensure_external_route=lambda address, next_hop: events.append(("route", address, next_hop)) or True,
-            _route_uses_next_hop=lambda *_args: True,
-        ),
+        nat_gateway.agentless_net_external_ip,
+        "ensure_external_route",
+        lambda address, next_hop: events.append(("route", address, next_hop)) or True,
+    )
+    monkeypatch.setattr(
+        nat_gateway.agentless_net_external_ip,
+        "_route_uses_next_hop",
+        lambda *_args: True,
     )
 
-    assert nat_gateway.reconcile_nat_gateway(parent_state(), gateway, source_state()) is True
+    assert nat_gateway.reconcile_nat_gateway(parent_state(), gateway, sources) is True
 
     route_index = next(index for index, event in enumerate(events) if event[0] == "route")
     rules = [event for event in events[:route_index] if event[0] == "rule"]
-    assert len(rules) == 4
-    namespace_snat = next(event[3] for event in rules if event[1:3] == ("nat", "POSTROUTING"))
-    assert namespace_snat[-2:] == ["--to-source", EXTERNAL_IP]
-    assert "-j" in namespace_snat and namespace_snat[namespace_snat.index("-j") + 1] == "SNAT"
+    assert len(rules) == expected_rule_count
+    if sources:
+        namespace_snat = next(event[3] for event in rules if event[1:3] == ("nat", "POSTROUTING"))
+        assert namespace_snat[-2:] == ["--to-source", EXTERNAL_IP]
+        assert "-j" in namespace_snat and namespace_snat[namespace_snat.index("-j") + 1] == "SNAT"
+    host_rules = [event for event in rules if event[1:3] in {
+        ("filter", nat_gateway.SNAT_FORWARD_CHAIN),
+        ("nat", nat_gateway.SNAT_BYPASS_CHAIN),
+    }]
+    assert len(host_rules) == 3
+    assert all(event[4] for event in host_rules)
+    assert chains[("filter", nat_gateway.SNAT_FORWARD_CHAIN)][-1] == ["-j", "RETURN"]
+    assert chains[("nat", nat_gateway.SNAT_BYPASS_CHAIN)][-1] == ["-j", "RETURN"]
     assert events[route_index] == ("route", EXTERNAL_IP, NEXT_HOP)
 
 

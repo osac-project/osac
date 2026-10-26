@@ -62,6 +62,7 @@ def test_config_as_code_secret_tracks_publish_templates_enabled():
             check=True,
             capture_output=True,
             text=True,
+            timeout=300,
         )
         secret = yaml.safe_load(result.stdout)
 
@@ -85,6 +86,7 @@ def _render_config_as_code_secret(*set_strings):
         ],
         capture_output=True,
         text=True,
+        timeout=300,
     )
 
 
@@ -126,6 +128,7 @@ def test_config_as_code_secret_rejects_an_invalid_netris_ca_configmap_name():
         ],
         capture_output=True,
         text=True,
+        timeout=300,
     )
 
     assert result.returncode != 0
@@ -141,6 +144,7 @@ def _render_aap_chart(*set_strings):
         ["helm", "template", "aap-test", str(chart_path), *args],
         capture_output=True,
         text=True,
+        timeout=300,
     )
 
 
@@ -205,6 +209,7 @@ def test_config_as_code_secret_tracks_osac_service_account():
         check=True,
         capture_output=True,
         text=True,
+        timeout=300,
     )
     secret = yaml.safe_load(result.stdout)
 
@@ -228,6 +233,7 @@ def test_config_as_code_secret_tracks_its_own_name():
         check=True,
         capture_output=True,
         text=True,
+        timeout=300,
     )
     secret = yaml.safe_load(result.stdout)
 

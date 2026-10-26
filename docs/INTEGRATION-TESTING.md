@@ -694,10 +694,11 @@ is not set. These checks and pytest collection prove selection only, not
 ### Focused CaaS natural-teardown boundary
 
 CaaS sanity retains the single-nodepool lifecycle and fast deletion feedback
-scenario. Two-node-set isolation runs in
-`caas/regression/test_cluster_node_sets.py`; explicit version resolution and
-invalid-version rejection are consolidated in
-`caas/regression/test_cluster_version.py`.
+scenario and verifies deployed version resolution through the ClusterOrder and
+HostedCluster release image. Two-node-set isolation runs in
+`caas/regression/test_cluster_node_sets.py`. Invalid-version API validation and
+ClusterVersion deletion protection belong to the Fulfillment integration suite
+in `fulfillment-service/it/it_public_clusters_test.go`.
 
 Both `test_cluster_create` and `test_cluster_create_with_two_node_sets` use the
 same natural teardown assertions. `test_cluster_create` creates its cluster from a

@@ -1,48 +1,22 @@
 ---
-- name: Include get remote cluster kubeconfig
-  ansible.builtin.include_role:
-    name: osac.service.common
-    tasks_from: get_remote_cluster_kubeconfig
+- name: Read the ExternalIP contract version
+  ansible.builtin.set_fact:
+    metallb_external_ip_contract_version: >-
+      {{ (external_ip.metadata.annotations | default({})).get(
+           'osac.openshift.io/externalip-contract-version', '') }}
 
-- name: Validate ExternalIP fields
+- name: Validate the ExternalIP contract version
   ansible.builtin.assert:
     that:
-      - external_ip.metadata is defined
-      - external_ip.metadata.name is defined
-      - external_ip.metadata.name | length > 0
-    fail_msg: "ExternalIP metadata.name is required"
+      - metallb_external_ip_contract_version in ['', 'v1']
+    fail_msg: >-
+      MetalLB ExternalIP supports the unversioned contract and v1; received
+      '{{ metallb_external_ip_contract_version }}'.
 
-- name: Extract ExternalIP configuration
-  ansible.builtin.set_fact:
-    ip_name: "{{ external_ip.metadata.name }}"
+- name: Release ExternalIP with the v1 result contract
+  ansible.builtin.include_tasks: _delete_external_ip_v1.yaml
+  when: metallb_external_ip_contract_version == 'v1'
 
-- name: Display deletion information
-  ansible.builtin.debug:
-    msg:
-      - "Deleting LoadBalancer Service for ExternalIP '{{ ip_name }}'"
-
-- name: Delete LoadBalancer Service
-  kubernetes.core.k8s:
-    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
-    state: absent
-    api_version: v1
-    kind: Service
-    name: "osac-eip-{{ ip_name }}"
-    namespace: metallb-system
-    wait: true
-    wait_timeout: 300
-  register: lb_service_delete_result
-  retries: 3
-  delay: 10
-  until: >-
-    lb_service_delete_result is successful
-    or ('NotFound' in (lb_service_delete_result.msg | default('')))
-  failed_when:
-    - lb_service_delete_result.failed | default(false)
-    - "'NotFound' not in (lb_service_delete_result.msg | default(''))"
-
-- name: Display LoadBalancer Service deletion result
-  ansible.builtin.debug:
-    msg:
-      - "LoadBalancer Service 'osac-eip-{{ ip_name }}' deletion completed"
-      - "Changed: {{ lb_service_delete_result.changed | default(false) }}"
+- name: Release ExternalIP with the legacy annotation contract
+  ansible.builtin.include_tasks: _delete_external_ip_legacy.yaml
+  when: metallb_external_ip_contract_version == ''

@@ -1,0 +1,86 @@
+---
+- name: Include get remote cluster kubeconfig
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: get_remote_cluster_kubeconfig
+
+- name: Set the MetalLB allocation operation
+  ansible.builtin.set_fact:
+    metallb_external_ip_operation: external_ip.allocate
+
+- name: Validate the MetalLB ExternalIP v1 allocation input
+  ansible.builtin.include_tasks: _validate_external_ip_v1.yaml
+
+- name: Inspect any existing MetalLB reservation before reuse
+  ansible.builtin.include_tasks: _inspect_external_ip_service_v1.yaml
+
+- name: Create or adopt the MetalLB reservation Service
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: "{{ metallb_external_ip_service_name }}"
+        namespace: metallb-system
+        annotations:
+          metallb.universe.tf/address-pool: "{{ metallb_external_ip_pool_name }}"
+          osac.openshift.io/externalippool-name: "{{ metallb_external_ip_pool_name }}"
+          osac.openshift.io/externalip-contract-version: v1
+          osac.openshift.io/externalip-kubernetes-uid: "{{ metallb_external_ip_uid }}"
+          osac.openshift.io/externalip-generation: "{{ metallb_external_ip_generation | string }}"
+          osac.openshift.io/tenant: "{{ metallb_external_ip_tenant }}"
+          osac.openshift.io/owner-reference: "ExternalIP/{{ metallb_external_ip_name }}"
+        labels:
+          osac.openshift.io/externalip: "{{ metallb_external_ip_name }}"
+          osac.openshift.io/externalip-uuid: "{{ metallb_external_ip_id }}"
+          osac.openshift.io/owner-kind: externalip
+          osac.openshift.io/owner-id: "{{ metallb_external_ip_id }}"
+          osac.openshift.io/managed-by: osac-fulfillment
+      spec:
+        type: LoadBalancer
+        selector: {}
+        ports:
+          - name: placeholder
+            protocol: TCP
+            port: 65535
+            targetPort: 65535
+  register: metallb_external_ip_service_result
+  retries: 60
+  delay: 10
+  until: metallb_external_ip_service_result is successful
+
+- name: Wait for the MetalLB Service to receive an IPv4 address
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Service
+    name: "{{ metallb_external_ip_service_name }}"
+    namespace: metallb-system
+  register: metallb_external_ip_service_info
+  retries: 60
+  delay: 10
+  until: >-
+    metallb_external_ip_service_info.resources | length > 0 and
+    metallb_external_ip_service_info.resources[0].status.loadBalancer.ingress | default([]) | length > 0 and
+    metallb_external_ip_service_info.resources[0].status.loadBalancer.ingress[0].ip | default('') | length > 0
+
+- name: Set the assigned MetalLB address
+  ansible.builtin.set_fact:
+    metallb_external_ip_address: >-
+      {{ metallb_external_ip_service_info.resources[0].status.loadBalancer.ingress[0].ip }}
+
+- name: Return the MetalLB ExternalIP v1 allocation result
+  ansible.builtin.set_stats:
+    data:
+      osac_result:
+        schemaVersion: v1
+        operation: external_ip.allocate
+        resourceUID: "{{ metallb_external_ip_uid }}"
+        observedGeneration: "{{ metallb_external_ip_generation | int }}"
+        data:
+          address: "{{ metallb_external_ip_address }}"
+    per_host: false
+    aggregate: false
+  when: not ansible_check_mode

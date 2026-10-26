@@ -1,0 +1,54 @@
+---
+- name: Validate the MetalLB ExternalIP v1 request
+  ansible.builtin.assert:
+    that:
+      - external_ip.metadata.name is defined
+      - external_ip.metadata.name | length > 0
+      - external_ip.metadata.namespace is defined
+      - external_ip.metadata.namespace | length > 0
+      - external_ip.metadata.uid is defined
+      - external_ip.metadata.uid | length > 0
+      - external_ip.metadata.generation is number
+      - external_ip.metadata.generation | int >= 0
+      - external_ip.metadata.labels is defined
+      - external_ip.metadata.labels['osac.openshift.io/externalip-uuid'] is defined
+      - external_ip.metadata.labels['osac.openshift.io/externalip-uuid'] | length > 0
+      - external_ip.metadata.annotations is defined
+      - external_ip.metadata.annotations['osac.openshift.io/externalip-contract-version'] == 'v1'
+      - external_ip.metadata.annotations['osac.openshift.io/tenant'] is defined
+      - external_ip.metadata.annotations['osac.openshift.io/tenant'] | length > 0
+      - external_ip.metadata.annotations['osac.openshift.io/externalippool-name'] is defined
+      - external_ip.metadata.annotations['osac.openshift.io/externalippool-name'] | length > 0
+      - external_ip.spec.pool is defined
+      - osac_job_vars.external_ip_pool.fulfillment_id is defined
+      - external_ip.spec.pool == osac_job_vars.external_ip_pool.fulfillment_id
+      - osac_job_vars.external_ip_pool.kubernetes_uid is defined
+      - osac_job_vars.external_ip_pool.kubernetes_uid | length > 0
+      - osac_job_vars.external_ip_pool.tenant_id is defined
+      - osac_job_vars.external_ip_pool.tenant_id | length > 0
+      - >-
+        osac_job_vars.external_ip_pool.tenant_id == 'shared'
+        or osac_job_vars.external_ip_pool.tenant_id == external_ip.metadata.annotations['osac.openshift.io/tenant']
+      - osac_job_vars.external_ip_pool.cidr is defined
+      - osac_job_vars.external_ip_pool.cidr | length > 0
+      - osac_job_vars.external_ip_pool.phase is defined
+      - osac_job_vars.external_ip_pool.phase | length > 0
+      - metallb_external_ip_operation != 'external_ip.allocate' or osac_job_vars.external_ip_pool.phase == 'Ready'
+      - metallb_external_ip_operation != 'external_ip.allocate' or external_ip.metadata.deletionTimestamp is not defined
+      - metallb_external_ip_operation != 'external_ip.release' or external_ip.metadata.deletionTimestamp is defined
+    fail_msg: >-
+      MetalLB ExternalIP v1 requires the current ExternalIP identity and a
+      matching pool snapshot. Allocation also requires a Ready pool and a
+      non-terminating resource; release requires a terminating resource.
+
+- name: Set the MetalLB ExternalIP v1 identity
+  ansible.builtin.set_fact:
+    metallb_external_ip_name: "{{ external_ip.metadata.name }}"
+    metallb_external_ip_id: "{{ external_ip.metadata.labels['osac.openshift.io/externalip-uuid'] }}"
+    metallb_external_ip_uid: "{{ external_ip.metadata.uid }}"
+    metallb_external_ip_generation: "{{ external_ip.metadata.generation | int }}"
+    metallb_external_ip_pool_name: >-
+      {{ external_ip.metadata.annotations['osac.openshift.io/externalippool-name'] }}
+    metallb_external_ip_tenant: "{{ external_ip.metadata.annotations['osac.openshift.io/tenant'] }}"
+    metallb_external_ip_uid_service_name: "osac-eip-{{ external_ip.metadata.uid }}"
+    metallb_external_ip_legacy_service_name: "osac-eip-{{ external_ip.metadata.name }}"

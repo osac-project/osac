@@ -61,6 +61,7 @@ def test_config_as_code_secret_tracks_publish_templates_enabled():
             check=True,
             capture_output=True,
             text=True,
+            timeout=300,
         )
         secret = yaml.safe_load(result.stdout)
 
@@ -85,6 +86,7 @@ def test_config_as_code_secret_always_tracks_netris_ca_configmap():
             check=True,
             capture_output=True,
             text=True,
+            timeout=300,
         )
         secret = yaml.safe_load(result.stdout)
 
@@ -107,6 +109,7 @@ def test_config_as_code_secret_tracks_osac_service_account():
         check=True,
         capture_output=True,
         text=True,
+        timeout=300,
     )
     secret = yaml.safe_load(result.stdout)
 
@@ -129,6 +132,7 @@ def test_config_as_code_secret_tracks_its_own_name():
         check=True,
         capture_output=True,
         text=True,
+        timeout=300,
     )
     secret = yaml.safe_load(result.stdout)
 

@@ -1,0 +1,63 @@
+---
+# Reserves the CaaS guest ingress address for a Cluster. The reservation is a
+# Netris IPAM /32 in ipam.lb_vip_ipv4_cidrs keyed by cluster_id, so a retry
+# returns the same address and another Cluster on the Subnet gets a different
+# one. This task has no legacy input shape: OSAC calls it only on the contract.
+
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: reserve_cluster_ingress_ip
+
+- name: Require the contract envelope
+  ansible.builtin.assert:
+    that:
+      - _osac_contract | default(false) | bool
+    fail_msg: >-
+      reserve_cluster_ingress_ip is a CaaS contract task and requires
+      osac_job_vars.
+
+- name: Reserve the cluster ingress address
+  block:
+    - name: Ensure Netris auth
+      ansible.builtin.include_role:
+        name: netris.controller.auth
+      when:
+        - netris_session_cookie is not defined
+        - not ansible_check_mode
+
+    - name: Reserve the address in Netris IPAM
+      osac.templates.netris_cluster_ingress:
+        operation: cluster_ingress.reserve
+        cluster_id: "{{ osac_job_vars.cluster_id | default('') }}"
+        subnet: "{{ _osac_subnet }}"
+        ipam: "{{ _osac_ipam }}"
+        controller_url: "{{ netris_controller_url }}"
+        session_cookie: "{{ netris_session_cookie | default('') }}"
+        site_id: "{{ netris_site_id | int }}"
+        tenant_id: "{{ netris_tenant_id | int }}"
+        timeout: "{{ netris_timeout | default(30) }}"
+        validate_certs: "{{ netris_validate_certs | default(true) }}"
+        ca_path: "{{ netris_ca_path | default(omit, true) }}"
+      register: _ci_result
+
+    - name: Build the typed cluster ingress result
+      ansible.builtin.set_fact:
+        _osac_result_data: >-
+          {{ {'cluster_ingress': {'address': _ci_result.address}} }}
+
+    - name: Emit the typed cluster ingress result
+      ansible.builtin.include_tasks: _emit_result.yaml
+  rescue:
+    - name: Publish the sanitized reservation error
+      ansible.builtin.include_tasks: _fail_task.yaml
+      vars:
+        _osac_error_message: >-
+          {{ ansible_failed_result.msg
+             | default('The Netris cluster ingress reservation failed') }}
+        _osac_error_retryable: >-
+          {{ ansible_failed_result.retryable | default(true) }}
+
+    - name: Fail the reservation after publishing the error
+      ansible.builtin.fail:
+        msg: "{{ _osac_error_message }}"

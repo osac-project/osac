@@ -155,3 +155,19 @@ argument_specs:
         description: Template-specific parameters (reserved for future use)
         options: {}
         default: {}
+
+  reserve_cluster_ingress_ip:
+    options:
+      template_parameters:
+        type: dict
+        description: Template-specific parameters (reserved for future use)
+        options: {}
+        default: {}
+
+  release_cluster_ingress_ip:
+    options:
+      template_parameters:
+        type: dict
+        description: Template-specific parameters (reserved for future use)
+        options: {}
+        default: {}

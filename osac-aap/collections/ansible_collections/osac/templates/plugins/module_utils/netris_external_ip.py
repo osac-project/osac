@@ -387,12 +387,19 @@ class NetrisSubnetClient:
             )
         return [_normalize_subnet_record(record) for record in data]
 
-    def create_subnet(self, name: str, prefix: str, site_id: int, tenant_id: int):
-        """Create a nat reservation subnet and return its provider id."""
+    def create_subnet(
+        self,
+        name: str,
+        prefix: str,
+        site_id: int,
+        tenant_id: int,
+        purpose: str = RESERVATION_PURPOSE,
+    ):
+        """Create a reservation subnet and return its provider id."""
         body = {
             "name": name,
             "prefix": prefix,
-            "purpose": RESERVATION_PURPOSE,
+            "purpose": purpose,
             "sites": [{"id": int(site_id)}],
             "tenant": {"id": int(tenant_id)},
         }

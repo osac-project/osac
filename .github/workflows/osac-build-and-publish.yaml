@@ -2391,13 +2391,14 @@ jobs:
       needs.tag.result == 'success' &&
       needs.wait-for-konflux-build.result == 'success'
     runs-on: osac-ci
-    # Must exceed the sum of the script's own two remaining poll phases
-    # (override-snapshot-test + Release-completion, each up to 80min =
-    # 160min) -- the build-wait phase is now wait-for-konflux-build's own
-    # matrix, with its own 85min timeout -- otherwise GitHub cancels the
-    # job mid-phase with no ::error:: message, silently producing neither
-    # a release nor a clear failure reason.
-    timeout-minutes: 170
+    # Must exceed the sum of the script's own remaining poll phases:
+    # override-snapshot-test (up to 80min) + up to 3 Release-completion
+    # attempts (80min first + 2x30min retries, see MAX_RELEASE_ATTEMPTS/
+    # RETRY_TIMEOUT_SECONDS below) -- the build-wait phase is now
+    # wait-for-konflux-build's own matrix, with its own 85min timeout --
+    # otherwise GitHub cancels the job mid-phase with no ::error:: message,
+    # silently producing neither a release nor a clear failure reason.
+    timeout-minutes: 230
     permissions:
       contents: read
     env:
@@ -2569,60 +2570,87 @@ jobs:
             print(f"::error::Timed out waiting for {resource_name}'s integration tests")
             sys.exit(1)
 
-        release = {
-            "apiVersion": "appstudio.redhat.com/v1alpha1",
-            "kind": "Release",
-            "metadata": {"name": resource_name, "namespace": NAMESPACE},
-            "spec": {"releasePlan": "cloud-extensions-stage", "snapshot": resource_name},
-        }
-        with open("/tmp/release.json", "w") as f:
-            json.dump(release, f)
-        subprocess.run(["oc", "apply", "-f", "/tmp/release.json"], check=True)
-        print(f"Created Release {resource_name}, waiting for it to complete")
-
         # Real condition type/reason values confirmed against
         # release_conditions.go in konflux-ci/release-service: type
         # "Released", reason "Succeeded"/"Failed"/"Progressing". Applying
         # the Release object succeeding says nothing about whether Konflux
         # actually released it -- only this confirms that.
-        deadline = time.time() + TIMEOUT_SECONDS
-        while time.time() < deadline:
-            try:
-                out = subprocess.run(
-                    ["oc", "get", "release", resource_name, "-n", NAMESPACE, "-o", "json"],
-                    capture_output=True, text=True, check=True,
-                )
-            except subprocess.CalledProcessError as e:
-                stderr = e.stderr or ""
-                if is_permanent_auth_error(stderr):
-                    print(f"::error::oc get release failed with a permanent auth/RBAC error: {stderr.strip()}")
-                    raise
-                # Same transient-oc-hiccup reasoning as find_component's own
-                # retry above -- don't let one failed `oc get` crash this
-                # job when the Release itself is still progressing fine.
-                print(f"::warning::oc get release failed, will retry: {stderr.strip()}", flush=True)
+        #
+        # Returns True (Released), or False for anything retry-worthy
+        # (Failed, or this attempt's own poll timing out) -- confirmed live
+        # that a Release can fail outright from a transient Tekton bundle-
+        # resolution timeout on a downstream task wholly unrelated to this
+        # release's own content (e.g. run-file-updates), with no automatic
+        # retry; this job should only ever fail for real on a genuine,
+        # persisting Konflux failure or its own GitHub Actions
+        # timeout-minutes, never on one transient infra blip.
+        def poll_release(release_name, timeout_seconds):
+            deadline = time.time() + timeout_seconds
+            while time.time() < deadline:
+                try:
+                    out = subprocess.run(
+                        ["oc", "get", "release", release_name, "-n", NAMESPACE, "-o", "json"],
+                        capture_output=True, text=True, check=True,
+                    )
+                except subprocess.CalledProcessError as e:
+                    stderr = e.stderr or ""
+                    if is_permanent_auth_error(stderr):
+                        print(f"::error::oc get release failed with a permanent auth/RBAC error: {stderr.strip()}")
+                        raise
+                    # Same transient-oc-hiccup reasoning as find_component's
+                    # own retry above -- don't let one failed `oc get` crash
+                    # this job when the Release itself is still progressing
+                    # fine.
+                    print(f"::warning::oc get release failed, will retry: {stderr.strip()}", flush=True)
+                    time.sleep(POLL_INTERVAL_SECONDS)
+                    continue
+                conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
+                if condition_true(conditions, "Released"):
+                    print(f"::notice::Konflux staging release succeeded: {release_name}")
+                    return True
+                if condition_false(conditions, "Released") and any(
+                    c.get("type") == "Released" and c.get("reason") == "Failed" for c in conditions
+                ):
+                    print(f"::warning::Konflux staging release failed: {release_name}")
+                    return False
+                if conditions:
+                    summary = "; ".join(
+                        f"{c.get('type')}={c.get('status')} ({c.get('reason')}: {c.get('message')})"
+                        for c in conditions
+                    )
+                    print(f"[{release_name}] {summary}", flush=True)
+                else:
+                    print(f"Waiting on {release_name}'s release to complete -- no conditions reported yet", flush=True)
                 time.sleep(POLL_INTERVAL_SECONDS)
-                continue
-            conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
-            if condition_true(conditions, "Released"):
-                print(f"::notice::Konflux staging release succeeded: {resource_name}")
+            print(f"::warning::Timed out waiting for {release_name}'s release to complete")
+            return False
+
+        # First attempt gets the full TIMEOUT_SECONDS (80min) -- a genuinely
+        # slow but real release deserves the same benefit of the doubt it
+        # always had. Retries get a shorter timeout: every transient
+        # failure confirmed live so far has resolved to Failed within
+        # 10-15min, not hung for a full 80.
+        MAX_RELEASE_ATTEMPTS = 3
+        RETRY_TIMEOUT_SECONDS = 30 * 60
+        released = False
+        for attempt_num in range(1, MAX_RELEASE_ATTEMPTS + 1):
+            release_name = resource_name if attempt_num == 1 else f"{resource_name}-retry{attempt_num - 1}"
+            release = {
+                "apiVersion": "appstudio.redhat.com/v1alpha1",
+                "kind": "Release",
+                "metadata": {"name": release_name, "namespace": NAMESPACE},
+                "spec": {"releasePlan": "cloud-extensions-stage", "snapshot": resource_name},
+            }
+            with open("/tmp/release.json", "w") as f:
+                json.dump(release, f)
+            subprocess.run(["oc", "apply", "-f", "/tmp/release.json"], check=True)
+            print(f"Created Release {release_name} (attempt {attempt_num}/{MAX_RELEASE_ATTEMPTS}), waiting for it to complete")
+            if poll_release(release_name, TIMEOUT_SECONDS if attempt_num == 1 else RETRY_TIMEOUT_SECONDS):
+                released = True
                 break
-            if condition_false(conditions, "Released") and any(
-                c.get("type") == "Released" and c.get("reason") == "Failed" for c in conditions
-            ):
-                print(f"::error::Konflux staging release failed: {resource_name}")
-                sys.exit(1)
-            if conditions:
-                summary = "; ".join(
-                    f"{c.get('type')}={c.get('status')} ({c.get('reason')}: {c.get('message')})"
-                    for c in conditions
-                )
-                print(f"[{resource_name}] {summary}", flush=True)
-            else:
-                print(f"Waiting on {resource_name}'s release to complete -- no conditions reported yet", flush=True)
-            time.sleep(POLL_INTERVAL_SECONDS)
-        else:
-            print(f"::error::Timed out waiting for {resource_name}'s release to complete")
+
+        if not released:
+            print(f"::error::Konflux staging release failed after {MAX_RELEASE_ATTEMPTS} attempts: {resource_name}")
             sys.exit(1)
         PYEOF
 
@@ -2905,7 +2933,9 @@ jobs:
       needs.tag.result == 'success' &&
       needs.wait-for-konflux-chart-build.result == 'success'
     runs-on: osac-ci
-    timeout-minutes: 170
+    # See trigger-konflux-staging-release's own comment on its identical
+    # timeout-minutes value for the full budget breakdown.
+    timeout-minutes: 230
     permissions:
       contents: read
     env:
@@ -3055,52 +3085,68 @@ jobs:
             print(f"::error::Timed out waiting for {resource_name}'s integration tests")
             sys.exit(1)
 
-        release = {
-            "apiVersion": "appstudio.redhat.com/v1alpha1",
-            "kind": "Release",
-            "metadata": {"name": resource_name, "namespace": NAMESPACE},
-            "spec": {"releasePlan": "osac-charts-stage", "snapshot": resource_name},
-        }
-        with open("/tmp/chart-release.json", "w") as f:
-            json.dump(release, f)
-        subprocess.run(["oc", "apply", "-f", "/tmp/chart-release.json"], check=True)
-        print(f"Created Release {resource_name}, waiting for it to complete")
-
-        deadline = time.time() + TIMEOUT_SECONDS
-        while time.time() < deadline:
-            try:
-                out = subprocess.run(
-                    ["oc", "get", "release", resource_name, "-n", NAMESPACE, "-o", "json"],
-                    capture_output=True, text=True, check=True,
-                )
-            except subprocess.CalledProcessError as e:
-                stderr = e.stderr or ""
-                if is_permanent_auth_error(stderr):
-                    print(f"::error::oc get release failed with a permanent auth/RBAC error: {stderr.strip()}")
-                    raise
-                print(f"::warning::oc get release failed, will retry: {stderr.strip()}", flush=True)
+        # Returns True (Released), or False for anything retry-worthy
+        # (Failed, or this attempt's own poll timing out) -- see
+        # trigger-konflux-staging-release's own identical poll_release for
+        # the full rationale.
+        def poll_release(release_name, timeout_seconds):
+            deadline = time.time() + timeout_seconds
+            while time.time() < deadline:
+                try:
+                    out = subprocess.run(
+                        ["oc", "get", "release", release_name, "-n", NAMESPACE, "-o", "json"],
+                        capture_output=True, text=True, check=True,
+                    )
+                except subprocess.CalledProcessError as e:
+                    stderr = e.stderr or ""
+                    if is_permanent_auth_error(stderr):
+                        print(f"::error::oc get release failed with a permanent auth/RBAC error: {stderr.strip()}")
+                        raise
+                    print(f"::warning::oc get release failed, will retry: {stderr.strip()}", flush=True)
+                    time.sleep(POLL_INTERVAL_SECONDS)
+                    continue
+                conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
+                if condition_true(conditions, "Released"):
+                    print(f"::notice::Konflux chart staging release succeeded: {release_name}")
+                    return True
+                if condition_false(conditions, "Released") and any(
+                    c.get("type") == "Released" and c.get("reason") == "Failed" for c in conditions
+                ):
+                    print(f"::warning::Konflux chart staging release failed: {release_name}")
+                    return False
+                if conditions:
+                    summary = "; ".join(
+                        f"{c.get('type')}={c.get('status')} ({c.get('reason')}: {c.get('message')})"
+                        for c in conditions
+                    )
+                    print(f"[{release_name}] {summary}", flush=True)
+                else:
+                    print(f"Waiting on {release_name}'s release to complete -- no conditions reported yet", flush=True)
                 time.sleep(POLL_INTERVAL_SECONDS)
-                continue
-            conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
-            if condition_true(conditions, "Released"):
-                print(f"::notice::Konflux chart staging release succeeded: {resource_name}")
+            print(f"::warning::Timed out waiting for {release_name}'s release to complete")
+            return False
+
+        MAX_RELEASE_ATTEMPTS = 3
+        RETRY_TIMEOUT_SECONDS = 30 * 60
+        released = False
+        for attempt_num in range(1, MAX_RELEASE_ATTEMPTS + 1):
+            release_name = resource_name if attempt_num == 1 else f"{resource_name}-retry{attempt_num - 1}"
+            release = {
+                "apiVersion": "appstudio.redhat.com/v1alpha1",
+                "kind": "Release",
+                "metadata": {"name": release_name, "namespace": NAMESPACE},
+                "spec": {"releasePlan": "osac-charts-stage", "snapshot": resource_name},
+            }
+            with open("/tmp/chart-release.json", "w") as f:
+                json.dump(release, f)
+            subprocess.run(["oc", "apply", "-f", "/tmp/chart-release.json"], check=True)
+            print(f"Created Release {release_name} (attempt {attempt_num}/{MAX_RELEASE_ATTEMPTS}), waiting for it to complete")
+            if poll_release(release_name, TIMEOUT_SECONDS if attempt_num == 1 else RETRY_TIMEOUT_SECONDS):
+                released = True
                 break
-            if condition_false(conditions, "Released") and any(
-                c.get("type") == "Released" and c.get("reason") == "Failed" for c in conditions
-            ):
-                print(f"::error::Konflux chart staging release failed: {resource_name}")
-                sys.exit(1)
-            if conditions:
-                summary = "; ".join(
-                    f"{c.get('type')}={c.get('status')} ({c.get('reason')}: {c.get('message')})"
-                    for c in conditions
-                )
-                print(f"[{resource_name}] {summary}", flush=True)
-            else:
-                print(f"Waiting on {resource_name}'s release to complete -- no conditions reported yet", flush=True)
-            time.sleep(POLL_INTERVAL_SECONDS)
-        else:
-            print(f"::error::Timed out waiting for {resource_name}'s release to complete")
+
+        if not released:
+            print(f"::error::Konflux chart staging release failed after {MAX_RELEASE_ATTEMPTS} attempts: {resource_name}")
             sys.exit(1)
         PYEOF
 

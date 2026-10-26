@@ -1,0 +1,45 @@
+---
+# Applies a NetworkAttachment at the Fabric enforcement point. Overlay
+# attachments and SecurityGroup binds are documented no-ops: the Kubernetes
+# Manager enforces VM SecurityGroups, and the Fabric has no enforcement point
+# on a VM address.
+
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: apply_network_attachment
+
+- name: Validate the interface type
+  ansible.builtin.assert:
+    that:
+      - _osac_interface.type | default('') in ['physical', 'overlay']
+    fail_msg: "interface.type must be physical or overlay"
+
+- name: Leave an overlay attachment to the Kubernetes Manager
+  ansible.builtin.debug:
+    msg: "Overlay attachment: no Fabric change; the Kubernetes Manager attached the VM"
+  when: _osac_interface.type | default('') == 'overlay'
+
+- name: Move the bare-metal port onto the Subnet segment
+  when: _osac_interface.type | default('') == 'physical'
+  block:
+    - name: Validate the physical attachment input
+      ansible.builtin.assert:
+        that:
+          - _osac_target.host_name | default('') | length > 0
+          - _osac_interface.name | default('') | length > 0
+          - _osac_interface.mac_address | default('') | length > 0
+          - subnet.metadata.name | default('') | length > 0
+          - provisioning_vnet | default('') | length > 0
+        fail_msg: >-
+          A physical attachment needs target.host_name, interface.name,
+          interface.mac_address, the Subnet name and the provisioning V-Net.
+
+    - name: Move the port to the Subnet segment
+      ansible.builtin.include_tasks: _move_port.yaml
+      vars:
+        network_attachment:
+          host_name: "{{ _osac_target.host_name }}"
+          logical_interface_name: "{{ _osac_interface.name }}"
+          from_vnet_name: "{{ provisioning_vnet }}"
+          to_vnet_name: "{{ subnet.metadata.name }}"

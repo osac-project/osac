@@ -95,6 +95,30 @@ argument_specs:
         required: true
         description: NATGateway CR from fulfillment-api via osac_job_vars
 
+  apply_network_attachment:
+    options:
+      provisioning_vnet:
+        type: str
+        required: false
+        description: Netris V-Net the host port returns to on delete.
+      template_parameters:
+        type: dict
+        description: Template-specific parameters (reserved for future use)
+        options: {}
+        default: {}
+
+  delete_network_attachment:
+    options:
+      provisioning_vnet:
+        type: str
+        required: false
+        description: Netris V-Net the host port returns to on delete.
+      template_parameters:
+        type: dict
+        description: Template-specific parameters (reserved for future use)
+        options: {}
+        default: {}
+
   move_network_attachment:
     options:
       network_attachment:

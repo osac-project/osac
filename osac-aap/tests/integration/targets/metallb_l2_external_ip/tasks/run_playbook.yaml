@@ -1,0 +1,30 @@
+---
+- name: Invoke an ExternalIP playbook through the top-level dispatcher
+  ansible.builtin.command:
+    argv:
+      - uv
+      - run
+      - ansible-playbook
+      - -e
+      - "ansible_python_interpreter={{ ansible_playbook_python }}"
+      - "{{ playbook_dir }}/../../../../../playbook_osac_{{ metallb_eip_playbook }}.yml"
+      - -e
+      - "{{ {'osac_job_vars': metallb_eip_job_vars} | to_json }}"
+  args:
+    chdir: "{{ playbook_dir }}/../../../../../"
+  environment:
+    ANSIBLE_STDOUT_CALLBACK: ansible.posix.json
+    ANSIBLE_SHOW_CUSTOM_STATS: "true"
+  register: metallb_eip_playbook_result
+  changed_when: false
+  failed_when: false
+
+- name: Check the ExternalIP playbook outcome
+  ansible.builtin.assert:
+    that:
+      - (metallb_eip_playbook_result.rc == 0) == (metallb_eip_should_succeed | bool)
+
+- name: Read the ExternalIP v1 result artifact
+  ansible.builtin.set_fact:
+    metallb_eip_result: >-
+      {{ ((metallb_eip_playbook_result.stdout | from_json).global_custom_stats | default({})).osac_result | default({}) }}

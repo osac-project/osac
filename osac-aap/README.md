@@ -228,7 +228,11 @@ override. `AGENTLESS_NET_EXTERNAL_INTERFACE` selects the uplink for AgentlessNet
 ExternalIPAttachment and embedded CaaS step workflows; it does not configure
 VirtualNetwork transit links.
 
-Plus MetalLB-based ExternalIPPool / ExternalIP management (`metallb_l2`).
+`metallb_l2` manages MetalLB-backed ExternalIPPools and ExternalIPs. In the
+`k8s_only` profile, ExternalIP allocation/release use the v1 result artifact;
+the existing LoadBalancer Service name and pool annotation stay stable, while
+the playbook checks Service ownership before reuse or deletion. Pool management
+and ExternalIPAttachment remain on their existing paths.
 
 ### Compute
 

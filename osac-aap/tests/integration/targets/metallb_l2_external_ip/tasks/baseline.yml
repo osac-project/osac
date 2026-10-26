@@ -1,0 +1,760 @@
+---
+- name: Verify MetalLB ExternalIP v1 allocation, adoption, and release
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    fixture_id: >-
+      {{ lookup('env', 'POD_UID') | default('local', true)
+      | regex_replace('[^a-z0-9]', '') | truncate(8, true, '') }}
+    fixture_namespace: "osac-eip-v1-{{ fixture_id }}"
+    tenant_id: metallb-eip-test
+    pool_name: metallb-eip-pool
+    pool_id: "44444444-4444-4444-8444-444444444444"
+    pool_cidr: 198.51.100.0/24
+    allocated_address: 198.51.100.47
+    new_external_ip_name: "eip-new-{{ fixture_id }}"
+    new_external_ip_id: "55555555-5555-4555-8555-555555555555"
+    legacy_external_ip_name: "eip-legacy-{{ fixture_id }}"
+    legacy_external_ip_id: "66666666-6666-4666-8666-666666666666"
+    foreign_external_ip_name: "eip-foreign-{{ fixture_id }}"
+    foreign_external_ip_id: "77777777-7777-4777-8777-777777777777"
+    ambiguous_external_ip_name: "eip-ambiguous-{{ fixture_id }}"
+    ambiguous_external_ip_id: "88888888-8888-4888-8888-888888888888"
+    legacy_address: 198.51.100.61
+    external_ip_finalizer: osac.openshift.io/test-hold
+  tasks:
+    - name: Run the MetalLB v1 workflow against Kind
+      block:
+        - name: Create a temporary controller stop-file directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: osac-metallb-eip-
+          register: metallb_eip_tempdir
+
+        - name: Set the fake MetalLB controller stop-file
+          ansible.builtin.set_fact:
+            metallb_eip_stop_file: "{{ metallb_eip_tempdir.path }}/stop"
+
+        - name: Ensure the fake controller stop-file is absent
+          ansible.builtin.file:
+            path: "{{ metallb_eip_stop_file }}"
+            state: absent
+
+        - name: Create the fixture namespaces
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ item }}"
+            state: present
+          loop:
+            - metallb-system
+            - "{{ fixture_namespace }}"
+
+        - name: Start the local MetalLB status fixture
+          ansible.builtin.command:
+            argv:
+              - python3
+              - "{{ playbook_dir }}/../files/service_status_controller.py"
+              - --namespace
+              - metallb-system
+              - --address
+              - "{{ allocated_address }}"
+              - --external-ip-uuid
+              - "{{ new_external_ip_id }}"
+              - --stop-file
+              - "{{ metallb_eip_stop_file }}"
+          async: 300
+          poll: 0
+          register: metallb_eip_controller_job
+          changed_when: true
+
+        - name: Create the ExternalIPPool fixture
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIPPool
+              metadata:
+                name: "{{ pool_name }}"
+                namespace: "{{ fixture_namespace }}"
+                labels:
+                  osac.openshift.io/externalippool-uuid: "{{ pool_id }}"
+                annotations:
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+                  osac.openshift.io/owner-reference: "test-owner"
+              spec:
+                ipFamily: IPv4
+                cidrs:
+                  - "{{ pool_cidr }}"
+
+        - name: Read the ExternalIPPool UID
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIPPool
+            name: "{{ pool_name }}"
+            namespace: "{{ fixture_namespace }}"
+          register: metallb_eip_pool_read
+
+        - name: Mark the ExternalIPPool fixture Ready
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - patch
+              - externalippool
+              - "{{ pool_name }}"
+              - -n
+              - "{{ fixture_namespace }}"
+              - --subresource=status
+              - --type=merge
+              - -p
+              - '{"status":{"phase":"Ready","total":254,"available":254}}'
+          changed_when: true
+
+        - name: Read the Ready ExternalIPPool snapshot
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIPPool
+            name: "{{ pool_name }}"
+            namespace: "{{ fixture_namespace }}"
+          register: metallb_eip_pool_read
+
+        - name: Save the ExternalIPPool snapshot
+          ansible.builtin.set_fact:
+            metallb_eip_pool_context:
+              fulfillment_id: "{{ pool_id }}"
+              kubernetes_uid: "{{ metallb_eip_pool_read.resources[0].metadata.uid }}"
+              tenant_id: "{{ tenant_id }}"
+              cidr: "{{ pool_cidr }}"
+              phase: Ready
+
+        - name: Create a new v1 ExternalIP fixture
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIP
+              metadata:
+                name: "{{ new_external_ip_name }}"
+                namespace: "{{ fixture_namespace }}"
+                labels:
+                  osac.openshift.io/externalip-uuid: "{{ new_external_ip_id }}"
+                annotations:
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+                  osac.openshift.io/owner-reference: "ExternalIP/{{ new_external_ip_name }}"
+                  osac.openshift.io/implementation-strategy: k8s_only
+                  osac.openshift.io/externalippool-name: "{{ pool_name }}"
+                  osac.openshift.io/externalip-contract-version: v1
+                finalizers:
+                  - "{{ external_ip_finalizer }}"
+              spec:
+                pool: "{{ pool_id }}"
+
+        - name: Read the new ExternalIP UID and generation
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIP
+            name: "{{ new_external_ip_name }}"
+            namespace: "{{ fixture_namespace }}"
+          register: metallb_eip_new_read
+
+        - name: Build the new ExternalIP allocation request
+          ansible.builtin.set_fact:
+            metallb_eip_new_resource: "{{ metallb_eip_new_read.resources[0] }}"
+            metallb_eip_new_uid_service_name: "osac-eip-{{ metallb_eip_new_read.resources[0].metadata.uid }}"
+            metallb_eip_new_legacy_service_name: "osac-eip-{{ new_external_ip_name }}"
+            metallb_eip_job_vars:
+              resource: "{{ metallb_eip_new_read.resources[0] }}"
+              external_ip_pool: "{{ metallb_eip_pool_context }}"
+            metallb_eip_playbook: create_external_ip
+            metallb_eip_should_succeed: true
+
+        - name: Run the new allocation playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Verify the new v1 allocation result
+          ansible.builtin.assert:
+            that:
+              - metallb_eip_result.schemaVersion == 'v1'
+              - metallb_eip_result.operation == 'external_ip.allocate'
+              - metallb_eip_result.resourceUID == metallb_eip_new_resource.metadata.uid
+              - metallb_eip_result.observedGeneration | int == metallb_eip_new_resource.metadata.generation | int
+              - metallb_eip_result.data.address == allocated_address
+
+        - name: Read the UID-named MetalLB reservation Service
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Service
+            name: "{{ metallb_eip_new_uid_service_name }}"
+            namespace: metallb-system
+          register: metallb_eip_new_service
+
+        - name: Confirm no name-based sibling was created for the greenfield allocate
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Service
+            name: "{{ metallb_eip_new_legacy_service_name }}"
+            namespace: metallb-system
+          register: metallb_eip_new_legacy_sibling
+
+        - name: Verify the MetalLB Service is UID-named with owner, tenant, pool, and result IP
+          ansible.builtin.assert:
+            that:
+              - metallb_eip_new_service.resources | length == 1
+              - metallb_eip_new_legacy_sibling.resources | length == 0
+              - metallb_eip_new_service.resources[0].metadata.name == metallb_eip_new_uid_service_name
+              - metallb_eip_new_service.resources[0].metadata.labels['osac.openshift.io/owner-kind'] == 'externalip'
+              - metallb_eip_new_service.resources[0].metadata.labels['osac.openshift.io/owner-id'] == new_external_ip_id
+              - metallb_eip_new_service.resources[0].metadata.labels['osac.openshift.io/externalip-uuid'] == new_external_ip_id
+              - >-
+                metallb_eip_new_service.resources[0].metadata.annotations['osac.openshift.io/externalip-kubernetes-uid']
+                == metallb_eip_new_resource.metadata.uid
+              - >-
+                metallb_eip_new_service.resources[0].metadata.annotations['osac.openshift.io/externalip-generation'] | int
+                == metallb_eip_new_resource.metadata.generation | int
+              - metallb_eip_new_service.resources[0].metadata.annotations['osac.openshift.io/tenant'] == tenant_id
+              - metallb_eip_new_service.resources[0].metadata.annotations['metallb.universe.tf/address-pool'] == pool_name
+              - metallb_eip_new_service.resources[0].status.loadBalancer.ingress[0].ip == allocated_address
+
+        - name: Retry the new allocation
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Verify allocation retry returns the same address on the UID-named Service
+          ansible.builtin.assert:
+            that:
+              - metallb_eip_result.data.address == allocated_address
+              - metallb_eip_result.resourceUID == metallb_eip_new_resource.metadata.uid
+
+        - name: Create a legacy-style ExternalIP fixture for migration adoption
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIP
+              metadata:
+                name: "{{ legacy_external_ip_name }}"
+                namespace: "{{ fixture_namespace }}"
+                labels:
+                  osac.openshift.io/externalip-uuid: "{{ legacy_external_ip_id }}"
+                annotations:
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+                  osac.openshift.io/owner-reference: "ExternalIP/{{ legacy_external_ip_name }}"
+                  osac.openshift.io/implementation-strategy: k8s_only
+                  osac.openshift.io/externalippool-name: "{{ pool_name }}"
+                  osac.openshift.io/externalip-contract-version: v1
+                finalizers:
+                  - "{{ external_ip_finalizer }}"
+              spec:
+                pool: "{{ pool_id }}"
+
+        - name: Record the legacy ExternalIP's currently reported address
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - patch
+              - externalip
+              - "{{ legacy_external_ip_name }}"
+              - -n
+              - "{{ fixture_namespace }}"
+              - --subresource=status
+              - --type=merge
+              - -p
+              - "{{ {'status': {'address': legacy_address}} | to_json }}"
+          changed_when: true
+
+        - name: Create a matching legacy MetalLB Service
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: "osac-eip-{{ legacy_external_ip_name }}"
+                namespace: metallb-system
+                annotations:
+                  metallb.universe.tf/address-pool: "{{ pool_name }}"
+                labels:
+                  osac.openshift.io/externalip: "{{ legacy_external_ip_name }}"
+                  osac.openshift.io/managed-by: osac-fulfillment
+              spec:
+                type: LoadBalancer
+                selector: {}
+                ports:
+                  - name: placeholder
+                    protocol: TCP
+                    port: 65535
+                    targetPort: 65535
+
+        - name: Set the legacy MetalLB Service status address
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - patch
+              - service
+              - "osac-eip-{{ legacy_external_ip_name }}"
+              - -n
+              - metallb-system
+              - --subresource=status
+              - --type=merge
+              - -p
+              - "{{ {'status': {'loadBalancer': {'ingress': [{'ip': legacy_address}]}}} | to_json }}"
+          changed_when: true
+
+        - name: Read the legacy ExternalIP identity
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIP
+            name: "{{ legacy_external_ip_name }}"
+            namespace: "{{ fixture_namespace }}"
+          register: metallb_eip_legacy_read
+
+        - name: Build the legacy ExternalIP migration request
+          ansible.builtin.set_fact:
+            metallb_eip_legacy_resource: "{{ metallb_eip_legacy_read.resources[0] }}"
+            metallb_eip_job_vars:
+              resource: "{{ metallb_eip_legacy_read.resources[0] }}"
+              external_ip_pool: "{{ metallb_eip_pool_context }}"
+            metallb_eip_should_succeed: true
+
+        - name: Run allocation against the matching legacy Service
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Verify legacy adoption preserves the allocated address
+          ansible.builtin.assert:
+            that:
+              - metallb_eip_result.operation == 'external_ip.allocate'
+              - metallb_eip_result.data.address == legacy_address
+              - metallb_eip_result.resourceUID == metallb_eip_legacy_resource.metadata.uid
+
+        - name: Verify the adopted Service records the v1 owner ID and UID
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Service
+            name: "osac-eip-{{ legacy_external_ip_name }}"
+            namespace: metallb-system
+          register: metallb_eip_legacy_service
+
+        - name: Assert adopted Service stays name-based with v1 owner identity
+          ansible.builtin.assert:
+            that:
+              - metallb_eip_legacy_service.resources[0].metadata.name == ('osac-eip-' ~ legacy_external_ip_name)
+              - metallb_eip_legacy_service.resources[0].metadata.labels['osac.openshift.io/owner-id'] == legacy_external_ip_id
+              - >-
+                metallb_eip_legacy_service.resources[0].metadata.annotations['osac.openshift.io/externalip-kubernetes-uid']
+                == metallb_eip_legacy_resource.metadata.uid
+
+        - name: Confirm adoption did not create a UID-named sibling
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Service
+            name: "osac-eip-{{ metallb_eip_legacy_resource.metadata.uid }}"
+            namespace: metallb-system
+          register: metallb_eip_legacy_uid_sibling
+
+        - name: Assert no UID-named sibling after legacy adoption
+          ansible.builtin.assert:
+            that:
+              - metallb_eip_legacy_uid_sibling.resources | length == 0
+
+        - name: Create a same-name Service with a conflicting pool
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: "osac-eip-{{ foreign_external_ip_name }}"
+                namespace: metallb-system
+                annotations:
+                  metallb.universe.tf/address-pool: foreign-pool
+                labels:
+                  osac.openshift.io/externalip: "{{ foreign_external_ip_name }}"
+              spec:
+                type: LoadBalancer
+                selector: {}
+                ports:
+                  - name: placeholder
+                    protocol: TCP
+                    port: 65535
+                    targetPort: 65535
+
+        - name: Create the ExternalIP whose Service identity conflicts
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIP
+              metadata:
+                name: "{{ foreign_external_ip_name }}"
+                namespace: "{{ fixture_namespace }}"
+                labels:
+                  osac.openshift.io/externalip-uuid: "{{ foreign_external_ip_id }}"
+                annotations:
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+                  osac.openshift.io/implementation-strategy: k8s_only
+                  osac.openshift.io/externalippool-name: "{{ pool_name }}"
+                  osac.openshift.io/externalip-contract-version: v1
+              spec:
+                pool: "{{ pool_id }}"
+
+        - name: Read the conflicting ExternalIP
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIP
+            name: "{{ foreign_external_ip_name }}"
+            namespace: "{{ fixture_namespace }}"
+          register: metallb_eip_foreign_read
+
+        - name: Attempt allocation without adopting the conflicting Service
+          ansible.builtin.set_fact:
+            metallb_eip_job_vars:
+              resource: "{{ metallb_eip_foreign_read.resources[0] }}"
+              external_ip_pool: "{{ metallb_eip_pool_context }}"
+            metallb_eip_should_succeed: false
+
+        - name: Run the conflicting allocation request
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Verify the conflicting Service remains unchanged
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Service
+            name: "osac-eip-{{ foreign_external_ip_name }}"
+            namespace: metallb-system
+          register: metallb_eip_foreign_service
+
+        - name: Assert the role did not take ownership of the foreign Service
+          ansible.builtin.assert:
+            that:
+              - metallb_eip_foreign_service.resources[0].metadata.annotations['metallb.universe.tf/address-pool'] == 'foreign-pool'
+              - metallb_eip_foreign_service.resources[0].metadata.labels.get('osac.openshift.io/owner-id', '') == ''
+
+        - name: Create an ExternalIP fixture for ambiguous dual-Service rejection
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIP
+              metadata:
+                name: "{{ ambiguous_external_ip_name }}"
+                namespace: "{{ fixture_namespace }}"
+                labels:
+                  osac.openshift.io/externalip-uuid: "{{ ambiguous_external_ip_id }}"
+                annotations:
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+                  osac.openshift.io/implementation-strategy: k8s_only
+                  osac.openshift.io/externalippool-name: "{{ pool_name }}"
+                  osac.openshift.io/externalip-contract-version: v1
+              spec:
+                pool: "{{ pool_id }}"
+
+        - name: Read the ambiguous ExternalIP identity
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIP
+            name: "{{ ambiguous_external_ip_name }}"
+            namespace: "{{ fixture_namespace }}"
+          register: metallb_eip_ambiguous_read
+
+        - name: Create the name-based half of an ambiguous reservation pair
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: "osac-eip-{{ ambiguous_external_ip_name }}"
+                namespace: metallb-system
+                annotations:
+                  metallb.universe.tf/address-pool: "{{ pool_name }}"
+                  osac.openshift.io/externalippool-name: "{{ pool_name }}"
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+                  osac.openshift.io/owner-reference: "ExternalIP/{{ ambiguous_external_ip_name }}"
+                labels:
+                  osac.openshift.io/externalip: "{{ ambiguous_external_ip_name }}"
+                  osac.openshift.io/externalip-uuid: "{{ ambiguous_external_ip_id }}"
+                  osac.openshift.io/managed-by: osac-fulfillment
+              spec:
+                type: LoadBalancer
+                selector: {}
+                ports:
+                  - name: placeholder
+                    protocol: TCP
+                    port: 65535
+                    targetPort: 65535
+
+        - name: Create the UID-named half of an ambiguous reservation pair
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: "osac-eip-{{ metallb_eip_ambiguous_read.resources[0].metadata.uid }}"
+                namespace: metallb-system
+                annotations:
+                  metallb.universe.tf/address-pool: "{{ pool_name }}"
+                  osac.openshift.io/externalippool-name: "{{ pool_name }}"
+                  osac.openshift.io/externalip-contract-version: v1
+                  osac.openshift.io/externalip-kubernetes-uid: "{{ metallb_eip_ambiguous_read.resources[0].metadata.uid }}"
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+                  osac.openshift.io/owner-reference: "ExternalIP/{{ ambiguous_external_ip_name }}"
+                labels:
+                  osac.openshift.io/externalip: "{{ ambiguous_external_ip_name }}"
+                  osac.openshift.io/externalip-uuid: "{{ ambiguous_external_ip_id }}"
+                  osac.openshift.io/owner-kind: externalip
+                  osac.openshift.io/owner-id: "{{ ambiguous_external_ip_id }}"
+                  osac.openshift.io/managed-by: osac-fulfillment
+              spec:
+                type: LoadBalancer
+                selector: {}
+                ports:
+                  - name: placeholder
+                    protocol: TCP
+                    port: 65535
+                    targetPort: 65535
+
+        - name: Attempt allocation against the ambiguous dual reservation
+          ansible.builtin.set_fact:
+            metallb_eip_ambiguous_uid_service_name: >-
+              osac-eip-{{ metallb_eip_ambiguous_read.resources[0].metadata.uid }}
+            metallb_eip_job_vars:
+              resource: "{{ metallb_eip_ambiguous_read.resources[0] }}"
+              external_ip_pool: "{{ metallb_eip_pool_context }}"
+            metallb_eip_playbook: create_external_ip
+            metallb_eip_should_succeed: false
+
+        - name: Run the ambiguous allocation request
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Verify both ambiguous Services remain without overwrite
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Service
+            name: "{{ item }}"
+            namespace: metallb-system
+          loop:
+            - "osac-eip-{{ ambiguous_external_ip_name }}"
+            - "{{ metallb_eip_ambiguous_uid_service_name }}"
+          register: metallb_eip_ambiguous_services
+
+        - name: Assert ambiguous dual Services were left in place
+          ansible.builtin.assert:
+            that:
+              - metallb_eip_ambiguous_services.results[0].resources | length == 1
+              - metallb_eip_ambiguous_services.results[1].resources | length == 1
+              - >-
+                metallb_eip_ambiguous_services.results[0].resources[0].metadata.labels.get(
+                  'osac.openshift.io/owner-kind', '') == ''
+              - >-
+                metallb_eip_ambiguous_services.results[1].resources[0].metadata.labels[
+                  'osac.openshift.io/owner-kind'] == 'externalip'
+
+        - name: Request deletion of the new ExternalIP fixture
+          kubernetes.core.k8s:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIP
+            name: "{{ new_external_ip_name }}"
+            namespace: "{{ fixture_namespace }}"
+            state: absent
+            wait: false
+
+        - name: Read the terminating new ExternalIP
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIP
+            name: "{{ new_external_ip_name }}"
+            namespace: "{{ fixture_namespace }}"
+          register: metallb_eip_new_deleting
+          until:
+            - metallb_eip_new_deleting.resources | length == 1
+            - metallb_eip_new_deleting.resources[0].metadata.deletionTimestamp is defined
+          retries: 5
+          delay: 1
+
+        - name: Build the new ExternalIP release request
+          ansible.builtin.set_fact:
+            metallb_eip_job_vars:
+              resource: "{{ metallb_eip_new_deleting.resources[0] }}"
+              external_ip_pool: "{{ metallb_eip_pool_context }}"
+            metallb_eip_playbook: delete_external_ip
+            metallb_eip_should_succeed: true
+
+        - name: Run the new release playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Read the UID-named reservation after release
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Service
+            name: "{{ metallb_eip_new_uid_service_name }}"
+            namespace: metallb-system
+          register: metallb_eip_new_released
+
+        - name: Verify the v1 release result and absent UID-named Service
+          ansible.builtin.assert:
+            that:
+              - metallb_eip_result.schemaVersion == 'v1'
+              - metallb_eip_result.operation == 'external_ip.release'
+              - metallb_eip_result.resourceUID == metallb_eip_new_deleting.resources[0].metadata.uid
+              - metallb_eip_result.observedGeneration | int == metallb_eip_new_deleting.resources[0].metadata.generation | int
+              - metallb_eip_result.data == {}
+              - metallb_eip_new_released.resources | length == 0
+
+        - name: Retry release after the reservation is gone
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Verify release retry is idempotent
+          ansible.builtin.assert:
+            that:
+              - metallb_eip_result.operation == 'external_ip.release'
+              - metallb_eip_result.data == {}
+
+        - name: Request deletion of the adopted legacy ExternalIP
+          kubernetes.core.k8s:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIP
+            name: "{{ legacy_external_ip_name }}"
+            namespace: "{{ fixture_namespace }}"
+            state: absent
+            wait: false
+
+        - name: Read the terminating adopted ExternalIP
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIP
+            name: "{{ legacy_external_ip_name }}"
+            namespace: "{{ fixture_namespace }}"
+          register: metallb_eip_legacy_deleting
+          until:
+            - metallb_eip_legacy_deleting.resources | length == 1
+            - metallb_eip_legacy_deleting.resources[0].metadata.deletionTimestamp is defined
+          retries: 5
+          delay: 1
+
+        - name: Build the adopted legacy Service release request
+          ansible.builtin.set_fact:
+            metallb_eip_job_vars:
+              resource: "{{ metallb_eip_legacy_deleting.resources[0] }}"
+              external_ip_pool: "{{ metallb_eip_pool_context }}"
+            metallb_eip_playbook: delete_external_ip
+            metallb_eip_should_succeed: true
+
+        - name: Release the adopted legacy Service through v1
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Verify the adopted legacy Service was released
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Service
+            name: "osac-eip-{{ legacy_external_ip_name }}"
+            namespace: metallb-system
+          register: metallb_eip_legacy_released
+
+        - name: Assert legacy release result and Service cleanup
+          ansible.builtin.assert:
+            that:
+              - metallb_eip_result.operation == 'external_ip.release'
+              - metallb_eip_result.resourceUID == metallb_eip_legacy_deleting.resources[0].metadata.uid
+              - metallb_eip_legacy_released.resources | length == 0
+      always:
+        - name: Stop the local MetalLB status fixture
+          ansible.builtin.file:
+            path: "{{ metallb_eip_stop_file }}"
+            state: touch
+            mode: "0600"
+          when: metallb_eip_stop_file is defined
+
+        - name: Wait for the local MetalLB status fixture to stop
+          ansible.builtin.async_status:
+            jid: "{{ metallb_eip_controller_job.ansible_job_id }}"
+          register: metallb_eip_controller_result
+          until: metallb_eip_controller_result.finished
+          retries: 10
+          delay: 1
+          when: metallb_eip_controller_job is defined
+
+        - name: Build fixture Service cleanup names
+          ansible.builtin.set_fact:
+            metallb_test_service_names: >-
+              {{
+                [
+                  'osac-eip-' ~ new_external_ip_name,
+                  'osac-eip-' ~ legacy_external_ip_name,
+                  'osac-eip-' ~ foreign_external_ip_name,
+                  'osac-eip-' ~ ambiguous_external_ip_name,
+                ]
+                + ([metallb_eip_new_uid_service_name] if metallb_eip_new_uid_service_name is defined else [])
+                + ([('osac-eip-' ~ metallb_eip_legacy_resource.metadata.uid)]
+                   if metallb_eip_legacy_resource is defined else [])
+                + ([('osac-eip-' ~ metallb_eip_foreign_read.resources[0].metadata.uid)]
+                   if metallb_eip_foreign_read is defined
+                   and metallb_eip_foreign_read.resources | default([]) | length > 0 else [])
+                + ([metallb_eip_ambiguous_uid_service_name]
+                   if metallb_eip_ambiguous_uid_service_name is defined else [])
+              }}
+          when: metallb_eip_tempdir is defined
+
+        - name: Remove fixture finalizers
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - patch
+              - externalip
+              - "{{ item }}"
+              - -n
+              - "{{ fixture_namespace }}"
+              - --type=merge
+              - -p
+              - '{"metadata":{"finalizers":[]}}'
+          loop:
+            - "{{ new_external_ip_name }}"
+            - "{{ legacy_external_ip_name }}"
+            - "{{ foreign_external_ip_name }}"
+            - "{{ ambiguous_external_ip_name }}"
+          changed_when: false
+          failed_when: false
+          when: metallb_eip_tempdir is defined
+
+        - name: Delete fixture MetalLB Services
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Service
+            name: "{{ item }}"
+            namespace: metallb-system
+            state: absent
+          loop: "{{ metallb_test_service_names | default([]) }}"
+          failed_when: false
+          when: metallb_eip_tempdir is defined
+
+        - name: Delete fixture ExternalIP and ExternalIPPool resources
+          kubernetes.core.k8s:
+            api_version: osac.openshift.io/v1alpha1
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: "{{ fixture_namespace }}"
+            state: absent
+            wait: true
+          loop:
+            - {kind: ExternalIP, name: "{{ new_external_ip_name }}"}
+            - {kind: ExternalIP, name: "{{ legacy_external_ip_name }}"}
+            - {kind: ExternalIP, name: "{{ foreign_external_ip_name }}"}
+            - {kind: ExternalIP, name: "{{ ambiguous_external_ip_name }}"}
+            - {kind: ExternalIPPool, name: "{{ pool_name }}"}
+          failed_when: false
+          when: metallb_eip_tempdir is defined
+
+        - name: Delete the fixture namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ fixture_namespace }}"
+            state: absent
+            wait: true
+          when: metallb_eip_tempdir is defined
+
+        - name: Remove temporary fixture files
+          ansible.builtin.file:
+            path: "{{ metallb_eip_tempdir.path }}"
+            state: absent
+          when: metallb_eip_tempdir is defined

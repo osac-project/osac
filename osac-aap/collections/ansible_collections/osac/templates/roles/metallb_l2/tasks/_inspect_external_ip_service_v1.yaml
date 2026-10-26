@@ -1,0 +1,121 @@
+---
+# Dual-lookup: prefer UID-named Service (v1 reservation key); reuse a
+# name-based Service in place when that is the only candidate. Never rename.
+# Both candidates present fails closed.
+
+- name: Read the UID-named MetalLB reservation Service
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Service
+    name: "{{ metallb_external_ip_uid_service_name }}"
+    namespace: metallb-system
+  register: metallb_external_ip_uid_service_read
+
+- name: Read the name-based MetalLB reservation Service
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Service
+    name: "{{ metallb_external_ip_legacy_service_name }}"
+    namespace: metallb-system
+  register: metallb_external_ip_legacy_service_read
+  when: >-
+    metallb_external_ip_legacy_service_name != metallb_external_ip_uid_service_name
+
+- name: Treat identical UID and legacy Service names as a single candidate
+  ansible.builtin.set_fact:
+    metallb_external_ip_legacy_service_read: "{{ metallb_external_ip_uid_service_read }}"
+  when: >-
+    metallb_external_ip_legacy_service_name == metallb_external_ip_uid_service_name
+
+- name: Refuse ambiguous MetalLB reservations
+  ansible.builtin.assert:
+    that:
+      - >-
+        metallb_external_ip_legacy_service_name == metallb_external_ip_uid_service_name
+        or not (
+          (metallb_external_ip_uid_service_read.resources | length > 0)
+          and (metallb_external_ip_legacy_service_read.resources | length > 0)
+        )
+    fail_msg: >-
+      Both '{{ metallb_external_ip_uid_service_name }}' and
+      '{{ metallb_external_ip_legacy_service_name }}' exist in metallb-system;
+      refusing to adopt or delete an ambiguous ExternalIP reservation.
+
+- name: Select the UID-named MetalLB reservation when present
+  ansible.builtin.set_fact:
+    metallb_external_ip_service_name: "{{ metallb_external_ip_uid_service_name }}"
+    metallb_external_ip_service_read: "{{ metallb_external_ip_uid_service_read }}"
+  when: metallb_external_ip_uid_service_read.resources | length > 0
+
+- name: Select the name-based MetalLB reservation for in-place reuse
+  ansible.builtin.set_fact:
+    metallb_external_ip_service_name: "{{ metallb_external_ip_legacy_service_name }}"
+    metallb_external_ip_service_read: "{{ metallb_external_ip_legacy_service_read }}"
+  when:
+    - metallb_external_ip_uid_service_read.resources | length == 0
+    - metallb_external_ip_legacy_service_read.resources | length > 0
+
+- name: Default to the UID-named MetalLB reservation for create or absent release
+  ansible.builtin.set_fact:
+    metallb_external_ip_service_name: "{{ metallb_external_ip_uid_service_name }}"
+    metallb_external_ip_service_read:
+      resources: []
+  when:
+    - metallb_external_ip_uid_service_read.resources | length == 0
+    - metallb_external_ip_legacy_service_read.resources | length == 0
+
+- name: Save the selected MetalLB reservation Service metadata
+  ansible.builtin.set_fact:
+    metallb_external_ip_service: "{{ metallb_external_ip_service_read.resources[0] }}"
+    metallb_external_ip_service_labels: >-
+      {{ metallb_external_ip_service_read.resources[0].metadata.labels | default({}) }}
+    metallb_external_ip_service_annotations: >-
+      {{ metallb_external_ip_service_read.resources[0].metadata.annotations | default({}) }}
+    metallb_external_ip_service_ip: >-
+      {{ (((metallb_external_ip_service_read.resources[0].status | default({})).get(
+           'loadBalancer', {}).get('ingress', []) | first | default({})).get('ip', '')) }}
+  when: metallb_external_ip_service_read.resources | length > 0
+
+- name: Validate existing MetalLB reservation ownership and pool
+  ansible.builtin.assert:
+    that:
+      - metallb_external_ip_service_labels.get('osac.openshift.io/externalip', '') == metallb_external_ip_name
+      - metallb_external_ip_service.spec.type == 'LoadBalancer'
+      - metallb_external_ip_service_annotations.get('metallb.universe.tf/address-pool', '') == metallb_external_ip_pool_name
+      - metallb_external_ip_service_annotations.get('osac.openshift.io/externalippool-name', metallb_external_ip_pool_name) == metallb_external_ip_pool_name
+      - metallb_external_ip_service_labels.get('osac.openshift.io/externalip-uuid', metallb_external_ip_id) == metallb_external_ip_id
+      - metallb_external_ip_service_annotations.get('osac.openshift.io/tenant', metallb_external_ip_tenant) == metallb_external_ip_tenant
+      - metallb_external_ip_service_annotations.get('osac.openshift.io/owner-reference', 'ExternalIP/' ~ metallb_external_ip_name) == ('ExternalIP/' ~ metallb_external_ip_name)
+      - >-
+        (
+          metallb_external_ip_service_labels.get('osac.openshift.io/owner-kind', '') == ''
+          and metallb_external_ip_service_labels.get('osac.openshift.io/owner-id', '') == ''
+          and metallb_external_ip_service_annotations.get('osac.openshift.io/externalip-kubernetes-uid', '') == ''
+          and metallb_external_ip_service_annotations.get('osac.openshift.io/externalip-contract-version', '') == ''
+        )
+        or
+        (
+          metallb_external_ip_service_labels.get('osac.openshift.io/owner-kind', '') == 'externalip'
+          and metallb_external_ip_service_labels.get('osac.openshift.io/owner-id', '') == metallb_external_ip_id
+          and metallb_external_ip_service_annotations.get('osac.openshift.io/externalip-kubernetes-uid', '') == metallb_external_ip_uid
+          and metallb_external_ip_service_annotations.get('osac.openshift.io/externalip-contract-version', '') == 'v1'
+        )
+    fail_msg: >-
+      Existing MetalLB Service '{{ metallb_external_ip_service_name }}' does
+      not match this ExternalIP's identity and pool; refusing to adopt or delete it.
+  when: metallb_external_ip_service_read.resources | length > 0
+
+- name: Validate the address on a legacy MetalLB reservation before adoption
+  ansible.builtin.assert:
+    that:
+      - (external_ip.status | default({})).get('address', '') | length > 0
+      - (external_ip.status | default({})).get('address', '') != '0.0.0.0'
+      - metallb_external_ip_service_ip == (external_ip.status | default({})).get('address', '')
+    fail_msg: >-
+      Existing legacy MetalLB Service '{{ metallb_external_ip_service_name }}'
+      cannot be matched to the ExternalIP status address; refusing to adopt or delete it.
+  when:
+    - metallb_external_ip_service_read.resources | length > 0
+    - metallb_external_ip_service_labels.get('osac.openshift.io/owner-kind', '') == ''

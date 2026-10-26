@@ -111,7 +111,9 @@ export const buildComputeInstanceCreatePayload = (
     const hasAdditionalDisksDefault =
       catalogItem?.fields?.additionalDisks?.behavior.case !== undefined;
     if (additionalDisks.length > 0 || hasAdditionalDisksDefault) {
-      spec.additionalDisks = additionalDisks;
+      spec.additionalDisks = {
+        items: additionalDisks,
+      };
     }
   }
 

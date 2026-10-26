@@ -55,7 +55,10 @@ const runningVm: ComputeInstance = {
   },
   spec: {
     $typeName: 'osac.public.v1.ComputeInstanceSpec',
-    additionalDisks: [],
+    additionalDisks: {
+      $typeName: 'osac.public.v1.ComputeInstanceDiskList',
+      items: [],
+    },
     catalogItem: create(ComputeInstanceCatalogItemReferenceSchema, { id: '' }),
     networkAttachments: [],
     template: create(ComputeInstanceTemplateReferenceSchema, { id: '' }),
@@ -69,6 +72,7 @@ const runningVm: ComputeInstance = {
     state: ComputeInstanceState.RUNNING,
     internalIpAddress: '10.0.0.5',
     externalIpAddress: '203.0.113.1',
+    computeNetworkAttachmentStatuses: [],
   },
 };
 

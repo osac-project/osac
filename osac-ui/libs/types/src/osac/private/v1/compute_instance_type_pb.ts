@@ -26,7 +26,7 @@ import type { Timestamp } from "../../../google/protobuf/timestamp_pb";
 import { file_google_protobuf_timestamp } from "../../../google/protobuf/timestamp_pb";
 import type { ComputeInstanceCatalogItemReference } from "./compute_instance_catalog_item_type_pb";
 import { file_osac_private_v1_compute_instance_catalog_item_type } from "./compute_instance_catalog_item_type_pb";
-import type { ComputeInstanceDisk, ComputeInstanceRunStrategy, ComputeNetworkAttachment } from "./compute_instance_common_type_pb";
+import type { ComputeInstanceDisk, ComputeInstanceDiskList, ComputeInstanceRunStrategy, ComputeNetworkAttachment } from "./compute_instance_common_type_pb";
 import { file_osac_private_v1_compute_instance_common_type } from "./compute_instance_common_type_pb";
 import type { ComputeInstanceTemplateReference } from "./compute_instance_template_type_pb";
 import { file_osac_private_v1_compute_instance_template_type } from "./compute_instance_template_type_pb";
@@ -38,6 +38,7 @@ import type { Metadata } from "./metadata_type_pb";
 import { file_osac_private_v1_metadata_type } from "./metadata_type_pb";
 import type { InstanceTypeReference } from "./instance_type_type_pb";
 import { file_osac_private_v1_instance_type_type } from "./instance_type_type_pb";
+import { file_osac_private_v1_metering_type } from "./metering_type_pb";
 import type { SecretLocalReference } from "./secret_type_pb";
 import { file_osac_private_v1_secret_type } from "./secret_type_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -46,7 +47,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/compute_instance_type.proto.
  */
 export const file_osac_private_v1_compute_instance_type: GenFile = /*@__PURE__*/
-  fileDesc("Citvc2FjL3ByaXZhdGUvdjEvY29tcHV0ZV9pbnN0YW5jZV90eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEitgEKD0NvbXB1dGVJbnN0YW5jZRIKCgJpZBgBIAEoCRIrCghtZXRhZGF0YRgCIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5NZXRhZGF0YRIyCgRzcGVjGAMgASgLMiQub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVJbnN0YW5jZVNwZWMSNgoGc3RhdHVzGAQgASgLMiYub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVJbnN0YW5jZVN0YXR1cyLRCQoTQ29tcHV0ZUluc3RhbmNlU3BlYxJDCgh0ZW1wbGF0ZRgBIAEoCzIxLm9zYWMucHJpdmF0ZS52MS5Db21wdXRlSW5zdGFuY2VUZW1wbGF0ZVJlZmVyZW5jZRJZChN0ZW1wbGF0ZV9wYXJhbWV0ZXJzGAIgAygLMjwub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVJbnN0YW5jZVNwZWMuVGVtcGxhdGVQYXJhbWV0ZXJzRW50cnkSPQoUcmVzdGFydF9yZXF1ZXN0ZWRfYXQYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wSACIAQESPAoJYm9vdF9kaXNrGAggASgLMiQub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVJbnN0YW5jZURpc2tIAYgBARI+ChBhZGRpdGlvbmFsX2Rpc2tzGAkgAygLMiQub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVJbnN0YW5jZURpc2sSUgoMcnVuX3N0cmF0ZWd5GAogASgOMisub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVJbnN0YW5jZVJ1blN0cmF0ZWd5Qgq6SAeCAQQQASAASAKIAQESFgoJdXNlcl9kYXRhGAsgASgJSAOIAQESSwoTbmV0d29ya19hdHRhY2htZW50cxgOIAMoCzIpLm9zYWMucHJpdmF0ZS52MS5Db21wdXRlTmV0d29ya0F0dGFjaG1lbnRCA+BBBRJKCgxjYXRhbG9nX2l0ZW0YDyABKAsyNC5vc2FjLnByaXZhdGUudjEuQ29tcHV0ZUluc3RhbmNlQ2F0YWxvZ0l0ZW1SZWZlcmVuY2USPQoNaW5zdGFuY2VfdHlwZRgRIAEoCzImLm9zYWMucHJpdmF0ZS52MS5JbnN0YW5jZVR5cGVSZWZlcmVuY2USLQobYXV0b19leHRlcm5hbF9pcF9hdHRhY2htZW50GBIgASgIQgPgQQVIBIgBARI3CgpkaXNrX2ltYWdlGBMgASgLMiMub3NhYy5wcml2YXRlLnYxLkRpc2tJbWFnZVJlZmVyZW5jZRJEChB1c2VyX2RhdGFfc2VjcmV0GBQgASgLMiUub3NhYy5wcml2YXRlLnYxLlNlY3JldExvY2FsUmVmZXJlbmNlQgPgQQUSOwoHc3NoX2tleRgVIAEoCzIlLm9zYWMucHJpdmF0ZS52MS5TZWNyZXRMb2NhbFJlZmVyZW5jZUID4EEFGk8KF1RlbXBsYXRlUGFyYW1ldGVyc0VudHJ5EgsKA2tleRgBIAEoCRIjCgV2YWx1ZRgCIAEoCzIULmdvb2dsZS5wcm90b2J1Zi5Bbnk6AjgBQhcKFV9yZXN0YXJ0X3JlcXVlc3RlZF9hdEIMCgpfYm9vdF9kaXNrQg8KDV9ydW5fc3RyYXRlZ3lCDAoKX3VzZXJfZGF0YUIeChxfYXV0b19leHRlcm5hbF9pcF9hdHRhY2htZW50SgQIBBAFSgQIBRAGSgQIBhAHSgQIBxAISgQIDBANSgQIDRAOSgQIEBARUgVpbWFnZVIFY29yZXNSCm1lbW9yeV9naWJSDnNzaF9wdWJsaWNfa2V5UgZzdWJuZXRSD3NlY3VyaXR5X2dyb3Vwc1IKaXNfd2luZG93cyKHAwoVQ29tcHV0ZUluc3RhbmNlU3RhdHVzEjQKBXN0YXRlGAEgASgOMiUub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVJbnN0YW5jZVN0YXRlEj0KCmNvbmRpdGlvbnMYAiADKAsyKS5vc2FjLnByaXZhdGUudjEuQ29tcHV0ZUluc3RhbmNlQ29uZGl0aW9uEhsKE2ludGVybmFsX2lwX2FkZHJlc3MYAyABKAkSOgoRbGFzdF9yZXN0YXJ0ZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wSACIAQESGwoTZXh0ZXJuYWxfaXBfYWRkcmVzcxgFIAEoCRI+ChVzdGF0ZV90cmFuc2l0aW9uX3RpbWUYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wSAGIAQESEwoDaHViGAcgASgJQgaKtRgCCAFCFAoSX2xhc3RfcmVzdGFydGVkX2F0QhgKFl9zdGF0ZV90cmFuc2l0aW9uX3RpbWUihQIKGENvbXB1dGVJbnN0YW5jZUNvbmRpdGlvbhI7CgR0eXBlGAEgASgOMi0ub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVJbnN0YW5jZUNvbmRpdGlvblR5cGUSMAoGc3RhdHVzGAIgASgOMiAub3NhYy5wcml2YXRlLnYxLkNvbmRpdGlvblN0YXR1cxI4ChRsYXN0X3RyYW5zaXRpb25fdGltZRgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEwoGcmVhc29uGAQgASgJSACIAQESFAoHbWVzc2FnZRgFIAEoCUgBiAEBQgkKB19yZWFzb25CCgoIX21lc3NhZ2UiOQodQ29tcHV0ZUluc3RhbmNlTG9jYWxSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCSq7AgoUQ29tcHV0ZUluc3RhbmNlU3RhdGUSJgoiQ09NUFVURV9JTlNUQU5DRV9TVEFURV9VTlNQRUNJRklFRBAAEiMKH0NPTVBVVEVfSU5TVEFOQ0VfU1RBVEVfU1RBUlRJTkcQARIiCh5DT01QVVRFX0lOU1RBTkNFX1NUQVRFX1JVTk5JTkcQAhIhCh1DT01QVVRFX0lOU1RBTkNFX1NUQVRFX0ZBSUxFRBADEiMKH0NPTVBVVEVfSU5TVEFOQ0VfU1RBVEVfREVMRVRJTkcQBBIjCh9DT01QVVRFX0lOU1RBTkNFX1NUQVRFX1NUT1BQSU5HEAUSIgoeQ09NUFVURV9JTlNUQU5DRV9TVEFURV9TVE9QUEVEEAYSIQodQ09NUFVURV9JTlNUQU5DRV9TVEFURV9QQVVTRUQQByqJAwocQ29tcHV0ZUluc3RhbmNlQ29uZGl0aW9uVHlwZRIvCitDT01QVVRFX0lOU1RBTkNFX0NPTkRJVElPTl9UWVBFX1VOU1BFQ0lGSUVEEAASOQo1Q09NUFVURV9JTlNUQU5DRV9DT05ESVRJT05fVFlQRV9DT05GSUdVUkFUSU9OX0FQUExJRUQQARIpCiVDT01QVVRFX0lOU1RBTkNFX0NPTkRJVElPTl9UWVBFX1JFQURZEAISNwozQ09NUFVURV9JTlNUQU5DRV9DT05ESVRJT05fVFlQRV9SRVNUQVJUX0lOX1BST0dSRVNTEAMSMgouQ09NUFVURV9JTlNUQU5DRV9DT05ESVRJT05fVFlQRV9SRVNUQVJUX0ZBSUxFRBAEEi8KK0NPTVBVVEVfSU5TVEFOQ0VfQ09ORElUSU9OX1RZUEVfUFJPVklTSU9ORUQQBRI0CjBDT01QVVRFX0lOU1RBTkNFX0NPTkRJVElPTl9UWVBFX1JFU1RBUlRfUkVRVUlSRUQQBkIUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_api_field_behavior, file_google_protobuf_any, file_google_protobuf_timestamp, file_osac_private_v1_compute_instance_catalog_item_type, file_osac_private_v1_compute_instance_common_type, file_osac_private_v1_compute_instance_template_type, file_osac_private_v1_condition_status_type, file_osac_private_v1_disk_image_type, file_osac_private_v1_metadata_type, file_osac_private_v1_instance_type_type, file_osac_private_v1_secret_type]);
+  fileDesc("Citvc2FjL3ByaXZhdGUvdjEvY29tcHV0ZV9pbnN0YW5jZV90eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEivAEKD0NvbXB1dGVJbnN0YW5jZRIKCgJpZBgBIAEoCRIrCghtZXRhZGF0YRgCIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5NZXRhZGF0YRIyCgRzcGVjGAMgASgLMiQub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVJbnN0YW5jZVNwZWMSPAoGc3RhdHVzGAQgASgLMiYub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVJbnN0YW5jZVN0YXR1c0IE4kEBAyLhCQoTQ29tcHV0ZUluc3RhbmNlU3BlYxJDCgh0ZW1wbGF0ZRgBIAEoCzIxLm9zYWMucHJpdmF0ZS52MS5Db21wdXRlSW5zdGFuY2VUZW1wbGF0ZVJlZmVyZW5jZRJZChN0ZW1wbGF0ZV9wYXJhbWV0ZXJzGAIgAygLMjwub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVJbnN0YW5jZVNwZWMuVGVtcGxhdGVQYXJhbWV0ZXJzRW50cnkSPQoUcmVzdGFydF9yZXF1ZXN0ZWRfYXQYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wSACIAQESPAoJYm9vdF9kaXNrGAggASgLMiQub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVJbnN0YW5jZURpc2tIAYgBARJCChBhZGRpdGlvbmFsX2Rpc2tzGAkgASgLMigub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVJbnN0YW5jZURpc2tMaXN0ElIKDHJ1bl9zdHJhdGVneRgKIAEoDjIrLm9zYWMucHJpdmF0ZS52MS5Db21wdXRlSW5zdGFuY2VSdW5TdHJhdGVneUIKukgHggEEEAEgAEgCiAEBEhYKCXVzZXJfZGF0YRgLIAEoCUgDiAEBEkwKE25ldHdvcmtfYXR0YWNobWVudHMYDiADKAsyKS5vc2FjLnByaXZhdGUudjEuQ29tcHV0ZU5ldHdvcmtBdHRhY2htZW50QgTiQQEFEkoKDGNhdGFsb2dfaXRlbRgPIAEoCzI0Lm9zYWMucHJpdmF0ZS52MS5Db21wdXRlSW5zdGFuY2VDYXRhbG9nSXRlbVJlZmVyZW5jZRI9Cg1pbnN0YW5jZV90eXBlGBEgASgLMiYub3NhYy5wcml2YXRlLnYxLkluc3RhbmNlVHlwZVJlZmVyZW5jZRIuChthdXRvX2V4dGVybmFsX2lwX2F0dGFjaG1lbnQYEiABKAhCBOJBAQVIBIgBARI/CgpkaXNrX2ltYWdlGBMgASgLMiMub3NhYy5wcml2YXRlLnYxLkRpc2tJbWFnZVJlZmVyZW5jZUIGkrUYAggCEkUKEHVzZXJfZGF0YV9zZWNyZXQYFCABKAsyJS5vc2FjLnByaXZhdGUudjEuU2VjcmV0TG9jYWxSZWZlcmVuY2VCBOJBAQUSPAoHc3NoX2tleRgVIAEoCzIlLm9zYWMucHJpdmF0ZS52MS5TZWNyZXRMb2NhbFJlZmVyZW5jZUIE4kEBBRpPChdUZW1wbGF0ZVBhcmFtZXRlcnNFbnRyeRILCgNrZXkYASABKAkSIwoFdmFsdWUYAiABKAsyFC5nb29nbGUucHJvdG9idWYuQW55OgI4AUIXChVfcmVzdGFydF9yZXF1ZXN0ZWRfYXRCDAoKX2Jvb3RfZGlza0IPCg1fcnVuX3N0cmF0ZWd5QgwKCl91c2VyX2RhdGFCHgocX2F1dG9fZXh0ZXJuYWxfaXBfYXR0YWNobWVudEoECAQQBUoECAUQBkoECAYQB0oECAcQCEoECAwQDUoECA0QDkoECBAQEVIFaW1hZ2VSBWNvcmVzUgptZW1vcnlfZ2liUg5zc2hfcHVibGljX2tleVIGc3VibmV0Ug9zZWN1cml0eV9ncm91cHNSCmlzX3dpbmRvd3Mi4gUKFUNvbXB1dGVJbnN0YW5jZVN0YXR1cxJaCgVzdGF0ZRgBIAEoDjIlLm9zYWMucHJpdmF0ZS52MS5Db21wdXRlSW5zdGFuY2VTdGF0ZUIkkrUYIAgBEhxzdGF0dXMuc3RhdGVfdHJhbnNpdGlvbl90aW1lEj0KCmNvbmRpdGlvbnMYAiADKAsyKS5vc2FjLnByaXZhdGUudjEuQ29tcHV0ZUluc3RhbmNlQ29uZGl0aW9uEhsKE2ludGVybmFsX2lwX2FkZHJlc3MYAyABKAkSOgoRbGFzdF9yZXN0YXJ0ZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wSACIAQESGwoTZXh0ZXJuYWxfaXBfYWRkcmVzcxgFIAEoCRI+ChVzdGF0ZV90cmFuc2l0aW9uX3RpbWUYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wSAGIAQESEwoDaHViGAcgASgJQgaKtRgCCAESXAojY29tcHV0ZV9uZXR3b3JrX2F0dGFjaG1lbnRfc3RhdHVzZXMYCCADKAsyLy5vc2FjLnByaXZhdGUudjEuQ29tcHV0ZU5ldHdvcmtBdHRhY2htZW50U3RhdHVzEmsKDWluc3RhbmNlX3R5cGUYCSABKAsyJi5vc2FjLnByaXZhdGUudjEuSW5zdGFuY2VUeXBlUmVmZXJlbmNlQiyStRgoCAESJHN0YXR1cy5pbnN0YW5jZV90eXBlX3RyYW5zaXRpb25fdGltZRJGCh1pbnN0YW5jZV90eXBlX3RyYW5zaXRpb25fdGltZRgKIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBIAogBAUIUChJfbGFzdF9yZXN0YXJ0ZWRfYXRCGAoWX3N0YXRlX3RyYW5zaXRpb25fdGltZUIgCh5faW5zdGFuY2VfdHlwZV90cmFuc2l0aW9uX3RpbWUiSAoeQ29tcHV0ZU5ldHdvcmtBdHRhY2htZW50U3RhdHVzEhIKCnN1Ym5ldF9yZWYYASABKAkSEgoKaXBfYWRkcmVzcxgCIAEoCSKFAgoYQ29tcHV0ZUluc3RhbmNlQ29uZGl0aW9uEjsKBHR5cGUYASABKA4yLS5vc2FjLnByaXZhdGUudjEuQ29tcHV0ZUluc3RhbmNlQ29uZGl0aW9uVHlwZRIwCgZzdGF0dXMYAiABKA4yIC5vc2FjLnByaXZhdGUudjEuQ29uZGl0aW9uU3RhdHVzEjgKFGxhc3RfdHJhbnNpdGlvbl90aW1lGAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBITCgZyZWFzb24YBCABKAlIAIgBARIUCgdtZXNzYWdlGAUgASgJSAGIAQFCCQoHX3JlYXNvbkIKCghfbWVzc2FnZSI5Ch1Db21wdXRlSW5zdGFuY2VMb2NhbFJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJKrsCChRDb21wdXRlSW5zdGFuY2VTdGF0ZRImCiJDT01QVVRFX0lOU1RBTkNFX1NUQVRFX1VOU1BFQ0lGSUVEEAASIwofQ09NUFVURV9JTlNUQU5DRV9TVEFURV9TVEFSVElORxABEiIKHkNPTVBVVEVfSU5TVEFOQ0VfU1RBVEVfUlVOTklORxACEiEKHUNPTVBVVEVfSU5TVEFOQ0VfU1RBVEVfRkFJTEVEEAMSIwofQ09NUFVURV9JTlNUQU5DRV9TVEFURV9ERUxFVElORxAEEiMKH0NPTVBVVEVfSU5TVEFOQ0VfU1RBVEVfU1RPUFBJTkcQBRIiCh5DT01QVVRFX0lOU1RBTkNFX1NUQVRFX1NUT1BQRUQQBhIhCh1DT01QVVRFX0lOU1RBTkNFX1NUQVRFX1BBVVNFRBAHKokDChxDb21wdXRlSW5zdGFuY2VDb25kaXRpb25UeXBlEi8KK0NPTVBVVEVfSU5TVEFOQ0VfQ09ORElUSU9OX1RZUEVfVU5TUEVDSUZJRUQQABI5CjVDT01QVVRFX0lOU1RBTkNFX0NPTkRJVElPTl9UWVBFX0NPTkZJR1VSQVRJT05fQVBQTElFRBABEikKJUNPTVBVVEVfSU5TVEFOQ0VfQ09ORElUSU9OX1RZUEVfUkVBRFkQAhI3CjNDT01QVVRFX0lOU1RBTkNFX0NPTkRJVElPTl9UWVBFX1JFU1RBUlRfSU5fUFJPR1JFU1MQAxIyCi5DT01QVVRFX0lOU1RBTkNFX0NPTkRJVElPTl9UWVBFX1JFU1RBUlRfRkFJTEVEEAQSLworQ09NUFVURV9JTlNUQU5DRV9DT05ESVRJT05fVFlQRV9QUk9WSVNJT05FRBAFEjQKMENPTVBVVEVfSU5TVEFOQ0VfQ09ORElUSU9OX1RZUEVfUkVTVEFSVF9SRVFVSVJFRBAGQhSKtRgQEg5vc2FjLnB1YmxpYy52MWIGcHJvdG8z", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_api_field_behavior, file_google_protobuf_any, file_google_protobuf_timestamp, file_osac_private_v1_compute_instance_catalog_item_type, file_osac_private_v1_compute_instance_common_type, file_osac_private_v1_compute_instance_template_type, file_osac_private_v1_condition_status_type, file_osac_private_v1_disk_image_type, file_osac_private_v1_metadata_type, file_osac_private_v1_instance_type_type, file_osac_private_v1_metering_type, file_osac_private_v1_secret_type]);
 
 /**
  * Contains the details of the compute instance.
@@ -182,11 +183,12 @@ export type ComputeInstanceSpec = Message<"osac.private.v1.ComputeInstanceSpec">
   bootDisk?: ComputeInstanceDisk | undefined;
 
   /**
-   * Additional disk configurations.
+   * Additional disk configurations. When creating from a Catalog Item, omit this field to use its default.
+   * Set `items` to an empty list to request no additional disks.
    *
-   * @generated from field: repeated osac.private.v1.ComputeInstanceDisk additional_disks = 9;
+   * @generated from field: osac.private.v1.ComputeInstanceDiskList additional_disks = 9;
    */
-  additionalDisks: ComputeInstanceDisk[];
+  additionalDisks?: ComputeInstanceDiskList | undefined;
 
   /**
    * Run strategy for the compute instance.
@@ -386,6 +388,35 @@ export type ComputeInstanceStatus = Message<"osac.private.v1.ComputeInstanceStat
    * @generated from field: string hub = 7;
    */
   hub: string;
+
+  /**
+   * Subnet and IP details reported for each configured network attachment.
+   *
+   * @generated from field: repeated osac.private.v1.ComputeNetworkAttachmentStatus compute_network_attachment_statuses = 8;
+   */
+  computeNetworkAttachmentStatuses: ComputeNetworkAttachmentStatus[];
+
+  /**
+   * The instance type that is actually running, after any restart that a resize required. It may
+   * lag `spec.instance_type` while a resize is in progress. The system sets it when it observes
+   * the instance running with the type; users can't set or change it.
+   *
+   * Metering bills the running instance against this type.
+   *
+   * @generated from field: osac.private.v1.InstanceTypeReference instance_type = 9;
+   */
+  instanceType?: InstanceTypeReference | undefined;
+
+  /**
+   * Records when the instance type in `status.instance_type` became running. This is the
+   * authoritative timestamp of the running type transition, suitable for billing interval
+   * calculations: metering bills the new type from this time.
+   *
+   * This will be empty if the instance has not been observed running yet.
+   *
+   * @generated from field: optional google.protobuf.Timestamp instance_type_transition_time = 10;
+   */
+  instanceTypeTransitionTime?: Timestamp | undefined;
 };
 
 /**
@@ -394,6 +425,34 @@ export type ComputeInstanceStatus = Message<"osac.private.v1.ComputeInstanceStat
  */
 export const ComputeInstanceStatusSchema: GenMessage<ComputeInstanceStatus> = /*@__PURE__*/
   messageDesc(file_osac_private_v1_compute_instance_type, 2);
+
+/**
+ * Contains the Subnet and IPv4 address reported for a network attachment.
+ *
+ * @generated from message osac.private.v1.ComputeNetworkAttachmentStatus
+ */
+export type ComputeNetworkAttachmentStatus = Message<"osac.private.v1.ComputeNetworkAttachmentStatus"> & {
+  /**
+   * Identifier of the Subnet assigned to the attachment.
+   *
+   * @generated from field: string subnet_ref = 1;
+   */
+  subnetRef: string;
+
+  /**
+   * IPv4 address assigned to the attachment.
+   *
+   * @generated from field: string ip_address = 2;
+   */
+  ipAddress: string;
+};
+
+/**
+ * Describes the message osac.private.v1.ComputeNetworkAttachmentStatus.
+ * Use `create(ComputeNetworkAttachmentStatusSchema)` to create a new message.
+ */
+export const ComputeNetworkAttachmentStatusSchema: GenMessage<ComputeNetworkAttachmentStatus> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_compute_instance_type, 3);
 
 /**
  * Contains the details of a condition that describes the status of a compute instance.
@@ -446,7 +505,7 @@ export type ComputeInstanceCondition = Message<"osac.private.v1.ComputeInstanceC
  * Use `create(ComputeInstanceConditionSchema)` to create a new message.
  */
 export const ComputeInstanceConditionSchema: GenMessage<ComputeInstanceCondition> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_compute_instance_type, 3);
+  messageDesc(file_osac_private_v1_compute_instance_type, 4);
 
 /**
  * Local reference to a ComputeInstance resource.
@@ -470,7 +529,7 @@ export type ComputeInstanceLocalReference = Message<"osac.private.v1.ComputeInst
  * Use `create(ComputeInstanceLocalReferenceSchema)` to create a new message.
  */
 export const ComputeInstanceLocalReferenceSchema: GenMessage<ComputeInstanceLocalReference> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_compute_instance_type, 4);
+  messageDesc(file_osac_private_v1_compute_instance_type, 5);
 
 /**
  * Represents the overall state of a compute instance.

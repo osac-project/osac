@@ -190,7 +190,7 @@ describe('buildComputeInstanceCreatePayload — disk storage tiers', () => {
       sizeGib: 20,
       storageTier: { id: 'id-fast', name: 'fast' },
     });
-    expect(payload.spec?.additionalDisks).toEqual([
+    expect(payload.spec?.additionalDisks?.items).toEqual([
       { sizeGib: 100, storageTier: { id: 'id-bulk', name: 'bulk' } },
     ]);
   });
@@ -208,7 +208,7 @@ describe('buildComputeInstanceCreatePayload — disk storage tiers', () => {
 
     const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
 
-    expect(payload.spec?.additionalDisks).toEqual([
+    expect(payload.spec?.additionalDisks?.items).toEqual([
       { sizeGib: 100, storageTier: { id: 'id-bulk', name: 'bulk' } },
     ]);
   });
@@ -232,7 +232,7 @@ describe('buildComputeInstanceCreatePayload — disk storage tiers', () => {
 
     const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
 
-    expect(payload.spec?.additionalDisks).toEqual([
+    expect(payload.spec?.additionalDisks?.items).toEqual([
       { sizeGib: 100, storageTier: { id: 'id-bulk', name: 'bulk' } },
     ]);
   });

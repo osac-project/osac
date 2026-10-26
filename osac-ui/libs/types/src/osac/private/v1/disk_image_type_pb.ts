@@ -142,7 +142,7 @@ export type DiskImageSpec = Message<"osac.private.v1.DiskImageSpec"> & {
   guestOsFamily: GuestOSFamily;
 
   /**
-   * CPU architectures supported by the disk image. Informational metadata only.
+   * CPU architectures supported by the disk image.
    *
    * @generated from field: repeated osac.private.v1.Architecture architecture = 4;
    */

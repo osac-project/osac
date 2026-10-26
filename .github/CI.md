@@ -72,7 +72,7 @@ Netris route and return policy is configured and
 The stretched networking suite checks shared-subnet connectivity between a
 ComputeInstance and a BareMetalInstance. Start it with `/test stretched-netris`
 or its checkbox in the pull request's E2E comment. It has a separate
-`E2E / Stretched Networking Netris Full Install` line and uses the `full-ci`
+`E2E / Stretched Netris Full Install` line and uses the `full-ci`
 profile. The workflow provisions the Netris/EVPN infrastructure; the test
 itself checks OSAC networking behavior and is not backend-specific. The broad
 Netris `full` suite also includes this test.

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 import json
-import re
 from pathlib import Path
 
 import yaml
@@ -74,8 +73,8 @@ def test_netris_suites_are_separate_manual_suites() -> None:
         "e2e-stretched-netris": {
             "suite": "stretched-netris",
             "workflow": "e2e-pr-stretched-netris.yml",
-            "workflow_name": "E2E Stretched Networking Netris PR suite",
-            "check": "E2E / Stretched Networking Netris Full Install",
+            "workflow_name": "E2E Stretched Netris PR suite",
+            "check": "E2E / Stretched Netris Full Install",
             "runner": "e2e-stretched-netris-full-install.yml",
         },
     }
@@ -111,52 +110,45 @@ def test_stretched_networking_test_uses_a_backend_agnostic_marker() -> None:
 def test_vmaas_netris_calls_networking_runner_with_vmaas_profile() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/e2e-vmaas-netris-full-install.yml").read_text())
     job = workflow["jobs"]["e2e-vmaas-netris"]
-    workflow_path, workflow_sha = job["uses"].rsplit("@", 1)
+    workflow_path, workflow_ref = job["uses"].rsplit("@", 1)
     assert workflow_path == "osac-project/osac-test-infra/.github/workflows/e2e-vmaas-netris-full-install.yml"
     assert job["with"]["suite"] == "vmaas_networking"
     assert job["with"]["osac-profile"] == "cudn-evpn-netris-test"
-    test_infra_sha = job["with"]["test-infra-sha"]
-    assert workflow_sha == test_infra_sha
-    assert re.fullmatch(r"[0-9a-f]{40}", test_infra_sha)
+    test_infra_ref = job["with"]["test-infra-ref"]
+    assert workflow_ref == test_infra_ref == "main"
 
     caller = yaml.safe_load((ROOT / ".github/workflows/e2e-vmaas-netris-full-install-caller.yml").read_text())
     assert caller["jobs"]["e2e-vmaas-netris"]["uses"] == "./.github/workflows/e2e-vmaas-netris-full-install.yml"
-
-    pr_workflow = yaml.safe_load((ROOT / ".github/workflows/e2e-pr.yml").read_text())
-    pr_job = pr_workflow["jobs"]["vmaas-netris"]
-    assert pr_job["uses"] == "./.github/workflows/e2e-vmaas-netris-full-install.yml"
-    assert "contains(needs.decide.outputs.suites, '\"vmaas-netris\"')" in pr_job["if"]
 
 
 def test_bmaas_netris_calls_networking_runner_with_bmaas_profile() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/e2e-bmaas-netris-full-install.yml").read_text())
     job = workflow["jobs"]["e2e-bmaas-netris"]
-    assert "/e2e-bmaas-netris-full-install.yml@" in job["uses"]
+    assert job["uses"] == "osac-project/osac-test-infra/.github/workflows/e2e-bmaas-netris-full-install.yml@main"
     assert job["with"]["suite"] == "bmaas_networking"
     assert job["with"]["osac-profile"] == "bmaas-ci"
-    assert job["uses"].endswith(f"@{job['with']['test-infra-sha']}")
-    assert re.fullmatch(r"[0-9a-f]{40}", job["with"]["test-infra-sha"])
+    assert job["with"]["test-infra-ref"] == "main"
 
 
-def test_netris_workflows_share_the_test_infra_revision() -> None:
+def test_netris_workflows_share_the_test_infra_ref() -> None:
     bmaas = yaml.safe_load((ROOT / ".github/workflows/e2e-bmaas-netris-full-install.yml").read_text())
     vmaas = yaml.safe_load((ROOT / ".github/workflows/e2e-vmaas-netris-full-install.yml").read_text())
     stretched = yaml.safe_load((ROOT / ".github/workflows/e2e-stretched-netris-full-install.yml").read_text())
     assert (
-        bmaas["jobs"]["e2e-bmaas-netris"]["with"]["test-infra-sha"]
-        == vmaas["jobs"]["e2e-vmaas-netris"]["with"]["test-infra-sha"]
-        == stretched["jobs"]["e2e-stretched-netris"]["with"]["test-infra-sha"]
+        bmaas["jobs"]["e2e-bmaas-netris"]["with"]["test-infra-ref"]
+        == vmaas["jobs"]["e2e-vmaas-netris"]["with"]["test-infra-ref"]
+        == stretched["jobs"]["e2e-stretched-netris"]["with"]["test-infra-ref"]
+        == "main"
     )
 
 
 def test_stretched_netris_calls_its_runner_with_full_profile() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/e2e-stretched-netris-full-install.yml").read_text())
     job = workflow["jobs"]["e2e-stretched-netris"]
-    assert "/e2e-stretched-netris-full-install.yml@" in job["uses"]
+    assert job["uses"] == "osac-project/osac-test-infra/.github/workflows/e2e-stretched-netris-full-install.yml@main"
     assert job["with"]["suite"] == "stretched_networking"
     assert job["with"]["osac-profile"] == "full-ci"
-    assert job["uses"].endswith(f"@{job['with']['test-infra-sha']}")
-    assert re.fullmatch(r"[0-9a-f]{40}", job["with"]["test-infra-sha"])
+    assert job["with"]["test-infra-ref"] == "main"
 
 
 def test_netris_callers_use_a_supported_service_image_key() -> None:

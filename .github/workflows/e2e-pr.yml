@@ -31,7 +31,7 @@ run-name: >-
 
 on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out; the suites run the approved commit
   workflow_run:
-    workflows: ["CI", "E2E review relay", "E2E comment", "E2E VMaaS PR suite", "E2E CaaS PR suite", "E2E BMaaS PR suite", "E2E BMaaS Netris PR suite", "E2E VMaaS Netris PR suite", "E2E Stretched Networking Netris PR suite"]  # keep in step with the workflow names the decision takes as inputs; the last six: the suites, each a run of its own
+    workflows: ["CI", "E2E review relay", "E2E comment", "E2E VMaaS PR suite", "E2E CaaS PR suite", "E2E BMaaS PR suite", "E2E BMaaS Netris PR suite", "E2E VMaaS Netris PR suite", "E2E Stretched Netris PR suite"]  # keep in step with the workflow names the decision takes as inputs; the last six: the suites, each a run of its own
     types: [requested, completed]
     # The CI run of a merge queue entry is on a branch GitHub names gh-readonly-queue/...: it is no pull request, the
     # decision ignores it, and it only added a run with a long title for every entry.

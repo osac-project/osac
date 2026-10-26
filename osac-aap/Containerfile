@@ -136,7 +136,7 @@ FROM base AS final
 # before it) -- both tripped Enterprise Contract's trusted_task.trusted
 # rule by existing at all; a plain sed on a committed file needs no
 # Tekton task whatsoever.
-ARG VERSION=dev
+ARG VERSION=0.0.40
 LABEL name="cloud-extensions/osac-aap-rhel10"
 LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
 LABEL org.opencontainers.image.version="${VERSION}"

@@ -342,13 +342,18 @@ def test_transport_configuration_is_passed_to_fetch_url(monkeypatch):
 
     assert records == []
     assert captured["url"] == "https://netris.example/api/v2/ipam/subnets"
-    assert captured["unredirected_headers"]["Cookie"] == f"connect.sid={TEST_COOKIE}"
+    cookie_matches = captured["headers"].get("Cookie") == f"connect.sid={TEST_COOKIE}"
+    assert cookie_matches
+    assert captured["unredirected_headers"] == ["Cookie"]
+    assert "Content-Type" not in captured["headers"]
     assert captured["timeout"] == 45
     assert captured["ca_path"] == "/tmp/netris-ca.pem"
+    assert captured["use_proxy"] is True
+    assert captured["force"] is True
     assert module_stub.params["validate_certs"] is False
 
 
-def test_session_cookie_never_follows_redirects(monkeypatch):
+def test_session_cookie_is_marked_unredirected(monkeypatch):
     captured = {}
 
     def fake_fetch_url(module, url, **kwargs):
@@ -362,7 +367,7 @@ def test_session_cookie_never_follows_redirects(monkeypatch):
 
     client.list_subnets()
 
-    assert captured["unredirected_headers"]["Cookie"] == f"connect.sid={TEST_COOKIE}"
+    assert captured["unredirected_headers"] == ["Cookie"]
 
 
 def _client_with_response(monkeypatch, status, payload=b""):

@@ -339,12 +339,15 @@ class NetrisSubnetClient:
         params = getattr(self._module, "params", None)
         if params is not None:
             params["validate_certs"] = self._validate_certs
+        headers = {"Cookie": f"connect.sid={self._session_cookie}"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
         response, info = fetch_url(
             self._module,
             f"{self._controller_url}{path}",
             data=json.dumps(body).encode() if body is not None else None,
-            headers={"Content-Type": "application/json"} if body is not None else {},
-            unredirected_headers={"Cookie": f"connect.sid={self._session_cookie}"},
+            headers=headers,
+            unredirected_headers=["Cookie"],
             method=method,
             timeout=self._timeout,
             use_proxy=True,

@@ -2650,7 +2650,22 @@ jobs:
             }
             with open("/tmp/release.json", "w") as f:
                 json.dump(release, f)
-            subprocess.run(["oc", "apply", "-f", "/tmp/release.json"], check=True)
+            # check=True alone would raise straight out of this loop on a
+            # transient oc apply hiccup, abandoning the remaining attempts
+            # entirely -- same transient-vs-permanent distinction every
+            # other oc call in this script already applies.
+            try:
+                subprocess.run(
+                    ["oc", "apply", "-f", "/tmp/release.json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr or ""
+                if is_permanent_auth_error(stderr):
+                    print(f"::error::oc apply failed with a permanent auth/RBAC error: {stderr.strip()}")
+                    raise
+                print(f"::warning::oc apply failed for {release_name}, will retry: {stderr.strip()}")
+                continue
             print(f"Created Release {release_name} (attempt {attempt_num}/{MAX_RELEASE_ATTEMPTS}), waiting for it to complete")
             if poll_release(release_name, TIMEOUT_SECONDS if attempt_num == 1 else RETRY_TIMEOUT_SECONDS):
                 released = True
@@ -3166,7 +3181,22 @@ jobs:
             }
             with open("/tmp/chart-release.json", "w") as f:
                 json.dump(release, f)
-            subprocess.run(["oc", "apply", "-f", "/tmp/chart-release.json"], check=True)
+            # check=True alone would raise straight out of this loop on a
+            # transient oc apply hiccup, abandoning the remaining attempts
+            # entirely -- same transient-vs-permanent distinction every
+            # other oc call in this script already applies.
+            try:
+                subprocess.run(
+                    ["oc", "apply", "-f", "/tmp/chart-release.json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr or ""
+                if is_permanent_auth_error(stderr):
+                    print(f"::error::oc apply failed with a permanent auth/RBAC error: {stderr.strip()}")
+                    raise
+                print(f"::warning::oc apply failed for {release_name}, will retry: {stderr.strip()}")
+                continue
             print(f"Created Release {release_name} (attempt {attempt_num}/{MAX_RELEASE_ATTEMPTS}), waiting for it to complete")
             if poll_release(release_name, TIMEOUT_SECONDS if attempt_num == 1 else RETRY_TIMEOUT_SECONDS):
                 released = True

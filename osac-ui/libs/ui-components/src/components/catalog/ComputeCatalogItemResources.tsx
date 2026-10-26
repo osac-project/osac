@@ -24,10 +24,6 @@ import {
   computeInstanceTypeReferenceFromPolicy,
   findComputeInstanceTypeForReference,
   formatComputeCatalogDiskImage,
-  formatComputeCatalogMemory,
-  formatComputeCatalogStorage,
-  formatComputeCatalogVCpu,
-  int32ValueFromPolicy,
 } from './computeCatalogItemResourceDisplay';
 import { GuestOsIcon } from '../shared/GuestOsIcon';
 
@@ -45,9 +41,7 @@ const ComputeCatalogItemResources = ({
   const instanceTypeReference = computeInstanceTypeReferenceFromPolicy(fields?.instanceType);
   const diskImageReference = computeDiskImageReferenceFromPolicy(fields?.diskImage);
   const instanceTypePolicyBehavior = catalogFieldPolicyBehavior(fields?.instanceType);
-  const bootDiskSizePolicyBehavior = catalogFieldPolicyBehavior(fields?.bootDisk?.sizeGib);
   const diskImagePolicyBehavior = catalogFieldPolicyBehavior(fields?.diskImage);
-  const bootDiskSizeGib = int32ValueFromPolicy(fields?.bootDisk?.sizeGib);
 
   const { computeInstanceTypes, diskImages } = resourceLookups;
 
@@ -63,42 +57,19 @@ const ComputeCatalogItemResources = ({
 
   const diskImageOsIcon = diskImageGuestOsIconType(diskImage);
 
-  const vCpuLabel = formatComputeCatalogVCpu(fields, instanceType, t);
-  const memoryLabel = formatComputeCatalogMemory(fields, instanceType, t);
-  const storageLabel = formatComputeCatalogStorage(fields, bootDiskSizeGib, t);
+  const instanceTypeLabel =
+    instanceType?.metadata?.name ?? instanceTypeReference?.name ?? instanceTypeReference?.id;
   const diskImageLabel = formatComputeCatalogDiskImage(fields, diskImage, diskImageReference);
 
   return (
     <DescriptionList isHorizontal isCompact>
       <DescriptionListGroup>
-        <DescriptionListTerm>{t('vCPU')}</DescriptionListTerm>
+        <DescriptionListTerm>{t('Instance type')}</DescriptionListTerm>
         <DescriptionListDescription>
           <Flex flexWrap={{ default: 'nowrap' }} gap={{ default: 'gapXs' }}>
-            <FlexItem>{vCpuLabel || '-'}</FlexItem>
+            <FlexItem>{instanceTypeLabel || '-'}</FlexItem>
             <FlexItem>
               <CatalogFieldEditabilityLabel behavior={instanceTypePolicyBehavior} />
-            </FlexItem>
-          </Flex>
-        </DescriptionListDescription>
-      </DescriptionListGroup>
-      <DescriptionListGroup>
-        <DescriptionListTerm>{t('Memory')}</DescriptionListTerm>
-        <DescriptionListDescription>
-          <Flex flexWrap={{ default: 'nowrap' }} gap={{ default: 'gapXs' }}>
-            <FlexItem>{memoryLabel || '-'}</FlexItem>
-            <FlexItem>
-              <CatalogFieldEditabilityLabel behavior={instanceTypePolicyBehavior} />
-            </FlexItem>
-          </Flex>
-        </DescriptionListDescription>
-      </DescriptionListGroup>
-      <DescriptionListGroup>
-        <DescriptionListTerm>{t('Storage')}</DescriptionListTerm>
-        <DescriptionListDescription>
-          <Flex flexWrap={{ default: 'nowrap' }} gap={{ default: 'gapXs' }}>
-            <FlexItem>{storageLabel || '-'}</FlexItem>
-            <FlexItem>
-              <CatalogFieldEditabilityLabel behavior={bootDiskSizePolicyBehavior} />
             </FlexItem>
           </Flex>
         </DescriptionListDescription>

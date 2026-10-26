@@ -16,7 +16,12 @@ import {
 } from '@patternfly/react-core';
 import type { TFunction } from 'i18next';
 
-import { ServiceTier } from '@osac/types';
+import {
+  BareMetalInstanceCatalogItems,
+  ClusterCatalogItems,
+  ComputeInstanceCatalogItems,
+  ServiceTier,
+} from '@osac/types';
 import { type CatalogListFilterCriteria } from '@osac/ui-components/api/v1/catalog-item-list-filter';
 import CatalogItemCard from '@osac/ui-components/components/catalog/CatalogItemCard';
 import {
@@ -36,6 +41,7 @@ import CreateButton from '@osac/ui-components/components/Primitives/CreateButton
 import ViewSwitcher from '@osac/ui-components/components/Primitives/ViewSwitcher';
 import { useCatalogItems } from '@osac/ui-components/hooks/use-catalog-items';
 import { SEARCH_PARAM, usePageFilter } from '@osac/ui-components/hooks/use-page-filter';
+import type { ServiceWithMethod } from '@osac/ui-components/hooks/use-permissions';
 import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useViewType } from '@osac/ui-components/hooks/use-view-type';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
@@ -147,6 +153,19 @@ const catalogKindForServiceTier = (tier: ServiceTier): CatalogItemKind | undefin
   }
 };
 
+const catalogServiceForKind = (
+  kind: CatalogItemKind | undefined,
+): ServiceWithMethod<'create'> | undefined => {
+  switch (kind) {
+    case 'bm':
+      return BareMetalInstanceCatalogItems;
+    case 'cluster':
+      return ClusterCatalogItems;
+    case 'vm':
+      return ComputeInstanceCatalogItems;
+  }
+};
+
 const serviceTierForFilter = (filter?: string): ServiceTier | undefined => {
   switch (filter) {
     case 'bm':
@@ -241,7 +260,9 @@ const CatalogPage = () => {
 
   const pageDescription = getPageDescription(t, enabledServices, role);
 
-  const canCreateCatalogItem = (role === 'admin' || role === 'tenant-admin') && !!selectedKind;
+  const catalogCreateService = catalogServiceForKind(selectedKind);
+  const canCreateCatalogItem =
+    (role === 'admin' || role === 'tenant-admin') && !!catalogCreateService;
 
   // react-router's setSearchParams does not compose across synchronous calls;
   // each updater receives the render-captured params. Clear every filter in one
@@ -275,7 +296,7 @@ const CatalogPage = () => {
       error={error}
       actions={
         canCreateCatalogItem ? (
-          <CreateButton to={`/catalog/${selectedKind}/create`}>
+          <CreateButton service={catalogCreateService} to={`/catalog/${selectedKind}/create`}>
             {t('Create catalog item')}
           </CreateButton>
         ) : null

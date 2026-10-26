@@ -18,22 +18,42 @@
   register: _vnet_list_resp
   no_log: true
 
+- name: Find V-Nets by name
+  ansible.builtin.set_fact:
+    _vnets_by_name: >-
+      {{ (_vnet_list_resp.json.data | default([]))
+         | selectattr('name', 'equalto', vnet_name)
+         | list }}
+  when: _vnet_list_resp.json is mapping
+
+- name: Initialize V-Net candidates
+  ansible.builtin.set_fact:
+    _existing_vnets: "{{ _vnets_by_name }}"
+
 - name: Find V-Nets by name and VPC
   ansible.builtin.set_fact:
     _existing_vnets: >-
-      {{ (_vnet_list_resp.json.data | default([]))
-         | selectattr('name', 'equalto', vnet_name)
+      {{ _vnets_by_name
+         | selectattr('vpc.id', 'defined')
          | selectattr('vpc.id', 'equalto', vnet_vpc_id | int)
          | list }}
-  when: _vnet_list_resp.json is mapping
+  when: vnet_vpc_id is defined
 
 - name: Filter V-Nets by tenant
   ansible.builtin.set_fact:
     _existing_vnets: >-
       {{ _existing_vnets
+         | selectattr('tenant.id', 'defined')
          | selectattr('tenant.id', 'equalto', vnet_tenant_id | int)
          | list }}
   when: vnet_tenant_id is defined
+
+- name: Keep same-name V-Net candidates when identity filtering found no match
+  ansible.builtin.set_fact:
+    _existing_vnets: "{{ _vnets_by_name }}"
+  when:
+    - _existing_vnets | default([]) | length == 0
+    - _vnets_by_name | length > 0
 
 - name: Fail if the V-Net identity is ambiguous
   ansible.builtin.assert:
@@ -47,11 +67,74 @@
   ansible.builtin.set_fact:
     _existing_vnet: "{{ _existing_vnets | first | default({}) }}"
 
+- name: Validate existing V-Net summary has an ID
+  ansible.builtin.assert:
+    that:
+      - _existing_vnet.id is defined
+      - _existing_vnet.id is not none
+      - _existing_vnet.id | string | length > 0
+    fail_msg: >-
+      Netris V-Net '{{ vnet_name }}' was found but its list response omitted the ID;
+      refusing to continue without a stable provider identifier.
+  when:
+    - _existing_vnet is mapping
+    - _existing_vnet | length > 0
+
+- name: Detect V-Net fields omitted from the list response
+  ansible.builtin.set_fact:
+    _vnet_missing_fields: >-
+      {{ _existing_vnet | netris.controller.netris_immutable_missing_fields({
+           'vpc.id': vnet_vpc_id,
+           'tenant.id': vnet_tenant_id,
+           'sites.ids': [vnet_site_id]
+         }) }}
+  when:
+    - _existing_vnet is mapping
+    - _existing_vnet | length > 0
+    - vnet_vpc_id is defined
+
+- name: Read V-Net details when its list response omits an immutable field
+  ansible.builtin.include_role:
+    name: netris.controller.vnet
+    tasks_from: read_by_id
+  vars:
+    vnet_id: "{{ _existing_vnet.id }}"
+  when: _vnet_missing_fields | default([]) | length > 0
+
+- name: Use detailed V-Net response for immutable field comparison
+  ansible.builtin.set_fact:
+    _existing_vnet: "{{ netris_vnet_detail }}"
+  when:
+    - netris_vnet_detail is defined
+    - _vnet_missing_fields | default([]) | length > 0
+
 - name: Set V-Net facts from existing V-Net (skip creation)
   ansible.builtin.set_fact:
     vnet_id: "{{ _existing_vnet.id }}"
     vnet_already_existed: true
   when: _existing_vnet | length > 0
+
+- name: Fail when existing V-Net has immutable field mismatch
+  when:
+    - _existing_vnet is mapping
+    - _existing_vnet | length > 0
+    - vnet_vpc_id is defined
+  block:
+    - name: Compute V-Net immutable mismatches
+      ansible.builtin.set_fact:
+        _vnet_mismatches: >-
+          {{ _existing_vnet | netris.controller.netris_immutable_mismatch({
+               'vpc.id': vnet_vpc_id,
+               'tenant.id': vnet_tenant_id,
+               'sites.ids': [vnet_site_id]
+             }) }}
+
+    - name: Fail on V-Net immutable mismatch
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'V-Net' | netris.controller.format_immutable_mismatch_message(
+               vnet_name, _vnet_mismatches) }}
+      when: (_vnet_mismatches | default([]) | length) > 0
 
 - name: Build V-Net body
   ansible.builtin.set_fact:
@@ -127,6 +210,22 @@
   register: _vnet_create_resp
   when: _existing_vnet | length == 0
   no_log: true
+
+- name: Validate V-Net create response includes an ID
+  ansible.builtin.assert:
+    that:
+      - _vnet_create_resp.json is mapping
+      - _vnet_create_resp.json.data is defined
+      - not ((_vnet_create_resp.json.data.id | default(_vnet_create_resp.json.data, true)) is mapping)
+      - (_vnet_create_resp.json.data.id | default(_vnet_create_resp.json.data, true)) is not none
+      - (_vnet_create_resp.json.data.id | default(_vnet_create_resp.json.data, true)) | string | length > 0
+    fail_msg: >-
+      Netris accepted V-Net '{{ vnet_name }}' creation but returned no usable ID;
+      retry after checking whether the V-Net was created.
+  when:
+    - _existing_vnet | length == 0
+    - _vnet_create_resp is not skipped
+    - _vnet_create_resp is changed or (_vnet_create_resp.status | default(0)) in [200, 201]
 
 - name: Set V-Net facts from create response
   ansible.builtin.set_fact:

@@ -4,6 +4,15 @@
 - name: Extract VirtualNetwork name
   ansible.builtin.set_fact:
     vn_name: "{{ virtual_network.metadata.name }}"
+    vn_ipv4_cidr: "{{ virtual_network.spec.ipv4Cidr | default('') }}"
+
+- name: Refuse delete of default VirtualNetwork
+  ansible.builtin.include_tasks: _refuse_if_default.yaml
+  vars:
+    _default_refuse_resource: "{{ virtual_network }}"
+    _default_refuse_kind: VirtualNetwork
+    _default_refuse_name: "{{ vn_name }}"
+    _default_refuse_allow_override: false
 
 - name: Display VirtualNetwork deletion info
   ansible.builtin.debug:
@@ -20,6 +29,26 @@
   ansible.builtin.set_fact:
     _vn_vpc_id: "{{ netris_vpc.id | default('') }}"
 
+- name: Build VirtualNetwork allocation ownership fields
+  ansible.builtin.set_fact:
+    _vn_allocation_expected_fields:
+      "tenant.id": "{{ netris_tenant_id }}"
+  when: vn_ipv4_cidr | length > 0
+
+- name: Add VirtualNetwork allocation prefix ownership field
+  ansible.builtin.set_fact:
+    _vn_allocation_expected_fields: >-
+      {{ _vn_allocation_expected_fields | combine({'prefix': vn_ipv4_cidr}) }}
+  when: vn_ipv4_cidr | length > 0
+
+- name: Add VirtualNetwork allocation VPC ownership field
+  ansible.builtin.set_fact:
+    _vn_allocation_expected_fields: >-
+      {{ _vn_allocation_expected_fields | combine({'vpc.id': _vn_vpc_id}) }}
+  when:
+    - vn_ipv4_cidr | length > 0
+    - _vn_vpc_id | string | length > 0
+
 - name: Delete IPAM allocation from Netris controller
   ansible.builtin.include_role:
     name: netris.controller.ipam
@@ -27,7 +56,7 @@
   vars:
     ipam_name: "{{ vn_name }}"
     ipam_vpc_id: "{{ _vn_vpc_id }}"
-  when: _vn_vpc_id | string | length > 0
+    ipam_expected_fields: "{{ _vn_allocation_expected_fields | default({'tenant.id': netris_tenant_id}) }}"
 
 - name: Delete VPC from Netris controller
   ansible.builtin.include_role:
@@ -35,6 +64,7 @@
     tasks_from: delete
   vars:
     vpc_name: "{{ vn_name }}"
+    vpc_tenant_id: "{{ netris_tenant_id }}"
 
 - name: Display deletion result
   ansible.builtin.debug:

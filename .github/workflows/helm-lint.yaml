@@ -224,6 +224,13 @@ jobs:
           fi
           if [ -f "${d}instance.yaml" ]; then
             instance_args+=(--values "${d}instance.yaml")
+            # The NetBox API token is generated at install time by the
+            # osac-infra seed hook; offline templating cannot see the Secret
+            # the BMF chart looks up, so supply a placeholder here like the
+            # other runtime-injected values set below.
+            case "${profile}" in
+              bmaas-netbox-ci) instance_args+=(--set "bmf.netbox.tokenValue=ci-render-placeholder") ;;
+            esac
             helm template osac charts/osac/ "${instance_args[@]}" \
               --set service.externalHostname=fulfillment-api.example.com \
               --set service.internalHostname=fulfillment-internal-api.example.com \

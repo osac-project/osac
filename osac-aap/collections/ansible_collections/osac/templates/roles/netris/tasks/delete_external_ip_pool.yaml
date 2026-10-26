@@ -24,6 +24,11 @@
     tasks_from: delete_subnet
   vars:
     ipam_name: "{{ (pool_cidrs | length == 1) | ternary(pool_name, pool_name + '-' + (idx | string)) }}-common"
+    ipam_expected_fields:
+      prefix: "{{ item }}"
+      purpose: common
+      "tenant.id": "{{ netris_tenant_id }}"
+      "sites.ids": ["{{ netris_site_id }}"]
   loop: "{{ pool_cidrs }}"
   loop_control:
     index_var: idx
@@ -35,6 +40,9 @@
     tasks_from: delete_allocation
   vars:
     ipam_name: "{{ (pool_cidrs | length == 1) | ternary(pool_name, pool_name + '-' + (idx | string)) }}"
+    ipam_expected_fields:
+      prefix: "{{ item }}"
+      "tenant.id": "{{ netris_tenant_id }}"
   loop: "{{ pool_cidrs }}"
   loop_control:
     index_var: idx

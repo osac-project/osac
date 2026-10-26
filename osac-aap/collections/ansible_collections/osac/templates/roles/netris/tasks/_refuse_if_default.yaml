@@ -1,0 +1,22 @@
+# Refuse delete when the OSAC CR is labeled as a default networking resource.
+# Callers must opt in before the teardown override can be honored.
+#
+# Required vars:
+#   _default_refuse_resource — CR dict (metadata.labels...)
+#   _default_refuse_kind — human-readable kind (e.g. VirtualNetwork)
+#   _default_refuse_name — resource name for the error message
+#   _default_refuse_allow_override — whether a privileged caller may override
+
+- name: Refuse delete of OSAC default networking resource
+  ansible.builtin.fail:
+    msg: >-
+      Refusing to delete default {{ _default_refuse_kind }} '{{ _default_refuse_name }}'
+      (label osac.openshift.io/default=true). Default networking resources
+      cannot be removed by this AAP delete playbook.
+  when:
+    - not (
+        (_default_refuse_allow_override | default(true) | bool)
+        and (osac_allow_default_resource_delete | default(false) | bool)
+      )
+    - _default_refuse_resource is defined
+    - _default_refuse_resource | netris.controller.osac_is_default_networking_resource

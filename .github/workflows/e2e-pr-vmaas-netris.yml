@@ -1,4 +1,3 @@
-id: cannot find name for user ID 4210355
 ---
 # The VMaaS Netris suite of a pull request, as a run of its own. The decision of e2e-pr.yml (osac-ci) starts it with
 # workflow_dispatch for the commit that was approved, because the policy names this file for the suite

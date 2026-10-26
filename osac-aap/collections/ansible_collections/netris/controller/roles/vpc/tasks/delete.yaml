@@ -19,8 +19,115 @@
 
 - name: Find VPC by name
   ansible.builtin.set_fact:
-    _existing_vpc: "{{ (_vpc_list_resp.json.data | default([])) | selectattr('name', 'equalto', vpc_name) | list | first | default(none) }}"
+    _vpcs_by_name: "{{ (_vpc_list_resp.json.data | default([])) | selectattr('name', 'equalto', vpc_name) | list }}"
   when: _vpc_list_resp.json is mapping
+
+- name: Filter VPCs by admin tenant
+  ansible.builtin.set_fact:
+    _existing_vpcs: >-
+      {{ _vpcs_by_name
+         | selectattr('adminTenant.id', 'defined')
+         | selectattr('adminTenant.id', 'equalto', vpc_tenant_id | int)
+         | list }}
+  when: vpc_tenant_id is defined
+
+- name: Keep same-name VPC candidates when tenant filtering found no match
+  ansible.builtin.set_fact:
+    _existing_vpcs: "{{ _vpcs_by_name }}"
+  when:
+    - _existing_vpcs | default([]) | length == 0
+    - _vpcs_by_name | length > 0
+
+- name: Fail if the VPC deletion identity is ambiguous
+  ansible.builtin.assert:
+    that:
+      - _existing_vpcs | default(_vpcs_by_name) | length <= 1
+    fail_msg: >-
+      More than one Netris VPC named '{{ vpc_name }}' matches the deletion
+      identity. Refusing to delete an ambiguous VPC.
+
+- name: Set the matching VPC
+  ansible.builtin.set_fact:
+    _existing_vpc: "{{ (_existing_vpcs | default(_vpcs_by_name)) | first | default(none) }}"
+
+- name: Detect VPC ownership fields omitted from the list response
+  ansible.builtin.set_fact:
+    _vpc_delete_missing_fields: >-
+      {{ _existing_vpc | netris.controller.netris_immutable_missing_fields({
+           'adminTenant.id': vpc_tenant_id
+         }) }}
+  when:
+    - _existing_vpc is defined
+    - _existing_vpc is not none
+    - vpc_tenant_id is defined
+
+- name: Validate existing VPC summary has an ID before deletion
+  ansible.builtin.assert:
+    that:
+      - _existing_vpc.id is defined
+      - _existing_vpc.id is not none
+      - _existing_vpc.id | string | length > 0
+    fail_msg: >-
+      Netris VPC '{{ vpc_name }}' was found but its list response omitted the ID;
+      refusing to delete without a stable provider identifier.
+  when: _existing_vpc is defined and _existing_vpc is not none
+
+- name: Read VPC details when the list response omits its tenant
+  netris.controller.protected_uri:
+    force: true
+    url: "{{ netris_controller_url }}/api/v2/vpc/{{ _existing_vpc.id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: "no-cache"
+      Pragma: "no-cache"
+    return_content: true
+    status_code: [200]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
+  register: _vpc_delete_detail_resp
+  no_log: true
+  when: _vpc_delete_missing_fields | default([]) | length > 0
+
+- name: Use detailed VPC response for ownership comparison
+  ansible.builtin.set_fact:
+    _existing_vpc: "{{ _vpc_delete_detail_resp.json.data | default(_vpc_delete_detail_resp.json) }}"
+  when:
+    - _vpc_delete_detail_resp is defined
+    - _vpc_delete_detail_resp is not skipped
+    - _vpc_delete_detail_resp.json is defined
+
+- name: Verify VPC ownership before deletion
+  when:
+    - _existing_vpc is defined
+    - _existing_vpc is not none
+    - vpc_tenant_id is defined
+  block:
+    - name: Compare VPC tenant with the requesting OSAC tenant
+      ansible.builtin.set_fact:
+        _vpc_delete_mismatches: >-
+          {{ _existing_vpc | netris.controller.netris_immutable_mismatch({
+               'adminTenant.id': vpc_tenant_id
+             }) }}
+
+    - name: Refuse to delete a VPC owned by another or unverifiable tenant
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'VPC' | netris.controller.format_immutable_mismatch_message(
+               vpc_name, _vpc_delete_mismatches) }}
+      when: _vpc_delete_mismatches | length > 0
+
+- name: Validate detailed VPC response has an ID before deletion
+  ansible.builtin.assert:
+    that:
+      - _existing_vpc.id is defined
+      - _existing_vpc.id is not none
+      - _existing_vpc.id | string | length > 0
+    fail_msg: >-
+      Netris VPC '{{ vpc_name }}' details omitted the ID; refusing to delete
+      without a stable provider identifier.
+  when: _existing_vpc is defined and _existing_vpc is not none
 
 - name: Delete VPC
   when: _existing_vpc is defined and _existing_vpc is not none

@@ -381,6 +381,7 @@ else
 		--namespace osac-deps --create-namespace \
 		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set lvms.channel=stable-$(OCP_VERSION) \
+		$(INFRA_HELM_ARGS) \
 		--timeout 30m --wait
 	@bash -c 'source scripts/lib.sh && wait_for_namespace_cleanup keycloak'
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))

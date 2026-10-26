@@ -282,8 +282,10 @@ installer command in the tier table remains the component-integration check.
 - **MCP server:** `fulfillment-service/it/it_mcp_server_test.go` uses a real MCP
   SDK client and an in-process MCP handler; its exchanger forwards a caller API
   token to deployed Fulfillment and PostgreSQL. It covers five-tool discovery,
-  connection summaries, tenant visibility, creator attribution, and rejected
-  writes without persisted mutations. `it_mcp_discovery_test.go` creates
+  connection summaries, tenant visibility, creator attribution, asynchronous
+  create acceptance with the resource ID and version, rejected arbitrary
+  service/method/payload arguments, and rejected writes without persisted
+  mutations. `it_mcp_discovery_test.go` creates
   Projects and Secret references for two tenants, verifies caller-scoped
   Project and Secret-reference listing, confirms Secret-reference results
   contain only reference metadata, and checks list-only Secret Get rejection
@@ -296,8 +298,9 @@ installer command in the tier table remains the component-integration check.
   settings and replica counts. `internal/auth/auth_jwt_validator_test.go`
   covers expired and untrusted-issuer tokens; MCP ingress tests cover wrong
   resource audiences. `mcpserver` unit tests cover 4xx/429/5xx and transport
-  exchange failures, caller/permission mismatch, safe errors, and connection
-  checks. Helm lint and rendering cover opt-in templates and schema; ordinary
+  exchange failures, typed registration, caller/permission mismatch, safe
+  errors, and connection checks. Helm lint and rendering cover opt-in templates
+  and schema; ordinary
   profile renders exercise the disabled default. Provider provisioning, VM
   readiness, and external MCP-host interoperability remain outside these tests.
 - **ComputeInstance deletion feedback with stale references ([OSAC-6513](https://redhat.atlassian.net/browse/OSAC-6513), DEV):** `internal/references/reference_validator_test.go` covers status-only, spec, mixed, and empty masks at Unit tier. `it/it_compute_instance_update_test.go` holds a deleting ComputeInstance, removes its referenced user-data Secret, then checks that status feedback persists through the deployed private Fulfillment API and PostgreSQL while spec, mixed, and empty-mask updates still reject the missing reference. Run it with the Fulfillment installer target above; against an already deployed compatible Kind environment, run `ginkgo run --timeout 20m --focus 'persists deletion feedback after a referenced Secret disappears' it` from `fulfillment-service/`. The suite omits the operator, AAP, and VM provider, so it does not prove dependent network teardown.
@@ -647,6 +650,8 @@ applicable integration tests separately to validate workflow behavior.
 - **Filters, variable transforms, and isolated plugin logic:** Include invalid input and default handling.
 - **AgentlessNet VirtualNetwork/Subnet state and command helpers:** Unit coverage proves the current v1 schema initialization, fail-closed rejection of incompatible v1/v2 databases, internal allocation and exhaustion, exclusion parsing for bridge memberships and NVUE reserved ranges, parent-lock serialization, retry retention, VLAN interfaces, derived DHCP-manager selection, DHCP rendering/service lifecycle, lease preservation, and diagnostics with mocked provider commands. OSAC-6306 pool unit cases prove immutable identity and idempotent identity-checked deletion. OSAC-6308 attachment unit cases prove the schema-v1 attachment row, identity/retry/target-replacement behavior, dependency deletion guards, and owner-scoped DNAT, forwarding, route, and conntrack cleanup commands. The existing ExternalIPPool operator controller test verifies pool deprovision waits until child ExternalIP CRs are removed. The operator envtest verifies Subnet parent-context construction; the Kind pool target verifies the ExternalIPPool CR's Kubernetes UID, Fulfillment label, tenant, family, and CIDR reach saved state through the existing playbooks. AAP/Kind service-readiness checks do not prove client leases or traffic delivery.
 - **Ansible roles, workflow tasks, hooks, leases, finalizers, or Kubernetes resources:** The test must exercise the role/playbook through Ansible against Kind.
+- **Netris tenant networking idempotency (OSAC-4923, [DEV]):** Unit tests cover the idempotency filters and response normalization. The `tests/integration/targets/netris_idempotency/tasks/baseline.yml` component target runs the real top-level Netris playbooks against Kind and a stateful local Netris HTTP fixture. It covers create/rerun, immutable drift and unverifiable fields, partial-operation recovery, ownership-checked deletion, ExternalIP pool membership, default-resource guards, attachment move retries, and sanitized AAP failure output.
+  The fixture proves caller-side playbook behavior; it does not confirm response contracts against a live Netris controller. See `osac-aap/docs/netris-idempotency-inventory.md` for the operation matrix. SecurityGroup stale ACL pruning remains OSAC-4888; broader live-provider coverage remains under OSAC-4843.
 - **Netris Subnet deletion:** The `netris_subnet_delete` target runs the real top-level delete playbook in a child Ansible process and proves dynamic strategy dispatch, the V-Net to IPAM to ConfigMap order, absence-tolerant V-Net and IPAM subnet deletion, and failure on non-404 provider errors against a fake Netris HTTP fixture and real Kind ConfigMaps. The fixture records method/path order only; it does not prove real Netris 404 semantics or a deployed AAP/provider contract ([OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843)).
 - **MetalLB ExternalIP detach annotation cleanup:** The `metallb_l2_detach_annotation` target starts two independent Ansible processes after both have read the same annotation snapshot. It verifies that concurrent detach cleanup succeeds when one process removes the annotation before the other patches it, against a real Kind API. It does not exercise a deployed AAP controller or MetalLB provider.
 - **Netris parent-network deletion:** The `netris_parent_delete` target runs the real VirtualNetwork and ExternalIPPool delete playbooks against a local HTTP fixture. It proves that a VPC or IPAM allocation removed between lookup and DELETE does not delay ordered cleanup, while 400 dependency and 500 provider errors still fail. It also verifies that absent resources cause no DELETE request. This is caller-side response handling, not a real Netris or deployed AAP/provider contract ([OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843)).

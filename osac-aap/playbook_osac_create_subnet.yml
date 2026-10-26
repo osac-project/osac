@@ -24,7 +24,25 @@
           - "Implementation strategy: {{ implementation_strategy }}"
           - "Template parameters: {{ template_parameters }}"
 
-    - name: Call the selected Subnet role
-      ansible.builtin.include_role:
-        name: "osac.templates.{{ implementation_strategy }}"
-        tasks_from: create_subnet
+    - name: Create Subnet with sanitized Netris failure details
+      block:
+        - name: Call the selected Subnet role
+          ansible.builtin.include_role:
+            name: "osac.templates.{{ implementation_strategy }}"
+            tasks_from: create_subnet
+      rescue:
+        - name: Report Subnet creation failure
+          ansible.builtin.include_role:
+            name: osac.templates.netris
+            tasks_from: _report_failure
+          vars:
+            _netris_failure_operation: create
+            _netris_failure_resource_type: Subnet
+            _netris_failure_resource_name: "{{ subnet_name }}"
+            _netris_failure_task: "{{ ansible_failed_task.name | default('unknown provider task') }}"
+            _netris_failure_result: "{{ ansible_failed_result | default({}) }}"
+          when: implementation_strategy == 'netris'
+        - name: Re-raise original failure for other networking managers
+          ansible.builtin.fail:
+            msg: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('operation failed')) }}"
+          when: implementation_strategy != 'netris'

@@ -73,6 +73,7 @@ ROLE_TESTS=(
   "netris_parent_delete"
   "netris_protected_launch"
   "netris_external_ip"
+  "netris_idempotency"
 )
 
 ROLE_SCENARIO_TESTS=(

@@ -9,7 +9,8 @@
     force: true
     url: >-
       {{ netris_controller_url }}/api/v2/ipam{{
-        ('?filterByVpc=' + (ipam_vpc_id | string)) if ipam_vpc_id is defined else ''
+        ('?filterByVpc=' + (ipam_vpc_id | string))
+        if ipam_vpc_id is defined and ipam_vpc_id | string | length > 0 else ''
       }}
     method: GET
     headers:
@@ -30,7 +31,39 @@
       {{ (_ipam_tree_resp.json.data | default([]))
          | selectattr('name', 'equalto', ipam_name)
          | list | first | default(none) }}
-  when: _ipam_tree_resp.json is defined and _ipam_tree_resp.json is mapping
+
+- name: Verify IPAM allocation ownership before deletion
+  when:
+    - _existing_ipam_alloc is defined
+    - _existing_ipam_alloc is mapping
+    - ipam_expected_fields is defined
+    - _ipam_tree_resp.json is defined
+    - _ipam_tree_resp.json is mapping
+  block:
+    - name: Compare IPAM allocation with the OSAC resource
+      ansible.builtin.set_fact:
+        _ipam_delete_mismatches: >-
+          {{ _existing_ipam_alloc | netris.controller.netris_immutable_mismatch(
+               ipam_expected_fields
+             ) }}
+
+    - name: Refuse to delete a mismatched or unverifiable IPAM allocation
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'IPAM allocation' | netris.controller.format_immutable_mismatch_message(
+               ipam_name, _ipam_delete_mismatches) }}
+      when: _ipam_delete_mismatches | length > 0
+
+- name: Validate existing IPAM allocation has an ID before deletion
+  ansible.builtin.assert:
+    that:
+      - _existing_ipam_alloc.id is defined
+      - _existing_ipam_alloc.id is not none
+      - _existing_ipam_alloc.id | string | length > 0
+    fail_msg: >-
+      Netris IPAM allocation '{{ ipam_name }}' was found but its list response
+      omitted the ID; refusing to delete without a stable provider identifier.
+  when: _existing_ipam_alloc is defined and _existing_ipam_alloc is mapping
 
 - name: Delete IPAM allocation
   when: _existing_ipam_alloc is defined and _existing_ipam_alloc is mapping

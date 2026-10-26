@@ -28,6 +28,8 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/ghttp"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/start/mcpserver"
@@ -310,7 +312,9 @@ func createMCPDiscoveryProject(
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
 	DeferCleanup(func(ctx context.Context) {
 		_, err := adminProjects.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{Id: projectID}.Build())
-		ExpectWithOffset(1, err).ToNot(HaveOccurred())
+		if status.Code(err) != codes.NotFound {
+			ExpectWithOffset(1, err).ToNot(HaveOccurred())
+		}
 	})
 	EventuallyWithOffset(1, func(g Gomega) {
 		getResponse, err := adminProjects.Get(ctx, privatev1.ProjectsGetRequest_builder{Id: projectID}.Build())
@@ -376,7 +380,9 @@ func createMCPDiscoverySecret(ctx context.Context, conn *grpc.ClientConn, caller
 	secretID := response.GetObject().GetId()
 	DeferCleanup(func(ctx context.Context) {
 		_, err := client.Delete(ctx, publicv1.SecretsDeleteRequest_builder{Id: secretID}.Build())
-		ExpectWithOffset(1, err).ToNot(HaveOccurred())
+		if status.Code(err) != codes.NotFound {
+			ExpectWithOffset(1, err).ToNot(HaveOccurred())
+		}
 	})
 	return secretID, secretBytes
 }

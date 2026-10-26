@@ -61,12 +61,113 @@
     _existing_nat: "{{ (_nat_list_resp.json.data | default([])) | selectattr('name', 'equalto', nat_name) | list | first | default(none) }}"
   when: _nat_list_resp.json is mapping
 
+- name: Build expected immutable NAT fields
+  ansible.builtin.set_fact:
+    _nat_expected_fields:
+      action: "{{ nat_action | upper }}"
+      "vpc.id": "{{ nat_vpc_id }}"
+      "site.id": "{{ nat_site_id }}"
+      protocol: "{{ nat_protocol }}"
+      state: enabled
+      sourceAddress: "{{ nat_source_address | default('0.0.0.0/0') }}"
+      sourcePort: "{{ nat_source_port | default('1-65535') }}"
+      destinationAddress: "{{ nat_destination_address | default('0.0.0.0/0') }}"
+      destinationPort: "{{ nat_destination_port | default('1-65535') }}"
+
+- name: Add SNAT immutable expectations
+  ansible.builtin.set_fact:
+    _nat_expected_fields: >-
+      {{ _nat_expected_fields | combine({'snatToIP': nat_snat_to_ip}) }}
+  when:
+    - nat_action == 'snat'
+    - nat_snat_to_ip is defined
+
+- name: Add SNAT pool expectation when configured
+  ansible.builtin.set_fact:
+    _nat_expected_fields: >-
+      {{ _nat_expected_fields | combine({'snatToPool': nat_snat_to_pool}) }}
+  when:
+    - nat_action == 'snat'
+    - nat_snat_to_pool is defined
+    - nat_snat_to_pool | string | length > 0
+
+- name: Add DNAT immutable expectations
+  ansible.builtin.set_fact:
+    _nat_expected_fields: >-
+      {{ _nat_expected_fields | combine({
+           'dnatToIP': nat_dnat_to_ip,
+           'dnatToPort': nat_dnat_to_port | default('')
+         }) }}
+  when:
+    - nat_action == 'dnat'
+    - nat_dnat_to_ip is defined
+
+- name: Validate existing NAT summary has an ID
+  ansible.builtin.assert:
+    that:
+      - _existing_nat.id is defined
+      - _existing_nat.id is not none
+      - _existing_nat.id | string | length > 0
+    fail_msg: >-
+      Netris NAT rule '{{ nat_name }}' was found but its list response omitted
+      the ID; refusing to continue without a stable provider identifier.
+  when: _existing_nat is defined and _existing_nat is not none
+
+- name: Detect NAT fields omitted from the list response
+  ansible.builtin.set_fact:
+    _nat_missing_fields: >-
+      {{ _existing_nat | netris.controller.netris_immutable_missing_fields(
+           _nat_expected_fields
+         ) }}
+  when: _existing_nat is defined and _existing_nat is not none
+
+- name: Read NAT details when its list response omits an immutable field
+  netris.controller.protected_uri:
+    force: true
+    url: "{{ netris_controller_url }}/api/v2/nat/{{ _existing_nat.id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: "no-cache"
+      Pragma: "no-cache"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
+  register: _nat_detail_resp
+  no_log: true
+  when: _nat_missing_fields | default([]) | length > 0
+
+- name: Use detailed NAT response for immutable field comparison
+  ansible.builtin.set_fact:
+    _existing_nat: "{{ _nat_detail_resp.json.data | default(_nat_detail_resp.json) }}"
+  when:
+    - _nat_detail_resp is defined
+    - _nat_detail_resp is not skipped
+    - _nat_detail_resp.json is defined
+
 - name: Set nat facts from existing rule (skip creation)
   ansible.builtin.set_fact:
     nat_id: "{{ _existing_nat.id }}"
     nat_already_existed: true
     nat_existing_rule: "{{ _existing_nat }}"
   when: _existing_nat is defined and _existing_nat is not none
+
+- name: Fail when existing NAT rule has immutable field mismatch
+  when: _existing_nat is defined and _existing_nat is not none
+  block:
+    - name: Compute NAT immutable mismatches
+      ansible.builtin.set_fact:
+        _nat_mismatches: >-
+          {{ _existing_nat | netris.controller.netris_immutable_mismatch(_nat_expected_fields) }}
+
+    - name: Fail on NAT immutable mismatch
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'NAT rule' | netris.controller.format_immutable_mismatch_message(
+               nat_name, _nat_mismatches) }}
+      when: (_nat_mismatches | default([]) | length) > 0
 
 - name: Create NAT rule
   netris.controller.protected_uri:
@@ -86,7 +187,23 @@
   no_log: true
   when: _existing_nat is not defined or _existing_nat is none
 
-- name: Set nat facts from create response
+- name: Validate NAT create response includes an ID
+  ansible.builtin.assert:
+    that:
+      - _nat_create_resp.json is mapping
+      - _nat_create_resp.json.data is defined
+      - not ((_nat_create_resp.json.data.id | default(_nat_create_resp.json.data, true)) is mapping)
+      - (_nat_create_resp.json.data.id | default(_nat_create_resp.json.data, true)) is not none
+      - (_nat_create_resp.json.data.id | default(_nat_create_resp.json.data, true)) | string | length > 0
+    fail_msg: >-
+      Netris accepted NAT rule '{{ nat_name }}' creation but returned no usable ID;
+      retry after checking whether the rule was created.
+  when:
+    - _existing_nat is not defined or _existing_nat is none
+    - _nat_create_resp is not skipped
+    - _nat_create_resp is changed or (_nat_create_resp.status | default(0)) in [200, 201]
+
+- name: Set NAT facts from create response
   ansible.builtin.set_fact:
     nat_id: "{{ _nat_create_resp.json.data.id | default(_nat_create_resp.json.data) }}"
     nat_already_existed: false

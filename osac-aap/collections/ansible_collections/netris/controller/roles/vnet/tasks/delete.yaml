@@ -19,16 +19,21 @@
 
 - name: Find V-Nets by name
   ansible.builtin.set_fact:
-    _existing_vnets: >-
+    _vnets_by_name: >-
       {{ (_vnet_list_resp.json.data | default([]))
          | selectattr('name', 'equalto', vnet_name)
          | list }}
   when: _vnet_list_resp.json is mapping
 
+- name: Initialize V-Net deletion candidates
+  ansible.builtin.set_fact:
+    _existing_vnets: "{{ _vnets_by_name }}"
+
 - name: Filter V-Nets by VPC
   ansible.builtin.set_fact:
     _existing_vnets: >-
       {{ _existing_vnets
+         | selectattr('vpc.id', 'defined')
          | selectattr('vpc.id', 'equalto', vnet_vpc_id | int)
          | list }}
   when: vnet_vpc_id is defined
@@ -37,9 +42,17 @@
   ansible.builtin.set_fact:
     _existing_vnets: >-
       {{ _existing_vnets
+         | selectattr('tenant.id', 'defined')
          | selectattr('tenant.id', 'equalto', vnet_tenant_id | int)
          | list }}
   when: vnet_tenant_id is defined
+
+- name: Keep same-name V-Net candidates when identity filtering found no match
+  ansible.builtin.set_fact:
+    _existing_vnets: "{{ _vnets_by_name }}"
+  when:
+    - _existing_vnets | length == 0
+    - _vnets_by_name | length > 0
 
 - name: Fail if the V-Net deletion identity is ambiguous
   ansible.builtin.assert:
@@ -52,6 +65,78 @@
 - name: Set the matching V-Net
   ansible.builtin.set_fact:
     _existing_vnet: "{{ _existing_vnets | first | default({}) }}"
+
+- name: Validate existing V-Net summary has an ID
+  ansible.builtin.assert:
+    that:
+      - _existing_vnet.id is defined
+      - _existing_vnet.id is not none
+      - _existing_vnet.id | string | length > 0
+    fail_msg: >-
+      Netris V-Net '{{ vnet_name }}' was found but its list response omitted
+      the ID; refusing to delete without a stable provider identifier.
+  when:
+    - _existing_vnet is mapping
+    - _existing_vnet | length > 0
+
+- name: Detect V-Net ownership fields omitted from the list response
+  ansible.builtin.set_fact:
+    _vnet_delete_missing_fields: >-
+      {{ _existing_vnet | netris.controller.netris_immutable_missing_fields(
+           vnet_expected_fields
+         ) }}
+  when:
+    - _existing_vnet is mapping
+    - _existing_vnet | length > 0
+    - vnet_expected_fields is defined
+
+- name: Read V-Net details when the list response omits ownership fields
+  ansible.builtin.include_role:
+    name: netris.controller.vnet
+    tasks_from: read_by_id
+  vars:
+    vnet_id: "{{ _existing_vnet.id }}"
+  when: _vnet_delete_missing_fields | default([]) | length > 0
+
+- name: Use detailed V-Net response for ownership comparison
+  ansible.builtin.set_fact:
+    _existing_vnet: "{{ netris_vnet_detail }}"
+  when:
+    - netris_vnet_detail is defined
+    - _vnet_delete_missing_fields | default([]) | length > 0
+
+- name: Verify V-Net ownership before deletion
+  when:
+    - _existing_vnet is mapping
+    - _existing_vnet | length > 0
+    - vnet_expected_fields is defined
+  block:
+    - name: Compare V-Net identity with the OSAC resource
+      ansible.builtin.set_fact:
+        _vnet_delete_mismatches: >-
+          {{ _existing_vnet | netris.controller.netris_immutable_mismatch(
+               vnet_expected_fields
+             ) }}
+
+    - name: Refuse to delete a V-Net with mismatched or unverifiable ownership
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'V-Net' | netris.controller.format_immutable_mismatch_message(
+               vnet_name, _vnet_delete_mismatches) }}
+      when: _vnet_delete_mismatches | length > 0
+
+- name: Validate detailed V-Net response has an ID before deletion
+  ansible.builtin.assert:
+    that:
+      - _existing_vnet.id is defined
+      - _existing_vnet.id is not none
+      - _existing_vnet.id | string | length > 0
+    fail_msg: >-
+      Netris V-Net '{{ vnet_name }}' details omitted the ID; refusing to delete
+      without a stable provider identifier.
+  when:
+    - _existing_vnet is mapping
+    - _existing_vnet | length > 0
 
 - name: Delete V-Net
   when: _existing_vnet | length > 0

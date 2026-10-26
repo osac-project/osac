@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.unit.test_netris_external_ip_module import (
+from .test_netris_external_ip_module import (
     COLLECTIONS_PATH,
     MODULE_PATH,
     module_args,

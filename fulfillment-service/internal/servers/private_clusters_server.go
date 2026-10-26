@@ -58,8 +58,10 @@ type PrivateClustersServer struct {
 	catalogItemsDao           *dao.GenericDAO[*privatev1.ClusterCatalogItem]
 	clusterVersionsDao        *dao.GenericDAO[*privatev1.ClusterVersion]
 	networkClassesDao         *dao.GenericDAO[*privatev1.NetworkClass]
+	virtualNetworksDao        *dao.GenericDAO[*privatev1.VirtualNetwork]
 	subnetsDao                *dao.GenericDAO[*privatev1.Subnet]
 	securityGroupsDao         *dao.GenericDAO[*privatev1.SecurityGroup]
+	tenantsDao                *dao.GenericDAO[*privatev1.Tenant]
 	externalIPPoolDao         *dao.GenericDAO[*privatev1.ExternalIPPool]
 	externalIPDao             *dao.GenericDAO[*privatev1.ExternalIP]
 	externalIPAttachmentDao   *dao.GenericDAO[*privatev1.ExternalIPAttachment]
@@ -181,7 +183,16 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		return
 	}
 
-	// Create the subnets DAO:
+	// Create the networking resource DAOs:
+	virtualNetworksDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	subnetsDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
@@ -204,6 +215,16 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 	// Create the security groups DAO:
 	securityGroupsDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
 		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
+	tenantsDao, err := dao.NewGenericDAO[*privatev1.Tenant]().
+		SetLogger(b.logger).
+		SetTableName("tenants").
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		Build()
@@ -261,8 +282,10 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		bareMetalInstanceTypesDao: bareMetalInstanceTypesDao,
 		clusterVersionsDao:        clusterVersionsDao,
 		networkClassesDao:         networkClassesDao,
+		virtualNetworksDao:        virtualNetworksDao,
 		subnetsDao:                subnetsDao,
 		securityGroupsDao:         securityGroupsDao,
+		tenantsDao:                tenantsDao,
 		externalIPPoolDao:         externalIPPoolDao,
 		externalIPDao:             externalIPDao,
 		externalIPAttachmentDao:   externalIPAttachmentDao,
@@ -353,10 +376,8 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 		return
 	}
 
-	if candidate.GetSpec().GetNetworkAttachment() == nil {
-		if err = s.injectDefaultNetworkAttachment(ctx, candidate); err != nil {
-			return
-		}
+	if err = s.applyDefaultNetworkAttachment(ctx, candidate); err != nil {
+		return
 	}
 
 	// Resolve fabric_interface for each node set when the cluster has a
@@ -444,6 +465,10 @@ func (s *PrivateClustersServer) validateClusterUpdateRequest(ctx context.Context
 
 func (s *PrivateClustersServer) prepareUpdatedCluster(ctx context.Context, current, candidate *privatev1.Cluster,
 	request *privatev1.ClustersUpdateRequest) error {
+	if current.GetMetadata().GetTenant() != candidate.GetMetadata().GetTenant() {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'metadata.tenant' is immutable")
+	}
+
 	// An unmasked metadata-only request omits spec. Keep the stored spec so its
 	// version and node sets are not interpreted as a metering-relevant change.
 	if request.GetUpdateMask() == nil && request.GetObject().GetSpec() == nil && current.GetSpec() != nil {
@@ -1065,9 +1090,16 @@ func (s *PrivateClustersServer) resolveTargetTenant(ctx context.Context, cluster
 	return s.tenancyLogic.DetermineDefaultTenant(ctx)
 }
 
-// injectDefaultNetworkAttachment populates spec.network_attachment from the
-// tenant's default subnet and security group when the caller omits it.
-func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Context,
+func clusterSecurityGroupsMissing(att *privatev1.ClusterNetworkAttachment) bool {
+	return att == nil || len(att.GetSecurityGroups()) == 0
+}
+
+// applyDefaultNetworkAttachment completes singular network_attachment at Create time.
+// Nil attachment allocates an empty one, then missing subnet and missing/empty
+// security_groups are filled from tenant defaults without overwriting supplied values.
+// The default subnet must belong to the unique default VirtualNetwork before its
+// default SecurityGroup can be injected.
+func (s *PrivateClustersServer) applyDefaultNetworkAttachment(ctx context.Context,
 	cluster *privatev1.Cluster) error {
 	tenant, err := s.resolveTargetTenant(ctx, cluster)
 	if err != nil {
@@ -1076,40 +1108,123 @@ func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Conte
 	}
 
 	spec := cluster.GetSpec()
-	subnet, err := findDefaultSubnet(ctx, s.logger, s.subnetsDao, tenant, cluster.GetMetadata().GetProject())
-	if err != nil {
-		s.logger.ErrorContext(ctx, "failed to look up default subnet", slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default subnet")
-	}
-	if subnet == nil {
+	project := cluster.GetMetadata().GetProject()
+	attachment := spec.GetNetworkAttachment()
+
+	// Fully specified — skip tenant-default lookups.
+	if attachment != nil &&
+		refKey(attachment.GetSubnet()) != "" &&
+		!clusterSecurityGroupsMissing(attachment) {
 		return nil
 	}
 
-	attachment := privatev1.ClusterNetworkAttachment_builder{
-		Subnet: privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
-	}.Build()
+	if attachment == nil {
+		attachment = privatev1.ClusterNetworkAttachment_builder{}.Build()
+		spec.SetNetworkAttachment(attachment)
+	}
 
-	virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
-	sg, err := findDefaultSecurityGroup(ctx, s.logger, s.securityGroupsDao, virtualNetworkID, tenant, cluster.GetMetadata().GetProject())
+	defaultSubnetInjected := refKey(attachment.GetSubnet()) == ""
+	var resolvedSubnet *privatev1.Subnet
+	defaultVN := ""
+	if defaultSubnetInjected {
+		defaultSubnet, lookupErr := findDefaultSubnet(ctx, s.logger, s.subnetsDao, tenant, project)
+		if lookupErr != nil {
+			s.logger.ErrorContext(ctx, "failed to look up default subnet", slog.Any("error", lookupErr))
+			return defaultResourceLookupFailure(lookupErr, "subnet")
+		}
+		if defaultSubnet == nil {
+			// Prefer the tenant-existence error when the assigned tenant is not in the DB,
+			// matching the DAO FK failure that Create would otherwise surface after prepare.
+			if err := s.requireTenantExists(ctx, tenant); err != nil {
+				return err
+			}
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"spec.network_attachment: subnet is required and no tenant default subnet is available")
+		}
+		attachment.SetSubnet(privatev1.SubnetLocalReference_builder{Id: defaultSubnet.GetId()}.Build())
+		resolvedSubnet = defaultSubnet
+
+		defaultVirtualNetwork, lookupErr := findDefaultVirtualNetwork(ctx, s.logger,
+			s.virtualNetworksDao, tenant, project)
+		if lookupErr != nil {
+			s.logger.ErrorContext(ctx, "failed to look up default virtual network", slog.Any("error", lookupErr))
+			return defaultResourceLookupFailure(lookupErr, "virtual network")
+		}
+		if defaultVirtualNetwork == nil {
+			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+				"tenant default networking is misconfigured: default subnet %q has no READY default VirtualNetwork",
+				defaultSubnet.GetId())
+		}
+		defaultVN = defaultVirtualNetwork.GetId()
+		subnetVN := refKey(defaultSubnet.GetSpec().GetVirtualNetwork())
+		if subnetVN == "" || subnetVN != defaultVN {
+			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+				"tenant default networking is misconfigured: default subnet %q references VirtualNetwork %q, but the unique default VirtualNetwork is %q",
+				defaultSubnet.GetId(), subnetVN, defaultVN)
+		}
+	}
+
+	if !clusterSecurityGroupsMissing(attachment) {
+		return nil
+	}
+
+	if resolvedSubnet == nil {
+		resolvedSubnet, err = resolveAndCanonicalizeReference(ctx, s.subnetsDao, cluster.GetMetadata(),
+			attachment.GetSubnet(), "subnet", grpccodes.InvalidArgument)
+		if err != nil {
+			return err
+		}
+	}
+	if !defaultSubnetInjected {
+		defaultVirtualNetwork, lookupErr := findDefaultVirtualNetwork(ctx, s.logger,
+			s.virtualNetworksDao, tenant, project)
+		if lookupErr != nil {
+			s.logger.ErrorContext(ctx, "failed to look up default virtual network", slog.Any("error", lookupErr))
+			return defaultResourceLookupFailure(lookupErr, "virtual network")
+		}
+		if defaultVirtualNetwork != nil {
+			defaultVN = defaultVirtualNetwork.GetId()
+		}
+	}
+	subnetVN := refKey(resolvedSubnet.GetSpec().GetVirtualNetwork())
+	if defaultVN == "" || subnetVN == "" || subnetVN != defaultVN {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"spec.network_attachment: security_groups are required when the subnet is not on the tenant default virtual network")
+	}
+	sg, sgErr := findDefaultSecurityGroup(ctx, s.logger, s.securityGroupsDao, subnetVN, tenant, project)
+	if sgErr != nil {
+		s.logger.ErrorContext(ctx, "failed to look up default security group", slog.Any("error", sgErr))
+		return defaultResourceLookupFailure(sgErr, "security group")
+	}
+	if sg == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"spec.network_attachment: security_groups are required and no tenant default security group is available")
+	}
+	attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
+		privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),
+	})
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "auto-injected default network attachment fields",
+		slog.String("subnet_id", refKey(attachment.GetSubnet())),
+		slog.String("security_group_id", sg.GetId()),
+	)
+	return nil
+}
+
+// requireTenantExists returns InvalidArgument when tenant is not present in the
+// tenants table. Used to preserve Create error precedence over missing network defaults.
+func (s *PrivateClustersServer) requireTenantExists(ctx context.Context, tenant string) error {
+	if tenant == "" {
+		return nil
+	}
+	_, err := s.tenantsDao.Get().SetId(tenant).Do(ctx)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "failed to look up default security group", slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default security group")
+		var notFound *dao.ErrNotFound
+		if errors.As(err, &notFound) {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument, "tenant '%s' doesn't exist", tenant)
+		}
+		s.logger.ErrorContext(ctx, "failed to look up tenant", slog.String("tenant", tenant), slog.Any("error", err))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate tenant")
 	}
-	if sg != nil {
-		attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
-			privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),
-		})
-	}
-
-	spec.SetNetworkAttachment(attachment)
-
-	attrs := []slog.Attr{
-		slog.String("subnet_id", subnet.GetId()),
-	}
-	if sg != nil {
-		attrs = append(attrs, slog.String("security_group_id", sg.GetId()))
-	}
-	s.logger.LogAttrs(ctx, slog.LevelInfo, "auto-injected default network attachment", attrs...)
 	return nil
 }
 

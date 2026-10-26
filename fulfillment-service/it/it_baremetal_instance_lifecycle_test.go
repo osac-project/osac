@@ -55,11 +55,19 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		instanceTypeId                      string
 		defaultDiskImageId                  string
 		defaultNetworkingFixture            catalogItemNetworkFixture
+		tenantName                          string
 	)
 
 	BeforeEach(func(ctx context.Context) {
+		// NetworkClass is a deployment singleton. Create it before the temporary
+		// tenant so cleanup removes that tenant's defaults before deleting the class.
+		_, networkClassCreated := getOrCreateTenantDefaultNetworkClassFixture(ctx)
+		tenantName, tenantConn := createCatalogItemTenantAdminFixture(ctx)
+		defaultNetworkingFixture = ensureTenantDefaultNetworkingFixture(ctx, tenantName, "")
+		defaultNetworkingFixture.networkClassCreated = networkClassCreated
+
 		// Create clients
-		bareMetalInstancesClient = publicv1.NewBareMetalInstancesClient(tool.ExternalView().UserConn())
+		bareMetalInstancesClient = publicv1.NewBareMetalInstancesClient(tenantConn)
 		privateBareMetalInstancesClient = privatev1.NewBareMetalInstancesClient(tool.InternalView().AdminConn())
 		bareMetalInstanceTemplatesClient = privatev1.NewBareMetalInstanceTemplatesClient(tool.InternalView().AdminConn())
 		bareMetalInstanceCatalogItemsClient = privatev1.NewBareMetalInstanceCatalogItemsClient(tool.InternalView().AdminConn())
@@ -110,10 +118,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
-
-		// Lifecycle Creates omit network_attachments and use shared catalog items without
-		// network field policies; hard-fail defaulting needs a tenant-default Subnet/SG.
-		defaultNetworkingFixture = ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 		// Create BareMetalInstanceTemplate with an explicit ID that matches the BMFO CRD
 		// validation pattern (^[a-zA-Z_][a-zA-Z0-9._]*$). Auto-generated UUIDs start with
@@ -465,7 +469,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("rejects public updates that change network attachments", func(ctx context.Context) {
 		// NetworkClass is a deployment singleton. Reuse the tenant-default subnet
 		// and security group instead of creating a second NetworkClass.
-		network := getTenantDefaultNetworkFixture(ctx, usersGroup, "")
+		network := getTenantDefaultNetworkFixture(ctx, tenantName, "")
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Metadata: publicv1.Metadata_builder{
@@ -528,7 +532,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		// default-networking lifecycle before replacing its singleton NetworkClass.
 		defaultNetworkingManager, err := newTestDefaultNetworkingManager()
 		Expect(err).NotTo(HaveOccurred())
-		Expect(deleteTenantDefaultNetworkingFixture(ctx, defaultNetworkingManager, usersGroup)).To(Succeed())
+		Expect(deleteTenantDefaultNetworkingFixture(ctx, defaultNetworkingManager, tenantName)).To(Succeed())
 		Expect(defaultNetworkingFixture.networkClassCreated).To(BeTrue(),
 			"the k8s-only validation fixture must own the deployment's singleton NetworkClass")
 		Expect(cleanupNetworkClassFixture(ctx, networkClassesClient, defaultNetworkingFixture.networkClassID)).To(Succeed())
@@ -558,7 +562,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Id: virtualNetworkId,
 				Metadata: privatev1.Metadata_builder{
 					Name:   fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
-					Tenant: usersGroup,
+					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
@@ -605,7 +609,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Id: subnetId,
 				Metadata: privatev1.Metadata_builder{
 					Name:   fmt.Sprintf("test-subnet-%s", uuid.New()[24:32]),
-					Tenant: usersGroup,
+					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.SubnetSpec_builder{
 					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
@@ -624,7 +628,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Id: securityGroupID,
 				Metadata: privatev1.Metadata_builder{
 					Name:   fmt.Sprintf("test-security-group-%s", uuid.New()[24:32]),
-					Tenant: usersGroup,
+					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.SecurityGroupSpec_builder{
 					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),

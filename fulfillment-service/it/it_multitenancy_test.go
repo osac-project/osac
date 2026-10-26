@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -93,8 +94,11 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 		})
 
 		Describe("cluster resources", func() {
-			var tenantClusterMapping map[string][]string
-			var clusterBMIT string
+			var (
+				tenantClusterMapping map[string][]string
+				clusterBMIT          string
+				tenantNetworks       map[string]catalogItemNetworkFixture
+			)
 
 			BeforeAll(func(ctx context.Context) {
 				// Create map to track which clusters belong to which tenants
@@ -152,6 +156,13 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 					}
 					Expect(err).ToNot(HaveOccurred())
 				}
+				networkClassID := createCatalogItemNetworkClassFixture(ctx)
+				tenantNetworks = make(map[string]catalogItemNetworkFixture)
+				for _, tenant := range ServiceAccountTenants {
+					if _, exists := tenantNetworks[tenant]; !exists {
+						tenantNetworks[tenant] = createCatalogItemNetworkInClassFixture(ctx, tenant, "", networkClassID)
+					}
+				}
 
 				// Create cluster template for testing
 				templateId := fmt.Sprintf("sa-isolation-template-%s", uuid.New())
@@ -186,8 +197,9 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 								Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
-								Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-								NodeSets: testClusterNodeSets(clusterBMIT, 3),
+								Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+								NetworkAttachment: tenantNetworks[tenant].clusterAttachment(),
+								NodeSets:          testClusterNodeSets(clusterBMIT, 3),
 							}.Build(),
 						}.Build(),
 					}.Build())
@@ -361,6 +373,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 				tenantClusterMapping map[string][]string
 				clusterTenantMapping map[string][]string
 				clusterBMIT          string
+				tenantNetworks       map[string]catalogItemNetworkFixture
 			)
 
 			BeforeAll(func(ctx context.Context) {
@@ -391,6 +404,11 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 						err = nil
 					}
 					Expect(err).ToNot(HaveOccurred())
+				}
+				networkClassID := createCatalogItemNetworkClassFixture(ctx)
+				tenantNetworks = make(map[string]catalogItemNetworkFixture, len(uniqueTenants))
+				for tenant := range uniqueTenants {
+					tenantNetworks[tenant] = createCatalogItemNetworkInClassFixture(ctx, tenant, "", networkClassID)
 				}
 
 				// Create a bare metal instance type for testing
@@ -462,8 +480,9 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 								Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
-								Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-								NodeSets: testClusterNodeSets(clusterBMIT, 3),
+								Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+								NetworkAttachment: tenantNetworks[OIDCTenants[user][0]].clusterAttachment(),
+								NodeSets:          testClusterNodeSets(clusterBMIT, 3),
 							}.Build(),
 						}.Build(),
 					}.Build())
@@ -551,7 +570,23 @@ func deleteCluster(ctx context.Context, clusterId string) error {
 	_, err := clusterClient.Delete(ctx, privatev1.ClustersDeleteRequest_builder{
 		Id: clusterId,
 	}.Build())
-	return err
+	if err != nil && grpcstatus.Code(err) != grpccodes.NotFound {
+		return err
+	}
+
+	// Cluster deletion is asynchronous. Wait for the Cluster to be archived
+	// before the suite tears down its referenced network resources.
+	Eventually(func(g Gomega) {
+		_, getErr := clusterClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: clusterId}.Build())
+		if grpcstatus.Code(getErr) == grpccodes.NotFound {
+			return
+		}
+		g.Expect(getErr).ToNot(HaveOccurred())
+
+		_, signalErr := clusterClient.Signal(ctx, privatev1.ClustersSignalRequest_builder{Id: clusterId}.Build())
+		g.Expect(signalErr).ToNot(HaveOccurred())
+	}, 5*time.Minute, time.Second).Should(Succeed())
+	return nil
 }
 
 // calculateResponseSize calculates the response size based on a tenant-resource mapping and a user's tenant membership

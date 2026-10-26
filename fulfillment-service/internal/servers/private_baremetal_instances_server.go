@@ -610,7 +610,7 @@ func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
 		var err error
 		defaultSubnet, err = findDefaultSubnet(ctx, s.logger, s.subnetsDao, tenantName, project)
 		if err != nil {
-			return err
+			return defaultResourceLookupFailure(err, "subnet")
 		}
 	}
 	defaultVN := ""
@@ -654,7 +654,7 @@ func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
 		if sgErr != nil {
 			s.logger.ErrorContext(ctx, "Failed to look up default security group",
 				slog.Any("error", sgErr))
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to find default security group")
+			return defaultResourceLookupFailure(sgErr, "security group")
 		}
 		if sg == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
@@ -705,7 +705,7 @@ func (s *PrivateBareMetalInstancesServer) injectFullDefaultNetworkAttachment(
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to look up default security group",
 			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to find default security group")
+		return defaultResourceLookupFailure(err, "security group")
 	}
 	if sg == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,

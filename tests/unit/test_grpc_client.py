@@ -106,3 +106,42 @@ def test_create_and_delete_shared_baremetal_instance_type(monkeypatch: pytest.Mo
         },
         {"service": f"{PRIVATE_API}.BareMetalInstanceTypes/Delete", "data": {"id": "bmit-123"}},
     ]
+
+
+def test_get_tenant_by_name_resolves_id_then_reads_full_tenant(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = GRPCClient(address="fulfillment-api.example.test:443", token="test-token")
+    calls: list[dict[str, Any]] = []
+    tenant = {"id": "tenant-id", "metadata": {"name": "tenant1"}, "status": {"conditions": []}}
+
+    def capture_call(*, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        calls.append({"service": service, "data": data})
+        if service == "osac.private.v1.Tenants/List":
+            return {
+                "items": [
+                    {"id": "other-tenant-id", "metadata": {"name": "tenant2"}},
+                    {"id": "tenant-id", "metadata": {"name": "tenant1"}},
+                ]
+            }
+        return {"object": tenant}
+
+    monkeypatch.setattr(client, "call", capture_call)
+
+    assert client.get_tenant_by_name(name="tenant1") is tenant
+    assert calls == [
+        {"service": "osac.private.v1.Tenants/List", "data": {"filter": 'this.metadata.name == "tenant1"'}},
+        {"service": "osac.private.v1.Tenants/Get", "data": {"id": "tenant-id"}},
+    ]
+
+
+def test_get_tenant_by_name_returns_none_when_list_has_no_exact_match(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = GRPCClient(address="fulfillment-api.example.test:443", token="test-token")
+    calls: list[str] = []
+
+    def capture_call(*, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        calls.append(service)
+        return {"items": [{"id": "tenant-id", "metadata": {"name": "tenant10"}}]}
+
+    monkeypatch.setattr(client, "call", capture_call)
+
+    assert client.get_tenant_by_name(name="tenant1") is None
+    assert calls == ["osac.private.v1.Tenants/List"]

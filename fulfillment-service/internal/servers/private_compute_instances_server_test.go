@@ -2217,7 +2217,6 @@ var _ = Describe("Private compute instances server", func() {
 
 			It("Should fill a missing SecurityGroup list for a default Subnet", func() {
 				defaultSubnet := createTestSubnet(ctx, virtualNetwork.GetId(), privatev1.SubnetState_SUBNET_STATE_READY, true)
-				createTestSecurityGroup(ctx, virtualNetwork.GetId(), privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY, true)
 
 				response, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
 					Object: privatev1.ComputeInstance_builder{

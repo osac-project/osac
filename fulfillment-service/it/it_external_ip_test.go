@@ -802,8 +802,6 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		ctx                      context.Context
 		networkClassesClient     privatev1.NetworkClassesClient
 		poolsClient              privatev1.ExternalIPPoolsClient
-		virtualNetworksClient    privatev1.VirtualNetworksClient
-		subnetsClient            privatev1.SubnetsClient
 		externalIPsClient        publicv1.ExternalIPsClient
 		privateExternalIPsClient privatev1.ExternalIPsClient
 		attachmentsClient        publicv1.ExternalIPAttachmentsClient
@@ -817,12 +815,12 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		externalIPId            string
 		clusterId               string
 		racingClusterID         string
-		subnetID                string
 		bmitName                string
 		templateId              string
 		attachmentIDs           []string
 		additionalExternalIPIDs []string
 		networkClassHubID       string
+		network                 catalogItemNetworkFixture
 	)
 
 	BeforeEach(func() {
@@ -832,8 +830,6 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		racingClusterID = ""
 		networkClassesClient = privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 		poolsClient = privatev1.NewExternalIPPoolsClient(tool.InternalView().AdminConn())
-		virtualNetworksClient = privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
-		subnetsClient = privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
 		externalIPsClient = publicv1.NewExternalIPsClient(tool.ExternalView().UserConn())
 		privateExternalIPsClient = privatev1.NewExternalIPsClient(tool.InternalView().AdminConn())
 		attachmentsClient = publicv1.NewExternalIPAttachmentsClient(tool.ExternalView().UserConn())
@@ -849,6 +845,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		Expect(err).ToNot(HaveOccurred())
 		networkClassHubID = networkClassResponse.GetObject().GetStatus().GetHub()
 		Expect(networkClassHubID).ToNot(BeEmpty())
+		network = createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
 
 		poolId = fmt.Sprintf("test-pool-%s", uuid.New())
 		_, err = poolsClient.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
@@ -1011,66 +1008,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 				})
 		})
 
-		// This Cluster is a networked target, so select its Hub from a real subnet
-		// attachment and wait until that Hub matches the ExternalIP's canonical Hub.
-		virtualNetworkID := fmt.Sprintf("test-vnet-%s", uuid.New())
-		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-			Object: privatev1.VirtualNetwork_builder{
-				Id: virtualNetworkID,
-				Metadata: privatev1.Metadata_builder{
-					Name:   fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
-					Tenant: usersGroup,
-				}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassID}.Build(),
-					Region:       "us-east-1",
-					Ipv4Cidr:     new("10.230.0.0/16"),
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func(cleanupCtx context.Context) {
-			Expect(cleanupVirtualNetworkFixture(cleanupCtx, virtualNetworksClient, virtualNetworkID)).To(Succeed())
-		})
-		expectNetworkingResourceHub(ctx, networkClassHubID, func(getCtx context.Context) (string, error) {
-			resp, getErr := virtualNetworksClient.Get(getCtx, privatev1.VirtualNetworksGetRequest_builder{
-				Id: virtualNetworkID,
-			}.Build())
-			if getErr != nil {
-				return "", getErr
-			}
-			return resp.GetObject().GetStatus().GetHub(), nil
-		})
-		setRoutingVirtualNetworkReady(ctx, virtualNetworksClient, virtualNetworkID)
-
-		subnetID = fmt.Sprintf("test-subnet-%s", uuid.New())
-		_, err = subnetsClient.Create(ctx, privatev1.SubnetsCreateRequest_builder{
-			Object: privatev1.Subnet_builder{
-				Id: subnetID,
-				Metadata: privatev1.Metadata_builder{
-					Name:   fmt.Sprintf("test-subnet-%s", uuid.New()[24:32]),
-					Tenant: usersGroup,
-				}.Build(),
-				Spec: privatev1.SubnetSpec_builder{
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
-					Ipv4Cidr:       new("10.230.1.0/24"),
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func(cleanupCtx context.Context) {
-			Expect(cleanupSubnetFixture(cleanupCtx, subnetsClient, subnetID)).To(Succeed())
-		})
-		expectNetworkingResourceHub(ctx, networkClassHubID, func(getCtx context.Context) (string, error) {
-			resp, getErr := subnetsClient.Get(getCtx, privatev1.SubnetsGetRequest_builder{
-				Id: subnetID,
-			}.Build())
-			if getErr != nil {
-				return "", getErr
-			}
-			return resp.GetObject().GetStatus().GetHub(), nil
-		})
-		setRoutingSubnetReady(ctx, subnetsClient, subnetID)
+		// The ready fixture shares the ExternalIP NetworkClass and Hub.
 
 		createClusterResp, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
@@ -1078,13 +1016,11 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NetworkAttachment: network.clusterAttachment(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
 						Size: new(int32(1)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName, Shared: true}.Build(),
 					}.Build()},
-					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
-						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetID}.Build(),
-					}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -1288,7 +1224,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 						Size: new(int32(1)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
 					}.Build()},
 					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
-						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+						Subnet: publicv1.SubnetLocalReference_builder{Id: network.subnetID}.Build(),
 					}.Build(),
 					AutoExternalIpAttachment: &autoAttach,
 				}.Build(),
@@ -1434,7 +1370,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 						Size: new(int32(1)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
 					}.Build()},
 					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
-						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+						Subnet: publicv1.SubnetLocalReference_builder{Id: network.subnetID}.Build(),
 					}.Build(),
 					AutoExternalIpAttachment: &autoAttach,
 				}.Build(),

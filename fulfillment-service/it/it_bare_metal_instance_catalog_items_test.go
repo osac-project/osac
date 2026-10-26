@@ -401,7 +401,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			Entry("catalog item default: subnet is no longer ready", false, codes.FailedPrecondition),
 		)
 		It("allows a Secret source to replace an inline catalog default", func(ctx context.Context) {
-			ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
+			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			secret := createCatalogItemUserDataSecretFixture(ctx, usersGroup)
 			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
 			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
@@ -420,10 +420,11 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				Object: publicv1.BareMetalInstance_builder{
 					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
-						DiskImage:      publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
-						UserDataSource: publicv1.UserDataSource_builder{Secret: publicv1.SecretLocalReference_builder{Id: secret}.Build()}.Build(),
-						InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup), Shared: true}.Build(),
+						CatalogItem:        publicv1.BareMetalInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+						DiskImage:          publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
+						UserDataSource:     publicv1.UserDataSource_builder{Secret: publicv1.SecretLocalReference_builder{Id: secret}.Build()}.Build(),
+						InstanceType:       publicv1.BareMetalInstanceTypeReference_builder{Id: createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup), Shared: true}.Build(),
+						NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{network.bareMetalInstanceAttachment()},
 					}.Build(),
 				}.Build(),
 			}.Build()

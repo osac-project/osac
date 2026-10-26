@@ -11,7 +11,7 @@ import pytest
 
 from tests.e2e.core.caas_versions import ensure_caas_disk_image_version
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
-from tests.e2e.core.helpers import unique_name, wait_for_grpc_subnet_ready
+from tests.e2e.core.helpers import unique_name, wait_for_grpc_subnet_ready, wait_for_tenant_default_networking_ready
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.keycloak import get_jwt
 from tests.e2e.core.keycloak_admin import (
@@ -187,18 +187,18 @@ def ensure_tenants(ensure_k8s_only_network_class: None, private_grpc: GRPCClient
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _wait_for_default_subnets_ready(
-    ensure_jwt_users: None, setup_organization_memberships: None, grpc: GRPCClient
+def _wait_for_default_networking_ready(
+    ensure_jwt_users: None, setup_organization_memberships: None, grpc: GRPCClient, private_grpc: GRPCClient
 ) -> None:
-    """Wait for tenant-default subnets to reach READY in the fulfillment database.
+    """Wait for tenant defaults, including the default SecurityGroup, to be READY.
 
     Tenant creation triggers the DefaultNetworkingProvisioner which creates a
-    default VirtualNetwork, Subnet, and SecurityGroup in SUBNET_STATE_PENDING.
-    The osac-operator marks the K8s CRs Ready, then the subnet feedback
-    controller syncs that state back to PostgreSQL.  Tests that implicitly
-    reference these subnets (e.g. BareMetalInstance creation inherits the
-    tenant's default subnet) hit FailedPrecondition if the DB update hasn't
-    landed yet.
+    default VirtualNetwork, Subnet, and SecurityGroup. The tenant's
+    DefaultNetworkingReady condition reaches AllResourcesReady only after all
+    configured defaults are READY. OSAC-5564 exposed a race where the subnet
+    became READY before its default SecurityGroup, causing Cluster Create to
+    reject requests that rely on defaults. Keep the subnet feedback check as
+    well because tests also resolve default subnets directly.
 
     Depends on ``ensure_jwt_users`` (which itself depends on ``ensure_tenants``)
     so that the ``grpc`` client's first call does not trigger JIT user
@@ -210,6 +210,10 @@ def _wait_for_default_subnets_ready(
     ``list_subnet_ids()`` returns an empty list (``WHERE tenant = $1``
     receives an empty string).
     """
+    # OSAC-5564: subnet readiness alone does not guarantee the matching default
+    # SecurityGroup is READY, which Cluster Create now requires for defaulting.
+    wait_for_tenant_default_networking_ready(grpc=private_grpc, tenant_name="tenant1")
+
     # Timeout must exceed 2x the operator's statusPollInterval (30s) to
     # accommodate two sequential polling cycles (VirtualNetwork -> Subnet).
     subnet_ids: list[str] = poll_until(

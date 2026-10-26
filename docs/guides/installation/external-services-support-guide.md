@@ -1521,15 +1521,20 @@ and keep a rollback point at every step.
 - Quiesce the writers: scale down the osac deployments, keeping a record
   of replica counts to restore.
 
-> **Chart-version caveat:** installer chart revisions between roughly
-> October 8 and October 14, 2026 predate the OAuth wiring that injects
-> `fulfillment-controller-credentials` into the operator and metering
-> deployments. On such pins, both crashloop after any database move until
-> the credentials are patched in (env `OSAC_FULFILLMENT_CLIENT_ID` /
+> **Chart prerequisite:** the operator and metering deployments must be
+> rendered by a chart pin that includes the OAuth client-credentials
+> wiring. Older pins authenticate the operator to the fulfillment API
+> with its service-account token only — sufficient while everything is
+> bundled, but not after the services move — so on such pins both
+> deployments crashloop following any database migration until the
+> credentials are patched in (env `OSAC_FULFILLMENT_CLIENT_ID` /
 > `OSAC_FULFILLMENT_CLIENT_SECRET` + `--fulfillment-ca-file` for the
-> operator; a credentials volume + issuer/client env for metering). The
-> exact patch script is in the companion runbook; the durable fix is a
-> newer chart pin.
+> operator; a credentials volume + issuer/client env for metering).
+> Check your pin before migrating — if
+> `helm template <chart> -n osac | grep OSAC_FULFILLMENT_CLIENT_ID`
+> renders nothing, it predates the wiring — and prefer upgrading to a
+> current chart pin first; that is the durable fix. Hand-patching the
+> env and volume is a stopgap for pins you cannot upgrade.
 
 ### B.2 Per-service migration
 

@@ -2650,11 +2650,17 @@ jobs:
   # Konflux-published) cleanly separate -- by the time this commit exists,
   # nothing reads the earlier one again.
   #
-  # Mirrors each of the 7 image-backed charts' own (removed)
-  # patch-chart-image-refs params exactly -- same registry-image and
-  # values.yaml field(s) per component -- just computed from prepare's own
-  # component-versions directly, since the real version is already known
-  # here; no git-tag lookup needed the way the removed task required.
+  # Covers each of the 7 image-backed charts' own (removed)
+  # patch-chart-image-refs params -- same registry-image and values.yaml
+  # field(s) per component -- computed from prepare's own component-versions
+  # directly, since the real version is already known here; no git-tag
+  # lookup needed the way the removed task required. Also stamps 2 real
+  # GHCR gaps the removed task never covered (osac-aap's own
+  # configAsCode.eeImage, osac-metering's own m360Adapter image) and the
+  # umbrella osac-chart's own top-level values.yaml, which the removed
+  # task never touched at all -- confirmed via a real published-chart
+  # audit (2026-10-26) that every one of these left a live ghcr.io
+  # reference in a chart actually published to registry.stage.redhat.io.
   #
   # continue-on-error mirrors wait-for-konflux-chart-build/
   # trigger-konflux-chart-staging-release's own stance below: charts are
@@ -2738,6 +2744,20 @@ jobs:
           ["osac-ui"]="registry.stage.redhat.io/cloud-extensions/osac-ui-rhel10"
         )
 
+        # Second field per component that references the exact same image as
+        # its own primary field above, confirmed still GHCR in a real
+        # published chart (verify-staged-release, 2026-10-26): osac-aap's
+        # own config-as-code execution-environment image, and osac-metering's
+        # own m360 adapter -- a genuinely separate Konflux component/image,
+        # sharing osac-metering's version since both are built from the same
+        # owning git component. Any ghcr.io reference left in a chart
+        # actually published to registry.stage.redhat.io is a bug, not a
+        # cosmetic gap -- a disconnected/stage install must never reach out
+        # to a community registry.
+        declare -A SECOND_REGISTRY_IMAGES=(
+          ["osac-metering"]="registry.stage.redhat.io/cloud-extensions/metering-m360-adapter-rhel10"
+        )
+
         for COMPONENT in $(printf '%s\n' "${!CHART_CONTEXTS[@]}" | sort); do
           COMPONENT_VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k] // empty' <<<"${COMPONENT_VERSIONS}")
           if [[ -z "${COMPONENT_VERSION}" ]]; then
@@ -2751,6 +2771,7 @@ jobs:
           case "${COMPONENT}" in
           osac-aap)
             TARGET_IMAGE="${TARGET_IMAGE}" yq -i '.bootstrap.image = strenv(TARGET_IMAGE)' "${VALUES_FILE}"
+            TARGET_IMAGE="${TARGET_IMAGE}" yq -i '.configAsCode.eeImage = strenv(TARGET_IMAGE)' "${VALUES_FILE}"
             ;;
           osac-ui)
             TARGET_IMAGE="${TARGET_IMAGE}" yq -i '.images.ui = strenv(TARGET_IMAGE)' "${VALUES_FILE}"
@@ -2759,9 +2780,63 @@ jobs:
             TARGET_IMAGE="${TARGET_IMAGE}" TARGET_REPO="${TARGET_IMAGE%:*}" TARGET_TAG="${TARGET_IMAGE##*:}" \
               yq -i '.images.service.repository = strenv(TARGET_REPO) | .images.service.tag = strenv(TARGET_TAG)' "${VALUES_FILE}"
             ;;
+          osac-metering)
+            TARGET_IMAGE="${TARGET_IMAGE}" TARGET_REPO="${TARGET_IMAGE%:*}" TARGET_TAG="${TARGET_IMAGE##*:}" \
+              yq -i '.image.repository = strenv(TARGET_REPO) | .image.tag = strenv(TARGET_TAG)' "${VALUES_FILE}"
+            M360_TARGET_IMAGE="${SECOND_REGISTRY_IMAGES[osac-metering]}:${COMPONENT_VERSION}"
+            M360_TARGET_REPO="${M360_TARGET_IMAGE%:*}" M360_TARGET_TAG="${M360_TARGET_IMAGE##*:}" \
+              yq -i '.m360Adapter.image.repository = strenv(M360_TARGET_REPO) | .m360Adapter.image.tag = strenv(M360_TARGET_TAG)' "${VALUES_FILE}"
+            ;;
           *)
             TARGET_IMAGE="${TARGET_IMAGE}" TARGET_REPO="${TARGET_IMAGE%:*}" TARGET_TAG="${TARGET_IMAGE##*:}" \
               yq -i '.image.repository = strenv(TARGET_REPO) | .image.tag = strenv(TARGET_TAG)' "${VALUES_FILE}"
+            ;;
+          esac
+        done
+
+        # The umbrella chart (osac-chart) is ALSO published to
+        # registry.stage.redhat.io, and its own top-level values.yaml --
+        # stamped early in `prepare` with GHCR references for nightly/e2e
+        # use (stamp_component_image_refs in nightly-charts.sh) -- overrides
+        # each nested sub-chart's own (correctly stamped above) default
+        # value via Helm's normal parent-overrides-child precedence.
+        # Without this, installing the published osac-chart standalone would
+        # pull every component from GHCR despite each bundled sub-chart
+        # having the right reference internally. osac-csi-driver is not an
+        # osac-chart dependency (see its own Chart.yaml), so it's not stamped
+        # here; m360Adapter has no umbrella-level override field to begin
+        # with (confirmed via the committed source), so fixing it on
+        # osac-metering's own values.yaml above is sufficient.
+        UMBRELLA_VALUES="osac-installer/charts/osac/values.yaml"
+        echo "Stamping umbrella osac-chart (${UMBRELLA_VALUES}) with the same real image refs"
+        for COMPONENT in $(printf '%s\n' "${!CHART_CONTEXTS[@]}" | sort); do
+          [[ "${COMPONENT}" == "osac-csi-driver" ]] && continue
+          COMPONENT_VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k] // empty' <<<"${COMPONENT_VERSIONS}")
+          [[ -z "${COMPONENT_VERSION}" ]] && continue
+          TARGET_IMAGE="${REGISTRY_IMAGES[${COMPONENT}]}:${COMPONENT_VERSION}"
+          case "${COMPONENT}" in
+          osac-aap)
+            TARGET_IMAGE="${TARGET_IMAGE}" yq -i '.aap.bootstrap.image = strenv(TARGET_IMAGE)' "${UMBRELLA_VALUES}"
+            TARGET_IMAGE="${TARGET_IMAGE}" yq -i '.aap.configAsCode.eeImage = strenv(TARGET_IMAGE)' "${UMBRELLA_VALUES}"
+            ;;
+          osac-ui)
+            TARGET_IMAGE="${TARGET_IMAGE}" yq -i '.ui.images.ui = strenv(TARGET_IMAGE)' "${UMBRELLA_VALUES}"
+            ;;
+          fulfillment-service)
+            TARGET_IMAGE="${TARGET_IMAGE}" TARGET_REPO="${TARGET_IMAGE%:*}" TARGET_TAG="${TARGET_IMAGE##*:}" \
+              yq -i '.service.images.service.repository = strenv(TARGET_REPO) | .service.images.service.tag = strenv(TARGET_TAG)' "${UMBRELLA_VALUES}"
+            ;;
+          osac-operator)
+            TARGET_IMAGE="${TARGET_IMAGE}" TARGET_REPO="${TARGET_IMAGE%:*}" TARGET_TAG="${TARGET_IMAGE##*:}" \
+              yq -i '.operator.image.repository = strenv(TARGET_REPO) | .operator.image.tag = strenv(TARGET_TAG)' "${UMBRELLA_VALUES}"
+            ;;
+          bare-metal-fulfillment-operator)
+            TARGET_IMAGE="${TARGET_IMAGE}" TARGET_REPO="${TARGET_IMAGE%:*}" TARGET_TAG="${TARGET_IMAGE##*:}" \
+              yq -i '.bmf.image.repository = strenv(TARGET_REPO) | .bmf.image.tag = strenv(TARGET_TAG)' "${UMBRELLA_VALUES}"
+            ;;
+          osac-metering)
+            TARGET_IMAGE="${TARGET_IMAGE}" TARGET_REPO="${TARGET_IMAGE%:*}" TARGET_TAG="${TARGET_IMAGE##*:}" \
+              yq -i '.metering.image.repository = strenv(TARGET_REPO) | .metering.image.tag = strenv(TARGET_TAG)' "${UMBRELLA_VALUES}"
             ;;
           esac
         done

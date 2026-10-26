@@ -237,6 +237,49 @@ var _ = Describe("Private external IP attachments server", func() {
 	})
 
 	Describe("Behaviour", func() {
+		It("resolves attachment uniqueness canonically and preserves the exact child exclusion", func() {
+			tenantsDAO, err := dao.NewGenericDAO[*privatev1.Tenant]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = tenantsDAO.Create().SetObject(privatev1.Tenant_builder{Id: "attachment-tenant", Metadata: privatev1.Metadata_builder{Name: "attachment-tenant", Tenant: "attachment-tenant"}.Build()}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			makeEIP := func(tenant string) *privatev1.ExternalIP {
+				response, createErr := externalIPDao.Create().SetObject(privatev1.ExternalIP_builder{
+					Metadata: privatev1.Metadata_builder{Name: "shared-display-name", Tenant: tenant, Creator: systemCreator}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: sharedPool.GetId()}.Build()}.Build(),
+					Status:   privatev1.ExternalIPStatus_builder{State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, Address: "203.0.113.1", Hub: "network-hub-a"}.Build(),
+				}.Build()).Do(ctx)
+				Expect(createErr).ToNot(HaveOccurred())
+				return response.GetObject()
+			}
+			first, second := makeEIP(testTenant), makeEIP("attachment-tenant")
+			ci := createComputeInstanceInState(ctx, computeInstanceDao, privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+			created, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{Object: privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{Name: "canonical-attachment", Tenant: testTenant}.Build(),
+				Spec:     privatev1.ExternalIPAttachmentSpec_builder{ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: first.GetId(), Name: "shared-display-name"}.Build(), ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build()}.Build(),
+			}.Build()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(server.validateUniqueness(ctx, second.GetId(), "unused-target", "shared-display-name")).To(Succeed())
+			Expect(grpcstatus.Code(server.validateUniqueness(ctx, first.GetId(), ci.GetId(), "misleading-name"))).To(Equal(grpccodes.AlreadyExists))
+			Expect(server.lifecycle.ensureExternalIPAvailableExcept(ctx, first.GetId(), "ignored-name", created.GetObject().GetId())).To(Succeed())
+			for _, parent := range []*privatev1.ExternalIP{first, second} {
+				parent.GetMetadata().SetLabels(map[string]string{autoCreatedLabel: "true", autoCreatedForLabel: ci.GetId()})
+				parent.GetMetadata().SetFinalizers([]string{"test-hold"})
+				_, err = externalIPDao.Update().SetObject(parent).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+			Expect(server.lifecycle.deleteAutoCreatedExternalIPs(ctx, ci.GetId())).To(Succeed())
+			for _, parent := range []*privatev1.ExternalIP{first, second} {
+				fresh, getErr := externalIPDao.Get().SetId(parent.GetId()).Do(ctx)
+				Expect(getErr).ToNot(HaveOccurred())
+				Expect(fresh.GetObject().GetMetadata().HasDeletionTimestamp()).To(Equal(parent.GetId() == second.GetId()))
+			}
+			Expect(grpcstatus.Code(server.lifecycle.ensureExternalIPAvailableExcept(ctx, first.GetId(), "ignored-name", "unrelated-child"))).To(Equal(grpccodes.FailedPrecondition))
+			_, err = suiteTx.Exec(ctx, "update external_ip_attachments set deletion_timestamp=now() where id=$1", created.GetObject().GetId())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(grpcstatus.Code(server.lifecycle.ensureExternalIPAvailable(ctx, first.GetId(), "ignored-name"))).To(Equal(grpccodes.FailedPrecondition))
+			Expect(server.lifecycle.ensureExternalIPAvailableExcept(ctx, first.GetId(), "ignored-name", created.GetObject().GetId())).To(Succeed())
+		})
+
 		It("rejects caller-supplied output status on Create", func() {
 			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
 				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)

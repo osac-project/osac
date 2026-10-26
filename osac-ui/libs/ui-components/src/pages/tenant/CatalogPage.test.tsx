@@ -2,7 +2,7 @@ import { Route, Routes } from 'react-router-dom';
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError, createRouterTransport } from '@connectrpc/connect';
 import { screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   BareMetalInstanceCatalogItem,
@@ -21,6 +21,7 @@ import {
   InstanceTypes,
   Metadata,
   MetadataSchema,
+  SelfSubjectAccessReviews,
   ServiceTier,
 } from '@osac/types';
 import { getViewTypePrefKey } from '@osac/ui-components/hooks/use-view-type';
@@ -234,6 +235,10 @@ const createCatalogPageTransport = ({
         },
       });
 
+      router.service(SelfSubjectAccessReviews, {
+        create: () => ({ object: { status: { allowed: true } } }),
+      });
+
       router.service(ComputeInstanceCatalogItems, {
         list: async (req) => {
           if (requestCounts) {
@@ -344,16 +349,19 @@ const renderCatalogPage = (
   transport = unauthorizedTransport,
   enabledServices: ServiceTier[] = allCatalogServiceTiers,
   routerEntries = ['/catalog'],
+  role: UserRole = 'admin',
 ) =>
   renderWithProviders(<CatalogPage />, {
     transport,
     routerEntries,
     apiFixtures: { enabledServices },
+    session: { role },
   });
 
 const renderCatalogPageWithDetailRoutes = (
   transport = createCatalogPageTransport(),
   routerEntries = ['/catalog'],
+  role: UserRole = 'admin',
 ) =>
   renderWithProviders(
     <Routes>
@@ -363,19 +371,26 @@ const renderCatalogPageWithDetailRoutes = (
       <Route path="/clusters/create/:catalogItemId" element={<div>Create cluster page</div>} />
       <Route path="/vms/create/:catalogItemId" element={<div>Create virtual machine page</div>} />
     </Routes>,
-    { transport, routerEntries },
+    {
+      transport,
+      routerEntries,
+      apiFixtures: { enabledServices: allCatalogServiceTiers },
+      session: { role },
+    },
   );
 
 const renderCatalogPageWithCreateRoute = (
   transport = createCatalogPageTransport(),
   routerEntries = ['/catalog'],
+  role: UserRole = 'admin',
+  enabledServices: ServiceTier[] = allCatalogServiceTiers,
 ) =>
   renderWithProviders(
     <Routes>
       <Route path="/catalog" element={<CatalogPage />} />
       <Route path="/catalog/:kind/create" element={<div>Create catalog item page</div>} />
     </Routes>,
-    { transport, routerEntries },
+    { transport, routerEntries, apiFixtures: { enabledServices }, session: { role } },
   );
 
 describe('CatalogPage', () => {
@@ -422,9 +437,11 @@ describe('CatalogPage', () => {
   });
 
   it('disables search while catalog queries are loading', async () => {
-    renderCatalogPage(createCatalogPageTransport({ vmDelayMs: 250, clusterItems: [] }), [
-      '/catalog?types=vm',
-    ]);
+    renderCatalogPage(
+      createCatalogPageTransport({ vmDelayMs: 250, clusterItems: [] }),
+      allCatalogServiceTiers,
+      ['/catalog?types=vm'],
+    );
 
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
     const searchInput = await screen.findByRole('textbox', { name: 'Filter catalog by keyword' });
@@ -461,8 +478,7 @@ describe('CatalogPage', () => {
   });
 
   it('falls back to the next enabled tier in priority order when Bare Metal is disabled', async () => {
-    setMockSession([ServiceTier.CAAS, ServiceTier.VMAAS]);
-    renderCatalogPage(createCatalogPageTransport());
+    renderCatalogPage(createCatalogPageTransport(), [ServiceTier.CAAS, ServiceTier.VMAAS]);
 
     await waitFor(() => {
       expect(screen.getByText(clusterCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
@@ -604,7 +620,9 @@ describe('CatalogPage', () => {
   });
 
   it('shows only the selected type when a different type is chosen', async () => {
-    const { user } = renderCatalogPage(createCatalogPageTransport(), ['/catalog?types=vm']);
+    const { user } = renderCatalogPage(createCatalogPageTransport(), allCatalogServiceTiers, [
+      '/catalog?types=vm',
+    ]);
 
     await waitFor(() => {
       expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
@@ -637,6 +655,7 @@ describe('CatalogPage', () => {
         vmItems: [vmCatalogItem, unpublishedVmItem],
         clusterItems: [],
       }),
+      allCatalogServiceTiers,
       ['/catalog?types=vm'],
     );
 
@@ -675,6 +694,7 @@ describe('CatalogPage', () => {
       createCatalogPageTransport({
         clusterError: Object.assign(new Error(), { name: 'UnauthorizedError' }),
       }),
+      allCatalogServiceTiers,
       ['/catalog?types=vm'],
     );
 
@@ -690,6 +710,7 @@ describe('CatalogPage', () => {
   it('shows a generic section error for non-401 failures', async () => {
     renderCatalogPage(
       createCatalogPageTransport({ vmError: new Error('Catalog service unavailable') }),
+      allCatalogServiceTiers,
       ['/catalog?types=cluster'],
     );
 
@@ -815,10 +836,11 @@ describe('CatalogPage', () => {
   });
 
   it('navigates to cluster create from the catalog item detail page', async () => {
-    setMockSession(allCatalogServiceTiers, 'tenant-admin');
-    const { user } = renderCatalogPageWithDetailRoutes(createCatalogPageTransport(), [
-      '/catalog?types=cluster',
-    ]);
+    const { user } = renderCatalogPageWithDetailRoutes(
+      createCatalogPageTransport(),
+      ['/catalog?types=cluster'],
+      'tenant-admin',
+    );
 
     await waitFor(() => {
       expect(screen.getByText(clusterCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
@@ -839,10 +861,11 @@ describe('CatalogPage', () => {
   });
 
   it('navigates to VM create from the catalog item detail page', async () => {
-    setMockSession(allCatalogServiceTiers, 'tenant-admin');
-    const { user } = renderCatalogPageWithDetailRoutes(createCatalogPageTransport(), [
-      '/catalog?types=vm',
-    ]);
+    const { user } = renderCatalogPageWithDetailRoutes(
+      createCatalogPageTransport(),
+      ['/catalog?types=vm'],
+      'tenant-admin',
+    );
 
     await waitFor(() => {
       expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
@@ -871,6 +894,7 @@ describe('CatalogPage', () => {
         vmItems: [vmCatalogItemWithReferences, vmCatalogItemWithIdOnlyReferences],
         requestCounts,
       }),
+      allCatalogServiceTiers,
       ['/catalog?types=vm'],
     );
 
@@ -922,7 +946,6 @@ describe('CatalogPage', () => {
   });
 
   it('omits the unsupported Source column for tenant admins', async () => {
-    setMockSession(allCatalogServiceTiers, 'tenant-admin');
     localStorage.setItem(catalogItemsViewPrefKey, 'list');
 
     const catalogItem = {
@@ -933,9 +956,12 @@ describe('CatalogPage', () => {
       }),
     };
 
-    renderCatalogPage(createCatalogPageTransport({ vmItems: [catalogItem], clusterItems: [] }), [
-      '/catalog?types=vm',
-    ]);
+    renderCatalogPage(
+      createCatalogPageTransport({ vmItems: [catalogItem], clusterItems: [] }),
+      allCatalogServiceTiers,
+      ['/catalog?types=vm'],
+      'tenant-admin',
+    );
 
     const table = await screen.findByRole('grid', { name: 'Catalog items' });
 
@@ -945,35 +971,41 @@ describe('CatalogPage', () => {
   });
 
   describe('Create catalog item action', () => {
-    it('is shown for admin and navigates to the create wizard for the selected type', async () => {
+    it.each([
+      { kind: 'bm', item: bareMetalCatalogItem },
+      { kind: 'cluster', item: clusterCatalogItem },
+      { kind: 'vm', item: vmCatalogItem },
+    ] as const)('maps $kind to its create service', async ({ kind, item }) => {
       const { user } = renderCatalogPageWithCreateRoute(
-        createCatalogPageTransport({ bmItems: [bareMetalCatalogItem] }),
+        createCatalogPageTransport({
+          vmItems: [vmCatalogItem],
+          clusterItems: [clusterCatalogItem],
+          bmItems: [bareMetalCatalogItem],
+        }),
+        [`/catalog?types=${kind}`],
       );
 
       await waitFor(() => {
-        expect(screen.getByText(bareMetalCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
+        expect(screen.getByText(item.metadata?.name ?? '')).toBeInTheDocument();
       });
 
-      expect(screen.getByRole('link', { name: 'Create catalog item' })).toHaveAttribute(
-        'href',
-        '/catalog/bm/create',
-      );
+      const createLink = screen.getByRole('link', { name: 'Create catalog item' });
+      await waitFor(() => expect(createLink).not.toHaveAttribute('aria-disabled', 'true'));
+      expect(createLink).toHaveAttribute('href', `/catalog/${kind}/create`);
 
-      await user.click(screen.getByRole('link', { name: 'Create catalog item' }));
+      await user.click(createLink);
 
       expect(screen.getByText('Create catalog item page')).toBeInTheDocument();
     });
 
     it('is shown for tenant-admin', async () => {
-      setMockSession(allCatalogServiceTiers, 'tenant-admin');
-      renderCatalogPageWithCreateRoute();
+      renderCatalogPageWithCreateRoute(undefined, ['/catalog'], 'tenant-admin');
 
       expect(await screen.findByRole('link', { name: 'Create catalog item' })).toBeInTheDocument();
     });
 
     it('is hidden for tenant-user', async () => {
-      setMockSession(allCatalogServiceTiers, 'tenant-user');
-      renderCatalogPageWithCreateRoute();
+      renderCatalogPageWithCreateRoute(undefined, ['/catalog'], 'tenant-user');
 
       await waitFor(() => {
         expect(
@@ -984,8 +1016,7 @@ describe('CatalogPage', () => {
     });
 
     it('is hidden when no catalog services are enabled', async () => {
-      setMockSession([]);
-      renderCatalogPageWithCreateRoute();
+      renderCatalogPageWithCreateRoute(undefined, ['/catalog'], 'admin', []);
 
       expect(
         await screen.findByRole('heading', { name: 'No catalog items found' }),

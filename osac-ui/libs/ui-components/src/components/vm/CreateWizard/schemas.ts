@@ -123,17 +123,15 @@ export const buildComputeInstanceStepSchema = (
         metadata: yup.object({
           name: fields.metadataName,
         }),
+      });
+    case 'configuration':
+      return yup.object({
         spec: yup.object({
           diskImage: lockedField(
             yup.object({
               id: yup.string().required(t('Disk image is required')),
             }),
           ),
-        }),
-      });
-    case 'configuration':
-      return yup.object({
-        spec: yup.object({
           instanceType: fields.specInstanceType,
         }),
       });

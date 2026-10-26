@@ -17,10 +17,10 @@
 #   5. Mixed launcher pods: one Failed + one Running —
 #      recovery refused because not all launchers are
 #      terminal.
-#   6. Cross-VMI identity boundary: a Running launcher
-#      with a different VMI UID is ignored by the
-#      UID-scoped selector — recovery sees "absent" and
-#      proceeds; alien pod is untouched.
+#   6. Cross-VMI identity boundary: a Running pod with
+#      a mismatched created-by label is excluded by
+#      vmi_owned_pods — recovery sees zero owned pods
+#      and proceeds; alien pod is untouched.
 #   7. No-timestamp refusal: VMI stuck but has no
 #      deletionTimestamp — recovery refuses regardless
 #      of launcher state. Three sub-cases: no launcher
@@ -1518,13 +1518,13 @@
                 compute_instance_name }}-running
           failed_when: false
 
-# Scenario 6 — Cross-VMI identity boundary: a RUNNING
-# launcher pod labelled with a DIFFERENT VMI UID must not
-# be matched by the recovery selector.  Recovery should
-# see "launcher absent" (zero pods match) and proceed
-# with cleanup.  If the UID selector were omitted, this
-# Running pod would be matched, _launcher_terminal would
-# be false, and recovery would incorrectly refuse.
+# Scenario 6 — Cross-VMI identity boundary: a Running
+# pod with no ownerReferences and a mismatched
+# created-by label is excluded by vmi_owned_pods.
+# Recovery sees zero owned pods and proceeds with
+# cleanup.  If the ownership filter were removed, the
+# namespace pod list would include this Running pod
+# and _owned_pods_terminal would be false.
 
 - name: >-
     Scenario 6: Cross-VMI identity boundary
@@ -1625,25 +1625,16 @@
             .metadata.deletionTimestamp
             | default('')) == ''
 
-        - name: "S6: Capture VMI UID"
-          ansible.builtin.set_fact:
-            _s6_vmi_uid: >-
-              {{ s6_vmi_check.resources[0]
-                 .metadata.uid }}
-
         - name: >-
-            S6: Create Running pod with WRONG UID
-          # This pod has a non-controlling
-          # ownerReference pointing to our VMI (so
-          # Kubernetes GC keeps it alive) but its
-          # created-by label points to a different
-          # UID.  With no controller=true ref, the
-          # filter falls back to the label, which
-          # does not match the target VMI UID —
-          # so this pod is excluded from ownership.
-          # If the ownership filter were removed,
-          # the namespace-wide pod list would include
-          # this Running pod and block recovery.
+            S6: Create Running pod with wrong label
+          # No ownerReferences — avoids Kubernetes GC
+          # dependency on the target VMI.  The pod has
+          # a mismatched created-by label, so the
+          # vmi_owned_pods legacy fallback excludes it.
+          # If the ownership filter were removed, the
+          # namespace-wide pod list would include this
+          # Running pod and _owned_pods_terminal would
+          # be false, blocking recovery.
           kubernetes.core.k8s:
             state: present
             definition:
@@ -1657,13 +1648,6 @@
                   {{
                   compute_instance_target_namespace
                   }}
-                ownerReferences:
-                  - apiVersion: kubevirt.io/v1
-                    kind: VirtualMachineInstance
-                    name: >-
-                      {{ compute_instance_name }}
-                    uid: "{{ _s6_vmi_uid }}"
-                    controller: false
                 labels:
                   kubevirt.io: virt-launcher
                   kubevirt.io/created-by: >-
@@ -1696,21 +1680,29 @@
           delay: 2
 
         - name: >-
-            S6: Assert alien pod has wrong UID and is
-            Running
+            S6: Assert alien pod has no ownerRefs,
+            wrong label, and is Running
           ansible.builtin.assert:
             that:
+              - >-
+                s6_alien_wait.resources | length > 0
               - >-
                 s6_alien_wait.resources[0].status.phase
                 == 'Running'
               - >-
+                (s6_alien_wait.resources[0]
+                .metadata.ownerReferences
+                | default([]) | length) == 0
+              - >-
                 s6_alien_wait.resources[0]
-                .metadata.labels['kubevirt.io/created-by']
-                != (_s6_vmi_uid | trim)
+                .metadata.labels
+                ['kubevirt.io/created-by']
+                != (s6_vmi_check.resources[0]
+                .metadata.uid)
             fail_msg: >-
-              Alien launcher fixture must be Running
-              with a UID that differs from the target
-              VMI.
+              Alien pod must be Running with no
+              ownerReferences and a created-by label
+              that differs from the target VMI UID.
 
         - name: "S6: Create minimal VM fixture"
           kubernetes.core.k8s:
@@ -1832,9 +1824,9 @@
 
         - name: >-
             S6: Verify alien pod still Running
-          # The Running alien launcher must still exist
-          # and still be Running — the UID selector
-          # must not have matched it.
+          # The Running alien pod must still exist and
+          # be Running — vmi_owned_pods must not have
+          # included it.
           kubernetes.core.k8s_info:
             api_version: v1
             kind: Pod

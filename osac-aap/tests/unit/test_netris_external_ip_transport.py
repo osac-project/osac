@@ -1,4 +1,7 @@
+"""Exercise authenticated Ansible HTTP transport against loopback providers."""
+
 import contextlib
+import hmac
 import importlib.util
 import json
 import os
@@ -30,6 +33,7 @@ fixture_spec.loader.exec_module(netris_fixture)
 
 @contextlib.contextmanager
 def running_server(server):
+    """Serve loopback requests while guaranteeing thread and socket cleanup."""
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     try:
@@ -42,18 +46,21 @@ def running_server(server):
 
 @pytest.fixture
 def provider():
+    """Expose the shared session-enforcing provider on an ephemeral port."""
     with running_server(netris_fixture.NetrisFixtureServer()) as server:
         yield server
 
 
 @pytest.fixture
 def transport_module(tmp_path, monkeypatch):
+    """Supply real fetch_url parameters without proxying loopback traffic."""
     monkeypatch.setenv("no_proxy", "127.0.0.1")
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
     return SimpleNamespace(params={"use_netrc": False}, tmpdir=str(tmp_path))
 
 
 def client_for(server, module, session_cookie=None):
+    """Build the real client using the fixture session unless overridden."""
     return netris_eip.NetrisSubnetClient(
         module,
         f"http://127.0.0.1:{server.server_port}",
@@ -62,6 +69,7 @@ def client_for(server, module, session_cookie=None):
 
 
 def test_authenticated_get_post_delete(provider, transport_module):
+    """Require the initial session on each shared-client HTTP operation."""
     client = client_for(provider, transport_module)
 
     assert client.list_subnets() == []
@@ -76,6 +84,7 @@ def test_authenticated_get_post_delete(provider, transport_module):
 
 @pytest.mark.parametrize("operation", netris_eip.OPERATIONS)
 def test_reconcile_uses_authenticated_shared_client(provider, transport_module, operation):
+    """Exercise allocation and release reconciliation through real HTTP."""
     request = {
         "reservation_name": "transport-reservation",
         "cidr": "192.0.2.0/29",
@@ -101,11 +110,14 @@ def test_reconcile_uses_authenticated_shared_client(provider, transport_module, 
     ("POST", "/api/v2/ipam/subnet", {}),
     ("DELETE", "/api/v2/ipam/subnet/1", None),
 ])
-@pytest.mark.parametrize("cookie_present", [False, True])
+@pytest.mark.parametrize("cookie", [
+    None, "connect.sid=invalid-test-session", "connect.sid=invalid-\u00e9",
+], ids=["missing", "incorrect", "non-ascii"])
 def test_fixture_rejects_missing_or_incorrect_cookie(
-    provider, transport_module, method, path, body, cookie_present
+    provider, transport_module, method, path, body, cookie
 ):
-    headers = {"Cookie": "connect.sid=invalid-test-session"} if cookie_present else {}
+    """Reject missing, incorrect, and non-ASCII sessions before mutation."""
+    headers = {"Cookie": cookie} if cookie is not None else {}
     response, info = netris_eip.fetch_url(
         transport_module, f"http://127.0.0.1:{provider.server_port}{path}",
         method=method, headers=headers, data=json.dumps(body) if body is not None else None,
@@ -122,6 +134,7 @@ def test_fixture_rejects_missing_or_incorrect_cookie(
 def test_real_module_subprocess_uses_fixture_session(
     provider, transport_module, operation, authenticated
 ):
+    """Verify child-module authentication and sanitized errors without leaks."""
     if operation == "external_ip.release":
         provider.commit_subnet({
             "name": (
@@ -168,13 +181,20 @@ def test_real_module_subprocess_uses_fixture_session(
 
 
 class RedirectHandler(BaseHTTPRequestHandler):
+    """Expose redirect targets without retaining or logging session values."""
+
     def log_message(self, *args):
+        """Keep synthetic request details out of server logs."""
         pass
 
     def handle_request(self):
+        """Record transport facts and redirect only authenticated requests."""
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length) if length else b""
-        authenticated = self.headers.get("Cookie") == f"connect.sid={self.server.session_cookie}"
+        authenticated = hmac.compare_digest(
+            self.headers.get("Cookie", "").encode("utf-8"),
+            f"connect.sid={self.server.session_cookie}".encode("utf-8"),
+        )
         self.server.observations.append({
             "method": self.command,
             "authenticated": authenticated,
@@ -199,6 +219,25 @@ class RedirectHandler(BaseHTTPRequestHandler):
     do_DELETE = handle_request
 
 
+@pytest.mark.parametrize("cookie", [
+    None, "connect.sid=invalid-test-session", "connect.sid=invalid-\u00e9",
+], ids=["missing", "incorrect", "non-ascii"])
+def test_redirect_handler_rejects_invalid_session(transport_module, cookie):
+    """Return 401, not a redirect or server error, for invalid header text."""
+    with running_server(ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)) as server:
+        server.session_cookie = secrets.token_hex(16)
+        server.observations = []
+        response, info = netris_eip.fetch_url(
+            transport_module, f"http://127.0.0.1:{server.server_port}/start",
+            headers={"Cookie": cookie} if cookie is not None else {},
+        )
+        if response is not None:
+            response.close()
+        assert info["status"] == 401
+        assert len(server.observations) == 1
+        assert not server.observations[0]["authenticated"]
+
+
 @pytest.mark.parametrize("method,status,policy,followed", [
     ("GET", status, "urllib2", True) for status in (301, 302, 303, 307, 308)
 ] + [
@@ -211,6 +250,7 @@ class RedirectHandler(BaseHTTPRequestHandler):
 def test_real_redirect_transport_never_forwards_cookie(
     transport_module, method, status, policy, followed, cross_origin
 ):
+    """Strip the session on followed redirects without changing policy."""
     with contextlib.ExitStack() as stack:
         origin = stack.enter_context(running_server(ThreadingHTTPServer(
             ("127.0.0.1", 0), RedirectHandler

@@ -32,6 +32,7 @@ Usage (from osac-aap/):
 """
 
 import contextlib
+import hmac
 import json
 import os
 import secrets
@@ -102,7 +103,10 @@ class NetrisFixtureHandler(BaseHTTPRequestHandler):
         """Require the per-run session on provider endpoints only."""
         if not self.path.startswith("/api/"):
             return True
-        if self.headers.get("Cookie") == f"connect.sid={self.server.session_cookie}":
+        if hmac.compare_digest(
+            self.headers.get("Cookie", "").encode("utf-8"),
+            f"connect.sid={self.server.session_cookie}".encode("utf-8"),
+        ):
             return True
         self._respond(401, {"message": "authentication required"})
         return False

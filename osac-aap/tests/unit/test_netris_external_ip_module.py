@@ -1,3 +1,4 @@
+import hmac
 import importlib.util
 import io
 import json
@@ -316,9 +317,11 @@ def test_release_module_returns_empty_address(monkeypatch, capsys):
 
 
 def test_transport_configuration_is_passed_to_fetch_url(monkeypatch):
+    """Preserve session, redirect isolation, and caller transport settings."""
     captured = {}
 
     def fake_fetch_url(module, url, **kwargs):
+        """Capture transport arguments while returning an empty provider list."""
         captured["url"] = url
         captured["module"] = module
         captured.update(kwargs)
@@ -342,7 +345,10 @@ def test_transport_configuration_is_passed_to_fetch_url(monkeypatch):
 
     assert records == []
     assert captured["url"] == "https://netris.example/api/v2/ipam/subnets"
-    cookie_matches = captured["headers"].get("Cookie") == f"connect.sid={TEST_COOKIE}"
+    cookie_matches = hmac.compare_digest(
+        captured["headers"].get("Cookie", "").encode("utf-8"),
+        f"connect.sid={TEST_COOKIE}".encode("utf-8"),
+    )
     assert cookie_matches
     assert captured["unredirected_headers"] == ["Cookie"]
     assert "Content-Type" not in captured["headers"]
@@ -354,9 +360,11 @@ def test_transport_configuration_is_passed_to_fetch_url(monkeypatch):
 
 
 def test_session_cookie_is_marked_unredirected(monkeypatch):
+    """Pass only the Cookie header name to Ansible's redirect exclusion."""
     captured = {}
 
     def fake_fetch_url(module, url, **kwargs):
+        """Record redirect-exclusion arguments without sending a request."""
         captured.update(kwargs)
         return (io.BytesIO(json.dumps({"data": []}).encode()), {"status": 200})
 

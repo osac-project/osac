@@ -88,21 +88,35 @@ def test_ipv4_network_wraps_the_shared_parser_error():
 
 def test_reconcile_installs_explicit_snat_and_host_rules_before_route(monkeypatch):
     events = []
+    chains = {}
     gateway = gateway_state()
 
     monkeypatch.setattr(nat_gateway, "_validate_parent", lambda *_args: None)
-    monkeypatch.setattr(nat_gateway, "_ensure_shared_chain", lambda *args, **kwargs: events.append(("chain", *args)) or True)
+
+    def ensure_chain(table, _parent_chain, chain, **_kwargs):
+        events.append(("chain", table, chain))
+        chains[(table, chain)] = [["-j", "RETURN"]]
+        return True
+
+    monkeypatch.setattr(nat_gateway, "_ensure_shared_chain", ensure_chain)
+    monkeypatch.setattr(
+        nat_gateway,
+        "_chain_rules",
+        lambda table, chain, *, namespace=None: [] if namespace else chains.get((table, chain), []),
+    )
     monkeypatch.setattr(nat_gateway, "_verify_owned_forward_chain", lambda: None)
     monkeypatch.setattr(nat_gateway, "verify_snat_forwarding_hook", lambda: None)
     monkeypatch.setattr(nat_gateway, "verify_snat_bypass_hook", lambda: None)
     monkeypatch.setattr(nat_gateway, "_verify_bypass_chain", lambda: None)
     monkeypatch.setattr(nat_gateway, "_existing_snat_rules", lambda *_args: [])
-    monkeypatch.setattr(nat_gateway, "_owned_rules", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(
-        nat_gateway,
-        "_ensure_rule",
-        lambda table, chain, rule, **kwargs: events.append(("rule", table, chain, rule)) or True,
-    )
+
+    def ensure_rule(table, chain, rule, **_kwargs):
+        events.append(("rule", table, chain, rule))
+        rules = chains[(table, chain)]
+        rules.insert(rules.index(["-j", "RETURN"]), rule)
+        return True
+
+    monkeypatch.setattr(nat_gateway, "_ensure_rule", ensure_rule)
 
     def ensure_rules(_runner, table, chain, rules, **_kwargs):
         for rule in rules:

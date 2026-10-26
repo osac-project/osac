@@ -123,6 +123,8 @@ def _rule_comment(rule: list[str]) -> str:
 def _owned_rules(table: str, chain: str, uid: str, *, namespace: str | None = None):
     owned = []
     for rule in _chain_rules(table, chain, namespace=namespace):
+        if rule == ["-j", "RETURN"]:
+            continue
         comment = _rule_comment(rule)
         match = OWNER_COMMENT.fullmatch(comment)
         if match is None:

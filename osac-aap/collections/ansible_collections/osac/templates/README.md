@@ -86,6 +86,48 @@ Templates are deployed through the OSAC fulfillment service, not directly via
 ansible-playbook. The OSAC orchestrator handles template selection, parameter
 validation, and lifecycle management.
 
+## Network Fabric Role (Netris)
+
+The `netris` role is the Fabric Manager for Netris-backed deployments. It
+lives at `roles/netris` and implements the network manager integration
+contract
+(`enhancement-proposals/enhancements/OSAC-1433-network-manager-integration-contract-networking/design.md`).
+
+Task entry points, one file each under `roles/netris/tasks`:
+
+- VirtualNetwork: `create_virtual_network`, `delete_virtual_network`
+- Subnet: `create_subnet`, `delete_subnet`
+- SecurityGroup: `create_security_group`, `delete_security_group`
+- Attachments: `apply_network_attachment`, `delete_network_attachment`,
+  `query_dhcp_lease`
+- CaaS ingress: `reserve_cluster_ingress_ip`, `release_cluster_ingress_ip`
+- ExternalIP family: `create_external_ip_pool`, `delete_external_ip_pool`,
+  `create_external_ip`, `delete_external_ip`, `attach_external_ip`,
+  `detach_external_ip`, `create_nat_gateway`, `delete_nat_gateway`
+- FabricDomain: `create_fabric_domain`, `delete_fabric_domain`
+
+Each task accepts one `osac_job_vars` envelope, publishes only its typed
+`osac_result`, and publishes `osac_error {message, retryable}` on failure.
+The rule and address mapping is shared:
+
+- `plugins/filter/security_group_plan.py` maps SecurityGroup rules to the
+  contract ACL intent and rejects rules Netris cannot enforce exactly.
+- `plugins/filter/subnet_dhcp_plan.py` derives the Fabric gateway and DHCP
+  pool from the supplied `ipam`.
+- `plugins/modules/netris_external_ip.py` and
+  `plugins/modules/netris_cluster_ingress.py` own the `/32` reservations.
+
+Documented no-ops: the Fabric SecurityGroup create/delete and the
+SecurityGroup bind, and the overlay attachment path. Netris v1 ACLs need a
+Subnet CIDR, so per-subnet materialization belongs with the physical bind.
+See `docs/features/netris-caas-networking.md` and
+`osac-installer/docs/network-backend.md` for the enforcement consequences.
+
+`roles/netris/tasks/_contract_input.yaml` is the temporary legacy
+translator: it normalizes the previous raw-CR payload until the shared
+dispatch sends `osac_job_vars`. It is the only shape-aware file and is
+deleted with the legacy-only task files when that dispatch lands.
+
 ## Template Development
 
 ### Creating a New Cluster Template

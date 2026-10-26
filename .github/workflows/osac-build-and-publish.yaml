@@ -2858,9 +2858,17 @@ jobs:
         for COMPONENT in $(printf '%s\n' "${!CHART_CONTEXTS[@]}" | sort); do
           COMPONENT_VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k] // empty' <<<"${COMPONENT_VERSIONS}")
           if [[ -z "${COMPONENT_VERSION}" ]]; then
+            # A warn-and-skip here would let this job proceed to commit,
+            # push, and tag anyway -- publishing this chart to the real
+            # stage registry still pointing at whatever stale reference was
+            # already there, with no visible failure. Every tracked
+            # component always has either a bumped or pinned resolved
+            # version by prepare's own invariant, so this should never
+            # happen; if it ever does, fail loudly instead of silently
+            # shipping a wrong/stale chart.
             safe_component=$(_gha_sanitize_for_message "${COMPONENT}")
-            echo "::warning::Skipping ${safe_component} chart image stamp — no resolved version"
-            continue
+            echo "::error::No resolved version for ${safe_component} -- refusing to stamp or publish charts" >&2
+            exit 1
           fi
           TARGET_IMAGE="${REGISTRY_IMAGES[${COMPONENT}]}:${COMPONENT_VERSION}"
           VALUES_FILE="${CHART_CONTEXTS[${COMPONENT}]}/values.yaml"
@@ -2909,7 +2917,17 @@ jobs:
         for COMPONENT in $(printf '%s\n' "${!CHART_CONTEXTS[@]}" | sort); do
           [[ "${COMPONENT}" == "osac-csi-driver" ]] && continue
           COMPONENT_VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k] // empty' <<<"${COMPONENT_VERSIONS}")
-          [[ -z "${COMPONENT_VERSION}" ]] && continue
+          if [[ -z "${COMPONENT_VERSION}" ]]; then
+            # Same reasoning as the per-chart stamping loop above: this
+            # component's own CHART_CONTEXTS iteration already exited the
+            # whole script before reaching here if its version was ever
+            # actually missing, so this is unreachable in practice -- kept
+            # as a loud failure, not a silent skip, rather than relying on
+            # that ordering.
+            safe_component=$(_gha_sanitize_for_message "${COMPONENT}")
+            echo "::error::No resolved version for ${safe_component} -- refusing to stamp or publish charts" >&2
+            exit 1
+          fi
           TARGET_IMAGE="${REGISTRY_IMAGES[${COMPONENT}]}:${COMPONENT_VERSION}"
           case "${COMPONENT}" in
           osac-aap)

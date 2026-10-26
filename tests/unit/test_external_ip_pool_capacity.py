@@ -48,7 +48,7 @@ def test_capacity_consumers_wait_for_natural_deletion_before_reading_capacity(
     def read_resource(*args: str) -> tuple[str, int]:
         """Model canonical kubectl output until each tracked IP naturally disappears."""
         name = args[3]
-        assert args == ("kubectl", "get", "externalips", name, "-n", "test")
+        assert args == ("kubectl", "get", "externalips.osac.openshift.io", name, "-n", "test")
         expected_ip = ("ip-first", "cr-first") if name == "cr-first" else ("ip-last", "cr-last")
         assert expected_ip in tracked
         assert grpc.delete_external_ip.call_args_list == (
@@ -62,7 +62,7 @@ def test_capacity_consumers_wait_for_natural_deletion_before_reading_capacity(
         return (
             ("resource still present", 0)
             if present
-            else (f'Error from server (NotFound): externalips "{name}" not found', 1)
+            else (f'Error from server (NotFound): externalips.osac.openshift.io "{name}" not found', 1)
         )
 
     def read_capacity(*, pool_id: str) -> dict[str, object]:
@@ -110,10 +110,10 @@ def test_capacity_consumers_retain_pending_ips_on_natural_deletion_timeout(
     def read_resource(*args: str) -> tuple[str, int]:
         """Leave the pending IP present after any earlier sibling's confirmed removal."""
         name = args[3]
-        assert args == ("kubectl", "get", "externalips", name, "-n", "test")
+        assert args == ("kubectl", "get", "externalips.osac.openshift.io", name, "-n", "test")
         if releasing_one or name == "cr-last":
             return "resource still present", 0
-        return f'Error from server (NotFound): externalips "{name}" not found', 1
+        return f'Error from server (NotFound): externalips.osac.openshift.io "{name}" not found', 1
 
     monkeypatch.setattr("tests.e2e.core.k8s_client.run_unchecked", read_resource)
     refill = Mock()
@@ -169,7 +169,11 @@ def test_external_ip_deletion_requires_confirmed_absence(
     monkeypatch: pytest.MonkeyPatch, clock: list[float], absent: bool
 ) -> None:
     """Accept only exact canonical NotFound; a successful read must keep waiting."""
-    output = 'Error from server (NotFound): externalips "cr-first" not found' if absent else "resource still present"
+    output = (
+        'Error from server (NotFound): externalips.osac.openshift.io "cr-first" not found'
+        if absent
+        else "resource still present"
+    )
     read = Mock(return_value=(output, 1 if absent else 0))
     monkeypatch.setattr("tests.e2e.core.k8s_client.run_unchecked", read)
     k8s = K8sClient(namespace="test", as_system_admin=False)
@@ -181,9 +185,81 @@ def test_external_ip_deletion_requires_confirmed_absence(
             helpers.wait_for_external_ip_deletion(k8s=k8s, name="cr-first")
 
     assert clock[0] == (0 if absent else 595)
-    assert read.call_args_list == [call("kubectl", "get", "externalips", "cr-first", "-n", "test")] * (
-        1 if absent else 120
+    assert read.call_args_list == [
+        call("kubectl", "get", "externalips.osac.openshift.io", "cr-first", "-n", "test")
+    ] * (1 if absent else 120)
+
+
+def test_external_ip_deletion_accepts_present_then_qualified_not_found(
+    monkeypatch: pytest.MonkeyPatch, clock: list[float]
+) -> None:
+    """Recognize real kubectl's qualified NotFound only after the present IP disappears."""
+    read = Mock(
+        side_effect=[
+            ("resource still present", 0),
+            ('Error from server (NotFound): externalips.osac.openshift.io "cr-first" not found', 1),
+        ]
     )
+    monkeypatch.setattr("tests.e2e.core.k8s_client.run_unchecked", read)
+
+    helpers.wait_for_external_ip_deletion(k8s=K8sClient(namespace="test", as_system_admin=False), name="cr-first")
+
+    assert clock[0] == 5
+    assert (
+        read.call_args_list == [call("kubectl", "get", "externalips.osac.openshift.io", "cr-first", "-n", "test")] * 2
+    )
+
+
+def test_successive_capacity_consumers_do_not_retry_confirmed_deletion(
+    monkeypatch: pytest.MonkeyPatch, clock: list[float]
+) -> None:
+    """Release tracking after qualified absence so the later consumer deletes only remaining IPs."""
+    grpc = Mock(spec=GRPCClient)
+    private_grpc = Mock(spec=GRPCClient)
+    k8s = K8sClient(namespace="test", as_system_admin=False)
+    tracked = [("ip-first", "cr-first"), ("ip-last", "cr-last")]
+    read = Mock(
+        side_effect=[
+            response
+            for name in ["cr-first", "cr-last", "cr-refill"]
+            for response in [
+                ("resource still present", 0),
+                (f'Error from server (NotFound): externalips.osac.openshift.io "{name}" not found', 1),
+            ]
+        ]
+    )
+    monkeypatch.setattr("tests.e2e.core.k8s_client.run_unchecked", read)
+    private_grpc.get_external_ip_pool.side_effect = [
+        {"object": {"status": {"total": "2", "allocated": str(allocated), "available": str(2 - allocated)}}}
+        for allocated in [1, 2, 0]
+    ]
+    refill = Mock(return_value=("ip-refill", "cr-refill"))
+    monkeypatch.setattr(capacity, "create_ip", refill)
+    pool_wait = Mock()
+    monkeypatch.setattr(capacity, "wait_for_external_ip_pool_deletion", pool_wait)
+    consumers = capacity.TestPoolCapacity()
+
+    consumers.test_release_restores_capacity(
+        small_pool=("pool-id", "pool-cr"), grpc=grpc, private_grpc=private_grpc, k8s_hub_client=k8s, created_ips=tracked
+    )
+    assert tracked == [("ip-last", "cr-last"), ("ip-refill", "cr-refill")]
+    consumers.test_pool_deletion_succeeds_after_all_ips_released(
+        small_pool=("pool-id", "pool-cr"), grpc=grpc, private_grpc=private_grpc, k8s_hub_client=k8s, created_ips=tracked
+    )
+
+    assert tracked == []
+    assert clock[0] == 15
+    assert grpc.delete_external_ip.call_args_list == [
+        call(external_ip_id=name) for name in ["ip-first", "ip-last", "ip-refill"]
+    ]
+    assert read.call_args_list == [
+        call("kubectl", "get", "externalips.osac.openshift.io", name, "-n", "test")
+        for name in ["cr-first", "cr-last", "cr-refill"]
+        for _ in range(2)
+    ]
+    refill.assert_called_once_with(grpc, k8s, "pool-id")
+    private_grpc.delete_external_ip_pool.assert_called_once_with(pool_id="pool-id")
+    pool_wait.assert_called_once_with(k8s=k8s, name="pool-cr")
 
 
 @pytest.mark.parametrize(
@@ -191,10 +267,12 @@ def test_external_ip_deletion_requires_confirmed_absence(
     [
         "Error from server (Forbidden): externalips is forbidden",
         "Unable to connect to the server: connection refused",
-        'Error from server (NotFound): secrets "cr-first" not found',
-        'Error from server (NotFound): externalips "other-ip" not found',
+        'Error from server (NotFound): secrets.osac.openshift.io "cr-first" not found',
+        'Error from server (NotFound): externalips.other.example "cr-first" not found',
+        'Error from server (NotFound): externalips.osac.openshift.io "other-ip" not found',
+        'Error from server (NotFound): externalips "cr-first" not found',
     ],
-    ids=["forbidden", "connection-error", "wrong-resource", "wrong-name"],
+    ids=["forbidden", "connection-error", "wrong-resource", "wrong-group", "wrong-name", "unqualified-resource"],
 )
 def test_capacity_consumers_preserve_tracking_on_unconfirmed_absence(
     monkeypatch: pytest.MonkeyPatch, clock: list[float], consumer: Callable[..., None], output: str
@@ -223,7 +301,7 @@ def test_capacity_consumers_preserve_tracking_on_unconfirmed_absence(
     assert exc_info.value.stderr == output
     assert clock[0] == 0
     assert tracked == [("ip-first", "cr-first"), ("ip-last", "cr-last")]
-    read.assert_called_once_with("kubectl", "get", "externalips", "cr-first", "-n", "test")
+    read.assert_called_once_with("kubectl", "get", "externalips.osac.openshift.io", "cr-first", "-n", "test")
     private_grpc.get_external_ip_pool.assert_not_called()
     private_grpc.delete_external_ip_pool.assert_not_called()
     refill.assert_not_called()

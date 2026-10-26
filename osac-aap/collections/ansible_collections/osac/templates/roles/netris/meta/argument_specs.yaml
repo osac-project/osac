@@ -171,3 +171,19 @@ argument_specs:
         description: Template-specific parameters (reserved for future use)
         options: {}
         default: {}
+
+  create_fabric_domain:
+    options:
+      template_parameters:
+        type: dict
+        description: Template-specific parameters (reserved for future use)
+        options: {}
+        default: {}
+
+  delete_fabric_domain:
+    options:
+      template_parameters:
+        type: dict
+        description: Template-specific parameters (reserved for future use)
+        options: {}
+        default: {}

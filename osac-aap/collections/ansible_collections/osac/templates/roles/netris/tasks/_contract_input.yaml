@@ -78,6 +78,8 @@
       delete_nat_gateway: nat_gateway
       create_server_cluster: server_cluster
       delete_server_cluster: server_cluster
+      create_fabric_domain: server_cluster
+      delete_fabric_domain: server_cluster
       move_network_attachment: network_attachment
       query_dhcp_lease: network_attachment
 

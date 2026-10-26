@@ -39,9 +39,9 @@ jobs:
       id-token: write
       checks: write
       pull-requests: read
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-stretched-netris-full-install.yml@main
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-stretched-netris-full-install.yml@3ab19243e171a74a2c9560d8e740978542377773
     with:
-      suite: stretched_networking
+      suite: stretched
       osac-profile: full-ci
       osac-repo: https://github.com/${{ inputs.repo }}.git
       osac-branch: ${{ inputs.sha }}
@@ -53,7 +53,8 @@ jobs:
         { "repo": "${{ inputs.repo }}", "ref": "${{ inputs.sha }}", "containerfile": "osac-aap/execution-environment/execution-environment.yaml", "context": ".", "imageKey": "aap.configAsCode.eeImage", "buildType": "ansible-builder" }
         ]
       test-infra-repository: osac-project/osac-test-infra
-      test-infra-ref: main
+      test-infra-ref: 3ab19243e171a74a2c9560d8e740978542377773
+      test-infra-sha: 3ab19243e171a74a2c9560d8e740978542377773
       pr-repository: ${{ inputs.pr-number != '' && inputs.repo || '' }}
       pr-sha: ${{ inputs.pr-number != '' && inputs.sha || '' }}
       pr-number: ${{ inputs.pr-number }}

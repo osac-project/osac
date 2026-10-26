@@ -3,6 +3,11 @@
 # Creates an SNAT rule on the SoftGate: VN CIDR -> ExternalIP address
 # All egress from the VirtualNetwork is source-NATted to the ExternalIP
 
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: create_nat_gateway
+
 - name: Validate NATGateway annotations
   ansible.builtin.assert:
     that:

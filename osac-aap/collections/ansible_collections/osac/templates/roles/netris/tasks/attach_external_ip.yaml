@@ -4,6 +4,11 @@
 # Resolves the external IP address from the ExternalIP CR (same model as
 # ExternalIP resolving from ExternalIPPool)
 
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: attach_external_ip
+
 - name: Validate ExternalIPAttachment annotations
   ansible.builtin.assert:
     that:

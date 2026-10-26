@@ -4,6 +4,11 @@
 # tasks, explicit v1 routes to the shared v1 tasks, and any other
 # nonempty version fails before any provider I/O.
 
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: create_external_ip
+
 - name: Resolve ExternalIP contract version
   ansible.builtin.set_fact:
     eip_contract_version: >-

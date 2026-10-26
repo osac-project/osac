@@ -10,6 +10,11 @@
 # Output: accumulates one entry per attachment into the _dhcp_leases fact,
 #         which the playbook publishes as the job's leases artifact.
 
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: query_dhcp_lease
+
 - name: Extract network attachment configuration
   ansible.builtin.set_fact:
     _dq_host_name: "{{ network_attachment.host_name }}"

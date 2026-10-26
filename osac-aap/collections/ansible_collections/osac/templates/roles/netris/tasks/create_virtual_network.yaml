@@ -2,6 +2,11 @@
 # VirtualNetwork maps to a Netris VPC + IPAM allocation
 # Creates a VPC (routing domain) and an IPAM allocation for the VN's CIDR
 
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: create_virtual_network
+
 - name: Extract VirtualNetwork configuration
   ansible.builtin.set_fact:
     vn_name: "{{ virtual_network.metadata.name }}"

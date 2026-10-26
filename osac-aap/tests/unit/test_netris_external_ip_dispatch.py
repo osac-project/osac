@@ -127,10 +127,13 @@ def test_unknown_version_routes_to_no_provider_work() -> None:
     """Both routing includes must be false for a nonempty unknown version."""
     for name in ("create_external_ip", "delete_external_ip"):
         tasks = _tasks(name)
+        # The input normalizer performs no provider work, so only the
+        # provider dispatch includes must carry the version guard.
         includes = [
             task
             for task in tasks
             if task.get("ansible.builtin.include_tasks") is not None
+            and not str(task["ansible.builtin.include_tasks"]).startswith("_contract_input")
         ]
         assert includes, f"{name} must dispatch through included task files"
         for include in includes:

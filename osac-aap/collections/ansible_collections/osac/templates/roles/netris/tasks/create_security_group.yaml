@@ -8,6 +8,11 @@
 # Stale-rule prune / desired-state reconcile when ingress/egress change is
 # OSAC-4888 (out of scope). Attached-subnet scoping is OSAC-4925.
 
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: create_security_group
+
 - name: Extract SecurityGroup configuration
   ansible.builtin.set_fact:
     sg_name: "{{ security_group.metadata.name }}"

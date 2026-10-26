@@ -2,6 +2,11 @@
 # Subnet maps to a Netris IPAM subnet + V-Net
 # Creates an IPAM subnet under the parent VN's allocation, then a V-Net with gateway
 
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: create_subnet
+
 - name: Extract Subnet configuration
   ansible.builtin.set_fact:
     subnet_name: "{{ subnet.metadata.name }}"

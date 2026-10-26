@@ -1,6 +1,11 @@
 ---
 # VirtualNetwork deletion - removes IPAM allocation first, then VPC
 
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: delete_virtual_network
+
 - name: Extract VirtualNetwork name
   ansible.builtin.set_fact:
     vn_name: "{{ virtual_network.metadata.name }}"

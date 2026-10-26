@@ -2,6 +2,11 @@
 # ExternalIPPool maps to Netris IPAM allocations (CIDR containers)
 # Individual ExternalIPs create /32 subnets (purpose=nat) inside these allocations
 
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: create_external_ip_pool
+
 - name: Extract ExternalIPPool configuration
   ansible.builtin.set_fact:
     pool_name: "{{ external_ip_pool.metadata.name }}"

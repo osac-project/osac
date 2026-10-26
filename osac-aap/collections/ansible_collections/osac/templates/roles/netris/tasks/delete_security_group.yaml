@@ -4,6 +4,11 @@
 # (sg-ingress-N-M) for backward compatibility during transition.
 # Desired-state prune of stale ACL rows is OSAC-4888 (out of scope here).
 
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: delete_security_group
+
 - name: Extract SecurityGroup configuration
   ansible.builtin.set_fact:
     sg_name: "{{ security_group.metadata.name }}"

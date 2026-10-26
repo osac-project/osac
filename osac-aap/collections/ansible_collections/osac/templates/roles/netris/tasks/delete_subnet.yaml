@@ -1,6 +1,11 @@
 ---
 # Subnet deletion - removes its V-Net, child prefix, then parent IPAM subnet.
 
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: delete_subnet
+
 - name: Extract Subnet identity
   ansible.builtin.set_fact:
     subnet_name: "{{ subnet.metadata.name }}"

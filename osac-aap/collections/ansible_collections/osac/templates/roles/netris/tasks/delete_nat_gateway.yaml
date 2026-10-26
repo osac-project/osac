@@ -1,6 +1,11 @@
 ---
 # NATGateway deletion — removes the SNAT rule from Netris
 
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: delete_nat_gateway
+
 - name: Extract NATGateway name
   ansible.builtin.set_fact:
     natgw_name: "{{ nat_gateway.metadata.name }}"

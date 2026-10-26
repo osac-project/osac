@@ -10,6 +10,11 @@
 # - Interrupted after detach before attach → rerun completes attach
 # Attach/detach helpers assert membership post-conditions.
 
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: move_network_attachment
+
 - name: Extract move configuration
   ansible.builtin.set_fact:
     na_host_name: "{{ network_attachment.host_name }}"

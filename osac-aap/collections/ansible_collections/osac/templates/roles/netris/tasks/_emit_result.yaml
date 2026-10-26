@@ -1,0 +1,11 @@
+---
+# Publishes the task's typed output. A task without a typed output publishes
+# nothing, so a successful play is its result.
+
+- name: Publish the typed result
+  ansible.builtin.set_stats:
+    data: >-
+      {{ {'osac_result': _osac_result_data} }}
+    per_host: false
+    aggregate: false
+  when: _osac_result_data | default({}) | length > 0

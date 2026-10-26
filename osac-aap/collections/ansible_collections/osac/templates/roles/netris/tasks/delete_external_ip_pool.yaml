@@ -2,6 +2,11 @@
 # ExternalIPPool deletion — removes common subnets and IPAM allocations for the pool
 # Child /32 subnets (ExternalIPs) must be deleted before the allocation
 
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: delete_external_ip_pool
+
 - name: Extract ExternalIPPool configuration
   ansible.builtin.set_fact:
     pool_name: "{{ external_ip_pool.metadata.name }}"

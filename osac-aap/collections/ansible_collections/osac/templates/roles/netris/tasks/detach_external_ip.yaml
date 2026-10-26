@@ -1,6 +1,11 @@
 ---
 # ExternalIPAttachment deletion — removes the DNAT rule from Netris
 
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: detach_external_ip
+
 - name: Validate ExternalIPAttachment ownership annotations
   ansible.builtin.assert:
     that:

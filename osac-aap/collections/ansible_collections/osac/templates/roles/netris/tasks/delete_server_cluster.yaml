@@ -1,4 +1,9 @@
 ---
+
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: delete_server_cluster
 - name: Validate ServerCluster deletion identity
   ansible.builtin.assert:
     that:

@@ -644,7 +644,13 @@ metering:
 - **The off-cluster metering extension is experimental.** The Secret-name
   convention plus `clusterNamespace` pointing at a plain namespace is a
   lab-validated extension, not an upstream-supported path; re-verify it
-  after every chart upgrade.
+  after every chart upgrade. Nothing reconciles this wiring for you —
+  you own, by hand: the metering topics (A.5 `mk_topic`), the
+  `osac-metering` Kafka user and its SCRAM credential (including
+  rotation — update both the broker and the Secret in
+  `clusterNamespace` together), and the billing adapters downstream of
+  the metering consumer. If any of that is unacceptable, disable
+  metering or run the broker Strimzi-managed (the options above).
 
 On a clean install these values and objects are in place before the first
 `helm install`. On a running deployment, apply the objects, then one
@@ -888,7 +894,7 @@ camelCase 404s and prove nothing.
 | PostgreSQL | nightly online `pg_dumpall \| gzip` | none | 14 |
 | OpenBao | stop → tar data dir → start → health check | seconds of downtime | 14 |
 | Keycloak | partial exports (realm/users/orgs/LDAP) + data-dir tar with brief stop | ~40 s | 7 JSON / 3 tars |
-| Kafka | none — event log with retention; the heartbeat canary is the health alarm | — | — |
+| Kafka | none — event log, see the event-loss policy below | — | — |
 
 Stagger the cron times so nothing overlaps; have each script verify its own
 output (a backup that silently produced nothing is worse than none). Know
@@ -900,6 +906,28 @@ as root-only, and add an encryption layer (gpg, age) before copies leave
 the services host. The scripts, restore procedures, and the rollback
 matrix are collected in
 [Appendix B.3](#b3-backup-restore-and-rollback).
+
+**Kafka event-loss policy.** "No backup" needs an explicit recovery
+contract, not silence. Metering events are **not re-derivable** — once
+consumed, nothing in OSAC can regenerate them. Recovery is therefore
+bounded by what the broker itself retains:
+
+- a broker that survives (disk intact) loses nothing; the §6.3 canary and
+  consumer-lag checks are the detection alarm;
+- a broker that loses its storage loses every event not yet consumed,
+  plus anything older than topic retention. Mitigations, in ascending
+  cost: raise retention on the metering topics, mirror the few topics
+  that matter to a second broker, or accept the loss for events whose
+  only consumer is the billing pipeline.
+
+Decide which tier you are in **before** a failure, and write the choice
+down next to the topic configuration (A.5, `mk_topic` retention).
+
+**Verify by restoring.** A backup is not verified until it has been
+restored once. After first setup — and after any backup-script change —
+rehearse each B.3 restore into a scratch target (a throwaway database,
+a stopped OpenBao on another port, a scratch Keycloak container) and
+confirm the data lands. Untested backups are a hypothesis.
 
 ---
 
@@ -1642,6 +1670,16 @@ tenant directory, run sync, create the organizations (their names must
 match the fulfillment tenants — the platform maps the token's
 `organization` claim to a tenant by name), assign memberships, and grant
 the tenant-admin role.
+
+One consistency caveat: `kc.sh export` is only a supported operation on
+a server Keycloak considers isolated — running it against the live pod
+works in practice for a single-node, quiesced instance, but the
+supported shape is to scale the bundled StatefulSet to zero first (as
+B.3.3's backup does for its data-dir tar) and run the export from a
+short-lived second container pointed at the same database, so nothing
+writes to the realm mid-export. If you export against the running pod,
+quiesce the writers first (B.2.1 step 1) and treat the result as
+point-in-time, not transactional.
 
 #### B.2.4 Kafka
 

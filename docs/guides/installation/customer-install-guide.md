@@ -273,6 +273,9 @@ Required for a production deployment:
   chart's Certificate resources. Do not pre-create these four Secrets for
   this installation. For manual database preparation, see
   [Prepare external PostgreSQL](helm-deployment-guide.md#prepare-external-postgresql).
+  For end-to-end external-database wiring — identity and certificate
+  requirements, and values — see the
+  [external services support guide](external-services-support-guide.md).
 - **An external secret store.** The bundled OpenBao instance is for testing and
   CI, not production. Before installing the `osac` chart, prepare Vault or
   OpenBao, its Keycloak client, and the Kubernetes Secret and CA bundle used by

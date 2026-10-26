@@ -819,9 +819,6 @@ oc -n osac-infra patch endpoints postgres --type=merge \
 #      ports targetPort 8443, endpoints, slice delete, bundled
 #      keycloak-service held at 0
 
-# [2] deployment env patches the chart version lacks (OAuth wiring, …)
-#     check-first: only patch when the env key is absent
-
 # [N] verification tail: rollout status of every osac deployment,
 #     endpoints IPs, can-i probes — fail loudly on any regression
 ```
@@ -832,7 +829,6 @@ What belongs in it, and when each line retires:
 |---|---|
 | PG selectorless svc + Endpoints + slice re-mirror | converged to the `dbInit.host` supported path |
 | Keycloak selectorless svc + Endpoints (pattern C) | converged to the §5.2 external-issuer path |
-| operator/metering OAuth env | chart pin ≥ the OAuth wiring revision |
 | chart-bug workarounds (envoy ALPN order, operator memory, missing RBAC rules) | the corresponding upstream fixes ship |
 | rollout + wiring verification | never — this part is the point |
 
@@ -1520,21 +1516,6 @@ and keep a rollback point at every step.
   procedures are in [B.3](#b3-backup-restore-and-rollback).
 - Quiesce the writers: scale down the osac deployments, keeping a record
   of replica counts to restore.
-
-> **Chart prerequisite:** the operator and metering deployments must be
-> rendered by a chart pin that includes the OAuth client-credentials
-> wiring. Older pins authenticate the operator to the fulfillment API
-> with its service-account token only — sufficient while everything is
-> bundled, but not after the services move — so on such pins both
-> deployments crashloop following any database migration until the
-> credentials are patched in (env `OSAC_FULFILLMENT_CLIENT_ID` /
-> `OSAC_FULFILLMENT_CLIENT_SECRET` + `--fulfillment-ca-file` for the
-> operator; a credentials volume + issuer/client env for metering).
-> Check your pin before migrating — if
-> `helm template <chart> -n osac | grep OSAC_FULFILLMENT_CLIENT_ID`
-> renders nothing, it predates the wiring — and prefer upgrading to a
-> current chart pin first; that is the durable fix. Hand-patching the
-> env and volume is a stopgap for pins you cannot upgrade.
 
 ### B.2 Per-service migration
 

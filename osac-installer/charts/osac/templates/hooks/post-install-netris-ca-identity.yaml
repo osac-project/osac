@@ -15,13 +15,23 @@ spec:
     metadata:
       labels:
         {{- include "osac.labels" . | nindent 8 }}
+      annotations:
+        openshift.io/required-scc: restricted-v2
     spec:
+      securityContext:
+        runAsNonRoot: true
+        {{- if not (.Capabilities.APIVersions.Has "security.openshift.io/v1") }}
+        runAsUser: 1000
+        fsGroup: 1000
+        {{- end }}
       restartPolicy: Never
       serviceAccountName: {{ include "osac.fullname" . }}-netris-ca-validate
       containers:
       - name: validate
         image: {{ .Values.cliImage }}
         env:
+        - name: HOME
+          value: /tmp
         - name: CA_CONFIGMAP_NAME
           value: {{ .Values.global.networking.netris.caBundle.configMap | quote }}
         - name: AAP_NAMESPACE
@@ -38,5 +48,16 @@ spec:
           echo "=== Netris CA Identity Validation ==="
 {{ .Files.Get "files/validate-netris-ca.sh" | nindent 10 }}
           echo "=== Identity validation passed ==="
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: tmp
+        emptyDir: {}
   backoffLimit: 0
 {{- end }}

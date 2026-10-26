@@ -38,7 +38,7 @@ ULKdaH227+yyTwMvdpqkwCYQ1zMNJDroR+dsfkzVhLiWA73SUtoobklzdpqaMmwK
 -----END CERTIFICATE-----
 """
 
-NETRIS_ARGS = [
+FIXTURE_NETRIS_ARGS = [
     "--set",
     "global.networking.fabricManager=netris",
     "--set",
@@ -46,9 +46,9 @@ NETRIS_ARGS = [
     "--set-string",
     "global.networking.netris.controllerUrl=https://netris.example.test",
     "--set-string",
-    "global.networking.netris.credentials.username=test",
-    "--set-string",
-    "global.networking.netris.credentials.password=test",
+    "global.networking.netris.credentials.username=osac-lifecycle-fixture",
+    "--set",
+    "global.networking.netris.credentials.externalSecret=true",
     "--set-string",
     "global.networking.netris.siteId=1",
     "--set-string",
@@ -101,20 +101,20 @@ def env_of(job: dict) -> dict[str, str]:
 
 class RenderContractTests(unittest.TestCase):
     def test_no_ca_resources_when_config_map_is_empty(self) -> None:
-        docs = documents(render(*NETRIS_ARGS))
+        docs = documents(render(*FIXTURE_NETRIS_ARGS))
         names = {doc.get("metadata", {}).get("name", "") for doc in docs}
         self.assertFalse([name for name in names if "netris-ca" in name])
 
     def test_validation_disabled_omits_validator_resources(self) -> None:
         docs = documents(
-            render(*NETRIS_ARGS, *CA_ARGS, "--set", "validation.enabled=false")
+            render(*FIXTURE_NETRIS_ARGS, *CA_ARGS, "--set", "validation.enabled=false")
         )
         names = {doc.get("metadata", {}).get("name", "") for doc in docs}
         self.assertFalse([name for name in names if "netris-ca-validate" in name])
         self.assertFalse([name for name in names if "identity-validate" in name])
 
     def test_validation_hooks_and_validator_rbac(self) -> None:
-        docs = documents(render(*NETRIS_ARGS, *CA_ARGS))
+        docs = documents(render(*FIXTURE_NETRIS_ARGS, *CA_ARGS))
 
         pre_install = find(docs, "Job", "osac-pre-install-validate")
         pre_command = command_of(pre_install)
@@ -136,6 +136,27 @@ class RenderContractTests(unittest.TestCase):
             identity["metadata"]["annotations"]["helm.sh/hook-weight"], "0"
         )
         self.assertEqual(env_of(identity)["CHECK_IDENTITY"], "true")
+
+        for job in (pre_install, identity):
+            pod_spec = job["spec"]["template"]["spec"]
+            pod_security = pod_spec["securityContext"]
+            container = pod_spec["containers"][0]
+            container_security = container["securityContext"]
+            self.assertEqual(
+                job["spec"]["template"]["metadata"]["annotations"][
+                    "openshift.io/required-scc"
+                ],
+                "restricted-v2",
+            )
+            self.assertTrue(pod_security["runAsNonRoot"])
+            self.assertEqual(pod_security["runAsUser"], 1000)
+            self.assertFalse(container_security["allowPrivilegeEscalation"])
+            self.assertTrue(container_security["readOnlyRootFilesystem"])
+            self.assertEqual(container_security["capabilities"]["drop"], ["ALL"])
+            self.assertEqual(
+                [mount for mount in container["volumeMounts"] if mount["mountPath"] == "/tmp"],
+                [{"name": "tmp", "mountPath": "/tmp"}],
+            )
 
         hook_role = find(docs, "ClusterRole", "osac-validate-default")
         self.assertFalse(
@@ -172,7 +193,7 @@ class RenderContractTests(unittest.TestCase):
         )
 
     def test_ca_read_grant_is_scoped_to_osac_sa(self) -> None:
-        docs = documents(render(*NETRIS_ARGS, *CA_ARGS))
+        docs = documents(render(*FIXTURE_NETRIS_ARGS, *CA_ARGS))
         role = find(docs, "Role", "osac-netris-ca-read")
         self.assertEqual(role["rules"][0]["resourceNames"], ["customer-netris-ca"])
         self.assertEqual(role["rules"][0]["verbs"], ["get"])
@@ -185,7 +206,7 @@ class RenderContractTests(unittest.TestCase):
 
     def test_configured_aap_service_account_is_used(self) -> None:
         docs = documents(
-            render(*NETRIS_ARGS, *CA_ARGS, "--set", "aap.serviceAccounts.osacSa=custom-sa")
+            render(*FIXTURE_NETRIS_ARGS, *CA_ARGS, "--set", "aap.serviceAccounts.osacSa=custom-sa")
         )
         binding = find(docs, "RoleBinding", "osac-netris-ca-read")
         self.assertEqual(binding["subjects"][0]["name"], "custom-sa")
@@ -205,7 +226,7 @@ class RenderContractTests(unittest.TestCase):
         )
 
     def test_admission_policy_protects_the_active_name(self) -> None:
-        docs = documents(render(*NETRIS_ARGS, *CA_ARGS))
+        docs = documents(render(*FIXTURE_NETRIS_ARGS, *CA_ARGS))
         policy = find(
             docs, "ValidatingAdmissionPolicy", "osac-netris-ca-protection-default"
         )
@@ -238,7 +259,7 @@ class RenderContractTests(unittest.TestCase):
     def test_admin_groups_can_be_overridden(self) -> None:
         docs = documents(
             render(
-                *NETRIS_ARGS,
+                *FIXTURE_NETRIS_ARGS,
                 *CA_ARGS,
                 "--set",
                 "global.networking.netris.caBundle.adminGroups[0]=platform-admins",
@@ -253,7 +274,7 @@ class RenderContractTests(unittest.TestCase):
     def test_empty_admin_groups_fail_schema_validation(self) -> None:
         with self.assertRaises(subprocess.CalledProcessError):
             render(
-                *NETRIS_ARGS,
+                *FIXTURE_NETRIS_ARGS,
                 *CA_ARGS,
                 "--set-json",
                 "global.networking.netris.caBundle.adminGroups=[]",

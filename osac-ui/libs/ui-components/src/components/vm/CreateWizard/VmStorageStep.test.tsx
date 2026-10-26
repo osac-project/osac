@@ -84,8 +84,8 @@ describe('VmStorageStep — additional disks', () => {
   it('renders the additional-disks array field with no rows initially', () => {
     renderStep();
 
-    expect(screen.queryByRole('group', { name: 'Additional disks' })).not.toBeInTheDocument();
-    expect(screen.queryByText('Additional disks')).not.toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Additional disks' })).toBeInTheDocument();
+    expect(screen.getByText('Additional disks')).toBeInTheDocument();
     expect(screen.queryByText('No additional disks yet.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add disk' })).toBeInTheDocument();
   });

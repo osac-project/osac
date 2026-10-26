@@ -15,14 +15,24 @@ spec:
     metadata:
       labels:
         {{- include "osac.labels" . | nindent 8 }}
+      annotations:
+        openshift.io/required-scc: restricted-v2
     spec:
+      securityContext:
+        runAsNonRoot: true
+        {{- if not (.Capabilities.APIVersions.Has "security.openshift.io/v1") }}
+        runAsUser: 1000
+        fsGroup: 1000
+        {{- end }}
       restartPolicy: Never
       serviceAccountName: {{ include "osac.fullname" . }}-validate
       containers:
       - name: validate
         image: {{ .Values.cliImage }}
-        {{- if and (eq .Values.global.networking.fabricManager "netris") .Values.global.networking.netris.caBundle.configMap }}
         env:
+        - name: HOME
+          value: /tmp
+        {{- if and (eq .Values.global.networking.fabricManager "netris") .Values.global.networking.netris.caBundle.configMap }}
         - name: CA_CONFIGMAP_NAME
           value: {{ .Values.global.networking.netris.caBundle.configMap | quote }}
         - name: AAP_NAMESPACE
@@ -93,6 +103,17 @@ spec:
 {{ .Files.Get "files/validate-netris-ca.sh" | nindent 10 }}
           {{ end }}
           echo "=== Validation passed ==="
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: tmp
+        emptyDir: {}
   backoffLimit: 0
 ---
 apiVersion: v1

@@ -615,7 +615,7 @@ var _ = Describe("Public clusters", func() {
 			versionName = object.GetMetadata().GetName()
 		}
 
-		_, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Metadata: publicv1.Metadata_builder{
 					Name: fmt.Sprintf("test-invalid-version-%s", uuid.New()[24:32]),
@@ -627,6 +627,18 @@ var _ = Describe("Public clusters", func() {
 				}.Build(),
 			}.Build(),
 		}.Build())
+		if createResponse != nil {
+			if object := createResponse.GetObject(); object != nil && object.GetId() != "" {
+				clusterID := object.GetId()
+				// Clean up an unexpectedly created cluster before asserting the expected error.
+				DeferCleanup(func() {
+					_, cleanupErr := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
+						Id: clusterID,
+					}.Build())
+					Expect(cleanupErr).ToNot(HaveOccurred())
+				})
+			}
+		}
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 		Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(expectedMessage))
 	},

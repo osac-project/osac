@@ -8,7 +8,7 @@
 
 - name: Extract VirtualNetwork name
   ansible.builtin.set_fact:
-    vn_name: "{{ virtual_network.metadata.name }}"
+    vn_name: "{{ _osac_resource.metadata.name }}"
     vn_ipv4_cidr: "{{ virtual_network.spec.ipv4Cidr | default('') }}"
 
 - name: Refuse delete of default VirtualNetwork

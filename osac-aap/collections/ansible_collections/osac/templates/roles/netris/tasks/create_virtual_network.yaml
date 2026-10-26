@@ -9,10 +9,10 @@
 
 - name: Extract VirtualNetwork configuration
   ansible.builtin.set_fact:
-    vn_name: "{{ virtual_network.metadata.name }}"
-    vn_ipv4_cidr: "{{ virtual_network.spec.ipv4Cidr | default('') }}"
-    vn_region: "{{ virtual_network.spec.region }}"
-    vn_tenant_id: "{{ virtual_network.metadata.annotations['osac.openshift.io/tenant'] | default('') }}"
+    vn_name: "{{ _osac_resource.metadata.name }}"
+    vn_ipv4_cidr: "{{ _osac_resource.spec.ipv4Cidr | default('') }}"
+    vn_region: "{{ _osac_resource.spec.region | default('') }}"
+    vn_tenant_id: "{{ _osac_tenant }}"
 
 - name: Resolve region to Netris site ID
   ansible.builtin.set_fact:
@@ -69,9 +69,19 @@
       (ID: {{ ipam_subnet_id | default('unknown') }})
   when: vn_ipv4_cidr | length > 0
 
+- name: Build the VirtualNetwork result
+  ansible.builtin.set_fact:
+    _osac_result_data: "{{ {'backend_id': vpc_id | int | string} }}"
+  when: _osac_contract | default(false) | bool
+
+- name: Emit the VirtualNetwork result
+  ansible.builtin.include_tasks: _emit_result.yaml
+  when: _osac_contract | default(false) | bool
+
 - name: Export VirtualNetwork VPC ID
   ansible.builtin.set_stats:
     data:
       vpc_id: "{{ vpc_id | int }}"
     per_host: false
     aggregate: false
+  when: not _osac_contract | default(false) | bool

@@ -108,21 +108,25 @@ def reserve_external_address(
     )
 
 
-def external_ip_attachment_context(store, *, target_ip="10.0.1.10"):
+def external_ip_attachment_context(
+    store, *, target_ip="10.0.1.10", external_ip_uid=UID_THREE
+):
     subnet = store.get_subnet(UID_TWO, TENANT_ONE)
     with sqlite3.connect(store.path) as connection:
-        address = connection.execute(
-            "SELECT address FROM external_ips WHERE uid = ?", (UID_THREE,)
-        ).fetchone()[0]
+        external_ip = connection.execute(
+            "SELECT fulfillment_id, address FROM external_ips WHERE uid = ?",
+            (external_ip_uid,),
+        ).fetchone()
+    assert external_ip is not None
     parent = store.get_virtual_network(UID_ONE, TENANT_ONE)
     return {
         "external_ip": {
             "name": "test-eip",
             "namespace": "test-networking",
-            "fulfillment_id": EXTERNAL_IP_FULFILLMENT_ID,
-            "kubernetes_uid": UID_THREE,
+            "fulfillment_id": external_ip[0],
+            "kubernetes_uid": external_ip_uid,
             "tenant_id": TENANT_ONE,
-            "address": address,
+            "address": external_ip[1],
             "state": "Allocated",
             "phase": "Ready",
         },
@@ -2124,13 +2128,17 @@ def test_external_ip_attachment_rejects_duplicate_fulfillment_id(tmp_path, monke
         context,
         "eth0",
     )
+    duplicate_uid = "88888888-8888-4888-8888-888888888888"
+    duplicate_external_ip_fulfillment_id = "99999999-9999-4999-8999-999999999999"
+    reserve_external_address(store, duplicate_uid, duplicate_external_ip_fulfillment_id)
+    duplicate_context = external_ip_attachment_context(store, external_ip_uid=duplicate_uid)
 
     with pytest.raises(StateError, match="Fulfillment identity is already reserved"):
         store.ensure_external_ip_attachment(
             "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
             ATTACHMENT_FULFILLMENT_ID,
             TENANT_ONE,
-            context,
+            duplicate_context,
             "eth0",
         )
 

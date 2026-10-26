@@ -127,7 +127,7 @@ httpCorsAllowedOrigins: []
 # Image configuration:
 images:
   service:
-    repository: ghcr.io/osac-project/fulfillment-service
+    repository: registry.stage.redhat.io/cloud-extensions/fulfillment-service-rhel10
     tag: 0.0.125 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
     pullPolicy: Always
   envoy:

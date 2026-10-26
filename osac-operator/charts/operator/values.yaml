@@ -3,7 +3,7 @@ global:
     enabled: false
     tenantNamespace: osac-csi
 image:
-  repository: ghcr.io/osac-project/osac-operator
+  repository: registry.stage.redhat.io/cloud-extensions/osac-operator-rhel10
   tag: 0.0.33 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
   pullPolicy: Always
 replicaCount: 1

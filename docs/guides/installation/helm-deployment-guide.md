@@ -165,22 +165,27 @@ your deployment uses VMaaS.
 
 ### Storage class
 
-OSAC PVCs use the cluster's default `StorageClass`. If the cluster already has
-a storage provisioner, make the intended `StorageClass` the default before
-installing; the charts do not configure a class per PVC. Check the available
-classes and which one is default with:
+OSAC components create PVCs in both install phases, so make the intended
+`StorageClass` the default before Phase 1. `osac-infra` creates a PVC for
+Keycloak by default and for bundled PostgreSQL or OpenBao when enabled; Phase 2
+workloads may also need storage. The charts do not select a class per PVC.
+Check the available classes and which one is default with:
 
 ```bash
 oc get storageclass
 ```
 
-The default class is marked `(default)` in the output.
+The default class is marked `(default)` in the output. The Phase 2 validation
+hook warns when no default class exists, but PVCs created in Phase 1 may
+already be `Pending`.
 
-When using an existing `StorageClass`, leave `lvms.enabled: false` and
-`topolvm.enabled: false` in `my-infra-values.yaml`. Both are disabled by
-default, so OSAC will not install LVMS or the TopoLVM CSI driver. The Phase 2
-validation hook warns when no default class exists, and stateful components
-may fail to provision PVCs.
+`lvms.enabled` and `topolvm.enabled` are both `false` by default, so you do not
+need to set them explicitly when using an existing provisioner. Set
+`lvms.enabled: true` when using LVMS to provide VMaaS storage; LVMS is not a
+CaaS prerequisite because hosted control planes use the hub's default
+`StorageClass` (see the [customer install guide](customer-install-guide.md)).
+Set `topolvm.enabled: true` only for the Kind `dev-full` local CSI setup; its
+TopoLVM storage class is not the cluster default.
 
 ### Phase 1a: install prerequisite Operators
 

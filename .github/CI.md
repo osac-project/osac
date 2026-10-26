@@ -75,7 +75,9 @@ or its checkbox in the pull request's E2E comment. It has a separate
 `E2E / Stretched Netris Full Install` line and uses the `full-ci`
 profile. The workflow provisions the Netris/EVPN infrastructure; the test
 itself checks OSAC networking behavior and is not backend-specific. The broad
-Netris `full` suite also includes this test.
+Netris `full` suite excludes CaaS and includes the implemented VMaaS and BMaaS
+Netris networking tests plus this stretched test. It leaves the slow BMaaS
+cross-tenant test to its dedicated workflow.
 
 ## Approvals after a rebase, and pull requests from forks
 

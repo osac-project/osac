@@ -2220,10 +2220,17 @@ jobs:
     # Gated on stamp-and-release-charts, not tag directly -- that job is
     # what actually pushes the osac-charts-release marker tag these chart
     # builds trigger off, strictly after the image release is confirmed.
+    # Its own explicit tag-pushed output, not its job result: that job's
+    # own continue-on-error means .result always reads 'success' here
+    # regardless of whether it actually pushed the tag -- confirmed live,
+    # this job ran its full ~85min poll for nothing after a real stamping
+    # failure. tag-pushed only ever becomes 'true' once the marker tag is
+    # actually confirmed pushed (see that job's own "Push charts release
+    # marker tag" step).
     needs: [prepare, tag, stamp-and-release-charts]
     if: |
       always() && !cancelled() && inputs.mode == 'release' &&
-      needs.stamp-and-release-charts.result == 'success'
+      needs.stamp-and-release-charts.outputs.tag-pushed == 'true'
     runs-on: osac-ci
     timeout-minutes: 85
     strategy:
@@ -2707,6 +2714,15 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+    # continue-on-error above means needs.<this job>.result always reads
+    # 'success' downstream regardless of whether this job's own steps
+    # actually failed (confirmed live: wait-for-konflux-chart-build still
+    # ran, burning its own ~85min poll, after this job's stamping step
+    # genuinely failed on a real release dispatch) -- this explicit output
+    # is what downstream jobs must gate on instead, see
+    # wait-for-konflux-chart-build's own if: below.
+    outputs:
+      tag-pushed: ${{ steps.push-tag.outputs.pushed }}
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       COMPONENT_VERSIONS: ${{ needs.prepare.outputs.component-versions }}
@@ -2718,6 +2734,9 @@ jobs:
       with:
         app-id: "4966101"
         private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+        # Explicit least-privilege scope: this job only ever pushes a
+        # commit and a tag to this repository, nothing else.
+        permission-contents: write
 
     - name: Checkout repository
       uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
@@ -2739,8 +2758,13 @@ jobs:
       run: |
         set -euo pipefail
         mkdir -p "${HOME}/.local/bin"
-        curl -sSL -o "${HOME}/.local/bin/yq" \
+        curl -fsSL -o "${HOME}/.local/bin/yq" \
           "https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64"
+        # SHA-256 confirmed directly against the real downloaded binary and
+        # against mikefarah/yq's own published release checksums file for
+        # this exact version/asset (that file's own multi-algorithm column
+        # layout is documented by its sibling checksums_hashes_order file).
+        echo "a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7  ${HOME}/.local/bin/yq" | sha256sum -c -
         chmod +x "${HOME}/.local/bin/yq"
         echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
 
@@ -2890,6 +2914,7 @@ jobs:
     # trigger-konflux-staging-release has confirmed every image this
     # release actually exists at registry.stage.redhat.io.
     - name: Push charts release marker tag
+      id: push-tag
       run: |
         set -euo pipefail
         source osac-installer/scripts/nightly-charts.sh
@@ -2900,6 +2925,7 @@ jobs:
           EXISTING_SHA=$(git rev-parse "${TAG}^{commit}")
           if [[ "${EXISTING_SHA}" == "${COMMIT_SHA}" ]]; then
             echo "Tag ${TAG} already exists at ${COMMIT_SHA}; skipping create/push"
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           safe_tag=$(_gha_sanitize_for_message "${TAG}")
@@ -2912,6 +2938,7 @@ jobs:
         git tag "${TAG}" -m "Release ${VERSION}"
         git push origin "${TAG}"
         echo "Tagged: ${TAG}"
+        echo "pushed=true" >> "$GITHUB_OUTPUT"
 
   # -------------------------------------------------------------------
   # Chart-side mirror of trigger-konflux-staging-release -- see

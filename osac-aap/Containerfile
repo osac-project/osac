@@ -40,7 +40,7 @@
 # every COPY path below is relative to the repo root, not this
 # directory.
 
-ARG EE_BASE_IMAGE="registry.access.redhat.com/ubi10:10.2"
+ARG EE_BASE_IMAGE="registry.access.redhat.com/ubi10:10.2-1792744468"
 ARG PYCMD="/usr/bin/python3.12"
 ARG PYPKG="python3.12"
 ARG PKGMGR_PRESERVE_CACHE=""

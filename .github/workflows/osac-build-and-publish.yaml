@@ -2591,6 +2591,40 @@ jobs:
         # retry; this job should only ever fail for real on a genuine,
         # persisting Konflux failure or its own GitHub Actions
         # timeout-minutes, never on one transient infra blip.
+        # oc apply is idempotent (a 3-way merge of the same desired state),
+        # so a transient client-side apply failure is retried against the
+        # SAME release_name/manifest rather than ever advancing to a
+        # different Release name -- a client-side failure doesn't prove the
+        # server never created the object, so creating a second,
+        # differently-named Release here could leave two Releases
+        # referencing the same Snapshot. Re-raises on a permanent auth/RBAC
+        # error; gives up loudly (not silently moving on) if the apply
+        # itself never succeeds after a few tries.
+        def apply_release(release_file, release_name, max_apply_retries=3, apply_retry_seconds=15):
+            for i in range(1, max_apply_retries + 1):
+                try:
+                    subprocess.run(
+                        ["oc", "apply", "-f", release_file],
+                        capture_output=True, text=True, check=True,
+                    )
+                    return
+                except subprocess.CalledProcessError as e:
+                    stderr = e.stderr or ""
+                    if is_permanent_auth_error(stderr):
+                        print(f"::error::oc apply failed with a permanent auth/RBAC error: {stderr.strip()}")
+                        raise
+                    if i == max_apply_retries:
+                        print(f"::error::oc apply failed {max_apply_retries} times for {release_name}: {stderr.strip()}")
+                        raise
+                    print(f"::warning::oc apply failed for {release_name}, retrying same apply: {stderr.strip()}")
+                    time.sleep(apply_retry_seconds)
+
+        # Returns "succeeded", "failed" (a confirmed terminal condition --
+        # safe to retry with a brand new Release), or "timeout" (this
+        # attempt's own poll window ran out with no terminal condition ever
+        # seen -- NOT a confirmed failure, so the caller must never create a
+        # second, competing Release referencing the same Snapshot while this
+        # one might still resolve on its own).
         def poll_release(release_name, timeout_seconds):
             deadline = time.time() + timeout_seconds
             while time.time() < deadline:
@@ -2614,12 +2648,12 @@ jobs:
                 conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
                 if condition_true(conditions, "Released"):
                     print(f"::notice::Konflux staging release succeeded: {release_name}")
-                    return True
+                    return "succeeded"
                 if condition_false(conditions, "Released") and any(
                     c.get("type") == "Released" and c.get("reason") == "Failed" for c in conditions
                 ):
                     print(f"::warning::Konflux staging release failed: {release_name}")
-                    return False
+                    return "failed"
                 if conditions:
                     summary = "; ".join(
                         f"{c.get('type')}={c.get('status')} ({c.get('reason')}: {c.get('message')})"
@@ -2630,7 +2664,7 @@ jobs:
                     print(f"Waiting on {release_name}'s release to complete -- no conditions reported yet", flush=True)
                 time.sleep(POLL_INTERVAL_SECONDS)
             print(f"::warning::Timed out waiting for {release_name}'s release to complete")
-            return False
+            return "timeout"
 
         # First attempt gets the full TIMEOUT_SECONDS (80min) -- a genuinely
         # slow but real release deserves the same benefit of the doubt it
@@ -2650,26 +2684,22 @@ jobs:
             }
             with open("/tmp/release.json", "w") as f:
                 json.dump(release, f)
-            # check=True alone would raise straight out of this loop on a
-            # transient oc apply hiccup, abandoning the remaining attempts
-            # entirely -- same transient-vs-permanent distinction every
-            # other oc call in this script already applies.
-            try:
-                subprocess.run(
-                    ["oc", "apply", "-f", "/tmp/release.json"],
-                    capture_output=True, text=True, check=True,
-                )
-            except subprocess.CalledProcessError as e:
-                stderr = e.stderr or ""
-                if is_permanent_auth_error(stderr):
-                    print(f"::error::oc apply failed with a permanent auth/RBAC error: {stderr.strip()}")
-                    raise
-                print(f"::warning::oc apply failed for {release_name}, will retry: {stderr.strip()}")
-                continue
+            apply_release("/tmp/release.json", release_name)
             print(f"Created Release {release_name} (attempt {attempt_num}/{MAX_RELEASE_ATTEMPTS}), waiting for it to complete")
-            if poll_release(release_name, TIMEOUT_SECONDS if attempt_num == 1 else RETRY_TIMEOUT_SECONDS):
+            outcome = poll_release(release_name, TIMEOUT_SECONDS if attempt_num == 1 else RETRY_TIMEOUT_SECONDS)
+            if outcome == "succeeded":
                 released = True
                 break
+            if outcome == "timeout":
+                # Never create a competing Release while this one might
+                # still be progressing -- fail outright here instead. This
+                # job should only ever fail for real on its own GitHub
+                # Actions timeout-minutes or a genuine, confirmed Konflux
+                # failure, never on a 3rd, ambiguous path.
+                print(f"::error::Timed out waiting for {release_name} -- not retrying, to avoid a second Release racing the same Snapshot")
+                sys.exit(1)
+            # outcome == "failed": a confirmed terminal condition, so the
+            # next loop iteration's new release_name is safe.
 
         if not released:
             print(f"::error::Konflux staging release failed after {MAX_RELEASE_ATTEMPTS} attempts: {resource_name}")
@@ -3131,6 +3161,33 @@ jobs:
         # (Failed, or this attempt's own poll timing out) -- see
         # trigger-konflux-staging-release's own identical poll_release for
         # the full rationale.
+        # See trigger-konflux-staging-release's own identical apply_release
+        # for the full rationale: oc apply is idempotent, so a transient
+        # client-side failure retries the SAME release_name/manifest rather
+        # than ever risking two Releases referencing the same Snapshot.
+        def apply_release(release_file, release_name, max_apply_retries=3, apply_retry_seconds=15):
+            for i in range(1, max_apply_retries + 1):
+                try:
+                    subprocess.run(
+                        ["oc", "apply", "-f", release_file],
+                        capture_output=True, text=True, check=True,
+                    )
+                    return
+                except subprocess.CalledProcessError as e:
+                    stderr = e.stderr or ""
+                    if is_permanent_auth_error(stderr):
+                        print(f"::error::oc apply failed with a permanent auth/RBAC error: {stderr.strip()}")
+                        raise
+                    if i == max_apply_retries:
+                        print(f"::error::oc apply failed {max_apply_retries} times for {release_name}: {stderr.strip()}")
+                        raise
+                    print(f"::warning::oc apply failed for {release_name}, retrying same apply: {stderr.strip()}")
+                    time.sleep(apply_retry_seconds)
+
+        # Returns "succeeded", "failed" (confirmed terminal -- safe to retry
+        # with a new Release), or "timeout" (not confirmed -- see
+        # trigger-konflux-staging-release's own identical poll_release for
+        # the full rationale on why this must never trigger a new Release).
         def poll_release(release_name, timeout_seconds):
             deadline = time.time() + timeout_seconds
             while time.time() < deadline:
@@ -3150,12 +3207,12 @@ jobs:
                 conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
                 if condition_true(conditions, "Released"):
                     print(f"::notice::Konflux chart staging release succeeded: {release_name}")
-                    return True
+                    return "succeeded"
                 if condition_false(conditions, "Released") and any(
                     c.get("type") == "Released" and c.get("reason") == "Failed" for c in conditions
                 ):
                     print(f"::warning::Konflux chart staging release failed: {release_name}")
-                    return False
+                    return "failed"
                 if conditions:
                     summary = "; ".join(
                         f"{c.get('type')}={c.get('status')} ({c.get('reason')}: {c.get('message')})"
@@ -3166,7 +3223,7 @@ jobs:
                     print(f"Waiting on {release_name}'s release to complete -- no conditions reported yet", flush=True)
                 time.sleep(POLL_INTERVAL_SECONDS)
             print(f"::warning::Timed out waiting for {release_name}'s release to complete")
-            return False
+            return "timeout"
 
         MAX_RELEASE_ATTEMPTS = 3
         RETRY_TIMEOUT_SECONDS = 30 * 60
@@ -3181,26 +3238,17 @@ jobs:
             }
             with open("/tmp/chart-release.json", "w") as f:
                 json.dump(release, f)
-            # check=True alone would raise straight out of this loop on a
-            # transient oc apply hiccup, abandoning the remaining attempts
-            # entirely -- same transient-vs-permanent distinction every
-            # other oc call in this script already applies.
-            try:
-                subprocess.run(
-                    ["oc", "apply", "-f", "/tmp/chart-release.json"],
-                    capture_output=True, text=True, check=True,
-                )
-            except subprocess.CalledProcessError as e:
-                stderr = e.stderr or ""
-                if is_permanent_auth_error(stderr):
-                    print(f"::error::oc apply failed with a permanent auth/RBAC error: {stderr.strip()}")
-                    raise
-                print(f"::warning::oc apply failed for {release_name}, will retry: {stderr.strip()}")
-                continue
+            apply_release("/tmp/chart-release.json", release_name)
             print(f"Created Release {release_name} (attempt {attempt_num}/{MAX_RELEASE_ATTEMPTS}), waiting for it to complete")
-            if poll_release(release_name, TIMEOUT_SECONDS if attempt_num == 1 else RETRY_TIMEOUT_SECONDS):
+            outcome = poll_release(release_name, TIMEOUT_SECONDS if attempt_num == 1 else RETRY_TIMEOUT_SECONDS)
+            if outcome == "succeeded":
                 released = True
                 break
+            if outcome == "timeout":
+                print(f"::error::Timed out waiting for {release_name} -- not retrying, to avoid a second Release racing the same Snapshot")
+                sys.exit(1)
+            # outcome == "failed": a confirmed terminal condition, so the
+            # next loop iteration's new release_name is safe.
 
         if not released:
             print(f"::error::Konflux chart staging release failed after {MAX_RELEASE_ATTEMPTS} attempts: {resource_name}")

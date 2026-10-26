@@ -242,42 +242,39 @@ describe('buildComputeInstanceStepSchema', () => {
     });
   });
 
-  it('validates inline user data with the shared 64 KB limit', async () => {
-    const errors = await validateStep('configuration', {
+  it('validates inline user data with the shared 64 KB limit on access step', async () => {
+    const errors = await validateStep('access', {
       ...emptyValues,
       catalogItemReference: { name: vmCatalogItem.title, id: vmCatalogItem.id },
       metadata: { name: 'web-01', project: '' },
       spec: {
         ...emptyValues.spec,
-        instanceType: provisioningFieldValue('standard-4-8'),
         userData: provisioningFieldValue('a'.repeat(65537)),
       },
     });
     expect(errors).toEqual({
-      spec: { userData: { value: 'User data must not exceed 64 KB.' } },
+      spec: { userData: { value: 'Cloud-init must not exceed 64 KB.' } },
     });
 
     await expect(
-      validateStep('configuration', {
+      validateStep('access', {
         ...emptyValues,
         catalogItemReference: { name: vmCatalogItem.title, id: vmCatalogItem.id },
         metadata: { name: 'web-01', project: '' },
         spec: {
           ...emptyValues.spec,
-          instanceType: provisioningFieldValue('standard-4-8'),
           userData: provisioningFieldValue('a'.repeat(65536)),
         },
       }),
     ).resolves.toEqual({});
 
     await expect(
-      validateStep('configuration', {
+      validateStep('access', {
         ...emptyValues,
         catalogItemReference: { name: vmCatalogItem.title, id: vmCatalogItem.id },
         metadata: { name: 'web-01', project: '' },
         spec: {
           ...emptyValues.spec,
-          instanceType: provisioningFieldValue('standard-4-8'),
           userDataSource: provisioningFieldValue('secret'),
           userData: provisioningFieldValue('a'.repeat(65537)),
           userDataSecret: provisioningFieldValue('user-data-secret'),

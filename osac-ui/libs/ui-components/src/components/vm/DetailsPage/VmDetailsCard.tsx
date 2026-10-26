@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import {
   Card,
   CardBody,
@@ -23,6 +24,9 @@ const VmDetailsCard = ({ vm }: Props) => {
   const { t } = useTranslation();
   const catalogItem = vm.spec?.catalogItem;
   const instanceType = vm.spec?.instanceType;
+  const sshKey = vm.spec?.sshKey;
+  const sshKeyLabel = sshKey?.name || sshKey?.id;
+  const sshKeyDetailsUrl = sshKey?.id ? `/secrets/${sshKey.id}` : undefined;
 
   return (
     <Card isFullHeight>
@@ -44,7 +48,11 @@ const VmDetailsCard = ({ vm }: Props) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('SSH public key')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {displayValue(vm.spec?.sshKey?.name)}
+              {sshKeyDetailsUrl && sshKeyLabel ? (
+                <Link to={sshKeyDetailsUrl}>{sshKeyLabel}</Link>
+              ) : (
+                displayValue(sshKeyLabel)
+              )}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

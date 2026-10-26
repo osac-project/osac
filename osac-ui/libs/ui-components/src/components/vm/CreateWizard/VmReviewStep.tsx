@@ -130,7 +130,7 @@ export const VmReviewStep = () => {
           </DescriptionListGroup>
 
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('User Data')}</DescriptionListTerm>
+            <DescriptionListTerm>{t('Cloud-init')}</DescriptionListTerm>
             <DescriptionListDescription>
               {formatReviewScalar(
                 values.spec.userDataSource.value === 'secret'

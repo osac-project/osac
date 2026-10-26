@@ -54,7 +54,8 @@ Appendix A. [Running the services as containers](#appendix-a-running-the-service
 
 **Conventions used throughout:** `<host-ip>` is the address on the services
 host that cluster nodes can reach; `<kc-host>` is the hostname your
-external Keycloak serves (the issuer host); everything in angle brackets
+external Keycloak serves on port **8443** — every Keycloak URL in this
+guide carries the port explicitly; everything in angle brackets
 is a value to substitute. The namespaces (`osac`, `osac-infra`,
 `keycloak`, …) and object names (`external-kafka`, `osac-db-config`, …)
 are chart-level constants — use them as-is.
@@ -111,7 +112,7 @@ The in-cluster consumers verify identity, not location:
   address, signed by a CA the db-init job trusts (§3.1), and keep the
   cert-auth HBA rules — then the `osac-db-config` /
   `osac-db-client-cert` Secrets work as the chart renders them.
-- **Keycloak**: JWT issuer URLs (`https://<kc-host>/realms/osac`) are set
+- **Keycloak**: JWT issuer URLs (`https://<kc-host>:8443/realms/osac`) are set
   by values and baked into deployments and the OpenBao JWT auth config.
   Keep the hostname stable after install — changing it later means
   re-pointing every consumer.
@@ -275,7 +276,7 @@ Pattern A — values only (survives upgrades). Every key involved:
 | 1 | `osac-infra` | `bundledVault.enabled` | `false` |
 | 2 | `osac` | `service.vault.endpoint` | `https://<host-ip>:8200` |
 | 3 | `osac` | `service.vault.caBundle.configMap` | `ca-bundle` (add the host CA per §2.2 option 2 if self-signed) |
-| 4 | `osac` | `service.vault.keycloakIssuerUrl` | `https://<kc-host>/realms/osac` |
+| 4 | `osac` | `service.vault.keycloakIssuerUrl` | `https://<kc-host>:8443/realms/osac` |
 | 5 | `osac` | `service.vault.keycloakClientId` / `keycloakAudience` | `osac-controller` / `osac-api` |
 | 6 | `osac` | `service.vault.namespace` / `kvMountPath` | `osac` / `secret` |
 | 7 | `osac` | `service.vault.lifecycleMountPath` / `lifecycleRole` | `jwt` / `lifecycle` |
@@ -291,7 +292,7 @@ service:
     endpoint: https://<host-ip>:8200
     caBundle:
       configMap: ca-bundle          # add the host cert per §2.2 option 2
-    keycloakIssuerUrl: https://<kc-host>/realms/osac
+    keycloakIssuerUrl: https://<kc-host>:8443/realms/osac
     keycloakClientId: osac-controller
     keycloakAudience: osac-api
     namespace: osac
@@ -337,7 +338,7 @@ with the route hostname; the chart's CI renders exactly this shape):
 ```yaml
 service:
   auth:
-    issuerUrl: https://<kc-host>/realms/osac
+    issuerUrl: https://<kc-host>:8443/realms/osac
     controllerCredentials:
     - secret:
         name: fulfillment-controller-credentials
@@ -346,7 +347,7 @@ service:
         - {key: client-secret, param: client-secret}
   idp:
     provider: keycloak
-    url: https://<kc-host>
+    url: https://<kc-host>:8443
     credentials:              # the same Secret is fine
     - secret:
         name: fulfillment-controller-credentials
@@ -354,7 +355,7 @@ service:
         - {key: client-id, param: client-id}
         - {key: client-secret, param: client-secret}
   vault:
-    keycloakIssuerUrl: https://<kc-host>/realms/osac
+    keycloakIssuerUrl: https://<kc-host>:8443/realms/osac
     credentials:
     - secret:
         name: vault-credentials
@@ -362,7 +363,7 @@ service:
         - {key: client-secret, param: client-secret}
 ui:
   auth:
-    oidcIssuerURL: https://<kc-host>/realms/osac   # not tpl-expanded — full URL
+    oidcIssuerURL: https://<kc-host>:8443/realms/osac   # not tpl-expanded — full URL
 ```
 
 The fulfillment controller requires `idp.url` + `idp.credentials`; its
@@ -405,11 +406,17 @@ In a bundled install the chart does this itself: a
 `keycloak-client-secrets` Secret and Keycloak starts with
 `--import-realm`. On this path there is no such machinery — pick the
 client secrets yourself (they must match the Secrets you created in
-§5.2), resolve the placeholders, and import:
+§5.2), resolve the placeholders, **and fix the `osac-ui` client**: the
+chart's `realm.json` ships it with development values
+(`http://ui.osac.localhost:8080` redirect URIs and web origins, and a
+`defaultClientScopes` list that omits `profile` and `email`) — the
+placeholder substitution does not touch any of those, so patch them in
+the same preprocessing step:
 
 ```bash
-# resolve placeholders into a resolved realm file (values are yours —
-# they must match the §5.2 client-credential Secrets)
+# resolve placeholders and patch the osac-ui client into a resolved
+# realm file (secret values are yours — they must match the §5.2
+# client-credential Secrets; <ui-origin> is your UI's HTTPS origin)
 python3 - realm.json > realm-resolved.json <<'PY'
 import json, sys
 subs = {
@@ -422,14 +429,27 @@ subs = {
 }
 text = open(sys.argv[1]).read()
 for k, v in subs.items(): text = text.replace(k, v)
-json.loads(text)                      # fail loudly on a bad resolve
-sys.stdout.write(text)
-PY
+realm = json.loads(text)             # fail loudly on a bad resolve
 
-# import via the admin REST API (or `kc.sh import` on the container)
-KC="https://<kc-host>"
-TOKEN=$(curl -sk -d "client_id=admin-cli" -d "username=<realm-admin-user>" \
-  -d "password=<realm-admin-password>" -d "grant_type=password" \
+ui = next(c for c in realm["clients"] if c["clientId"] == "osac-ui")
+ui["redirectUris"] = ["https://<ui-origin>/callback",
+                      "https://<ui-origin>/*"]
+ui["webOrigins"] = ["https://<ui-origin>"]
+for scope in ("profile", "email"):
+    if scope not in ui["defaultClientScopes"]:
+        ui["defaultClientScopes"].append(scope)
+
+json.dump(realm, sys.stdout)
+PY
+chmod 600 realm-resolved.json    # it contains client secrets
+
+# import via the admin REST API (or `kc.sh import` on the container).
+# The import runs against the master realm, so authenticate as the
+# bootstrap admin created in A.4 — <realm-admin-*> only becomes usable
+# once the osac realm (which defines that user) has been imported.
+KC="https://<kc-host>:8443"
+TOKEN=$(curl -sk -d "client_id=admin-cli" -d "username=admin" \
+  -d "password=<kc-admin-password>" -d "grant_type=password" \
   "${KC}/realms/master/protocol/openid-connect/token" \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 curl -sk -X POST -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" \
@@ -443,13 +463,13 @@ one at the validated pin.)
 ### 5.4 Verify
 
 ```bash
-curl -sk https://<kc-host>/realms/osac \
+curl -sk https://<kc-host>:8443/realms/osac \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['realm'])"    # osac
 
 # token end-to-end (ROPC works for tenant users; the UI client is public
 # PKCE and cannot do it — use the browser for that flow)
 curl -sk -d "client_id=admin-cli&username=<user>&password=<password>&grant_type=password" \
-  https://<kc-host>/realms/osac/protocol/openid-connect/token
+  https://<kc-host>:8443/realms/osac/protocol/openid-connect/token
 ```
 
 Then one UI login (full OIDC PKCE) and one API call with the resulting
@@ -682,7 +702,7 @@ service:
   vault:                        # §4
     endpoint: https://<host-ip>:8200
     caBundle: {configMap: ca-bundle}
-    keycloakIssuerUrl: https://<keycloak-host>/realms/osac
+    keycloakIssuerUrl: https://<kc-host>:8443/realms/osac
     keycloakClientId: osac-controller
     keycloakAudience: osac-api
     namespace: osac
@@ -762,7 +782,7 @@ oc -n osac rollout status deploy/fulfillment-controller   # …and every deploy
 
 # external health
 curl -sk -o /dev/null -w '%{http_code}\n' https://<host-ip>:8200/v1/sys/health          # 200
-curl -sk https://<kc-host>/realms/osac | python3 -c \
+curl -sk https://<kc-host>:8443/realms/osac | python3 -c \
   "import sys,json; print(json.load(sys.stdin)['realm'])"                                # osac
 podman exec osac-postgres psql -U postgres -Atc \
   "select count(*) from pg_stat_activity where usename in ('osac_service','osac_metering')"   # >0
@@ -837,9 +857,11 @@ confirm the data lands. Untested backups are a hypothesis.
 #!/usr/bin/env bash
 # /usr/local/sbin/osac-pg-backup.sh — nightly full dump, keep 14
 set -euo pipefail
+umask 077                     # dumps carry credentials and tenant data
 DIR=/var/lib/osac/backups; mkdir -p "$DIR"
-podman exec osac-postgres pg_dumpall -U postgres | gzip \
-  > "$DIR/osac-pg-$(date +%Y%m%d-%H%M%S).sql.gz"
+OUT="$DIR/osac-pg-$(date +%Y%m%d-%H%M%S).sql.gz"
+podman exec osac-postgres pg_dumpall -U postgres | gzip > "$OUT"
+gzip -t "$OUT"                 # verify the archive is intact, not empty
 ls -1t "$DIR"/osac-pg-*.sql.gz | tail -n +15 | xargs -r rm -f
 ```
 
@@ -861,15 +883,20 @@ the backups like the unseal key.
 #!/usr/bin/env bash
 # /root/bao-backup/backup-openbao.sh — stop, tar, start, verify (keep 14)
 set -euo pipefail
+umask 077                     # the data dir is encrypted; keep it that way
 DIR=/root/bao-backup; STAMP=$(date +%Y%m%d-%H%M%S); mkdir -p "$DIR"
+CA=/root/bao-ca.pem           # from A.3 — trust it instead of -k
+# never leave OpenBao stopped because the tar failed mid-script
+trap 'systemctl is-active --quiet container-osac-openbao.service \
+  || systemctl start container-osac-openbao.service' EXIT
 systemctl stop container-osac-openbao.service
 tar -czf "$DIR/bao-data-$STAMP.tar.gz" -C /root bao-data
 systemctl start container-osac-openbao.service
 for i in $(seq 1 30); do
   sleep 2
-  [ "$(curl -sk -o /dev/null -w '%{http_code}' https://<host-ip>:8200/v1/sys/health)" = 200 ] && break
+  [ "$(curl -s --cacert "$CA" -o /dev/null -w '%{http_code}' https://<host-ip>:8200/v1/sys/health)" = 200 ] && break
 done
-curl -sk https://<host-ip>:8200/v1/sys/health | grep -q '"sealed":false'
+curl -s --cacert "$CA" https://<host-ip>:8200/v1/sys/health | grep -q '"sealed":false'
 echo "OK bao-data-$STAMP.tar.gz"
 find "$DIR" -name 'bao-data-*.tar.gz' -mtime +14 -delete
 ```
@@ -897,21 +924,40 @@ Two layers, because the deployment options differ (A.4):
 # /root/kc-backup/backup-keycloak.sh — partial exports (keep 7)
 set -euo pipefail
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin:$PATH   # cron PATH lacks iptables etc.
+umask 077                     # exports carry realm keys and password hashes
 DIR=/root/kc-backup; STAMP=$(date +%Y%m%d-%H%M%S); mkdir -p "$DIR"
-KC="https://<kc-host>"
+KC="https://<kc-host>:8443"
 KC_PASS=$(podman inspect keycloak-external --format \
   '{{range .Config.Env}}{{println .}}{{end}}' | grep '^KEYCLOAK_ADMIN_PASSWORD=' | cut -d= -f2-)
-TOKEN=$(curl -sk -d "client_id=admin-cli&username=admin&password=${KC_PASS}&grant_type=password" \
+TOKEN=$(curl -sf -d "client_id=admin-cli&username=admin&password=${KC_PASS}&grant_type=password" \
   "${KC}/realms/master/protocol/openid-connect/token" \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
 
-# realm structure (clients, roles, groups) — partial-export
-curl -sk -X POST -H "Authorization: Bearer ${TOKEN}" \
+# realm structure (clients, roles, groups) — partial-export.
+# -f makes curl fail on HTTP errors (an expired token would otherwise
+# save a JSON error object as tonight's "backup"); the python step then
+# validates the payload really is JSON.
+curl -sf -X POST -H "Authorization: Bearer ${TOKEN}" \
   "${KC}/admin/realms/osac/partial-export?exportClients=true&exportGroupsAndRoles=true" \
+  | python3 -c 'import sys,json; json.dump(json.load(sys.stdin), sys.stdout)' \
   > "$DIR/realm-osac-${STAMP}.json"
-# users are NOT included in partial-export — separate call
-curl -sk -H "Authorization: Bearer ${TOKEN}" \
-  "${KC}/admin/realms/osac/users?max=1000&briefRepresentation=false" \
+
+# users are NOT included in partial-export — separate, PAGINATED call
+# (the admin API caps a single response; without the loop everything
+# past the first page is silently missing)
+FIRST=0; PAGES=()
+while :; do
+  PAGE=$(curl -sf -H "Authorization: Bearer ${TOKEN}" \
+    "${KC}/admin/realms/osac/users?first=${FIRST}&max=100&briefRepresentation=false")
+  COUNT=$(printf '%s' "$PAGE" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))')
+  [ "$COUNT" -eq 0 ] && break
+  PAGES+=("$PAGE")
+  FIRST=$((FIRST + COUNT))
+done
+# merge the pages into one valid JSON array (guard the empty realm)
+[ ${#PAGES[@]} -eq 0 ] && PAGES=('[]')
+printf '%s\n' "${PAGES[@]}" \
+  | python3 -c 'import sys,json; json.dump([u for p in map(json.loads,sys.stdin) for u in p], sys.stdout)' \
   > "$DIR/users-osac-${STAMP}.json"
 # same pattern for organizations, org members, LDAP components
 ls -1t "$DIR"/realm-osac-*.json | tail -n +8 | xargs -r rm -f
@@ -1058,7 +1104,7 @@ podman run -d --name osac-postgres \
   -v /var/lib/osac/postgres:/var/lib/pgsql \
   -e POSTGRESQL_USER=service \
   -e POSTGRESQL_DATABASE=service \
-  -e POSTGRESQL_PASSWORD=<superuser-password> \
+  -e POSTGRESQL_PASSWORD=<bootstrap-user-password> \
   quay.io/sclorg/postgresql-18-c10s
 
 # boot persistence (old-style unit — see A.1)
@@ -1073,12 +1119,14 @@ an external instance should not inherit that; and do not add
 `--security-opt label=disable` to this container — with the fcontext rules
 from A.1 the normal labels work.
 
-On identities: the `POSTGRESQL_USER`/`POSTGRESQL_DATABASE` pair is the
-container image's own bootstrap account (a password superuser) and is not
-what OSAC uses. The chart's db-init job logs in as the `postgres`
-superuser over client-cert mTLS (§3.1) and creates the real users —
-`osac_service`, `osac_metering` — and their databases; the workload client
-certificates' CNs match those role names.
+On identities: the `POSTGRESQL_USER`/`POSTGRESQL_PASSWORD` pair is the
+container image's own bootstrap account — a password-authenticated
+superuser named `service`, local to first-boot initialization — and is
+**not** the OSAC `postgres` administrator, nor what OSAC uses. The
+chart's db-init job logs in as the `postgres` superuser over client-cert
+mTLS (§3.1) and creates the real users — `osac_service`, `osac_metering`
+— and their databases; the workload client certificates' CNs match those
+role names.
 
 ### A.3 OpenBao
 
@@ -1117,12 +1165,17 @@ listener "tcp" {
 openssl req -x509 -newkey rsa:2048 -keyout /root/bao-key.pem -out /root/bao-cert.pem \
   -days 365 -nodes -subj "/CN=<host-ip>" -addext "subjectAltName=IP:<host-ip>"
 chmod 644 /root/bao-cert.pem /root/bao-key.pem
+# CA that validates the server cert, for clients inside the container:
+# with the self-signed shortcut the cert is its own CA; with a
+# cluster-issued cert (§2.2 option 1) copy the issuing CA here instead.
+cp /root/bao-cert.pem /root/bao-ca.pem
 mkdir -p /root/bao-data /root/bao-config    # config as above
 
 podman run -d --name osac-openbao \
   -p <host-ip>:8200:8200 -p <host-ip>:8201:8201 \
   --security-opt label=disable \
   -v /root/bao-cert.pem:/bao/tls/tls.crt:z -v /root/bao-key.pem:/bao/tls/tls.key:z \
+  -v /root/bao-ca.pem:/bao/tls/ca.crt:z \
   -v /root/bao-data:/bao/data:z -v /root/bao-config:/bao/config:z \
   -e HOME=/tmp ghcr.io/openbao/openbao:2.6.2 server -config=/bao/config/bao.hcl
 
@@ -1137,16 +1190,21 @@ unseal helper below reads (unseal key + root token, root-only). Note
 **`-format=json`** — without it `bao operator init` writes a human-readable
 table that the JSON-parsing helper cannot read:
 
+Every `bao` invocation below runs inside the container, so it needs an
+explicit address and CA trust — `podman exec` does not inherit them:
+
 ```bash
 umask 077
-podman exec osac-openbao bao operator init -format=json \
+podman exec -e BAO_ADDR=https://<host-ip>:8200 -e BAO_CACERT=/bao/tls/ca.crt \
+  osac-openbao bao operator init -format=json \
   -key-shares=1 -key-threshold=1 > /root/openbao-init.json
 chmod 600 /root/openbao-init.json
 
 # first unseal by hand (later ones are the drop-in's job):
 KEY=$(python3 -c 'import json;print(json.load(open("/root/openbao-init.json"))["unseal_keys_b64"][0])')
-curl -sk -X PUT -d "{\"key\":\"$KEY\"}" https://<host-ip>:8200/v1/sys/unseal
-curl -sk https://<host-ip>:8200/v1/sys/health   # 200 = initialized, unsealed, active
+curl -s --cacert /root/bao-ca.pem -X PUT -d "{\"key\":\"$KEY\"}" https://<host-ip>:8200/v1/sys/unseal
+curl -s --cacert /root/bao-ca.pem https://<host-ip>:8200/v1/sys/health \
+  | grep -q '"initialized":true'   # 200 = initialized, unsealed, active
 ```
 
 Then bootstrap the objects the §4.2 values expect — the same objects the
@@ -1155,10 +1213,15 @@ lifecycle policy and role):
 
 ```bash
 ROOT_TOKEN=$(python3 -c 'import json;print(json.load(open("/root/openbao-init.json"))["root_token"])')
-BAO="podman exec -e BAO_ADDR=https://<host-ip>:8200 -e BAO_TOKEN=$ROOT_TOKEN osac-openbao bao"
+# -i forwards stdin (the policy-write heredoc below) into the container
+BAO="podman exec -i -e BAO_ADDR=https://<host-ip>:8200 -e BAO_CACERT=/bao/tls/ca.crt \
+  -e BAO_TOKEN=$ROOT_TOKEN osac-openbao bao"
 
-$BAO namespace create osac 2>/dev/null || echo "namespace osac already exists"
-$BAO auth enable -namespace=osac -path=jwt jwt 2>/dev/null || echo "jwt auth already enabled"
+# existence checks are explicit so a TLS or auth failure is visible instead
+# of being masked by an "already exists" fallback
+$BAO namespace lookup osac >/dev/null 2>&1 || $BAO namespace create osac
+$BAO auth list -namespace=osac | grep -q '^jwt/' \
+  || $BAO auth enable -namespace=osac -path=jwt jwt
 
 $BAO policy write -namespace=osac lifecycle - <<'POLICY'
 path "sys/namespaces/*" {
@@ -1187,7 +1250,7 @@ POLICY
 # point JWT auth at the external Keycloak issuer (reachable over TLS the
 # server trusts; add oidc_discovery_ca_pem=@<ca.pem> if using an internal CA)
 $BAO write -namespace=osac auth/jwt/config \
-  oidc_discovery_url="https://<kc-host>/realms/osac" \
+  oidc_discovery_url="https://<kc-host>:8443/realms/osac" \
   default_role="lifecycle"
 
 $BAO write -namespace=osac auth/jwt/role/lifecycle \
@@ -1276,7 +1339,7 @@ podman run -d --name keycloak-external \
   -e KEYCLOAK_ADMIN_PASSWORD=<kc-admin-password> \
   -e KC_HTTPS_CERTIFICATE_FILE=/etc/x509/https/tls.crt \
   -e KC_HTTPS_CERTIFICATE_KEY_FILE=/etc/x509/https/tls.key \
-  -e KC_HOSTNAME=<kc-host> \
+  -e KC_HOSTNAME=https://<kc-host>:8443 \
   -e KC_HOSTNAME_STRICT=false \
   -e KC_HTTP_ENABLED=false \
   quay.io/keycloak/keycloak:26.6.4 start
@@ -1287,8 +1350,17 @@ systemctl daemon-reload && systemctl enable container-keycloak-external.service
 ```
 
 `start` (production mode) is deliberate — HTTPS issuer URLs require it.
-`KC_HOSTNAME` must be the same host the §5.2 issuer URLs use, or token
-validation fails on audience/issuer mismatch.
+`KC_HOSTNAME` is a full URL including the port, and must match the §5.2
+issuer URLs — **the container publishes 8443 and every URL in this guide
+carries `:8443` explicitly** (host port 443 would need a reverse proxy or
+a privileged mapping, which this recipe does not add). Verify the
+discovery document agrees before wiring any consumer:
+
+```bash
+curl -sk https://<kc-host>:8443/realms/osac/.well-known/openid-configuration \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['issuer'])"
+# must print exactly: https://<kc-host>:8443/realms/osac
+```
 
 **Database durability — lab vs production.** The embedded H2 database in
 the bind-mounted `/root/kc-data` is fine for a lab or evaluation instance
@@ -1299,9 +1371,35 @@ on an external instance like §3's) by adding `KC_DB=postgres`,
 `KC_DB_USERNAME=<kc-db-user>`, `KC_DB_PASSWORD=<kc-db-password>` to the
 run command (standard Keycloak configuration; not exercised in the
 validation lab), and back it up per §10.3. On a clean install, seed the
-realm per §5.3. If the container starts and dies with
-`AccessDeniedException` on the key file, the chown/chmod above did not
-happen.
+realm per §5.3.
+
+Two setup steps make that work against an A.2-style instance:
+
+- **Create the database and user yourself.** The chart's db-init job
+  only provisions `osac_service` and `osac_metering`; nothing creates a
+  `keycloak` database. As the `postgres` superuser (client-cert mTLS,
+  §3.1): `CREATE DATABASE keycloak;` and
+  `CREATE ROLE <kc-db-user> LOGIN PASSWORD '<kc-db-password>';` with
+  ownership of that database granted to it.
+- **Reconcile with the cert-only HBA.** A.2's `access.conf` accepts
+  only client-certificate authentication, but Keycloak's JDBC
+  connection authenticates with username/password. Add a narrowly
+  scoped rule **above** the `cert` lines:
+
+  ```ini
+  hostssl keycloak <kc-db-user> <kc-source-ip>/32 scram-sha-256
+  ```
+
+  (`<kc-source-ip>` is the address the Keycloak connection arrives from —
+  the container's bridge IP when both run on the same host, or the
+  Keycloak host's IP otherwise; `0.0.0.0/0` defeats the purpose). Alternatively keep cert-only HBA and configure the JDBC
+  connection for client-certificate TLS (`?ssl=true&sslmode=verify-full`
+  plus a `sslcert`/`sslkey` pair in the connection properties and a
+  role whose name matches the certificate CN) — more moving parts, no
+  password on the wire.
+
+If the container starts and dies with `AccessDeniedException` on the
+key file, the chown/chmod above did not happen.
 
 ### A.5 Kafka
 

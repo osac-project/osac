@@ -74,8 +74,10 @@
 #   3. Checks deletionTimestamp FIRST — a VMI without a deletion
 #      request must never be patched or force-deleted regardless
 #      of launcher state.
-#   4. Validates the VMI UID, then looks up matching launcher
-#      pods and checks that ALL are terminal or absent.
+#   4. Validates the VMI UID, then discovers all pods directly
+#      controlled by this VMI (controller=true ownerReference
+#      or legacy kubevirt.io/created-by label fallback) and
+#      checks that ALL are terminal or absent.
 #   5. Removes only the foregroundDeleteVirtualMachine finalizer
 #      via atomic RFC 6902 test+replace, preserving all others.
 #   6. Confirms VMI absence before continuing to dependent
@@ -159,15 +161,13 @@
               for operator retry.
           when: (_vmi_uid | trim) == ''
 
-        - name: Look up virt-launcher pod
-          # KubeVirt sets labels kubevirt.io=virt-launcher
-          # and kubevirt.io/created-by=<VMI UID> on every
-          # launcher pod (pkg/virt-controller/services/
-          # template.go).  kubevirt.io/domain is an
-          # annotation, not a label, so label_selectors
-          # must use the two labels above.  Using the VMI
-          # UID ensures we never match a launcher that
-          # belongs to a different VMI.
+        - name: List all pods in target namespace
+          # Single namespace-scoped query; the
+          # vmi_owned_pods filter then selects only
+          # pods directly controlled by this VMI UID
+          # (controller=true ownerReference) or, when
+          # no controlling owner exists, pods with the
+          # legacy kubevirt.io/created-by label.
           kubernetes.core.k8s_info:
             kubeconfig: >-
               {{ remote_cluster_kubeconfig | default(omit) }}
@@ -175,26 +175,26 @@
             kind: Pod
             namespace: >-
               {{ compute_instance_target_namespace }}
-            label_selectors:
-              - kubevirt.io=virt-launcher
-              - >-
-                kubevirt.io/created-by={{
-                _vmi_uid | trim }}
-          register: launcher_pod_info
+          register: _ns_pods
 
-        - name: Classify launcher pod state
+        - name: Filter VMI-owned pods
           ansible.builtin.set_fact:
-            _launcher_terminal: >-
-              {{ (launcher_pod_info.resources
-                  | default([])
+            _owned_pods: >-
+              {{ _ns_pods.resources
+                 | osac.templates.vmi_owned_pods(
+                     _vmi_uid | trim) }}
+
+        - name: Classify owned pod state
+          ansible.builtin.set_fact:
+            _owned_pods_terminal: >-
+              {{ (_owned_pods
                   | map(attribute='status.phase',
                         default='Unknown')
                   | reject('in',
                            ['Succeeded', 'Failed'])
                   | list | length) == 0 }}
-            _launcher_phase: >-
-              {{ (launcher_pod_info.resources
-                  | default([])
+            _owned_pods_phase: >-
+              {{ (_owned_pods
                   | map(attribute='status.phase',
                         default='Unknown')
                   | list | join(','))
@@ -211,24 +211,27 @@
                 VMI deletionTimestamp:
                 {{ _vmi_has_deletion_ts }}
               - >-
-                Launcher phase:
-                {{ _launcher_phase }}
+                Owned pods phase:
+                {{ _owned_pods_phase }}
               - >-
-                Launcher terminal:
-                {{ _launcher_terminal }}
+                Owned pods terminal:
+                {{ _owned_pods_terminal }}
+              - >-
+                Owned pod count:
+                {{ _owned_pods | length }}
 
         - name: >-
-            Fail — launcher still running, cannot
+            Fail — owned pods still running, cannot
             force-delete
           ansible.builtin.fail:
             msg: >-
               VMI stuck after graceful timeout but
-              virt-launcher is still in phase
-              '{{ _launcher_phase }}'. Recovery
-              requires the launcher to be terminal
+              VMI-owned pods are still in phase
+              '{{ _owned_pods_phase }}'. Recovery
+              requires all owned pods to be terminal
               (Succeeded/Failed) or absent. Retaining
               finalizer for operator retry.
-          when: not (_launcher_terminal | bool)
+          when: not (_owned_pods_terminal | bool)
 
         - name: >-
             Remove foreground-delete finalizer

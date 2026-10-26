@@ -1,9 +1,8 @@
-# Installing OSAC on OpenShift Container Platform (WIP)
+# Installing OSAC on OpenShift Container Platform
 
-**Last Updated**: 2026-09-16
+**Last Updated**: 2026-10-09
 **Audience**: Cloud administrators
-**Status**: WIP — see the TBD notes in [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend)
-and [Section 8.3](#83-registering-the-hub) for what's still open
+**Status**: Draft for review
 
 ---
 
@@ -66,9 +65,13 @@ if that's you.
 ### 1.1 What is released
 
 The OSAC platform chart (phase 2) is published as an OCI artifact at
-`oci://ghcr.io/osac-project/charts/osac`. The latest tagged release is
-`0.0.17`, and a rolling `0.0.9-nightly.*` channel is also available. The chart
+`oci://ghcr.io/osac-project/charts/osac`. The latest tagged stable release is
+`0.0.25`; rolling nightly builds are also published. The chart
 includes a `values.schema.json` file and a `values-example.yaml` file.
+
+For a current CaaS installation using the BMaaS worker flow, use `0.0.25` or
+a later stable chart release. To match component versions to another chart
+tag, inspect its dependencies with `helm show chart`.
 
 To install for a specific service, follow the workflow in
 [Section 6](#6-installation-workflows-by-service). Each workflow lists the
@@ -111,6 +114,10 @@ toggles and values to set.
 - The OpenShift CLI (`oc`), matching the cluster version. The installation and
   its hooks call `oc` and `kubectl`.
 - Helm 3.8 or later, for OCI registry support.
+- ORAS CLI v1.3.0 or later, for publishing the CaaS QCOW2 image to an OCI
+  registry. `--artifact-platform` was added in v1.3.0 and is still
+  experimental; see the [ORAS installation guide](https://oras.land/docs/installation/)
+  and [v1.3.0 release notes](https://github.com/oras-project/oras/releases/tag/v1.3.0).
 - The `osac` CLI, latest release, for postinstallation hub registration and
   day-2 operations (see [Section 8.2](#82-installing-the-osac-cli)). Not
   required for the Helm installation.
@@ -179,9 +186,18 @@ Notes on individual components:
   `mce.enabled=true` when this installation owns standalone MCE; the `caas-ci`
   infrastructure profile does so explicitly. Leave it `false` when Red Hat
   Advanced Cluster Management for Kubernetes (RHACM) or another MCE
-  installation already owns it. The disabled state also prevents the phase-1
-  chart from applying its temporary Assisted image override `ConfigMap` and
-  compatibility RBAC.
+  installation already owns it. ISO-less provisioning requires the Assisted
+  components introduced with MCE 5.0; this change was not backported to MCE
+  2.x. Until a stable MCE 5.0 catalog is available, the chart remains on
+  `stable-2.17` and temporarily overrides the `assisted-service`,
+  `assisted-installer-agent`, `assisted-installer`, and
+  `assisted-installer-controller` images with MCE 5.0 images, which are
+  compatible with MCE 2.x. The override bridge is rendered only when
+  `mce.enabled=true`; when RHACM or another external MCE owns the lifecycle,
+  ensure it provides compatible Assisted 5.0 images. Once MCE 5.0 is available,
+  update the chart's MCE channel/version and retire the temporary overrides.
+  See the [MCE dependency values](../../../osac-installer/charts/osac-deps/values.yaml)
+  and [Assisted image override values](../../../osac-installer/charts/osac-infra/values.yaml).
 
 ### 2.4 Credentials and external services
 
@@ -218,24 +234,23 @@ Required for a production deployment:
 
 Required for CaaS:
 
-- **DNS credentials.** Route 53 is the only DNS backend the chart schema
-  accepts, so a Helm install requires an `AWS_ACCESS_KEY_ID` value and an
-  `AWS_SECRET_ACCESS_KEY` value that can manage the target hosted zone, even
-  in an on-premises environment. To run without OSAC managing DNS, see
-  [Section 8.4](#84-installing-without-dns-management). For more information,
-  see
-  [`dns-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/dns-backend.md).
-- **A `NetworkClass` with a registered manager.** OSAC provisions cluster
-  networking through a `NetworkClass` custom resource, which requires a
-  fabric manager, a Kubernetes manager, or both, to be registered and
-  referenced (`networkClass.fabricManager` / `networkClass.k8sManager`). At
-  this stage, CaaS assumes the cluster runs on servers that are part of a
-  physical fabric managed by a fabric manager, such as Netris. Netris
-  requires the controller URL, credentials, site and tenant IDs, and SSH keys
-  to the servers and the bastion host. Other fabric and Kubernetes managers
-  may be registered on your cluster; check with whoever manages your OSAC
-  networking configuration for what's available. For more information, see
-  [`network-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/network-backend.md).
+- **DNS backend.** Route 53 is the default and only provider role accepted by
+  the current chart schema. AWS credentials are needed when AAP must create or
+  delete Route 53 records; they are not required merely to install the chart.
+  The runtime `dns.noop.dns` role is not exposed by the chart schema yet; see
+  [Section 8.4](#84-installing-without-dns-management) for the documented
+  ConfigMap workaround. For details, see
+  [`dns-backend.md`](../../../osac-installer/docs/dns-backend.md).
+- **Networking backend.** Configure the normal installer path through
+  `global.networking`, not by independently wiring a `NetworkClass` and
+  manager ConfigMaps. The CaaS path in this guide uses the Netris fabric
+  manager on connected IPv4 networking. Helm derives the manager registration,
+  `NetworkClass`, and AAP backend settings from that facade. See
+  [`network-backend.md`](../../../osac-installer/docs/network-backend.md).
+- **BMaaS worker provisioning.** The current CaaS flow provisions bare-metal
+  workers on demand through BMaaS. Enable and configure BMaaS, its inventory,
+  worker `BareMetalInstanceType`, and the release `DiskImage`/`ClusterVersion`
+  association as described in [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend).
 
 Required for BMaaS with the Metal3 backend:
 
@@ -252,13 +267,18 @@ Required for BMaaS with the Metal3 backend:
   LVM Storage or another dynamic storage class, and MetalLB or another
   `LoadBalancer`-class implementation.
 - **CaaS** (`global.services.caas.enabled`) requires multicluster engine
-  (standalone, or provided by RHACM if it's installed), a DNS backend, a
-  network backend, and `aap.instanceGroups.clusterFulfillment` configuration.
-  For more information,
-  see
-  [`aap-configuration.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/aap-configuration.md).
-- **BMaaS** (`global.services.bmaas.enabled`) requires BareMetalOperator and a
-  `Provisioning` custom resource with `spec.watchAllNamespaces: true`.
+  (standalone, or provided by RHACM if it's installed), MetalLB or another
+  `LoadBalancer`-class implementation, LVM Storage or another dynamic storage
+  class, a DNS backend, the selected network backend, and both
+  `clusterFulfillment` and `networkFulfillment` AAP instance groups. The
+  current bare-metal worker flow also requires enabled, configured BMaaS with
+  available inventory, a worker `BareMetalInstanceType`, and a `DiskImage`
+  associated with the selected `ClusterVersion`. See
+  [`aap-configuration.md`](../../../osac-installer/docs/aap-configuration.md)
+  and [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend).
+- **BMaaS** (`global.services.bmaas.enabled`) requires a configured inventory
+  backend. When using Metal3, see the BareMetalOperator and `Provisioning`
+  prerequisites in [Section 2.4](#24-credentials-and-external-services).
 
 ---
 
@@ -268,7 +288,9 @@ OSAC subscribes to a specific update channel for each platform Operator. The
 channel-tracked versions float as the channels publish updates.
 [Table 3.1](#table-31-component-versions) lists each channel and the CSV version
 that channel resolved to on OpenShift Container Platform 4.22.6 in September
-2026. Treat the observed versions as indicative.
+2026. The chart and subchart versions in that table are a dated `0.0.17`
+release snapshot, not the current stable tag; treat the observed versions as
+indicative.
 
 <a id="table-31-component-versions"></a>
 **Table 3.1. Component versions**
@@ -374,7 +396,7 @@ You create one values file for the `osac` chart, `my-values.yaml`.
 1. Retrieve the full set of value keys from the chart:
 
    ```console
-   $ helm show values oci://ghcr.io/osac-project/charts/osac --version 0.0.17 > values-upstream.yaml
+   $ helm show values oci://ghcr.io/osac-project/charts/osac --version 0.0.25 > values-upstream.yaml
    ```
 
 2. Create `my-values.yaml` for the `osac` chart. Base it on the Production
@@ -427,7 +449,7 @@ Use this procedure when the cluster already meets the prerequisites.
 - Install the `osac` chart by running the following command:
 
   ```console
-  $ helm install osac oci://ghcr.io/osac-project/charts/osac --version 0.0.17 \
+  $ helm install osac oci://ghcr.io/osac-project/charts/osac --version 0.0.25 \
       -n "$NS" --create-namespace \
       -f my-values.yaml \
       --set global.clusterDomain="$DOMAIN" \
@@ -436,7 +458,7 @@ Use this procedure when the cluster already meets the prerequisites.
       --wait --timeout 40m
   ```
 
-  Use `--version 0.0.9-nightly.<build>` only to test unreleased fixes. The AAP
+  Use a currently published nightly tag only to test unreleased fixes. The AAP
   bootstrap job takes 10 to 40 minutes. Helm does not return until it and, for
   CaaS, the `osac-publish-templates` hook have finished.
 
@@ -458,7 +480,7 @@ complete set, run the following command, and review the `osac` chart
 `values.schema.json` file:
 
 ```console
-$ helm show values oci://ghcr.io/osac-project/charts/osac --version 0.0.17
+$ helm show values oci://ghcr.io/osac-project/charts/osac --version 0.0.25
 ```
 
 Keys defined in `charts/osac/values.schema.json` are marked `schema`. Keys
@@ -499,10 +521,9 @@ subchart's own `values.yaml` file.
 
 | Parameter | Source | Description | Default |
 |---|---|---|---|
-| `networkManagers[]` | schema | Registers network-manager `ConfigMap` resources that the Operator dispatcher discovers. Each entry has `name`, `role` (`fabric` or `k8s`), `description`, and `capabilities`. Equivalent to `operator.networkManagers.*`. | `[]` |
-| `networkClass.enabled` | schema | Creates the default `NetworkClass` in the Fulfillment Service after installation. Required for VirtualNetwork and tenant onboarding. | `true` |
-| `networkClass.title`, `networkClass.description` | schema | Required title and description for the `NetworkClass`. | CUDN text |
-| `networkClass.fabricManager`, `networkClass.k8sManager` | schema | Which registered manager backs the class. For fabric-less VMaaS, set `fabricManager: ""` and `k8sManager: "k8s_only"`. For Netris, set `fabricManager: "netris"`. | `cudn_net` and `""` |
+| `global.networking.fabricManager`, `global.networking.k8sManager`, `global.networking.netris.*` | schema | Preferred backend facade. Helm derives the manager registration, default `NetworkClass`, and AAP backend settings. See [`network-backend.md`](../../../osac-installer/docs/network-backend.md). | No fabric; `k8s_only` |
+| `operator.networkManagers.fabricManagers.*`, `operator.networkManagers.k8sManagers.*` | schema | Low-level manager registrations. Normally derived from `global.networking`; use directly only for an explicitly managed/custom registration. | Operator defaults |
+| `networkClass.enabled`, `networkClass.title`, `networkClass.description`, `networkClass.fabricManager`, `networkClass.k8sManager` | schema | Low-level `NetworkClass` values. Prefer `global.networking`; use the facade's `networkClass` override when a targeted override is needed. | Manager-specific defaults |
 | `networkClass.isDefault` | schema | Marks the class the deployment default. Only one `NetworkClass` can exist. | `true` |
 | `networkClass.defaults.virtualNetworkIPv4CIDR`, `networkClass.defaults.subnetIPv4CIDR`, `networkClass.defaults.enableNatGateway`, `networkClass.defaults.egressRules` | schema | Tenant-onboarding defaults that auto-create the VirtualNetwork, Subnet, and SecurityGroup. | `10.200.0.0/16` and others |
 
@@ -657,29 +678,88 @@ the cluster. Then follow [Section 4](#4-installing-osac).
 
 ### 6.2 Installing OSAC for CaaS with the Netris network backend
 
-The AWS Route 53 DNS backend is the default; it's independent of the network
-backend. For the full variable reference, see
-[`network-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/network-backend.md).
+The current CaaS flow provisions bare-metal worker nodes on demand through
+BMaaS; it does not use a pre-booted static worker-agent pool. This flow is
+available in stable chart `0.0.25` and later. Configure Netris through the
+chart's `global.networking` facade, which derives the network-manager
+registration, `NetworkClass`, and AAP backend variables. The AWS Route 53 DNS
+backend is the default and is independent of the network backend. For the full
+variable reference, see
+[`network-backend.md`](../../../osac-installer/docs/network-backend.md).
 
 **Prerequisites**
 
-- multicluster engine is installed (standalone, or provided by RHACM).
+- MCE is installed (standalone, or provided by RHACM). ISO-less CaaS requires
+  the Assisted 5.0 components; see the compatibility and transition guidance
+  in [Section 2.3](#23-platform-operators-and-components).
 - MetalLB (or another `LoadBalancer`-class implementation) and LVM Storage
   (or another dynamic storage class) are installed.
-- You have AWS Route 53 credentials for the target hosted zone.
-- Access to the Netris controller: URL, user name, password, site and tenant
-  IDs, and management VPC details.
-- SSH private keys for the servers and the bastion host.
+- BMaaS is enabled and configured with a usable provider backend, worker
+  inventory, and BMC/network reachability. Define the worker
+  `BareMetalInstanceType` used by the cluster.
+- Publish the worker RHCOS QCOW2 image as an OCI artifact, register it as a
+  `DiskImage`, and associate it with the selected `ClusterVersion` before
+  provisioning the first cluster.
+- The Netris controller, site, tenant, management VPC, and resource-class
+  mapping are available. This guide's Netris CaaS path assumes connected IPv4
+  networking and one provider-owned networking hub.
+- For Route 53-managed DNS, provide credentials with permissions to manage the
+  target hosted zone. If OSAC will not manage DNS, follow
+  [Section 8.4](#84-installing-without-dns-management) before creating the
+  first `ClusterOrder`.
+- SSH private keys for the servers and bastion host are still required by the
+  current CaaS AAP workflow; this is separate from the removed static worker
+  pool.
+
+#### Publish the worker RHCOS image
+
+Publish the bootable, whole-disk QCOW2 image to an OCI-compliant registry
+reachable from the BMaaS provisioning environment. For a private registry,
+authenticate for the push and configure read credentials for the provisioning
+environment. Registering a `DiskImage` stores its reference only; it does not
+fetch the artifact or verify registry access. Replace the example registry,
+repository, tag, and file path with your values. For a private registry, set
+`REGISTRY_USER` and `REGISTRY_PASSWORD` through a secure mechanism rather than
+putting passwords in shell history; omit the login command for a public
+registry.
+
+```console
+$ export REGISTRY="registry.example.com"
+$ export REPOSITORY="osac/rhcos"
+$ export TAG="4.22.0"
+$ export QCOW2="/path/to/rhcos-4.22.0-x86_64.qcow2"
+$ printf '%s' "$REGISTRY_PASSWORD" | oras login \
+    --username "$REGISTRY_USER" --password-stdin "$REGISTRY"
+$ oras push -a disktype=qcow2 --artifact-platform linux/amd64 \
+    "$REGISTRY/$REPOSITORY:$TAG" "$QCOW2"
+```
+
+The annotation marks the artifact as QCOW2 and the platform metadata identifies
+this example as Linux/AMD64; use the platform matching your image and worker
+architecture. `--artifact-platform` is experimental in ORAS 1.3; check the
+[ORAS `push` documentation](https://oras.land/docs/commands/oras_push/) for
+version-specific behavior. Use the published reference as the `DiskImage`
+`source_ref`, for example
+`oci://$REGISTRY/$REPOSITORY:$TAG`. Prefer the manifest digest printed by
+`oras push` for an immutable reference:
+`oci://$REGISTRY/$REPOSITORY@sha256:<digest>`. For the OSAC `DiskImage`
+registration steps, see the
+[Bare Metal Instance DiskImage guide](../developer/baremetalinstance-guide.md).
 
 **Procedure**
 
-1. In `my-values.yaml`, enable the CaaS tier, the OpenShift Container Platform
-   release images offered to hosted clusters, and the `cluster-fulfillment`
-   and `network-fulfillment` instance groups with the Netris coordinates:
+1. In `my-values.yaml`, enable CaaS and BMaaS, select Netris through the
+   `global.networking` facade, and enable both AAP instance groups. Helm
+   derives `NETWORK_CLASS`, `NETWORK_STEPS_COLLECTION`, and the shared Netris
+   values; do not set those derived values directly.
 
    ```yaml
    global:
-     services: { caas: { enabled: true }, vmaas: { enabled: false }, bmaas: { enabled: false }, maas: { enabled: false } }
+     services:
+       caas: { enabled: true }
+       vmaas: { enabled: false }
+       bmaas: { enabled: true }
+       maas: { enabled: false }
      networking:
        fabricManager: netris
        k8sManager: ""
@@ -687,6 +767,7 @@ backend. For the full variable reference, see
          controllerUrl: "https://netris.example.com"
          credentials:
            username: "netris"
+           externalSecret: true
          siteId: "5"
          tenantId: "1"
          tenantName: "Admin"
@@ -722,20 +803,18 @@ backend. For the full variable reference, see
          enabled: true
    ```
 
-   In `global.networking.netris.resourceClassMap`, each key is a resource-class name;
+   `global.networking.netris.resourceClassMap` is a JSON string. Each key is a
+   resource-class name;
    `server_cluster_template_id` is the Netris server-cluster template,
    `mgmt_interface` is the management NIC, and `vpc_interfaces` are the
-   data-plane NICs.
+   data-plane NICs. Set the Netris password in the `netris-credentials` Secret
+   in the AAP namespace because this example uses `externalSecret: true`.
 
-2. Put the AWS and Netris credentials in a separate values file that is
-   excluded from version control:
+2. Put Route 53 and SSH credentials in a separate values file excluded from
+   version control. Omit the AWS keys if using the no-op DNS procedure in
+   Section 8.4.
 
    ```yaml
-   global:
-     networking:
-       netris:
-         credentials:
-           password: "<netris_password>"
    aap:
      instanceGroups:
        clusterFulfillment:
@@ -748,18 +827,25 @@ backend. For the full variable reference, see
              <contents_of_your_openssh_bastion_private_key_file>
    ```
 
-3. Install OSAC (see [Section 4.3](#43-installing-osac)), passing every
-   values file, for example `helm ... -f my-values.yaml -f my-secrets.local.yaml
-   ...`. For more information, see
-   [`aap-configuration.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/aap-configuration.md)
-   and
-   [`dns-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/dns-backend.md).
+3. Before creating a `ClusterOrder`, confirm that BMaaS has eligible worker
+   hosts and that the selected `BareMetalInstanceType` and `ClusterVersion`
+   resolve to the intended physical profile and RHCOS `DiskImage`. BMaaS
+   provisions each worker BMI on demand, performs the physical network handoff,
+   and discovers the tenant-network IP; do not pre-create or import a static
+   pool of worker Agents.
+
+4. Install OSAC as described in [Section 4.3](#43-installing-osac), passing
+   every values file, for example `helm ... --version 0.0.25 -f
+   my-values.yaml -f my-secrets.local.yaml ...`. Use `0.0.25` or a later
+   stable chart release for this flow. For AAP group details, see
+   [`aap-configuration.md`](../../../osac-installer/docs/aap-configuration.md);
+   for DNS setup, see [`dns-backend.md`](../../../osac-installer/docs/dns-backend.md).
 
 **Verification**
 
 - Complete [Section 7](#7-verifying-the-installation), including step 10.
-- Create a `ClusterOrder` custom resource and watch the AAP
-  `cluster-fulfillment` and `network-fulfillment` jobs.
+- Create a `ClusterOrder` and watch its status, the on-demand BMaaS BMI
+  lifecycle, and the AAP `cluster-fulfillment` and `network-fulfillment` jobs.
 
 ### 6.3 Installing OSAC for BMaaS
 
@@ -988,12 +1074,13 @@ $ oc get route -n keycloak
 ### 8.2 Installing the `osac` CLI
 
 Download the CLI version matching the `fulfillment-service` subchart pinned
-by your `osac` chart release (`0.0.107` for release `0.0.17` — see
-[Section 3](#3-osac-component-versions)). Releases are tagged and published
-on the monorepo, not on the `fulfillment-service` repository itself:
+by your `osac` chart release (`0.0.115` for chart `0.0.25`; verify the
+subchart version with `helm show chart` for other releases). Releases are tagged
+and published on the monorepo, not on the `fulfillment-service` repository
+itself:
 
 ```console
-$ curl -L -o osac https://github.com/osac-project/osac/releases/download/fulfillment-service/v0.0.107/osac_Linux_x86_64
+$ curl -L -o osac https://github.com/osac-project/osac/releases/download/fulfillment-service/v0.0.115/osac_Linux_x86_64
 $ chmod +x osac
 $ sudo mv osac /usr/local/bin/
 ```
@@ -1017,7 +1104,7 @@ Fulfillment Service and the hub run on the same cluster.
 2. Generate the hub-access kubeconfig file:
 
    ```console
-   $ curl -sO https://raw.githubusercontent.com/osac-project/osac/refs/tags/osac/v0.0.17/osac-installer/scripts/create-hub-access-kubeconfig.sh
+   $ curl -sO https://raw.githubusercontent.com/osac-project/osac/refs/tags/osac/v0.0.25/osac-installer/scripts/create-hub-access-kubeconfig.sh
    $ chmod +x create-hub-access-kubeconfig.sh
    $ ./create-hub-access-kubeconfig.sh
    ```
@@ -1035,16 +1122,20 @@ the self-signed `default-ca`, add `--ca-file default-ca.crt` to the
 `--insecure` instead only for evaluation, never in production. Add
 `--as system:admin` only when your `oc` context cannot mint the token.
 
-Multi-hub environments are currently unsupported, and support may be added in future releases.
+For networking, each deployment supports one provider-owned networking hub.
+This boundary does not limit the number of hosted or workload clusters that
+use that hub; see the
+[networking decisions](../../agent-context/networking-decisions.md).
 
 ### 8.4 Installing without DNS management
 
-`dns.route53.dns` is the only `DNS_CLASS` the chart schema accepts; a Helm
-install always requires Route 53 credentials, even in an on-premises
-environment with no Route 53 zone. To run CaaS without OSAC managing DNS,
-install normally and then patch the `cluster-fulfillment-ig` `ConfigMap`
-afterward — this bypasses schema validation, so it can't be set through Helm
-values directly.
+`dns.route53.dns` is the default and only provider role accepted by the current
+chart schema. The runtime `dns.noop.dns` role exists, but the chart schema does
+not currently allow it in `DNS_CLASS`; the post-install patch below remains
+necessary. Helm installation itself does not require AWS credentials. AAP
+needs AWS credentials only when Route 53 is used to create or delete records.
+To run CaaS without OSAC managing DNS, install normally and then patch the
+`cluster-fulfillment-ig` `ConfigMap` before the first `ClusterOrder`.
 
 **Procedure**
 
@@ -1070,19 +1161,24 @@ values directly.
        | grep -E 'DNS_CLASS|EXTERNAL_ACCESS|HOSTED_CLUSTER'
    ```
 
-3. Create these DNS records yourself; `dns.noop.dns` stops OSAC from managing
-   DNS, it does not create records for you:
+3. Create these DNS records yourself before provisioning; `dns.noop.dns` skips
+   DNS changes, so it does not create or delete records for you:
 
    ```text
    api.<cluster>.<guest_domain>       -> API endpoint
+   api-int.<cluster>.<guest_domain>   -> API endpoint
    *.apps.<cluster>.<guest_domain>    -> ingress endpoint
    ```
 
-   The records must resolve from the hub, the AAP execution environment, the
-   managed host, and the hosted cluster.
+   The Netris workflow still waits for `api`, `api-int`, and
+   `default-router.apps.<cluster>.<guest_domain>` to resolve after the no-op
+   task. The wildcard apps record covers the default-router name. Ensure the
+   records resolve from the hub, the AAP execution environment, the managed
+   host, and the hosted cluster.
 
-Reapply the patch after any infrastructure reinstall that recreates this
-`ConfigMap`.
+Reapply the patch after any Helm upgrade or infrastructure reinstall that
+recreates this `ConfigMap`; the post-install override is not retained in chart
+values.
 
 ### 8.5 Additional resources
 
@@ -1101,8 +1197,8 @@ Reapply the patch after any infrastructure reinstall that recreates this
 
 - Deployment onto an existing OpenShift Container Platform cluster with
   `cluster-admin` privileges.
-- The published `osac` chart at a tagged release, such as `0.0.17`. The chart
-  `values-example.yaml` file documents the Production block: an external
+- The published `osac` chart at a tagged stable release, such as `0.0.25`.
+  The chart `values-example.yaml` file documents the Production block: an external
   PostgreSQL database, an external Keycloak, and pinned image tags.
 - Prerequisite Operators and infrastructure already present on the cluster —
   installed by whoever prepares the cluster using the
@@ -1115,7 +1211,9 @@ Reapply the patch after any infrastructure reinstall that recreates this
   [secrets management configuration guide](secrets-management-configuration.md).
 - An external Keycloak configured with the `osac` realm, clients, and roles
   through `service.auth` and `service.idp`.
-- A single hub cluster.
+- A single OSAC installation hub cluster. Networking has a separate boundary:
+  one provider-owned networking hub per deployment, with multiple hosted or
+  workload clusters able to use it (see [Section 8.3](#83-registering-the-hub)).
 
 ### 9.2 Evaluation only
 
@@ -1135,8 +1233,24 @@ Reapply the patch after any infrastructure reinstall that recreates this
   Keycloak through `service.auth` and `service.idp`, but realm and client
   provisioning is out of scope. See
   [`fulfillment-service/docs/INSTALL.md`](https://github.com/osac-project/osac/blob/main/fulfillment-service/docs/INSTALL.md).
-- Multi-hub topologies (TBD — see the note in
-  [Section 8.3](#83-registering-the-hub)).
+- Disconnected, IPv6, or dual-stack networking, and deployments requiring
+  more than one provider-owned networking hub.
+- CaaS VM worker nodes or multi-NIC cluster attachments; this CaaS flow uses
+  BMaaS-backed bare-metal worker nodes and a single network attachment.
+
+### 9.4 CaaS support boundary
+
+| CaaS profile | Status | Boundary |
+|---|---|---|
+| On-demand bare-metal workers through BMaaS | Available in stable chart `0.0.25` and later | Workers are provisioned on demand; this replaces the static pre-booted agent pool. Availability in the chart does not certify a particular provider deployment. |
+| Netris-backed CaaS networking | Supported chart configuration | Requires connected IPv4 networking and one provider-owned networking hub per deployment. Multiple hosted/workload clusters may use that hub. |
+| `cudn_net` with `ci.steps` / virtual BM workers | CI-only | Not a production physical-Netris profile. |
+| `agentless_net` | Limited baseline; not a complete CaaS backend | Do not use it to claim full production CaaS provisioning. |
+| Disconnected, IPv6/dual-stack, or multi-network-hub CaaS; VM workers or multi-NIC attachments | Not supported or covered by this flow | The documented CaaS path is connected IPv4 with bare-metal workers and one cluster network attachment. |
+
+The table describes shipped chart/configuration scope, not a guarantee that a
+site's hardware, BMC access, fabric, or DNS setup has been validated. Complete
+the environment-specific integration testing before production rollout.
 
 ---
 
@@ -1236,7 +1350,7 @@ indicates an incorrect `--version` value. To list the tags, run the following
 command:
 
 ```console
-$ helm show chart oci://ghcr.io/osac-project/charts/osac --version 0.0.17
+$ helm show chart oci://ghcr.io/osac-project/charts/osac --version 0.0.25
 ```
 
 ### 11.5 The `osac-db-init` hook fails

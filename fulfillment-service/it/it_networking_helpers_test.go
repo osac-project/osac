@@ -100,8 +100,24 @@ func cleanupNetworkFixtureResource(
 	}
 }
 
+type networkClassFixtureCleanupSummary struct {
+	SchemaVersion int    `json:"schema_version"`
+	TotalNS       int64  `json:"total_ns"`
+	Outcome       string `json:"outcome"`
+}
+
 func cleanupNetworkClassFixture(ctx context.Context, client privatev1.NetworkClassesClient, id string) error {
-	return cleanupNetworkFixtureResource(ctx,
+	summary := networkClassFixtureCleanupSummary{SchemaVersion: 1, Outcome: "interrupted"}
+	totalStarted := time.Now()
+	defer func() {
+		summary.TotalNS = time.Since(totalStarted).Nanoseconds()
+		_, reporterConfig := GinkgoConfiguration()
+		if reporterConfig.JSONReport != "" {
+			AddReportEntry("networkclass-fixture-cleanup", summary, ReportEntryVisibilityNever)
+		}
+	}()
+
+	err := cleanupNetworkFixtureResource(ctx,
 		func(ctx context.Context) error {
 			_, err := client.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: id}.Build())
 			return err
@@ -125,6 +141,12 @@ func cleanupNetworkClassFixture(ctx context.Context, client privatev1.NetworkCla
 			}.Build())
 			return err
 		})
+	if err != nil {
+		summary.Outcome = "error"
+	} else {
+		summary.Outcome = "success"
+	}
+	return err
 }
 
 func cleanupSecurityGroupFixture(ctx context.Context, client privatev1.SecurityGroupsClient, id string) error {

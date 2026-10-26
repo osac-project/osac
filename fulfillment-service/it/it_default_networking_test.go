@@ -21,6 +21,7 @@ import (
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	"github.com/onsi/ginkgo/v2/dsl/reporting"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -728,12 +729,61 @@ func createDefaultNetworkClass(
 	return response.GetObject().GetId()
 }
 
+type defaultNetworkingCleanupSummary struct {
+	SchemaVersion         int    `json:"schema_version"`
+	TotalNS               int64  `json:"total_ns"`
+	DisableDefaultsNS     int64  `json:"disable_defaults_ns"`
+	SetupNS               int64  `json:"setup_ns"`
+	ListTenantsNS         int64  `json:"list_tenants_ns"`
+	TenantSweepNS         int64  `json:"tenant_sweep_ns"`
+	DeleteCallsNS         int64  `json:"delete_calls_ns"`
+	WaitNS                int64  `json:"wait_ns"`
+	TenantsListed         int    `json:"tenants_listed"`
+	TenantsStarted        int    `json:"tenants_started"`
+	TenantsCompleted      int    `json:"tenants_completed"`
+	TenantsWithoutPending int    `json:"tenants_without_pending"`
+	DeleteAttempts        int    `json:"delete_attempts"`
+	PendingResponses      int    `json:"pending_responses"`
+	Outcome               string `json:"outcome"`
+	LastStage             string `json:"last_stage"`
+}
+
 // cleanupDefaultNetworkingForAllTenants removes controller-owned default
 // resources created while the test NetworkClass was active. The integration
 // service starts with persistent test tenants, so deleting only the tenant
 // created by an individual spec leaves other VirtualNetworks referencing the
 // singleton NetworkClass.
-func cleanupDefaultNetworkingForAllTenants(ctx context.Context, networkClassID string) error {
+func cleanupDefaultNetworkingForAllTenants(ctx context.Context, networkClassID string) (resultErr error) {
+	summary := defaultNetworkingCleanupSummary{SchemaVersion: 1, Outcome: "interrupted", LastStage: "setup"}
+	totalStarted := time.Now()
+	phaseStarted := totalStarted
+	if networkClassID != "" {
+		summary.LastStage = "disable_defaults"
+	}
+	defer func() {
+		elapsed := time.Since(phaseStarted).Nanoseconds()
+		switch summary.LastStage {
+		case "disable_defaults":
+			summary.DisableDefaultsNS += elapsed
+		case "setup":
+			summary.SetupNS += elapsed
+		case "list_tenants":
+			summary.ListTenantsNS += elapsed
+		case "tenant_sweep":
+			summary.TenantSweepNS += elapsed
+		}
+		summary.TotalNS = time.Since(totalStarted).Nanoseconds()
+		if resultErr != nil {
+			summary.Outcome = "error"
+		} else if summary.LastStage == "complete" {
+			summary.Outcome = "success"
+		}
+		_, reporterConfig := GinkgoConfiguration()
+		if reporterConfig.JSONReport != "" {
+			reporting.AddReportEntry("default-networking-cleanup", summary, reporting.ReportEntryVisibilityNever)
+		}
+	}()
+
 	// Stop the tenant controller from recreating defaults while this fixture is
 	// being torn down. It reconciles every synced tenant while the NetworkClass
 	// still contains defaults, so deleting resources first races with Ensure.
@@ -764,6 +814,9 @@ func cleanupDefaultNetworkingForAllTenants(ctx context.Context, networkClassID s
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
+		summary.DisableDefaultsNS += time.Since(phaseStarted).Nanoseconds()
+		summary.LastStage = "setup"
+		phaseStarted = time.Now()
 	}
 
 	store, err := auth.NewMemoryTokenStore().SetLogger(logger).Build()
@@ -794,18 +847,34 @@ func cleanupDefaultNetworkingForAllTenants(ctx context.Context, networkClassID s
 		return fmt.Errorf("build default networking manager: %w", err)
 	}
 	tenantsClient := privatev1.NewTenantsClient(tool.InternalView().AdminConn())
+	summary.SetupNS += time.Since(phaseStarted).Nanoseconds()
+	summary.LastStage = "list_tenants"
+	phaseStarted = time.Now()
 	tenants, err := tenantsClient.List(ctx, privatev1.TenantsListRequest_builder{}.Build())
 	if err != nil {
 		return fmt.Errorf("list tenants for default networking cleanup: %w", err)
 	}
+	summary.ListTenantsNS += time.Since(phaseStarted).Nanoseconds()
+	summary.LastStage = "tenant_sweep"
+	phaseStarted = time.Now()
+	summary.TenantsListed = len(tenants.GetItems())
 
 	for _, tenant := range tenants.GetItems() {
+		summary.TenantsStarted++
+		pendingEver := false
 		tenantName := tenant.GetMetadata().GetName()
 		cleanupCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		ticker := time.NewTicker(time.Second)
 		for {
+			summary.DeleteAttempts++
+			deleteStarted := time.Now()
 			err = manager.Delete(cleanupCtx, tenantName)
+			summary.DeleteCallsNS += time.Since(deleteStarted).Nanoseconds()
 			if err == nil {
+				summary.TenantsCompleted++
+				if !pendingEver {
+					summary.TenantsWithoutPending++
+				}
 				break
 			}
 			if !errors.Is(err, defaultnetworking.ErrResourcesDeleting) {
@@ -813,17 +882,24 @@ func cleanupDefaultNetworkingForAllTenants(ctx context.Context, networkClassID s
 				ticker.Stop()
 				return fmt.Errorf("delete default networking for tenant %q: %w", tenantName, err)
 			}
+			summary.PendingResponses++
+			pendingEver = true
+			waitStarted := time.Now()
 			select {
 			case <-cleanupCtx.Done():
+				summary.WaitNS += time.Since(waitStarted).Nanoseconds()
 				cancel()
 				ticker.Stop()
 				return fmt.Errorf("wait for default networking deletion for tenant %q: %w", tenantName, cleanupCtx.Err())
 			case <-ticker.C:
+				summary.WaitNS += time.Since(waitStarted).Nanoseconds()
 			}
 		}
 		cancel()
 		ticker.Stop()
 	}
+	summary.TenantSweepNS += time.Since(phaseStarted).Nanoseconds()
+	summary.LastStage = "complete"
 	return nil
 }
 

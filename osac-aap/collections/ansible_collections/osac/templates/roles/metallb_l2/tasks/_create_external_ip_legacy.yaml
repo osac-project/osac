@@ -1,0 +1,88 @@
+---
+- name: Include get remote cluster kubeconfig
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: get_remote_cluster_kubeconfig
+
+- name: Validate ExternalIP fields and annotations
+  ansible.builtin.assert:
+    that:
+      - external_ip.metadata is defined
+      - external_ip.metadata.name is defined
+      - external_ip.metadata.name | length > 0
+      - external_ip.metadata.annotations is defined
+      - "'osac.openshift.io/externalippool-name' in external_ip.metadata.annotations"
+    fail_msg: >-
+      ExternalIP metadata.name and
+      metadata.annotations['osac.openshift.io/externalippool-name'] are required
+
+- name: Extract ExternalIP configuration
+  ansible.builtin.set_fact:
+    ip_name: "{{ external_ip.metadata.name }}"
+    ip_pool_name: >-
+      {{ external_ip.metadata.annotations['osac.openshift.io/externalippool-name'] }}
+
+- name: Display ExternalIP information
+  ansible.builtin.debug:
+    msg:
+      - "Creating LoadBalancer Service for ExternalIP '{{ ip_name }}'"
+      - "Pool name (IPAddressPool): {{ ip_pool_name }}"
+
+# Empty-selector LB Service reserves an IP from the MetalLB pool without
+# routing traffic. Port 65535 is arbitrary — required by the Service spec
+# but unused. MetalLB writes the assigned IP to status.loadBalancer.ingress.
+- name: Create LoadBalancer Service
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: "osac-eip-{{ ip_name }}"
+        namespace: metallb-system
+        annotations:
+          metallb.universe.tf/address-pool: "{{ ip_pool_name }}"
+        labels:
+          osac.openshift.io/externalip: "{{ ip_name }}"
+          osac.openshift.io/managed-by: osac-fulfillment
+      spec:
+        type: LoadBalancer
+        selector: {}
+        ports:
+          - name: placeholder
+            protocol: TCP
+            port: 65535
+            targetPort: 65535
+  register: lb_service_result
+  retries: 60
+  delay: 10
+  until: lb_service_result is successful
+
+- name: Display LoadBalancer Service creation result
+  ansible.builtin.debug:
+    msg:
+      - "LoadBalancer Service 'osac-eip-{{ ip_name }}' created"
+      - "Changed: {{ lb_service_result.changed | default(false) }}"
+
+- name: Wait for IP assignment
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Service
+    name: "osac-eip-{{ ip_name }}"
+    namespace: metallb-system
+  register: lb_service_info
+  retries: 60
+  delay: 10
+  until: >-
+    lb_service_info.resources | length > 0 and
+    lb_service_info.resources[0].status.loadBalancer.ingress | default([]) | length > 0
+
+- name: Extract assigned IP
+  ansible.builtin.set_fact:
+    assigned_ip: "{{ lb_service_info.resources[0].status.loadBalancer.ingress[0].ip }}"
+
+- name: Display assigned IP
+  ansible.builtin.debug:
+    msg: "ExternalIP '{{ ip_name }}' assigned address: {{ assigned_ip }}"

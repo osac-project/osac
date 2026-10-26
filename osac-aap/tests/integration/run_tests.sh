@@ -72,6 +72,7 @@ ROLE_TESTS=(
   "agentless_net_attachment"
   "compute_instance_delete_vmi_recovery"
   "metallb_l2_detach_annotation"
+  "metallb_l2_external_ip"
   "netris_protected_launch"
   "netris_fabric"
   "cudn_evpn"

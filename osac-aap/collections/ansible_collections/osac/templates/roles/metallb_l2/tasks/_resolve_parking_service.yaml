@@ -1,0 +1,114 @@
+---
+# Resolve the MetalLB parking Service for attach/detach.
+# Prefer osac-eip-<ExternalIP UID> (v1); fall back to osac-eip-<name>.
+# Fail closed when both candidates exist. Callers must set external_ip_name
+# and the ExternalIPAttachment namespace on external_ip_attachment.metadata.
+
+- name: Read ExternalIP UID from the attachment job context when present
+  ansible.builtin.set_fact:
+    metallb_parking_external_ip_uid: >-
+      {{ (
+           ((osac_job_vars | default({})).get('external_ip_attachment_context', {})
+             | default({})).get('external_ip', {})
+           | default({})
+         ).get('kubernetes_uid', '')
+         | default('', true) | string | trim }}
+
+- name: Look up the ExternalIP CR when the attachment context omits its UID
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: osac.openshift.io/v1alpha1
+    kind: ExternalIP
+    name: "{{ external_ip_name }}"
+    namespace: "{{ external_ip_attachment.metadata.namespace }}"
+  register: metallb_parking_external_ip_lookup
+  when: metallb_parking_external_ip_uid | length == 0
+
+- name: Use the ExternalIP CR UID when the attachment context omitted it
+  ansible.builtin.set_fact:
+    metallb_parking_external_ip_uid: >-
+      {{ metallb_parking_external_ip_lookup.resources[0].metadata.uid }}
+  when:
+    - metallb_parking_external_ip_uid | length == 0
+    - metallb_parking_external_ip_lookup is not skipped
+    - metallb_parking_external_ip_lookup.resources | default([]) | length == 1
+
+- name: Set parking Service name candidates
+  ansible.builtin.set_fact:
+    metallb_parking_uid_service_name: >-
+      {{ ('osac-eip-' ~ metallb_parking_external_ip_uid)
+         if (metallb_parking_external_ip_uid | length > 0) else '' }}
+    metallb_parking_legacy_service_name: "osac-eip-{{ external_ip_name }}"
+
+- name: Read the UID-named parking Service when a UID is known
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Service
+    name: "{{ metallb_parking_uid_service_name }}"
+    namespace: metallb-system
+  register: metallb_parking_uid_service_read
+  when: metallb_parking_uid_service_name | length > 0
+
+- name: Treat a missing UID candidate as absent
+  ansible.builtin.set_fact:
+    metallb_parking_uid_service_read:
+      resources: []
+  when: metallb_parking_uid_service_name | length == 0
+
+- name: Read the name-based parking Service
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Service
+    name: "{{ metallb_parking_legacy_service_name }}"
+    namespace: metallb-system
+  register: metallb_parking_legacy_service_read
+  when: >-
+    metallb_parking_legacy_service_name != metallb_parking_uid_service_name
+
+- name: Treat identical UID and legacy parking names as a single candidate
+  ansible.builtin.set_fact:
+    metallb_parking_legacy_service_read: "{{ metallb_parking_uid_service_read }}"
+  when: >-
+    metallb_parking_legacy_service_name == metallb_parking_uid_service_name
+
+- name: Refuse ambiguous MetalLB parking reservations
+  ansible.builtin.assert:
+    that:
+      - >-
+        metallb_parking_legacy_service_name == metallb_parking_uid_service_name
+        or not (
+          (metallb_parking_uid_service_read.resources | default([]) | length > 0)
+          and (metallb_parking_legacy_service_read.resources | default([]) | length > 0)
+        )
+    fail_msg: >-
+      Both '{{ metallb_parking_uid_service_name }}' and
+      '{{ metallb_parking_legacy_service_name }}' exist in metallb-system;
+      refusing to attach or detach an ambiguous ExternalIP parking Service.
+
+- name: Select the UID-named parking Service when present
+  ansible.builtin.set_fact:
+    metallb_parking_service_name: "{{ metallb_parking_uid_service_name }}"
+    parking_service_info: "{{ metallb_parking_uid_service_read }}"
+  when: metallb_parking_uid_service_read.resources | default([]) | length > 0
+
+- name: Select the name-based parking Service when it is the only candidate
+  ansible.builtin.set_fact:
+    metallb_parking_service_name: "{{ metallb_parking_legacy_service_name }}"
+    parking_service_info: "{{ metallb_parking_legacy_service_read }}"
+  when:
+    - metallb_parking_uid_service_read.resources | default([]) | length == 0
+    - metallb_parking_legacy_service_read.resources | default([]) | length > 0
+
+- name: Default the parking Service name for restore when neither candidate exists
+  ansible.builtin.set_fact:
+    metallb_parking_service_name: >-
+      {{ metallb_parking_uid_service_name
+         if (metallb_parking_uid_service_name | length > 0)
+         else metallb_parking_legacy_service_name }}
+    parking_service_info:
+      resources: []
+  when:
+    - metallb_parking_uid_service_read.resources | default([]) | length == 0
+    - metallb_parking_legacy_service_read.resources | default([]) | length == 0

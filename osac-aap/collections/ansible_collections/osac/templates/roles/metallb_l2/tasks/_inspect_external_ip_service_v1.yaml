@@ -119,3 +119,4 @@
   when:
     - metallb_external_ip_service_read.resources | length > 0
     - metallb_external_ip_service_labels.get('osac.openshift.io/owner-kind', '') == ''
+    - metallb_external_ip_operation == 'external_ip.allocate'

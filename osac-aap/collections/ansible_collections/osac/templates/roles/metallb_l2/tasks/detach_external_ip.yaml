@@ -117,6 +117,12 @@
       - "ComputeInstance: {{ detach_compute_instance_name | default('not available') }}"
   when: not detach_already_done
 
+# Prefer restoring the UID-named parking Service for v1 ExternalIPs; fall back
+# to the legacy name-based Service when no UID is available.
+- name: Resolve the MetalLB parking Service name for detach restore
+  ansible.builtin.include_tasks: _resolve_parking_service.yaml
+  when: not detach_already_done
+
 # Delete the LB Service, clear the annotation, and restore the placeholder atomically.
 # The rescue restores the LB Service if placeholder re-creation fails so the IP
 # is never left unparked without a reservation in metallb-system.
@@ -156,14 +162,28 @@
           apiVersion: v1
           kind: Service
           metadata:
-            name: "osac-eip-{{ external_ip_name }}"
+            name: "{{ metallb_parking_service_name }}"
             namespace: metallb-system
             labels:
               osac.openshift.io/externalip: "{{ external_ip_name }}"
               osac.openshift.io/managed-by: osac-fulfillment
-            annotations:
-              metallb.universe.tf/address-pool: "{{ detach_pool_name }}"
-              metallb.universe.tf/loadBalancerIPs: "{{ detach_ip_address }}"
+            annotations: >-
+              {{
+                {
+                  'metallb.universe.tf/address-pool': detach_pool_name,
+                  'metallb.universe.tf/loadBalancerIPs': detach_ip_address,
+                  'osac.openshift.io/externalippool-name': detach_pool_name
+                }
+                | combine(
+                    {
+                      'osac.openshift.io/externalip-contract-version': 'v1',
+                      'osac.openshift.io/externalip-kubernetes-uid':
+                        metallb_parking_external_ip_uid
+                    }
+                    if (metallb_parking_external_ip_uid | default('') | length > 0)
+                    else {}
+                  )
+              }}
           spec:
             type: LoadBalancer
             selector: {}
@@ -180,7 +200,7 @@
     - name: Display placeholder Service creation result
       ansible.builtin.debug:
         msg:
-          - "Placeholder Service 'osac-eip-{{ external_ip_name }}' re-created in metallb-system"
+          - "Placeholder Service '{{ metallb_parking_service_name }}' re-created in metallb-system"
           - "IP preserved: {{ detach_ip_address }}"
           - "Changed: {{ placeholder_service_result.changed | default(false) }}"
 

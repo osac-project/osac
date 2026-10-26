@@ -1,6 +1,6 @@
 ---
-# ExternalIPPool deletion — removes common subnets and IPAM allocations for the pool
-# Child /32 subnets (ExternalIPs) must be deleted before the allocation
+# ExternalIPPool deletion removes common subnets and IPAM allocations.
+# Child /32 subnets (ExternalIPs) must be deleted before the allocation.
 
 - name: Normalize task input
   ansible.builtin.include_tasks: _contract_input.yaml
@@ -9,50 +9,80 @@
 
 - name: Extract ExternalIPPool configuration
   ansible.builtin.set_fact:
-    pool_name: "{{ external_ip_pool.metadata.name }}"
-    pool_cidrs: "{{ external_ip_pool.spec.cidrs }}"
+    pool_name: "{{ _osac_resource.metadata.name }}"
+    pool_cidrs: "{{ _osac_resource.spec.cidrs | default([]) }}"
 
-- name: Display ExternalIPPool deletion info
-  ansible.builtin.debug:
-    msg:
-      - "Deleting Netris IPAM allocations for ExternalIPPool '{{ pool_name }}'"
-      - "CIDRs: {{ pool_cidrs }}"
+- name: Validate the contract ExternalIPPool snapshot
+  ansible.builtin.assert:
+    that:
+      - pool_cidrs is sequence
+      - pool_cidrs | length == 1
+    fail_msg: >-
+      ExternalIPPool '{{ pool_name }}' must carry exactly one IPv4 CIDR in
+      spec.cidrs.
+  when: _osac_contract | default(false) | bool
 
-- name: Ensure Netris auth
-  ansible.builtin.include_role:
-    name: netris.controller.auth
-  when: netris_session_cookie is not defined
+- name: Delete the ExternalIPPool reservoirs
+  block:
+    - name: Display ExternalIPPool deletion info
+      ansible.builtin.debug:
+        msg:
+          - "Deleting Netris IPAM allocations for ExternalIPPool '{{ pool_name }}'"
+          - "CIDRs: {{ pool_cidrs }}"
 
-- name: Delete common subnet for each CIDR
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: delete_subnet
-  vars:
-    ipam_name: "{{ (pool_cidrs | length == 1) | ternary(pool_name, pool_name + '-' + (idx | string)) }}-common"
-    ipam_expected_fields:
-      prefix: "{{ item }}"
-      purpose: common
-      "tenant.id": "{{ netris_tenant_id }}"
-      "sites.ids": ["{{ netris_site_id }}"]
-  loop: "{{ pool_cidrs }}"
-  loop_control:
-    index_var: idx
-    label: "{{ item }}"
+    - name: Ensure Netris auth
+      ansible.builtin.include_role:
+        name: netris.controller.auth
+      when:
+        - netris_session_cookie is not defined
+        - not ansible_check_mode
 
-- name: Delete IPAM allocation for each CIDR
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: delete_allocation
-  vars:
-    ipam_name: "{{ (pool_cidrs | length == 1) | ternary(pool_name, pool_name + '-' + (idx | string)) }}"
-    ipam_expected_fields:
-      prefix: "{{ item }}"
-      "tenant.id": "{{ netris_tenant_id }}"
-  loop: "{{ pool_cidrs }}"
-  loop_control:
-    index_var: idx
-    label: "{{ item }}"
+    - name: Delete common subnet for each CIDR
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+        tasks_from: delete_subnet
+      vars:
+        ipam_name: "{{ (pool_cidrs | length == 1) | ternary(pool_name, pool_name + '-' + (idx | string)) }}-common"
+        ipam_expected_fields:
+          prefix: "{{ item }}"
+          purpose: common
+          "tenant.id": "{{ netris_tenant_id }}"
+          "sites.ids": ["{{ netris_site_id }}"]
+      loop: "{{ pool_cidrs }}"
+      loop_control:
+        index_var: idx
+        label: "{{ item }}"
 
-- name: Display ExternalIPPool deletion result
-  ansible.builtin.debug:
-    msg: "ExternalIPPool '{{ pool_name }}' — {{ pool_cidrs | length }} IPAM allocation(s) removed"
+    - name: Delete IPAM allocation for each CIDR
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+        tasks_from: delete_allocation
+      vars:
+        ipam_name: "{{ (pool_cidrs | length == 1) | ternary(pool_name, pool_name + '-' + (idx | string)) }}"
+        ipam_expected_fields:
+          prefix: "{{ item }}"
+          "tenant.id": "{{ netris_tenant_id }}"
+      loop: "{{ pool_cidrs }}"
+      loop_control:
+        index_var: idx
+        label: "{{ item }}"
+
+    - name: Display ExternalIPPool deletion result
+      ansible.builtin.debug:
+        msg: "ExternalIPPool '{{ pool_name }}' — {{ pool_cidrs | length }} IPAM allocation(s) removed"
+  rescue:
+    - name: Publish the sanitized ExternalIPPool error
+      ansible.builtin.include_tasks: _fail_task.yaml
+      vars:
+        _osac_error_message: >-
+          {{ ansible_failed_result.msg
+             | default('The Netris ExternalIPPool delete failed') }}
+        _osac_error_retryable: >-
+          {{ ansible_failed_result.retryable | default(true) }}
+      when: _osac_contract | default(false) | bool
+
+    - name: Fail the ExternalIPPool task after the rescue
+      ansible.builtin.fail:
+        msg: >-
+          {{ _osac_error_message | default(ansible_failed_result.msg
+             | default('ExternalIPPool delete failed')) }}

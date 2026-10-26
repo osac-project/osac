@@ -29,6 +29,13 @@ options:
     choices:
       - external_ip.allocate
       - external_ip.release
+  shape:
+    description: Input shape of the resource and pool arguments.
+    type: str
+    default: v1
+    choices:
+      - v1
+      - contract
   resource:
     description: Supplied ExternalIP snapshot.
     type: dict
@@ -96,6 +103,7 @@ ARGUMENT_SPEC = {
         "required": True,
         "choices": list(core.OPERATIONS),
     },
+    "shape": {"type": "str", "default": "v1", "choices": list(core.SHAPES)},
     "resource": {"type": "dict", "required": True},
     "pool": {"type": "dict", "required": True},
     "controller_url": {"type": "str", "required": True, "no_log": True},
@@ -135,7 +143,7 @@ def main() -> None:
     params = module.params
     try:
         request = core.validate_request(
-            params["resource"], params["pool"], params["operation"]
+            params["resource"], params["pool"], params["operation"], params["shape"]
         )
         if module.check_mode:
             module.exit_json(
@@ -156,7 +164,10 @@ def main() -> None:
         status = getattr(error, "http_status", None)
         suffix = f", HTTP {status}" if status is not None else ""
         module.fail_json(
-            msg=f"Netris ExternalIP {params['operation']} failed ({category}{suffix})",
+            msg=f"Netris ExternalIP {params['operation']} failed"
+            f" ({category}{suffix}): {error}",
+            category=category,
+            retryable=core.is_retryable(category),
             invocation=_redacted_invocation(params),
         )
         return

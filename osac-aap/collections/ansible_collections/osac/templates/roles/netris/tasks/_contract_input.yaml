@@ -111,6 +111,12 @@
       {{ osac_job_vars.virtual_network | default({}) if _osac_contract | bool else {} }}
     _osac_subnet: >-
       {{ osac_job_vars.subnet | default({}) if _osac_contract | bool else {} }}
+    _osac_external_ip_pool: >-
+      {{ osac_job_vars.external_ip_pool | default({}) if _osac_contract | bool else {} }}
+    _osac_external_ip_ref: >-
+      {{ osac_job_vars.external_ip | default({}) if _osac_contract | bool else {} }}
+    _osac_destination: >-
+      {{ osac_job_vars.destination | default({}) if _osac_contract | bool else {} }}
     _osac_target: >-
       {{ osac_job_vars.target | default({}) if _osac_contract | bool else {} }}
     _osac_interface: >-

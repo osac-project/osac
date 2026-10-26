@@ -19,58 +19,77 @@
     _default_refuse_name: "{{ vn_name }}"
     _default_refuse_allow_override: false
 
-- name: Display VirtualNetwork deletion info
-  ansible.builtin.debug:
-    msg: "Deleting Netris VPC + IPAM allocation for VirtualNetwork '{{ vn_name }}'"
+- name: Apply the VirtualNetwork delete provider work
+  block:
+    - name: Display VirtualNetwork deletion info
+      ansible.builtin.debug:
+        msg: "Deleting Netris VPC + IPAM allocation for VirtualNetwork '{{ vn_name }}'"
 
-- name: Look up VPC by name
-  ansible.builtin.include_role:
-    name: netris.controller.vpc
-    tasks_from: read
-  vars:
-    vpc_name: "{{ vn_name }}"
+    - name: Look up VPC by name
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: read
+      vars:
+        vpc_name: "{{ vn_name }}"
 
-- name: Set VPC ID
-  ansible.builtin.set_fact:
-    _vn_vpc_id: "{{ netris_vpc.id | default('') }}"
+    - name: Set VPC ID
+      ansible.builtin.set_fact:
+        _vn_vpc_id: "{{ netris_vpc.id | default('') }}"
 
-- name: Build VirtualNetwork allocation ownership fields
-  ansible.builtin.set_fact:
-    _vn_allocation_expected_fields:
-      "tenant.id": "{{ netris_tenant_id }}"
-  when: vn_ipv4_cidr | length > 0
+    - name: Build VirtualNetwork allocation ownership fields
+      ansible.builtin.set_fact:
+        _vn_allocation_expected_fields:
+          "tenant.id": "{{ netris_tenant_id }}"
+      when: vn_ipv4_cidr | length > 0
 
-- name: Add VirtualNetwork allocation prefix ownership field
-  ansible.builtin.set_fact:
-    _vn_allocation_expected_fields: >-
-      {{ _vn_allocation_expected_fields | combine({'prefix': vn_ipv4_cidr}) }}
-  when: vn_ipv4_cidr | length > 0
+    - name: Add VirtualNetwork allocation prefix ownership field
+      ansible.builtin.set_fact:
+        _vn_allocation_expected_fields: >-
+          {{ _vn_allocation_expected_fields | combine({'prefix': vn_ipv4_cidr}) }}
+      when: vn_ipv4_cidr | length > 0
 
-- name: Add VirtualNetwork allocation VPC ownership field
-  ansible.builtin.set_fact:
-    _vn_allocation_expected_fields: >-
-      {{ _vn_allocation_expected_fields | combine({'vpc.id': _vn_vpc_id}) }}
-  when:
-    - vn_ipv4_cidr | length > 0
-    - _vn_vpc_id | string | length > 0
+    - name: Add VirtualNetwork allocation VPC ownership field
+      ansible.builtin.set_fact:
+        _vn_allocation_expected_fields: >-
+          {{ _vn_allocation_expected_fields | combine({'vpc.id': _vn_vpc_id}) }}
+      when:
+        - vn_ipv4_cidr | length > 0
+        - _vn_vpc_id | string | length > 0
 
-- name: Delete IPAM allocation from Netris controller
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: delete_allocation
-  vars:
-    ipam_name: "{{ vn_name }}"
-    ipam_vpc_id: "{{ _vn_vpc_id }}"
-    ipam_expected_fields: "{{ _vn_allocation_expected_fields | default({'tenant.id': netris_tenant_id}) }}"
+    - name: Delete IPAM allocation from Netris controller
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+        tasks_from: delete_allocation
+      vars:
+        ipam_name: "{{ vn_name }}"
+        ipam_vpc_id: "{{ _vn_vpc_id }}"
+        ipam_expected_fields: "{{ _vn_allocation_expected_fields | default({'tenant.id': netris_tenant_id}) }}"
+      when: _vn_vpc_id | string | length > 0
 
-- name: Delete VPC from Netris controller
-  ansible.builtin.include_role:
-    name: netris.controller.vpc
-    tasks_from: delete
-  vars:
-    vpc_name: "{{ vn_name }}"
-    vpc_tenant_id: "{{ netris_tenant_id }}"
+    - name: Delete VPC from Netris controller
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: delete
+      vars:
+        vpc_name: "{{ vn_name }}"
+        vpc_tenant_id: "{{ netris_tenant_id }}"
 
-- name: Display deletion result
-  ansible.builtin.debug:
-    msg: "VPC + IPAM allocation '{{ vn_name }}' deletion completed"
+    - name: Display deletion result
+      ansible.builtin.debug:
+        msg: "VPC + IPAM allocation '{{ vn_name }}' deletion completed"
+  rescue:
+    - name: Publish the sanitized VirtualNetwork delete error
+      ansible.builtin.include_tasks: _fail_task.yaml
+      vars:
+        _osac_error_message: >-
+          {{ ansible_failed_result.msg
+             | default('The Netris VirtualNetwork delete failed') }}
+        _osac_error_retryable: >-
+          {{ ansible_failed_result.retryable | default(true) }}
+      when: _osac_contract | default(false) | bool
+
+    - name: Fail the VirtualNetwork delete task after the rescue
+      ansible.builtin.fail:
+        msg: >-
+          {{ _osac_error_message | default(ansible_failed_result.msg
+             | default('VirtualNetwork delete failed')) }}

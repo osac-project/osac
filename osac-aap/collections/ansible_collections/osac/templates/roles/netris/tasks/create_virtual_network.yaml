@@ -18,70 +18,88 @@
   ansible.builtin.set_fact:
     vn_site_id: "{{ netris_region_site_map[vn_region] | default(netris_site_id) }}"
 
-- name: Display VirtualNetwork information
-  ansible.builtin.debug:
-    msg:
-      - "Creating Netris VPC + IPAM allocation for VirtualNetwork '{{ vn_name }}'"
-      - "Region: {{ vn_region }}"
-      - "Site ID: {{ vn_site_id }}"
-      - "IPv4 CIDR: {{ vn_ipv4_cidr | default('not configured') }}"
+- name: Apply the VirtualNetwork create provider work
+  block:
+    - name: Display VirtualNetwork information
+      ansible.builtin.debug:
+        msg:
+          - "Creating Netris VPC + IPAM allocation for VirtualNetwork '{{ vn_name }}'"
+          - "Region: {{ vn_region }}"
+          - "Site ID: {{ vn_site_id }}"
+          - "IPv4 CIDR: {{ vn_ipv4_cidr | default('not configured') }}"
 
-- name: Create VPC in Netris controller
-  ansible.builtin.include_role:
-    name: netris.controller.vpc
-    tasks_from: create
-  vars:
-    vpc_name: "{{ vn_name }}"
-    vpc_site_id: "{{ vn_site_id }}"
-    vpc_tenant_id: "{{ netris_tenant_id }}"
+    - name: Create VPC in Netris controller
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: create
+      vars:
+        vpc_name: "{{ vn_name }}"
+        vpc_site_id: "{{ vn_site_id }}"
+        vpc_tenant_id: "{{ netris_tenant_id }}"
 
-- name: Display VPC creation result
-  ansible.builtin.debug:
-    msg: >-
-      VPC '{{ vn_name }}' {{ (vpc_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
-      (ID: {{ vpc_id | default('unknown') }})
+    - name: Display VPC creation result
+      ansible.builtin.debug:
+        msg: >-
+          VPC '{{ vn_name }}' {{ (vpc_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
+          (ID: {{ vpc_id | default('unknown') }})
 
-- name: Validate Netris VPC ID
-  ansible.builtin.assert:
-    that:
-      - vpc_id is defined
-      - vpc_id | string | trim is match('^[0-9]+$')
-      - vpc_id | int > 0
-    fail_msg: "Netris did not return a VPC ID for VirtualNetwork '{{ vn_name }}'"
+    - name: Validate Netris VPC ID
+      ansible.builtin.assert:
+        that:
+          - vpc_id is defined
+          - vpc_id | string | trim is match('^[0-9]+$')
+          - vpc_id | int > 0
+        fail_msg: "Netris did not return a VPC ID for VirtualNetwork '{{ vn_name }}'"
 
-- name: Create IPAM allocation for VirtualNetwork CIDR
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: create_allocation
-  vars:
-    ipam_name: "{{ vn_name }}"
-    ipam_cidr: "{{ vn_ipv4_cidr }}"
-    ipam_purpose: "common"
-    ipam_site_id: "{{ vn_site_id }}"
-    ipam_tenant_id: "{{ netris_tenant_id }}"
-    ipam_vpc_id: "{{ vpc_id }}"
-  when: vn_ipv4_cidr | length > 0
+    - name: Create IPAM allocation for VirtualNetwork CIDR
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+        tasks_from: create_allocation
+      vars:
+        ipam_name: "{{ vn_name }}"
+        ipam_cidr: "{{ vn_ipv4_cidr }}"
+        ipam_purpose: "common"
+        ipam_site_id: "{{ vn_site_id }}"
+        ipam_tenant_id: "{{ netris_tenant_id }}"
+        ipam_vpc_id: "{{ vpc_id }}"
+      when: vn_ipv4_cidr | length > 0
 
-- name: Display IPAM allocation result
-  ansible.builtin.debug:
-    msg: >-
-      IPAM allocation '{{ vn_name }}' {{ (ipam_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
-      (ID: {{ ipam_subnet_id | default('unknown') }})
-  when: vn_ipv4_cidr | length > 0
+    - name: Display IPAM allocation result
+      ansible.builtin.debug:
+        msg: >-
+          IPAM allocation '{{ vn_name }}' {{ (ipam_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
+          (ID: {{ ipam_subnet_id | default('unknown') }})
+      when: vn_ipv4_cidr | length > 0
 
-- name: Build the VirtualNetwork result
-  ansible.builtin.set_fact:
-    _osac_result_data: "{{ {'backend_id': vpc_id | int | string} }}"
-  when: _osac_contract | default(false) | bool
+    - name: Build the VirtualNetwork result
+      ansible.builtin.set_fact:
+        _osac_result_data: "{{ {'backend_id': vpc_id | int | string} }}"
+      when: _osac_contract | default(false) | bool
 
-- name: Emit the VirtualNetwork result
-  ansible.builtin.include_tasks: _emit_result.yaml
-  when: _osac_contract | default(false) | bool
+    - name: Emit the VirtualNetwork result
+      ansible.builtin.include_tasks: _emit_result.yaml
+      when: _osac_contract | default(false) | bool
 
-- name: Export VirtualNetwork VPC ID
-  ansible.builtin.set_stats:
-    data:
-      vpc_id: "{{ vpc_id | int }}"
-    per_host: false
-    aggregate: false
-  when: not _osac_contract | default(false) | bool
+    - name: Export VirtualNetwork VPC ID
+      ansible.builtin.set_stats:
+        data:
+          vpc_id: "{{ vpc_id | int }}"
+        per_host: false
+        aggregate: false
+      when: not _osac_contract | default(false) | bool
+  rescue:
+    - name: Publish the sanitized VirtualNetwork create error
+      ansible.builtin.include_tasks: _fail_task.yaml
+      vars:
+        _osac_error_message: >-
+          {{ ansible_failed_result.msg
+             | default('The Netris VirtualNetwork create failed') }}
+        _osac_error_retryable: >-
+          {{ ansible_failed_result.retryable | default(true) }}
+      when: _osac_contract | default(false) | bool
+
+    - name: Fail the VirtualNetwork create task after the rescue
+      ansible.builtin.fail:
+        msg: >-
+          {{ _osac_error_message | default(ansible_failed_result.msg
+             | default('VirtualNetwork create failed')) }}

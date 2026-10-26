@@ -9,6 +9,18 @@ import time
 from ansible.module_utils.urls import fetch_url
 
 OPERATIONS = ("external_ip.allocate", "external_ip.release")
+SHAPES = ("v1", "contract")
+
+RETRYABLE_CATEGORIES = frozenset(
+    {
+        "transport_error",
+        "provider_error",
+        "malformed_response",
+        "uncertain_state",
+        "exhausted_attempts",
+        "exhausted_observations",
+    }
+)
 
 CONTRACT_VERSION = "v1"
 TENANT_ANNOTATION = "osac.openshift.io/tenant"
@@ -65,10 +77,76 @@ def _canonical_ipv4(value, context: str) -> ipaddress.IPv4Network:
     return network
 
 
-def validate_request(resource: dict, pool: dict, operation: str) -> dict:
-    """Normalize and validate resource + pool snapshots before any provider I/O."""
+def is_retryable(category: str) -> bool:
+    """Return whether OSAC should retry a failure of this category."""
+    return category in RETRYABLE_CATEGORIES
+
+
+def validate_request(
+    resource: dict, pool: dict, operation: str, shape: str = "v1"
+) -> dict:
+    """Normalize and validate the input shape before any provider I/O."""
+    if shape not in SHAPES:
+        raise ValueError(f"unsupported ExternalIP input shape {shape!r}")
     if operation not in OPERATIONS:
         raise ValueError(f"unsupported ExternalIP operation {operation!r}")
+    if shape == "contract":
+        return _validate_contract_request(resource, pool, operation)
+    return _validate_v1_request(resource, pool, operation)
+
+
+def _validate_contract_request(
+    resource: dict, pool: dict, operation: str
+) -> dict:
+    """Validate the contract snapshots: ExternalIP and ExternalIPPool."""
+    if not isinstance(resource, dict):
+        raise ValueError("ExternalIP resource snapshot must be a dictionary")
+    if not isinstance(pool, dict):
+        raise ValueError("ExternalIP pool snapshot must be a dictionary")
+    metadata = resource.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError("ExternalIP resource snapshot omits metadata")
+    uid = _required_text(metadata.get("uid"), "ExternalIP resource UID")
+    generation = _positive_int(
+        metadata.get("generation"), "ExternalIP generation"
+    )
+    resource_id = _required_text(resource.get("id"), "ExternalIP API ID")
+    spec = resource.get("spec")
+    if not isinstance(spec, dict):
+        raise ValueError("ExternalIP resource snapshot omits spec")
+    pool_reference = _required_text(spec.get("pool"), "ExternalIP pool reference")
+    pool_id = _required_text(pool.get("id"), "ExternalIPPool API ID")
+    if pool_id != pool_reference:
+        raise ValueError(
+            "ExternalIP pool reference does not match the pool snapshot"
+        )
+    pool_spec = pool.get("spec")
+    if not isinstance(pool_spec, dict):
+        raise ValueError("ExternalIPPool snapshot omits spec")
+    cidrs = pool_spec.get("cidrs")
+    if not isinstance(cidrs, list) or len(cidrs) != 1:
+        raise ValueError(
+            "ExternalIPPool snapshot spec.cidrs must hold exactly one IPv4"
+            " CIDR"
+        )
+    network = _canonical_ipv4(cidrs[0], "ExternalIPPool CIDR")
+    return {
+        "operation": operation,
+        "uid": uid,
+        "generation": generation,
+        "reservation_name": f"{RESERVATION_NAME_PREFIX}{uid}",
+        "resource_id": resource_id,
+        "tenant_id": "",
+        "pool_id": pool_id,
+        "pool_uid": "",
+        "pool_tenant_id": "",
+        "cidr": str(network),
+        "phase": "Deleting" if operation == "external_ip.release" else "Ready",
+    }
+
+
+def _validate_v1_request(resource: dict, pool: dict, operation: str) -> dict:
+    """Validate the opt-in annotation v1 snapshots."""
     if not isinstance(resource, dict):
         raise ValueError("ExternalIP resource snapshot must be a dictionary")
     if not isinstance(pool, dict):

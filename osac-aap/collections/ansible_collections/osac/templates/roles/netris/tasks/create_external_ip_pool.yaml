@@ -1,6 +1,6 @@
 ---
-# ExternalIPPool maps to Netris IPAM allocations (CIDR containers)
-# Individual ExternalIPs create /32 subnets (purpose=nat) inside these allocations
+# ExternalIPPool maps to Netris IPAM allocations (CIDR containers).
+# Individual ExternalIPs create /32 subnets (purpose=nat) inside them.
 
 - name: Normalize task input
   ansible.builtin.include_tasks: _contract_input.yaml
@@ -9,48 +9,80 @@
 
 - name: Extract ExternalIPPool configuration
   ansible.builtin.set_fact:
-    pool_name: "{{ external_ip_pool.metadata.name }}"
-    pool_cidrs: "{{ external_ip_pool.spec.cidrs }}"
+    pool_name: "{{ _osac_resource.metadata.name }}"
+    pool_cidrs: "{{ _osac_resource.spec.cidrs | default([]) }}"
 
-- name: Display ExternalIPPool information
-  ansible.builtin.debug:
-    msg:
-      - "Creating Netris IPAM allocations for ExternalIPPool '{{ pool_name }}'"
-      - "CIDRs: {{ pool_cidrs }}"
+- name: Validate the contract ExternalIPPool snapshot
+  ansible.builtin.assert:
+    that:
+      - pool_cidrs is sequence
+      - pool_cidrs | length == 1
+      - (pool_cidrs[0] | ansible.utils.ipaddr('version')) == 4
+      - (pool_cidrs[0] | ansible.utils.ipaddr('network/prefix')) == pool_cidrs[0]
+    fail_msg: >-
+      ExternalIPPool '{{ pool_name }}' must carry exactly one canonical IPv4
+      CIDR in spec.cidrs.
+  when: _osac_contract | default(false) | bool
 
-- name: Ensure Netris auth
-  ansible.builtin.include_role:
-    name: netris.controller.auth
-  when: netris_session_cookie is not defined
+- name: Create the ExternalIPPool reservoirs
+  block:
+    - name: Display ExternalIPPool information
+      ansible.builtin.debug:
+        msg:
+          - "Creating Netris IPAM allocations for ExternalIPPool '{{ pool_name }}'"
+          - "CIDRs: {{ pool_cidrs }}"
 
-- name: Create IPAM allocation for each CIDR
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: create_allocation
-  vars:
-    ipam_name: "{{ (pool_cidrs | length == 1) | ternary(pool_name, pool_name + '-' + (idx | string)) }}"
-    ipam_cidr: "{{ item }}"
-    ipam_tenant_id: "{{ netris_tenant_id }}"
-  loop: "{{ pool_cidrs }}"
-  loop_control:
-    index_var: idx
-    label: "{{ item }}"
+    - name: Ensure Netris auth
+      ansible.builtin.include_role:
+        name: netris.controller.auth
+      when:
+        - netris_session_cookie is not defined
+        - not ansible_check_mode
 
-- name: Create common subnet inside each allocation (required for NAT on /32 subnets)
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: create_subnet
-  vars:
-    ipam_name: "{{ (pool_cidrs | length == 1) | ternary(pool_name, pool_name + '-' + (idx | string)) }}-common"
-    ipam_cidr: "{{ item }}"
-    ipam_purpose: "common"
-    ipam_site_id: "{{ netris_site_id }}"
-    ipam_tenant_id: "{{ netris_tenant_id }}"
-  loop: "{{ pool_cidrs }}"
-  loop_control:
-    index_var: idx
-    label: "{{ item }}"
+    - name: Create IPAM allocation for each CIDR
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+        tasks_from: create_allocation
+      vars:
+        ipam_name: "{{ (pool_cidrs | length == 1) | ternary(pool_name, pool_name + '-' + (idx | string)) }}"
+        ipam_cidr: "{{ item }}"
+        ipam_tenant_id: "{{ netris_tenant_id }}"
+      loop: "{{ pool_cidrs }}"
+      loop_control:
+        index_var: idx
+        label: "{{ item }}"
 
-- name: Display ExternalIPPool creation result
-  ansible.builtin.debug:
-    msg: "ExternalIPPool '{{ pool_name }}' — {{ pool_cidrs | length }} IPAM allocation(s) with common subnets registered"
+    - name: Create common subnet inside each allocation (required for NAT on /32 subnets)
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+        tasks_from: create_subnet
+      vars:
+        ipam_name: "{{ (pool_cidrs | length == 1) | ternary(pool_name, pool_name + '-' + (idx | string)) }}-common"
+        ipam_cidr: "{{ item }}"
+        ipam_purpose: "common"
+        ipam_site_id: "{{ netris_site_id }}"
+        ipam_tenant_id: "{{ netris_tenant_id }}"
+      loop: "{{ pool_cidrs }}"
+      loop_control:
+        index_var: idx
+        label: "{{ item }}"
+
+    - name: Display ExternalIPPool creation result
+      ansible.builtin.debug:
+        msg: "ExternalIPPool '{{ pool_name }}' — {{ pool_cidrs | length }} IPAM allocation(s) with common subnets registered"
+  rescue:
+    - name: Publish the sanitized ExternalIPPool error
+      ansible.builtin.include_tasks: _fail_task.yaml
+      vars:
+        _osac_error_message: >-
+          {{ ansible_failed_result.msg
+             | default('The Netris ExternalIPPool create failed') }}
+        _osac_error_retryable: >-
+          {{ ansible_failed_result.retryable | default(true) }}
+      when: _osac_contract | default(false) | bool
+
+    - name: Fail the ExternalIPPool task after the rescue
+      ansible.builtin.fail:
+        msg: >-
+          {{ _osac_error_message | default(ansible_failed_result.msg
+             | default('ExternalIPPool create failed')) }}

@@ -1,13 +1,17 @@
 ---
-# ExternalIP create entry point. Dispatches by the persisted contract
-# version annotation: empty/missing routes to the legacy name-based
-# tasks, explicit v1 routes to the shared v1 tasks, and any other
-# nonempty version fails before any provider I/O.
+# ExternalIP create entry point. A contract envelope routes to the typed snapshot
+# tasks. Without one, the persisted contract-version annotation selects the
+# legacy or the opt-in v1 tasks; any other nonempty version fails before any
+# provider work.
 
 - name: Normalize task input
   ansible.builtin.include_tasks: _contract_input.yaml
   vars:
     _osac_task_name: create_external_ip
+
+- name: Initialize the legacy ExternalIP contract version
+  ansible.builtin.set_fact:
+    eip_contract_version: ''
 
 - name: Resolve ExternalIP contract version
   ansible.builtin.set_fact:
@@ -15,14 +19,25 @@
       {{ external_ip.metadata.annotations
          ['osac.openshift.io/externalip-contract-version']
          | default('', true) | trim }}
+  when: not _osac_contract | default(false) | bool
+
+- name: Route the contract ExternalIP create to the typed tasks
+  ansible.builtin.include_tasks: _external_ip_contract.yaml
+  vars:
+    external_ip_contract_operation: allocate
+  when: _osac_contract | default(false) | bool
 
 - name: Route unversioned ExternalIP create to the legacy tasks
   ansible.builtin.include_tasks: _create_external_ip_legacy.yaml
-  when: eip_contract_version | length == 0
+  when:
+    - not _osac_contract | default(false) | bool
+    - eip_contract_version | length == 0
 
 - name: Route v1 ExternalIP create to the shared v1 tasks
   ansible.builtin.include_tasks: _external_ip_v1.yaml
-  when: eip_contract_version == 'v1'
+  when:
+    - not _osac_contract | default(false) | bool
+    - eip_contract_version == 'v1'
   vars:
     external_ip_v1_operation: external_ip.allocate
 
@@ -32,5 +47,6 @@
       Unsupported ExternalIP contract version '{{ eip_contract_version }}'.
       Expected an empty value (legacy) or 'v1'.
   when:
+    - not _osac_contract | default(false) | bool
     - eip_contract_version | length > 0
     - eip_contract_version != 'v1'

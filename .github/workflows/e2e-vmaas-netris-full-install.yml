@@ -39,10 +39,10 @@ jobs:
       id-token: write
       checks: write
       pull-requests: read
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-netris-full-install.yml@main
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-netris-full-install.yml@codex/test-bmaas-mono-repo
     with:
-      suite: vmaas_networking
-      osac-profile: cudn-evpn-netris-test
+      suite: full
+      osac-profile: full-ci
       osac-repo: https://github.com/${{ inputs.repo }}.git
       osac-branch: ${{ inputs.sha }}
       components: >-
@@ -53,7 +53,8 @@ jobs:
         { "repo": "${{ inputs.repo }}", "ref": "${{ inputs.sha }}", "containerfile": "osac-aap/execution-environment/execution-environment.yaml", "context": ".", "imageKey": "aap.configAsCode.eeImage", "buildType": "ansible-builder" }
         ]
       test-infra-repository: osac-project/osac-test-infra
-      test-infra-ref: main
+      test-infra-ref: codex/test-bmaas-mono-repo
+      test-infra-sha: "10821336314a56cd39d02f44ea4db66b58bebe4f"
       pr-repository: ${{ inputs.pr-number != '' && inputs.repo || '' }}
       pr-sha: ${{ inputs.pr-number != '' && inputs.sha || '' }}
       pr-number: ${{ inputs.pr-number }}

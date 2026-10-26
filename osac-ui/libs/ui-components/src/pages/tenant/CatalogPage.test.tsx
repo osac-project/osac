@@ -7,13 +7,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BareMetalInstanceCatalogItem,
   BareMetalInstanceCatalogItems,
+  BareMetalInstanceTypes,
   Capabilities,
   ClusterCatalogItem,
   ClusterCatalogItems,
   ClusterTemplateReferenceSchema,
+  ClusterVersions,
   ComputeInstanceCatalogItem,
+  ComputeInstanceCatalogItemSchema,
   ComputeInstanceCatalogItems,
   ComputeInstanceTemplateReferenceSchema,
+  DiskImages,
+  InstanceTypes,
   Metadata,
   MetadataSchema,
   ServiceTier,
@@ -58,6 +63,51 @@ const vmCatalogItem: ComputeInstanceCatalogItem = {
   published: true,
   templateParameters: {},
 };
+
+const vmCatalogItemWithReferences = create(ComputeInstanceCatalogItemSchema, {
+  id: vmCatalogItem.id,
+  metadata: vmCatalogMetaData,
+  title: vmCatalogItem.title,
+  description: vmCatalogItem.description,
+  template: { id: 'tpl-rhel-9' },
+  published: true,
+  templateParameters: {},
+  fields: {
+    instanceType: {
+      behavior: {
+        case: 'locked',
+        value: { id: 'instance-type-id', name: '  General purpose  ' },
+      },
+    },
+    diskImage: {
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { id: 'disk-image-id', name: '  RHEL 10  ' } },
+      },
+    },
+  },
+});
+
+const vmCatalogItemWithIdOnlyReferences = create(ComputeInstanceCatalogItemSchema, {
+  id: 'catalog-rhel-8',
+  metadata: { ...vmCatalogMetaData, name: 'catalog-rhel-8' },
+  title: 'RHEL 8 catalog',
+  description: 'RHEL 8 base image',
+  template: { id: 'tpl-rhel-8' },
+  published: true,
+  templateParameters: {},
+  fields: {
+    instanceType: {
+      behavior: { case: 'locked', value: { id: 'instance-type-id-only' } },
+    },
+    diskImage: {
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { id: 'disk-image-id-only' } },
+      },
+    },
+  },
+});
 
 const clusterCatalogItem: ClusterCatalogItem = {
   $typeName: 'osac.public.v1.ClusterCatalogItem',
@@ -125,6 +175,7 @@ type CatalogRequestCounts = {
   vm: number;
   cluster: number;
   bm: number;
+  resourceLookups: number;
 };
 
 const toConnectError = (error: Error) => {
@@ -236,6 +287,42 @@ const createCatalogPageTransport = ({
           object: bmItems.find((i) => i.id === req.id),
         }),
       });
+
+      router.service(InstanceTypes, {
+        list: () => {
+          if (requestCounts) {
+            requestCounts.resourceLookups += 1;
+          }
+          return { items: [] };
+        },
+      });
+
+      router.service(DiskImages, {
+        list: () => {
+          if (requestCounts) {
+            requestCounts.resourceLookups += 1;
+          }
+          return { items: [] };
+        },
+      });
+
+      router.service(BareMetalInstanceTypes, {
+        list: () => {
+          if (requestCounts) {
+            requestCounts.resourceLookups += 1;
+          }
+          return { items: [] };
+        },
+      });
+
+      router.service(ClusterVersions, {
+        list: () => {
+          if (requestCounts) {
+            requestCounts.resourceLookups += 1;
+          }
+          return { items: [] };
+        },
+      });
     }),
   );
 
@@ -250,6 +337,7 @@ const createRequestCounts = (): CatalogRequestCounts => ({
   vm: 0,
   cluster: 0,
   bm: 0,
+  resourceLookups: 0,
 });
 
 const renderCatalogPage = (
@@ -447,7 +535,13 @@ describe('CatalogPage', () => {
     expect(
       screen.getByText('Create catalog items from master templates, then attach them to tenants.'),
     ).toBeInTheDocument();
-    expect(requestCounts).toEqual({ capabilities: 0, vm: 0, cluster: 0, bm: 0 });
+    expect(requestCounts).toEqual({
+      capabilities: 0,
+      vm: 0,
+      cluster: 0,
+      bm: 0,
+      resourceLookups: 0,
+    });
     expect(
       screen.queryByRole('group', { name: 'Filter catalog by resource type' }),
     ).toBeInTheDocument();
@@ -473,7 +567,13 @@ describe('CatalogPage', () => {
       screen.getByText('Create catalog items from master templates, then attach them to tenants.'),
     ).toBeInTheDocument();
     expect(screen.getByText('No catalog services are enabled.')).toBeInTheDocument();
-    expect(requestCounts).toEqual({ capabilities: 0, vm: 0, cluster: 0, bm: 0 });
+    expect(requestCounts).toEqual({
+      capabilities: 0,
+      vm: 0,
+      cluster: 0,
+      bm: 0,
+      resourceLookups: 0,
+    });
     expect(
       screen.queryByRole('group', { name: 'Filter catalog by resource type' }),
     ).toBeInTheDocument();
@@ -764,21 +864,52 @@ describe('CatalogPage', () => {
   });
 
   it('switches to a list table that links to catalog item details', async () => {
-    const { user } = renderCatalogPage(createCatalogPageTransport(), ['/catalog?types=vm']);
+    const requestCounts = createRequestCounts();
+    localStorage.setItem(catalogItemsViewPrefKey, 'list');
+    const { user } = renderCatalogPage(
+      createCatalogPageTransport({
+        vmItems: [vmCatalogItemWithReferences, vmCatalogItemWithIdOnlyReferences],
+        requestCounts,
+      }),
+      ['/catalog?types=vm'],
+    );
 
     await waitFor(() => {
-      expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
+      expect(
+        screen.getByText(vmCatalogItemWithReferences.metadata?.name ?? ''),
+      ).toBeInTheDocument();
     });
 
-    expect(screen.queryByRole('grid')).not.toBeInTheDocument();
+    const table = await screen.findByRole('grid', { name: 'Catalog items' });
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((header) => header.textContent),
+    ).toEqual(['Name', 'Status', 'Instance type', 'Disk image', 'Visibility', 'Created', '']);
+    expect(
+      within(table).queryByRole('columnheader', { name: 'Configuration' }),
+    ).not.toBeInTheDocument();
+    expect(within(table).getByRole('columnheader', { name: 'Visibility' })).toBeInTheDocument();
+    expect(within(table).getByRole('columnheader', { name: 'Created' })).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'List view' }));
+    const row = within(table).getAllByRole('row')[1];
+    const cells = within(row).getAllByRole('cell');
+    expect(cells[2].textContent).toBe('  General purpose  ');
+    expect(cells[3].textContent).toBe('  RHEL 10  ');
+    expect(row).not.toHaveTextContent('instance-type-id');
+    expect(row).not.toHaveTextContent('disk-image-id');
 
-    expect(await screen.findByRole('grid', { name: 'Catalog items' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: vmCatalogItem.metadata?.name })).toHaveAttribute(
-      'href',
-      `/catalog/vm/${vmCatalogItem.id}`,
-    );
+    const idOnlyRow = within(table).getAllByRole('row')[2];
+    const idOnlyCells = within(idOnlyRow).getAllByRole('cell');
+    expect(idOnlyCells[2].textContent).toBe('-');
+    expect(idOnlyCells[3].textContent).toBe('-');
+    expect(idOnlyRow).not.toHaveTextContent('instance-type-id-only');
+    expect(idOnlyRow).not.toHaveTextContent('disk-image-id-only');
+    expect(requestCounts.resourceLookups).toBe(0);
+
+    expect(
+      screen.getByRole('link', { name: vmCatalogItemWithReferences.metadata?.name }),
+    ).toHaveAttribute('href', `/catalog/vm/${vmCatalogItemWithReferences.id}`);
 
     await user.click(screen.getByRole('button', { name: /Clusters/ }));
 

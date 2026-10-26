@@ -232,8 +232,11 @@ const CatalogPage = () => {
 
   const data = [...vms, ...clusters, ...bms];
 
+  const shouldLoadResourceLookups =
+    data.length > 0 && !isLoading && !error && (viewType === 'cards' || selectedKind !== 'vm');
+
   const resourceLookups = useCatalogItemResourceLookups({
-    enabled: data.length > 0 && !isLoading && !error,
+    enabled: shouldLoadResourceLookups,
   });
 
   const pageDescription = getPageDescription(t, enabledServices, role);

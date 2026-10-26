@@ -167,5 +167,5 @@ def test_parent_vpc_lookup_matches_id_and_tenant_and_rejects_ambiguity() -> None
 
     subnet_create = _tasks(TEMPLATE_NETRIS / "create_subnet.yaml")
     role_call = _named_task(subnet_create, "Look up parent VPC by name")
-    assert role_call["vars"]["vpc_lookup_id"] == "{{ subnet_virtual_network_vpc_id }}"
+    assert role_call["vars"]["vpc_lookup_id"] == "{{ subnet_virtual_network_vpc_id | default(omit, true) }}"
     assert role_call["vars"]["vpc_tenant_id"] == "{{ netris_tenant_id }}"

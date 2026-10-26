@@ -322,8 +322,9 @@ def test_fabric_outputs_are_validated_before_configmap_publication() -> None:
 
     create_vnet = tasks[names.index("Create V-Net in Netris controller")]["vars"]
     assert create_vnet["vnet_gateway"] == "{{ _gateway_cidr | default(omit) }}"
-    assert create_vnet["vnet_dhcp_start_ip"] == "{{ _dhcp_start | default(omit) }}"
-    assert create_vnet["vnet_dhcp_end_ip"] == "{{ _dhcp_end | default(omit) }}"
+    assert create_vnet["vnet_dhcp_start_ip"] == "{{ _dhcp_start | default(omit, true) }}"
+    assert create_vnet["vnet_dhcp_enabled"] == "{{ _subnet_dhcp_enabled | default(true) | bool }}"
+    assert create_vnet["vnet_dhcp_end_ip"] == "{{ _dhcp_end | default(omit, true) }}"
 
 
 @pytest.mark.parametrize(

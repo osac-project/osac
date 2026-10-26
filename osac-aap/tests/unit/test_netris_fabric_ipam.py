@@ -244,7 +244,10 @@ def test_gateway_creation_waits_for_reserved_ipam_and_cleanup_removes_child_firs
     tasks = yaml.safe_load((TASKS / "create_subnet.yaml").read_text())
     names = [task["name"] for task in tasks]
     helper = tasks[names.index("Ensure the reserved EVPN fabric prefix exists in Netris IPAM")]
-    assert helper["when"] == "is_cudn_evpn"
+    conditions = helper["when"]
+    if isinstance(conditions, str):
+        conditions = [conditions]
+    assert "is_cudn_evpn" in conditions
     assert names.index(helper["name"]) < names.index("Create V-Net in Netris controller")
     tasks = yaml.safe_load((TASKS / "delete_subnet.yaml").read_text())
     names = [task["name"] for task in tasks]

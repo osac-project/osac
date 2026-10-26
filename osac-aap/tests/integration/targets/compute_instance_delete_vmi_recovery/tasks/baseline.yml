@@ -2,7 +2,7 @@
 # OSAC-6689: Integration tests for stuck VMI recovery during
 # ComputeInstance deletion.
 #
-# Validates six paths in delete_resources.yaml:
+# Validates seven paths in delete_resources.yaml:
 #   1. Normal: VMI absent before timeout — no recovery needed.
 #   2. Crashed launcher recovery: VMI stuck with deletion
 #      timestamp, launcher pod Failed — finalizer removed
@@ -20,6 +20,15 @@
 #      with a different VMI UID is ignored by the
 #      UID-scoped selector — recovery sees "absent" and
 #      proceeds; alien pod is untouched.
+#   7. No-timestamp refusal: VMI stuck but has no
+#      deletionTimestamp — recovery refuses regardless
+#      of launcher state. Three sub-cases: no launcher
+#      (S7a), Failed launcher (S7b), Running launcher
+#      (S7c).
+#
+# The post-timeout VMI-already-gone recovery branch is
+# structurally checked but is not exercised by this
+# controller-disabled integration harness.
 #
 # The Kind cluster has KubeVirt CRDs (operator scaled to 0),
 # so VMI/Pod resources can be created directly.  No real
@@ -1825,4 +1834,726 @@
               name: >-
                 {{ compute_instance_name
                 }}-cloud-init
+          failed_when: false
+
+
+# ============================================================
+# Scenario 7 — No-timestamp refusal: VMI stuck but has no
+# deletionTimestamp — recovery refuses BEFORE pod lookup,
+# regardless of launcher state.  Three sub-cases verify
+# refusal with no launcher, a Failed launcher, and a
+# Running launcher.
+# ============================================================
+- name: >-
+    Scenario 7: No-timestamp refusal (three launcher
+    states)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    compute_instance_name: test-vmi-s7
+    compute_instance_target_namespace: test-subnet
+    guest_os_family: linux
+    compute_instance:
+      spec: {}
+    ocp_virt_vm_graceful_wait_retries: 2
+  tasks:
+    # --- S7a: no launcher at all ---
+    - name: "S7a: Run no-launcher sub-case"
+      block:
+        - name: "S7a: Clean up previous resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}
+          failed_when: false
+
+        - name: "S7a: Create VMI (no deletion request)"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                finalizers:
+                  - >-
+                    kubevirt.io/foregroundDeleteVirtualMachine
+              spec:
+                domain:
+                  devices: {}
+                  resources:
+                    requests:
+                      memory: 128Mi
+
+        - name: "S7a: Verify VMI has NO timestamp"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s7a_vmi_check
+          failed_when: >
+            s7a_vmi_check.resources | length == 0 or
+            (s7a_vmi_check.resources[0]
+            .metadata.deletionTimestamp
+            | default('')) != ''
+
+        - name: "S7a: Create minimal VM fixture"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                runStrategy: Always
+                template:
+                  spec:
+                    domain:
+                      devices: {}
+                      resources:
+                        requests:
+                          memory: 128Mi
+
+        - name: "S7a: Expect failure (no launcher)"
+          block:
+            - name: "S7a: Run delete_resources"
+              ansible.builtin.include_role:
+                name: osac.templates.ocp_virt_vm
+                tasks_from: delete_resources.yaml
+
+            - name: "S7a: Record unexpected success"
+              ansible.builtin.set_fact:
+                _s7a_unexpected: true
+          rescue:
+            - name: "S7a: Verify timestamp refusal"
+              ansible.builtin.assert:
+                that:
+                  - >-
+                    'deletionTimestamp' in
+                    (ansible_failed_result.msg
+                    | default(''))
+                fail_msg: >-
+                  Expected deletionTimestamp refusal.
+
+        - name: "S7a: Assert refusal"
+          ansible.builtin.assert:
+            that: _s7a_unexpected is not defined
+            fail_msg: >-
+              Should have failed for VMI without
+              deletionTimestamp (no launcher case).
+
+        - name: "S7a: Verify VMI preserved"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s7a_vmi_after
+          failed_when: >-
+            s7a_vmi_after.resources | length == 0
+
+        - name: "S7a: Verify integrity after refusal"
+          ansible.builtin.assert:
+            that:
+              - >-
+                'kubevirt.io/foregroundDeleteVirtualMachine'
+                in (s7a_vmi_after.resources[0]
+                .metadata.finalizers | default([]))
+              - >-
+                (s7a_vmi_after.resources[0]
+                .metadata.deletionTimestamp
+                | default('')) == ''
+            fail_msg: >-
+              VMI finalizer removed or
+              deletionTimestamp introduced
+              despite refusal.
+
+        - name: "S7a: Verify parent VM preserved"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachine
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s7a_vm_after
+          failed_when: >-
+            _s7a_vm_after.resources | length == 0
+
+      always:
+        - name: "S7a: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s7a_cleanup_vmi
+          failed_when: false
+
+        - name: "S7a: Remove finalizer for cleanup"
+          vars:
+            _s7a_fins: >-
+              {{ _s7a_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s7a_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s7a_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s7a_fins
+                     | difference([_s7a_target]) }}
+          when: >-
+            _s7a_cleanup_vmi.resources | length > 0
+            and _s7a_target in
+            (_s7a_cleanup_vmi.resources[0]
+             .metadata.finalizers | default([]))
+          failed_when: false
+
+        - name: "S7a: Delete resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            delete_options:
+              gracePeriodSeconds: 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}
+          failed_when: false
+
+    # --- S7b: Failed launcher ---
+    - name: "S7b: Run Failed-launcher sub-case"
+      block:
+        - name: "S7b: Create VMI (no deletion request)"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                finalizers:
+                  - >-
+                    kubevirt.io/foregroundDeleteVirtualMachine
+              spec:
+                domain:
+                  devices: {}
+                  resources:
+                    requests:
+                      memory: 128Mi
+
+        - name: "S7b: Capture VMI UID"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s7b_vmi_check
+
+        - name: "S7b: Set UID fact"
+          ansible.builtin.set_fact:
+            _s7b_vmi_uid: >-
+              {{ s7b_vmi_check.resources[0]
+                 .metadata.uid }}
+
+        - name: "S7b: Create Failed launcher"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: >-
+                  virt-launcher-{{
+                  compute_instance_name }}
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                labels:
+                  kubevirt.io: virt-launcher
+                  kubevirt.io/created-by: >-
+                    {{ _s7b_vmi_uid }}
+                annotations:
+                  kubevirt.io/domain: >-
+                    {{ compute_instance_name }}
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: compute
+                    image: >-
+                      registry.k8s.io/pause:3.9
+                    command: ["false"]
+
+        - name: "S7b: Wait for launcher Failed"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              virt-launcher-{{
+              compute_instance_name }}
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s7b_launcher_wait
+          until: >
+            s7b_launcher_wait.resources | length > 0
+            and
+            (s7b_launcher_wait.resources[0]
+            .status.phase | default('')) == 'Failed'
+          retries: 30
+          delay: 2
+
+        - name: "S7b: Create minimal VM fixture"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                runStrategy: Always
+                template:
+                  spec:
+                    domain:
+                      devices: {}
+                      resources:
+                        requests:
+                          memory: 128Mi
+
+        - name: "S7b: Expect failure (Failed launcher)"
+          block:
+            - name: "S7b: Run delete_resources"
+              ansible.builtin.include_role:
+                name: osac.templates.ocp_virt_vm
+                tasks_from: delete_resources.yaml
+
+            - name: "S7b: Record unexpected success"
+              ansible.builtin.set_fact:
+                _s7b_unexpected: true
+          rescue:
+            - name: "S7b: Verify timestamp refusal"
+              ansible.builtin.assert:
+                that:
+                  - >-
+                    'deletionTimestamp' in
+                    (ansible_failed_result.msg
+                    | default(''))
+                fail_msg: >-
+                  Expected deletionTimestamp refusal
+                  with Failed launcher.
+
+        - name: "S7b: Assert refusal"
+          ansible.builtin.assert:
+            that: _s7b_unexpected is not defined
+            fail_msg: >-
+              Should have failed for VMI without
+              deletionTimestamp (Failed launcher).
+
+        - name: "S7b: Verify VMI preserved"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s7b_vmi_after
+          failed_when: >-
+            s7b_vmi_after.resources | length == 0
+
+        - name: "S7b: Verify integrity after refusal"
+          ansible.builtin.assert:
+            that:
+              - >-
+                'kubevirt.io/foregroundDeleteVirtualMachine'
+                in (s7b_vmi_after.resources[0]
+                .metadata.finalizers | default([]))
+              - >-
+                (s7b_vmi_after.resources[0]
+                .metadata.deletionTimestamp
+                | default('')) == ''
+            fail_msg: >-
+              VMI finalizer removed or
+              deletionTimestamp introduced
+              despite refusal.
+
+        - name: "S7b: Verify parent VM preserved"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachine
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s7b_vm_after
+          failed_when: >-
+            _s7b_vm_after.resources | length == 0
+
+      always:
+        - name: "S7b: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s7b_cleanup_vmi
+          failed_when: false
+
+        - name: "S7b: Remove finalizer for cleanup"
+          vars:
+            _s7b_fins: >-
+              {{ _s7b_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s7b_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s7b_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s7b_fins
+                     | difference([_s7b_target]) }}
+          when: >-
+            _s7b_cleanup_vmi.resources | length > 0
+            and _s7b_target in
+            (_s7b_cleanup_vmi.resources[0]
+             .metadata.finalizers | default([]))
+          failed_when: false
+
+        - name: "S7b: Delete resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            delete_options:
+              gracePeriodSeconds: 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}
+          failed_when: false
+
+    # --- S7c: Running launcher ---
+    - name: "S7c: Run Running-launcher sub-case"
+      block:
+        - name: "S7c: Create VMI (no deletion request)"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                finalizers:
+                  - >-
+                    kubevirt.io/foregroundDeleteVirtualMachine
+              spec:
+                domain:
+                  devices: {}
+                  resources:
+                    requests:
+                      memory: 128Mi
+
+        - name: "S7c: Capture VMI UID"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s7c_vmi_check
+
+        - name: "S7c: Set UID fact"
+          ansible.builtin.set_fact:
+            _s7c_vmi_uid: >-
+              {{ s7c_vmi_check.resources[0]
+                 .metadata.uid }}
+
+        - name: "S7c: Create Running launcher"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: >-
+                  virt-launcher-{{
+                  compute_instance_name }}
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                labels:
+                  kubevirt.io: virt-launcher
+                  kubevirt.io/created-by: >-
+                    {{ _s7c_vmi_uid }}
+                annotations:
+                  kubevirt.io/domain: >-
+                    {{ compute_instance_name }}
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: compute
+                    image: >-
+                      registry.k8s.io/pause:3.9
+
+        - name: "S7c: Wait for launcher Running"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              virt-launcher-{{
+              compute_instance_name }}
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s7c_launcher_wait
+          until: >
+            s7c_launcher_wait.resources | length > 0
+            and
+            (s7c_launcher_wait.resources[0]
+            .status.phase | default('')) == 'Running'
+          retries: 30
+          delay: 2
+
+        - name: "S7c: Create minimal VM fixture"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                runStrategy: Always
+                template:
+                  spec:
+                    domain:
+                      devices: {}
+                      resources:
+                        requests:
+                          memory: 128Mi
+
+        - name: "S7c: Expect failure (Running launcher)"
+          block:
+            - name: "S7c: Run delete_resources"
+              ansible.builtin.include_role:
+                name: osac.templates.ocp_virt_vm
+                tasks_from: delete_resources.yaml
+
+            - name: "S7c: Record unexpected success"
+              ansible.builtin.set_fact:
+                _s7c_unexpected: true
+          rescue:
+            - name: "S7c: Verify timestamp refusal"
+              ansible.builtin.assert:
+                that:
+                  - >-
+                    'deletionTimestamp' in
+                    (ansible_failed_result.msg
+                    | default(''))
+                fail_msg: >-
+                  Expected deletionTimestamp refusal
+                  with Running launcher.
+
+        - name: "S7c: Assert refusal"
+          ansible.builtin.assert:
+            that: _s7c_unexpected is not defined
+            fail_msg: >-
+              Should have failed for VMI without
+              deletionTimestamp (Running launcher).
+
+        - name: "S7c: Verify VMI preserved"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s7c_vmi_after
+          failed_when: >-
+            s7c_vmi_after.resources | length == 0
+
+        - name: "S7c: Verify integrity after refusal"
+          ansible.builtin.assert:
+            that:
+              - >-
+                'kubevirt.io/foregroundDeleteVirtualMachine'
+                in (s7c_vmi_after.resources[0]
+                .metadata.finalizers | default([]))
+              - >-
+                (s7c_vmi_after.resources[0]
+                .metadata.deletionTimestamp
+                | default('')) == ''
+            fail_msg: >-
+              VMI finalizer removed or
+              deletionTimestamp introduced
+              despite refusal.
+
+        - name: "S7c: Verify parent VM preserved"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachine
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s7c_vm_after
+          failed_when: >-
+            _s7c_vm_after.resources | length == 0
+
+        - name: "S7: Assert all three sub-cases passed"
+          ansible.builtin.debug:
+            msg: >-
+              Scenario 7 passed: no-timestamp refusal
+              for absent, Failed, and Running launcher.
+
+      always:
+        - name: "S7c: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s7c_cleanup_vmi
+          failed_when: false
+
+        - name: "S7c: Remove finalizer for cleanup"
+          vars:
+            _s7c_fins: >-
+              {{ _s7c_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s7c_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s7c_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s7c_fins
+                     | difference([_s7c_target]) }}
+          when: >-
+            _s7c_cleanup_vmi.resources | length > 0
+            and _s7c_target in
+            (_s7c_cleanup_vmi.resources[0]
+             .metadata.finalizers | default([]))
+          failed_when: false
+
+        - name: "S7c: Delete resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            delete_options:
+              gracePeriodSeconds: 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}
           failed_when: false

@@ -35,8 +35,6 @@ jobs:
         run: uv sync --locked --all-extras --group development
       - name: Run ansible-lint
         working-directory: osac-aap
-        env:
-          YAMLLINT_CONFIG_FILE: ${{ github.workspace }}/.yamllint.yaml
         # Explicit "." is required: without a target path, ansible-lint
         # discovers files via `git ls-files` against the whole repo (not
         # CWD-scoped), which in this monorepo pulls in unrelated

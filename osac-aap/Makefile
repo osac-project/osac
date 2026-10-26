@@ -16,7 +16,7 @@ test:
 	}
 
 lint:
-	YAMLLINT_CONFIG_FILE="$(shell git rev-parse --show-toplevel)/.yamllint.yaml" uv run ansible-lint
+	uv run ansible-lint
 
 # Not a generic docker/Containerfile build like the other components --
 # ansible-builder assembles the execution environment image from

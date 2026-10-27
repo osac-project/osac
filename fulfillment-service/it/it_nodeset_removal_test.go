@@ -74,6 +74,10 @@ var _ = Describe("Node set removal", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+			_, err := instanceTypesClient.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{Id: workerBmitName}.Build())
+			return err
+		}, nil)
 
 		// Create storage bare metal instance type:
 		storageBmitName = fmt.Sprintf("storage-bmit-%s", uuid.New()[24:32])
@@ -102,6 +106,10 @@ var _ = Describe("Node set removal", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+			_, err := instanceTypesClient.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{Id: storageBmitName}.Build())
+			return err
+		}, nil)
 
 		// Create a provisioning template; the Cluster supplies its two node sets.
 		templateId = fmt.Sprintf("template_2_nodesets_%s", uuid.New())
@@ -116,6 +124,10 @@ var _ = Describe("Node set removal", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+			_, err := templatesClient.Delete(ctx, privatev1.ClusterTemplatesDeleteRequest_builder{Id: templateId}.Build())
+			return err
+		}, nil)
 	})
 
 	It("Should keep node set removed after edit", func() {
@@ -136,6 +148,7 @@ var _ = Describe("Node set removal", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		clusterId := createResponse.Object.Id
+		deferClusterDeletion(clusterId, tool.ExternalView().UserConn())
 
 		// Step 2: Verify cluster has 2 node sets
 		getResponse, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{

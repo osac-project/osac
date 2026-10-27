@@ -734,7 +734,7 @@ var _ = Describe("controllerFlags.validateRemoteCluster", func() {
 })
 
 var _ = Describe("addSchemesForRemoteControllers", func() {
-	It("registers storage.k8s.io/v1 StorageClass on remoteScheme and bmfov1alpha1 on localScheme when networking is enabled", func() {
+	It("registers StorageClass on remoteScheme and bmfov1alpha1 on localScheme when networking is enabled", func() {
 		localScheme := runtime.NewScheme()
 		remoteScheme := runtime.NewScheme()
 		addSchemesForRemoteControllers(localScheme, remoteScheme, false, false, true)

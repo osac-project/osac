@@ -333,7 +333,7 @@ For example, a Netris VMaaS install uses:
 
 ```bash
 make install PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
-  INSTANCE_VALUES_EXTRA="-f values/vmaas-ci/netris.yaml -f netris-runtime.yaml"
+  INSTANCE_VALUES_EXTRA="-f values/vmaas-ci/netris.yaml -f values/vmaas-ci/netris-runtime.yaml"
 ```
 
 The overlay registers `netris` and `cudn_evpn` and selects that pair on the

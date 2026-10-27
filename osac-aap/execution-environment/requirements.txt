@@ -379,7 +379,7 @@ urllib3==2.6.3
     #   kubernetes
     #   py-pure-client
     #   requests
-wcwidth==0.6.0
+wcwidth==0.9.4
     # via prettytable
 websocket-client==1.9.2
     # via

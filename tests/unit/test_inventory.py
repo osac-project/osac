@@ -121,6 +121,12 @@ def test_metal3_host_for_bmi_rejects_malformed_host_id() -> None:
         backend.host_for_bmi(bmi_cr_name="bmi-cr")
 
 
+def test_metal3_default_host_selector_matches_the_bmh_label() -> None:
+    backend = _metal3(FakeMetal3K8s())
+
+    assert backend.default_host_selector() == {"osac.openshift.io/host-type": "default"}
+
+
 def test_metal3_count_available_uses_available_and_ready_states() -> None:
     k8s = FakeMetal3K8s(available_count=3)
     backend = _metal3(k8s)
@@ -331,6 +337,14 @@ def test_netbox_host_for_bmi_cross_checks_the_deployed_bmh_namespace() -> None:
         backend.host_for_bmi(bmi_cr_name="bmi-cr")
 
 
+def test_netbox_default_host_selector_uses_a_custom_field_name() -> None:
+    backend = _netbox(FakeNetBox())
+
+    # Must be a valid NetBox custom-field name: the operator queries it as
+    # cf_<key>, and label-style keys with dots/slashes are rejected.
+    assert backend.default_host_selector() == {"host_type": "default"}
+
+
 def test_netbox_count_available_uses_the_free_device_query() -> None:
     netbox = FakeNetBox(
         [
@@ -391,9 +405,11 @@ def test_netbox_fixture_devices_are_created_idempotently_and_deleted(monkeypatch
         "osac_managed": True,
         "osac_bmc_address": "redfish://10.0.0.1",
         "osac_boot_mac": "aa:bb:cc:dd:ee:01",
+        # The capability custom field the instance type's selector matches.
+        "host_type": "default",
     }
     assert second["custom_fields"]["osac_interface_macs"] == {"data-0": "AA:BB:CC:DD:EE:02"}
-    assert second["custom_fields"]["host-type"] == "default"
+    assert second["custom_fields"]["host_type"] == "default"
 
     # Second ensure is a no-op: the run-prefixed devices already exist.
     backend.ensure_available_hosts()

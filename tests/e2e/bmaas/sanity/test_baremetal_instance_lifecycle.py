@@ -115,8 +115,8 @@ def test_baremetal_instance_lifecycle(
     inventory_hosts: None,
     test_run_id: str,
     ssh_key_secret: str,
-    ssh_public_key: str,
     networking_provisioning_enabled: bool,
+    ssh_public_key: str,
 ) -> None:
     """Provision a BMI end-to-end and assert its terminal stage, NIC metadata, power cycle, and deprovision."""
     name = f"e2e-bmi-{test_run_id}"
@@ -197,9 +197,6 @@ def test_baremetal_instance_lifecycle(
             )
             assert_no_network_attachment(k8s=k8s_hub_client, target_kind="BareMetalInstance", target_id=bmi_id)
 
-        host_ref = inventory_backend.host_for_bmi(bmi_cr_name=bmi_cr_name)
-||||||| parent of 668b3b8 (OSAC-6199: split inventory routing from BMH provisioning)
-        host_ref = inventory_backend.host_for_bmi(bmi_cr_name=bmi_cr_name)
         host = inventory_backend.host_for_bmi(bmi_cr_name=bmi_cr_name)
 
         # Verify NIC metadata matches the BMH hardware inventory (OSAC-3254)

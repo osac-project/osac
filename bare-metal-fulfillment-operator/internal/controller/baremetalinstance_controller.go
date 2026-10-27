@@ -405,6 +405,15 @@ func (r *BareMetalInstanceReconciler) reconcileManagement(ctx context.Context, b
 	if bareMetalInstance.Status.Phase == v1alpha1.BareMetalInstancePhaseFailed {
 		return ctrl.Result{}, nil
 	}
+	// A retrying provision attempt is still in flight: power management and
+	// the Ready phase must wait until provisioning succeeds or fails for good
+	// (OSAC-1700). Without this guard the failure-observing reconcile returns
+	// a zero result and falls through to the Ready transition.
+	if provisionCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete); provisionCond != nil &&
+		provisionCond.Status == metav1.ConditionFalse &&
+		provisionCond.Reason == v1alpha1.HostConditionReasonRetrying {
+		return ctrl.Result{}, nil
+	}
 
 	// Capture whether power was synced before this reconciliation modifies conditions.
 	// Used to detect stale power state reads during rapid stop/start cycles.
@@ -545,6 +554,23 @@ func (r *BareMetalInstanceReconciler) reconcilePower(ctx context.Context, bareMe
 	return true, nil
 }
 
+// provisionRetryMessagePrefix is the operator-facing prefix for retryable
+// provision failures; the latest backend error is appended for diagnostics.
+const provisionRetryMessagePrefix = "Provisioning retry scheduled after failed attempt: "
+
+// markProvisionRetrying stamps the retryable-failure state on the instance:
+// phase Progressing with the Retrying condition reason, preserving the latest
+// backend error in the condition message (OSAC-1700).
+func markProvisionRetrying(bareMetalInstance *v1alpha1.BareMetalInstance, backendError string) {
+	bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+	bareMetalInstance.SetStatusCondition(
+		v1alpha1.HostConditionProvisionTemplateComplete,
+		metav1.ConditionFalse,
+		v1alpha1.HostConditionReasonRetrying,
+		provisionRetryMessagePrefix+backendError,
+	)
+}
+
 func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx context.Context, bareMetalInstance *v1alpha1.BareMetalInstance) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -666,13 +692,7 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 		provisioning.DefaultMaxJobHistory, r.ProvisionPollIntervalDuration,
 		&provisioning.PollCallbacks{
 			OnFailed: func(message string) {
-				bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
-				bareMetalInstance.SetStatusCondition(
-					v1alpha1.HostConditionProvisionTemplateComplete,
-					metav1.ConditionFalse,
-					v1alpha1.HostConditionReasonRetrying,
-					"Provisioning retry scheduled after failed attempt: "+message,
-				)
+				markProvisionRetrying(bareMetalInstance, message)
 			},
 			OnSuccess: func(_ provisioning.ProvisionStatus) {
 				bareMetalInstance.SetStatusCondition(
@@ -705,12 +725,7 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 	if result.RequeueAfter > 0 {
 		switch {
 		case provisionCond != nil && provisionCond.Reason == v1alpha1.HostConditionReasonTemplateFailed:
-			bareMetalInstance.SetStatusCondition(
-				v1alpha1.HostConditionProvisionTemplateComplete,
-				metav1.ConditionFalse,
-				v1alpha1.HostConditionReasonRetrying,
-				"Provisioning retry scheduled after failed attempt: "+provisionCond.Message,
-			)
+			markProvisionRetrying(bareMetalInstance, provisionCond.Message)
 		case provisionCond == nil || provisionCond.Reason != v1alpha1.HostConditionReasonRetrying:
 			bareMetalInstance.SetStatusCondition(
 				v1alpha1.HostConditionProvisionTemplateComplete,

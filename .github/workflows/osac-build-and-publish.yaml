@@ -2029,6 +2029,7 @@ jobs:
           - osac-aap
     permissions:
       contents: read
+      checks: read
 
     steps:
     - name: Checkout repository
@@ -2060,6 +2061,8 @@ jobs:
       env:
         COMMIT_SHA: ${{ steps.commit.outputs.sha }}
         COMPONENT: ${{ matrix.component }}
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
       run: |
         set -euo pipefail
         python3 - <<'PYEOF'
@@ -2071,6 +2074,7 @@ jobs:
 
         COMMIT_SHA = os.environ["COMMIT_SHA"]
         COMPONENT = os.environ["COMPONENT"]
+        GITHUB_REPOSITORY = os.environ["GITHUB_REPOSITORY"]
         NAMESPACE = "osac-tenant"
         POLL_INTERVAL_SECONDS = 30
         TIMEOUT_SECONDS = 80 * 60
@@ -2177,12 +2181,43 @@ jobs:
             message = succeeded.get("message", "")
             print(f"[{COMPONENT}] PipelineRun {latest['metadata']['name']}: {reason} -- {message}", flush=True)
 
+        # Confirmed terminal failure is detectable far faster than this
+        # poll's own TIMEOUT_SECONDS would otherwise discover it: a failed
+        # build never produces the successful Snapshot find_component()
+        # waits for, so without this, a genuine build failure (confirmed
+        # live: osac-aap's own build-container step, not infra flakiness)
+        # just burns the full 80 minutes before reporting anything.
+        # KONFLUX_SA_TOKEN has no RBAC for pipelineruns.tekton.dev (see
+        # describe_pending_state's own fallback above), so this can't poll
+        # the PipelineRun directly -- but Konflux already posts a real
+        # GitHub check-run the moment a build genuinely finishes, which
+        # this job's own GITHUB_TOKEN can read regardless. gh api failures
+        # here degrade silently (return False) rather than crash the job:
+        # this is a fast-fail optimization, not core functionality --
+        # losing the real poll over a transient `gh api` hiccup would be
+        # absurd.
+        def check_run_failed():
+            check_name = f"Konflux kflux-prd-rh02 / {COMPONENT}-on-release"
+            try:
+                out = subprocess.run(
+                    ["gh", "api", f"repos/{GITHUB_REPOSITORY}/commits/{COMMIT_SHA}/check-runs",
+                     "--jq", f'.check_runs[] | select(.name == "{check_name}") | .conclusion'],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError:
+                return False
+            conclusion = out.stdout.strip()
+            return conclusion not in ("", "success", "neutral", "skipped")
+
         deadline = time.time() + TIMEOUT_SECONDS
         found = None
         while time.time() < deadline:
             found = find_component()
             if found:
                 break
+            if check_run_failed():
+                print(f"::error::Konflux build for {COMPONENT} failed (confirmed via its own GitHub check-run) -- not waiting out the remaining timeout")
+                sys.exit(1)
             describe_pending_state()
             time.sleep(POLL_INTERVAL_SECONDS)
         else:
@@ -2250,6 +2285,7 @@ jobs:
           - osac-ui-chart
     permissions:
       contents: read
+      checks: read
 
     steps:
     - name: Checkout repository
@@ -2270,14 +2306,16 @@ jobs:
 
     # Identical logic to wait-for-konflux-build's own step -- see that
     # job's comments for the full rationale (transient-oc-hiccup
-    # tolerance, pipelinerun-RBAC degrade-gracefully, etc.). Kept as a
-    # literal copy rather than a shared composite action so this job can
-    # be deleted cleanly in one place once charts are folded into the
-    # main matrix (see this job's own top comment).
+    # tolerance, pipelinerun-RBAC degrade-gracefully, check-run fast-fail,
+    # etc.). Kept as a literal copy rather than a shared composite action
+    # so this job can be deleted cleanly in one place once charts are
+    # folded into the main matrix (see this job's own top comment).
     - name: Wait for chart component's Konflux build
       env:
         COMMIT_SHA: ${{ steps.commit.outputs.sha }}
         COMPONENT: ${{ matrix.component }}
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
       run: |
         set -euo pipefail
         python3 - <<'PYEOF'
@@ -2289,6 +2327,7 @@ jobs:
 
         COMMIT_SHA = os.environ["COMMIT_SHA"]
         COMPONENT = os.environ["COMPONENT"]
+        GITHUB_REPOSITORY = os.environ["GITHUB_REPOSITORY"]
         NAMESPACE = "osac-tenant"
         POLL_INTERVAL_SECONDS = 30
         TIMEOUT_SECONDS = 80 * 60
@@ -2363,12 +2402,30 @@ jobs:
             message = succeeded.get("message", "")
             print(f"[{COMPONENT}] PipelineRun {latest['metadata']['name']}: {reason} -- {message}", flush=True)
 
+        # See wait-for-konflux-build's own identical check_run_failed for
+        # the full rationale.
+        def check_run_failed():
+            check_name = f"Konflux kflux-prd-rh02 / {COMPONENT}-on-release"
+            try:
+                out = subprocess.run(
+                    ["gh", "api", f"repos/{GITHUB_REPOSITORY}/commits/{COMMIT_SHA}/check-runs",
+                     "--jq", f'.check_runs[] | select(.name == "{check_name}") | .conclusion'],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError:
+                return False
+            conclusion = out.stdout.strip()
+            return conclusion not in ("", "success", "neutral", "skipped")
+
         deadline = time.time() + TIMEOUT_SECONDS
         found = None
         while time.time() < deadline:
             found = find_component()
             if found:
                 break
+            if check_run_failed():
+                print(f"::error::Konflux build for {COMPONENT} failed (confirmed via its own GitHub check-run) -- not waiting out the remaining timeout")
+                sys.exit(1)
             describe_pending_state()
             time.sleep(POLL_INTERVAL_SECONDS)
         else:

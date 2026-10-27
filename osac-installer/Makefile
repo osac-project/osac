@@ -164,6 +164,12 @@ CHARTS         := charts
 DEPS_CHART     := $(CHARTS)/osac-deps
 INFRA_CHART    := $(CHARTS)/osac-infra
 OSAC_CHART     := $(CHARTS)/osac
+# Override both to install-osac from a published OCI chart artifact (e.g.
+# oci://registry.stage.redhat.io/cloud-extensions/osac-chart) instead of
+# building the chart from this checkout -- for validating a real staged
+# release rather than the current commit. Leave unset for normal use.
+OSAC_CHART_OCI_REF ?=
+OSAC_CHART_OCI_VERSION ?=
 # Runtime supplies hostnames and credentials; use the minimal CI fixture for
 # local chart checks without loosening the required-values schema.
 HELM_VALIDATION_VALUES := $(OSAC_CHART)/ci/default-values.yaml
@@ -437,8 +443,12 @@ AAP_LICENSE_FILE ?= values/$(PROFILE)/license.zip
 
 .PHONY: install-osac
 install-osac: ## Install OSAC instance (PLATFORM= PROFILE= NS= required)
+ifdef OSAC_CHART_OCI_REF
+	@[ -n "$(OSAC_CHART_OCI_VERSION)" ] || { echo "ERROR: OSAC_CHART_OCI_VERSION is required when OSAC_CHART_OCI_REF is set" >&2; exit 1; }
+else
 	rm -rf $(OSAC_CHART)/charts
 	helm --repository-config $(LOCAL_HELM_REPOSITORY_CONFIG) dependency build $(OSAC_CHART)
+endif
 ifneq ($(PLATFORM),kind)
 	@[ -n "$(AAP_LICENSE_FILE)" ] || { echo "ERROR: AAP_LICENSE_FILE is required for PLATFORM=openshift" >&2; exit 1; }
 	@[ -f "$(AAP_LICENSE_FILE)" ] || { echo "ERROR: AAP_LICENSE_FILE not found at $(AAP_LICENSE_FILE)" >&2; exit 1; }
@@ -474,7 +484,7 @@ endif
 			--set-string "aap.configAsCode.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY}" \
 		); \
 	fi; \
-	helm upgrade --install osac $(OSAC_CHART) \
+	helm upgrade --install osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF) --version $(OSAC_CHART_OCI_VERSION),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) --create-namespace \
 		--set-string global.osacDeploymentId=$(NS)/osac \

@@ -45,11 +45,45 @@
           - "_pod_spec is not search('cluster-fulfillment-ig')"
         fail_msg: Pod spec must not reference cluster-fulfillment-ig
 
-    - name: Assert storage-operations references are retained
+    - name: Assert storage-operations references and ca-bundle contract are retained
       ansible.builtin.assert:
         that:
           - "_pod_spec is search('storage-operations-ig')"
-        fail_msg: Expected storage-operations-ig references in pod spec
+          - >-
+            _pod.spec.containers[0].volumeMounts
+            | selectattr('name', 'equalto', 'ca-bundle')
+            | selectattr('mountPath', 'equalto', '/etc/ca-bundle')
+            | selectattr('readOnly', 'equalto', true)
+            | list | length == 1
+          - >-
+            (_pod.spec.volumes
+             | selectattr('name', 'equalto', 'ca-bundle')
+             | list | first).configMap.name == 'ca-bundle'
+          - >-
+            (_pod.spec.volumes
+             | selectattr('name', 'equalto', 'ca-bundle')
+             | list | first).configMap['items'][0].key == 'bundle.pem'
+          - >-
+            (_pod.spec.volumes
+             | selectattr('name', 'equalto', 'ca-bundle')
+             | list | first).configMap['items'][0].path == 'bundle.pem'
+          - >-
+            (_pod.spec.volumes
+             | selectattr('name', 'equalto', 'ca-bundle')
+             | list | first).configMap.optional == true
+          - >-
+            _pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'SSL_CERT_FILE')
+            | selectattr('value', 'equalto', '/etc/ca-bundle/bundle.pem')
+            | list | length == 1
+          - >-
+            _pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'REQUESTS_CA_BUNDLE')
+            | selectattr('value', 'equalto', '/etc/ca-bundle/bundle.pem')
+            | list | length == 1
+        fail_msg: >-
+          Expected storage-operations-ig references, optional ca-bundle ConfigMap
+          mount, and SSL_CERT_FILE/REQUESTS_CA_BUNDLE env vars in compute-instance pod spec
 
 - name: Compute-instance pod spec with remote kubeconfig
   hosts: localhost
@@ -102,11 +136,44 @@
             | selectattr('name', 'equalto', 'storage-operations-ig')
             | selectattr('optional', 'defined')
             | list | length == 1
+          - >-
+            _storage_pod.spec.containers[0].volumeMounts
+            | selectattr('name', 'equalto', 'ca-bundle')
+            | selectattr('mountPath', 'equalto', '/etc/ca-bundle')
+            | selectattr('readOnly', 'equalto', true)
+            | list | length == 1
+          - >-
+            (_storage_pod.spec.volumes
+             | selectattr('name', 'equalto', 'ca-bundle')
+             | list | first).configMap.name == 'ca-bundle'
+          - >-
+            (_storage_pod.spec.volumes
+             | selectattr('name', 'equalto', 'ca-bundle')
+             | list | first).configMap['items'][0].key == 'bundle.pem'
+          - >-
+            (_storage_pod.spec.volumes
+             | selectattr('name', 'equalto', 'ca-bundle')
+             | list | first).configMap['items'][0].path == 'bundle.pem'
+          - >-
+            (_storage_pod.spec.volumes
+             | selectattr('name', 'equalto', 'ca-bundle')
+             | list | first).configMap.optional == true
+          - >-
+            _storage_pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'SSL_CERT_FILE')
+            | selectattr('value', 'equalto', '/etc/ca-bundle/bundle.pem')
+            | list | length == 1
+          - >-
+            _storage_pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'REQUESTS_CA_BUNDLE')
+            | selectattr('value', 'equalto', '/etc/ca-bundle/bundle.pem')
+            | list | length == 1
           - "_storage_pod_spec is not search('compute-instance-operations-ig')"
           - "_storage_pod_spec is not search('remote-cluster-kubeconfig')"
         fail_msg: >-
-          Storage operations must keep their isolated optional credentials and
-          omit the remote kubeconfig mount when no secret is configured.
+          Storage operations must keep their isolated optional credentials,
+          mount the cluster ca-bundle ConfigMap, and omit the remote kubeconfig
+          mount when no secret is configured.
 
 - name: Storage operations pod spec with remote kubeconfig
   hosts: localhost

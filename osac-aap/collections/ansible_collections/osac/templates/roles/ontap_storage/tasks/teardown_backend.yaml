@@ -6,14 +6,6 @@
 # Tenant status and immutable tenant-id preparation labels without a legacy
 # hub Secret. Cluster-side K8s resources belong to teardown_cluster_storage.
 
-- name: Validate tenant_name is a valid DNS label
-  ansible.builtin.fail:
-    msg: >-
-      tenant_name is not a valid DNS label. Must be 1-63 lowercase
-      alphanumeric characters or hyphens, cannot start or end with a hyphen.
-  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
-  no_log: true
-
 - name: Fail if any dispatched tier has an invalid backend_id
   ansible.builtin.fail:
     msg: >-

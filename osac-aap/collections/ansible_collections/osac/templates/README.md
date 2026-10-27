@@ -270,7 +270,9 @@ least one limit — always include `qos_limits.static_limits` for a tier that sh
 enforcement.
 
 **Dispatcher pattern:** `osac.service.storage_provider` validates inputs (tier list,
-provider allowlist, protocol allowlist, provisioning target enum, max tier count) then
+tier/provider/tenant DNS labels, unique tier names, QoS name length and derived
+`qos_policy`, `tenant_namespace`, and `storage_provider_action`; provider and
+protocol support are validated per-provider via `meta/osac.yaml`) then
 dispatches to `osac.templates.{provider}_storage` via a `_dispatch_provider.yaml`
 wrapper (Ansible does not support `loop:` on `include_role`).
 

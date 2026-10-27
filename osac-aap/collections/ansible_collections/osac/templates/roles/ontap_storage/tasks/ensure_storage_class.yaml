@@ -148,8 +148,8 @@
       {% set matching_tbc_names = [] -%}
       {% set matching_csi_names = [] -%}
       {% set conns = _provider_backend_connections | default({}, true) -%}
-      {% set _ca_required = (ontap_storage_validate_certs | default(true) | bool) and (ontap_storage_ca_bundle_path is defined) -%}
-      {% set _ca_b64 = ((lookup('file', ontap_storage_ca_bundle_path, errors='ignore') | default('', true)) | b64encode)
+      {% set _ca_required = (ontap_storage_validate_certs | default(true) | bool) and (storage_provider_ca_bundle_path is defined) -%}
+      {% set _ca_b64 = ((lookup('file', storage_provider_ca_bundle_path, errors='ignore') | default('', true)) | b64encode)
                        if _ca_required
                        else '' -%}
       {% for bid in _ontap_dedicated_backend_ids -%}
@@ -195,7 +195,7 @@
             and (_espec.svm | default('') == _svm)
             and (((_espec.credentials | default({}, true)).name | default('')) == _sec_name)
             and ((_espec.storage | default([])) == _pools)
-            and (not (ontap_storage_validate_certs is defined or ontap_storage_ca_bundle_path is defined)
+            and (not (ontap_storage_validate_certs is defined or storage_provider_ca_bundle_path is defined)
                  or (not _ca_required and ((_espec.trustedCACertificate | default('')) | length == 0))
                  or (_ca_required and (_ca_b64 | length > 0) and ((_espec.trustedCACertificate | default('')) == _ca_b64))) -%}
       {% set _ = matching_tbc_names.append(_tbc_name) -%}

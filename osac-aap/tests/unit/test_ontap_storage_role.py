@@ -289,7 +289,7 @@ def test_ontap_virtual_pools_use_labels_and_selector_not_storage_pools(
 
     rendered_ca_b64 = _render(
         ca_expr,
-        {"ontap_storage_validate_certs": True, "ontap_storage_ca_bundle_path": str(ca_file)},
+        {"ontap_storage_validate_certs": True, "storage_provider_ca_bundle_path": str(ca_file)},
     )
     assert rendered_ca_b64 == base64.b64encode(ca_pem.encode("utf-8")).decode("ascii")
     assert (
@@ -311,7 +311,7 @@ def test_ontap_virtual_pools_use_labels_and_selector_not_storage_pools(
             ca_expr,
             {
                 "ontap_storage_validate_certs": True,
-                "ontap_storage_ca_bundle_path": str(missing_or_empty),
+                "storage_provider_ca_bundle_path": str(missing_or_empty),
             },
         )
         assert missing_ca_b64 == ""
@@ -1190,12 +1190,14 @@ def test_ontap_consumes_svm_preparation_without_hub_secrets_or_ontap_http():
 
     defaults_text = (ONTAP_ROLE_DIR / "defaults" / "main.yaml").read_text(encoding="utf-8")
     assert "ontap_storage_config_namespace" not in defaults_text
+    assert "ontap_storage_ca_bundle_path" not in defaults_text
     assert "ontap_storage_validate_certs:" in defaults_text
 
     for yaml_file in ONTAP_ROLE_DIR.rglob("*.yaml"):
         content = yaml_file.read_text(encoding="utf-8")
         assert "ontap-tenant-" not in content
         assert "ontap_storage_config_namespace" not in content
+        assert "ontap_storage_ca_bundle_path" not in content
         assert "kubeconfig: ~" not in content
         assert "ansible.builtin.uri" not in content
         assert "slurp" not in content
@@ -1465,7 +1467,7 @@ def test_ontap_ensure_short_circuit_checks_tbc_and_csi_secret():
             {
                 **dedicated_only_vars,
                 "ontap_storage_validate_certs": True,
-                "ontap_storage_ca_bundle_path": "/nonexistent/ca-bundle.pem",
+                "storage_provider_ca_bundle_path": "/nonexistent/ca-bundle.pem",
             },
         )
         is False
@@ -1556,14 +1558,27 @@ def test_ontap_ensure_short_circuit_checks_tbc_and_csi_secret():
         for task in teardown_backend_tasks
     )
 
-    # Verify remaining _validate_tiers.yaml failure guards (tenant_name DNS label, protocol, sanType, trident namespace).
+    # Verify tenant_name DNS label guard is centralized in osac.service.storage_provider
+    # and not duplicated in ontap_storage task files.
+    dispatcher_tasks = _load_yaml(
+        ONTAP_ROLE_DIR.parent.parent.parent
+        / "service"
+        / "roles"
+        / "storage_provider"
+        / "tasks"
+        / "main.yaml"
+    )
     tier_tenant_when = _find_task(
-        validate_tiers_tasks, "Validate tenant_name is a valid DNS label"
+        dispatcher_tasks, "Validate tenant_name is a valid DNS label"
     )["when"]
     for invalid_tenant in ("", "-bad", "bad-", "Bad_Tenant", "a" * 64):
         assert _render_when(tier_tenant_when, {"tenant_name": invalid_tenant}) is True
     for valid_tenant in ("a", "acme-01"):
         assert _render_when(tier_tenant_when, {"tenant_name": valid_tenant}) is False
+    assert all(
+        task.get("name") != "Validate tenant_name is a valid DNS label"
+        for task in validate_tiers_tasks
+    )
 
     tier_proto_when = _find_task(
         validate_tiers_tasks, "Fail if any tier protocol is unsupported by the ONTAP provider"
@@ -1594,14 +1609,12 @@ def test_ontap_ensure_short_circuit_checks_tbc_and_csi_secret():
     assert _render_when(tier_ns_when, {}) is True
     assert _render_when(tier_ns_when, {"ontap_storage_trident_namespace": "trident"}) is False
 
-    # Verify teardown_cluster_storage.yaml tenant_name DNS label guard, CRD/TBC/CSI Secret ordering guards, and always cleanup.
+    # Verify teardown_cluster_storage.yaml CRD/TBC/CSI Secret ordering guards and always cleanup.
     teardown_cluster_tasks = _load_yaml(ONTAP_ROLE_DIR / "tasks" / "teardown_cluster_storage.yaml")
-    tenant_dns_when = _find_task(
-        teardown_cluster_tasks, "Validate tenant_name is a valid DNS label"
-    )["when"]
-    for invalid_tenant in ("", "-bad", "bad-", "Bad_Tenant", "a" * 64):
-        assert _render_when(tenant_dns_when, {"tenant_name": invalid_tenant}) is True
-    assert _render_when(tenant_dns_when, {"tenant_name": "acme-tenant-01"}) is False
+    assert all(
+        task.get("name") != "Validate tenant_name is a valid DNS label"
+        for task in teardown_cluster_tasks
+    )
 
     cleanup_block = _find_task(teardown_cluster_tasks, "Clean up cluster-side K8s resources")
     cleanup_tasks = cleanup_block["block"]

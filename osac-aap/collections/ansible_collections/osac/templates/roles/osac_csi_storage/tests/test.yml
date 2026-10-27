@@ -82,35 +82,53 @@
     - name: Run input validation tests
       when: test_input_validation | default(false) | bool
       block:
-        - name: Call ensure_storage_class with invalid tenant_name
-          ansible.builtin.include_role:
-            name: osac.templates.osac_csi_driver
-            tasks_from: ensure_storage_class
-          vars:
-            tenant_name: "Invalid_Name!"
-            _provider_tiers:
-              - name: default
-                protocol: nfs
-                provider: osac_csi_driver
-          ignore_errors: true
-          register: name_result
+        - name: Verify dispatcher rejects invalid tenant_name
+          block:
+            - name: Call storage_provider ensure_storage_class with invalid tenant_name (expected to fail)
+              ansible.builtin.include_role:
+                name: osac.service.storage_provider
+              vars:
+                storage_provider_action: ensure_storage_class
+                tenant_name: "Invalid_Name!"
+                tenant_namespace: osac-tenants
+                storage_provider_tiers:
+                  - name: default
+                    protocol: nfs
+                    provider: osac-csi
 
-        - name: Call ensure_storage_class with empty _provider_tiers
-          ansible.builtin.include_role:
-            name: osac.templates.osac_csi_driver
-            tasks_from: ensure_storage_class
-          vars:
-            tenant_name: valid-name
-            _provider_tiers: []
-          ignore_errors: true
-          register: tiers_result
+            - name: This should not be reached when tenant_name is invalid
+              ansible.builtin.fail:
+                msg: "storage_provider should have failed when tenant_name is not a valid DNS label"
 
-        - name: Verify input validation failures
-          ansible.builtin.assert:
-            that:
-              - name_result.msg is search('not a valid DNS label')
-              - tiers_result.msg is search('_provider_tiers must be provided')
-            success_msg: "Input validation successfully guarded invalid inputs"
+          rescue:
+            - name: Verify tenant_name DNS label validation failure
+              ansible.builtin.assert:
+                that:
+                  - ansible_failed_result.msg is search('not a valid DNS label')
+                fail_msg: "Expected DNS label failure for tenant_name, got: {{ ansible_failed_result.msg | default('') }}"
+                success_msg: "Dispatcher correctly rejected invalid tenant_name"
+
+        - name: Verify ensure_storage_class rejects empty _provider_tiers
+          block:
+            - name: Call ensure_storage_class with empty _provider_tiers (expected to fail)
+              ansible.builtin.include_role:
+                name: osac.templates.osac_csi_driver
+                tasks_from: ensure_storage_class
+              vars:
+                tenant_name: valid-name
+                _provider_tiers: []
+
+            - name: This should not be reached when _provider_tiers is empty
+              ansible.builtin.fail:
+                msg: "ensure_storage_class should have failed when _provider_tiers is empty"
+
+          rescue:
+            - name: Verify _provider_tiers validation failure
+              ansible.builtin.assert:
+                that:
+                  - ansible_failed_result.msg is search('_provider_tiers must be provided')
+                fail_msg: "Expected _provider_tiers failure, got: {{ ansible_failed_result.msg | default('') }}"
+                success_msg: "Input validation successfully guarded invalid inputs"
 
 # ──────────────────────────────────────────────────────────────
 # Test 3: Setup contract (sets storage_provider_tenant_config)

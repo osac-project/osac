@@ -344,7 +344,7 @@
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
+    storage_provider_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _t_svm_name: "customer_acme_svm"
     _sc_gold: "ontap-{{ _t_assignment_key }}-{{ ('gold' | hash('sha256'))[:16] | lower }}"
@@ -614,7 +614,7 @@
           vars:
             storage_provider_action: ensure_storage_class
             ontap_storage_validate_certs: true
-            ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/nonexistent-ca.pem"
+            storage_provider_ca_bundle_path: "{{ playbook_dir }}/../../../certs/nonexistent-ca.pem"
       rescue:
         - name: Record missing CA bundle failure
           ansible.builtin.set_fact:
@@ -635,7 +635,7 @@
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
+    storage_provider_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _t_svm_name: "customer_acme_svm"
     _sc_gold: "ontap-{{ _t_assignment_key }}-{{ ('gold' | hash('sha256'))[:16] | lower }}"

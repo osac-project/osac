@@ -5,7 +5,7 @@ kindClusterName: osac-dev
 # replacement with the same tag before installing the chart. The AWX
 # configuration hook uses Python's standard JSON library, so it does not
 # require jq in this image.
-cliImage: quay.io/openshift/origin-cli:4.20.0
+cliImage: quay.io/openshift/origin-cli:5.1.0
 
 # Shared with the OSAC chart profile so devstack hooks use the same issuer and
 # credential Secret references as the main installer hooks.

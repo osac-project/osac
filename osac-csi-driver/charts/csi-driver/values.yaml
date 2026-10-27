@@ -21,7 +21,7 @@ global:
       tlsSecretName: osac-fulfillment-trust-admission-tls
       # The bootstrap hooks run /bin/sh and kubectl; the minimal kubectl image
       # does not include a shell. OpenShift assigns a non-root UID via SCC.
-      bootstrapImage: quay.io/openshift/origin-cli:4.20.0
+      bootstrapImage: quay.io/openshift/origin-cli:5.1.0
       resources:
         requests:
           cpu: 100m

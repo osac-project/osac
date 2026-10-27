@@ -161,8 +161,8 @@ RUN mkdir -p /runner && chgrp 0 /runner && chmod -R ug+rwx /runner
 WORKDIR /runner
 RUN $PYCMD -m pip install --no-cache-dir 'dumb-init==1.2.5'
 RUN chmod 0755 /opt/builder/bin/entrypoint
-COPY --from=quay.io/openshift/origin-cli:4.19 /usr/bin/oc /usr/local/bin/
-COPY --from=quay.io/openshift/origin-cli:4.19 /usr/bin/kubectl /usr/local/bin/
+COPY --from=quay.io/openshift/origin-cli:5.1 /usr/bin/oc /usr/local/bin/
+COPY --from=quay.io/openshift/origin-cli:5.1 /usr/bin/kubectl /usr/local/bin/
 COPY --from=docker.io/alpine/helm:3.21.4 /usr/bin/helm /usr/local/bin/helm
 RUN rm -rf /output
 LABEL ansible-execution-environment=true

@@ -188,6 +188,57 @@ var _ = Describe("ExternalIP v1 Envtest", func() {
 		Expect(updated.Annotations).NotTo(HaveKey(osacExternalIPAllocatedAddressAnnotation))
 	})
 
+	It("keeps the placeholder allocation behavior for v1 when provisioning is disabled", func() {
+		createExternalIP(v1alpha1.ExternalIPStatus{}, nil)
+		reconciler.NetworkProvisioningEnabled = false
+		provisionCalled := false
+		provider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+			provisionCalled = true
+			return &provisioning.ProvisionResult{JobID: "unexpected-job", InitialState: v1alpha1.JobStatePending}, nil
+		}
+
+		request := mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(externalIP)}}
+		for range 4 {
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		updated := &v1alpha1.ExternalIP{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(externalIP), updated)).To(Succeed())
+		Expect(updated.Status.Phase).To(Equal(v1alpha1.ExternalIPPhaseReady))
+		Expect(updated.Status.State).To(Equal(v1alpha1.ExternalIPStateAllocated))
+		Expect(updated.Status.Address).To(Equal(externalIPNoProvisioningAddress))
+		Expect(updated.Status.ProvisioningJobs).To(BeEmpty())
+		Expect(updated.Annotations[osacExternalIPContractVersionAnnotation]).To(Equal("v1"))
+		Expect(provisionCalled).To(BeFalse(), "AAP provisioning must not be triggered when disabled")
+	})
+
+	It("keeps the legacy placeholder behavior when provisioning is disabled", func() {
+		manager := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "agentless-net", Namespace: namespaceName}, manager)).To(Succeed())
+		delete(manager.Data, networkmanager.DataKeyExternalIPContractVersion)
+		Expect(k8sClient.Update(ctx, manager)).To(Succeed())
+
+		createExternalIP(v1alpha1.ExternalIPStatus{}, nil)
+		delete(externalIP.Annotations, osacExternalIPContractVersionAnnotation)
+		Expect(k8sClient.Update(ctx, externalIP)).To(Succeed())
+		reconciler.NetworkProvisioningEnabled = false
+
+		request := mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(externalIP)}}
+		for range 3 {
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		updated := &v1alpha1.ExternalIP{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(externalIP), updated)).To(Succeed())
+		Expect(updated.Status.Phase).To(Equal(v1alpha1.ExternalIPPhaseReady))
+		Expect(updated.Status.State).To(Equal(v1alpha1.ExternalIPStateAllocated))
+		Expect(updated.Status.Address).To(Equal(externalIPNoProvisioningAddress))
+		Expect(updated.Status.ProvisioningJobs).To(BeEmpty())
+		Expect(updated.Annotations).NotTo(HaveKey(osacExternalIPContractVersionAnnotation))
+	})
+
 	It("does not publish an allocation when the submitted pool snapshot is stale", func() {
 		createExternalIP(v1alpha1.ExternalIPStatus{}, nil)
 		provider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {

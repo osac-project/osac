@@ -190,8 +190,13 @@ func (r *ExternalIPReconciler) updateStatusWithRetry(
 			computed.State == v1alpha1.ExternalIPStateAllocated && computed.Phase == v1alpha1.ExternalIPPhaseReady {
 			latestJob := provisioning.FindLatestJobByType(latest.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
 			expectedJob := provisioning.FindLatestJobByType(computed.ProvisioningJobs, v1alpha1.JobTypeProvision)
-			if latestJob == nil || expectedJob == nil || latestJob.JobID != expectedJob.JobID ||
-				latestJob.ConfigVersion == "" || latestJob.ConfigVersion != latest.Status.DesiredConfigVersion {
+			// Provisioning-disabled environments intentionally publish the legacy
+			// no-provider placeholder without a job result. No other v1 allocation
+			// may bypass the job identity and configuration checks below.
+			placeholderWithoutProvider := !r.NetworkProvisioningEnabled &&
+				computed.Address == externalIPNoProvisioningAddress && latestJob == nil && expectedJob == nil
+			if !placeholderWithoutProvider && (latestJob == nil || expectedJob == nil || latestJob.JobID != expectedJob.JobID ||
+				latestJob.ConfigVersion == "" || latestJob.ConfigVersion != latest.Status.DesiredConfigVersion) {
 				return fmt.Errorf("ExternalIP allocation job changed before status was written")
 			}
 		}
@@ -318,14 +323,14 @@ func (r *ExternalIPReconciler) handleProvisioningDisabled(
 		}
 		return ctrl.Result{}, nil
 	}
-	if externalIP.Status.Address == externalIPNoProvisioningAddress {
-		externalIP.Status.Address = ""
-		setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStatePending)
-	}
-	if externalIP.Status.Address == "" {
-		externalIP.Status.Phase = v1alpha1.ExternalIPPhaseProgressing
-		setReadyConditionBlocked(&externalIP.Status.Conditions, v1alpha1.ReasonProgressing,
-			"network provisioning is disabled; ExternalIP allocation is pending")
+	// Keep no-provider test and development deployments compatible across
+	// manager contract versions. Feedback deliberately does not copy this
+	// placeholder into the Fulfillment address field.
+	if externalIP.Status.Address == "" || externalIP.Status.Address == externalIPNoProvisioningAddress {
+		setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStateAllocated)
+		externalIP.Status.Address = externalIPNoProvisioningAddress
+		externalIP.Status.Phase = v1alpha1.ExternalIPPhaseReady
+		setReadyConditionTrue(&externalIP.Status.Conditions)
 	}
 	return ctrl.Result{}, nil
 }

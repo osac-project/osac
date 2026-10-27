@@ -69,6 +69,7 @@ ROLE_TESTS=(
   "agentless_net_subnet"
   "agentless_net_attachment"
   "metallb_l2_detach_annotation"
+  "metallb_l2_external_ip"
   "netris_subnet_delete"
   "netris_parent_delete"
   "netris_protected_launch"

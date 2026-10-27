@@ -129,6 +129,13 @@ render_success \
   --set global.networking.fabricManager= \
   --set global.networking.k8sManager=k8s_only
 
+# The k8s_only manager uses the v1 ExternalIP result contract for MetalLB.
+render_success \
+  k8s-only-external-ip-contract \
+  'externalIPContractVersion: "v1"' \
+  --set global.networking.fabricManager= \
+  --set global.networking.k8sManager=k8s_only
+
 # Default operator values advertise ipv4-only capabilities on manager ConfigMaps.
 render_ipv4_only_manager_success \
   agentless-manager-capabilities \

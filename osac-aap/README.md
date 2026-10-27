@@ -208,7 +208,14 @@ override. `AGENTLESS_NET_EXTERNAL_INTERFACE` selects the uplink for AgentlessNet
 ExternalIPAttachment and embedded CaaS step workflows; it does not configure
 VirtualNetwork transit links.
 
-Plus MetalLB-based ExternalIPPool / ExternalIP management (`metallb_l2`).
+`metallb_l2` manages MetalLB-backed ExternalIPPools and ExternalIPs. In the
+`k8s_only` profile, ExternalIP allocation/release use the v1 result artifact.
+New reservations use the Service name `osac-eip-<ExternalIP UID>`. An existing
+name-based Service (`osac-eip-<ExternalIP name>`) is reused in place and never
+renamed. If both Services exist, the playbook fails. Attach and detach resolve
+the parking Service with the same dual-lookup. The playbook checks Service
+ownership and pool before reuse or deletion. Pool management and
+ExternalIPAttachment remain on their existing paths.
 
 ### Compute
 

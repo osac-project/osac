@@ -203,3 +203,36 @@ var _ = Describe("Netris ExternalIP registration", func() {
 		})
 	})
 })
+
+var _ = Describe("Kubernetes-only ExternalIP registration", func() {
+	It("registers k8s_only with the v1 contract when deployed", func() {
+		cmd := exec.Command("kubectl", "get", "configmaps",
+			"-l", "osac.openshift.io/network-k8s-manager=true",
+			"-n", operatorNamespace, "-o", "json")
+		output, err := utils.Run(cmd)
+		if err != nil {
+			Fail(fmt.Sprintf("kubectl get k8s manager configmaps failed: %v", err))
+		}
+
+		var configMapList struct {
+			Items []struct {
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+				Data map[string]string `json:"data"`
+			} `json:"items"`
+		}
+		ExpectWithOffset(1, json.Unmarshal(output, &configMapList)).To(Succeed())
+
+		deployed := false
+		for _, cm := range configMapList.Items {
+			if cm.Data["name"] != "k8s_only" {
+				continue
+			}
+			deployed = true
+			ExpectWithOffset(1, cm.Metadata.Name).To(Equal("osac-network-k8s-manager-k8s-only"))
+			ExpectWithOffset(1, cm.Data["externalIPContractVersion"]).To(Equal("v1"))
+		}
+		Expect(deployed).To(BeTrue(), "the Kind dev profile should register k8s_only")
+	})
+})

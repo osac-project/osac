@@ -88,22 +88,17 @@
     attach_already_done: false
   when: attach_already_done is not defined
 
-# Read the reserved IP directly from the parking Service status.
-- name: Read reserved IP from parking Service
-  kubernetes.core.k8s_info:
-    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
-    api_version: v1
-    kind: Service
-    name: "osac-eip-{{ external_ip_name }}"
-    namespace: metallb-system
-  register: parking_service_info
+# Resolve the parking Service by ExternalIP UID first, then by name.
+- name: Resolve the MetalLB parking Service for attach
+  ansible.builtin.include_tasks: _resolve_parking_service.yaml
   when: not attach_already_done
 
 - name: Fail if parking Service not found or IP not yet assigned
   ansible.builtin.fail:
     msg: >-
-      Parking Service 'osac-eip-{{ external_ip_name }}' not found in metallb-system
-      or MetalLB has not yet assigned an IP. Run create_external_ip first.
+      Parking Service '{{ metallb_parking_service_name }}' not found in
+      metallb-system or MetalLB has not yet assigned an IP. Run
+      create_external_ip first.
   when:
     - not attach_already_done
     - >-
@@ -136,7 +131,7 @@
         state: absent
         api_version: v1
         kind: Service
-        name: "osac-eip-{{ external_ip_name }}"
+        name: "{{ metallb_parking_service_name }}"
         namespace: metallb-system
         wait: true
         wait_timeout: 60
@@ -151,7 +146,7 @@
     - name: Display parking Service deletion result
       ansible.builtin.debug:
         msg:
-          - "Parking Service 'osac-eip-{{ external_ip_name }}' deleted"
+          - "Parking Service '{{ metallb_parking_service_name }}' deleted"
           - "Changed: {{ reservation_delete_result.changed | default(false) }}"
 
     # Create a LoadBalancer Service in the VM namespace.
@@ -204,14 +199,24 @@
           apiVersion: v1
           kind: Service
           metadata:
-            name: "osac-eip-{{ external_ip_name }}"
+            name: "{{ metallb_parking_service_name }}"
             namespace: metallb-system
-            labels:
-              osac.openshift.io/externalip: "{{ external_ip_name }}"
-              osac.openshift.io/managed-by: osac-fulfillment
-            annotations:
-              metallb.universe.tf/address-pool: "{{ attach_pool_name }}"
-              metallb.universe.tf/loadBalancerIPs: "{{ attach_ip_address }}"
+            labels: >-
+              {{
+                (parking_service_info.resources[0].metadata.labels | default({}))
+                | combine({
+                    'osac.openshift.io/externalip': external_ip_name,
+                    'osac.openshift.io/managed-by': 'osac-fulfillment'
+                  })
+              }}
+            annotations: >-
+              {{
+                (parking_service_info.resources[0].metadata.annotations | default({}))
+                | combine({
+                    'metallb.universe.tf/address-pool': attach_pool_name,
+                    'metallb.universe.tf/loadBalancerIPs': attach_ip_address
+                  })
+              }}
           spec:
             type: LoadBalancer
             selector: {}
@@ -230,7 +235,7 @@
       ansible.builtin.fail:
         msg: >-
           Attach of ExternalIP '{{ external_ip_name }}' failed; the parking Service
-          'osac-eip-{{ external_ip_name }}' in metallb-system has been restored
+          '{{ metallb_parking_service_name }}' in metallb-system has been restored
           if it had been deleted. Check the preceding error for details.
 
 # Workaround for upstream OVN-Kubernetes bug: the EndpointSlice mirror

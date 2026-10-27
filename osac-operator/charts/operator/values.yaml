@@ -165,10 +165,12 @@ networkManagers:
   k8sManagers:
     k8s_only:
       enabled: false
+      externalIPContractVersion: v1
       description: >-
         Composite k8s-native networking (CUDN, Kubernetes NetworkPolicy, MetalLB
-        L2) with no separate physical fabric. Delegates each resource type to an
-        existing k8s-native implementation — see osac-aap's osac.templates.k8s_only
-        role. Capabilities: ipv4 only.
+        L2) with no separate physical fabric. Its MetalLB ExternalIP
+        allocation/release path uses the v1 result contract. This is a scoped
+        Kubernetes-only exception; it does not change the fabric-manager
+        responsibility for ExternalIP in other profiles. Capabilities: ipv4 only.
       capabilities:
       - ipv4

@@ -22,6 +22,12 @@ it composes the existing, independently-tested k8s-native roles:
 - **SecurityGroup** → `network_policy` (Kubernetes NetworkPolicy)
 - **ExternalIPPool / ExternalIP / ExternalIPAttachment** → `metallb_l2` (MetalLB L2 advertisement)
 
+The `k8s_only` registration advertises ExternalIP contract v1. Only MetalLB
+ExternalIP allocation and release use the v1 result artifact; pool provisioning
+and attachment/detachment keep their existing contracts. This is a scoped
+exception for the explicit Kubernetes-only profile. Other Kubernetes managers
+still do not receive ExternalIP fallback.
+
 ## Dispatcher contract
 
 `k8s_only` is an explicit Kubernetes-only profile, not a substitute for a

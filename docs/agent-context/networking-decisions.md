@@ -143,6 +143,50 @@ annotation handoff until its removal (OSAC-6384), and the operator chart
 defaults the netris manager registration to the v1 contract while the manager
 itself stays disabled until an operator enables it.
 
+MetalLB's `k8s_only` profile uses the same v1 result handoff as a scoped
+Kubernetes-only exception; other Kubernetes managers do not gain ExternalIP
+manager fallback.
+
+## MetalLB ExternalIP implementation status
+
+The `k8s_only` manager registers ExternalIP contract v1 for the `metallb_l2`
+allocate/release path. This exception is limited to the explicit Kubernetes-only
+profile because it provides VMaaS ExternalIP support where no fabric manager is
+configured. It does not move ExternalIP allocation responsibility for other
+NetworkClasses from the fabric manager to a Kubernetes manager. ExternalIPPool
+provisioning and ExternalIPAttachment attach/detach remain their existing
+workflows, and CaaS API/ingress VIP allocation remains separate under the CaaS
+networking design.
+
+MetalLB v1 reservations use the LoadBalancer Service name
+`osac-eip-<ExternalIP UID>`, matching the design's UID-owned reservation key
+(same pattern as Netris / OSAC-6376; OSAC-6779). The Service still records the
+Fulfillment ExternalIP ID as `owner-id`, the Kubernetes UID annotation, pool
+annotations including `externalippool-name`, and tenant identity. The
+operator's v1 artifact check fences allocation results by that UID and the
+observed generation, then validates the result address against the selected
+pool snapshot. AAP returns `osac_result.data.address` for allocation and empty
+`data` for release; it does not query ExternalIPPool objects or write back to
+the ExternalIP CR.
+
+Dual-lookup before allocate or release prefers the UID-named Service when
+present. If only a legacy or earlier name-based `osac-eip-<ExternalIP name>`
+Service exists, it is reused in place when owner ID, Kubernetes UID, and pool
+match (legacy adopt additionally requires the Service address to equal the
+current ExternalIP status address). The playbook never renames a Live Service,
+so retries and migration do not drop the VIP. If both the UID-named and
+name-based candidates exist, allocation and release fail closed. Unknown,
+partial, or conflicting ownership likewise fails closed so the playbook cannot
+overwrite or delete an unrelated tenant's reservation.
+
+When network provisioning is disabled, both legacy and v1 ExternalIPs retain
+the established no-provider behavior: the operator marks them Ready with the
+`0.0.0.0` placeholder and does not dispatch AAP. Feedback excludes that
+placeholder from the Fulfillment address field. When provisioning is enabled
+later, the v1 reconcile path clears the placeholder and requires the normal
+validated allocation result. This keeps no-provider development and CI profiles
+usable without treating a placeholder as a provider result.
+
 ## AgentlessNet ExternalIPAttachment implementation status
 
 The OSAC-6308 AgentlessNet v1 attachment flow is independently versioned by

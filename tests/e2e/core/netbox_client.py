@@ -94,13 +94,21 @@ class NetBoxClient:
             raise RuntimeError(f"NetBox {kind} {slug!r} was not found")
         return int(record.id)
 
-    def create_device(self, *, name: str, role: str, site: str, custom_fields: dict[str, Any] | None = None) -> str:
+    def create_device(
+        self, *, name: str, role: str, site: str, device_type: str, custom_fields: dict[str, Any] | None = None
+    ) -> str:
         """Create a device in the OSAC pool free state (``staged``); return its id."""
         site_id = self._resolve_id(self._api.dcim.sites, slug=site, kind="site")
         role_id = self._resolve_id(self._api.dcim.device_roles, slug=role, kind="device role")
+        type_id = self._resolve_id(self._api.dcim.device_types, slug=device_type, kind="device type")
         try:
             device = self._api.dcim.devices.create(
-                name=name, role=role_id, site=site_id, status="staged", custom_fields=custom_fields or {}
+                name=name,
+                role=role_id,
+                site=site_id,
+                device_type=type_id,
+                status="staged",
+                custom_fields=custom_fields or {},
             )
         except pynetbox.RequestError as exc:
             raise self._error("create_device", exc) from exc

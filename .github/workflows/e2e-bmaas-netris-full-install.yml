@@ -46,7 +46,7 @@ jobs:
       id-token: write
       checks: write
       pull-requests: read
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-netris-full-install.yml@3ab19243e171a74a2c9560d8e740978542377773
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-netris-full-install.yml@46e8f2eedb2d89000d09c457a019a7cd81832c92
     with:
       suite: bmaas
       test-scope: networking
@@ -62,8 +62,8 @@ jobs:
         { "repo": "${{ inputs.repo }}", "ref": "${{ inputs.sha }}", "containerfile": "bare-metal-fulfillment-operator/Containerfile", "context": ".", "imageKey": "bmf.image.repository" }
         ]
       test-infra-repository: osac-project/osac-test-infra
-      test-infra-ref: 3ab19243e171a74a2c9560d8e740978542377773
-      test-infra-sha: 3ab19243e171a74a2c9560d8e740978542377773
+      test-infra-ref: 46e8f2eedb2d89000d09c457a019a7cd81832c92
+      test-infra-sha: 46e8f2eedb2d89000d09c457a019a7cd81832c92
       # pr-number and pr-sha go together: the suite refuses to provision when the pull request head is another commit.
       pr-repository: ${{ inputs.pr-number != '' && inputs.repo || '' }}
       pr-sha: ${{ inputs.pr-number != '' && inputs.sha || '' }}

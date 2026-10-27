@@ -202,6 +202,21 @@ for scenario in test_windows_userdata_sysprep test_windows_no_userdata test_linu
 done
 echo ""
 
+echo "=== Running Tenant StorageClass Role Tests ==="
+echo ""
+
+TENANT_STORAGE_CLASS_TEST="${SCRIPT_DIR}/../../collections/ansible_collections/osac/service/roles/tenant_storage_class/tests/test.yml"
+
+for scenario in test_happy_path test_tier_not_available test_empty_list test_duplicate_tier test_disk_label test_identical_duplicate_tier test_csp_filtered_tiers; do
+  echo "Testing tenant_storage_class: ${scenario}"
+  if run_ansible_playbook "${TENANT_STORAGE_CLASS_TEST}" -e "${scenario}=true"; then
+    PASSED+=("tenant_storage_class:${scenario}")
+  else
+    FAILED+=("tenant_storage_class:${scenario}")
+  fi
+done
+echo ""
+
 echo "=== Running Config-as-Code Role Tests ==="
 echo ""
 

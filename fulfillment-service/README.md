@@ -109,8 +109,10 @@ and exactly one password source (inline password or an OSAC Secret reference). S
 credentials are validated in either mode. Ownership is immutable after creation; partial updates
 to other fields preserve it. No VMaaS cluster or TridentBackendConfig reference is required.
 
-This API change records ownership only. Operator provisioning and readiness behavior for
-CSP-managed backends will be implemented separately.
+In `osac-operator`, `StorageReconciler` tracks CSP-managed tier readiness via the `Tenant`
+`StorageReady` condition and `Tenant.status.storageClasses` (skipping secret resolution and AAP
+storage jobs for `cspManaged: true` backends), and `ComputeInstanceReconciler` gates CSP-managed
+VM provisioning on `StorageReady=True` and live per-tier presence in `Tenant.status.storageClasses`.
 
 ## Running unit tests
 

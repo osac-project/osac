@@ -16,7 +16,9 @@ package onboarding
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -903,6 +905,9 @@ var _ = Describe("run", func() {
 				err := f.run(ctx, tenant)
 
 				Expect(err).To(MatchError(ContainSubstring("tenant CR still present")))
+				var retryable interface{ RequeueAfter() time.Duration }
+				Expect(errors.As(err, &retryable)).To(BeTrue())
+				Expect(retryable.RequeueAfter()).To(Equal(time.Second))
 				Expect(hasFinalizer(tenant)).To(BeTrue())
 			})
 		})
@@ -988,6 +993,9 @@ var _ = Describe("run", func() {
 				err := f.run(ctx, tenant)
 
 				Expect(err).To(MatchError(ContainSubstring("tenant CR still present")))
+				var retryable interface{ RequeueAfter() time.Duration }
+				Expect(errors.As(err, &retryable)).To(BeTrue())
+				Expect(retryable.RequeueAfter()).To(Equal(time.Second))
 				Expect(hasFinalizer(tenant)).To(BeTrue())
 			})
 		})
@@ -1132,6 +1140,77 @@ var _ = Describe("run", func() {
 				err := f.run(ctx, tenant)
 
 				Expect(err).To(MatchError(expectedErr))
+				Expect(hasFinalizer(tenant)).To(BeTrue())
+			})
+		})
+
+		When("projects remain for the tenant during delete", func() {
+			It("does not delete hub Tenant CR or Namespace while projects remain for the tenant", func() {
+				existing := newTenantCR(tenantID, namespace1, tenantID, nil)
+				existingNS := &corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: tenantID,
+					},
+				}
+				fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing, existingNS).Build()
+
+				projectsMock := NewMockProjectsClient(ctrl)
+				projectsMock.EXPECT().
+					List(gomock.Any(), gomock.Any()).
+					DoAndReturn(func(_ context.Context, req *privatev1.ProjectsListRequest, _ ...grpc.CallOption) (*privatev1.ProjectsListResponse, error) {
+						Expect(req.GetFilter()).To(Equal(fmt.Sprintf("this.metadata.tenant == %q", tenantID)))
+						Expect(req.GetLimit()).To(Equal(int32(0)))
+						return privatev1.ProjectsListResponse_builder{Total: 1}.Build(), nil
+					})
+
+				tenant := privatev1.Tenant_builder{
+					Id: tenantID,
+					Metadata: privatev1.Metadata_builder{
+						Name:              tenantID,
+						Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
+						DeletionTimestamp: timestamppb.Now(),
+						Tenant:            tenantName,
+					}.Build(),
+				}.Build()
+
+				f := newFunction(mockHubCache, mockHubs, mockTenants, projectsMock)
+				err := f.run(ctx, tenant)
+
+				Expect(err).To(MatchError(ContainSubstring("tenant still has 1 project(s) pending deletion")))
+				var retryable interface{ RequeueAfter() time.Duration }
+				Expect(errors.As(err, &retryable)).To(BeTrue())
+				Expect(retryable.RequeueAfter()).To(Equal(time.Second))
+				Expect(hasFinalizer(tenant)).To(BeTrue())
+
+				gotCR := &osacv1alpha1.Tenant{}
+				Expect(fakeClient.Get(ctx, clnt.ObjectKey{Namespace: namespace1, Name: tenantID}, gotCR)).To(Succeed())
+				Expect(gotCR.DeletionTimestamp).To(BeNil())
+
+				gotNS := &corev1.Namespace{}
+				Expect(fakeClient.Get(ctx, clnt.ObjectKey{Name: tenantID}, gotNS)).To(Succeed())
+				Expect(gotNS.DeletionTimestamp).To(BeNil())
+			})
+
+			It("returns error without listing hubs when querying remaining projects fails", func() {
+				projectsMock := NewMockProjectsClient(ctrl)
+				projectsMock.EXPECT().
+					List(gomock.Any(), gomock.Any()).
+					Return(nil, errors.New("projects db error"))
+
+				tenant := privatev1.Tenant_builder{
+					Id: tenantID,
+					Metadata: privatev1.Metadata_builder{
+						Name:              tenantID,
+						Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
+						DeletionTimestamp: timestamppb.Now(),
+						Tenant:            tenantName,
+					}.Build(),
+				}.Build()
+
+				f := newFunction(mockHubCache, mockHubs, mockTenants, projectsMock)
+				err := f.run(ctx, tenant)
+
+				Expect(err).To(MatchError(ContainSubstring("failed to query for remaining projects: projects db error")))
 				Expect(hasFinalizer(tenant)).To(BeTrue())
 			})
 		})

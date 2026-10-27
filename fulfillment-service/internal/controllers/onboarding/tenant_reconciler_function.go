@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -40,6 +41,8 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+const tenantDeletionRetryInterval = time.Second
 
 type FunctionBuilder struct {
 	logger     *slog.Logger
@@ -245,6 +248,28 @@ func (t *task) delete(ctx context.Context) error {
 		return nil
 	}
 
+	// Wait for all projects (including projects whose deletion is still in
+	// progress) to be archived before deleting the Tenant CR or Namespace on
+	// any hub, so project workloads and volumes finish deprovisioning before
+	// hub storage teardown begins.
+	listFilter := fmt.Sprintf(
+		"this.metadata.tenant == %q",
+		t.tenant.GetMetadata().GetName(),
+	)
+	listResp, err := t.r.projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
+		Filter: new(listFilter),
+		Limit:  new(int32(0)),
+	}.Build())
+	if err != nil {
+		return fmt.Errorf("failed to query for remaining projects: %w", err)
+	}
+	if listResp.GetTotal() > 0 {
+		return controllers.RequeueAtInterval(
+			fmt.Errorf("tenant still has %d project(s) pending deletion", listResp.GetTotal()),
+			tenantDeletionRetryInterval,
+		)
+	}
+
 	hubs, err := t.listAllHubs(ctx)
 	if err != nil {
 		return err
@@ -296,24 +321,10 @@ func (t *task) delete(ctx context.Context) error {
 		crStillPresent = true
 	}
 	if crStillPresent {
-		return fmt.Errorf("tenant CR still present on one or more hubs")
-	}
-
-	// Wait for all projects to be archived before removing the finalizer —
-	// otherwise the DAO archive hits FK violations from the projects table.
-	listFilter := fmt.Sprintf(
-		"this.metadata.tenant == %q && !has(this.metadata.deletion_timestamp)",
-		t.tenant.GetMetadata().GetName(),
-	)
-	listResp, err := t.r.projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
-		Filter: new(listFilter),
-		Limit:  new(int32(0)),
-	}.Build())
-	if err != nil {
-		return fmt.Errorf("failed to query for remaining projects: %w", err)
-	}
-	if listResp.GetTotal() > 0 {
-		return fmt.Errorf("tenant still has %d project(s) pending deletion", listResp.GetTotal())
+		return controllers.RequeueAtInterval(
+			fmt.Errorf("tenant CR still present on one or more hubs"),
+			tenantDeletionRetryInterval,
+		)
 	}
 
 	t.removeFinalizer()

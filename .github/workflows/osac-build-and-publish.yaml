@@ -2197,11 +2197,23 @@ jobs:
         # losing the real poll over a transient `gh api` hiccup would be
         # absurd.
         def check_run_failed():
+            # Filters on status == "completed" server-side (not just on
+            # name) rather than reading .conclusion alone and treating
+            # anything-not-a-known-good-value as failed: while a check-run
+            # is still in_progress/queued, its real conclusion is JSON
+            # null, which jq prints as the 4-char string "null" -- that's
+            # not in any exempt list a naive conclusion-only check would
+            # use, so EVERY component's very first poll (long before the
+            # real build even starts) misclassified as a confirmed
+            # failure. Confirmed live: every "Wait for Konflux build" row
+            # failed in ~10s, not a real 80min timeout. Filtering on
+            # status == "completed" first means conclusion is only ever
+            # read once it's a real, final value.
             check_name = f"Konflux kflux-prd-rh02 / {COMPONENT}-on-release"
             try:
                 out = subprocess.run(
                     ["gh", "api", f"repos/{GITHUB_REPOSITORY}/commits/{COMMIT_SHA}/check-runs",
-                     "--jq", f'.check_runs[] | select(.name == "{check_name}") | .conclusion'],
+                     "--jq", f'.check_runs[] | select(.name == "{check_name}" and .status == "completed") | .conclusion'],
                     capture_output=True, text=True, check=True,
                 )
             except subprocess.CalledProcessError:
@@ -2405,11 +2417,23 @@ jobs:
         # See wait-for-konflux-build's own identical check_run_failed for
         # the full rationale.
         def check_run_failed():
+            # Filters on status == "completed" server-side (not just on
+            # name) rather than reading .conclusion alone and treating
+            # anything-not-a-known-good-value as failed: while a check-run
+            # is still in_progress/queued, its real conclusion is JSON
+            # null, which jq prints as the 4-char string "null" -- that's
+            # not in any exempt list a naive conclusion-only check would
+            # use, so EVERY component's very first poll (long before the
+            # real build even starts) misclassified as a confirmed
+            # failure. Confirmed live: every "Wait for Konflux build" row
+            # failed in ~10s, not a real 80min timeout. Filtering on
+            # status == "completed" first means conclusion is only ever
+            # read once it's a real, final value.
             check_name = f"Konflux kflux-prd-rh02 / {COMPONENT}-on-release"
             try:
                 out = subprocess.run(
                     ["gh", "api", f"repos/{GITHUB_REPOSITORY}/commits/{COMMIT_SHA}/check-runs",
-                     "--jq", f'.check_runs[] | select(.name == "{check_name}") | .conclusion'],
+                     "--jq", f'.check_runs[] | select(.name == "{check_name}" and .status == "completed") | .conclusion'],
                     capture_output=True, text=True, check=True,
                 )
             except subprocess.CalledProcessError:

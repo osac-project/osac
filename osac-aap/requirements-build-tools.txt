@@ -272,3 +272,13 @@ setuptools==80.10.2 --hash=sha256:8b0e9d10c784bf7d262c4e5ec5d4ec94127ce206e8738f
 # pycountry's own build backend is poetry-core (unconstrained),
 # confirmed via its real sdist pyproject.toml -- already satisfied by
 # poetry-core==2.5.0 above, no further need.
+# datetime's own runtime requires_dist also lists zope.interface (bare)
+# alongside pytz (already have) -- confirmed via its real PyPI metadata.
+# Confirmed live: a later build got past the earlier "datetime" gap
+# cleanly, then failed on "Could not find a version that satisfies the
+# requirement zope.interface (from datetime) (from versions: none)".
+# zope.interface's own build-system.requires is unconstrained setuptools
+# + wheel (already have); its own runtime requires_dist entries are all
+# gated behind docs/test/testing extras, never requested here, so no
+# further cascade -- confirmed via its real sdist pyproject.toml.
+zope.interface==8.7 --hash=sha256:0b47b62e8d0d99b24bcdd32f4f2120425e5019c3bee2ad69a0e1d75737487a96

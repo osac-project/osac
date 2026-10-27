@@ -80,8 +80,14 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 		DeferCleanup(func() {
 			By("cleaning up test resources and restoring the operator Deployment to single-cluster mode")
 			defer func() {
-				_, secretErr := runKubectl("delete", "secret", remoteKubeconfigSecretName, "-n", operatorNamespace, "--ignore-not-found")
-				_, kindErr := runKind("delete", "cluster", "--name", remoteKindClusterName, "--kubeconfig", remoteKubeconfigPath)
+				_, secretErr := runKubectl(
+					"delete", "secret", remoteKubeconfigSecretName,
+					"-n", operatorNamespace, "--ignore-not-found",
+				)
+				_, kindErr := runKind(
+					"delete", "cluster", "--name", remoteKindClusterName,
+					"--kubeconfig", remoteKubeconfigPath,
+				)
 				Expect(secretErr).NotTo(HaveOccurred())
 				Expect(kindErr).NotTo(HaveOccurred())
 			}()
@@ -92,7 +98,10 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 				"-n", operatorNamespace, "--ignore-not-found", "--wait=false",
 			)
 			removeFinalizers("tenant", remoteTestTenantName, operatorNamespace)
-			_, testSecretDelErr := runKubectl("delete", "secret", remoteTestSecretName, "-n", operatorNamespace, "--ignore-not-found")
+			_, testSecretDelErr := runKubectl(
+				"delete", "secret", remoteTestSecretName,
+				"-n", operatorNamespace, "--ignore-not-found",
+			)
 			_, scDelErr := runKubectl("delete", "sc", localDecoyStorageClass, "--ignore-not-found")
 
 			if remoteModeReconfigured {

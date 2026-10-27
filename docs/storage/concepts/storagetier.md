@@ -7,19 +7,17 @@ Cloud Provider Admin controls which tiers exist, and tenant users select them
 by name.
 
 ```
-StorageBackend "netapp-prod"          StorageBackend "vast-prod"
-        |                                   |
-        +-------- associated via -----------+
-                        |
-              +---------+----------+
-              |                    |
-      StorageTier "gold"    StorageTier "silver"
-        protocol: BLOCK       protocol: BLOCK
-        QoS: 500/200 MB/s     QoS: 250/100 MB/s
-              |
-              | selected by name, per disk
-              v
-      ComputeInstance boot disk / additional disks
+StorageBackend "netapp-prod"        StorageBackend "vast-prod"
+        │                                   │
+        │ associated via                    │ associated via
+        ▼                                   ▼
+StorageTier "gold"                  StorageTier "silver"
+  protocol: BLOCK                    protocol: BLOCK
+  QoS: 500/200 MB/s                  QoS: 250/100 MB/s
+                    │
+                    │ selected by name, per disk
+                    ▼
+        ComputeInstance boot disk / additional disks
 ```
 
 ## Fields

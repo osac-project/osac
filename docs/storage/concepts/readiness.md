@@ -31,12 +31,12 @@ problems.
 ```
  onboarding              every configured tier has
    not yet                exactly one matching class
-   complete   ───────────────────────────────────►  True (latched)
-     │                                                  │
-     │ NotFound (a tier has no class)                   │ stays True when
-     │ MultipleFound (a tier has 2+ classes)            │ tiers are added
-     ▼                                                  ▼
-   False   ◄── re-checked until resolved         milestone stays True
+   complete   ──────────────────────────────────►  True (latched)
+     │                                             │
+     │ NotFound (a tier has no class)              │ stays True when
+     │ MultipleFound (a tier has 2+ classes)       │ tiers are added
+     ▼                                             ▼
+   False   ◄── re-checked until resolved           milestone stays True
 ```
 
 - It becomes `True` when every initially configured CSP-managed

@@ -8,11 +8,11 @@ ownership models. For provider-specific setup steps, see the
 
 ```
 CSP admin registers StorageBackend + StorageTiers
-                |
-                v
+                │
+                ▼
 Tenant is created in OSAC
-                |
-                v
+                │
+                ▼
       ┌─────────────────────────────────┐
       │  OSAC-managed                   │  CSP-managed
       │  1. provision tenant creds      │  1. list shared classes on the
@@ -21,11 +21,11 @@ Tenant is created in OSAC
       │     on the target cluster       │     configured tier
       │  3. verify classes              │  3. set StorageOnboardingComplete
       └─────────────────────────────────┘
-                |
-                v
+                │
+                ▼
 Tenant status: conditions + resolved {name, tier} classes
-                |
-                v
+                │
+                ▼
 Tenant users select tiers per disk when creating ComputeInstances
 ```
 

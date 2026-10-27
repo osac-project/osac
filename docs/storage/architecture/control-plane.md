@@ -23,8 +23,8 @@ disk.
   │    v                                     │    │    │                      │
   │  Fulfillment API                         │    │    v                      │
   │    StorageBackend, StorageTier           │    │  StorageClasses           │
-  │         │                               │    │  (labeled per tenancy)    │
-  │         v                               │    │        ▲                  │
+  │         │                                │    │  (labeled per tenancy)    │
+  │         v                                │    │        ▲                  │
   │  Tenant CR ──► osac-operator ◄───────────┼────┼────────┘                  │
   │  (conditions,   StorageReconciler        │    │  (read-only listing;      │
   │   resolved       lists classes,          │    │   OSAC-managed also       │

@@ -11,9 +11,9 @@ StorageBackend "netapp-prod"
    cspManaged:    true | false
    endpoint:      management API (optional in CSP-managed mode)
    credentials:   management user (optional in CSP-managed mode)
-        |
-        | referenced by
-        v
+        │
+        │ referenced by
+        ▼
    one or more StorageTiers
 ```
 

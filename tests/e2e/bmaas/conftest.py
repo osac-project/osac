@@ -37,7 +37,7 @@ def bmh_namespace() -> str:
 
 @pytest.fixture(scope="session")
 def inventory_backend(
-    k8s_hub_client: K8sClient, namespace: str, grpc: GRPCClient, bmh_namespace: str, test_run_id: str
+    k8s_hub_client: K8sClient, namespace: str, bmh_namespace: str, test_run_id: str
 ) -> Generator[InventoryBackend, None, None]:
     """Inventory backend selected by OSAC_INVENTORY_BACKEND (default metal3).
 
@@ -46,7 +46,7 @@ def inventory_backend(
     vars as debug overrides only.
     """
     backend = make_inventory_backend(
-        k8s=k8s_hub_client, namespace=namespace, grpc=grpc, bmh_namespace=bmh_namespace, test_run_id=test_run_id
+        k8s=k8s_hub_client, namespace=namespace, bmh_namespace=bmh_namespace, test_run_id=test_run_id
     )
     yield backend
     backend.close()

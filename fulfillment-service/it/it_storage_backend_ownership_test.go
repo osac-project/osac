@@ -68,8 +68,6 @@ var _ = Describe("Storage backend ownership API", func() {
 			Expect(listed.GetItems()).To(BeEmpty())
 		},
 		Entry("NetApp", "netapp"),
-		Entry("ONTAP alias", "ontap"),
-		Entry("Trident alias", "trident"),
 	)
 
 	It("creates a credential-free CSP-managed backend through the private CLI", func(ctx context.Context) {

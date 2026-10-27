@@ -49,7 +49,7 @@ message StorageBackendSpec {
   option (buf.validate.message).cel = {
     id: "netapp_requires_csp_managed"
     message: "OSAC-managed NetApp storage is not supported; set cspManaged to true"
-    expression: "this.csp_managed || !(this.provider in ['netapp', 'ontap', 'trident'])"
+    expression: "this.csp_managed || this.provider != 'netapp'"
   };
   option (buf.validate.message).cel = {
     id: "osac_managed_endpoint_required"
@@ -63,7 +63,7 @@ message StorageBackendSpec {
   };
 
   // Storage provider identifier. For example: "vast", "ceph", "pure".
-  // NetApp providers ("netapp", "ontap", "trident") require cspManaged=true.
+  // The "netapp" provider requires cspManaged=true.
   //
   // This value is immutable once the StorageBackend is created.
   string provider = 1 [(buf.validate.field).string.min_len = 1];

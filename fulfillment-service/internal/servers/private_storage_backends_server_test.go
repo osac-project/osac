@@ -115,11 +115,7 @@ var _ = Describe("Storage backend ownership", func() {
 			}
 		},
 		Entry("OSAC-managed NetApp", "netapp", false, false),
-		Entry("OSAC-managed ONTAP alias", "ontap", false, false),
-		Entry("OSAC-managed Trident alias", "trident", false, false),
 		Entry("CSP-managed NetApp", "netapp", true, true),
-		Entry("CSP-managed ONTAP alias", "ontap", true, true),
-		Entry("CSP-managed Trident alias", "trident", true, true),
 		Entry("OSAC-managed VAST", "vast", false, true),
 		Entry("OSAC-managed Pure", "pure", false, true),
 	)

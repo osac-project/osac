@@ -28,6 +28,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
 	"github.com/osac-project/osac/osac-operator/test/utils"
 )
@@ -321,9 +323,10 @@ func containsLine(output, target string) bool {
 	return false
 }
 
-// writeRemoteInClusterKubeconfig writes a kubeconfig file for the remote Kind
-// cluster using its control-plane node InternalIP on the shared Kind bridge
-// network and a freshly minted bearer credential for the remote ServiceAccount.
+// writeRemoteInClusterKubeconfig loads the remote Kind kubeconfig via clientcmd,
+// points the cluster server at the control-plane node InternalIP on the shared
+// Kind bridge network, sets the ServiceAccount bearer credential in AuthInfos,
+// and writes the updated kubeconfig to destPath without logging credentials.
 func writeRemoteInClusterKubeconfig(remoteKubeconfigPath, destPath string) {
 	ipOut, err := runKubectlWithKubeconfig(
 		remoteKubeconfigPath,
@@ -333,30 +336,6 @@ func writeRemoteInClusterKubeconfig(remoteKubeconfigPath, destPath string) {
 	nodeIP := strings.TrimSpace(string(ipOut))
 	Expect(nodeIP).NotTo(BeEmpty())
 
-	caFile := filepath.Join(GinkgoT().TempDir(), "remote-ca.crt")
-	caOut, err := runKubectlWithKubeconfig(
-		remoteKubeconfigPath,
-		"config", "view", "--raw", "-o", `jsonpath={.clusters[0].cluster.certificate-authority-data}`,
-	)
-	Expect(err).NotTo(HaveOccurred())
-	Expect(strings.TrimSpace(string(caOut))).NotTo(BeEmpty())
-
-	rawCfg, err := os.ReadFile(remoteKubeconfigPath)
-	Expect(err).NotTo(HaveOccurred())
-	Expect(os.WriteFile(destPath, rawCfg, 0o600)).To(Succeed())
-
-	clusterNameOut, err := runKubectlWithKubeconfig(
-		destPath, "config", "view", "-o", "jsonpath={.clusters[0].name}",
-	)
-	Expect(err).NotTo(HaveOccurred())
-	clusterEntryName := strings.TrimSpace(string(clusterNameOut))
-	Expect(clusterEntryName).NotTo(BeEmpty())
-
-	_, err = runKubectlWithKubeconfig(
-		destPath, "config", "set-cluster", clusterEntryName, "--server=https://"+nodeIP+":6443",
-	)
-	Expect(err).NotTo(HaveOccurred())
-
 	credOut, err := runKubectlWithKubeconfig(
 		remoteKubeconfigPath,
 		"create", "token", remoteServiceAccountName, "-n", operatorNamespace, "--duration=1h",
@@ -365,22 +344,33 @@ func writeRemoteInClusterKubeconfig(remoteKubeconfigPath, destPath string) {
 	bearerValue := strings.TrimSpace(string(credOut))
 	Expect(bearerValue).NotTo(BeEmpty())
 
-	_, err = runKubectlWithKubeconfig(
-		destPath, "config", "set-credentials", remoteServiceAccountName, "--token="+bearerValue,
-	)
+	kubeCfg, err := clientcmd.LoadFromFile(remoteKubeconfigPath)
 	Expect(err).NotTo(HaveOccurred())
+	Expect(kubeCfg.Clusters).NotTo(BeEmpty())
 
-	_, err = runKubectlWithKubeconfig(
-		destPath, "config", "set-context", "remote",
-		"--cluster="+clusterEntryName,
-		"--user="+remoteServiceAccountName,
-		"--namespace="+operatorNamespace,
-	)
-	Expect(err).NotTo(HaveOccurred())
+	var clusterEntryName string
+	for name, clusterCfg := range kubeCfg.Clusters {
+		clusterEntryName = name
+		clusterCfg.Server = "https://" + nodeIP + ":6443"
+		break
+	}
+	Expect(clusterEntryName).NotTo(BeEmpty())
 
-	_, err = runKubectlWithKubeconfig(destPath, "config", "use-context", "remote")
-	Expect(err).NotTo(HaveOccurred())
-	_ = caFile
+	kubeCfg.AuthInfos = map[string]*clientcmdapi.AuthInfo{
+		remoteServiceAccountName: {
+			Token: bearerValue,
+		},
+	}
+	kubeCfg.Contexts = map[string]*clientcmdapi.Context{
+		"remote": {
+			Cluster:   clusterEntryName,
+			AuthInfo:  remoteServiceAccountName,
+			Namespace: operatorNamespace,
+		},
+	}
+	kubeCfg.CurrentContext = "remote"
+
+	Expect(clientcmd.WriteToFile(*kubeCfg, destPath)).To(Succeed())
 }
 
 // configureOperatorDeploymentForRemoteMode patches the deployed operator on the

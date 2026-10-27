@@ -90,29 +90,56 @@ class FakeDevicesEndpoint:
 
 class FakeAPI:
     def __init__(
-        self, sites: FakeLookupEndpoint, device_roles: FakeLookupEndpoint, devices: FakeDevicesEndpoint
+        self,
+        sites: FakeLookupEndpoint,
+        device_roles: FakeLookupEndpoint,
+        device_types: FakeLookupEndpoint,
+        devices: FakeDevicesEndpoint,
     ) -> None:
-        self.dcim = SimpleNamespace(sites=sites, device_roles=device_roles, devices=devices)
+        self.dcim = SimpleNamespace(sites=sites, device_roles=device_roles, device_types=device_types, devices=devices)
 
 
 def _client(api: FakeAPI) -> NetBoxClient:
     return NetBoxClient(url="https://netbox.example.test", token=_TOKEN, api=cast(Api, api))
 
 
+def _api(
+    sites: FakeLookupEndpoint | None = None,
+    device_roles: FakeLookupEndpoint | None = None,
+    device_types: FakeLookupEndpoint | None = None,
+    devices: FakeDevicesEndpoint | None = None,
+) -> FakeAPI:
+    return FakeAPI(
+        sites=sites or FakeLookupEndpoint({"dc1": 7}),
+        device_roles=device_roles or FakeLookupEndpoint({"server": 3}),
+        device_types=device_types or FakeLookupEndpoint({"virtual-host": 5}),
+        devices=devices or FakeDevicesEndpoint(),
+    )
+
+
 def test_create_device_resolves_slugs_and_defaults_to_staged() -> None:
     sites = FakeLookupEndpoint({"dc1": 7})
     device_roles = FakeLookupEndpoint({"server": 3})
     devices = FakeDevicesEndpoint()
-    client = _client(FakeAPI(sites, device_roles, devices))
+    client = _client(_api(sites=sites, device_roles=device_roles, devices=devices))
 
-    device_id = client.create_device(name="host-1", role="server", site="dc1", custom_fields={"osac_managed": True})
+    device_id = client.create_device(
+        name="host-1", role="server", site="dc1", device_type="virtual-host", custom_fields={"osac_managed": True}
+    )
 
     assert device_id == "100"
     # Role resolution must go through device_roles, not roles.
     assert sites.get_calls == [{"key": None, "slug": "dc1"}]
     assert device_roles.get_calls == [{"key": None, "slug": "server"}]
     assert devices.create_kwargs == [
-        {"name": "host-1", "role": 3, "site": 7, "status": "staged", "custom_fields": {"osac_managed": True}}
+        {
+            "name": "host-1",
+            "role": 3,
+            "site": 7,
+            "device_type": 5,
+            "status": "staged",
+            "custom_fields": {"osac_managed": True},
+        }
     ]
 
 
@@ -120,44 +147,45 @@ def test_create_device_passes_numeric_ids_through_without_lookup() -> None:
     sites = FakeLookupEndpoint({})
     device_roles = FakeLookupEndpoint({})
     devices = FakeDevicesEndpoint()
-    client = _client(FakeAPI(sites, device_roles, devices))
+    client = _client(_api(sites=sites, device_roles=device_roles, devices=devices))
 
-    device_id = client.create_device(name="host-1", role="9", site="4")
+    device_id = client.create_device(name="host-1", role="9", site="4", device_type="6")
 
     assert device_id == "100"
     assert sites.get_calls == []
     assert device_roles.get_calls == []
     assert devices.create_kwargs[0]["role"] == 9
     assert devices.create_kwargs[0]["site"] == 4
+    assert devices.create_kwargs[0]["device_type"] == 6
     assert devices.create_kwargs[0]["status"] == "staged"
 
 
 def test_create_device_without_custom_fields_sends_empty_mapping() -> None:
     devices = FakeDevicesEndpoint()
-    client = _client(FakeAPI(FakeLookupEndpoint({"dc1": 1}), FakeLookupEndpoint({"server": 2}), devices))
+    client = _client(_api(device_roles=FakeLookupEndpoint({"server": 2}), devices=devices))
 
-    client.create_device(name="host-1", role="server", site="dc1")
+    client.create_device(name="host-1", role="server", site="dc1", device_type="virtual-host")
 
     assert devices.create_kwargs[0]["custom_fields"] == {}
 
 
 def test_create_device_missing_slug_fails_fast() -> None:
-    client = _client(FakeAPI(FakeLookupEndpoint({"dc1": 1}), FakeLookupEndpoint({}), FakeDevicesEndpoint()))
+    client = _client(_api(device_roles=FakeLookupEndpoint({})))
 
     with pytest.raises(RuntimeError, match="device role 'nope' was not found"):
-        client.create_device(name="host-1", role="nope", site="dc1")
+        client.create_device(name="host-1", role="nope", site="dc1", device_type="virtual-host")
 
 
 def test_create_device_missing_site_slug_fails_fast() -> None:
-    client = _client(FakeAPI(FakeLookupEndpoint({}), FakeLookupEndpoint({"server": 3}), FakeDevicesEndpoint()))
+    client = _client(_api(sites=FakeLookupEndpoint({})))
 
     with pytest.raises(RuntimeError, match="site 'nope' was not found"):
-        client.create_device(name="host-1", role="server", site="nope")
+        client.create_device(name="host-1", role="server", site="nope", device_type="virtual-host")
 
 
 def test_delete_device_is_idempotent() -> None:
     devices = FakeDevicesEndpoint()
-    client = _client(FakeAPI(FakeLookupEndpoint({}), FakeLookupEndpoint({}), devices))
+    client = _client(_api(devices=devices))
 
     client.delete_device("999")
 
@@ -167,7 +195,7 @@ def test_delete_device_is_idempotent() -> None:
 def test_delete_device_deletes_the_record() -> None:
     record = FakeRecord({"id": 5, "name": "host-1", "status": "staged"})
     devices = FakeDevicesEndpoint([record])
-    client = _client(FakeAPI(FakeLookupEndpoint({}), FakeLookupEndpoint({}), devices))
+    client = _client(_api(devices=devices))
 
     client.delete_device("5")
 
@@ -182,25 +210,25 @@ def test_get_device_status_normalizes_string_and_choice_forms() -> None:
         (SimpleNamespace(value="failed"), "failed"),
     ):
         devices = FakeDevicesEndpoint([FakeRecord({"id": 1, "status": status})])
-        client = _client(FakeAPI(FakeLookupEndpoint({}), FakeLookupEndpoint({}), devices))
+        client = _client(_api(devices=devices))
         assert client.get_device_status("1") == expected
 
 
 def test_get_device_status_missing_device_returns_empty() -> None:
-    client = _client(FakeAPI(FakeLookupEndpoint({}), FakeLookupEndpoint({}), FakeDevicesEndpoint()))
+    client = _client(_api(devices=FakeDevicesEndpoint()))
 
     assert client.get_device_status("999") == ""
 
 
 def test_get_device_returns_serialized_record() -> None:
     devices = FakeDevicesEndpoint([FakeRecord({"id": 1, "name": "host-1", "custom_fields": {"osac_managed": True}})])
-    client = _client(FakeAPI(FakeLookupEndpoint({}), FakeLookupEndpoint({}), devices))
+    client = _client(_api(devices=devices))
 
     assert client.get_device("1") == {"id": 1, "name": "host-1", "custom_fields": {"osac_managed": True}}
 
 
 def test_get_device_missing_device_raises() -> None:
-    client = _client(FakeAPI(FakeLookupEndpoint({}), FakeLookupEndpoint({}), FakeDevicesEndpoint()))
+    client = _client(_api(devices=FakeDevicesEndpoint()))
 
     with pytest.raises(RuntimeError, match="was not found"):
         client.get_device("999")
@@ -208,7 +236,7 @@ def test_get_device_missing_device_raises() -> None:
 
 def test_list_devices_prefixes_custom_field_filters() -> None:
     devices = FakeDevicesEndpoint()
-    client = _client(FakeAPI(FakeLookupEndpoint({}), FakeLookupEndpoint({}), devices))
+    client = _client(_api(devices=devices))
 
     client.list_devices(status="staged", custom_fields={"osac_managed": True, "osac_instance_id__empty": True})
 
@@ -217,7 +245,7 @@ def test_list_devices_prefixes_custom_field_filters() -> None:
 
 def test_list_devices_filters_by_exact_name() -> None:
     devices = FakeDevicesEndpoint([FakeRecord({"id": 1, "name": "host-1"}), FakeRecord({"id": 2, "name": "host-2"})])
-    client = _client(FakeAPI(FakeLookupEndpoint({}), FakeLookupEndpoint({}), devices))
+    client = _client(_api(devices=devices))
 
     result = client.list_devices(name="host-1")
 
@@ -227,7 +255,7 @@ def test_list_devices_filters_by_exact_name() -> None:
 
 def test_list_devices_without_filters_queries_everything() -> None:
     devices = FakeDevicesEndpoint()
-    client = _client(FakeAPI(FakeLookupEndpoint({}), FakeLookupEndpoint({}), devices))
+    client = _client(_api(devices=devices))
 
     client.list_devices()
 
@@ -255,7 +283,7 @@ def test_request_error_is_sanitized_and_never_leaks_the_token() -> None:
         def get(self, key: str | None = None, **_kwargs: object) -> FakeRecord:
             raise pynetbox.RequestError(FakeRequestsResponse())
 
-    client = _client(FakeAPI(FakeLookupEndpoint({}), FakeLookupEndpoint({}), ExplodingDevicesEndpoint(devices.records)))
+    client = _client(_api(devices=ExplodingDevicesEndpoint(devices.records)))
 
     with pytest.raises(RuntimeError) as excinfo:
         client.get_device_status("1")

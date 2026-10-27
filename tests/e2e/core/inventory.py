@@ -248,6 +248,9 @@ class NetBoxInventory:
         site: str = env("OSAC_NETBOX_SITE", "").strip()
         if not site:
             raise RuntimeError("OSAC_NETBOX_SITE must name the NetBox site slug for fixture devices")
+        device_type: str = env("OSAC_NETBOX_DEVICE_TYPE", "").strip()
+        if not device_type:
+            raise RuntimeError("OSAC_NETBOX_DEVICE_TYPE must name the NetBox device type slug for fixture devices")
         role: str = env("OSAC_NETBOX_ROLE", "server")
         try:
             for index, spec in enumerate(self.fixture_spec, start=1):
@@ -255,7 +258,11 @@ class NetBoxInventory:
                 if self.netbox.list_devices(name=name):
                     continue
                 device_id = self.netbox.create_device(
-                    name=name, role=role, site=site, custom_fields=self._fixture_custom_fields(spec)
+                    name=name,
+                    role=role,
+                    site=site,
+                    device_type=device_type,
+                    custom_fields=self._fixture_custom_fields(spec),
                 )
                 self._created_device_ids.append(device_id)
         except BaseException:

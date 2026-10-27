@@ -34,6 +34,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/defaultnetworking"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing/fixturecleanup"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -675,7 +676,7 @@ var _ = Describe("Default networking provisioning", func() {
 			manualVNs = append(manualVNs, proto.Clone(object).(*privatev1.VirtualNetwork))
 		}
 
-		By("Snapshotting live tenants and original defaults before serial cleanup")
+		By("Snapshotting live tenants and original defaults before cleanup")
 		tenantSnapshot, err := tenantsClient.List(ctx, privatev1.TenantsListRequest_builder{}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(int(tenantSnapshot.GetTotal())).To(Equal(len(tenantSnapshot.GetItems())), "Tenant snapshot must be complete")
@@ -1018,6 +1019,7 @@ type defaultNetworkingCleanupSummary struct {
 // created by an individual spec leaves other VirtualNetworks referencing the
 // singleton NetworkClass.
 func cleanupDefaultNetworkingForAllTenants(ctx context.Context, networkClassID string) (resultErr error) {
+	sweepStats := &fixturecleanup.Stats{}
 	summary := defaultNetworkingCleanupSummary{SchemaVersion: 1, Outcome: "interrupted", LastStage: "setup"}
 	totalStarted := time.Now()
 	phaseStarted := totalStarted
@@ -1025,6 +1027,13 @@ func cleanupDefaultNetworkingForAllTenants(ctx context.Context, networkClassID s
 		summary.LastStage = "disable_defaults"
 	}
 	defer func() {
+		summary.TenantsStarted = sweepStats.TenantsStarted
+		summary.TenantsCompleted = sweepStats.TenantsCompleted
+		summary.TenantsWithoutPending = sweepStats.TenantsWithoutPending
+		summary.DeleteAttempts = sweepStats.DeleteAttempts
+		summary.PendingResponses = sweepStats.PendingResponses
+		summary.DeleteCallsNS = sweepStats.DeleteCallsNS
+		summary.WaitNS = sweepStats.WaitNS
 		elapsed := time.Since(phaseStarted).Nanoseconds()
 		switch summary.LastStage {
 		case "disable_defaults":
@@ -1123,44 +1132,14 @@ func cleanupDefaultNetworkingForAllTenants(ctx context.Context, networkClassID s
 	phaseStarted = time.Now()
 	summary.TenantsListed = len(tenants.GetItems())
 
+	tenantNames := make([]string, 0, len(tenants.GetItems()))
 	for _, tenant := range tenants.GetItems() {
-		summary.TenantsStarted++
-		pendingEver := false
-		tenantName := tenant.GetMetadata().GetName()
-		cleanupCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		ticker := time.NewTicker(time.Second)
-		for {
-			summary.DeleteAttempts++
-			deleteStarted := time.Now()
-			err = manager.Delete(cleanupCtx, tenantName)
-			summary.DeleteCallsNS += time.Since(deleteStarted).Nanoseconds()
-			if err == nil {
-				summary.TenantsCompleted++
-				if !pendingEver {
-					summary.TenantsWithoutPending++
-				}
-				break
-			}
-			if !errors.Is(err, defaultnetworking.ErrResourcesDeleting) {
-				cancel()
-				ticker.Stop()
-				return fmt.Errorf("delete default networking for tenant %q: %w", tenantName, err)
-			}
-			summary.PendingResponses++
-			pendingEver = true
-			waitStarted := time.Now()
-			select {
-			case <-cleanupCtx.Done():
-				summary.WaitNS += time.Since(waitStarted).Nanoseconds()
-				cancel()
-				ticker.Stop()
-				return fmt.Errorf("wait for default networking deletion for tenant %q: %w", tenantName, cleanupCtx.Err())
-			case <-ticker.C:
-				summary.WaitNS += time.Since(waitStarted).Nanoseconds()
-			}
-		}
-		cancel()
-		ticker.Stop()
+		tenantNames = append(tenantNames, tenant.GetMetadata().GetName())
+	}
+	if err := fixturecleanup.Drain(ctx, tenantNames, manager.Delete, func(err error) bool {
+		return errors.Is(err, defaultnetworking.ErrResourcesDeleting)
+	}, sweepStats); err != nil {
+		return err
 	}
 	summary.TenantSweepNS += time.Since(phaseStarted).Nanoseconds()
 	summary.LastStage = "complete"

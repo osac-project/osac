@@ -163,9 +163,13 @@
       {% set _pcfg = _prep.provider_config if (_prep.provider_config is defined and _prep.provider_config is mapping) else {} -%}
       {% set _lif = (_conn.endpoint | default('', true) | string | trim | regex_replace('^https?://', '') | regex_replace('/.*$', '') | trim) -%}
       {% set _svm = (_pcfg.svm | default('', true) | string | trim) -%}
-      {% set _san = (ontap_storage_san_type | default('iscsi', true) | string | trim) -%}
+      {% set _san = (ontap_storage_san_type | default('fcp', true) | string | trim) -%}
       {% set _pools = [] -%}
+      {% set _tiers_valid = namespace(ok=true) -%}
       {% for tier in (_provider_tiers | default([]) | selectattr('backend_id', 'equalto', bid) | list) -%}
+      {% if tier.provider_config is defined and tier.provider_config is not none and (tier.provider_config is not mapping or tier.provider_config.profile is defined or tier.provider_config.pool_selector is defined) -%}
+      {% set _tiers_valid.ok = false -%}
+      {% endif -%}
       {% set _tier_key = (tier.name | hash('sha256'))[:16] | lower -%}
       {% set _enc = (tier.encryption_enabled | default(false) | bool) | ternary('true', 'false') -%}
       {% set _defaults = {'encryption': _enc} -%}
@@ -177,7 +181,10 @@
       {% endif -%}
       {% set _ = _pools.append({'labels': {'osac_backend': _tbc_name, 'tier': tier.name}, 'defaults': _defaults}) -%}
       {% endfor -%}
-      {% if (_existing_tbc | length > 0)
+      {% if _tiers_valid.ok
+            and (_lif | length > 0)
+            and (_svm | length > 0)
+            and (_existing_tbc | length > 0)
             and ((_existing_tbc[0].status | default({}, true)).phase | default('') == 'Bound')
             and ((_existing_tbc[0].status | default({}, true)).lastOperationStatus | default('Success', true) == 'Success') -%}
       {% set _espec = _existing_tbc[0].spec | default({}, true) -%}
@@ -195,8 +202,11 @@
       {% endif -%}
       {% endif -%}
       {% set _exp_user_b64 = (_pcfg.username | default('', true) | string | trim) | b64encode -%}
-      {% if (_existing | length > 0)
+      {% set _exp_pass = (_pcfg.password | default('', true) | string | trim) -%}
+      {% if _tiers_valid.ok
+            and (_existing | length > 0)
             and (_exp_user_b64 | length > 0)
+            and (_exp_pass | length > 0)
             and (((_existing[0].data | default({}, true)).username | default('')) == _exp_user_b64)
             and (((_existing[0].data | default({}, true)).password | default('') | length) > 0) -%}
       {% set _ = matching_csi_names.append(_sec_name) -%}

@@ -112,7 +112,7 @@ def test_ontap_virtual_pools_use_labels_and_selector_not_storage_pools(
         "defaults": {"encryption": "false"},
     }
 
-    # 2. Render Dedicated-SVM StorageClass parameters.
+    # 2. Render Dedicated-SVM StorageClass parameters and stale Dedicated-SVM SC detection.
     sc_task = _find_task(block_tasks, "Create the per-tier StorageClasses")
     dedicated_sc_params = _render(
         sc_task["kubernetes.core.k8s"]["definition"]["parameters"],
@@ -123,6 +123,51 @@ def test_ontap_virtual_pools_use_labels_and_selector_not_storage_pools(
         "selector": "osac_backend=ontap-0000000000000001;tier=gold",
     }
     assert "storagePools" not in dedicated_sc_params
+
+    stale_ded_task = _find_task(
+        block_tasks,
+        "Identify existing Dedicated-SVM StorageClasses with changed immutable parameters",
+    )
+    stale_ded_expr = stale_ded_task["ansible.builtin.set_fact"]["_ontap_stale_dedicated_sc_names"]
+    ded_sc_name = _render(
+        sc_task["kubernetes.core.k8s"]["definition"]["metadata"]["name"],
+        {"_assignment_key": "0000000000000001", "item": {"name": "gold"}},
+    )
+    assert (
+        _render(
+            stale_ded_expr,
+            {
+                "_assignment_key": "0000000000000001",
+                "_tbc_name": "ontap-0000000000000001",
+                "_backend_tiers": [{"name": "gold"}],
+                "_ontap_sc_checks": {
+                    "resources": [
+                        {"metadata": {"name": ded_sc_name}, "parameters": dedicated_sc_params}
+                    ]
+                },
+            },
+        )
+        == []
+    )
+    assert _render(
+        stale_ded_expr,
+        {
+            "_assignment_key": "0000000000000001",
+            "_tbc_name": "ontap-0000000000000001",
+            "_backend_tiers": [{"name": "gold"}],
+            "_ontap_sc_checks": {
+                "resources": [
+                    {
+                        "metadata": {"name": ded_sc_name},
+                        "parameters": {
+                            "backendType": "ontap-san",
+                            "selector": "osac_backend=ontap-old;tier=gold",
+                        },
+                    }
+                ]
+            },
+        },
+    ) == [ded_sc_name]
 
     # 3. Render Shared-TBC StorageClass parameters: multi-key pool_selector sorted by key,
     #    dot-escaped backendName in storagePools when resolved, and omitted when empty.
@@ -301,8 +346,47 @@ def test_ontap_dual_mode_validation_and_shared_tbc_contracts():
     """
     validate_tasks = _load_yaml(ONTAP_ROLE_DIR / "tasks" / "_validate_backend_mode.yaml")
 
+    # Missing or non-mapping backend connection entry
+    missing_conn_when = _find_task(
+        validate_tasks,
+        "Fail if backend connection details are missing or invalid for dispatched backend",
+    )["when"]
+    assert _render_when(missing_conn_when, {"_ontap_backend_id": "b1"}) is True
+    assert (
+        _render_when(
+            missing_conn_when,
+            {"_ontap_backend_id": "b1", "_provider_backend_connections": {"b2": {}}},
+        )
+        is True
+    )
+    assert (
+        _render_when(
+            missing_conn_when,
+            {"_ontap_backend_id": "b1", "_provider_backend_connections": {"b1": "not-a-dict"}},
+        )
+        is True
+    )
+    assert (
+        _render_when(
+            missing_conn_when,
+            {"_ontap_backend_id": "b1", "_provider_backend_connections": {"b1": {}}},
+        )
+        is False
+    )
+
     # Mode discrimination (_ontap_is_shared_tbc) and _backend_tiers filtering
     mode_task = _find_task(validate_tasks, "Select backend tiers and determine ONTAP backend tenancy mode")
+    backend_tiers_expr = mode_task["ansible.builtin.set_fact"]["_backend_tiers"]
+    assert _render(
+        backend_tiers_expr,
+        {
+            "_ontap_backend_id": "b1",
+            "_provider_tiers": [
+                {"name": "gold", "backend_id": "b1"},
+                {"name": "silver", "backend_id": "b2"},
+            ],
+        },
+    ) == [{"name": "gold", "backend_id": "b1"}]
     is_shared_expr = mode_task["ansible.builtin.set_fact"]["_ontap_is_shared_tbc"]
     assert (
         _render(
@@ -343,6 +427,97 @@ def test_ontap_dual_mode_validation_and_shared_tbc_contracts():
         )
         is True
     )
+    assert (
+        _render_when(
+            both_modes_when,
+            {
+                "_ontap_is_shared_tbc": True,
+                "_ontap_backend_id": "b1",
+                "_provider_backend_connections": {"b1": {"provider_config": {"profiles": []}}},
+            },
+        )
+        is False
+    )
+
+    # Reject empty or non-list provider_config.profiles in Shared-TBC mode
+    non_empty_profiles_when = _find_task(
+        validate_tasks, "Fail if Shared-TBC provider_config.profiles is not a non-empty list"
+    )["when"]
+    for bad_profiles in ([], "not-a-list", {"name": "gold"}):
+        assert (
+            _render_when(
+                non_empty_profiles_when,
+                {
+                    "_ontap_is_shared_tbc": True,
+                    "_ontap_backend_id": "b1",
+                    "_provider_backend_connections": {
+                        "b1": {"provider_config": {"profiles": bad_profiles}}
+                    },
+                },
+            )
+            is True
+        )
+    assert (
+        _render_when(
+            non_empty_profiles_when,
+            {
+                "_ontap_is_shared_tbc": True,
+                "_ontap_backend_id": "b1",
+                "_provider_backend_connections": {
+                    "b1": {"provider_config": {"profiles": [{"name": "gold"}]}}
+                },
+            },
+        )
+        is False
+    )
+
+    # Validate Shared-TBC profile entries (DNS label name/tbc_namespace, DNS subdomain tbc_name <= 253)
+    profile_entries_when = _find_task(validate_tasks, "Validate Shared-TBC profile entries")["when"]
+    for bad_entry in (
+        {"name": "gold"},
+        {"name": "INVALID_NAME", "shared": {"tbc_namespace": "trident", "tbc_name": "tbc-1"}},
+        {"name": "gold", "shared": {"tbc_namespace": "-bad-ns", "tbc_name": "tbc-1"}},
+        {"name": "gold", "shared": {"tbc_namespace": "trident", "tbc_name": "bad..subdomain"}},
+        {"name": "gold", "shared": {"tbc_namespace": "trident", "tbc_name": "a" * 254}},
+    ):
+        assert (
+            _render_when(
+                profile_entries_when,
+                {
+                    "_ontap_is_shared_tbc": True,
+                    "_ontap_backend_id": "b1",
+                    "_provider_backend_connections": {
+                        "b1": {"provider_config": {"profiles": [bad_entry]}}
+                    },
+                },
+            )
+            is True
+        )
+    assert (
+        _render_when(
+            profile_entries_when,
+            {
+                "_ontap_is_shared_tbc": True,
+                "_ontap_backend_id": "b1",
+                "_provider_backend_connections": {
+                    "b1": {
+                        "provider_config": {
+                            "profiles": [
+                                {
+                                    "name": " gold-01 ",
+                                    "shared": {
+                                        "tbc_namespace": " trident ",
+                                        "tbc_name": " shared.tbc-01 ",
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                },
+            },
+        )
+        is False
+    )
 
     # Duplicate profile detection (including whitespace-padded duplicates)
     dup_profile_when = _find_task(
@@ -370,6 +545,72 @@ def test_ontap_dual_mode_validation_and_shared_tbc_contracts():
                 "_provider_backend_connections": {
                     "b1": {"provider_config": {"profiles": [{"name": "gold"}, {"name": "silver"}]}}
                 },
+            },
+        )
+        is False
+    )
+
+    # Build Shared-TBC profile map and validate tier profile reference & non-empty pool_selector
+    profile_map_expr = _find_task(
+        validate_tasks, "Build Shared-TBC profile map for dispatched backend"
+    )["ansible.builtin.set_fact"]["_ontap_shared_profile_map"]
+    rendered_profile_map = _render(
+        profile_map_expr,
+        {
+            "_ontap_backend_id": "b1",
+            "_provider_backend_connections": {
+                "b1": {
+                    "provider_config": {
+                        "profiles": [
+                            {
+                                "name": " gold ",
+                                "shared": {"tbc_namespace": " trident ", "tbc_name": " tbc-gold "},
+                            }
+                        ]
+                    }
+                }
+            },
+        },
+    )
+    assert rendered_profile_map == {
+        "gold": {"tbc_namespace": "trident", "tbc_name": "tbc-gold"}
+    }
+
+    tier_profile_when = _find_task(
+        validate_tasks,
+        "Fail if a Shared-TBC tier is missing valid provider_config profile or pool_selector",
+    )["when"]
+    for bad_tier in (
+        {"name": "t1"},
+        {"name": "t1", "provider_config": {"profile": "unknown", "pool_selector": {"tier": "gold"}}},
+        {"name": "t1", "provider_config": {"profile": "gold", "pool_selector": {}}},
+    ):
+        assert (
+            _render_when(
+                tier_profile_when,
+                {
+                    "_ontap_is_shared_tbc": True,
+                    "_ontap_shared_profile_map": rendered_profile_map,
+                    "_backend_tiers": [bad_tier],
+                },
+            )
+            is True
+        )
+    assert (
+        _render_when(
+            tier_profile_when,
+            {
+                "_ontap_is_shared_tbc": True,
+                "_ontap_shared_profile_map": rendered_profile_map,
+                "_backend_tiers": [
+                    {
+                        "name": "t1",
+                        "provider_config": {
+                            "profile": " gold ",
+                            "pool_selector": {"tier": "gold"},
+                        },
+                    }
+                ],
             },
         )
         is False
@@ -426,7 +667,76 @@ def test_ontap_dual_mode_validation_and_shared_tbc_contracts():
         is False
     )
 
-    # Dedicated-SVM tier rejecting profile and pool_selector
+    # Dedicated-SVM tenant_preparation presence, non-empty required fields, and tier rejection of profile/pool_selector
+    missing_prep_when = _find_task(
+        validate_tasks, "Fail if tenant_preparation is missing for Dedicated-SVM backend"
+    )["when"]
+    for bad_conn in ({}, {"tenant_preparation": "bad"}, {"tenant_preparation": {"provider_config": None}}):
+        assert (
+            _render_when(
+                missing_prep_when,
+                {
+                    "_ontap_is_shared_tbc": False,
+                    "_ontap_backend_id": "b1",
+                    "_provider_backend_connections": {"b1": bad_conn},
+                },
+            )
+            is True
+        )
+    assert (
+        _render_when(
+            missing_prep_when,
+            {
+                "_ontap_is_shared_tbc": False,
+                "_ontap_backend_id": "b1",
+                "_provider_backend_connections": {
+                    "b1": {"tenant_preparation": {"provider_config": {}}}
+                },
+            },
+        )
+        is False
+    )
+
+    prep_fields_when = _find_task(
+        validate_tasks,
+        "Validate operator-supplied tenant preparation fields for Dedicated-SVM backend",
+    )["when"]
+    for bad_pcfg in (
+        {"username": "", "password": "p", "svm": "svm1"},
+        {"username": "u", "password": "   ", "svm": "svm1"},
+        {"username": "u", "password": "p", "svm": ""},
+    ):
+        assert (
+            _render_when(
+                prep_fields_when,
+                {
+                    "_ontap_is_shared_tbc": False,
+                    "_ontap_backend_id": "b1",
+                    "_provider_backend_connections": {
+                        "b1": {"tenant_preparation": {"provider_config": bad_pcfg}}
+                    },
+                },
+            )
+            is True
+        )
+    assert (
+        _render_when(
+            prep_fields_when,
+            {
+                "_ontap_is_shared_tbc": False,
+                "_ontap_backend_id": "b1",
+                "_provider_backend_connections": {
+                    "b1": {
+                        "tenant_preparation": {
+                            "provider_config": {"username": "u", "password": "p", "svm": "svm1"}
+                        }
+                    }
+                },
+            },
+        )
+        is False
+    )
+
     ded_reject_shared_when = _find_task(
         validate_tasks, "Fail if a Dedicated-SVM tier specifies Shared-TBC provider_config fields"
     )["when"]
@@ -722,6 +1032,33 @@ def test_ontap_dual_mode_validation_and_shared_tbc_contracts():
         )
         is False
     )
+    ded_not_bound_when = _find_task(
+        block_tasks, "Fail if the TridentBackendConfig did not become Bound"
+    )["when"]
+    for unbound_status in (
+        {"resources": []},
+        {"resources": [{"status": {"phase": "Pending"}}]},
+        {"resources": [{"status": {"phase": "Bound", "lastOperationStatus": "Pending"}}]},
+    ):
+        assert (
+            _render_when(
+                ded_not_bound_when,
+                {"_ontap_is_shared_tbc": False, "_tbc_status": unbound_status},
+            )
+            is True
+        )
+    assert (
+        _render_when(
+            ded_not_bound_when,
+            {
+                "_ontap_is_shared_tbc": False,
+                "_tbc_status": {
+                    "resources": [{"status": {"phase": "Bound", "lastOperationStatus": "Success"}}]
+                },
+            },
+        )
+        is False
+    )
 
     # Dedicated-SVM endpoint validation and _management_lif whitespace/scheme stripping
     endpoint_fail_when = _find_task(
@@ -942,6 +1279,36 @@ def test_ontap_ensure_short_circuit_checks_tbc_and_csi_secret():
     assert len(csi_names) == 1
     assert sc_selectors[sc_names[1]] == ""
 
+    trident_crd_fail_when = _find_task(
+        ensure_tasks, "Fail if Trident is not installed on the target cluster"
+    )["when"]
+    assert (
+        _render_when(
+            trident_crd_fail_when,
+            {"_ontap_dedicated_backend_ids": ["ded-1"], "_trident_crd_check": {"resources": []}},
+        )
+        is True
+    )
+    assert (
+        _render_when(
+            trident_crd_fail_when,
+            {
+                "_ontap_dedicated_backend_ids": ["ded-1"],
+                "_trident_crd_check": {
+                    "resources": [{"metadata": {"name": "tridentbackendconfigs.trident.netapp.io"}}]
+                },
+            },
+        )
+        is False
+    )
+    assert (
+        _render_when(
+            trident_crd_fail_when,
+            {"_ontap_dedicated_backend_ids": [], "_trident_crd_check": {"resources": []}},
+        )
+        is False
+    )
+
     all_exist_expr = _find_task(
         ensure_tasks,
         "Determine if all StorageClasses, Bound TridentBackendConfigs, and CSI Secrets already exist",
@@ -952,7 +1319,7 @@ def test_ontap_ensure_short_circuit_checks_tbc_and_csi_secret():
     expected_tbc_spec = {
         "storageDriverName": "ontap-san",
         "backendName": tbc_names[0],
-        "sanType": "iscsi",
+        "sanType": "fcp",
         "managementLIF": "10.0.0.1",
         "svm": "svm1",
         "credentials": {"name": csi_names[0]},
@@ -1034,7 +1401,8 @@ def test_ontap_ensure_short_circuit_checks_tbc_and_csi_secret():
         )
         is False
     )
-    # When CSI Secret username differs or password is empty, do not short-circuit.
+    # When CSI Secret username differs or password is empty, or incoming _pcfg.password is empty/whitespace
+    # or Dedicated-SVM tier sets Shared-TBC provider_config fields, do not short-circuit.
     assert (
         _render(
             all_exist_expr,
@@ -1051,6 +1419,40 @@ def test_ontap_ensure_short_circuit_checks_tbc_and_csi_secret():
                         }
                     ]
                 },
+            },
+        )
+        is False
+    )
+    assert (
+        _render(
+            all_exist_expr,
+            {
+                **dedicated_only_vars,
+                "_provider_backend_connections": {
+                    **conns,
+                    "ded-1": {
+                        "endpoint": "10.0.0.1",
+                        "tenant_preparation": {
+                            "provider_config": {"svm": "svm1", "username": "u", "password": "   "}
+                        },
+                    },
+                },
+            },
+        )
+        is False
+    )
+    assert (
+        _render(
+            all_exist_expr,
+            {
+                **dedicated_only_vars,
+                "_provider_tiers": [
+                    {
+                        "name": "ded-gold",
+                        "backend_id": "ded-1",
+                        "provider_config": {"profile": "p1"},
+                    }
+                ],
             },
         )
         is False
@@ -1154,6 +1556,131 @@ def test_ontap_ensure_short_circuit_checks_tbc_and_csi_secret():
         for task in teardown_backend_tasks
     )
 
+    # Verify remaining _validate_tiers.yaml failure guards (tenant_name DNS label, protocol, sanType, trident namespace).
+    tier_tenant_when = _find_task(
+        validate_tiers_tasks, "Validate tenant_name is a valid DNS label"
+    )["when"]
+    for invalid_tenant in ("", "-bad", "bad-", "Bad_Tenant", "a" * 64):
+        assert _render_when(tier_tenant_when, {"tenant_name": invalid_tenant}) is True
+    for valid_tenant in ("a", "acme-01"):
+        assert _render_when(tier_tenant_when, {"tenant_name": valid_tenant}) is False
+
+    tier_proto_when = _find_task(
+        validate_tiers_tasks, "Fail if any tier protocol is unsupported by the ONTAP provider"
+    )["when"]
+    assert (
+        _render_when(tier_proto_when, {"_provider_tiers": [{"name": "gold", "protocol": "nfs"}]})
+        is True
+    )
+    assert (
+        _render_when(
+            tier_proto_when, {"_provider_tiers": [{"name": "gold", "protocol": "block"}]}
+        )
+        is False
+    )
+
+    tier_san_when = _find_task(
+        validate_tiers_tasks, "Fail if sanType is not a valid Trident SAN transport"
+    )["when"]
+    for bad_san in ("", "nfs", "smb"):
+        assert _render_when(tier_san_when, {"ontap_storage_san_type": bad_san}) is True
+    for valid_san in ("iscsi", "fcp", "nvme"):
+        assert _render_when(tier_san_when, {"ontap_storage_san_type": valid_san}) is False
+
+    tier_ns_when = _find_task(
+        validate_tiers_tasks, "Fail if the trident namespace is empty"
+    )["when"]
+    assert _render_when(tier_ns_when, {"ontap_storage_trident_namespace": ""}) is True
+    assert _render_when(tier_ns_when, {}) is True
+    assert _render_when(tier_ns_when, {"ontap_storage_trident_namespace": "trident"}) is False
+
+    # Verify teardown_cluster_storage.yaml tenant_name DNS label guard, CRD/TBC/CSI Secret ordering guards, and always cleanup.
+    teardown_cluster_tasks = _load_yaml(ONTAP_ROLE_DIR / "tasks" / "teardown_cluster_storage.yaml")
+    tenant_dns_when = _find_task(
+        teardown_cluster_tasks, "Validate tenant_name is a valid DNS label"
+    )["when"]
+    for invalid_tenant in ("", "-bad", "bad-", "Bad_Tenant", "a" * 64):
+        assert _render_when(tenant_dns_when, {"tenant_name": invalid_tenant}) is True
+    assert _render_when(tenant_dns_when, {"tenant_name": "acme-tenant-01"}) is False
+
+    cleanup_block = _find_task(teardown_cluster_tasks, "Clean up cluster-side K8s resources")
+    cleanup_tasks = cleanup_block["block"]
+    for tbc_crd_task_name in (
+        "Find all tenant ONTAP TridentBackendConfigs by label",
+        "Delete tenant ONTAP TridentBackendConfigs",
+    ):
+        crd_when = _find_task(cleanup_tasks, tbc_crd_task_name)["when"]
+        assert _render_when(crd_when, {"_ontap_cleanup_trident_crd": {"resources": []}}) is False
+        assert (
+            _render_when(
+                crd_when,
+                {"_ontap_cleanup_trident_crd": {"resources": [{"metadata": {"name": "crd"}}]}},
+            )
+            is True
+        )
+
+    wait_remove_task = _find_task(cleanup_tasks, "Wait for the TridentBackendConfigs to be removed")
+    assert (
+        _render_when(wait_remove_task["when"], {"_ontap_cleanup_tbc_list": {"resources": []}})
+        is False
+    )
+    assert (
+        _render_when(
+            wait_remove_task["when"],
+            {"_ontap_cleanup_tbc_list": {"resources": [{"metadata": {"name": "ontap-1"}}]}},
+        )
+        is True
+    )
+    assert _render_when(wait_remove_task["until"], {"_tbc_check": {"resources": []}}) is True
+    assert (
+        _render_when(
+            wait_remove_task["until"],
+            {"_tbc_check": {"resources": [{"metadata": {"name": "ontap-1"}}]}},
+        )
+        is False
+    )
+
+    for csi_cleanup_task_name in (
+        "Find all tenant ONTAP CSI Secrets by label",
+        "Delete tenant ONTAP CSI Secrets after TBCs are confirmed gone",
+    ):
+        csi_when = _find_task(cleanup_tasks, csi_cleanup_task_name)["when"]
+        assert _render_when(csi_when, {"_ontap_cleanup_tbc_list": {}}) is True
+        assert (
+            _render_when(
+                csi_when,
+                {
+                    "_ontap_cleanup_tbc_list": {"resources": [{"metadata": {"name": "ontap-1"}}]},
+                    "_tbc_check": {"failed": False, "resources": []},
+                },
+            )
+            is True
+        )
+        assert (
+            _render_when(
+                csi_when,
+                {
+                    "_ontap_cleanup_tbc_list": {"resources": [{"metadata": {"name": "ontap-1"}}]},
+                    "_tbc_check": {
+                        "failed": True,
+                        "resources": [{"metadata": {"name": "ontap-1"}}],
+                    },
+                },
+            )
+            is False
+        )
+
+    cleanup_clear_task = _find_task(cleanup_block["always"], "Clear credential-bearing facts")
+    assert cleanup_clear_task.get("no_log") is True
+    for fact_name in (
+        "_ontap_cleanup_sc_list",
+        "_ontap_cleanup_trident_crd",
+        "_ontap_cleanup_tbc_list",
+        "_ontap_cleanup_csi_list",
+        "_tbc_check",
+    ):
+        assert fact_name in cleanup_clear_task["ansible.builtin.set_fact"]
+
 
 def _setup_prepare_ontap_mocks(tmp_path: Path) -> dict[str, Path]:
     """Create stub kubectl, curl, and sleep binaries in tmp_path/bin for prepare-ontap-svm.sh."""
@@ -1204,6 +1731,10 @@ case "$*" in
     exit 0
     ;;
   *"apply --server-side --field-manager=prepare-ontap-svm -f -"*)
+    if [[ -n "${MOCK_APPLY_ERROR:-}" ]]; then
+      printf '%s\n' "${MOCK_APPLY_ERROR}" >&2
+      exit 1
+    fi
     jq -c . >> "${MOCK_APPLIED_FILE}"
     ;;
 esac
@@ -1461,3 +1992,160 @@ def test_prepare_ontap_svm_password_stdin_secret_name_and_resolve_name_by_id(tmp
     assert "tenant-unlabeled" not in fallback_proc.stdout
     assert "tenant-unlabeled" not in fallback_proc.stderr
     assert "Resolved StorageBackend ID" not in fallback_proc.stdout
+
+    # Error when Tenant CR is missing on the hub cluster (tenant-missing branch in mock kubectl)
+    missing_tenant_proc = subprocess.run(
+        [
+            str(PREPARE_ONTAP_SCRIPT),
+            "--tenant",
+            "tenant-missing",
+            "--backend",
+            "ontap-primary",
+            "--backend-id",
+            "ontap-be-1",
+            "--svm",
+            "svm1",
+            "--username",
+            "user1",
+            "--generate-password",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert missing_tenant_proc.returncode != 0
+    assert (
+        "Target Tenant CR not found in the configured tenant namespace."
+        in missing_tenant_proc.stderr
+    )
+    assert "tenant-missing" not in missing_tenant_proc.stdout
+    assert "tenant-missing" not in missing_tenant_proc.stderr
+
+    # CLI validation errors: missing required arguments, invalid --map entry, empty --password-stdin,
+    # and invalid DNS-label backend-id suffix when --secret-name is omitted.
+    missing_args_proc = subprocess.run(
+        [str(PREPARE_ONTAP_SCRIPT), "--backend", "ontap-primary", "--backend-id", "ontap-be-1"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert missing_args_proc.returncode != 0
+    assert (
+        "Specify either --map <tenant>:<svm>:<username> or all of --tenant, --svm, and --username."
+        in missing_args_proc.stderr
+    )
+
+    bad_map_proc = subprocess.run(
+        [
+            str(PREPARE_ONTAP_SCRIPT),
+            "--backend",
+            "ontap-primary",
+            "--backend-id",
+            "ontap-be-1",
+            "--map",
+            "tenant1:only_two_fields",
+            "--generate-password",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert bad_map_proc.returncode != 0
+    assert "Invalid --map entry." in bad_map_proc.stderr
+
+    empty_stdin_proc = subprocess.run(
+        [
+            str(PREPARE_ONTAP_SCRIPT),
+            "--tenant",
+            "tenant1",
+            "--tenant-id",
+            "tid-1",
+            "--backend",
+            "ontap-primary",
+            "--backend-id",
+            "ontap-be-1",
+            "--svm",
+            "svm1",
+            "--username",
+            "user1",
+            "--password-stdin",
+        ],
+        input="",
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert empty_stdin_proc.returncode != 0
+    assert "No password received on stdin." in empty_stdin_proc.stderr
+
+    bad_suffix_proc = subprocess.run(
+        [
+            str(PREPARE_ONTAP_SCRIPT),
+            "--tenant",
+            "tenant1",
+            "--tenant-id",
+            "tid-1",
+            "--backend",
+            "ontap-primary",
+            "--backend-id",
+            "---",
+            "--svm",
+            "svm1",
+            "--username",
+            "user1",
+            "--generate-password",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert bad_suffix_proc.returncode != 0
+    assert (
+        "Could not derive a valid DNS-label Secret name suffix from the backend identifier"
+        in bad_suffix_proc.stderr
+    )
+
+    # Error classification when `kubectl apply` fails (Forbidden, Invalid, Conflict, generic)
+    for simulated_err, expected_msg in (
+        (
+            "Error from server (Forbidden): secrets is forbidden",
+            "Failed to apply ONTAP tenant preparation Secret (Forbidden: check RBAC permissions).",
+        ),
+        (
+            "Error from server (Invalid): Secret is invalid",
+            "Failed to apply ONTAP tenant preparation Secret (Invalid resource or label value).",
+        ),
+        (
+            "Apply failed with 1 conflict: conflict with field-manager",
+            "Failed to apply ONTAP tenant preparation Secret (Server-side apply field-manager conflict).",
+        ),
+    ):
+        apply_fail_proc = subprocess.run(
+            [
+                str(PREPARE_ONTAP_SCRIPT),
+                "--tenant",
+                "tenant1",
+                "--tenant-id",
+                "tid-1",
+                "--backend",
+                "ontap-primary",
+                "--backend-id",
+                "ontap-be-1",
+                "--svm",
+                "svm1",
+                "--username",
+                "user1",
+                "--generate-password",
+            ],
+            env=_mock_env(paths, {"MOCK_APPLY_ERROR": simulated_err}),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert apply_fail_proc.returncode != 0
+        assert expected_msg in apply_fail_proc.stderr

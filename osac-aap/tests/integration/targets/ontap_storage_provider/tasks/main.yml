@@ -1108,7 +1108,10 @@
         argv:
           - python3
           - -c
-          - "import hmac, os, sys; sys.exit(0 if (hmac.compare_digest(os.environ['ACTUAL_1'], os.environ['EXPECTED']) and hmac.compare_digest(os.environ['ACTUAL_2'], os.environ['EXPECTED'])) else 1)"
+          - >-
+            import hmac, os, sys;
+            sys.exit(0 if (hmac.compare_digest(os.environ['ACTUAL_1'], os.environ['EXPECTED'])
+            and hmac.compare_digest(os.environ['ACTUAL_2'], os.environ['EXPECTED'])) else 1)
       environment:
         ACTUAL_1: "{{ _prep_batch_secret_1.resources[0].data.password | default('') | b64decode }}"
         ACTUAL_2: "{{ _prep_batch_secret_2.resources[0].data.password | default('') | b64decode }}"
@@ -1968,7 +1971,7 @@
       failed_when: false
       no_log: true
 
-    - name: Delete the stub Trident operator
+    - name: Delete the stub Trident operator and RBAC
       kubernetes.core.k8s:
         state: absent
         definition: "{{ item }}"
@@ -1979,4 +1982,21 @@
           metadata:
             name: stub-trident-operator
             namespace: trident
+        - apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: stub-trident-operator
+            namespace: trident
+        - apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            name: stub-trident-operator
+            namespace: trident
+        - apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: stub-trident-operator
+            namespace: trident
+      loop_control:
+        label: "{{ item.kind }}/{{ item.metadata.name }}"
       failed_when: false

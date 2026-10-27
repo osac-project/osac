@@ -193,16 +193,11 @@
         _ontap_shared_sc_desired_params: >-
           {% set desired_map = {} -%}
           {% for item in _backend_tiers -%}
-          {% set _sc_name = 'ontap-' ~ _assignment_key ~ '-' ~ ((item.name | hash('sha256'))[:16] | lower) -%}
-          {% if (_ontap_expected_sc_selectors is defined) and (_sc_name in _ontap_expected_sc_selectors) and (_ontap_expected_sc_selectors[_sc_name] | length > 0) -%}
-          {% set _sel = _ontap_expected_sc_selectors[_sc_name] -%}
-          {% else -%}
           {% set _parts = [] -%}
           {% for entry in (item.provider_config.pool_selector | dict2items | sort(attribute='key')) -%}
           {% set _ = _parts.append((entry.key | string) ~ '=' ~ (entry.value | string)) -%}
           {% endfor -%}
           {% set _sel = _parts | join(';') -%}
-          {% endif -%}
           {% set _bname = _ontap_profile_backend_names[item.provider_config.profile | trim] | default('') -%}
           {% set _desired = {'backendType': 'ontap-san', 'selector': _sel}
              | combine({'storagePools': (_bname | replace('.', '\\.')) ~ ':.*'} if (_bname | length > 0) else {}) -%}
@@ -343,7 +338,7 @@
           {% set _enc = (tier.encryption_enabled | default(false) | bool) | ternary('true', 'false') -%}
           {% set _defaults = {'encryption': _enc} -%}
           {% set _max_iops = (tier.qos_limits.provider_config.max_iops | default(0) | int)
-                             if (tier.qos_limits is defined and tier.qos_limits.provider_config is defined)
+                             if (tier.qos_limits is defined and tier.qos_limits is mapping and tier.qos_limits.provider_config is defined and tier.qos_limits.provider_config is mapping)
                              else 0 -%}
           {% if _max_iops > 0 -%}
           {% set _ = _defaults.update({'qosPolicy': 'osac-' ~ _assignment_key ~ '-' ~ _tier_key ~ '-qos'}) -%}

@@ -20,7 +20,7 @@
 - name: Resolve StorageClass for requested tier
   ansible.builtin.set_fact:
     _tenant_sc_unique_names: >-
-      {% set _req_tier = (tenant_storage_class_storage_tier | string | trim | lower) -%}
+      {% set _req_tier = tenant_storage_class_storage_tier | string | trim | lower -%}
       {% set _names = [] -%}
       {% for _sc in tenant_storage_class_storage_classes -%}
       {% if (_sc.name is defined) and (_sc.name != '') and ((_sc.tier | default('') | string | trim | lower) == _req_tier) and (_sc.name not in _names) -%}

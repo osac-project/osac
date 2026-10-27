@@ -82,12 +82,12 @@ type ComputeInstanceReconciler struct {
 	// TiersClient and BackendsClient query the fulfillment service Tier API for
 	// JIT storage provisioning extra_vars. When nil, tier/backend context
 	// injection is skipped — backward compatible with environments without a
-	// fulfillment service connection. See resolveAndInjectTierContext.
+	// fulfillment service connection. See resolveAndPartitionTierContext.
 	TiersClient    StorageTiersLister
 	BackendsClient StorageBackendsClient
 	// SecretsClient resolves a storage backend's password from a referenced Secret
 	// when the backend supplies password_secret instead of an inline password. When
-	// nil, backends that rely on password_secret are skipped. See resolveAndInjectTierContext.
+	// nil, backends that rely on password_secret are skipped. See resolveAndPartitionTierContext.
 	SecretsClient SecretsClient
 }
 
@@ -533,13 +533,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 
 	// If the tenant is not ready, requeue
 	if tenant.Status.Phase != v1alpha1.TenantPhaseReady {
-		msg := fmt.Sprintf("Tenant '%s' is not ready (phase: %s)", tenant.GetName(), tenant.Status.Phase)
-		if srCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady); srCond != nil && srCond.Message != "" {
-			msg = fmt.Sprintf("%s. %s: %s", msg, srCond.Type, srCond.Message)
-		}
-		if scCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady); scCond != nil && scCond.Message != "" {
-			msg = fmt.Sprintf("%s. %s: %s", msg, scCond.Type, scCond.Message)
-		}
+		msg := formatTenantNotReadyMessage(tenant)
 		oldReason := conditionReason(instance, v1alpha1.ComputeInstanceConditionProvisioned)
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, msg, v1alpha1.ReasonTenantNotReady)
 		if oldReason != v1alpha1.ReasonTenantNotReady {
@@ -605,6 +599,42 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 
 	recordRunningConfig(instance)
 
+	var gated bool
+	ctx, gated, err = r.prepareStorageContext(ctx, targetClient, instance, tenant, kv, priorProvisionedReason)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if gated {
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+
+	// Always delegate to provisioning lifecycle — EvaluateAction decides
+	// whether to skip, poll, or trigger. This avoids the A-B-A problem where
+	// IsConfigApplied alone could match a stale historical job.
+	return r.handleProvisioning(ctx, instance)
+}
+
+func formatTenantNotReadyMessage(tenant *v1alpha1.Tenant) string {
+	msg := fmt.Sprintf("Tenant '%s' is not ready (phase: %s)", tenant.GetName(), tenant.Status.Phase)
+	if srCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady); srCond != nil && srCond.Message != "" {
+		msg = fmt.Sprintf("%s. %s: %s", msg, srCond.Type, srCond.Message)
+	}
+	if scCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady); scCond != nil && scCond.Message != "" {
+		msg = fmt.Sprintf("%s. %s: %s", msg, scCond.Type, scCond.Message)
+	}
+	return msg
+}
+
+func (r *ComputeInstanceReconciler) prepareStorageContext(
+	ctx context.Context,
+	targetClient client.Client,
+	instance *v1alpha1.ComputeInstance,
+	tenant *v1alpha1.Tenant,
+	kv *kubevirtv1.VirtualMachine,
+	priorProvisionedReason string,
+) (context.Context, bool, error) {
+	log := ctrllog.FromContext(ctx)
+
 	// Resolve and partition storage tier definitions and backend connections.
 	// OSAC-managed tiers and connections are injected into ctx for JIT storage
 	// provisioning (OSAC-1992), while CSP-managed tiers and skipped tiers are
@@ -628,7 +658,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 				r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, eventReasonTenantNotReady, eventActionReconcile, "%s", msg)
 			}
 			log.Info("tenant CSP storage is not ready for requested tiers, requeueing", "tenant", tenant.GetName(), "reason", msg)
-			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+			return ctx, true, nil
 		}
 	}
 
@@ -650,7 +680,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		tenantName := tenant.GetName()
 		resolution, err := getTenantStorageClasses(ctx, targetClient, tenantName)
 		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to resolve tenant storage classes from target cluster for tenant %s: %w", tenantName, err)
+			return ctx, false, fmt.Errorf("failed to resolve tenant storage classes from target cluster for tenant %s: %w", tenantName, err)
 		}
 
 		for _, msg := range resolution.duplicateMessages {
@@ -668,10 +698,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		}
 	}
 
-	// Always delegate to provisioning lifecycle — EvaluateAction decides
-	// whether to skip, poll, or trigger. This avoids the A-B-A problem where
-	// IsConfigApplied alone could match a stale historical job.
-	return r.handleProvisioning(ctx, instance)
+	return ctx, false, nil
 }
 
 func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
@@ -1455,4 +1482,3 @@ func filterStorageClassesToRequestedTiers(
 	}
 	return filtered
 }
-

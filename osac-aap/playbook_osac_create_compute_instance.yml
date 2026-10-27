@@ -140,7 +140,14 @@
         _ambiguous_requested_tiers: >-
           {% set _ambiguous = [] -%}
           {% for _tier in _cr_requested_tiers -%}
-          {% set _names = (tenant_storage_class_storage_classes | selectattr('tier', 'equalto', _tier) | selectattr('name', 'defined') | map(attribute='name') | reject('equalto', '') | unique | sort | list) -%}
+          {% set _names = tenant_storage_class_storage_classes
+             | selectattr('tier', 'equalto', _tier)
+             | selectattr('name', 'defined')
+             | map(attribute='name')
+             | reject('equalto', '')
+             | unique
+             | sort
+             | list -%}
           {% if (_names | length) > 1 -%}
           {% set _ = _ambiguous.append(_tier ~ ' (' ~ (_names | join(', ')) ~ ')') -%}
           {% endif -%}

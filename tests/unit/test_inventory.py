@@ -31,6 +31,7 @@ _NETBOX_ENV_VARS = (
     "OSAC_NETBOX_CA_FILE",
     "OSAC_NETBOX_INSECURE",
     "OSAC_NETBOX_SITE",
+    "OSAC_NETBOX_DEVICE_TYPE",
     "OSAC_NETBOX_ROLE",
     "OSAC_NETBOX_FIXTURE_HOSTS",
 )
@@ -233,8 +234,12 @@ class FakeNetBox:
             devices = [device for device in devices if device.get("status") == status]
         return [dict(device) for device in devices]
 
-    def create_device(self, *, name: str, role: str, site: str, custom_fields: dict[str, Any] | None = None) -> str:
-        self.created.append({"name": name, "role": role, "site": site, "custom_fields": custom_fields})
+    def create_device(
+        self, *, name: str, role: str, site: str, device_type: str, custom_fields: dict[str, Any] | None = None
+    ) -> str:
+        self.created.append(
+            {"name": name, "role": role, "site": site, "device_type": device_type, "custom_fields": custom_fields}
+        )
         device_id = str(100 + len(self.created))
         self.devices.append(
             {"id": device_id, "name": name, "status": "staged", "custom_fields": dict(custom_fields or {})}
@@ -360,6 +365,7 @@ def test_netbox_wait_for_released_requires_bmh_deleted_and_device_staged(monkeyp
 
 def test_netbox_fixture_devices_are_created_idempotently_and_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OSAC_NETBOX_SITE", "dc1")
+    monkeypatch.setenv("OSAC_NETBOX_DEVICE_TYPE", "virtual-host")
     netbox = FakeNetBox()
     backend = _netbox(
         netbox,
@@ -402,6 +408,7 @@ def test_netbox_fixture_devices_are_created_idempotently_and_deleted(monkeypatch
 
 def test_netbox_fixture_role_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OSAC_NETBOX_SITE", "dc1")
+    monkeypatch.setenv("OSAC_NETBOX_DEVICE_TYPE", "virtual-host")
     monkeypatch.setenv("OSAC_NETBOX_ROLE", "compute")
     netbox = FakeNetBox()
     backend = _netbox(netbox, fixture_spec=[{"bmc_address": "redfish://10.0.0.1", "boot_mac": "aa:bb:cc:dd:ee:01"}])
@@ -411,7 +418,7 @@ def test_netbox_fixture_role_env_override(monkeypatch: pytest.MonkeyPatch) -> No
     assert netbox.created[0]["role"] == "compute"
 
 
-def test_netbox_fixture_requires_a_host_spec_and_site(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_netbox_fixture_requires_host_spec_site_and_device_type(monkeypatch: pytest.MonkeyPatch) -> None:
     backend = _netbox(FakeNetBox(), fixture_spec=[])
 
     with pytest.raises(RuntimeError, match="OSAC_NETBOX_FIXTURE_HOSTS is empty"):
@@ -422,13 +429,23 @@ def test_netbox_fixture_requires_a_host_spec_and_site(monkeypatch: pytest.Monkey
     with pytest.raises(RuntimeError, match="OSAC_NETBOX_SITE"):
         backend2.ensure_available_hosts()
 
+    monkeypatch.setenv("OSAC_NETBOX_SITE", "dc1")
+    monkeypatch.setenv("OSAC_NETBOX_DEVICE_TYPE", "")
+    with pytest.raises(RuntimeError, match="OSAC_NETBOX_DEVICE_TYPE"):
+        backend2.ensure_available_hosts()
+
 
 def test_netbox_fixture_creation_failure_cleans_up_created_devices(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OSAC_NETBOX_SITE", "dc1")
+    monkeypatch.setenv("OSAC_NETBOX_DEVICE_TYPE", "virtual-host")
 
     class ExplodingNetBox(FakeNetBox):
-        def create_device(self, *, name: str, role: str, site: str, custom_fields: dict[str, Any] | None = None) -> str:
-            device_id = super().create_device(name=name, role=role, site=site, custom_fields=custom_fields)
+        def create_device(
+            self, *, name: str, role: str, site: str, device_type: str, custom_fields: dict[str, Any] | None = None
+        ) -> str:
+            device_id = super().create_device(
+                name=name, role=role, site=site, device_type=device_type, custom_fields=custom_fields
+            )
             if len(self.created) == 2:
                 raise RuntimeError("boom")
             return device_id
@@ -459,6 +476,7 @@ def test_netbox_release_created_hosts_aggregates_deletion_failures() -> None:
     backend = _netbox(netbox, fixture_spec=[{"bmc_address": "redfish://10.0.0.1", "boot_mac": "aa:bb:cc:dd:ee:01"}])
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setenv("OSAC_NETBOX_SITE", "dc1")
+    monkeypatch.setenv("OSAC_NETBOX_DEVICE_TYPE", "virtual-host")
     try:
         backend.ensure_available_hosts()
         with pytest.raises(RuntimeError, match="1 NetBox fixture device deletion failure"):

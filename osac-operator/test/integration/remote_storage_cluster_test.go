@@ -49,6 +49,7 @@ const (
 var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clusters", Ordered, Serial, func() {
 	var (
 		remoteKubeconfigPath   string
+		restorePatchFilePath   string
 		remoteModeReconfigured bool
 	)
 
@@ -70,10 +71,19 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 			))
 		}
 
+		By("snapshotting the management cluster operator Deployment template to a restore patch file")
+		restorePatchFilePath = filepath.Join(GinkgoT().TempDir(), "local-mode-restore-patch.json")
+		writeLocalModeRestorePatchFile(restorePatchFilePath)
+
 		remoteKubeconfigPath = filepath.Join(GinkgoT().TempDir(), "osac-remote.kubeconfig")
 
 		DeferCleanup(func() {
 			By("cleaning up test resources and restoring the operator Deployment to single-cluster mode")
+			defer func() {
+				_, _ = runKubectl("delete", "secret", remoteKubeconfigSecretName, "-n", operatorNamespace, "--ignore-not-found")
+				_, _ = runKind("delete", "cluster", "--name", remoteKindClusterName, "--kubeconfig", remoteKubeconfigPath)
+			}()
+
 			removeFinalizers("tenant", remoteTestTenantName, operatorNamespace)
 			_, _ = runKubectl(
 				"delete", "tenant", remoteTestTenantName,
@@ -84,10 +94,8 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 			_, _ = runKubectl("delete", "sc", localDecoyStorageClass, "--ignore-not-found")
 
 			if remoteModeReconfigured {
-				restoreOperatorDeploymentToLocalMode()
+				restoreOperatorDeploymentToLocalMode(restorePatchFilePath)
 			}
-			_, _ = runKubectl("delete", "secret", remoteKubeconfigSecretName, "-n", operatorNamespace, "--ignore-not-found")
-			_, _ = runKind("delete", "cluster", "--name", remoteKindClusterName, "--kubeconfig", remoteKubeconfigPath)
 		})
 
 		By("creating the second Kind workload cluster (" + remoteKindClusterName + ")")
@@ -447,49 +455,51 @@ func configureOperatorDeploymentForRemoteMode() {
 	Expect(err).NotTo(HaveOccurred())
 }
 
-// restoreOperatorDeploymentToLocalMode removes the remote-kubeconfig volume,
-// volumeMount, and OSAC_REMOTE_CLUSTER_KUBECONFIG env var and re-enables the
-// single-cluster controllers using a static strategic merge patch file.
-func restoreOperatorDeploymentToLocalMode() {
-	deployName := operatorDeploymentName()
-	patch := fmt.Sprintf(`{
-  "spec": {
-    "template": {
-      "spec": {
-        "volumes": [
-          {"$patch": "delete", "name": "remote-kubeconfig"}
-        ],
-        "containers": [
-          {
-            "name": "manager",
-            "env": [
-              {"$patch": "delete", "name": "OSAC_REMOTE_CLUSTER_KUBECONFIG"},
-              {"name": "OSAC_ENABLE_CLUSTER_CONTROLLER", "value": "true"},
-              {"name": "OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER", "value": "true"}
-            ],
-            "volumeMounts": [
-              {"$patch": "delete", "mountPath": %q}
-            ]
-          }
-        ]
-      }
-    }
-  }
-}`, remoteKubeconfigMountDir)
-
-	patchFile := filepath.Join(GinkgoT().TempDir(), "local-mode-restore-patch.json")
-	if err := os.WriteFile(patchFile, []byte(patch), 0o600); err != nil {
-		return
-	}
-	_, _ = runKubectl(
-		"patch", "deployment", deployName, "-n", operatorNamespace,
-		"--type=strategic", "--patch-file="+patchFile,
+// writeLocalModeRestorePatchFile snapshots the operator Deployment's original
+// pod template spec into patchFilePath so it can be restored via --patch-file
+// without passing template JSON through command-line arguments.
+func writeLocalModeRestorePatchFile(patchFilePath string) {
+	savedListJSON, err := runKubectl(
+		"get", "deployment", "-l", "app.kubernetes.io/name=operator",
+		"-n", operatorNamespace, "-o", "json",
 	)
+	Expect(err).NotTo(HaveOccurred())
+
+	var list struct {
+		Items []struct {
+			Spec struct {
+				Template json.RawMessage `json:"template"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	Expect(json.Unmarshal(savedListJSON, &list)).To(Succeed())
+	Expect(list.Items).NotTo(BeEmpty())
+
+	patchBody, err := json.Marshal(map[string]any{
+		"spec": map[string]any{
+			"template": list.Items[0].Spec.Template,
+		},
+	})
+	Expect(err).NotTo(HaveOccurred())
+	Expect(os.WriteFile(patchFilePath, patchBody, 0o600)).To(Succeed())
+}
+
+// restoreOperatorDeploymentToLocalMode restores the operator Deployment's
+// original pod template spec from restorePatchFilePath and verifies rollout.
+func restoreOperatorDeploymentToLocalMode(restorePatchFilePath string) {
+	deployName := operatorDeploymentName()
+	_, err := runKubectl(
+		"patch", "deployment", deployName, "-n", operatorNamespace,
+		"--type=merge", "--patch-file="+restorePatchFilePath,
+	)
+	Expect(err).NotTo(HaveOccurred())
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	_, _ = utils.Run(exec.CommandContext(
+	_, err = utils.Run(exec.CommandContext(
 		ctx, "kubectl", "rollout", "status", "deployment/"+deployName, "-n", operatorNamespace, "--timeout=90s",
 	))
+	Expect(err).NotTo(HaveOccurred())
 	waitForSingleReadyOperatorPod("")
 }
 

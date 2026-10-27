@@ -31,7 +31,6 @@ class StorageMappingTests(unittest.TestCase):
         cls.core = client.CoreV1Api()
         cls.storage = client.StorageV1Api()
         cls.custom = client.CustomObjectsApi()
-        cls.check_volume_ids = os.environ.get("OSAC_TEST_DISK_VOLUME_IDS") == "true"
 
     def setUp(self) -> None:
         self.namespace = "disk-mapping-" + uuid.uuid4().hex[:12]
@@ -79,6 +78,11 @@ class StorageMappingTests(unittest.TestCase):
                     {"sizeGiB": 100, "storageTier": "balanced"},
                     {"sizeGiB": 250, "storageTier": "archive"},
                 ],
+                "diskVolumeIDs": {
+                    "disk-2": "volume-data-2",
+                    "boot": "volume-boot",
+                    "disk-1": "volume-data-1",
+                },
                 "image": {
                     "sourceType": "registry",
                     "sourceRef": "quay.io/containerdisks/fedora:latest",
@@ -89,12 +93,6 @@ class StorageMappingTests(unittest.TestCase):
                 "tenantReference": {"name": self.namespace, "namespace": self.namespace}
             },
         }
-        if self.check_volume_ids:
-            self.resource["spec"]["diskVolumeIDs"] = {
-                "disk-2": "volume-data-2",
-                "boot": "volume-boot",
-                "disk-1": "volume-data-1",
-            }
         self.custom.create_namespaced_custom_object(
             "osac.openshift.io",
             "v1alpha1",
@@ -239,14 +237,11 @@ class StorageMappingTests(unittest.TestCase):
             )
             self.assertEqual(disk["metadata"]["namespace"], self.namespace)
             annotations = disk["metadata"].get("annotations", {})
-            if self.check_volume_ids:
-                self.assertEqual(
-                    annotations.get("osac.openshift.io/storage-volume-id"),
-                    volume_id,
-                    key,
-                )
-            else:
-                self.assertNotIn("osac.openshift.io/storage-volume-id", annotations)
+            self.assertEqual(
+                annotations.get("osac.openshift.io/storage-volume-id"),
+                volume_id,
+                key,
+            )
             if key == "boot":
                 self.assertEqual(
                     disk["spec"]["source"],

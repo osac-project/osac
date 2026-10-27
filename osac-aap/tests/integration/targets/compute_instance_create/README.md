@@ -1,9 +1,10 @@
 # ComputeInstance storage mapping integration
 
 `storage_tier_mapping` runs the real top-level ComputeInstance create playbook
-against Kind. It checks boot and additional-disk StorageClasses, sizes, sources
-and access modes on persisted DataVolumes, including retries. Missing, empty,
-incomplete and ambiguous mappings must fail before any DataVolume or VM exists.
+against Kind. It checks boot and additional-disk StorageClasses, sizes, sources,
+access modes and Volume-ID annotations on persisted DataVolumes, including
+retries. Missing, empty, incomplete and ambiguous mappings must fail before any
+DataVolume or VM exists.
 Shared StorageClasses must remain unchanged. A mixed case also exercises the
 real storage-provider dispatcher and LVMS StorageClass creation.
 Identical mappings returned again by JIT remain valid; different class names
@@ -69,17 +70,13 @@ Kubernetes module overrides before invoking the provisioning playbook.
 
 ## Volume-ID dependency
 
-The default run covers legacy input without `spec.diskVolumeIDs`. To verify
-the ID handoff, use a checkout containing the AAP consumer from
-[PR #1907](https://github.com/osac-project/osac/pull/1907), then run:
+Volume-ID checks always run, including in normal CI. The test depends on the
+AAP consumer from [PR #1907](https://github.com/osac-project/osac/pull/1907).
+Keep this PR in draft until that dependency merges, then rebase and require
+the integration checks to pass before merging.
 
-```bash
-OSAC_TEST_DISK_VOLUME_IDS=true uv run ansible-playbook \
-  tests/integration/targets/compute_instance_create/tasks/storage_tier_mapping.yml
-```
-
-This supplies distinct `boot`, `disk-1` and `disk-2` entries in shuffled order
-and requires the corresponding `osac.openshift.io/storage-volume-id` annotation
-on each stored DataVolume. It fails if the consumer is absent; it does not skip
-the assertion. This still tests the AAP consumer, not Fulfillment's creation of
-Volume records or the operator's producer contract.
+The fixture supplies distinct `boot`, `disk-1` and `disk-2` entries in shuffled
+order and requires the corresponding `osac.openshift.io/storage-volume-id`
+annotation on each stored DataVolume. Missing consumer support fails the test.
+This tests the AAP consumer; Fulfillment's creation of Volume records and the
+operator's producer contract require their own coverage.

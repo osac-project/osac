@@ -42,7 +42,7 @@ import (
 type mockInventoryClient struct {
 	findFreeHostFunc           func(ctx context.Context, matchExpressions map[string]string) (*inventory.Host, error)
 	assignHostFunc             func(ctx context.Context, inventoryHostID string, bareMetalInstanceID string, labels map[string]string) (*inventory.Host, error)
-	unassignHostFunc           func(ctx context.Context, inventoryHostID string, labels []string) error
+	unassignHostFunc           func(ctx context.Context, inventoryHostID, bareMetalInstanceID string, labels []string) error
 	getHostNICsFunc            func(ctx context.Context, inventoryHostID string) ([]inventory.HostNIC, error)
 	getHostNICsCalled          int
 	getHostLogicalPortMACsFunc func(ctx context.Context, inventoryHostID string) (map[string]string, error)
@@ -62,9 +62,9 @@ func (m *mockInventoryClient) AssignHost(ctx context.Context, inventoryHostID st
 	return nil, nil
 }
 
-func (m *mockInventoryClient) UnassignHost(ctx context.Context, inventoryHostID string, labels []string) error {
+func (m *mockInventoryClient) UnassignHost(ctx context.Context, inventoryHostID, bareMetalInstanceID string, labels []string) error {
 	if m.unassignHostFunc != nil {
-		return m.unassignHostFunc(ctx, inventoryHostID, labels)
+		return m.unassignHostFunc(ctx, inventoryHostID, bareMetalInstanceID, labels)
 	}
 	return nil
 }
@@ -1396,6 +1396,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:              "handleDeletion-bareMetalInstance",
 					Namespace:         namespace,
+					UID:               "bmi-123",
 					DeletionTimestamp: &metav1.Time{Time: time.Now()},
 				},
 				Spec: v1alpha1.BareMetalInstanceSpec{
@@ -1411,9 +1412,10 @@ var _ = Describe("BareMetalInstance Controller", func() {
 
 			It("should unassign the host and remove finalizer", func() {
 				unassignCalled := false
-				mockInvClient.unassignHostFunc = func(ctx context.Context, inventoryHostID string, labels []string) error {
+				mockInvClient.unassignHostFunc = func(ctx context.Context, inventoryHostID, bareMetalInstanceID string, labels []string) error {
 					unassignCalled = true
 					Expect(inventoryHostID).To(Equal("host-to-delete"))
+					Expect(bareMetalInstanceID).To(Equal("bmi-123"))
 					return nil
 				}
 
@@ -1430,6 +1432,19 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				Expect(unassignCalled).To(BeTrue())
 			})
 
+			It("keeps the inventory finalizer while unassign is pending", func() {
+				cleanupErr := errors.New("cleanup pending")
+				mockInvClient.unassignHostFunc = func(_ context.Context, _, _ string, _ []string) error {
+					return cleanupErr
+				}
+
+				result, err := reconciler.handleDeletion(ctx, bareMetalInstance)
+
+				Expect(err).To(MatchError(cleanupErr))
+				Expect(result).To(Equal(ctrl.Result{}))
+				Expect(controllerutil.ContainsFinalizer(bareMetalInstance, BareMetalInstanceInventoryFinalizer)).To(BeTrue())
+			})
+
 			Context("when ExternalHostID is empty", func() {
 				BeforeEach(func() {
 					bareMetalInstance.Spec.ExternalHostID = ""
@@ -1437,7 +1452,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 
 				It("should remove finalizer without unassigning", func() {
 					unassignCalled := false
-					mockInvClient.unassignHostFunc = func(ctx context.Context, inventoryHostID string, labels []string) error {
+					mockInvClient.unassignHostFunc = func(ctx context.Context, inventoryHostID, bareMetalInstanceID string, labels []string) error {
 						unassignCalled = true
 						return nil
 					}
@@ -1530,7 +1545,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 						}, nil
 					}
 					unassignCalled := false
-					mockInvClient.unassignHostFunc = func(_ context.Context, _ string, _ []string) error {
+					mockInvClient.unassignHostFunc = func(_ context.Context, _, _ string, _ []string) error {
 						unassignCalled = true
 						return nil
 					}

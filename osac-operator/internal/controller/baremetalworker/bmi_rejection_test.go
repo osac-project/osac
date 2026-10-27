@@ -65,7 +65,7 @@ var _ = Describe("ensureBMI marks definitive Create rejections", func() {
 		r, fc, co := nodeSetHarness("rejection-mark", nodeRequest("standard", 1))
 		fc.createErr = status.Error(code, message)
 		cluster := authoritativeTestCluster(context.Background(), r, co)
-		_, _, err := r.ensureBMI(context.Background(), co, cluster, co.Spec.NodeRequests[0], "slot", nil, "", "", "")
+		_, _, err := r.ensureBMI(context.Background(), co, cluster, co.Spec.NodeRequests[0], "slot", nil, "", "")
 		return fc, err
 	}
 	DescribeTable("wraps terminal codes with the rejection sentinel", func(code codes.Code) {
@@ -93,7 +93,7 @@ var _ = Describe("ensureBMI marks definitive Create rejections", func() {
 		r, fc, co := nodeSetHarness("rejection-already-exists", nodeRequest("standard", 1))
 		fc.createErr = status.Error(codes.AlreadyExists, "exists")
 		cluster := authoritativeTestCluster(context.Background(), r, co)
-		_, _, err := r.ensureBMI(context.Background(), co, cluster, co.Spec.NodeRequests[0], "slot", nil, "", "", "")
+		_, _, err := r.ensureBMI(context.Background(), co, cluster, co.Spec.NodeRequests[0], "slot", nil, "", "")
 		Expect(err).To(HaveOccurred())
 		Expect(errors.Is(err, errBMICreateRejected)).To(BeFalse(), "AlreadyExists recovery marked as rejection: %v", err)
 	})
@@ -101,7 +101,7 @@ var _ = Describe("ensureBMI marks definitive Create rejections", func() {
 		r, fc, co := nodeSetHarness("rejection-plain", nodeRequest("standard", 1))
 		fc.failCreate = true
 		cluster := authoritativeTestCluster(context.Background(), r, co)
-		_, _, err := r.ensureBMI(context.Background(), co, cluster, co.Spec.NodeRequests[0], "slot", nil, "", "", "")
+		_, _, err := r.ensureBMI(context.Background(), co, cluster, co.Spec.NodeRequests[0], "slot", nil, "", "")
 		Expect(err).To(HaveOccurred())
 		Expect(errors.Is(err, errBMICreateRejected)).To(BeFalse(), "interrupted create marked as rejection: %v", err)
 	})

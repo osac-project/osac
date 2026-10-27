@@ -18,10 +18,16 @@ package inventory
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/nodes"
+	th "github.com/gophercloud/gophercloud/v2/testhelper"
+	fakeclient "github.com/gophercloud/gophercloud/v2/testhelper/client"
+	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
+	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 )
 
 func TestValidateMatchExpressions(t *testing.T) {
@@ -281,3 +287,25 @@ func TestFindFreeHostValidation(t *testing.T) {
 		})
 	}
 }
+
+var _ = Describe("OpenStack UnassignHost ownership", func() {
+	It("leaves a node assigned to another instance untouched", func() {
+		fakeServer := th.SetupHTTP()
+		defer fakeServer.Teardown()
+		patchCalls := 0
+		fakeServer.Mux.HandleFunc("/nodes/test-node-uuid", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = fmt.Fprint(w, "{\"uuid\":\"test-node-uuid\",\"extra\":{\"osac_labels\":{\"bareMetalInstanceId\":\"bmi-456\"}}}")
+				return
+			}
+			patchCalls++
+			w.WriteHeader(http.StatusOK)
+		})
+		client := &OpenStackClient{client: fakeclient.ServiceClient(fakeServer)}
+
+		Expect(client.UnassignHost(context.Background(), "test-node-uuid", "bmi-123", nil)).To(Succeed())
+		Expect(patchCalls).To(BeZero())
+	})
+})

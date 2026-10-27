@@ -206,18 +206,29 @@ has_client_permissions if {
   is_tenant_idp_manager
 }
 
-# Allow metadata, reflection, and health except to reader-only users:
+# Check if the request has a validated JWT identity (e.g. osac-ui-backend via client credentials):
+default is_authenticated = false
+is_authenticated if {
+  input.auth.identity.authnMethod == "jwt"
+}
+
+# Allow metadata and health to unauthenticated callers:
 allow if {
   not is_reader_only
   startswith(grpc_method, "/metadata.")
 }
 allow if {
   not is_reader_only
-  startswith(grpc_method, "/grpc.reflection.")
-}
-allow if {
-  not is_reader_only
   startswith(grpc_method, "/grpc.health.")
+}
+
+# gRPC reflection exposes the service catalog; allow authenticated non-reader
+# accounts. Reader-only roles are explicitly excluded so they cannot enumerate
+# services beyond their allowed method set.
+allow if {
+  is_authenticated
+  not is_reader_only
+  startswith(grpc_method, "/grpc.reflection.")
 }
 
 # Allow specific methods to clients (and tenant admins/IdP managers who inherit client permissions):

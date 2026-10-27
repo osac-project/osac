@@ -269,16 +269,12 @@ func (r *Reconciler) createSelectedWorker(
 	nr *v1alpha1.NodeRequest, prev *v1alpha1.WorkerStatus,
 	inputs workerCreationInputs, observed *workerObservation,
 ) (ctrl.Result, error) {
-	instanceType, res, err := r.resolveNodeSetInstanceType(ctx, co, nr.BareMetal.InstanceType)
+	_, res, err := r.resolveNodeSetInstanceType(ctx, co, nr.BareMetal.InstanceType)
 	if err != nil || !res.IsZero() {
 		return res, err
 	}
-	var fabricInterface string
-	if co.Spec.NetworkAttachment != nil && co.Spec.NetworkAttachment.SubnetRef != "" {
-		fabricInterface, err = resolveFabricInterface(instanceType)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
+	if na := co.Spec.NetworkAttachment; na != nil && na.SubnetRef != "" && nr.FabricInterface == "" {
+		return ctrl.Result{}, fmt.Errorf("node request %q has no stored fabric interface for network attachment", nr.NodeSet)
 	}
 	filter := fmt.Sprintf(`this.metadata.labels["%s"] == "%s"`, clusterOrderLabel, co.Name)
 	if err := r.checkCurrentCapacityPlan(ctx, co); err != nil {
@@ -304,11 +300,11 @@ func (r *Reconciler) createSelectedWorker(
 		return ctrl.Result{}, err
 	}
 	if prev.Phase == workerPhaseFailed {
-		res, err = r.retryFailedWorker(ctx, co, cluster, nr, prev, inputs.image, string(inputs.ignition), filter, fabricInterface)
+		res, err = r.retryFailedWorker(ctx, co, cluster, nr, prev, inputs.image, string(inputs.ignition), filter)
 	} else {
 		var ws v1alpha1.WorkerStatus
 		ws, res, err = r.ensureWorkerBMI(ctx, co, cluster, nr, prev.BareMetalInstance.Name, observed,
-			inputs.image, string(inputs.ignition), filter, fabricInterface)
+			inputs.image, string(inputs.ignition), filter)
 		if err == nil && res.IsZero() {
 			workerCreated(prev, ws.BareMetalInstance.Name, ws.BareMetalInstance.ID)
 		}
@@ -510,7 +506,7 @@ func (r *Reconciler) ensureWorkerBMI(
 	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 	nr *v1alpha1.NodeRequest, workerName string,
 	observed *workerObservation,
-	image *privatev1.DiskImageReference, ignitionRaw, filter, fabricInterface string,
+	image *privatev1.DiskImageReference, ignitionRaw, filter string,
 ) (v1alpha1.WorkerStatus, ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	tenant := cluster.GetMetadata().GetTenant()
@@ -525,7 +521,7 @@ func (r *Reconciler) ensureWorkerBMI(
 		log.Info("worker BMI already exists, skipping create", "name", workerName)
 		return newWorkerStatus(nr.NodeSet, nr.BareMetal.InstanceType, workerName, bmi.GetId(), workerPhaseWaitingForAgent), ctrl.Result{}, nil
 	}
-	bmi, res, err := r.ensureBMI(ctx, co, cluster, *nr, workerName, image, ignitionRaw, filter, fabricInterface)
+	bmi, res, err := r.ensureBMI(ctx, co, cluster, *nr, workerName, image, ignitionRaw, filter)
 	if err != nil || !res.IsZero() {
 		return v1alpha1.WorkerStatus{}, res, err
 	}

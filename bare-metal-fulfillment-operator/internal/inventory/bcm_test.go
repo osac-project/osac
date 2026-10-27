@@ -208,7 +208,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			bmhMgr.EXPECT().DeleteBMCSecret(gomock.Any(), "node001-bmc-secret").Return(nil)
 
 			client := NewBCMClient(mockAPI, bmhMgr, "bcm")
-			Expect(client.UnassignHost(ctx, bmhNamespace+"/node001", nil)).To(Succeed())
+			Expect(client.UnassignHost(ctx, bmhNamespace+"/node001", "bmi-123", nil)).To(Succeed())
 		})
 
 		It("should remove specified labels while preserving admin-configured keys", func(ctx context.Context) {
@@ -230,7 +230,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			bmhMgr.EXPECT().DeleteBMCSecret(gomock.Any(), "node001-bmc-secret").Return(nil)
 
 			client := NewBCMClient(mockAPI, bmhMgr, "bcm")
-			Expect(client.UnassignHost(ctx, bmhNamespace+"/node001", []string{"pool_id", "custom_label"})).To(Succeed())
+			Expect(client.UnassignHost(ctx, bmhNamespace+"/node001", "bmi-123", []string{"pool_id", "custom_label"})).To(Succeed())
 		})
 
 		It("should skip BCM write and delete BMH when osac_instance_id is already absent", func(ctx context.Context) {
@@ -240,7 +240,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			bmhMgr.EXPECT().DeleteBMCSecret(gomock.Any(), "node001-bmc-secret").Return(nil)
 
 			client := NewBCMClient(mockAPI, bmhMgr, "bcm")
-			Expect(client.UnassignHost(ctx, bmhNamespace+"/node001", nil)).To(Succeed())
+			Expect(client.UnassignHost(ctx, bmhNamespace+"/node001", "bmi-123", nil)).To(Succeed())
 		})
 
 		It("should skip BCM write and delete BMH when device not found", func(ctx context.Context) {
@@ -249,19 +249,27 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			bmhMgr.EXPECT().DeleteBMCSecret(gomock.Any(), "node001-bmc-secret").Return(nil)
 
 			client := NewBCMClient(mockAPI, bmhMgr, "bcm")
-			Expect(client.UnassignHost(ctx, bmhNamespace+"/node001", nil)).To(Succeed())
+			Expect(client.UnassignHost(ctx, bmhNamespace+"/node001", "bmi-123", nil)).To(Succeed())
+		})
+
+		It("should not delete runtime resources owned by another instance", func(ctx context.Context) {
+			device := makeDevice("{\"hostname\":\"node001\",\"extra_values\":{\"osac_instance_id\":\"bmi-456\"}}")
+			mockAPI.EXPECT().GetDevice(gomock.Any(), "node001").Return(device, nil)
+
+			client := NewBCMClient(mockAPI, bmhMgr, "bcm")
+			Expect(client.UnassignHost(ctx, bmhNamespace+"/node001", "bmi-123", nil)).To(Succeed())
 		})
 
 		It("should return error for invalid host ID format", func(ctx context.Context) {
 			client := NewBCMClient(mockAPI, bmhMgr, "bcm")
-			err := client.UnassignHost(ctx, "invalid-no-slash", nil)
+			err := client.UnassignHost(ctx, "invalid-no-slash", "bmi-123", nil)
 			Expect(err).To(MatchError(ContainSubstring("UnassignHost")))
 			Expect(err).To(MatchError(ContainSubstring("invalid host ID")))
 		})
 
 		It("should return error for empty host ID", func(ctx context.Context) {
 			client := NewBCMClient(mockAPI, bmhMgr, "bcm")
-			err := client.UnassignHost(ctx, "", nil)
+			err := client.UnassignHost(ctx, "", "bmi-123", nil)
 			Expect(err).To(MatchError(ContainSubstring("UnassignHost")))
 		})
 
@@ -269,7 +277,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			mockAPI.EXPECT().GetDevice(gomock.Any(), "node001").Return(nil, fmt.Errorf("connection refused"))
 
 			client := NewBCMClient(mockAPI, bmhMgr, "bcm")
-			err := client.UnassignHost(ctx, bmhNamespace+"/node001", nil)
+			err := client.UnassignHost(ctx, bmhNamespace+"/node001", "bmi-123", nil)
 			Expect(err).To(MatchError(ContainSubstring("UnassignHost")))
 		})
 
@@ -280,7 +288,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			mockAPI.EXPECT().UpdateDevice(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("update failed"))
 
 			client := NewBCMClient(mockAPI, bmhMgr, "bcm")
-			err := client.UnassignHost(ctx, bmhNamespace+"/node001", nil)
+			err := client.UnassignHost(ctx, bmhNamespace+"/node001", "bmi-123", nil)
 			Expect(err).To(MatchError(ContainSubstring("UnassignHost")))
 		})
 
@@ -289,7 +297,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			bmhMgr.EXPECT().DeleteBMH(gomock.Any(), "node001").Return(fmt.Errorf("k8s delete failed"))
 
 			client := NewBCMClient(mockAPI, bmhMgr, "bcm")
-			err := client.UnassignHost(ctx, bmhNamespace+"/node001", nil)
+			err := client.UnassignHost(ctx, bmhNamespace+"/node001", "bmi-123", nil)
 			Expect(err).To(MatchError(ContainSubstring("UnassignHost")))
 			Expect(err).To(MatchError(ContainSubstring("k8s delete failed")))
 		})
@@ -301,7 +309,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			mockAPI.EXPECT().UpdateDevice(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("bcm write error"))
 
 			client := NewBCMClient(mockAPI, bmhMgr, "bcm")
-			err := client.UnassignHost(ctx, bmhNamespace+"/node001", nil)
+			err := client.UnassignHost(ctx, bmhNamespace+"/node001", "bmi-123", nil)
 			Expect(err).To(HaveOccurred())
 		})
 	})

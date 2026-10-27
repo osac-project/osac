@@ -1,0 +1,3342 @@
+---
+# OSAC-6689: Integration tests for stuck VMI recovery during
+# ComputeInstance deletion.
+#
+# Validates nine paths in delete_resources.yaml:
+#   1. Normal: VMI absent, VM present — both cleaned up
+#      without entering the recovery path.
+#   2. Crashed launcher recovery: VMI stuck with deletion
+#      timestamp, launcher pod Failed — finalizer removed
+#      and VMI deleted.
+#   3. Launcher absent recovery: VMI stuck with deletion
+#      timestamp, launcher pod already gone — finalizer
+#      removed and VMI deleted.
+#   4. Recovery refusal: VMI stuck but launcher is still
+#      Running — playbook fails to protect data, retaining
+#      the finalizer for operator retry.
+#   5. Mixed launcher pods: one Failed + one Running —
+#      recovery refused because not all launchers are
+#      terminal.
+#   6. Cross-VMI identity boundary: a Running pod with
+#      a mismatched created-by label is excluded by
+#      vmi_owned_pods — recovery sees zero owned pods
+#      and proceeds; alien pod is untouched.
+#   7. No-timestamp refusal: VMI stuck but has no
+#      deletionTimestamp — recovery refuses regardless
+#      of launcher state. Three sub-cases: no launcher
+#      (S7a), Failed launcher (S7b), Running launcher
+#      (S7c).
+#   8. Owned non-launcher refusal: a Running pod directly
+#      controlled by the target VMI (no launcher labels)
+#      blocks recovery — proves ownership-based discovery
+#      covers non-launcher pods.
+#   9. Foreign-controller precedence: a Running pod with
+#      a controlling ownerReference to a DIFFERENT real VMI
+#      but carrying the target's created-by label does NOT
+#      block target VMI recovery.
+#
+# The post-timeout VMI-already-gone recovery branch is
+# structurally checked but is not exercised by this
+# controller-disabled integration harness.
+#
+# The Kind cluster has KubeVirt CRDs (operator scaled to 0),
+# so VMI/Pod resources can be created directly.  No real
+# virt-launcher or KubeVirt controller runs; the test
+# constructs the exact resource states that the recovery
+# logic classifies.
+#
+# Each stuck-VMI scenario overrides the graceful-wait retry
+# count (ocp_virt_vm_graceful_wait_retries) to 2 so the
+# timeout fires in ~10 s instead of the production 5 min.
+# Scenarios pre-create resources in the state that triggers
+# recovery and invoke delete_resources.yaml directly, with
+# ignore_errors where expected failure is the correct outcome.
+
+# ============================================================
+# Scenario 1 — Normal: VMI already absent, no recovery needed
+# ============================================================
+- name: "Scenario 1: Normal VMI deletion (no recovery)"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+  vars:
+    compute_instance_name: vmi-recovery-normal
+    compute_instance_target_namespace: test-subnet
+    guest_os_family: linux
+    compute_instance:
+      spec: {}
+  tasks:
+    - name: "S1: Run test with cleanup"
+      block:
+        - name: "S1: Clean up previous resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+          failed_when: false
+
+        - name: "S1: Create minimal VM fixture"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                runStrategy: Always
+                template:
+                  spec:
+                    domain:
+                      devices: {}
+                      resources:
+                        requests:
+                          memory: 128Mi
+
+        - name: "S1: Verify VM present, VMI absent"
+          kubernetes.core.k8s_info:
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s1_pre
+          failed_when: >-
+            (item.expect == 'present' and
+            _s1_pre.resources | length == 0) or
+            (item.expect == 'absent' and
+            _s1_pre.resources | length > 0)
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              expect: present
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              expect: absent
+
+        - name: "S1: Run delete_resources"
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: delete_resources.yaml
+
+        - name: "S1: Verify VM and VMI absent"
+          kubernetes.core.k8s_info:
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s1_post
+          failed_when: >-
+            _s1_post.resources | length > 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+
+        - name: "S1: Assert normal cleanup succeeded"
+          ansible.builtin.debug:
+            msg: >-
+              Scenario 1 passed: VMI absent, VM
+              deleted by normal cleanup path.
+
+      always:
+        - name: "S1: Cleanup"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            delete_options:
+              gracePeriodSeconds: 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+          failed_when: false
+
+# ============================================================
+# Scenario 2 — Crashed launcher: VMI stuck, pod Failed
+# ============================================================
+- name: "Scenario 2: Crashed launcher recovery"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+  vars:
+    compute_instance_name: vmi-recovery-crashed
+    compute_instance_target_namespace: test-subnet
+    guest_os_family: linux
+    compute_instance:
+      spec: {}
+    # Override production default (60) to avoid 5-min wait.
+    ocp_virt_vm_graceful_wait_retries: 2
+  tasks:
+    - name: "S2: Run test with cleanup"
+      block:
+        - name: "S2: Clean up previous test resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+
+        - name: "S2: Create stuck VMI"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                finalizers:
+                  - kubevirt.io/foregroundDeleteVirtualMachine
+              spec:
+                domain:
+                  devices: {}
+                  resources:
+                    requests:
+                      memory: 128Mi
+
+        - name: "S2: Request VMI deletion"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s2_delete_result
+          failed_when: false
+
+        - name: "S2: Verify VMI is stuck"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s2_vmi_check
+          failed_when: >
+            s2_vmi_check.resources | length == 0 or
+            (s2_vmi_check.resources[0].metadata.deletionTimestamp
+            | default('')) == ''
+
+        - name: "S2: Capture VMI UID for launcher labels"
+          ansible.builtin.set_fact:
+            _s2_vmi_uid: >-
+              {{ s2_vmi_check.resources[0]
+                 .metadata.uid }}
+
+        - name: "S2: Create failed launcher pod"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: >-
+                  virt-launcher-{{
+                  compute_instance_name }}
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                ownerReferences:
+                  - apiVersion: kubevirt.io/v1
+                    kind: VirtualMachineInstance
+                    name: "{{ compute_instance_name }}"
+                    uid: "{{ _s2_vmi_uid }}"
+                    controller: true
+                    blockOwnerDeletion: true
+                labels:
+                  kubevirt.io: virt-launcher
+                  kubevirt.io/created-by: >-
+                    {{ _s2_vmi_uid }}
+                annotations:
+                  kubevirt.io/domain: >-
+                    {{ compute_instance_name }}
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: compute
+                    image: >-
+                      registry.k8s.io/pause:3.9
+                    command: ["false"]
+
+        - name: "S2: Wait for launcher Failed"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              virt-launcher-{{
+              compute_instance_name }}
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s2_launcher_wait
+          until: >
+            s2_launcher_wait.resources | length > 0 and
+            (s2_launcher_wait.resources[0].status.phase
+            | default('')) == 'Failed'
+          retries: 30
+          delay: 2
+
+        - name: "S2: Create minimal VM fixture"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                runStrategy: Always
+                template:
+                  spec:
+                    domain:
+                      devices: {}
+                      resources:
+                        requests:
+                          memory: 128Mi
+
+        - name: "S2: Create dependent resource fixtures"
+          kubernetes.core.k8s:
+            state: present
+            definition: "{{ item }}"
+          loop:
+            - apiVersion: v1
+              kind: Service
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-load-balancer
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                ports:
+                  - port: 22
+                    targetPort: 22
+            - apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-root-disk
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                source:
+                  blank: {}
+                pvc:
+                  accessModes:
+                    - ReadWriteOnce
+                  resources:
+                    requests:
+                      storage: 1Mi
+            - apiVersion: v1
+              kind: Secret
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-cloud-init
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              type: Opaque
+              data:
+                userdata: ""
+
+        - name: "S2: Verify fixtures exist"
+          kubernetes.core.k8s_info:
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s2_fixture_check
+          failed_when: >-
+            _s2_fixture_check.resources
+            | length == 0
+          loop:
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+
+        - name: "S2: Run delete_resources"
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: delete_resources.yaml
+
+        - name: "S2: Verify VMI cleaned up"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s2_vmi_after
+          failed_when: >-
+            s2_vmi_after.resources | length > 0
+
+        - name: "S2: Verify VM and dependents deleted"
+          kubernetes.core.k8s_info:
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s2_dep_check
+          failed_when: >-
+            _s2_dep_check.resources | length > 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+
+        - name: "S2: Assert recovery succeeded"
+          ansible.builtin.debug:
+            msg: >-
+              Scenario 2 passed: crashed launcher VMI
+              force-deleted, VM and dependents cleaned
+              up successfully.
+
+      always:
+        - name: "S2: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s2_cleanup_vmi
+          failed_when: false
+
+        - name: >-
+            S2: Remove foreground-delete finalizer
+            for cleanup
+          vars:
+            _s2_fins: >-
+              {{ _s2_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s2_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s2_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s2_fins
+                     | difference([_s2_target]) }}
+          when: >-
+            _s2_cleanup_vmi.resources | length > 0
+            and
+            'kubevirt.io/foregroundDeleteVirtualMachine'
+            in (_s2_cleanup_vmi.resources[0]
+                .metadata.finalizers | default([]))
+          failed_when: false
+
+        - name: "S2: Cleanup"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            delete_options:
+              gracePeriodSeconds: 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+          failed_when: false
+
+# ============================================================
+# Scenario 3 — Launcher absent: VMI stuck, pod not found
+# ============================================================
+- name: "Scenario 3: Launcher absent recovery"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+  vars:
+    compute_instance_name: vmi-recovery-no-launcher
+    compute_instance_target_namespace: test-subnet
+    guest_os_family: linux
+    compute_instance:
+      spec: {}
+    # Override production default (60) to avoid 5-min wait.
+    ocp_virt_vm_graceful_wait_retries: 2
+  tasks:
+    - name: "S3: Run test with cleanup"
+      block:
+        - name: "S3: Create stuck VMI (no launcher)"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                finalizers:
+                  - kubevirt.io/foregroundDeleteVirtualMachine
+              spec:
+                domain:
+                  devices: {}
+                  resources:
+                    requests:
+                      memory: 128Mi
+
+        - name: "S3: Request VMI deletion"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s3_delete_result
+          failed_when: false
+
+        - name: "S3: Verify VMI has timestamp"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s3_vmi_check
+          failed_when: >
+            s3_vmi_check.resources | length == 0 or
+            (s3_vmi_check.resources[0].metadata.deletionTimestamp
+            | default('')) == ''
+
+        - name: "S3: Create minimal VM fixture"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                runStrategy: Always
+                template:
+                  spec:
+                    domain:
+                      devices: {}
+                      resources:
+                        requests:
+                          memory: 128Mi
+
+        - name: "S3: Create dependent resource fixtures"
+          kubernetes.core.k8s:
+            state: present
+            definition: "{{ item }}"
+          loop:
+            - apiVersion: v1
+              kind: Service
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-load-balancer
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                ports:
+                  - port: 22
+                    targetPort: 22
+            - apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-root-disk
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                source:
+                  blank: {}
+                pvc:
+                  accessModes:
+                    - ReadWriteOnce
+                  resources:
+                    requests:
+                      storage: 1Mi
+            - apiVersion: v1
+              kind: Secret
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-cloud-init
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              type: Opaque
+              data:
+                userdata: ""
+
+        - name: "S3: Verify fixtures exist"
+          kubernetes.core.k8s_info:
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s3_fixture_check
+          failed_when: >-
+            _s3_fixture_check.resources
+            | length == 0
+          loop:
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+
+        - name: "S3: Run delete_resources"
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: delete_resources.yaml
+
+        - name: "S3: Verify VMI cleaned up"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s3_vmi_after
+          failed_when: >-
+            s3_vmi_after.resources | length > 0
+
+        - name: "S3: Verify VM and dependents deleted"
+          kubernetes.core.k8s_info:
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s3_dep_check
+          failed_when: >-
+            _s3_dep_check.resources | length > 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+
+        - name: "S3: Assert recovery succeeded"
+          ansible.builtin.debug:
+            msg: >-
+              Scenario 3 passed: launcher-absent VMI
+              force-deleted, VM and dependents cleaned
+              up successfully.
+
+      always:
+        - name: "S3: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s3_cleanup_vmi
+          failed_when: false
+
+        - name: >-
+            S3: Remove foreground-delete finalizer
+            for cleanup
+          vars:
+            _s3_fins: >-
+              {{ _s3_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s3_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s3_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s3_fins
+                     | difference([_s3_target]) }}
+          when: >-
+            _s3_cleanup_vmi.resources | length > 0
+            and
+            'kubevirt.io/foregroundDeleteVirtualMachine'
+            in (_s3_cleanup_vmi.resources[0]
+                .metadata.finalizers | default([]))
+          failed_when: false
+
+        - name: "S3: Cleanup"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            delete_options:
+              gracePeriodSeconds: 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+          failed_when: false
+
+# ============================================================
+# Scenario 4 — Recovery refusal: launcher still Running
+# ============================================================
+- name: "Scenario 4: Recovery refused (launcher running)"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+  vars:
+    compute_instance_name: vmi-recovery-running
+    compute_instance_target_namespace: test-subnet
+    guest_os_family: linux
+    compute_instance:
+      spec: {}
+    # Override production default (60) to avoid 5-min wait.
+    ocp_virt_vm_graceful_wait_retries: 2
+  tasks:
+    - name: "S4: Run test with cleanup"
+      block:
+        - name: "S4: Clean up previous resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}
+          failed_when: false
+
+        - name: "S4: Create stuck VMI"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                finalizers:
+                  - kubevirt.io/foregroundDeleteVirtualMachine
+              spec:
+                domain:
+                  devices: {}
+                  resources:
+                    requests:
+                      memory: 128Mi
+
+        - name: "S4: Request VMI deletion"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s4_delete_result
+          failed_when: false
+
+        - name: "S4: Capture VMI UID for launcher labels"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s4_vmi_check
+
+        - name: "S4: Set VMI UID fact"
+          ansible.builtin.set_fact:
+            _s4_vmi_uid: >-
+              {{ s4_vmi_check.resources[0]
+                 .metadata.uid }}
+
+        - name: "S4: Create Running launcher pod"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: >-
+                  virt-launcher-{{
+                  compute_instance_name }}
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                ownerReferences:
+                  - apiVersion: kubevirt.io/v1
+                    kind: VirtualMachineInstance
+                    name: >-
+                      {{ compute_instance_name }}
+                    uid: "{{ _s4_vmi_uid }}"
+                    controller: true
+                    blockOwnerDeletion: true
+                labels:
+                  kubevirt.io: virt-launcher
+                  kubevirt.io/created-by: >-
+                    {{ _s4_vmi_uid }}
+                annotations:
+                  kubevirt.io/domain: >-
+                    {{ compute_instance_name }}
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: compute
+                    image: >-
+                      registry.k8s.io/pause:3.9
+
+        - name: "S4: Wait for launcher Running"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              virt-launcher-{{
+              compute_instance_name }}
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s4_launcher_wait
+          until: >
+            s4_launcher_wait.resources | length > 0 and
+            (s4_launcher_wait.resources[0].status.phase
+            | default('')) == 'Running'
+          retries: 30
+          delay: 2
+
+        - name: "S4: Create minimal VM fixture"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                runStrategy: Always
+                template:
+                  spec:
+                    domain:
+                      devices: {}
+                      resources:
+                        requests:
+                          memory: 128Mi
+
+        - name: "S4: Expect delete_resources to fail"
+          block:
+            - name: "S4: Run delete_resources"
+              ansible.builtin.include_role:
+                name: osac.templates.ocp_virt_vm
+                tasks_from: delete_resources.yaml
+
+            - name: "S4: Record unexpected success"
+              ansible.builtin.set_fact:
+                _s4_unexpected_success: true
+
+          rescue:
+            - name: >-
+                S4: Assert failure is from launcher
+                guard
+              ansible.builtin.assert:
+                that:
+                  - >-
+                    'VMI-owned pods are still in phase'
+                    in (ansible_failed_result.msg
+                        | default(''))
+                fail_msg: >-
+                  delete_resources failed for an
+                  unexpected reason:
+                  {{ ansible_failed_result.msg
+                     | default('unknown') }}
+
+        - name: >-
+            S4: Assert delete_resources did not succeed
+          ansible.builtin.assert:
+            that:
+              - >-
+                _s4_unexpected_success is not defined
+            fail_msg: >-
+              delete_resources should have failed when
+              the launcher is still Running.
+
+        - name: "S4: Verify VMI still exists"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s4_vmi_after
+          failed_when: >-
+            s4_vmi_after.resources | length == 0
+
+        - name: "S4: Assert data preserved"
+          ansible.builtin.debug:
+            msg: >-
+              Scenario 4 passed: recovery correctly
+              refused when launcher is still running,
+              VMI preserved.
+
+      always:
+        # Remove the foreground-delete finalizer so the
+        # subsequent grace-period-0 delete completes
+        # instead of leaving a terminating VMI that
+        # blocks reruns.
+        - name: "S4: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s4_cleanup_vmi
+          failed_when: false
+
+        - name: >-
+            S4: Remove foreground-delete finalizer
+            for cleanup
+          vars:
+            _s4_fins: >-
+              {{ _s4_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s4_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s4_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s4_fins
+                     | difference([_s4_target]) }}
+          when: >-
+            _s4_cleanup_vmi.resources | length > 0
+            and
+            'kubevirt.io/foregroundDeleteVirtualMachine'
+            in (_s4_cleanup_vmi.resources[0]
+                .metadata.finalizers | default([]))
+          failed_when: false
+
+        - name: "S4: Cleanup"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            delete_options:
+              gracePeriodSeconds: 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}
+          failed_when: false
+
+# ============================================================
+# Scenario 5 — Mixed pods: one Failed, one Running
+# ============================================================
+- name: >-
+    Scenario 5: Recovery refused (mixed launcher pods)
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+  vars:
+    compute_instance_name: vmi-recovery-mixed
+    compute_instance_target_namespace: test-subnet
+    guest_os_family: linux
+    compute_instance:
+      spec: {}
+    # Override production default (60) to avoid 5-min wait.
+    ocp_virt_vm_graceful_wait_retries: 2
+  tasks:
+    - name: "S5: Run test with cleanup"
+      block:
+        - name: "S5: Clean up previous resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}-failed
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}-running
+          failed_when: false
+
+        - name: "S5: Create stuck VMI"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                finalizers:
+                  - >-
+                    kubevirt.io/foregroundDeleteVirtualMachine
+              spec:
+                domain:
+                  devices: {}
+                  resources:
+                    requests:
+                      memory: 128Mi
+
+        - name: "S5: Request VMI deletion"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s5_delete_result
+          failed_when: false
+
+        - name: "S5: Capture VMI UID for launcher labels"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s5_vmi_check
+
+        - name: "S5: Set VMI UID fact"
+          ansible.builtin.set_fact:
+            _s5_vmi_uid: >-
+              {{ s5_vmi_check.resources[0]
+                 .metadata.uid }}
+
+        - name: "S5: Create Failed launcher pod"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: >-
+                  virt-launcher-{{
+                  compute_instance_name }}-failed
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                ownerReferences:
+                  - apiVersion: kubevirt.io/v1
+                    kind: VirtualMachineInstance
+                    name: >-
+                      {{ compute_instance_name }}
+                    uid: "{{ _s5_vmi_uid }}"
+                    controller: true
+                    blockOwnerDeletion: true
+                labels:
+                  kubevirt.io: virt-launcher
+                  kubevirt.io/created-by: >-
+                    {{ _s5_vmi_uid }}
+                annotations:
+                  kubevirt.io/domain: >-
+                    {{ compute_instance_name }}
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: compute
+                    image: >-
+                      registry.k8s.io/pause:3.9
+                    command: ["false"]
+
+        - name: "S5: Wait for Failed pod"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              virt-launcher-{{
+              compute_instance_name }}-failed
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s5_failed_wait
+          until: >
+            s5_failed_wait.resources | length > 0
+            and
+            (s5_failed_wait.resources[0].status.phase
+            | default('')) == 'Failed'
+          retries: 30
+          delay: 2
+
+        - name: "S5: Create Running launcher pod"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: >-
+                  virt-launcher-{{
+                  compute_instance_name }}-running
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                ownerReferences:
+                  - apiVersion: kubevirt.io/v1
+                    kind: VirtualMachineInstance
+                    name: >-
+                      {{ compute_instance_name }}
+                    uid: "{{ _s5_vmi_uid }}"
+                    controller: true
+                    blockOwnerDeletion: true
+                labels:
+                  kubevirt.io: virt-launcher
+                  kubevirt.io/created-by: >-
+                    {{ _s5_vmi_uid }}
+                annotations:
+                  kubevirt.io/domain: >-
+                    {{ compute_instance_name }}
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: compute
+                    image: >-
+                      registry.k8s.io/pause:3.9
+
+        - name: "S5: Wait for Running pod"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              virt-launcher-{{
+              compute_instance_name }}-running
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s5_running_wait
+          until: >
+            s5_running_wait.resources | length > 0
+            and
+            (s5_running_wait.resources[0].status.phase
+            | default('')) == 'Running'
+          retries: 30
+          delay: 2
+
+        - name: "S5: Create minimal VM fixture"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                runStrategy: Always
+                template:
+                  spec:
+                    domain:
+                      devices: {}
+                      resources:
+                        requests:
+                          memory: 128Mi
+
+        - name: "S5: Expect delete_resources to fail"
+          block:
+            - name: "S5: Run delete_resources"
+              ansible.builtin.include_role:
+                name: osac.templates.ocp_virt_vm
+                tasks_from: delete_resources.yaml
+
+            - name: "S5: Record unexpected success"
+              ansible.builtin.set_fact:
+                _s5_unexpected_success: true
+
+          rescue:
+            - name: >-
+                S5: Assert failure is from launcher
+                guard
+              ansible.builtin.assert:
+                that:
+                  - >-
+                    'VMI-owned pods are still in phase'
+                    in (ansible_failed_result.msg
+                        | default(''))
+                fail_msg: >-
+                  delete_resources failed for an
+                  unexpected reason:
+                  {{ ansible_failed_result.msg
+                     | default('unknown') }}
+
+        - name: >-
+            S5: Assert delete_resources did not succeed
+          ansible.builtin.assert:
+            that:
+              - >-
+                _s5_unexpected_success is not defined
+            fail_msg: >-
+              delete_resources should have failed with
+              mixed terminal and running launcher pods.
+
+        - name: "S5: Verify VMI still exists"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s5_vmi_after
+          failed_when: >-
+            s5_vmi_after.resources | length == 0
+
+        - name: "S5: Assert data preserved"
+          ansible.builtin.debug:
+            msg: >-
+              Scenario 5 passed: recovery correctly
+              refused with mixed launcher pod states
+              (Failed + Running), VMI preserved.
+
+      always:
+        # Remove the foreground-delete finalizer so the
+        # subsequent grace-period-0 delete completes
+        # instead of leaving a terminating VMI that
+        # blocks reruns.
+        - name: "S5: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s5_cleanup_vmi
+          failed_when: false
+
+        - name: >-
+            S5: Remove foreground-delete finalizer
+            for cleanup
+          vars:
+            _s5_fins: >-
+              {{ _s5_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s5_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s5_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s5_fins
+                     | difference([_s5_target]) }}
+          when: >-
+            _s5_cleanup_vmi.resources | length > 0
+            and
+            'kubevirt.io/foregroundDeleteVirtualMachine'
+            in (_s5_cleanup_vmi.resources[0]
+                .metadata.finalizers | default([]))
+          failed_when: false
+
+        - name: "S5: Cleanup"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            delete_options:
+              gracePeriodSeconds: 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}-failed
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}-running
+          failed_when: false
+
+# Scenario 6 — Cross-VMI identity boundary: a Running
+# pod with no ownerReferences and a mismatched
+# created-by label is excluded by vmi_owned_pods.
+# Recovery sees zero owned pods and proceeds with
+# cleanup.  If the ownership filter were removed, the
+# namespace pod list would include this Running pod
+# and _owned_pods_terminal would be false.
+
+- name: >-
+    Scenario 6: Cross-VMI identity boundary
+    (wrong UID ignored)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    compute_instance_name: test-vmi-s6
+    compute_instance_target_namespace: test-subnet
+    guest_os_family: linux
+    compute_instance:
+      spec: {}
+    ocp_virt_vm_graceful_wait_retries: 2
+  tasks:
+    - name: "S6: Run test with cleanup"
+      block:
+        - name: "S6: Clean up previous resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}-alien
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+          failed_when: false
+
+        - name: "S6: Create stuck VMI"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                finalizers:
+                  - >-
+                    kubevirt.io/foregroundDeleteVirtualMachine
+              spec:
+                domain:
+                  devices: {}
+                  resources:
+                    requests:
+                      memory: 128Mi
+
+        - name: "S6: Request VMI deletion"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s6_delete_result
+          failed_when: false
+
+        - name: "S6: Verify VMI is stuck"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s6_vmi_check
+          failed_when: >
+            s6_vmi_check.resources | length == 0 or
+            (s6_vmi_check.resources[0]
+            .metadata.deletionTimestamp
+            | default('')) == ''
+
+        - name: >-
+            S6: Create Running pod with wrong label
+          # No ownerReferences — avoids Kubernetes GC
+          # dependency on the target VMI.  The pod has
+          # a mismatched created-by label, so the
+          # vmi_owned_pods legacy fallback excludes it.
+          # If the ownership filter were removed, the
+          # namespace-wide pod list would include this
+          # Running pod and _owned_pods_terminal would
+          # be false, blocking recovery.
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: >-
+                  virt-launcher-{{
+                  compute_instance_name }}-alien
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                labels:
+                  kubevirt.io: virt-launcher
+                  kubevirt.io/created-by: >-
+                    00000000-0000-0000-0000-ffffffffffff
+                annotations:
+                  kubevirt.io/domain: >-
+                    {{ compute_instance_name }}
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: compute
+                    image: >-
+                      registry.k8s.io/pause:3.9
+
+        - name: "S6: Wait for alien launcher Running"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              virt-launcher-{{
+              compute_instance_name }}-alien
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s6_alien_wait
+          until: >
+            s6_alien_wait.resources | length > 0 and
+            (s6_alien_wait.resources[0].status.phase
+            | default('')) == 'Running'
+          retries: 30
+          delay: 2
+
+        - name: >-
+            S6: Assert alien pod has no ownerRefs,
+            wrong label, and is Running
+          ansible.builtin.assert:
+            that:
+              - >-
+                s6_alien_wait.resources | length > 0
+              - >-
+                s6_alien_wait.resources[0].status.phase
+                == 'Running'
+              - >-
+                (s6_alien_wait.resources[0]
+                .metadata.ownerReferences
+                | default([]) | length) == 0
+              - >-
+                s6_alien_wait.resources[0]
+                .metadata.labels
+                ['kubevirt.io/created-by']
+                != (s6_vmi_check.resources[0]
+                .metadata.uid)
+            fail_msg: >-
+              Alien pod must be Running with no
+              ownerReferences and a created-by label
+              that differs from the target VMI UID.
+
+        - name: "S6: Create minimal VM fixture"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                runStrategy: Always
+                template:
+                  spec:
+                    domain:
+                      devices: {}
+                      resources:
+                        requests:
+                          memory: 128Mi
+
+        - name: "S6: Create dependent resource fixtures"
+          kubernetes.core.k8s:
+            state: present
+            definition: "{{ item }}"
+          loop:
+            - apiVersion: v1
+              kind: Service
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-load-balancer
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                ports:
+                  - port: 22
+                    targetPort: 22
+            - apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-root-disk
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                source:
+                  blank: {}
+                pvc:
+                  accessModes:
+                    - ReadWriteOnce
+                  resources:
+                    requests:
+                      storage: 1Mi
+            - apiVersion: v1
+              kind: Secret
+              metadata:
+                name: >-
+                  {{ compute_instance_name
+                  }}-cloud-init
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              type: Opaque
+              data:
+                userdata: ""
+
+        - name: "S6: Verify fixtures exist"
+          kubernetes.core.k8s_info:
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s6_fixture_check
+          failed_when: >-
+            _s6_fixture_check.resources
+            | length == 0
+          loop:
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+
+        - name: "S6: Run delete_resources"
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: delete_resources.yaml
+
+        - name: "S6: Verify VMI cleaned up"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s6_vmi_after
+          failed_when: >-
+            s6_vmi_after.resources | length > 0
+
+        - name: >-
+            S6: Verify alien pod still Running
+          # The Running alien pod must still exist and
+          # be Running — vmi_owned_pods must not have
+          # included it.
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              virt-launcher-{{
+              compute_instance_name }}-alien
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s6_alien_after
+          failed_when: >-
+            s6_alien_after.resources | length == 0 or
+            s6_alien_after.resources[0].status.phase
+            != 'Running'
+
+        - name: "S6: Verify VM and dependents deleted"
+          kubernetes.core.k8s_info:
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s6_dep_check
+          failed_when: >-
+            _s6_dep_check.resources | length > 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+
+        - name: "S6: Assert identity boundary"
+          ansible.builtin.debug:
+            msg: >-
+              Scenario 6 passed: recovery ignored
+              Running wrong-UID launcher (still
+              Running), recovered target VMI via
+              absent-launcher path; VM and dependents
+              cleaned up.
+
+      always:
+        - name: "S6: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s6_cleanup_vmi
+          failed_when: false
+
+        - name: >-
+            S6: Remove foreground-delete finalizer
+            for cleanup
+          vars:
+            _s6_fins: >-
+              {{ _s6_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s6_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s6_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s6_fins
+                     | difference([_s6_target]) }}
+          when: >-
+            _s6_cleanup_vmi.resources | length > 0
+            and
+            'kubevirt.io/foregroundDeleteVirtualMachine'
+            in (_s6_cleanup_vmi.resources[0]
+                .metadata.finalizers | default([]))
+          failed_when: false
+
+        - name: "S6: Cleanup"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            delete_options:
+              gracePeriodSeconds: 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}-alien
+            - api: v1
+              kind: Service
+              name: >-
+                {{ compute_instance_name
+                }}-load-balancer
+            - api: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              name: >-
+                {{ compute_instance_name
+                }}-root-disk
+            - api: v1
+              kind: Secret
+              name: >-
+                {{ compute_instance_name
+                }}-cloud-init
+          failed_when: false
+
+
+# ============================================================
+# Scenario 7 — No-timestamp refusal: VMI stuck but has no
+# deletionTimestamp — recovery refuses BEFORE pod lookup,
+# regardless of launcher state.  Three sub-cases verify
+# refusal with no launcher, a Failed launcher, and a
+# Running launcher.
+# ============================================================
+- name: >-
+    Scenario 7: No-timestamp refusal (three launcher
+    states)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    compute_instance_name: test-vmi-s7
+    compute_instance_target_namespace: test-subnet
+    guest_os_family: linux
+    compute_instance:
+      spec: {}
+    ocp_virt_vm_graceful_wait_retries: 2
+  tasks:
+    # --- S7a: no launcher at all ---
+    - name: "S7a: Run no-launcher sub-case"
+      block:
+        - name: "S7a: Clean up previous resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}
+          failed_when: false
+
+        - name: "S7a: Create VMI (no deletion request)"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                finalizers:
+                  - >-
+                    kubevirt.io/foregroundDeleteVirtualMachine
+              spec:
+                domain:
+                  devices: {}
+                  resources:
+                    requests:
+                      memory: 128Mi
+
+        - name: "S7a: Verify VMI has NO timestamp"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s7a_vmi_check
+          failed_when: >
+            s7a_vmi_check.resources | length == 0 or
+            (s7a_vmi_check.resources[0]
+            .metadata.deletionTimestamp
+            | default('')) != ''
+
+        - name: "S7a: Create minimal VM fixture"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                runStrategy: Always
+                template:
+                  spec:
+                    domain:
+                      devices: {}
+                      resources:
+                        requests:
+                          memory: 128Mi
+
+        - name: "S7a: Expect failure (no launcher)"
+          block:
+            - name: "S7a: Run delete_resources"
+              ansible.builtin.include_role:
+                name: osac.templates.ocp_virt_vm
+                tasks_from: delete_resources.yaml
+
+            - name: "S7a: Record unexpected success"
+              ansible.builtin.set_fact:
+                _s7a_unexpected: true
+          rescue:
+            - name: "S7a: Verify timestamp refusal"
+              ansible.builtin.assert:
+                that:
+                  - >-
+                    'deletionTimestamp' in
+                    (ansible_failed_result.msg
+                    | default(''))
+                fail_msg: >-
+                  Expected deletionTimestamp refusal.
+
+        - name: "S7a: Assert refusal"
+          ansible.builtin.assert:
+            that: _s7a_unexpected is not defined
+            fail_msg: >-
+              Should have failed for VMI without
+              deletionTimestamp (no launcher case).
+
+        - name: "S7a: Verify VMI preserved"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s7a_vmi_after
+          failed_when: >-
+            s7a_vmi_after.resources | length == 0
+
+        - name: "S7a: Verify integrity after refusal"
+          ansible.builtin.assert:
+            that:
+              - >-
+                'kubevirt.io/foregroundDeleteVirtualMachine'
+                in (s7a_vmi_after.resources[0]
+                .metadata.finalizers | default([]))
+              - >-
+                (s7a_vmi_after.resources[0]
+                .metadata.deletionTimestamp
+                | default('')) == ''
+            fail_msg: >-
+              VMI finalizer removed or
+              deletionTimestamp introduced
+              despite refusal.
+
+        - name: "S7a: Verify parent VM preserved"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachine
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s7a_vm_after
+          failed_when: >-
+            _s7a_vm_after.resources | length == 0
+
+      always:
+        - name: "S7a: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s7a_cleanup_vmi
+          failed_when: false
+
+        - name: "S7a: Remove finalizer for cleanup"
+          vars:
+            _s7a_fins: >-
+              {{ _s7a_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s7a_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s7a_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s7a_fins
+                     | difference([_s7a_target]) }}
+          when: >-
+            _s7a_cleanup_vmi.resources | length > 0
+            and _s7a_target in
+            (_s7a_cleanup_vmi.resources[0]
+             .metadata.finalizers | default([]))
+          failed_when: false
+
+        - name: "S7a: Delete resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            delete_options:
+              gracePeriodSeconds: 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}
+          failed_when: false
+
+    # --- S7b: Failed launcher ---
+    - name: "S7b: Run Failed-launcher sub-case"
+      block:
+        - name: "S7b: Create VMI (no deletion request)"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                finalizers:
+                  - >-
+                    kubevirt.io/foregroundDeleteVirtualMachine
+              spec:
+                domain:
+                  devices: {}
+                  resources:
+                    requests:
+                      memory: 128Mi
+
+        - name: "S7b: Capture VMI UID"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s7b_vmi_check
+
+        - name: "S7b: Set UID fact"
+          ansible.builtin.set_fact:
+            _s7b_vmi_uid: >-
+              {{ s7b_vmi_check.resources[0]
+                 .metadata.uid }}
+
+        - name: "S7b: Create Failed launcher"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: >-
+                  virt-launcher-{{
+                  compute_instance_name }}
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                ownerReferences:
+                  - apiVersion: kubevirt.io/v1
+                    kind: VirtualMachineInstance
+                    name: >-
+                      {{ compute_instance_name }}
+                    uid: "{{ _s7b_vmi_uid }}"
+                    controller: true
+                    blockOwnerDeletion: true
+                labels:
+                  kubevirt.io: virt-launcher
+                  kubevirt.io/created-by: >-
+                    {{ _s7b_vmi_uid }}
+                annotations:
+                  kubevirt.io/domain: >-
+                    {{ compute_instance_name }}
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: compute
+                    image: >-
+                      registry.k8s.io/pause:3.9
+                    command: ["false"]
+
+        - name: "S7b: Wait for launcher Failed"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              virt-launcher-{{
+              compute_instance_name }}
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s7b_launcher_wait
+          until: >
+            s7b_launcher_wait.resources | length > 0
+            and
+            (s7b_launcher_wait.resources[0]
+            .status.phase | default('')) == 'Failed'
+          retries: 30
+          delay: 2
+
+        - name: "S7b: Create minimal VM fixture"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                runStrategy: Always
+                template:
+                  spec:
+                    domain:
+                      devices: {}
+                      resources:
+                        requests:
+                          memory: 128Mi
+
+        - name: "S7b: Expect failure (Failed launcher)"
+          block:
+            - name: "S7b: Run delete_resources"
+              ansible.builtin.include_role:
+                name: osac.templates.ocp_virt_vm
+                tasks_from: delete_resources.yaml
+
+            - name: "S7b: Record unexpected success"
+              ansible.builtin.set_fact:
+                _s7b_unexpected: true
+          rescue:
+            - name: "S7b: Verify timestamp refusal"
+              ansible.builtin.assert:
+                that:
+                  - >-
+                    'deletionTimestamp' in
+                    (ansible_failed_result.msg
+                    | default(''))
+                fail_msg: >-
+                  Expected deletionTimestamp refusal
+                  with Failed launcher.
+
+        - name: "S7b: Assert refusal"
+          ansible.builtin.assert:
+            that: _s7b_unexpected is not defined
+            fail_msg: >-
+              Should have failed for VMI without
+              deletionTimestamp (Failed launcher).
+
+        - name: "S7b: Verify VMI preserved"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s7b_vmi_after
+          failed_when: >-
+            s7b_vmi_after.resources | length == 0
+
+        - name: "S7b: Verify integrity after refusal"
+          ansible.builtin.assert:
+            that:
+              - >-
+                'kubevirt.io/foregroundDeleteVirtualMachine'
+                in (s7b_vmi_after.resources[0]
+                .metadata.finalizers | default([]))
+              - >-
+                (s7b_vmi_after.resources[0]
+                .metadata.deletionTimestamp
+                | default('')) == ''
+            fail_msg: >-
+              VMI finalizer removed or
+              deletionTimestamp introduced
+              despite refusal.
+
+        - name: "S7b: Verify parent VM preserved"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachine
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s7b_vm_after
+          failed_when: >-
+            _s7b_vm_after.resources | length == 0
+
+      always:
+        - name: "S7b: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s7b_cleanup_vmi
+          failed_when: false
+
+        - name: "S7b: Remove finalizer for cleanup"
+          vars:
+            _s7b_fins: >-
+              {{ _s7b_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s7b_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s7b_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s7b_fins
+                     | difference([_s7b_target]) }}
+          when: >-
+            _s7b_cleanup_vmi.resources | length > 0
+            and _s7b_target in
+            (_s7b_cleanup_vmi.resources[0]
+             .metadata.finalizers | default([]))
+          failed_when: false
+
+        - name: "S7b: Delete resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            delete_options:
+              gracePeriodSeconds: 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}
+          failed_when: false
+
+    # --- S7c: Running launcher ---
+    - name: "S7c: Run Running-launcher sub-case"
+      block:
+        - name: "S7c: Create VMI (no deletion request)"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                finalizers:
+                  - >-
+                    kubevirt.io/foregroundDeleteVirtualMachine
+              spec:
+                domain:
+                  devices: {}
+                  resources:
+                    requests:
+                      memory: 128Mi
+
+        - name: "S7c: Capture VMI UID"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s7c_vmi_check
+
+        - name: "S7c: Set UID fact"
+          ansible.builtin.set_fact:
+            _s7c_vmi_uid: >-
+              {{ s7c_vmi_check.resources[0]
+                 .metadata.uid }}
+
+        - name: "S7c: Create Running launcher"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: >-
+                  virt-launcher-{{
+                  compute_instance_name }}
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                ownerReferences:
+                  - apiVersion: kubevirt.io/v1
+                    kind: VirtualMachineInstance
+                    name: >-
+                      {{ compute_instance_name }}
+                    uid: "{{ _s7c_vmi_uid }}"
+                    controller: true
+                    blockOwnerDeletion: true
+                labels:
+                  kubevirt.io: virt-launcher
+                  kubevirt.io/created-by: >-
+                    {{ _s7c_vmi_uid }}
+                annotations:
+                  kubevirt.io/domain: >-
+                    {{ compute_instance_name }}
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: compute
+                    image: >-
+                      registry.k8s.io/pause:3.9
+
+        - name: "S7c: Wait for launcher Running"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              virt-launcher-{{
+              compute_instance_name }}
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s7c_launcher_wait
+          until: >
+            s7c_launcher_wait.resources | length > 0
+            and
+            (s7c_launcher_wait.resources[0]
+            .status.phase | default('')) == 'Running'
+          retries: 30
+          delay: 2
+
+        - name: "S7c: Create minimal VM fixture"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                runStrategy: Always
+                template:
+                  spec:
+                    domain:
+                      devices: {}
+                      resources:
+                        requests:
+                          memory: 128Mi
+
+        - name: "S7c: Expect failure (Running launcher)"
+          block:
+            - name: "S7c: Run delete_resources"
+              ansible.builtin.include_role:
+                name: osac.templates.ocp_virt_vm
+                tasks_from: delete_resources.yaml
+
+            - name: "S7c: Record unexpected success"
+              ansible.builtin.set_fact:
+                _s7c_unexpected: true
+          rescue:
+            - name: "S7c: Verify timestamp refusal"
+              ansible.builtin.assert:
+                that:
+                  - >-
+                    'deletionTimestamp' in
+                    (ansible_failed_result.msg
+                    | default(''))
+                fail_msg: >-
+                  Expected deletionTimestamp refusal
+                  with Running launcher.
+
+        - name: "S7c: Assert refusal"
+          ansible.builtin.assert:
+            that: _s7c_unexpected is not defined
+            fail_msg: >-
+              Should have failed for VMI without
+              deletionTimestamp (Running launcher).
+
+        - name: "S7c: Verify VMI preserved"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s7c_vmi_after
+          failed_when: >-
+            s7c_vmi_after.resources | length == 0
+
+        - name: "S7c: Verify integrity after refusal"
+          ansible.builtin.assert:
+            that:
+              - >-
+                'kubevirt.io/foregroundDeleteVirtualMachine'
+                in (s7c_vmi_after.resources[0]
+                .metadata.finalizers | default([]))
+              - >-
+                (s7c_vmi_after.resources[0]
+                .metadata.deletionTimestamp
+                | default('')) == ''
+            fail_msg: >-
+              VMI finalizer removed or
+              deletionTimestamp introduced
+              despite refusal.
+
+        - name: "S7c: Verify parent VM preserved"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachine
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s7c_vm_after
+          failed_when: >-
+            _s7c_vm_after.resources | length == 0
+
+        - name: "S7: Assert all three sub-cases passed"
+          ansible.builtin.debug:
+            msg: >-
+              Scenario 7 passed: no-timestamp refusal
+              for absent, Failed, and Running launcher.
+
+      always:
+        - name: "S7c: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s7c_cleanup_vmi
+          failed_when: false
+
+        - name: "S7c: Remove finalizer for cleanup"
+          vars:
+            _s7c_fins: >-
+              {{ _s7c_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s7c_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s7c_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s7c_fins
+                     | difference([_s7c_target]) }}
+          when: >-
+            _s7c_cleanup_vmi.resources | length > 0
+            and _s7c_target in
+            (_s7c_cleanup_vmi.resources[0]
+             .metadata.finalizers | default([]))
+          failed_when: false
+
+        - name: "S7c: Delete resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            delete_options:
+              gracePeriodSeconds: 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}
+          failed_when: false
+
+# ============================================================
+# Scenario 8 — Owned non-launcher refusal: a Running pod
+# directly controlled by the target VMI, with NO launcher
+# app-label or created-by label, blocks recovery.
+# ============================================================
+- name: >-
+    Scenario 8: Owned non-launcher pod blocks recovery
+  hosts: localhost
+  gather_facts: false
+  vars:
+    compute_instance_name: test-vmi-s8
+    compute_instance_target_namespace: test-subnet
+    guest_os_family: linux
+    compute_instance:
+      spec: {}
+    ocp_virt_vm_graceful_wait_retries: 2
+  tasks:
+    - name: "S8: Run test with cleanup"
+      block:
+        - name: "S8: Clean up previous resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                owned-sidecar-{{
+                compute_instance_name }}
+          failed_when: false
+
+        - name: "S8: Create stuck VMI"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                finalizers:
+                  - >-
+                    kubevirt.io/foregroundDeleteVirtualMachine
+              spec:
+                domain:
+                  devices: {}
+                  resources:
+                    requests:
+                      memory: 128Mi
+
+        - name: "S8: Request VMI deletion"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s8_delete_result
+          failed_when: false
+
+        - name: "S8: Capture VMI UID"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s8_vmi_check
+          failed_when: >
+            s8_vmi_check.resources | length == 0 or
+            (s8_vmi_check.resources[0]
+            .metadata.deletionTimestamp
+            | default('')) == ''
+
+        - name: "S8: Set VMI UID fact"
+          ansible.builtin.set_fact:
+            _s8_vmi_uid: >-
+              {{ s8_vmi_check.resources[0]
+                 .metadata.uid }}
+
+        - name: >-
+            S8: Create Running owned pod (no launcher
+            labels)
+          # Pod has controller=true ownerRef to target
+          # VMI but NO kubevirt.io or created-by labels.
+          # Ownership-based discovery must still find it.
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: >-
+                  owned-sidecar-{{
+                  compute_instance_name }}
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                ownerReferences:
+                  - apiVersion: kubevirt.io/v1
+                    kind: VirtualMachineInstance
+                    name: >-
+                      {{ compute_instance_name }}
+                    uid: "{{ _s8_vmi_uid }}"
+                    controller: true
+                    blockOwnerDeletion: true
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: sidecar
+                    image: >-
+                      registry.k8s.io/pause:3.9
+
+        - name: "S8: Wait for pod Running"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              owned-sidecar-{{
+              compute_instance_name }}
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s8_pod_wait
+          until: >
+            s8_pod_wait.resources | length > 0 and
+            (s8_pod_wait.resources[0].status.phase
+            | default('')) == 'Running'
+          retries: 30
+          delay: 2
+
+        - name: "S8: Assert preconditions"
+          ansible.builtin.assert:
+            that:
+              - >-
+                s8_pod_wait.resources[0].status.phase
+                == 'Running'
+              - >-
+                s8_pod_wait.resources[0]
+                .metadata.ownerReferences[0].uid
+                == (_s8_vmi_uid | trim)
+              - >-
+                s8_pod_wait.resources[0]
+                .metadata.labels
+                | default({})
+                | length == 0
+            fail_msg: >-
+              Pod must be Running, owned by target
+              VMI, with NO labels.
+
+        - name: "S8: Create minimal VM fixture"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                runStrategy: Always
+                template:
+                  spec:
+                    domain:
+                      devices: {}
+                      resources:
+                        requests:
+                          memory: 128Mi
+
+        - name: "S8: Expect delete_resources to fail"
+          block:
+            - name: "S8: Run delete_resources"
+              ansible.builtin.include_role:
+                name: osac.templates.ocp_virt_vm
+                tasks_from: delete_resources.yaml
+
+            - name: "S8: Record unexpected success"
+              ansible.builtin.set_fact:
+                _s8_unexpected: true
+          rescue:
+            - name: "S8: Verify owned-pods refusal"
+              ansible.builtin.assert:
+                that:
+                  - >-
+                    'VMI-owned pods are still in phase'
+                    in (ansible_failed_result.msg
+                    | default(''))
+                fail_msg: >-
+                  Expected owned-pods refusal.
+
+        - name: "S8: Assert refusal occurred"
+          ansible.builtin.assert:
+            that: _s8_unexpected is not defined
+            fail_msg: >-
+              Should have refused: owned non-launcher
+              Running pod must block recovery.
+
+        - name: "S8: Verify VMI preserved"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s8_vmi_after
+          failed_when: >-
+            s8_vmi_after.resources | length == 0
+
+        - name: "S8: Verify integrity after refusal"
+          ansible.builtin.assert:
+            that:
+              - >-
+                'kubevirt.io/foregroundDeleteVirtualMachine'
+                in (s8_vmi_after.resources[0]
+                .metadata.finalizers | default([]))
+            fail_msg: >-
+              VMI finalizer must be preserved.
+
+        - name: "S8: Verify parent VM preserved"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachine
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s8_vm_after
+          failed_when: >-
+            _s8_vm_after.resources | length == 0
+
+      always:
+        - name: "S8: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s8_cleanup_vmi
+          failed_when: false
+
+        - name: "S8: Remove finalizer for cleanup"
+          vars:
+            _s8_fins: >-
+              {{ _s8_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s8_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s8_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s8_fins
+                     | difference([_s8_target]) }}
+          when: >-
+            _s8_cleanup_vmi.resources | length > 0
+            and _s8_target in
+            (_s8_cleanup_vmi.resources[0]
+             .metadata.finalizers | default([]))
+          failed_when: false
+
+        - name: "S8: Cleanup"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            delete_options:
+              gracePeriodSeconds: 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                owned-sidecar-{{
+                compute_instance_name }}
+          failed_when: false
+
+# ============================================================
+# Scenario 9 — Foreign-controller precedence: a Running pod
+# controlled by a DIFFERENT real VMI but carrying the target
+# VMI's created-by label does NOT block target recovery.
+# ============================================================
+- name: >-
+    Scenario 9: Foreign-controlled pod with target
+    label does not block recovery
+  hosts: localhost
+  gather_facts: false
+  vars:
+    compute_instance_name: test-vmi-s9
+    compute_instance_target_namespace: test-subnet
+    guest_os_family: linux
+    compute_instance:
+      spec: {}
+    ocp_virt_vm_graceful_wait_retries: 2
+  tasks:
+    - name: "S9: Run test with cleanup"
+      block:
+        - name: "S9: Clean up previous resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}-foreign"
+            - api: v1
+              kind: Pod
+              name: >-
+                foreign-ctrl-{{
+                compute_instance_name }}
+          failed_when: false
+
+        # Create the FOREIGN VMI first — a real K8s
+        # object whose UID we use as the controlling
+        # owner.  This avoids fabricated UIDs that
+        # Kubernetes GC could delete.
+        - name: "S9: Create foreign VMI"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: >-
+                  {{ compute_instance_name }}-foreign
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                domain:
+                  devices: {}
+                  resources:
+                    requests:
+                      memory: 128Mi
+
+        - name: "S9: Capture foreign VMI UID"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: >-
+              {{ compute_instance_name }}-foreign
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s9_foreign_vmi
+          failed_when: >-
+            s9_foreign_vmi.resources | length == 0
+
+        - name: "S9: Set foreign UID fact"
+          ansible.builtin.set_fact:
+            _s9_foreign_uid: >-
+              {{ s9_foreign_vmi.resources[0]
+                 .metadata.uid }}
+
+        - name: "S9: Create target stuck VMI"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                finalizers:
+                  - >-
+                    kubevirt.io/foregroundDeleteVirtualMachine
+              spec:
+                domain:
+                  devices: {}
+                  resources:
+                    requests:
+                      memory: 128Mi
+
+        - name: "S9: Request target VMI deletion"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s9_delete_result
+          failed_when: false
+
+        - name: "S9: Capture target VMI UID"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s9_target_check
+          failed_when: >
+            s9_target_check.resources | length == 0
+
+        - name: "S9: Set target UID fact"
+          ansible.builtin.set_fact:
+            _s9_target_uid: >-
+              {{ s9_target_check.resources[0]
+                 .metadata.uid }}
+
+        - name: >-
+            S9: Create Running pod controlled by
+            foreign VMI with target created-by label
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: >-
+                  foreign-ctrl-{{
+                  compute_instance_name }}
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                ownerReferences:
+                  - apiVersion: kubevirt.io/v1
+                    kind: VirtualMachineInstance
+                    name: >-
+                      {{ compute_instance_name
+                      }}-foreign
+                    uid: "{{ _s9_foreign_uid }}"
+                    controller: true
+                    blockOwnerDeletion: true
+                labels:
+                  kubevirt.io: virt-launcher
+                  kubevirt.io/created-by: >-
+                    {{ _s9_target_uid }}
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: compute
+                    image: >-
+                      registry.k8s.io/pause:3.9
+
+        - name: "S9: Wait for pod Running"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              foreign-ctrl-{{
+              compute_instance_name }}
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s9_pod_wait
+          until: >
+            s9_pod_wait.resources | length > 0 and
+            (s9_pod_wait.resources[0].status.phase
+            | default('')) == 'Running'
+          retries: 30
+          delay: 2
+
+        - name: "S9: Assert preconditions"
+          ansible.builtin.assert:
+            that:
+              - >-
+                s9_pod_wait.resources[0].status.phase
+                == 'Running'
+              - >-
+                s9_pod_wait.resources[0]
+                .metadata.ownerReferences[0].uid
+                == (_s9_foreign_uid | trim)
+              - >-
+                s9_pod_wait.resources[0]
+                .metadata.ownerReferences[0].uid
+                != (_s9_target_uid | trim)
+              - >-
+                s9_pod_wait.resources[0]
+                .metadata.labels
+                ['kubevirt.io/created-by']
+                == (_s9_target_uid | trim)
+            fail_msg: >-
+              Pod must be Running, controlled by
+              foreign VMI, with contradictory
+              target created-by label.
+
+        - name: "S9: Create target VM fixture"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+              spec:
+                runStrategy: Always
+                template:
+                  spec:
+                    domain:
+                      devices: {}
+                      resources:
+                        requests:
+                          memory: 128Mi
+
+        - name: "S9: Run delete_resources"
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: delete_resources.yaml
+
+        - name: "S9: Verify target VMI cleaned up"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s9_vmi_after
+          failed_when: >-
+            s9_vmi_after.resources | length > 0
+
+        - name: "S9: Verify target VM deleted"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachine
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s9_vm_after
+          failed_when: >-
+            _s9_vm_after.resources | length > 0
+
+        - name: >-
+            S9: Verify foreign VMI still exists
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: >-
+              {{ compute_instance_name }}-foreign
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s9_foreign_after
+          failed_when: >-
+            s9_foreign_after.resources | length == 0
+
+        - name: >-
+            S9: Verify foreign pod still Running
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              foreign-ctrl-{{
+              compute_instance_name }}
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s9_pod_after
+          failed_when: >-
+            s9_pod_after.resources | length == 0 or
+            s9_pod_after.resources[0].status.phase
+            != 'Running'
+
+        - name: "S9: Assert foreign precedence"
+          ansible.builtin.debug:
+            msg: >-
+              Scenario 9 passed: foreign-controlled
+              Running pod with target created-by label
+              excluded; target VMI recovered; foreign
+              VMI and pod preserved.
+
+      always:
+        - name: "S9: Cleanup"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            delete_options:
+              gracePeriodSeconds: 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachine
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: >-
+                {{ compute_instance_name }}-foreign
+            - api: v1
+              kind: Pod
+              name: >-
+                foreign-ctrl-{{
+                compute_instance_name }}
+          failed_when: false

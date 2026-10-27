@@ -201,6 +201,7 @@ service:
       pullPolicy: IfNotPresent
   eventPublisher:
     enabled: true
+    topicRetention: "-1s"
   certs:
     issuerRef:
       kind: ClusterIssuer

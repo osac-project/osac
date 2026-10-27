@@ -64,8 +64,9 @@ type Client interface {
 	// This operation must be strongly consistent: it only returns when the inventory state reflects the assignment
 	AssignHost(ctx context.Context, inventoryHostID string, bareMetalInstanceID string, labels map[string]string) (*Host, error)
 
-	// UnassignHost updates the host by undoing the assign operation
-	UnassignHost(ctx context.Context, inventoryHostID string, labels []string) error
+	// UnassignHost updates the host by undoing the assign operation for the given instance.
+	// A retry must not unassign a host that has since been assigned to another instance.
+	UnassignHost(ctx context.Context, inventoryHostID, bareMetalInstanceID string, labels []string) error
 
 	// GetHostNICs returns the physical network interfaces for an allocated host.
 	// Returns nil, nil when the backend does not support NIC discovery for this host class.

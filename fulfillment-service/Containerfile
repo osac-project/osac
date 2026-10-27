@@ -30,7 +30,7 @@ RUN \
   [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; \
   GODEBUG=http2client=0 go mod download
 
-ARG VERSION=""
+ARG VERSION=0.0.129-nightly.20261027.8402b1c.141.1
 
 # Copy source for fulfillment-service and its workspace dependencies.
 COPY --chown=1001:1001 proto/ proto/
@@ -82,7 +82,7 @@ FROM runtime-base AS runtime
 # label. Separate from the internal.version.id ldflags above (that one
 # is baked into the binary for `osac version`/CLI reporting; this one is
 # the registry/OCI-level label, invisible to the binary).
-ARG VERSION=dev
+ARG VERSION=0.0.129-nightly.20261027.8402b1c.141.1
 LABEL name="cloud-extensions/fulfillment-service-rhel10"
 LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
 LABEL org.opencontainers.image.version="${VERSION}"

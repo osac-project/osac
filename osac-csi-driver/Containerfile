@@ -29,7 +29,7 @@ COPY --chown=1001:1001 proto/ proto/
 COPY --chown=1001:1001 osac-csi-driver/ osac-csi-driver/
 
 WORKDIR /opt/app-root/src/osac-csi-driver
-ARG VERSION=0.1.0
+ARG VERSION=0.0.23
 ARG GIT_COMMIT=unknown
 RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
@@ -44,7 +44,7 @@ FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
 # falling back to the base image's own inherited version label.
 # Separate from the main.version ldflags above (that one is baked into
 # the binary; this is the registry/OCI-level label).
-ARG VERSION=0.1.0
+ARG VERSION=0.0.23
 LABEL name="cloud-extensions/osac-csi-driver-rhel10"
 LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
 LABEL org.opencontainers.image.version="${VERSION}"

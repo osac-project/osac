@@ -212,6 +212,9 @@ jobs:
       contents: read
     uses: ./.github/workflows/tests.yml
     with:
+      # Temporary PR1998 fulfillment head-source performance comparison.
+      # Remove after comparisons; this does not validate merging latest main.
+      commit: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 1998 && matrix.kind == 'it-fulfillment-service' && github.event.pull_request.head.sha || '' }}
       kind: ${{ matrix.kind }}
       dir: ${{ matrix.dir || '' }}
       cmd: ${{ matrix.cmd || '' }}

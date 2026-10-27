@@ -29,7 +29,7 @@ make install PLATFORM=openshift PROFILE=vmaas-ci NS=osac
 | `make test` | Run integration tests (SUITE= required) |
 | `make helm-lint` | Lint all charts |
 
-All targets require `PLATFORM=kind|openshift PROFILE=dev|vmaas-ci|...|cudn-evpn-netris-test NS=<namespace>`.
+All targets require `PLATFORM=kind|openshift PROFILE=dev|vmaas-ci|...|full-ci NS=<namespace>`.
 
 ```bash
 make uninstall PLATFORM=openshift PROFILE=vmaas-ci NS=osac
@@ -37,8 +37,9 @@ make uninstall PLATFORM=openshift PROFILE=vmaas-ci NS=osac
 
 ## CI reference profiles
 
-Each profile under `values/` has an `infra.yaml` and an `instance.yaml`, used
-by CI and local dev, never for a real deployment:
+Each base profile under `values/` has an `infra.yaml` and an `instance.yaml`,
+used by CI and local dev, never for a real deployment. Netris CI layers the
+service-specific `netris.yaml` after the base instance values:
 
 | Profile | Use case |
 |---------|----------|
@@ -47,7 +48,9 @@ by CI and local dev, never for a real deployment:
 | `values/bmaas-ci/` | BMaaS CI (bare metal) |
 | `values/full-ci/` | All services enabled |
 | `values/dev/` | Local dev (Kind) |
-| `values/cudn-evpn-netris-test/` | Explicit CUDN EVPN + Netris VMaaS/BMaaS E2E profile (OpenShift only) |
+| `values/vmaas-ci/netris.yaml` | Netris + CUDN EVPN overlay for VMaaS CI |
+| `values/bmaas-ci/netris.yaml` | Netris + CUDN EVPN overlay for BMaaS CI |
+| `values/full-ci/netris.yaml` | Netris + CUDN EVPN overlay for full and stretched CI |
 
 ## AgentlessNet VirtualNetwork namespace profile
 

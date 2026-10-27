@@ -114,12 +114,33 @@ def test_vmaas_netris_selects_networking_scope_for_vmaas_deployment() -> None:
     assert workflow_path == "osac-project/osac-test-infra/.github/workflows/e2e-vmaas-netris-full-install.yml"
     assert job["with"]["suite"] == "vmaas"
     assert job["with"]["test-scope"] == "networking"
-    assert job["with"]["osac-profile"] == "cudn-evpn-netris-test"
+    assert job["with"]["osac-profile"] == "vmaas-ci"
     test_infra_ref = job["with"]["test-infra-ref"]
     assert workflow_ref == test_infra_ref
 
     caller = yaml.safe_load((ROOT / ".github/workflows/e2e-vmaas-netris-full-install-caller.yml").read_text())
     assert caller["jobs"]["e2e-vmaas-netris"]["uses"] == "./.github/workflows/e2e-vmaas-netris-full-install.yml"
+
+
+def test_netris_profiles_define_the_cudn_evpn_default_networkclass() -> None:
+    for profile in ("vmaas-ci", "bmaas-ci", "full-ci"):
+        values_path = ROOT / "osac-installer/values" / profile / "netris.yaml"
+        values = yaml.safe_load(values_path.read_text())
+        managers = values["operator"]["networkManagers"]
+        network_class = values["networkClass"]
+
+        assert values["global"]["expertOverrides"]["networkClass"] is True
+        assert managers["enabled"] is True
+        assert managers["fabricManagers"]["netris"]["enabled"] is True
+        assert managers["k8sManagers"]["cudn_evpn"]["enabled"] is True
+        assert network_class["enabled"] is True
+        assert network_class["fabricManager"] == "netris"
+        assert network_class["k8sManager"] == "cudn_evpn"
+        assert network_class["isDefault"] is True
+
+    full_values = yaml.safe_load((ROOT / "osac-installer/values/full-ci/netris.yaml").read_text())
+    assert full_values["aap"]["instanceGroups"]["storageFulfillment"]["enabled"] is True
+    assert full_values["metering"]["echoAdapter"]["enabled"] is True
 
 
 def test_bmaas_netris_selects_networking_scope_for_bmaas_deployment() -> None:

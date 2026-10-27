@@ -277,11 +277,6 @@ def check_profile_emergency_service_accounts() -> None:
             "template-publisher",
             "osac-metering",
         },
-        "cudn-evpn-netris-test/instance.yaml": {
-            "admin",
-            "template-publisher",
-            "osac-metering",
-        },
         "dev/kind-instance.yaml": {
             "admin",
         },

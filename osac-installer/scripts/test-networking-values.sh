@@ -249,12 +249,32 @@ render_success \
   --set-string service.externalHostname=fulfillment-api.test.example.com \
   --set-string service.internalHostname=fulfillment-internal-api.test.example.com
 
-render_success \
-  netris-cudn-evpn-test-validate-certs \
-  'NETRIS_VALIDATE_CERTS: "false"' \
-  --values "${SCRIPT_DIR}/../values/cudn-evpn-netris-test/instance.yaml" \
-  --set-string service.externalHostname=fulfillment-api.test.example.com \
-  --set-string service.internalHostname=fulfillment-internal-api.test.example.com
+for profile in vmaas-ci bmaas-ci full-ci; do
+  render_success \
+    "netris-${profile}-cudn-evpn" \
+    'name: osac-network-k8s-manager-cudn-evpn' \
+    --values "${SCRIPT_DIR}/../values/${profile}/instance.yaml" \
+    --values "${SCRIPT_DIR}/../values/${profile}/netris.yaml" \
+    --set-string global.networking.netris.controllerUrl=https://netris.example.com \
+    --set-string global.networking.netris.credentials.username=test-user \
+    --set global.networking.netris.credentials.externalSecret=true \
+    --set-string global.networking.netris.siteId=1 \
+    --set-string global.networking.netris.tenantId=1 \
+    --set-string global.networking.netris.tenantName=test \
+    --set-string service.externalHostname=fulfillment-api.test.example.com \
+    --set-string service.internalHostname=fulfillment-internal-api.test.example.com
+
+  rendered_values="${TMP_DIR}/netris-${profile}-cudn-evpn.yaml"
+  if ! grep -Fq 'k8s_manager\":\"cudn_evpn' "${rendered_values}" \
+    || ! grep -Fq 'fabric_manager\":\"netris' "${rendered_values}"; then
+    echo "ERROR: ${profile}/netris.yaml did not select the default Netris/CUDN EVPN pair" >&2
+    exit 1
+  fi
+  if ! grep -Fq 'NETRIS_VALIDATE_CERTS: "false"' "${rendered_values}"; then
+    echo "ERROR: ${profile}/netris.yaml did not disable Netris certificate validation for CI" >&2
+    exit 1
+  fi
+done
 
 render_success \
   netris-full-ci-validate-certs \

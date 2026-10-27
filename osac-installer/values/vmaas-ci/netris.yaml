@@ -1,0 +1,44 @@
+# Netris/CUDN EVPN overlay for the VMaaS CI profile.
+# The Netris backend supplies controller, site, VPC, and credential values in
+# its generated runtime overlay. The CUDN EVPN underlay is provisioned separately.
+global:
+  expertOverrides:
+    networkClass: true
+  networking:
+    fabricManager: netris
+    k8sManager: ""
+    netris:
+      validateCerts: false
+      credentials:
+        username: netris
+        externalSecret: true
+
+operator:
+  networkManagers:
+    enabled: true
+    fabricManagers:
+      cudn_net:
+        enabled: false
+      netris:
+        enabled: true
+        description: Netris SDN fabric manager
+        capabilities:
+        - ipv4
+    k8sManagers:
+      k8s_only:
+        enabled: false
+      cudn_evpn:
+        enabled: true
+        description: OVN EVPN Kubernetes network manager for VM-to-fabric connectivity
+        capabilities:
+        - ipv4
+
+networkClass:
+  enabled: true
+  title: CUDN EVPN with Netris
+  description: >-
+    Provisions IPv4 networking through the CUDN EVPN Kubernetes manager and
+    the Netris physical fabric manager.
+  k8sManager: cudn_evpn
+  fabricManager: netris
+  isDefault: true

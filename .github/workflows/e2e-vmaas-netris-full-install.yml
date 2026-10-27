@@ -43,7 +43,7 @@ jobs:
     with:
       suite: vmaas
       test-scope: networking
-      osac-profile: cudn-evpn-netris-test
+      osac-profile: vmaas-ci
       osac-repo: https://github.com/${{ inputs.repo }}.git
       osac-branch: ${{ inputs.sha }}
       components: >-

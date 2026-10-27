@@ -30,8 +30,8 @@ global:
           memory: 256Mi
 driverName: csi.osac.openshift.io
 image:
-  repository: ghcr.io/osac-project/osac-csi-driver
-  tag: sha-75762fa # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+  repository: registry.stage.redhat.io/cloud-extensions/osac-csi-driver-rhel10
+  tag: 0.0.26 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
   pullPolicy: Always
 controller:
   replicas: 1

@@ -1,7 +1,7 @@
 fullnameOverride: "bmf-operator"
 image:
-  repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
-  tag: sha-75762fa # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+  repository: registry.stage.redhat.io/cloud-extensions/bare-metal-fulfillment-operator-rhel10
+  tag: 0.0.37 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
   pullPolicy: Always
 replicaCount: 1
 resources:

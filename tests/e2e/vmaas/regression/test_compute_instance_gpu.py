@@ -99,7 +99,7 @@ def test_gpu_compute_instance(
         )
         assert annotations["osac.openshift.io/tenant"] != "", "tenant annotation must not be empty"
 
-        # Wait for AAP to trigger provisioning
+        # Wait for the initial reconciliation phase
         poll_until(
             fn=lambda: k8s_hub_client.get_compute_instance_phase(name=ci_name, checked=False),
             until=lambda v: v == "Starting",
@@ -108,12 +108,13 @@ def test_gpu_compute_instance(
             description=f"{ci_name} Starting",
         )
 
-        # Wait for VM namespace to be assigned
+        # Starting precedes AAP dependency/preparation work, VM creation, and
+        # subsequent reference propagation. Use the provisioning polling budget.
         vm_ns: str = poll_until(
             fn=lambda: k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name),
             until=lambda v: v != "",
-            retries=30,
-            delay=2,
+            retries=120,
+            delay=5,
             description=f"{ci_name} VM namespace",
         )
 

@@ -28,18 +28,24 @@ var (
 	storageClassROVerbs = []string{"get", "list", "watch"}
 )
 
+// TestManagerRoleGrantsLogicalVolumeLifecycle verifies that the kustomize
+// ClusterRole grants LogicalVolume lifecycle verbs.
 func TestManagerRoleGrantsLogicalVolumeLifecycle(t *testing.T) {
 	rolePath := filepath.Join(repoRoot(), "osac-operator/config/rbac/role.yaml")
 	role := loadClusterRoleFile(t, rolePath)
 	assertClusterRoleRuleVerbs(t, role, rolePath, "topolvm.io", []string{"logicalvolumes"}, logicalVolumeVerbs)
 }
 
+// TestManagerHelmClusterRoleGrantsLogicalVolumeLifecycle verifies that the Helm
+// ClusterRole grants LogicalVolume lifecycle verbs.
 func TestManagerHelmClusterRoleGrantsLogicalVolumeLifecycle(t *testing.T) {
 	rolePath := filepath.Join(repoRoot(), "osac-operator/charts/operator/templates/clusterrole.yaml")
 	role := loadHelmClusterRoleTemplate(t, rolePath)
 	assertClusterRoleRuleVerbs(t, role, rolePath, "topolvm.io", []string{"logicalvolumes"}, logicalVolumeVerbs)
 }
 
+// TestManagerHelmClusterRoleGrantsAgentCleanup verifies that the Helm
+// ClusterRole grants Agent cleanup verbs.
 func TestManagerHelmClusterRoleGrantsAgentCleanup(t *testing.T) {
 	rolePath := filepath.Join(repoRoot(), "osac-operator/charts/operator/templates/clusterrole.yaml")
 	role := loadHelmClusterRoleTemplate(t, rolePath)
@@ -50,18 +56,24 @@ func TestManagerHelmClusterRoleGrantsAgentCleanup(t *testing.T) {
 	)
 }
 
+// TestManagerRoleGrantsStorageClassReadOnly verifies that the kustomize
+// ClusterRole grants read-only StorageClass verbs.
 func TestManagerRoleGrantsStorageClassReadOnly(t *testing.T) {
 	rolePath := filepath.Join(repoRoot(), "osac-operator/config/rbac/role.yaml")
 	role := loadClusterRoleFile(t, rolePath)
 	assertClusterRoleRuleVerbs(t, role, rolePath, "storage.k8s.io", []string{"storageclasses"}, storageClassROVerbs)
 }
 
+// TestManagerHelmClusterRoleGrantsStorageClassReadOnly verifies that the Helm
+// ClusterRole grants read-only StorageClass verbs.
 func TestManagerHelmClusterRoleGrantsStorageClassReadOnly(t *testing.T) {
 	rolePath := filepath.Join(repoRoot(), "osac-operator/charts/operator/templates/clusterrole.yaml")
 	role := loadHelmClusterRoleTemplate(t, rolePath)
 	assertClusterRoleRuleVerbs(t, role, rolePath, "storage.k8s.io", []string{"storageclasses"}, storageClassROVerbs)
 }
 
+// assertClusterRoleRuleVerbs checks that role contains a rule for apiGroup and
+// resources with the exact wantVerbs set.
 func assertClusterRoleRuleVerbs(
 	t *testing.T, role clusterRole, rolePath, apiGroup string, resources, wantVerbs []string,
 ) {

@@ -85,6 +85,7 @@ func (m *mockManager) Start(ctx context.Context) error {
 	return m.startFunc(ctx)
 }
 
+// GetProvider returns the configured multicluster.Provider for testing.
 func (m *mockManager) GetProvider() multicluster.Provider {
 	return m.provider
 }

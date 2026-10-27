@@ -95,10 +95,13 @@ type testRemoteCluster struct {
 	client client.Client
 }
 
+// GetClient returns the fake client configured for the remote test cluster.
 func (c *testRemoteCluster) GetClient() client.Client {
 	return c.client
 }
 
+// newRemoteTestMcManager wraps the local test manager with a single-cluster
+// provider named "remote" backed by remoteClient.
 func newRemoteTestMcManager(remoteClient client.Client) mcmanager.Manager {
 	mgr, err := mcmanager.WithMultiCluster(
 		testMcManager.GetLocalManager(),

@@ -27,18 +27,26 @@ import (
 	"k8s.io/apimachinery/pkg/util/yaml"
 )
 
+// renderOperatorDeployment renders templates/deployment.yaml from the operator
+// Helm chart with the given --set values.
 func renderOperatorDeployment(t *testing.T, setValues ...string) ([]byte, error) {
 	t.Helper()
+	helmBin, err := exec.LookPath("helm")
+	if err != nil {
+		t.Fatalf("helm binary is required on PATH for Helm contract tests: %v", err)
+	}
 	chartDir := filepath.Join(repoRoot(), "osac-operator/charts/operator")
 	args := make([]string, 0, 5+2*len(setValues))
 	args = append(args, "template", "osac-operator", chartDir, "-s", "templates/deployment.yaml")
 	for _, val := range setValues {
 		args = append(args, "--set", val)
 	}
-	cmd := exec.Command("helm", args...)
+	cmd := exec.Command(helmBin, args...)
 	return cmd.CombinedOutput()
 }
 
+// parseRenderedDeployment unmarshals rendered YAML bytes into an
+// appsv1.Deployment and validates its Kind.
 func parseRenderedDeployment(t *testing.T, raw []byte) appsv1.Deployment {
 	t.Helper()
 	var deployment appsv1.Deployment
@@ -51,6 +59,8 @@ func parseRenderedDeployment(t *testing.T, raw []byte) appsv1.Deployment {
 	return deployment
 }
 
+// findManagerContainer returns the manager container from deployment or fails
+// the test if absent.
 func findManagerContainer(t *testing.T, deployment appsv1.Deployment) corev1.Container {
 	t.Helper()
 	for _, c := range deployment.Spec.Template.Spec.Containers {
@@ -62,6 +72,8 @@ func findManagerContainer(t *testing.T, deployment appsv1.Deployment) corev1.Con
 	return corev1.Container{}
 }
 
+// findVolume returns a pointer to the named Pod volume in deployment, or nil
+// if not found.
 func findVolume(deployment appsv1.Deployment, name string) *corev1.Volume {
 	for i := range deployment.Spec.Template.Spec.Volumes {
 		if deployment.Spec.Template.Spec.Volumes[i].Name == name {
@@ -71,6 +83,8 @@ func findVolume(deployment appsv1.Deployment, name string) *corev1.Volume {
 	return nil
 }
 
+// TestHelmDeploymentDefaultLocalModeOmitsRemoteKubeconfig verifies that
+// default chart values omit remote kubeconfig env vars and volume mounts.
 func TestHelmDeploymentDefaultLocalModeOmitsRemoteKubeconfig(t *testing.T) {
 	out, err := renderOperatorDeployment(t)
 	if err != nil {
@@ -94,6 +108,8 @@ func TestHelmDeploymentDefaultLocalModeOmitsRemoteKubeconfig(t *testing.T) {
 	}
 }
 
+// TestHelmDeploymentRemoteKubeconfigRendersEnvAndSecretMount verifies remote
+// kubeconfig env var and read-only Secret mount rendering.
 func TestHelmDeploymentRemoteKubeconfigRendersEnvAndSecretMount(t *testing.T) {
 	out, err := renderOperatorDeployment(t,
 		"remoteClusterKubeconfig=/etc/osac/remote-cluster-kubeconfig",
@@ -161,6 +177,8 @@ func TestHelmDeploymentRemoteKubeconfigRendersEnvAndSecretMount(t *testing.T) {
 	}
 }
 
+// TestHelmDeploymentRemoteKubeconfigCustomSecretKey verifies that
+// remoteClusterKubeconfigSecretKey overrides the Secret item key.
 func TestHelmDeploymentRemoteKubeconfigCustomSecretKey(t *testing.T) {
 	out, err := renderOperatorDeployment(t,
 		"remoteClusterKubeconfig=/etc/osac/remote-cluster-kubeconfig",
@@ -184,6 +202,8 @@ func TestHelmDeploymentRemoteKubeconfigCustomSecretKey(t *testing.T) {
 	}
 }
 
+// TestHelmDeploymentRemoteKubeconfigMutualFailGuards verifies that helm
+// template fails when only one of the two remote kubeconfig values is set.
 func TestHelmDeploymentRemoteKubeconfigMutualFailGuards(t *testing.T) {
 	out, err := renderOperatorDeployment(t,
 		"remoteClusterKubeconfig=/etc/osac/remote-cluster-kubeconfig",

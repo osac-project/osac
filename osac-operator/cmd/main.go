@@ -230,6 +230,8 @@ func (f *controllerFlags) validate() error {
 	return nil
 }
 
+// validateRemoteCluster verifies that no controllers incompatible with
+// remote-cluster kubeconfig mode are enabled when a kubeconfig path is set.
 func (f *controllerFlags) validateRemoteCluster(remoteClusterKubeconfig string) error {
 	if strings.TrimSpace(remoteClusterKubeconfig) == "" {
 		return nil

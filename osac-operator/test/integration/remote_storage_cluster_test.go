@@ -131,19 +131,19 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 		for _, verb := range []string{"get", "list", "watch"} {
 			out, err := runKubectlWithKubeconfig(
 				remoteKubeconfigPath,
-				"auth", "can-i", verb, "storageclasses.storage.k8s.io", "--as="+remoteSAIdentity,
+				"auth", "can-i", "-A", verb, "storageclasses.storage.k8s.io", "--as="+remoteSAIdentity,
 			)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(strings.TrimSpace(string(out))).To(
+			Expect(lastNonEmptyLine(string(out))).To(
 				Equal("yes"), "expected remote SA to allow %s on storageclasses", verb,
 			)
 		}
 		for _, verb := range []string{"create", "update", "patch", "delete"} {
 			out, _ := runKubectlWithKubeconfig(
 				remoteKubeconfigPath,
-				"auth", "can-i", verb, "storageclasses.storage.k8s.io", "--as="+remoteSAIdentity,
+				"auth", "can-i", "-A", verb, "storageclasses.storage.k8s.io", "--as="+remoteSAIdentity,
 			)
-			Expect(strings.TrimSpace(string(out))).To(
+			Expect(lastNonEmptyLine(string(out))).To(
 				Equal("no"), "expected remote SA to forbid %s on storageclasses", verb,
 			)
 		}
@@ -323,6 +323,18 @@ func containsLine(output, target string) bool {
 	return false
 }
 
+// lastNonEmptyLine returns the last non-empty trimmed line of output so stderr
+// warnings emitted by kubectl before stdout do not break single-token checks.
+func lastNonEmptyLine(output string) string {
+	lines := strings.Split(output, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if trimmed := strings.TrimSpace(lines[i]); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 // writeRemoteInClusterKubeconfig loads the remote Kind kubeconfig via clientcmd,
 // points the cluster server at the control-plane node InternalIP on the shared
 // Kind bridge network, sets the ServiceAccount bearer credential in AuthInfos,
@@ -401,6 +413,7 @@ func configureOperatorDeploymentForRemoteMode() {
             "name": "manager",
             "env": [
               {"name": "OSAC_REMOTE_CLUSTER_KUBECONFIG", "value": %q},
+              {"name": "OSAC_AAP_URL", "value": ""},
               {"name": "OSAC_ENABLE_CLUSTER_CONTROLLER", "value": "false"},
               {"name": "OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER", "value": "false"},
               {"name": "OSAC_ENABLE_TENANT_CONTROLLER", "value": "true"},

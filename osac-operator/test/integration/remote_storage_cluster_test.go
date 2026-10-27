@@ -48,8 +48,8 @@ const (
 
 var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clusters", Ordered, Serial, func() {
 	var (
-		remoteKubeconfigPath string
-		savedDeploymentJSON  []byte
+		remoteKubeconfigPath   string
+		remoteModeReconfigured bool
 	)
 
 	BeforeAll(func() {
@@ -70,13 +70,6 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 			))
 		}
 
-		By("snapshotting the management cluster operator Deployment before enabling remote-cluster mode")
-		savedDeploymentJSON, err = runKubectl(
-			"get", "deployment", "-l", "app.kubernetes.io/name=operator",
-			"-n", operatorNamespace, "-o", "json",
-		)
-		Expect(err).NotTo(HaveOccurred())
-
 		remoteKubeconfigPath = filepath.Join(GinkgoT().TempDir(), "osac-remote.kubeconfig")
 
 		DeferCleanup(func() {
@@ -90,8 +83,8 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 			_, _ = runKubectl("delete", "secret", remoteTestSecretName, "-n", operatorNamespace, "--ignore-not-found")
 			_, _ = runKubectl("delete", "sc", localDecoyStorageClass, "--ignore-not-found")
 
-			if len(savedDeploymentJSON) > 0 {
-				restoreOperatorDeploymentToLocalMode(savedDeploymentJSON)
+			if remoteModeReconfigured {
+				restoreOperatorDeploymentToLocalMode()
 			}
 			_, _ = runKubectl("delete", "secret", remoteKubeconfigSecretName, "-n", operatorNamespace, "--ignore-not-found")
 			_, _ = runKind("delete", "cluster", "--name", remoteKindClusterName, "--kubeconfig", remoteKubeconfigPath)
@@ -161,6 +154,7 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 		Expect(err).NotTo(HaveOccurred())
 
 		By("reconfiguring the deployed operator on the management cluster into remote-cluster mode")
+		remoteModeReconfigured = true
 		configureOperatorDeploymentForRemoteMode()
 		waitForSingleReadyOperatorPod(remoteKubeconfigMountPath)
 	})
@@ -436,7 +430,13 @@ func configureOperatorDeploymentForRemoteMode() {
   }
 }`, remoteKubeconfigSecretName, remoteKubeconfigMountPath, remoteKubeconfigMountDir)
 
-	_, err := runKubectl("patch", "deployment", deployName, "-n", operatorNamespace, "--type=strategic", "-p", patch)
+	patchFile := filepath.Join(GinkgoT().TempDir(), "remote-mode-patch.json")
+	Expect(os.WriteFile(patchFile, []byte(patch), 0o600)).To(Succeed())
+
+	_, err := runKubectl(
+		"patch", "deployment", deployName, "-n", operatorNamespace,
+		"--type=strategic", "--patch-file="+patchFile,
+	)
 	Expect(err).NotTo(HaveOccurred())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -447,32 +447,44 @@ func configureOperatorDeploymentForRemoteMode() {
 	Expect(err).NotTo(HaveOccurred())
 }
 
-// restoreOperatorDeploymentToLocalMode restores the operator Deployment's
-// pod template spec to its pre-test single-cluster snapshot.
-func restoreOperatorDeploymentToLocalMode(savedListJSON []byte) {
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Spec struct {
-				Template json.RawMessage `json:"template"`
-			} `json:"spec"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(savedListJSON, &list); err != nil || len(list.Items) == 0 {
+// restoreOperatorDeploymentToLocalMode removes the remote-kubeconfig volume,
+// volumeMount, and OSAC_REMOTE_CLUSTER_KUBECONFIG env var and re-enables the
+// single-cluster controllers using a static strategic merge patch file.
+func restoreOperatorDeploymentToLocalMode() {
+	deployName := operatorDeploymentName()
+	patch := fmt.Sprintf(`{
+  "spec": {
+    "template": {
+      "spec": {
+        "volumes": [
+          {"$patch": "delete", "name": "remote-kubeconfig"}
+        ],
+        "containers": [
+          {
+            "name": "manager",
+            "env": [
+              {"$patch": "delete", "name": "OSAC_REMOTE_CLUSTER_KUBECONFIG"},
+              {"name": "OSAC_ENABLE_CLUSTER_CONTROLLER", "value": "true"},
+              {"name": "OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER", "value": "true"}
+            ],
+            "volumeMounts": [
+              {"$patch": "delete", "mountPath": %q}
+            ]
+          }
+        ]
+      }
+    }
+  }
+}`, remoteKubeconfigMountDir)
+
+	patchFile := filepath.Join(GinkgoT().TempDir(), "local-mode-restore-patch.json")
+	if err := os.WriteFile(patchFile, []byte(patch), 0o600); err != nil {
 		return
 	}
-	deployName := list.Items[0].Metadata.Name
-	patchBody, err := json.Marshal(map[string]any{
-		"spec": map[string]any{
-			"template": list.Items[0].Spec.Template,
-		},
-	})
-	if err != nil {
-		return
-	}
-	_, _ = runKubectl("patch", "deployment", deployName, "-n", operatorNamespace, "--type=merge", "-p", string(patchBody))
+	_, _ = runKubectl(
+		"patch", "deployment", deployName, "-n", operatorNamespace,
+		"--type=strategic", "--patch-file="+patchFile,
+	)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	_, _ = utils.Run(exec.CommandContext(

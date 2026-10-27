@@ -60,6 +60,7 @@ const (
 	messageReady                       = "The instance is ready."
 	messageStepHostAllocation          = "Host allocation is in progress."
 	messageStepProvisioning            = "OS provisioning is in progress."
+	messageStepProvisioningRetrying    = "Provisioning is retrying after an unsuccessful attempt."
 	messageStepNetworkSetupAttachment  = "Network attachment is in progress."
 	messageStepNetworkSetupHandoff     = "Network handoff is in progress."
 	messageStepNetworkSetupIPDiscovery = "IP address discovery is in progress."
@@ -552,10 +553,14 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 		switch progress.State {
 		case bmfov1alpha1.StateInProgress:
 			stage := progress.Step.Stage()
+			message := stepMessage(progress.Step)
+			if progress.Retrying {
+				message = messageStepProvisioningRetrying
+			}
 			t.updateCondition(
 				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
 				privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-				string(stage), stepMessage(progress.Step))
+				string(stage), message)
 			t.updateCondition(
 				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
 				privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")

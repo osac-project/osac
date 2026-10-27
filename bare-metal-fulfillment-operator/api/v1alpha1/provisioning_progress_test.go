@@ -108,6 +108,22 @@ var _ = Describe("DeriveProvisioningProgress", func() {
 				condFalse(HostConditionProvisionTemplateComplete, HostConditionReasonProgressing),
 			},
 			ProvisioningProgress{State: StateInProgress, Step: StepProvisioning}),
+		Entry("ProvisionTemplateComplete False+Retrying -> retrying provisioning, not failed",
+			[]metav1.Condition{
+				condTrue(HostConditionAllocated),
+				condFalse(HostConditionProvisionTemplateComplete, HostConditionReasonRetrying),
+			},
+			ProvisioningProgress{State: StateInProgress, Step: StepProvisioning, Retrying: true}),
+		Entry("retrying provisioning overrides retained success milestones",
+			[]metav1.Condition{
+				condTrue(HostConditionAllocated),
+				condFalse(HostConditionProvisionTemplateComplete, HostConditionReasonRetrying),
+				condTrue(HostConditionNetworkAttachmentsReady),
+				condTrue(HostConditionNetworkHandoffComplete),
+				condTrue(HostConditionIPDiscoveryComplete),
+				condTrue(HostConditionPowerSynced),
+			},
+			ProvisioningProgress{State: StateInProgress, Step: StepProvisioning, Retrying: true}),
 
 		// --- Terminal states ---
 		Entry("network trio all True -> Provisioned, Ready axis live (power-neutral in-flight step)",
@@ -196,6 +212,9 @@ var _ = Describe("DeriveProvisioningProgress", func() {
 			ProvisioningProgress{State: StateFailed, Step: StepHostAllocation, Failure: FailureHostAllocation}),
 		Entry("Allocated False+TemplateFailed -> generic host allocation failure",
 			[]metav1.Condition{condFalse(HostConditionAllocated, HostConditionReasonTemplateFailed)},
+			ProvisioningProgress{State: StateFailed, Step: StepHostAllocation, Failure: FailureHostAllocation}),
+		Entry("Allocated False+Retrying -> generic host allocation failure",
+			[]metav1.Condition{condFalse(HostConditionAllocated, HostConditionReasonRetrying)},
 			ProvisioningProgress{State: StateFailed, Step: StepHostAllocation, Failure: FailureHostAllocation}),
 		Entry("ProvisionTemplateComplete False+TemplateFailed -> provision job failure",
 			[]metav1.Condition{

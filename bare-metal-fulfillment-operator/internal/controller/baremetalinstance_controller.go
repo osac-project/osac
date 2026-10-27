@@ -569,6 +569,10 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 		}
 		provisionCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
 		if provisionCond != nil && provisionCond.Status != metav1.ConditionTrue {
+			if provisionCond.Reason == v1alpha1.HostConditionReasonRetrying {
+				bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+				return ctrl.Result{}, nil
+			}
 			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
 			return ctrl.Result{}, nil
 		}
@@ -662,12 +666,12 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 		provisioning.DefaultMaxJobHistory, r.ProvisionPollIntervalDuration,
 		&provisioning.PollCallbacks{
 			OnFailed: func(message string) {
-				bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+				bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 				bareMetalInstance.SetStatusCondition(
 					v1alpha1.HostConditionProvisionTemplateComplete,
 					metav1.ConditionFalse,
-					v1alpha1.HostConditionReasonTemplateFailed,
-					message,
+					v1alpha1.HostConditionReasonRetrying,
+					"Provisioning retry scheduled after failed attempt: "+message,
 				)
 			},
 			OnSuccess: func(_ provisioning.ProvisionStatus) {
@@ -695,15 +699,26 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 		return result, err
 	}
 
-	// Set progressing condition while provisioning is in-flight, but don't overwrite a failure.
+	// Set a progressing condition while provisioning is in-flight. Migrate a
+	// retained pre-OSAC-1700 failure to retrying without losing its backend error.
 	provisionCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
-	if result.RequeueAfter > 0 && (provisionCond == nil || provisionCond.Reason != v1alpha1.HostConditionReasonTemplateFailed) {
-		bareMetalInstance.SetStatusCondition(
-			v1alpha1.HostConditionProvisionTemplateComplete,
-			metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonProgressing,
-			"Provisioning job in progress",
-		)
+	if result.RequeueAfter > 0 {
+		switch {
+		case provisionCond != nil && provisionCond.Reason == v1alpha1.HostConditionReasonTemplateFailed:
+			bareMetalInstance.SetStatusCondition(
+				v1alpha1.HostConditionProvisionTemplateComplete,
+				metav1.ConditionFalse,
+				v1alpha1.HostConditionReasonRetrying,
+				"Provisioning retry scheduled after failed attempt: "+provisionCond.Message,
+			)
+		case provisionCond == nil || provisionCond.Reason != v1alpha1.HostConditionReasonRetrying:
+			bareMetalInstance.SetStatusCondition(
+				v1alpha1.HostConditionProvisionTemplateComplete,
+				metav1.ConditionFalse,
+				v1alpha1.HostConditionReasonProgressing,
+				"Provisioning job in progress",
+			)
+		}
 	}
 
 	return result, nil

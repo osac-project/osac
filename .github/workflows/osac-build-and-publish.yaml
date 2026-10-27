@@ -2816,7 +2816,11 @@ jobs:
     # Same registry-image/values.yaml-field mapping each of these 7
     # charts' own (removed) patch-chart-image-refs task used to carry as
     # Tekton params -- see each chart's .tekton/<chart>/release.yaml git
-    # history for the per-component values this mirrors.
+    # history for the per-component values this mirrors. A few fields
+    # below (osac-metering's m360Adapter.image, osac-csi-driver's
+    # fulfillmentTrust admission image) were never covered by that old
+    # task either -- found via a direct published-chart audit, not from
+    # its history.
     - name: Stamp real chart image refs for Konflux release
       run: |
         set -euo pipefail
@@ -2891,6 +2895,25 @@ jobs:
             M360_TARGET_IMAGE="${SECOND_REGISTRY_IMAGES[osac-metering]}:${COMPONENT_VERSION}"
             M360_TARGET_REPO="${M360_TARGET_IMAGE%:*}" M360_TARGET_TAG="${M360_TARGET_IMAGE##*:}" \
               yq -i '.m360Adapter.image.repository = strenv(M360_TARGET_REPO) | .m360Adapter.image.tag = strenv(M360_TARGET_TAG)' "${VALUES_FILE}"
+            ;;
+          osac-csi-driver)
+            TARGET_IMAGE="${TARGET_IMAGE}" TARGET_REPO="${TARGET_IMAGE%:*}" TARGET_TAG="${TARGET_IMAGE##*:}" \
+              yq -i '.image.repository = strenv(TARGET_REPO) | .image.tag = strenv(TARGET_TAG)' "${VALUES_FILE}"
+            # global.fulfillmentTrust.admission.image references osac-operator,
+            # a separate component -- disabled by default, but the chart's
+            # own default must never point at GHCR with an empty tag (same
+            # "disconnected/stage install must never reach out to a
+            # community registry" rule as above): if someone flips
+            # fulfillmentTrust.enabled without supplying their own image,
+            # they must land on a real, pullable staged osac-operator image.
+            OPERATOR_VERSION=$(jq -r --arg k "osac-operator" '.[$k] // empty' <<<"${COMPONENT_VERSIONS}")
+            if [[ -z "${OPERATOR_VERSION}" ]]; then
+              echo "::error::No resolved version for osac-operator -- refusing to stamp osac-csi-driver-chart's fulfillmentTrust admission image" >&2
+              exit 1
+            fi
+            OPERATOR_IMAGE="${REGISTRY_IMAGES[osac-operator]}:${OPERATOR_VERSION}"
+            OPERATOR_REPO="${OPERATOR_IMAGE%:*}" OPERATOR_TAG="${OPERATOR_IMAGE##*:}" \
+              yq -i '.global.fulfillmentTrust.admission.image.repository = strenv(OPERATOR_REPO) | .global.fulfillmentTrust.admission.image.tag = strenv(OPERATOR_TAG)' "${VALUES_FILE}"
             ;;
           *)
             TARGET_IMAGE="${TARGET_IMAGE}" TARGET_REPO="${TARGET_IMAGE%:*}" TARGET_TAG="${TARGET_IMAGE##*:}" \

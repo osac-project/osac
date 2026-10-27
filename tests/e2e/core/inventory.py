@@ -35,6 +35,7 @@ import yaml
 
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
+    DEFAULT_BMI_HOST_SELECTOR,
     HostRef,
     wait_for_bmh_available,
     wait_for_bmi_cr,
@@ -97,6 +98,15 @@ class InventoryBackend(Protocol):
         """Return how many hosts are free for allocation right now."""
         ...
 
+    def default_host_selector(self) -> dict[str, str]:
+        """Return the host selector for the suite's auto-created instance type.
+
+        metal3: keys match BMH labels (osac.openshift.io/host-type). netbox:
+        keys must be valid device custom-field names, since the operator
+        queries them as cf_<key>.
+        """
+        ...
+
     def wait_for_released(self, *, host: HostRef) -> None:
         """Wait until the host is free again after BMI deprovisioning."""
         ...
@@ -132,6 +142,11 @@ class Metal3Inventory:
         return self.k8s.count_bmhs_by_provisioning_state(
             bmh_namespace=self.bmh_namespace, states={"available", "ready"}
         )
+
+    def default_host_selector(self) -> dict[str, str]:
+        # Matches the osac.openshift.io/host-type label the infra backend
+        # stamps on the enrolled BMHs.
+        return dict(DEFAULT_BMI_HOST_SELECTOR)
 
     def wait_for_released(self, *, host: HostRef) -> None:
         wait_for_bmh_available(k8s=self.k8s, name=host.name, bmh_namespace=host.namespace)
@@ -222,6 +237,13 @@ class NetBoxInventory:
             )
         )
 
+    def default_host_selector(self) -> dict[str, str]:
+        # The netbox equivalent of the BMH host-type label: a capability
+        # custom field the operator queries as cf_host_type. Fixture devices
+        # are stamped with it (see _fixture_custom_fields) the same way the
+        # infra backend labels BMHs for metal3.
+        return {"host_type": "default"}
+
     def wait_for_released(self, *, host: HostRef) -> None:
         device_id = host.name.removeprefix("netbox-")
 
@@ -278,6 +300,9 @@ class NetBoxInventory:
             "osac_bmc_address": spec["bmc_address"],
             "osac_boot_mac": spec["boot_mac"],
         }
+        # Capability fields matching the instance type's host selector — the
+        # netbox equivalent of the BMH labels the infra backend stamps.
+        custom_fields.update(self.default_host_selector())
         interface_macs = spec.get("interface_macs")
         if interface_macs:
             custom_fields["osac_interface_macs"] = interface_macs

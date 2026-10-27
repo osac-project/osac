@@ -67,6 +67,14 @@ fixture creates `osac_managed` devices in the `staged` state from
 within one session is idempotent) and deletes them on teardown. Each run
 uses a new run id, so delete leftover devices after an aborted run.
 
+The auto-created instance type's host selector is backend-dependent: on
+metal3 it matches the `osac.openshift.io/host-type` BMH label; on netbox it
+is the `host_type` device custom field, which the fixture stamps on every
+device it creates (the netbox equivalent of the infra backend labelling
+BMHs). `interface_macs` keys must match the instance type's network port
+names (`data-0` by default) — they populate the operator's
+`osac_interface_macs` logical-port MAC mapping.
+
 Connection settings come from the BMF chart's `osac-inventory-config`,
 `osac-netbox-token`, and `osac-netbox-ca` Secrets. The URL and token Secrets
 are read only when their `OSAC_NETBOX_*` overrides are unset, and the CA

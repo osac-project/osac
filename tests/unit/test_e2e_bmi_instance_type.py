@@ -116,3 +116,18 @@ def test_configured_type_needs_no_template_lookup_or_cleanup() -> None:
     assert grpc.calls == []
     assert grpc.created == []
     assert grpc.deleted == []
+
+
+def test_creates_type_with_the_given_host_selector() -> None:
+    grpc = FakeGRPCClient(
+        {f"{PRIVATE_API}.BareMetalInstanceTemplates/List": {"items": [{"metadata": {"name": "bm-host-provisioning"}}]}}
+    )
+
+    fixture = bmi_instance_type_for_tests(
+        grpc, template_name="bm-host-provisioning", configured="", host_selector={"host_type": "default"}
+    )
+    name = next(fixture)
+    assert grpc.created == [(name, {"host_type": "default"}, "data-0")]
+    with pytest.raises(StopIteration):
+        next(fixture)
+    assert grpc.deleted == ["bmit-123"]

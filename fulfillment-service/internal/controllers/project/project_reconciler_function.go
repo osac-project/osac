@@ -153,7 +153,7 @@ func (r *function) Run(ctx context.Context, project *privatev1.Project) error {
 			if project.HasMetadata() &&
 				project.GetMetadata().HasDeletionTimestamp() &&
 				status.Code(err) == codes.FailedPrecondition {
-				return controllers.RequeueAtInterval(err, defaultNetworkingDeleteRetryDelay)
+				return controllers.RequeueAfter(err, defaultNetworkingDeleteRetryDelay)
 			}
 			return err
 		}

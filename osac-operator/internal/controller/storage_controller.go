@@ -751,7 +751,7 @@ func (r *StorageReconciler) handleDelete(ctx context.Context, tenant *v1alpha1.T
 	// Resolved independently from handleUpdate's resolution (no caching between
 	// create and delete paths), before the first AAP-triggering call in this
 	// function, so every downstream call in this reconcile sees the same result.
-	ctx, osacTiers, _, skippedOSACTiers, tierErr := resolveAndPartitionTierContext(ctx, r.TiersClient, r.BackendsClient, r.SecretsClient, "tenant", tenant.Name)
+	ctx, _, _, skippedOSACTiers, tierErr := resolveAndPartitionTierContext(ctx, r.TiersClient, r.BackendsClient, r.SecretsClient, "tenant", tenant.Name)
 	if tierErr != nil {
 		log.Error(tierErr, "tier resolution failed during deletion", "tenant", tenant.Name)
 	}
@@ -797,7 +797,7 @@ func (r *StorageReconciler) handleDelete(ctx context.Context, tenant *v1alpha1.T
 	classCleanupDone := classDeprovJob != nil && classDeprovJob.State.IsTerminal() && classDeprovJob.State.IsSuccessful()
 
 	if !classCleanupDone {
-		result, err := r.handleClusterStorageDeprovisioning(ctx, tenant, osacTiers, skippedOSACTiers)
+		result, err := r.handleClusterStorageDeprovisioning(ctx, tenant)
 		if err != nil {
 			return result, err
 		}
@@ -1028,8 +1028,6 @@ func (r *StorageReconciler) removeTenantClusterStorageEntry(tenant *v1alpha1.Ten
 func (r *StorageReconciler) handleClusterStorageDeprovisioning(
 	ctx context.Context,
 	tenant *v1alpha1.Tenant,
-	osacTiers []provisioning.TierDefinition,
-	skippedOSACTiers bool,
 ) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	if r.ClusterStorageProvider == nil {
@@ -1037,7 +1035,7 @@ func (r *StorageReconciler) handleClusterStorageDeprovisioning(
 		return ctrl.Result{}, nil
 	}
 
-	if r.canSkipOSACDeprovisioning(tenant, osacTiers, skippedOSACTiers) {
+	if r.canSkipOSACDeprovisioning(ctx, tenant.Status.ClusterStorageJobs) {
 		log.Info("no OSAC storage tiers resolved, skipping cluster storage deprovisioning job", "tenant", tenant.Name)
 		return ctrl.Result{}, nil
 	}
@@ -1058,25 +1056,18 @@ func (r *StorageReconciler) handleBackendDeprovisioning(ctx context.Context, ten
 		return ctrl.Result{}, nil
 	}
 
+	if r.canSkipOSACDeprovisioning(ctx, tenant.Status.StorageBackendJobs) {
+		log.Info("no OSAC storage tiers resolved, skipping backend deprovisioning job", "tenant", tenant.Name)
+		return ctrl.Result{}, nil
+	}
+
 	hubSecretReady, err := r.hubSecretExists(ctx, tenant.GetName(), "")
 	if err != nil {
 		log.Error(err, "failed to check hub Secret existence, requeueing")
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
-	latestJob := provisioning.FindLatestJobByType(tenant.Status.StorageBackendJobs, v1alpha1.JobTypeDeprovision)
-	deprovJobActive := latestJob != nil && latestJob.JobID != "" && !latestJob.State.IsTerminal()
-	deprovJobBlocking := latestJob != nil &&
-		latestJob.State.IsTerminal() &&
-		!latestJob.State.IsSuccessful() &&
-		latestJob.BlockDeletionOnFailure
-
-	if !r.canProvisionOSACStorage(ctx) && !deprovJobActive && !deprovJobBlocking {
-		log.Info("no OSAC storage tiers resolved, skipping backend deprovisioning job", "tenant", tenant.Name)
-		return ctrl.Result{}, nil
-	}
-
-	if !hubSecretReady && !deprovJobActive && !deprovJobBlocking {
+	if !hubSecretReady && !hasActiveOrBlockingDeprovisionJob(tenant.Status.StorageBackendJobs) {
 		return ctrl.Result{}, nil
 	}
 
@@ -1508,25 +1499,22 @@ func (r *StorageReconciler) isPureCSPTenant(
 }
 
 // canSkipOSACDeprovisioning reports whether Tenant deletion can safely bypass
-// OSAC-managed cluster storage deprovisioning. It returns true when tier and
-// backend gRPC clients are configured, no OSAC-managed tiers resolved, no
-// tiers were skipped during resolution, and no cluster storage deprovision job
-// is currently active or blocking deletion.
-func (r *StorageReconciler) canSkipOSACDeprovisioning(
-	tenant *v1alpha1.Tenant,
-	osacTiers []provisioning.TierDefinition,
-	skippedOSACTiers bool,
-) bool {
-	if r.TiersClient == nil || r.BackendsClient == nil || len(osacTiers) > 0 || skippedOSACTiers {
+// OSAC-managed deprovisioning for the given job history. It returns true when
+// tier and backend gRPC clients are configured, no OSAC-managed tiers resolved
+// into ctx, and no deprovision job is currently active or blocking deletion.
+func (r *StorageReconciler) canSkipOSACDeprovisioning(ctx context.Context, jobs []v1alpha1.JobStatus) bool {
+	return !r.canProvisionOSACStorage(ctx) && !hasActiveOrBlockingDeprovisionJob(jobs)
+}
+
+func hasActiveOrBlockingDeprovisionJob(jobs []v1alpha1.JobStatus) bool {
+	latestJob := provisioning.FindLatestJobByType(jobs, v1alpha1.JobTypeDeprovision)
+	if latestJob == nil {
 		return false
 	}
-	latestJob := provisioning.FindLatestJobByType(tenant.Status.ClusterStorageJobs, v1alpha1.JobTypeDeprovision)
-	deprovJobActive := latestJob != nil && latestJob.JobID != "" && !latestJob.State.IsTerminal()
-	deprovJobBlocking := latestJob != nil &&
-		latestJob.State.IsTerminal() &&
-		!latestJob.State.IsSuccessful() &&
-		latestJob.BlockDeletionOnFailure
-	return !deprovJobActive && !deprovJobBlocking
+	if latestJob.JobID != "" && !latestJob.State.IsTerminal() {
+		return true
+	}
+	return latestJob.State.IsTerminal() && !latestJob.State.IsSuccessful() && latestJob.BlockDeletionOnFailure
 }
 
 // mergeResolvedStorageClasses merges CSP-managed and OSAC-managed resolved

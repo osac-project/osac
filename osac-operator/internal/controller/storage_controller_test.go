@@ -1503,6 +1503,99 @@ var _ = Describe("Storage Controller", func() {
 			}))
 			Expect(ctxConns).NotTo(HaveKey("backend-csp"))
 		})
+
+		It("should skip secret resolution and exclude cspManaged=true VAST backends configured with inline password or password_secret, while preserving OSAC-managed caller behavior", func() {
+			tiersClient := &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-vast-inline", "be-csp-vast-inline"),
+							newTestStorageTier("csp-vast-secret", "be-csp-vast-secret"),
+							newTestStorageTier("osac-vast", "be-osac-vast"),
+						},
+					}.Build(), nil
+				},
+			}
+			backendsClient := &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					switch in.GetId() {
+					case "be-csp-vast-inline":
+						return privatev1.StorageBackendsGetResponse_builder{
+							Object: privatev1.StorageBackend_builder{
+								Spec: privatev1.StorageBackendSpec_builder{
+									Provider:   "vast",
+									CspManaged: true,
+									Endpoint:   "https://csp-vast-inline.example.com",
+									Credentials: privatev1.StorageBackendCredentials_builder{
+										Username: testBackendUsername,
+										Password: testBackendPassword,
+									}.Build(),
+								}.Build(),
+							}.Build(),
+						}.Build(), nil
+					case "be-csp-vast-secret":
+						return privatev1.StorageBackendsGetResponse_builder{
+							Object: privatev1.StorageBackend_builder{
+								Spec: privatev1.StorageBackendSpec_builder{
+									Provider:   "vast",
+									CspManaged: true,
+									Endpoint:   "https://csp-vast-secret.example.com",
+									Credentials: privatev1.StorageBackendCredentials_builder{
+										Username:       testBackendUsername,
+										PasswordSecret: privatev1.SecretLocalReference_builder{Id: "csp-vast-secret-id"}.Build(),
+									}.Build(),
+								}.Build(),
+							}.Build(),
+						}.Build(), nil
+					case "be-osac-vast":
+						return newTestStorageBackendGetResponse("vast"), nil
+					default:
+						return nil, status.Error(codes.NotFound, "not found")
+					}
+				},
+			}
+			secretsClient := &mockSecretsClient{
+				getFunc: func(context.Context, *privatev1.SecretsGetRequest, ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
+					Fail("SecretsClient.Get must not be called for cspManaged VAST backends even when password_secret is set")
+					return nil, nil
+				},
+			}
+
+			osacDefs, cspDefs, conns, skipped, err := resolveTierDefinitionsWithStatus(ctx, tiersClient, backendsClient, secretsClient)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(skipped).To(BeFalse())
+			Expect(secretsClient.getCallCount).To(Equal(0))
+			Expect(osacDefs).To(HaveLen(1))
+			Expect(osacDefs[0].Name).To(Equal("osac-vast"))
+			Expect(cspDefs).To(HaveLen(2))
+			Expect(cspDefs[0].Name).To(Equal("csp-vast-inline"))
+			Expect(cspDefs[1].Name).To(Equal("csp-vast-secret"))
+			Expect(conns).To(HaveLen(1))
+			Expect(conns).To(HaveKey("be-osac-vast"))
+			Expect(conns).NotTo(HaveKey("be-csp-vast-inline"))
+			Expect(conns).NotTo(HaveKey("be-csp-vast-secret"))
+
+			// Verify shared OSAC-managed callers (resolveTierDefinitions and resolveAndInjectTierContext)
+			// return and inject only the cspManaged=false tier and connection.
+			callerDefs, callerConns, err := resolveTierDefinitions(ctx, tiersClient, backendsClient, secretsClient)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(callerDefs).To(Equal(osacDefs))
+			Expect(callerConns).To(Equal(conns))
+
+			injectedOnlyCtx, injectedOnlyDefs, err := resolveAndInjectTierContext(ctx, tiersClient, backendsClient, secretsClient, "clusterOrder", "test-co")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(injectedOnlyDefs).To(Equal(osacDefs))
+			Expect(provisioning.StorageTierDefinitionsFromContext(injectedOnlyCtx)).To(Equal(osacDefs))
+			Expect(provisioning.StorageBackendConnectionsFromContext(injectedOnlyCtx)).To(Equal(conns))
+
+			partCtx, partOSAC, partCSP, partSkipped, err := resolveAndPartitionTierContext(ctx, tiersClient, backendsClient, secretsClient, "computeInstance", "test-ci")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(partSkipped).To(BeFalse())
+			Expect(partOSAC).To(Equal(osacDefs))
+			Expect(partCSP).To(Equal(cspDefs))
+			Expect(provisioning.StorageTierDefinitionsFromContext(partCtx)).To(Equal(osacDefs))
+			Expect(provisioning.StorageBackendConnectionsFromContext(partCtx)).To(Equal(conns))
+		})
 	})
 
 	Context("Tier definitions in AAP extra_vars context", func() {
@@ -4852,6 +4945,91 @@ var _ = Describe("Storage Controller", func() {
 			Expect(backendCond).NotTo(BeNil())
 			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(backendCond.Reason).To(Equal("TierResolutionFailed"))
+		})
+
+		It("should trigger 0 BackendProvider and 0 ClusterStorageProvider AAP jobs and skip SecretsClient.Get when reconciling a Tenant against a cspManaged=true VAST backend with supplied credentials", func() {
+			name := "csp-pure-vast-with-creds"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, "csp-vast-gold-sc", cspManagedTenantValue, "csp-vast-gold")
+			waitForStorageClassInCache("csp-vast-gold-sc")
+
+			backendTriggers := 0
+			clusterTriggers := 0
+			backendProvider := &mockProvisioningProvider{
+				name: "backend-mock",
+				triggerProvisionFunc: func(context.Context, client.Object) (*provisioning.ProvisionResult, error) {
+					backendTriggers++
+					return &provisioning.ProvisionResult{JobID: "unexpected-be", InitialState: v1alpha1.JobStateRunning}, nil
+				},
+			}
+			clusterProvider := &mockProvisioningProvider{
+				name: "cluster-mock",
+				triggerProvisionFunc: func(context.Context, client.Object) (*provisioning.ProvisionResult, error) {
+					clusterTriggers++
+					return &provisioning.ProvisionResult{JobID: "unexpected-cs", InitialState: v1alpha1.JobStateRunning}, nil
+				},
+			}
+
+			secretsClient := &mockSecretsClient{
+				getFunc: func(context.Context, *privatev1.SecretsGetRequest, ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
+					Fail("SecretsClient.Get must not be called for a cspManaged=true VAST backend")
+					return nil, nil
+				},
+			}
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				backendProvider, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.SecretsClient = secretsClient
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-vast-gold", "be-csp-vast"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, _ *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return privatev1.StorageBackendsGetResponse_builder{
+						Object: privatev1.StorageBackend_builder{
+							Spec: privatev1.StorageBackendSpec_builder{
+								Provider:   "vast",
+								CspManaged: true,
+								Endpoint:   "https://vast-csp.example.com",
+								Credentials: privatev1.StorageBackendCredentials_builder{
+									Username:       testBackendUsername,
+									Password:       testBackendPassword,
+									PasswordSecret: privatev1.SecretLocalReference_builder{Id: "vast-csp-secret"}.Build(),
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(), nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(backendTriggers).To(BeZero())
+			Expect(clusterTriggers).To(BeZero())
+			Expect(secretsClient.getCallCount).To(BeZero())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			srCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady)
+			Expect(srCond).NotTo(BeNil())
+			Expect(srCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(srCond.Reason).To(Equal(v1alpha1.TenantReasonFound))
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)).To(BeNil())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)).To(BeNil())
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "csp-vast-gold-sc", Tier: "csp-vast-gold"},
+			}))
 		})
 	})
 

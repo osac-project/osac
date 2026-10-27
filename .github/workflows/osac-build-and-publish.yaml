@@ -2071,6 +2071,7 @@ jobs:
         import subprocess
         import sys
         import time
+        import urllib.parse
 
         COMMIT_SHA = os.environ["COMMIT_SHA"]
         COMPONENT = os.environ["COMPONENT"]
@@ -2215,6 +2216,18 @@ jobs:
             # long before any real build even started. Confirmed live:
             # every "Wait for Konflux build" row failed in ~10s.
             check_name = f"Konflux kflux-prd-rh02 / {COMPONENT}-on-release"
+            # check_name filters server-side (and is URL-encoded: it
+            # contains spaces and a slash) rather than fetching every
+            # check-run on this commit and filtering in Python -- a
+            # release commit easily carries far more than the API's
+            # default page-30 worth of check-runs (CI, E2E's own several
+            # suite checks, jira-reference, plus one Konflux check per
+            # image/chart component), so an unfiltered, unpaginated call
+            # could silently never see this component's own check-run at
+            # all. per_page=100 is extra headroom on top of that, not a
+            # substitute for it.
+            query = urllib.parse.urlencode({"check_name": check_name, "per_page": 100})
+            url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/commits/{COMMIT_SHA}/check-runs?{query}"
             # Header passed via curl's own -K stdin config, not -H on the
             # argv -- an argv value is visible to anything that can read
             # this host's process table (ps/proc) for as long as curl
@@ -2222,16 +2235,27 @@ jobs:
             curl_config = (
                 f'header = "Authorization: Bearer {os.environ["GH_TOKEN"]}"\n'
                 'header = "Accept: application/vnd.github+json"\n'
-                f'url = "https://api.github.com/repos/{GITHUB_REPOSITORY}/commits/{COMMIT_SHA}/check-runs"\n'
+                f'url = "{url}"\n'
             )
+            # This whole function is a fast-fail optimization layered on
+            # top of find_component's own TIMEOUT_SECONDS-bounded poll,
+            # not core functionality -- any failure here, including a
+            # hung network call, must degrade to "not confirmed failed
+            # yet" rather than block or crash this loop. Without
+            # --max-time/timeout, a single hung curl call would silently
+            # defeat the entire point of failing fast: it'd sit blocked
+            # until this job's own 85-minute timeout-minutes killed it,
+            # the exact outcome this check exists to avoid.
             try:
                 out = subprocess.run(
-                    ["curl", "-sf", "-K", "-"],
+                    ["curl", "-sf", "--max-time", "15", "-K", "-"],
                     input=curl_config,
-                    capture_output=True, text=True, check=True,
+                    capture_output=True, text=True, check=True, timeout=20,
                 )
                 data = json.loads(out.stdout)
-            except (subprocess.CalledProcessError, json.JSONDecodeError):
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+                     FileNotFoundError, json.JSONDecodeError) as e:
+                print(f"::warning::check-run lookup for {COMPONENT} failed, will retry: {e}", flush=True)
                 return False
             for check_run in data.get("check_runs", []):
                 if check_run.get("name") == check_name and check_run.get("status") == "completed":
@@ -2354,6 +2378,7 @@ jobs:
         import subprocess
         import sys
         import time
+        import urllib.parse
 
         COMMIT_SHA = os.environ["COMMIT_SHA"]
         COMPONENT = os.environ["COMPONENT"]
@@ -2453,6 +2478,18 @@ jobs:
             # long before any real build even started. Confirmed live:
             # every "Wait for Konflux build" row failed in ~10s.
             check_name = f"Konflux kflux-prd-rh02 / {COMPONENT}-on-release"
+            # check_name filters server-side (and is URL-encoded: it
+            # contains spaces and a slash) rather than fetching every
+            # check-run on this commit and filtering in Python -- a
+            # release commit easily carries far more than the API's
+            # default page-30 worth of check-runs (CI, E2E's own several
+            # suite checks, jira-reference, plus one Konflux check per
+            # image/chart component), so an unfiltered, unpaginated call
+            # could silently never see this component's own check-run at
+            # all. per_page=100 is extra headroom on top of that, not a
+            # substitute for it.
+            query = urllib.parse.urlencode({"check_name": check_name, "per_page": 100})
+            url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/commits/{COMMIT_SHA}/check-runs?{query}"
             # Header passed via curl's own -K stdin config, not -H on the
             # argv -- an argv value is visible to anything that can read
             # this host's process table (ps/proc) for as long as curl
@@ -2460,16 +2497,27 @@ jobs:
             curl_config = (
                 f'header = "Authorization: Bearer {os.environ["GH_TOKEN"]}"\n'
                 'header = "Accept: application/vnd.github+json"\n'
-                f'url = "https://api.github.com/repos/{GITHUB_REPOSITORY}/commits/{COMMIT_SHA}/check-runs"\n'
+                f'url = "{url}"\n'
             )
+            # This whole function is a fast-fail optimization layered on
+            # top of find_component's own TIMEOUT_SECONDS-bounded poll,
+            # not core functionality -- any failure here, including a
+            # hung network call, must degrade to "not confirmed failed
+            # yet" rather than block or crash this loop. Without
+            # --max-time/timeout, a single hung curl call would silently
+            # defeat the entire point of failing fast: it'd sit blocked
+            # until this job's own 85-minute timeout-minutes killed it,
+            # the exact outcome this check exists to avoid.
             try:
                 out = subprocess.run(
-                    ["curl", "-sf", "-K", "-"],
+                    ["curl", "-sf", "--max-time", "15", "-K", "-"],
                     input=curl_config,
-                    capture_output=True, text=True, check=True,
+                    capture_output=True, text=True, check=True, timeout=20,
                 )
                 data = json.loads(out.stdout)
-            except (subprocess.CalledProcessError, json.JSONDecodeError):
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+                     FileNotFoundError, json.JSONDecodeError) as e:
+                print(f"::warning::check-run lookup for {COMPONENT} failed, will retry: {e}", flush=True)
                 return False
             for check_run in data.get("check_runs", []):
                 if check_run.get("name") == check_name and check_run.get("status") == "completed":

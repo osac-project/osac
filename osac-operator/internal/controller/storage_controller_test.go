@@ -31,14 +31,21 @@ import (
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
+	"sigs.k8s.io/multicluster-runtime/providers/single"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
@@ -80,6 +87,25 @@ func registeredBackendsClient(total int32) *mockStorageBackendsClient {
 
 func storageReconcileRequest(nn types.NamespacedName) mcreconcile.Request {
 	return mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}}
+}
+
+// testRemoteCluster is a lightweight cluster.Cluster wrapper for multicluster tests.
+type testRemoteCluster struct {
+	cluster.Cluster
+	client client.Client
+}
+
+func (c *testRemoteCluster) GetClient() client.Client {
+	return c.client
+}
+
+func newRemoteTestMcManager(remoteClient client.Client) mcmanager.Manager {
+	mgr, err := mcmanager.WithMultiCluster(
+		testMcManager.GetLocalManager(),
+		single.New("remote", &testRemoteCluster{client: remoteClient}),
+	)
+	Expect(err).NotTo(HaveOccurred())
+	return mgr
 }
 
 func createReadyTenantForStorage(ctx context.Context, name, namespace string) {
@@ -4827,6 +4853,218 @@ var _ = Describe("Storage Controller", func() {
 
 			reqs := r.mapCatalogEventToTenants(ctx, nil)
 			Expect(reqs).NotTo(BeEmpty())
+		})
+	})
+
+	Context("Remote cluster StorageClass target selection", func() {
+		It("should resolve csp-managed and tenant-specific StorageClasses from the registered remote cluster while ignoring local StorageClasses", func() {
+			name := "csp-remote-registered"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			cspCondType := storageOwnedConditionTypes[0]
+
+			// Create local-only CSP and tenant StorageClasses on the management cluster that must be ignored in remote mode.
+			createLabeledStorageClass(ctx, "local-only-csp-gold-sc", cspManagedTenantValue, "csp-remote-reg-gold")
+			createLabeledStorageClass(ctx, "local-only-csp-extra-sc", cspManagedTenantValue, "csp-remote-reg-local-only")
+			createLabeledStorageClass(ctx, "local-only-tenant-vast-sc", name, "osac-remote-fast")
+			waitForStorageClassInCache("local-only-csp-gold-sc")
+			waitForStorageClassInCache("local-only-csp-extra-sc")
+			waitForStorageClassInCache("local-only-tenant-vast-sc")
+
+			vastSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("vast-tenant-config-%s", name),
+					Namespace: secretsNamespace,
+					Labels: map[string]string{
+						osacTenantKey:            name,
+						osacStorageProviderLabel: "vast",
+					},
+				},
+				StringData: map[string]string{"provider": "vast"},
+			}
+			Expect(k8sClient.Create(ctx, vastSecret)).To(Succeed())
+			waitForIndexedClientObject(vastSecret)
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vastSecret))).To(Succeed())
+			})
+
+			remoteScheme := runtime.NewScheme()
+			Expect(clientgoscheme.AddToScheme(remoteScheme)).To(Succeed())
+			remoteCSPStorageClass := &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "remote-csp-gold-sc",
+					Labels: map[string]string{
+						osacTenantKey:        cspManagedTenantValue,
+						osacStorageTierLabel: "csp-remote-reg-gold",
+					},
+				},
+				Provisioner: "ebs.csi.aws.com",
+			}
+			remoteTenantStorageClass := &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: name + "-remote-vast-sc",
+					Labels: map[string]string{
+						osacTenantKey:        name,
+						osacStorageTierLabel: "osac-remote-fast",
+					},
+				},
+				Provisioner: "csi.vastdata.com",
+			}
+			remoteClient := fake.NewClientBuilder().
+				WithScheme(remoteScheme).
+				WithObjects(remoteCSPStorageClass, remoteTenantStorageClass).
+				Build()
+
+			remoteMgr := newRemoteTestMcManager(remoteClient)
+			r := NewStorageReconciler(
+				remoteMgr, testNamespace, "remote",
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-remote-reg-gold", "backend-csp"),
+							newTestStorageTier("osac-remote-fast", "backend-vast"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					switch in.GetId() {
+					case "backend-csp":
+						return newTestCSPManagedBackendGetResponse("aws-ebs"), nil
+					case "backend-vast":
+						return newTestStorageBackendGetResponse("vast"), nil
+					default:
+						return nil, status.Error(codes.NotFound, "not found")
+					}
+				},
+			}
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			cspCond := tenant.GetStatusCondition(cspCondType)
+			Expect(cspCond).NotTo(BeNil())
+			Expect(cspCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cspCond.Reason).To(Equal(v1alpha1.TenantReasonFound))
+			Expect(cspCond.Message).To(ContainSubstring(`tier "csp-remote-reg-gold": StorageClass "remote-csp-gold-sc" (csp-managed)`))
+			Expect(cspCond.Message).NotTo(ContainSubstring("local-only-csp-gold-sc"))
+
+			clusterCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+			Expect(clusterCond).NotTo(BeNil())
+			Expect(clusterCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(tenant.Status.ClusterStorage).To(ContainElement(v1alpha1.ClusterStorageStatus{
+				ClusterName: "remote",
+				Ready:       true,
+				Reason:      v1alpha1.TenantReasonFound,
+			}))
+
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "remote-csp-gold-sc", Tier: "csp-remote-reg-gold"},
+				{Name: name + "-remote-vast-sc", Tier: "osac-remote-fast"},
+			}))
+		})
+
+		It("should fail closed without falling back to local StorageClasses when remote StorageClass List returns Forbidden, and preserve latched readiness on later Forbidden errors", func() {
+			name := "csp-remote-forbidden"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			cspCondType := storageOwnedConditionTypes[0]
+
+			// Local management cluster has a matching StorageClass that must never be used when remote target is configured.
+			createLabeledStorageClass(ctx, "local-forbidden-fallback-sc", cspManagedTenantValue, "csp-remote-forbid-gold")
+			waitForStorageClassInCache("local-forbidden-fallback-sc")
+
+			remoteScheme := runtime.NewScheme()
+			Expect(clientgoscheme.AddToScheme(remoteScheme)).To(Succeed())
+			remoteSC := &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "remote-forbid-gold-sc",
+					Labels: map[string]string{
+						osacTenantKey:        cspManagedTenantValue,
+						osacStorageTierLabel: "csp-remote-forbid-gold",
+					},
+				},
+				Provisioner: "ebs.csi.aws.com",
+			}
+			forbidRemoteList := true
+			remoteClient := fake.NewClientBuilder().
+				WithScheme(remoteScheme).
+				WithObjects(remoteSC).
+				WithInterceptorFuncs(interceptor.Funcs{
+					List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+						if forbidRemoteList {
+							return apierrors.NewForbidden(storagev1.Resource("storageclasses"), "", errors.New("forbidden"))
+						}
+						return c.List(ctx, list, opts...)
+					},
+				}).
+				Build()
+
+			remoteMgr := newRemoteTestMcManager(remoteClient)
+			r := NewStorageReconciler(
+				remoteMgr, testNamespace, "remote",
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-remote-forbid-gold", "backend-csp"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, _ *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestCSPManagedBackendGetResponse("aws-ebs"), nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+
+			By("returning Forbidden on initial onboarding and leaving CSP storage readiness condition unset without using local StorageClasses")
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsForbidden(err)).To(BeTrue())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.GetStatusCondition(cspCondType)).To(BeNil())
+			Expect(tenant.Status.StorageClasses).To(BeEmpty())
+
+			By("completing onboarding once remote RBAC allows StorageClass List")
+			forbidRemoteList = false
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.GetStatusCondition(cspCondType)).NotTo(BeNil())
+			Expect(tenant.GetStatusCondition(cspCondType).Status).To(Equal(metav1.ConditionTrue))
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "remote-forbid-gold-sc", Tier: "csp-remote-forbid-gold"},
+			}))
+
+			By("preserving latched CSP storage readiness ConditionTrue and existing status.storageClasses if a later reconcile encounters Forbidden")
+			forbidRemoteList = true
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsForbidden(err)).To(BeTrue())
+
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.GetStatusCondition(cspCondType)).NotTo(BeNil())
+			Expect(tenant.GetStatusCondition(cspCondType).Status).To(Equal(metav1.ConditionTrue))
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "remote-forbid-gold-sc", Tier: "csp-remote-forbid-gold"},
+			}))
 		})
 	})
 })

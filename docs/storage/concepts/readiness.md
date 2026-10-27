@@ -20,8 +20,10 @@ problems.
 | `StorageOnboardingComplete` | CSP-managed | All expected CSP-managed classes for the configured tiers exist on the target cluster. |
 
 > **Status: Dev Preview.** `StorageOnboardingComplete` is the newer,
-> latched onboarding signal introduced with CSP-managed storage. The
-> OSAC-managed conditions above are unchanged. Unifying readiness reporting
+> latched onboarding signal introduced with CSP-managed storage. It is
+> being renamed to `StorageReady` in an upcoming change; these documents
+> use the current name until the rename lands. The OSAC-managed
+> conditions above are unchanged, and unifying readiness reporting
 > across modes is planned.
 
 ## StorageOnboardingComplete semantics

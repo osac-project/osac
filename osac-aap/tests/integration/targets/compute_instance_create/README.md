@@ -37,9 +37,9 @@ KUBECONFIG="$PWD/tests/integration/kubeconfig-osac-test" \
 The target requires the ComputeInstance, DataVolume and VirtualMachine CRDs.
 Use an API-only test environment: active controllers or admission webhooks can
 introduce provider behavior outside this test's scope.
-The standard setup removes the four workload admission configurations and any
-KubeVirt installation placeholder after stopping CDI/KubeVirt, so writes do not
-call their unavailable services. CRD schema validation stays enabled.
+The standard setup removes workload admission configurations after stopping
+CDI/KubeVirt, so writes do not call their unavailable services. CRD schema
+validation stays enabled.
 
 ## Minimal isolated environment
 
@@ -59,8 +59,13 @@ kubectl --kubeconfig "$KUBECONFIG" apply \
   -f ../osac-operator/config/crd/bases/osac.openshift.io_computeinstances.yaml
 kubectl --kubeconfig "$KUBECONFIG" apply \
   -f tests/integration/targets/compute_instance_create/files/storage_mapping_api_crds.yaml
-uv run ansible-playbook \
-  tests/integration/targets/compute_instance_create/tasks/storage_tier_mapping.yml
+kubectl --kubeconfig "$KUBECONFIG" wait \
+  --for=condition=Established --timeout=60s \
+  crd/computeinstances.osac.openshift.io \
+  crd/datavolumes.cdi.kubevirt.io \
+  crd/virtualmachines.kubevirt.io &&
+  uv run ansible-playbook \
+    tests/integration/targets/compute_instance_create/tasks/storage_tier_mapping.yml
 kind delete cluster --name osac-6682
 ```
 

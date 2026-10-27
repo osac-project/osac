@@ -741,7 +741,6 @@ class GRPCClient:
     def create_baremetal_instance_type(
         self, *, name: str, fabric_port: str, host_label_selector: dict[str, str] | None = None
     ) -> str:
-        selector = host_label_selector or DEFAULT_HOST_LABEL_SELECTOR
         response = self.call(
             service=f"{PRIVATE_API}.BareMetalInstanceTypes/Create",
             data={
@@ -755,6 +754,10 @@ class GRPCClient:
                                 {"name": fabric_port, "role": "fabric", "type": "Ethernet", "speed": "10Gbps"}
                             ],
                         },
+                        # Selector keys are backend-dependent: metal3 matches BMH
+                        # labels (osac.openshift.io/host-type); netbox queries device
+                        # custom fields as cf_<key>, so keys must be valid custom-field
+                        # names there.
                         "host_label_selector": {"match_labels": selector},
                     },
                 }

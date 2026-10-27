@@ -24,9 +24,14 @@ def bmi_template() -> str:
 
 
 @pytest.fixture(scope="session")
-def bmi_instance_type(private_grpc: GRPCClient, bmi_template: str) -> Generator[str, None, None]:
+def bmi_instance_type(
+    private_grpc: GRPCClient, bmi_template: str, inventory_backend: InventoryBackend
+) -> Generator[str, None, None]:
     yield from bmi_instance_type_for_tests(
-        private_grpc, template_name=bmi_template, configured=env("OSAC_BMI_INSTANCE_TYPE", "").strip()
+        private_grpc,
+        template_name=bmi_template,
+        configured=env("OSAC_BMI_INSTANCE_TYPE", "").strip(),
+        host_selector=inventory_backend.default_host_selector(),
     )
 
 

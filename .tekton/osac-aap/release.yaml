@@ -50,9 +50,14 @@ spec:
   # consistency -- today's image otherwise ends up with two different
   # ansible-core versions baked in, confirmed live via a real build log --
   # and because Cachi2's pip prefetch needs a pinned, resolvable spec).
+  # This is the REAL installed version, independent of
+  # requirements-build-tools.txt's own ansible-core pin (which only
+  # covers Hermeto's build-tool prefetch cache) -- confirmed live,
+  # bumping only that file's pin left this one shipping the unpatched,
+  # GHSA-w8p5-mx5w-cpqj-vulnerable ansible-core. Keep both in sync.
   - name: build-args
     value:
-      - ANSIBLE_INSTALL_REFS=ansible-core==2.20.3 ansible-runner==2.4.3
+      - ANSIBLE_INSTALL_REFS=ansible-core==2.20.10 ansible-runner==2.4.3
   pipelineSpec:
     description: |
       This pipeline is ideal for building container images from a Containerfile while maintaining trust after pipeline customization.

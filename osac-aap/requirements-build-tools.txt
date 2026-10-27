@@ -235,3 +235,28 @@ expandvars==1.1.2
 # SECOND coexisting Cython version, same pattern as setuptools/wheel/
 # setuptools-scm above.
 Cython==3.1.8
+# ansible-builder's own build-time introspection (introspect.py, vendored
+# under execution-environment/ansible-builder-scripts/) independently
+# scans every vendored collection's own requirements.txt and merges them
+# into the final pip install, separately from and not fully covered by
+# this file or execution-environment/requirements.txt -- confirmed live,
+# a real release build failed on "Could not find a version that
+# satisfies the requirement datetime (from versions: none)". Traced to
+# vendor/ansible_collections/purestorage/flashblade/requirements.txt,
+# which declares 6 unpinned deps (netaddr, datetime, pycountry, pytz,
+# urllib3, py-pure-client) -- netaddr/pytz/urllib3/py-pure-client are
+# already covered by existing pins in this file or
+# execution-environment/requirements.txt; only these two were missing.
+datetime==6.0
+pycountry==26.2.16
+# datetime's own build-system.requires is setuptools>=78.1.1,<81 (plus
+# an unconstrained wheel, already satisfied by wheel==0.48.0 above) --
+# confirmed via its real sdist pyproject.toml -- which neither existing
+# setuptools pin (70.0.0, 82.0.0) satisfies. A THIRD coexisting
+# setuptools version, same pattern as above; its own build-system.
+# requires is commented out in its real sdist (self-hosting, no further
+# cascade).
+setuptools==80.10.2
+# pycountry's own build backend is poetry-core (unconstrained),
+# confirmed via its real sdist pyproject.toml -- already satisfied by
+# poetry-core==2.5.0 above, no further need.

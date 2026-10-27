@@ -1,7 +1,8 @@
 # OSAC metering
 
-Collects fulfillment lifecycle events, publishes CloudEvents to Kafka, and
-provides provider adapters for downstream billing integrations.
+Folds fulfillment's per-tenant event topics into usage, sends per-minute
+differences to the billing provider, and provides provider adapters for
+downstream billing integrations.
 
 This component is part of the OSAC monorepo, not an isolated project. Its APIs,
 generated artifacts, deployment configuration, and runtime behavior may affect
@@ -17,15 +18,17 @@ respective areas.
 
 - Component setup: [`README.md`](README.md)
 - Event schema: `schema/`
-- Producer: `metering-service/`
+- Fold, rounds, relay, and rules: `metering-service/`
 - Adapter runner and contracts: `adapters/`
-- Deployment values: `charts/osac-metering/values.yaml`
+- Deployment values and rule revisions: `charts/osac-metering/`
 
 ## Invariants
 
 - `schema/`, `metering-service/`, and `adapters/` are separate Go modules; test the module you change.
 - Changes under `schema/` affect both `metering-service/` and `adapters/`; run the root `make test` after schema changes.
 - Metering events use the shared CloudEvents schema and preserve resource transition ordering.
+- The same events and rules always produce the same usage, across restarts, upgrades, and database restores.
+- The fold writes facts and event offsets in one transaction; nothing bills twice and none is lost.
 - Kafka offsets are committed only after successful processing and flush.
 - Preserve deduplication, ordering, retry, and DLQ behavior in the shared adapter `Runner`; concrete adapters must not reimplement it.
 - A DLQ send failure must not silently acknowledge the source event.
@@ -38,15 +41,15 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-met
 
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
-| Event schema or transition mapping | Unit across affected modules | `make test` |
-| Projection/database code | Component integration (database) | `make test` |
-| Fulfillment client CA parsing, TLS verification, or bundle rotation | Unit with local TLS endpoint plus Helm render | `make test` and `make -C ../osac-installer fulfillment-trust-render-test`; deployed Watch contract remains [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) |
-| Fulfillment client service-account OAuth, credential rotation, or issuer configuration | Unit with local TLS token endpoint plus profile Helm render | `make test` and `make -C ../osac-installer metering-auth-render-test`; deployed cross-cluster auth remains with QE under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) |
-| Kafka producer/consumer, CloudEvents transport, offsets, retries, or DLQ | Component integration | Required suite is currently unavailable; track [OSAC-4846](https://redhat.atlassian.net/browse/OSAC-4846) |
-| Fulfillment Watch or gRPC event ingestion | Contract or component integration | Required suite is currently unavailable; track the relevant [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) task |
+| Event schema or heartbeat shape | Unit across affected modules | `make test` |
+| Database, fold, rounds, relay, or usage evaluation | Component integration against real PostgreSQL and Kafka | `make test` |
+| Rule revisions | Unit, plus the chart-sync check against the shipped ConfigMap | `make test` |
+| Kafka producer/consumer, CloudEvents transport, offsets, retries, or DLQ | Component integration | `make test` |
 | Provider adapters | Unit plus component/E2E coverage for the provider boundary | `make test` and the qualifying provider suite |
+| Billing provider contract | Contract test against a real M360 tenant | `M360_TEST_API_URL`/`M360_TEST_API_KEY`/`M360_TEST_TENANT` gate `adapters/m360/contract_test.go` |
 
-Do not set `SKIP_DB_TESTS` when validating projection/database behavior.
+Do not skip the real PostgreSQL and Kafka suites when validating database,
+fold, round, or relay behavior; they are the determinism gate for billing.
 
 ## Generated files
 

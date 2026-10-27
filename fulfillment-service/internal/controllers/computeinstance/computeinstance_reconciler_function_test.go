@@ -2840,6 +2840,99 @@ var _ = Describe("instance_type resolution in reconciler", func() {
 		Expect(list.Items[0].Labels).To(HaveKeyWithValue(labels.InstanceTypeName, "test-type"))
 	})
 
+	It("moves only the instance-type-name label on a name-only resize", func() {
+		// Two instance type names can resolve to identical vCPUs, memory, and
+		// GPU specs. The resize then changes nothing the CR spec hashes: the
+		// desired config version stays put and the operator's provisioning job
+		// has nothing to do, so only the label moves. The label is what the
+		// operator gates the running-type stamp on, so it must move even though
+		// the spec does not.
+		mockInstanceTypesClient := NewMockInstanceTypesClient(ctrl)
+		mockInstanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Id: "test-type",
+					Spec: privatev1.InstanceTypeSpec_builder{
+						Vcpus:     4,
+						MemoryGib: 8,
+					}.Build(),
+				}.Build(),
+			}.Build(), nil).
+			AnyTimes()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), "test-hub").
+			Return(&controllers.HubEntry{
+				Namespace: hubNamespace,
+				Client:    fakeClient,
+			}, nil).
+			AnyTimes()
+
+		hubsClient := controllers.NewMockHubsClient(ctrl)
+
+		computeInstancesClient := NewMockComputeInstancesClient(ctrl)
+		computeInstancesClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.ComputeInstancesUpdateRequest, opts ...grpc.CallOption) (*privatev1.ComputeInstancesUpdateResponse, error) {
+				return &privatev1.ComputeInstancesUpdateResponse{Object: req.GetObject()}, nil
+			}).
+			AnyTimes()
+
+		instanceWith := func(typeName string) *privatev1.ComputeInstance {
+			return privatev1.ComputeInstance_builder{
+				Id: "test-instance-name-only-resize",
+				Metadata: privatev1.Metadata_builder{
+					Finalizers: []string{finalizers.Controller},
+					Tenant:     "test-tenant",
+				}.Build(),
+				Spec: privatev1.ComputeInstanceSpec_builder{
+					Template:     &privatev1.ComputeInstanceTemplateReference{Name: "osac.templates.ocp_virt_vm"},
+					InstanceType: &privatev1.InstanceTypeReference{Name: typeName},
+					NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+						privatev1.ComputeNetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
+					},
+				}.Build(),
+				Status: privatev1.ComputeInstanceStatus_builder{
+					State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+					Hub:   "test-hub",
+				}.Build(),
+			}.Build()
+		}
+
+		f := &function{
+			logger:                 logger,
+			hubCache:               hubCache,
+			networkingHubReader:    readyComputeNetworkingHubReader("test-hub", hubNamespace, fakeClient),
+			computeInstancesClient: computeInstancesClient,
+			hubsClient:             hubsClient,
+			instanceTypesClient:    mockInstanceTypesClient,
+			maskCalculator:         nil,
+		}
+
+		// The first reconcile creates the CR toward the previous type.
+		Expect(f.run(ctx, instanceWith("old-type"))).ToNot(HaveOccurred())
+
+		list := &osacv1alpha1.ComputeInstanceList{}
+		Expect(fakeClient.List(ctx, list)).ToNot(HaveOccurred())
+		Expect(list.Items).To(HaveLen(1))
+		Expect(list.Items[0].Labels).To(HaveKeyWithValue(labels.InstanceTypeName, "old-type"))
+		specBefore := list.Items[0].Spec
+
+		// The second reconcile applies a type whose name differs but whose
+		// resolved resources are identical.
+		Expect(f.run(ctx, instanceWith("new-type"))).ToNot(HaveOccurred())
+
+		list = &osacv1alpha1.ComputeInstanceList{}
+		Expect(fakeClient.List(ctx, list)).ToNot(HaveOccurred())
+		Expect(list.Items).To(HaveLen(1))
+		// The spec the config version hashes is unchanged...
+		Expect(list.Items[0].Spec).To(Equal(specBefore))
+		// ...while the label names the new type.
+		Expect(list.Items[0].Labels).To(HaveKeyWithValue(labels.InstanceTypeName, "new-type"))
+	})
+
 	It("returns error when InstanceType lookup fails (triggers requeue)", func() {
 		mockInstanceTypesClient := NewMockInstanceTypesClient(ctrl)
 		mockInstanceTypesClient.EXPECT().

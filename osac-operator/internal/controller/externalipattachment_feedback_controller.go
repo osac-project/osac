@@ -133,37 +133,55 @@ func newExternalIPAttachmentSyncUpdate(eipClient privatev1.ExternalIPsClient, hu
 
 func newExternalIPAttachmentSyncDelete(hubClient clnt.Client) func(context.Context, *v1alpha1.ExternalIPAttachment, *privatev1.ExternalIPAttachment) error {
 	return func(ctx context.Context, obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) error {
-		if err := backfillAttachmentStateTransitionTime(ctx, hubClient, obj); err != nil {
-			return err
-		}
 		if err := syncExternalIPAttachmentDelete(ctx, obj, remote); err != nil {
 			return err
 		}
-		transition := obj.Status.StateTransitionTime
-		var transitionTime *timestamppb.Timestamp
-		if transition != nil {
-			transitionTime = timestamppb.New(transition.Time)
-		}
-		return syncExternalIPAttachmentParentCRD(ctx, hubClient, obj.Namespace, remote.GetSpec().GetExternalIp().GetId(), false, transitionTime)
+		// The delete sync leaves the reported time on the remote; the parent CRD
+		// records the same time fulfillment received.
+		return syncExternalIPAttachmentParentCRD(ctx, hubClient, obj.Namespace, remote.GetSpec().GetExternalIp().GetId(),
+			false, remote.GetStatus().GetStateTransitionTime())
 	}
 }
 
+// syncExternalIPAttachmentDelete maps ExternalIPAttachment CR status during deletion.
+// Failed attachments report FAILED, and everything else reports DELETING: an attachment
+// whose deletion timestamp is set is going away whatever phase its status still carries,
+// including the empty phase of an attachment deleted before any controller status write.
+//
+// The state and its time come from the same place. The Failed phase the CR records dates
+// its own transition, an event the controller observed. The DELETING reported for every
+// other phase is forced: the phase predates the deletion, so its time is not the
+// deletion's — the deletion started at the deletion timestamp, and dating the report at
+// the old phase's time would erase the billed span up to the deletion. An attachment
+// deleted before any controller status write has no phase time either, and the deletion
+// timestamp covers it.
 func syncExternalIPAttachmentDelete(_ context.Context, obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) error {
-	syncExternalIPAttachmentStateTransitionTime(obj, remote)
-	if obj.Status.Phase == v1alpha1.ExternalIPAttachmentPhaseFailed {
+	var at *timestamppb.Timestamp
+	switch obj.Status.Phase {
+	case v1alpha1.ExternalIPAttachmentPhaseFailed:
 		remote.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_FAILED)
-		return nil
+		at = stateTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
+	default:
+		remote.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_DELETING)
+		at = laterTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
 	}
-	remote.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_DELETING)
+	if at == nil {
+		if remote.GetStatus().GetStateTransitionTime() != nil {
+			return nil
+		}
+		return fmt.Errorf("external IP attachment %s has no state transition time", remote.GetId())
+	}
+	remote.GetStatus().SetStateTransitionTime(at)
 	return nil
 }
 
 func syncExternalIPAttachmentStateTransitionTime(obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) {
-	if obj.Status.StateTransitionTime == nil {
+	at := stateTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
+	if at == nil {
 		remote.GetStatus().ClearStateTransitionTime()
 		return
 	}
-	remote.GetStatus().SetStateTransitionTime(timestamppb.New(obj.Status.StateTransitionTime.Time))
+	remote.GetStatus().SetStateTransitionTime(at)
 }
 
 func syncExternalIPAttachmentState(ctx context.Context, obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) {

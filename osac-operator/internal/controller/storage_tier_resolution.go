@@ -51,11 +51,15 @@ func (r *tierResolutionResult) conditionMessage() string {
 
 var tierLabelPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$`)
 
+// joinStorageClassNames renders the names of one tier's StorageClasses, sorted: the
+// client's List returns them in no defined order, and a condition or event message
+// that reorders its names between reconciles reads as a new problem.
 func joinStorageClassNames(items []storagev1.StorageClass) (joined string, names []string) {
 	names = make([]string, len(items))
 	for i := range items {
 		names[i] = items[i].GetName()
 	}
+	sort.Strings(names)
 	return strings.Join(names, ", "), names
 }
 

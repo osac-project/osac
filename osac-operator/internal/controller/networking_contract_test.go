@@ -74,6 +74,69 @@ func TestDeleteFeedbackCopiesAuthoritativeTransitionTimes(t *testing.T) {
 	})
 }
 
+// A resource deleted before any controller status write reaches fulfillment carries no
+// transition time. Its deletion started at the deletion timestamp, so the delete feedback
+// must report that time: a missing time makes fulfillment reject the state change and the
+// resource can never finish deleting.
+func TestDeleteFeedbackReportsDeletionTimeWhenStatusWasNeverWritten(t *testing.T) {
+	deleted := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+
+	t.Run("ExternalIP", func(t *testing.T) {
+		obj := &v1alpha1.ExternalIP{
+			ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &metav1.Time{Time: deleted}},
+			Status:     v1alpha1.ExternalIPStatus{},
+		}
+		remote := &privatev1.ExternalIP{Status: &privatev1.ExternalIPStatus{
+			State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
+			StateTransitionTime: timestamppb.New(deleted.Add(-time.Minute)),
+		}}
+
+		if err := syncExternalIPDelete(context.Background(), obj, remote); err != nil {
+			t.Fatal(err)
+		}
+		if remote.GetStatus().GetState() != privatev1.ExternalIPState_EXTERNAL_IP_STATE_DELETING {
+			t.Fatalf("state = %v, want DELETING", remote.GetStatus().GetState())
+		}
+		assertTransitionTime(t, remote.GetStatus().GetStateTransitionTime(), deleted)
+	})
+
+	t.Run("ExternalIPAttachment", func(t *testing.T) {
+		obj := &v1alpha1.ExternalIPAttachment{
+			ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &metav1.Time{Time: deleted}},
+			Status:     v1alpha1.ExternalIPAttachmentStatus{},
+		}
+		remote := &privatev1.ExternalIPAttachment{Status: &privatev1.ExternalIPAttachmentStatus{
+			StateTransitionTime: timestamppb.New(deleted.Add(-time.Minute)),
+		}}
+
+		if err := syncExternalIPAttachmentDelete(context.Background(), obj, remote); err != nil {
+			t.Fatal(err)
+		}
+		if remote.GetStatus().GetState() != privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_DELETING {
+			t.Fatalf("state = %v, want DELETING", remote.GetStatus().GetState())
+		}
+		assertTransitionTime(t, remote.GetStatus().GetStateTransitionTime(), deleted)
+	})
+
+	t.Run("NATGateway", func(t *testing.T) {
+		obj := &v1alpha1.NATGateway{
+			ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &metav1.Time{Time: deleted}},
+			Status:     v1alpha1.NATGatewayStatus{},
+		}
+		remote := &privatev1.NATGateway{Status: &privatev1.NATGatewayStatus{
+			StateTransitionTime: timestamppb.New(deleted.Add(-time.Minute)),
+		}}
+
+		if err := syncNATGatewayDelete(context.Background(), obj, remote); err != nil {
+			t.Fatal(err)
+		}
+		if remote.GetStatus().GetState() != privatev1.NATGatewayState_NAT_GATEWAY_STATE_DELETING {
+			t.Fatalf("state = %v, want DELETING", remote.GetStatus().GetState())
+		}
+		assertTransitionTime(t, remote.GetStatus().GetStateTransitionTime(), deleted)
+	})
+}
+
 func TestExternalIPDeleteRecordsTransitionTime(t *testing.T) {
 	status := &v1alpha1.ExternalIPStatus{}
 

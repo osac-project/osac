@@ -870,7 +870,8 @@
             },
             "topicRetention": {
               "type": "string",
-              "description": "How long a tenant's event topic keeps records: a negative duration like '-1s' keeps them indefinitely, or a positive one like '168h'",
+              "description": "How long a tenant's event topic keeps records: a negative duration like '-1s' keeps them indefinitely, or a positive one like '168h'. Only applies to topics the publisher creates",
+              "pattern": "^-?(0|([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)))+$",
               "default": "-1s"
             }
           }
@@ -1788,11 +1789,6 @@
       "type": "object",
       "description": "OSAC Metering Service configuration",
       "properties": {
-        "enabled": {
-          "type": "boolean",
-          "description": "Deploy the OSAC Metering Service (opt-in)",
-          "default": false
-        },
         "image": {
           "type": "object",
           "properties": {
@@ -1824,14 +1820,15 @@
           },
           "additionalProperties": false
         },
-        "reconciliation": {
+        "topics": {
           "type": "object",
-          "description": "Metering reconciliation configuration",
+          "description": "Per-tenant heartbeat and dead-letter topics metering creates when it first serves a tenant",
           "properties": {
-            "interval": {
+            "retentionMs": {
               "type": "string",
-              "description": "Reconciliation interval (Go duration format)",
-              "default": "60m"
+              "description": "How long the topics keep records, in milliseconds; -1 keeps them indefinitely. The retention is the recovery window, because metering rebuilds its database from the topics",
+              "pattern": "^(-1|[1-9][0-9]*)$",
+              "default": "-1"
             }
           },
           "additionalProperties": false
@@ -1860,6 +1857,11 @@
                 }
               },
               "additionalProperties": false
+            },
+            "maxEvents": {
+              "type": "integer",
+              "description": "How many heartbeats the echo adapter keeps for E2E assertions; a long parallel session evicts old events below this",
+              "minimum": 1
             }
           },
           "additionalProperties": false
@@ -1931,6 +1933,40 @@
         "global": {
           "type": "object",
           "description": "Helm-injected global values (passed automatically to subcharts)"
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "description": "Prometheus ServiceMonitor for the metering service and adapters. Requires a Prometheus operator or OpenShift user-workload monitoring.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create ServiceMonitors scraping the /metrics endpoints",
+              "default": false
+            },
+            "labels": {
+              "type": "object",
+              "description": "Extra labels for Prometheus instances that select monitors by label",
+              "additionalProperties": { "type": "string" }
+            }
+          },
+          "additionalProperties": false
+        },
+        "prometheusRule": {
+          "type": "object",
+          "description": "PrometheusRule with alert rules over the metering metrics: stalled rounds, round failures, outbox backlog, skipped events, dead-letter depth",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create the PrometheusRule with the metering alerts",
+              "default": false
+            },
+            "labels": {
+              "type": "object",
+              "description": "Extra labels for Prometheus instances that select rules by label",
+              "additionalProperties": { "type": "string" }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -2300,7 +2336,7 @@
     },
     "hubAccess": {
       "type": "object",
-      "description": "Hub access SA, RBAC, and create-hub hook (CI/dev only)",
+      "description": "Hub access SA, RBAC, and create-hub hook: the identity the fulfillment service uses on the local hub, for example to create tenant Kafka topics",
       "properties": {
         "enabled": {
           "type": "boolean",

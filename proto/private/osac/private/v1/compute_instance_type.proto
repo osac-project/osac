@@ -149,7 +149,7 @@ message ComputeInstanceSpec {
 
   // Reference to a compute instance catalog item. Mutually exclusive with template on Create; retained as immutable provenance afterward.
   // When set, the server fetches the catalog item and applies its typed field policies.
-  ComputeInstanceCatalogItemReference catalog_item = 15;
+  ComputeInstanceCatalogItemReference catalog_item = 15 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_CONSTANT}];
 
   // Reserved field numbers for removed fields (do not reuse).
   reserved 16;

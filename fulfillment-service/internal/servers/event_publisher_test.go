@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -27,7 +28,6 @@ import (
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
@@ -37,6 +37,10 @@ import (
 )
 
 var _ = Describe("Event publisher", Ordered, func() {
+	var (
+		kafkaBroker *kafka.Container
+		kafkaConfig *sarama.Config
+	)
 	type consumedEvent struct {
 		topic   string
 		key     string
@@ -44,32 +48,34 @@ var _ = Describe("Event publisher", Ordered, func() {
 		event   *privatev1.Event
 	}
 
-	var kafkaBroker *kafka.Container
-
-	newKafkaConfig := func() *sarama.Config {
-		config, err := kafkaBroker.Config()
-		ExpectWithOffset(1, err).ToNot(HaveOccurred())
-		return config
-	}
-
-	newKafkaClient := func() sarama.Client {
-		client, err := sarama.NewClient([]string{kafkaBroker.Brokers()}, newKafkaConfig())
-		ExpectWithOffset(1, err).ToNot(HaveOccurred())
-		DeferCleanup(client.Close)
-		return client
-	}
-
-	newTestEventPublisherBuilder := func(pool *pgxpool.Pool) *EventPublisherBuilder {
+	newTestEventPublisher := func(pool *pgxpool.Pool, registry *prometheus.Registry) (*EventPublisher, error) {
 		return NewEventPublisher().
 			SetLogger(logger).
 			SetDatabasePool(pool).
-			SetKafkaConfig(newKafkaConfig()).
+			SetKafkaConfig(kafkaConfig).
 			SetKafkaBrokers(kafkaBroker.Brokers()).
-			SetMetricsRegisterer(prometheus.NewRegistry())
+			SetMetricsRegisterer(registry).
+			Build()
 	}
 
-	newTestEventPublisher := func(pool *pgxpool.Pool) (*EventPublisher, error) {
-		return newTestEventPublisherBuilder(pool).Build()
+	metricValue := func(registry *prometheus.Registry, name string) float64 {
+		GinkgoHelper()
+		families, err := registry.Gather()
+		Expect(err).ToNot(HaveOccurred())
+		for _, family := range families {
+			if family.GetName() != name {
+				continue
+			}
+			Expect(family.GetMetric()).To(HaveLen(1))
+			metric := family.GetMetric()[0]
+			if metric.GetCounter() != nil {
+				return metric.GetCounter().GetValue()
+			}
+			Expect(metric.GetGauge()).ToNot(BeNil())
+			return metric.GetGauge().GetValue()
+		}
+		// Counter vectors are absent from the registry until their first use.
+		return 0
 	}
 
 	kafkaHasTopic := func(client sarama.Client, topic string) bool {
@@ -144,25 +150,8 @@ var _ = Describe("Event publisher", Ordered, func() {
 	}
 
 	notifyChanges := func(ctx context.Context, pool *pgxpool.Pool) {
-		_, err := pool.Exec(ctx, "select pg_notify($1, 'test')", defaultEventPublisherChannel)
+		_, err := pool.Exec(ctx, "select pg_notify($1, 'test')", "changes")
 		ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	}
-
-	ensureKafkaTopic := func(client sarama.Client, topic string) {
-		adminConfig, err := kafkaBroker.Config()
-		ExpectWithOffset(1, err).ToNot(HaveOccurred())
-		admin, err := sarama.NewClusterAdmin([]string{kafkaBroker.Brokers()}, adminConfig)
-		ExpectWithOffset(1, err).ToNot(HaveOccurred())
-		DeferCleanup(admin.Close)
-
-		err = admin.CreateTopic(topic, &sarama.TopicDetail{
-			NumPartitions:     1,
-			ReplicationFactor: 1,
-		}, false)
-		ExpectWithOffset(1, err).To(Succeed())
-		EventuallyWithOffset(1, func() bool {
-			return kafkaHasTopic(client, topic)
-		}).WithTimeout(5 * time.Second).WithPolling(50 * time.Millisecond).Should(BeTrue())
 	}
 
 	BeforeAll(func() {
@@ -175,6 +164,8 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 		err = kafkaBroker.Start(startCtx)
+		Expect(err).ToNot(HaveOccurred())
+		kafkaConfig, err = kafkaBroker.Config()
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func() {
 			stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Minute)
@@ -196,7 +187,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 
 	Describe("Creation", func() {
 		It("Can be created when all the required parameters are set", func() {
-			publisher, err := newTestEventPublisher(&pgxpool.Pool{})
+			publisher, err := newTestEventPublisher(&pgxpool.Pool{}, prometheus.NewRegistry())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(publisher).ToNot(BeNil())
 			Expect(publisher.Close()).To(Succeed())
@@ -204,7 +195,12 @@ var _ = Describe("Event publisher", Ordered, func() {
 		})
 
 		It("Accepts a publish callback", func() {
-			publisher, err := newTestEventPublisherBuilder(&pgxpool.Pool{}).
+			publisher, err := NewEventPublisher().
+				SetLogger(logger).
+				SetDatabasePool(&pgxpool.Pool{}).
+				SetKafkaConfig(kafkaConfig).
+				SetKafkaBrokers(kafkaBroker.Brokers()).
+				SetMetricsRegisterer(prometheus.NewRegistry()).
 				SetPublishCallback(func(context.Context, *privatev1.Event) error {
 					return nil
 				}).
@@ -230,12 +226,22 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(publisher).To(BeNil())
 		})
 
-		It("Can't be created without a Kafka client", func() {
+		It("Can't be created without a Kafka configuration", func() {
 			publisher, err := NewEventPublisher().
 				SetLogger(logger).
 				SetDatabasePool(&pgxpool.Pool{}).
 				Build()
 			Expect(err).To(MatchError("kafka configuration is mandatory"))
+			Expect(publisher).To(BeNil())
+		})
+
+		It("Can't be created without Kafka bootstrap brokers", func() {
+			publisher, err := NewEventPublisher().
+				SetLogger(logger).
+				SetDatabasePool(&pgxpool.Pool{}).
+				SetKafkaConfig(kafkaConfig).
+				Build()
+			Expect(err).To(MatchError("kafka brokers are mandatory"))
 			Expect(publisher).To(BeNil())
 		})
 
@@ -281,6 +287,25 @@ var _ = Describe("Event publisher", Ordered, func() {
 				Build()
 			Expect(err).To(MatchError("topic prefix is mandatory"))
 			Expect(publisher).To(BeNil())
+		})
+
+		It("Creates with any retention: negative and zero both mean indefinite", func() {
+			// A negative duration is the spelled-out indefinite form, matching
+			// the broker's own retention.ms = -1; the zero duration means it too.
+			for _, retention := range []time.Duration{-time.Second, 0} {
+				publisher, err := NewEventPublisher().
+					SetLogger(logger).
+					SetDatabasePool(&pgxpool.Pool{}).
+					SetKafkaConfig(kafkaConfig).
+					SetKafkaBrokers(kafkaBroker.Brokers()).
+					SetKafkaTopicPrefix("osac.events.").
+					SetKafkaTopicRetention(retention).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				Expect(publisher).ToNot(BeNil())
+				Expect(publisher.retentionMS()).To(Equal("-1"))
+				Expect(publisher.Close()).To(Succeed())
+			}
 		})
 
 		It("Can't be created with an empty table", func() {
@@ -342,18 +367,6 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(err).To(MatchError("channel '1changes' should not start with a digit"))
 			Expect(publisher).To(BeNil())
 		})
-
-		It("Converts table and channel names to lowercase", func() {
-			publisher, err := newTestEventPublisherBuilder(&pgxpool.Pool{}).
-				SetTable("Changes").
-				SetChannel("Changes_Channel").
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-			Expect(publisher).ToNot(BeNil())
-			Expect(publisher.dbTable).To(Equal("changes"))
-			Expect(publisher.dbChannel).To(Equal("changes_channel"))
-			Expect(publisher.Close()).To(Succeed())
-		})
 	})
 
 	Describe("Encode change event", func() {
@@ -361,6 +374,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 			encodeCtx context.Context
 			pool      *pgxpool.Pool
 			client    sarama.Client
+			registry  *prometheus.Registry
 			pub       *EventPublisher
 		)
 
@@ -376,9 +390,14 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pool.Close)
 
-			client = newKafkaClient()
+			config, err := kafkaBroker.Config()
+			Expect(err).ToNot(HaveOccurred())
+			client, err = sarama.NewClient([]string{kafkaBroker.Brokers()}, config)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(client.Close)
 
-			pub, err = newTestEventPublisher(pool)
+			registry = prometheus.NewRegistry()
+			pub, err = newTestEventPublisher(pool, registry)
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pub.Close)
 		})
@@ -459,7 +478,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 				insert into changes ("table", op, data)
 				values ('projects', $1, $2::jsonb)
 				returning id
-			`, eventPublisherOpSignal, fmt.Sprintf(`{
+			`, "SIGNAL", fmt.Sprintf(`{
 				"id": "p-signal",
 				"name": "p-signal",
 				"tenant": %q,
@@ -690,7 +709,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 				Expect(err).ToNot(HaveOccurred())
 				return count
 			}).WithTimeout(5 * time.Second).Should(Equal(0))
-			Expect(testutil.ToFloat64(pub.metrics.publishErrors.With(nil))).To(Equal(float64(1)))
+			Expect(metricValue(registry, "event_publish_errors_total")).To(Equal(float64(1)))
 		})
 
 		It("Does not publish a row that has an empty tenant", func() {
@@ -713,7 +732,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 				Expect(err).ToNot(HaveOccurred())
 				return count
 			}).WithTimeout(5 * time.Second).Should(Equal(0))
-			Expect(testutil.ToFloat64(pub.metrics.publishErrors.With(nil))).To(Equal(float64(1)))
+			Expect(metricValue(registry, "event_publish_errors_total")).To(Equal(float64(1)))
 		})
 	})
 
@@ -737,9 +756,13 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pool.Close)
 
-			client = newKafkaClient()
+			config, err := kafkaBroker.Config()
+			Expect(err).ToNot(HaveOccurred())
+			client, err = sarama.NewClient([]string{kafkaBroker.Brokers()}, config)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(client.Close)
 
-			pub, err = newTestEventPublisher(pool)
+			pub, err = newTestEventPublisher(pool, prometheus.NewRegistry())
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pub.Close)
 		})
@@ -820,6 +843,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 			drainCtx context.Context
 			pool     *pgxpool.Pool
 			client   sarama.Client
+			registry *prometheus.Registry
 			pub      *EventPublisher
 		)
 
@@ -835,9 +859,14 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pool.Close)
 
-			client = newKafkaClient()
+			config, err := kafkaBroker.Config()
+			Expect(err).ToNot(HaveOccurred())
+			client, err = sarama.NewClient([]string{kafkaBroker.Brokers()}, config)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(client.Close)
 
-			pub, err = newTestEventPublisher(pool)
+			registry = prometheus.NewRegistry()
+			pub, err = newTestEventPublisher(pool, registry)
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pub.Close)
 		})
@@ -905,7 +934,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 				Expect(pub.Close()).To(Succeed())
 
 				var err error
-				pub, err = newTestEventPublisher(pool)
+				pub, err = newTestEventPublisher(pool, prometheus.NewRegistry())
 				Expect(err).ToNot(HaveOccurred())
 				DeferCleanup(pub.Close)
 				insertChange(tenant, "obj-2", "INSERT")
@@ -958,9 +987,10 @@ var _ = Describe("Event publisher", Ordered, func() {
 							for name, detail := range request.TopicDetails {
 								Expect(detail.NumPartitions).To(Equal(int32(1)))
 								Expect(detail.ReplicationFactor).To(Equal(int16(-1)))
-								Expect(detail.ConfigEntries).To(HaveLen(2))
+								Expect(detail.ConfigEntries).To(HaveLen(3))
 								Expect(*detail.ConfigEntries["retention.ms"]).To(Equal("-1"))
 								Expect(*detail.ConfigEntries["retention.bytes"]).To(Equal("-1"))
+								Expect(*detail.ConfigEntries["cleanup.policy"]).To(Equal("delete"))
 								topics = append(topics, name)
 							}
 						}
@@ -992,12 +1022,13 @@ var _ = Describe("Event publisher", Ordered, func() {
 					config.Admin.Retry.Max = 0
 					config.Net.ReadTimeout = time.Second
 					var err error
+					registry = prometheus.NewRegistry()
 					pub, err = NewEventPublisher().
 						SetLogger(logger).
 						SetDatabasePool(pool).
 						SetKafkaConfig(config).
 						SetKafkaBrokers(broker.Addr()).
-						SetMetricsRegisterer(prometheus.NewRegistry()).
+						SetMetricsRegisterer(registry).
 						SetListenWaitTimeout(50 * time.Millisecond).
 						Build()
 					Expect(err).ToNot(HaveOccurred())
@@ -1014,7 +1045,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 					Eventually(countChanges).WithTimeout(5 * time.Second).Should(BeZero())
 					Expect(createdTopics()).To(Equal([]string{topic}))
 					Expect(topicChecks()).To(Equal(1))
-					Expect(testutil.ToFloat64(pub.metrics.publishTotal.With(nil))).To(Equal(float64(2)))
+					Expect(metricValue(registry, "event_publish_total")).To(Equal(float64(2)))
 				})
 
 				It("Does not try to create an existing topic", func() {
@@ -1033,7 +1064,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 					defer stopPublisher(cancel, done)
 					Eventually(countChanges).WithTimeout(5 * time.Second).Should(BeZero())
 					Expect(createdTopics()).To(Equal([]string{topic}))
-					Expect(testutil.ToFloat64(pub.metrics.publishTotal.With(nil))).To(Equal(float64(1)))
+					Expect(metricValue(registry, "event_publish_total")).To(Equal(float64(1)))
 				})
 
 				It("Retains the event when the broker does not answer a metadata request", func() {
@@ -1042,10 +1073,10 @@ var _ = Describe("Event publisher", Ordered, func() {
 					cancel, done := startPublisher(pub)
 					defer stopPublisher(cancel, done)
 					Eventually(func() float64 {
-						return testutil.ToFloat64(pub.metrics.publishErrors.With(nil))
+						return metricValue(registry, "event_publish_errors_total")
 					}).WithTimeout(5 * time.Second).Should(BeNumerically(">", 0))
 					Expect(countChanges()).To(Equal(1))
-					Expect(testutil.ToFloat64(pub.metrics.publishTotal.With(nil))).To(BeZero())
+					Expect(metricValue(registry, "event_publish_total")).To(BeZero())
 				})
 
 				DescribeTable(
@@ -1080,7 +1111,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 						Eventually(done).WithTimeout(500 * time.Millisecond).Should(BeClosed())
 						Expect(runErr).To(MatchError(context.Canceled))
 						Expect(countChanges()).To(Equal(1))
-						Expect(testutil.ToFloat64(pub.metrics.publishTotal.With(nil))).To(BeZero())
+						Expect(metricValue(registry, "event_publish_total")).To(BeZero())
 						_, err := pool.Exec(drainCtx, "select id from changes for update nowait")
 						Expect(err).ToNot(HaveOccurred())
 					},
@@ -1111,10 +1142,10 @@ var _ = Describe("Event publisher", Ordered, func() {
 						cancel, done := startPublisher(pub)
 						defer stopPublisher(cancel, done)
 						Eventually(func() float64 {
-							return testutil.ToFloat64(pub.metrics.publishErrors.With(nil))
+							return metricValue(registry, "event_publish_errors_total")
 						}).WithTimeout(5 * time.Second).Should(BeNumerically(">", 0))
 						Expect(countChanges()).To(Equal(1))
-						Expect(testutil.ToFloat64(pub.metrics.publishTotal.With(nil))).To(BeZero())
+						Expect(metricValue(registry, "event_publish_total")).To(BeZero())
 						if phase == "topic creation" {
 							configureBroker(sarama.NewMockSequence(missing, ready), sarama.ErrNoError, sarama.ErrNoError)
 						} else {
@@ -1122,7 +1153,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 						}
 						Eventually(countChanges).WithTimeout(5 * time.Second).Should(BeZero())
 						Expect(topicChecks()).To(BeNumerically(">=", 2))
-						Expect(testutil.ToFloat64(pub.metrics.publishTotal.With(nil))).To(Equal(float64(1)))
+						Expect(metricValue(registry, "event_publish_total")).To(Equal(float64(1)))
 						switch phase {
 						case "topic creation":
 							Expect(createdTopics()).To(ContainElements(topic, topic))
@@ -1166,41 +1197,44 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(err).ToNot(HaveOccurred())
 		}
 
-		It("Refreshes the unpublished event count", func() {
+		It("Refreshes the unpublished event count while running", func() {
 			tenant := "metrics-" + uuid.New()
-			insertChange(tenant, "p-1", eventPublisherOpInsert)
-			insertChange(tenant, "p-2", eventPublisherOpInsert)
-
-			Expect(testutil.ToFloat64(pub.metrics.unpublishedCount)).To(Equal(float64(0)))
-			err := pub.metricsWorkFunc(drainCtx)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(testutil.ToFloat64(pub.metrics.unpublishedCount)).To(Equal(float64(2)))
-		})
-
-		It("Reports whether there may be another batch to process", func() {
-			tenant := "more-" + uuid.New()
+			insertChange(tenant, "p-1", "INSERT")
+			insertChange(tenant, "p-2", "INSERT")
 			Expect(pub.Close()).To(Succeed())
-
+			registry = prometheus.NewRegistry()
+			release := make(chan struct{})
 			var err error
-			pub, err = newTestEventPublisherBuilder(pool).
-				SetBatchSize(2).
+			pub, err = NewEventPublisher().
+				SetLogger(logger).
+				SetDatabasePool(pool).
+				SetKafkaConfig(kafkaConfig).
+				SetKafkaBrokers(kafkaBroker.Brokers()).
+				SetMetricsRegisterer(registry).
+				SetMetricsInterval(20 * time.Millisecond).
+				SetPublishCallback(func(ctx context.Context, _ *privatev1.Event) error {
+					select {
+					case <-release:
+						return nil
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pub.Close)
 
-			insertChange(tenant, "obj-1", eventPublisherOpInsert)
-			insertChange(tenant, "obj-2", eventPublisherOpInsert)
-			insertChange(tenant, "obj-3", eventPublisherOpInsert)
-
-			more, err := pub.drain(drainCtx)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(more).To(BeTrue())
-			Expect(countChanges()).To(Equal(1))
-
-			more, err = pub.drain(drainCtx)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(more).To(BeFalse())
-			Expect(countChanges()).To(Equal(0))
+			Expect(metricValue(registry, "event_unpublished_count")).To(BeZero())
+			cancel, done := startPublisher(pub)
+			defer stopPublisher(cancel, done)
+			Eventually(func() float64 {
+				return metricValue(registry, "event_unpublished_count")
+			}).WithTimeout(5 * time.Second).Should(Equal(float64(2)))
+			close(release)
+			Eventually(countChanges).WithTimeout(5 * time.Second).Should(BeZero())
+			Eventually(func() float64 {
+				return metricValue(registry, "event_unpublished_count")
+			}).WithTimeout(5 * time.Second).Should(BeZero())
 		})
 
 		It("Does not claim a row from an open transaction ahead of a committed higher ID", func() {
@@ -1261,7 +1295,12 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(pub.Close()).To(Succeed())
 
 			var err error
-			pub, err = newTestEventPublisherBuilder(pool).
+			pub, err = NewEventPublisher().
+				SetLogger(logger).
+				SetDatabasePool(pool).
+				SetKafkaConfig(kafkaConfig).
+				SetKafkaBrokers(kafkaBroker.Brokers()).
+				SetMetricsRegisterer(prometheus.NewRegistry()).
 				SetPublishCallback(func(context.Context, *privatev1.Event) error {
 					return errors.New("simulated crash")
 				}).
@@ -1275,7 +1314,8 @@ var _ = Describe("Event publisher", Ordered, func() {
 			stopPublisher(cancel, done)
 
 			Expect(pub.Close()).To(Succeed())
-			pub, err = newTestEventPublisher(pool)
+			registry = prometheus.NewRegistry()
+			pub, err = newTestEventPublisher(pool, registry)
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pub.Close)
 
@@ -1292,24 +1332,34 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(countChanges()).To(Equal(0))
 		})
 
-		It("Rolls back the transaction when processing panics", func() {
-			tenant := "panic-" + uuid.New()
-			insertChange(tenant, "obj-1", eventPublisherOpInsert)
+		It("Rolls back the transaction when processing is canceled", func() {
+			tenant := "cancel-" + uuid.New()
+			insertChange(tenant, "obj-1", "INSERT")
 			Expect(pub.Close()).To(Succeed())
-
+			runCtx, cancel := context.WithCancel(drainCtx)
+			defer cancel()
 			var err error
-			pub, err = newTestEventPublisherBuilder(pool).
-				SetPublishCallback(func(context.Context, *privatev1.Event) error {
-					panic("simulated panic")
+			pub, err = NewEventPublisher().
+				SetLogger(logger).
+				SetDatabasePool(pool).
+				SetKafkaConfig(kafkaConfig).
+				SetKafkaBrokers(kafkaBroker.Brokers()).
+				SetMetricsRegisterer(prometheus.NewRegistry()).
+				SetPublishCallback(func(ctx context.Context, _ *privatev1.Event) error {
+					cancel()
+					return ctx.Err()
 				}).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pub.Close)
 
-			Expect(func() {
-				_, _ = pub.drain(drainCtx)
-			}).To(PanicWith("simulated panic"))
+			done := make(chan error, 1)
+			go func() { done <- pub.Run(runCtx) }()
+			Eventually(done).WithTimeout(5 * time.Second).Should(Receive(MatchError(context.Canceled)))
 			Expect(countChanges()).To(Equal(1))
+			// Another transaction must be able to lock the retained row immediately.
+			_, err = pool.Exec(drainCtx, "select id from changes for update nowait")
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		It("Skips a row that cannot be encoded and continues draining later rows", func() {
@@ -1317,7 +1367,6 @@ var _ = Describe("Event publisher", Ordered, func() {
 			badTopic := DefaultEventTopicPrefix + badTenant
 			tenant := "keep-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant
-			ensureKafkaTopic(client, topic)
 			insertChange(badTenant, "obj-1", "TRUNCATE")
 			insertChange(tenant, "obj-1", "INSERT")
 
@@ -1328,7 +1377,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 				return kafkaHasTopic(client, badTopic)
 			}).WithTimeout(300 * time.Millisecond).WithPolling(50 * time.Millisecond).Should(BeFalse())
 			Eventually(countChanges).WithTimeout(5 * time.Second).Should(Equal(0))
-			Expect(testutil.ToFloat64(pub.metrics.publishErrors.With(nil))).To(Equal(float64(1)))
+			Expect(metricValue(registry, "event_publish_errors_total")).To(Equal(float64(1)))
 
 			events := collectKafkaEvents(client, topic, 1)
 			Expect(events[0].key).To(Equal("obj-1"))
@@ -1341,7 +1390,6 @@ var _ = Describe("Event publisher", Ordered, func() {
 			badTopic := DefaultEventTopicPrefix + badTenant
 			tenant := "keep-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant
-			ensureKafkaTopic(client, topic)
 			insertChange(badTenant, "", "INSERT")
 			insertChange(tenant, "obj-1", "INSERT")
 
@@ -1352,7 +1400,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 				return kafkaHasTopic(client, badTopic)
 			}).WithTimeout(300 * time.Millisecond).WithPolling(50 * time.Millisecond).Should(BeFalse())
 			Eventually(countChanges).WithTimeout(5 * time.Second).Should(Equal(0))
-			Expect(testutil.ToFloat64(pub.metrics.publishErrors.With(nil))).To(Equal(float64(1)))
+			Expect(metricValue(registry, "event_publish_errors_total")).To(Equal(float64(1)))
 
 			events := collectKafkaEvents(client, topic, 1)
 			Expect(events[0].key).To(Equal("obj-1"))
@@ -1365,7 +1413,6 @@ var _ = Describe("Event publisher", Ordered, func() {
 			skipTopic := DefaultEventTopicPrefix + skipTenant
 			tenant := "keep-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant
-			ensureKafkaTopic(client, topic)
 			_, err := pool.Exec(drainCtx, `
 				insert into changes ("table", op, data)
 				values (
@@ -1402,23 +1449,30 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(pub.Close()).To(Succeed())
 
 			var err error
-			pub, err = newTestEventPublisherBuilder(pool).
-				SetBatchSize(1).
+			pub, err = NewEventPublisher().
+				SetLogger(logger).
+				SetDatabasePool(pool).
+				SetKafkaConfig(kafkaConfig).
+				SetKafkaBrokers(kafkaBroker.Brokers()).
+				SetMetricsRegisterer(prometheus.NewRegistry()).
+				SetBatchSize(2).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pub.Close)
 
 			insertChange(tenant, "obj-1", "INSERT")
 			insertChange(tenant, "obj-2", "INSERT")
+			insertChange(tenant, "obj-3", "INSERT")
 
 			cancel, done := startPublisher(pub)
 			defer stopPublisher(cancel, done)
 
 			Eventually(countChanges).WithTimeout(5 * time.Second).Should(Equal(0))
 
-			events := collectKafkaEvents(client, topic, 2)
+			events := collectKafkaEvents(client, topic, 3)
 			Expect(events[0].key).To(Equal("obj-1"))
 			Expect(events[1].key).To(Equal("obj-2"))
+			Expect(events[2].key).To(Equal("obj-3"))
 		})
 
 		It("Publishes to the configured topic prefix", func() {
@@ -1428,7 +1482,12 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(pub.Close()).To(Succeed())
 
 			var err error
-			pub, err = newTestEventPublisherBuilder(pool).
+			pub, err = NewEventPublisher().
+				SetLogger(logger).
+				SetDatabasePool(pool).
+				SetKafkaConfig(kafkaConfig).
+				SetKafkaBrokers(kafkaBroker.Brokers()).
+				SetMetricsRegisterer(prometheus.NewRegistry()).
 				SetKafkaTopicPrefix(prefix).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
@@ -1546,15 +1605,20 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Eventually(done).Should(Receive(MatchError(context.Canceled)))
 		})
 
-		It("Waits for a custom table and publishes via a custom channel", func() {
+		It("Normalizes custom table and channel names and publishes changes", func() {
 			table := "custom_changes"
 			channel := "custom_changes_channel"
 			Expect(pub.Close()).To(Succeed())
 
 			var err error
-			pub, err = newTestEventPublisherBuilder(pool).
-				SetTable(table).
-				SetChannel(channel).
+			pub, err = NewEventPublisher().
+				SetLogger(logger).
+				SetDatabasePool(pool).
+				SetKafkaConfig(kafkaConfig).
+				SetKafkaBrokers(kafkaBroker.Brokers()).
+				SetMetricsRegisterer(prometheus.NewRegistry()).
+				SetTable(strings.ToUpper(table)).
+				SetChannel(strings.ToUpper(channel)).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pub.Close)

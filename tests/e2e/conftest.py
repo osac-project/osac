@@ -4,6 +4,7 @@ import contextlib
 import os
 import subprocess
 import textwrap
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -11,7 +12,7 @@ import pytest
 
 from tests.e2e.core.caas_versions import ensure_caas_disk_image_version
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
-from tests.e2e.core.helpers import unique_name, wait_for_grpc_subnet_ready
+from tests.e2e.core.helpers import unique_name, wait_for_grpc_subnet_ready, wait_for_tenant_condition
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.keycloak import get_jwt
 from tests.e2e.core.keycloak_admin import (
@@ -24,7 +25,7 @@ from tests.e2e.core.keycloak_admin import (
 )
 from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.core.runner import env, poll_until, run
+from tests.e2e.core.runner import env, poll_until, run, run_unchecked
 
 
 @pytest.fixture(scope="session")
@@ -118,6 +119,44 @@ def namespace() -> str:
     return env("OSAC_NAMESPACE", "osac-devel")
 
 
+def _apply_manifest(manifest: str) -> None:
+    subprocess.run(["oc", "apply", "-f", "-"], input=manifest, text=True, capture_output=True, check=True, timeout=120)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cluster_tenants(namespace: str, k8s_hub_client: K8sClient) -> None:
+    """Apply the install namespace's Tenant and the shared Tenant before tests.
+
+    The E2E workflows apply these two CRs between install and test; doing it
+    here keeps a bare pytest run against a deployed install self-sufficient.
+    Applying is idempotent, so parallel workers and repeated runs converge on
+    the same objects.
+    """
+    for name in sorted({namespace, "shared"}):
+        _apply_manifest(
+            "apiVersion: osac.openshift.io/v1alpha1\n"
+            "kind: Tenant\n"
+            "metadata:\n"
+            f"  name: {name}\n"
+            f"  namespace: {namespace}\n"
+            "spec: {}\n"
+        )
+    # Per-tenant StorageClasses come from an AAP job; wait for the test
+    # tenant's classes so provisioning jobs do not queue behind storage jobs.
+    # When the condition never appears the environment has no storage
+    # configured and the wait is skipped.
+    condition = ""
+    for _ in range(6):
+        condition = k8s_hub_client.get_tenant_condition_status(
+            name=namespace, condition_type="ClusterStorageReady", checked=False
+        )
+        if condition:
+            break
+        time.sleep(5)
+    if condition and condition != "True":
+        wait_for_tenant_condition(k8s=k8s_hub_client, name=namespace, condition_type="ClusterStorageReady")
+
+
 @pytest.fixture(scope="session")
 def cluster_domain() -> str:
     return run("kubectl", "get", "ingress.config.openshift.io", "cluster", "-o", "jsonpath={.spec.domain}")
@@ -151,6 +190,16 @@ def keycloak_client_id() -> str:
 @pytest.fixture(scope="session")
 def jwt_username() -> str:
     return env("OSAC_JWT_USERNAME", "tenant1_admin")
+
+
+@pytest.fixture(scope="session")
+def jwt_tenant(jwt_username: str) -> str:
+    """The fulfillment tenant the JWT user belongs to.
+
+    The mapping mirrors ensure_jwt_users: every fixture user of tenant1 maps
+    to the tenant1 tenant, and tenant2's users to tenant2.
+    """
+    return f"tenant{jwt_username.removeprefix('tenant').split('_')[0]}"
 
 
 @pytest.fixture(scope="session")
@@ -476,28 +525,74 @@ def jwt_grpc_tenant2(fulfillment_address: str, keycloak_url: str, jwt_password: 
 # --- Cross-cutting concern: Metering ---
 
 
+def _expose_metering_adapter_route(namespace: str) -> str:
+    """Expose the echo adapter Service and return its HTTP route URL."""
+    service, rc = run_unchecked(
+        "oc",
+        "get",
+        "svc",
+        "-n",
+        namespace,
+        "-l",
+        "app.kubernetes.io/component=echo-adapter",
+        "-o",
+        "jsonpath={.items[0].metadata.name}",
+    )
+    if rc != 0 or not service:
+        raise RuntimeError(f"no echo-adapter Service found in namespace {namespace}")
+    # Exposing an existing route fails; the route itself is what matters.
+    run_unchecked("oc", "expose", "svc", service, "-n", namespace, "--name=metering-test-adapter")
+    host, rc = run_unchecked(
+        "oc", "get", "route", "metering-test-adapter", "-n", namespace, "-o", "jsonpath={.spec.host}"
+    )
+    if rc != 0 or not host:
+        raise RuntimeError(f"failed to expose the echo adapter route in namespace {namespace}")
+    return f"http://{host}"
+
+
 def pytest_collection_finish(session: pytest.Session) -> None:
     # Collect-only does not execute metering fixtures or contact the adapter.
     if session.config.getoption("collectonly"):
         return
     metering_tests = [item for item in session.items if item.get_closest_marker("metering")]
     if metering_tests and not os.environ.get("METERING_ADAPTER_URL"):
-        pytest.fail(
-            f"METERING_ADAPTER_URL is not set but {len(metering_tests)} test(s) require metering. "
-            "Set the env var or run with -m 'not metering' to exclude metering tests.",
-            pytrace=False,
-        )
+        try:
+            _expose_metering_adapter_route(env("OSAC_NAMESPACE", "osac-devel"))
+        except RuntimeError as exc:
+            pytest.fail(
+                f"METERING_ADAPTER_URL is not set and the echo adapter route could not be exposed "
+                f"for {len(metering_tests)} metering test(s): {exc}. "
+                "Set the env var, enable metering.echoAdapter, or run with -m 'not metering'.",
+                pytrace=False,
+            )
+
+
+@pytest.fixture(scope="session")
+def metering_adapter_url(namespace: str) -> str:
+    """The metering echo adapter's URL.
+
+    METERING_ADAPTER_URL wins when set (CI exports it after creating the
+    route); otherwise the echo adapter Service is exposed here, so a local
+    run needs no preparation beyond the install.
+    """
+    if url := os.environ.get("METERING_ADAPTER_URL"):
+        return url
+    return _expose_metering_adapter_route(namespace)
 
 
 @pytest.fixture
-def metering() -> Iterator[MeteringCollector]:
+def metering(metering_adapter_url: str, jwt_tenant: str) -> Iterator[MeteringCollector]:
     """Composable metering verifier. Inject into any test to verify
     that lifecycle events appear via the test adapter HTTP API.
 
     Records a start timestamp on setup, verifies all expectations
-    (including CloudEvent structure validation) on teardown.
+    (including CloudEvent structure validation) on teardown. Every
+    heartbeat must name the JWT user's tenant: the echo adapter
+    aggregates every tenant's topics, so only the value catches an
+    event published to the wrong tenant.
     """
-    collector = MeteringCollector(base_url=env("METERING_ADAPTER_URL"))
+    collector = MeteringCollector(base_url=metering_adapter_url)
+    collector.with_tenant(jwt_tenant)
     collector.start()
     yield collector
     try:

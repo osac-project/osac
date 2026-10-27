@@ -33,6 +33,11 @@ keycloak:
 kafka:
   enabled: true
 
+# Activate Ironic for the BMF Metal3 inventory backend (cluster-wide
+# BareMetalHost discovery, no provisioning network).
+metal3:
+  enabled: true
+
 # --- Bundled PostgreSQL ---
 # Bundled PostgreSQL for testing only; not intended for production.
 bundledPostgres:

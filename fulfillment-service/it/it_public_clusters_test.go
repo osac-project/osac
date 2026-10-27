@@ -566,6 +566,14 @@ var _ = Describe("Public clusters", func() {
 		// Verify the cluster has the correct version:
 		Expect(object.GetSpec().GetVersion().GetName()).To(Equal(cvName))
 
+		// An active cluster reference must protect the ClusterVersion from deletion.
+		_, err = cvClient.Delete(ctx, privatev1.ClusterVersionsDeleteRequest_builder{
+			Id: cvObject.GetId(),
+		}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+		Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(cvName))
+
 		// Verify via Get as well:
 		getResponse, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{
 			Id: object.GetId(),
@@ -577,6 +585,71 @@ var _ = Describe("Public clusters", func() {
 		Expect(storedSpec.GetNetworkAttachment().GetSecurityGroups()).To(HaveLen(1))
 		Expect(storedSpec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID))
 	})
+
+	DescribeTable("Rejects create with an unusable explicit version", func(suffix string, invalidSpec *privatev1.ClusterVersionSpec, expectedMessage string) {
+		cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
+		versionName := fmt.Sprintf("does-not-exist-%s", uuid.New()[24:32])
+		if invalidSpec != nil {
+			version := nextCVVersion()
+			spec := privatev1.ClusterVersionSpec_builder{
+				Version: version,
+				Image:   fmt.Sprintf("quay.io/openshift-release-dev/ocp-release:%s-multi", version),
+			}.Build()
+			proto.Merge(spec, invalidSpec)
+			response, err := cvClient.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+				Object: privatev1.ClusterVersion_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-cv-invalid-%s-%s", suffix, uuid.New()[24:32]),
+					}.Build(),
+					Spec: spec,
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := response.GetObject()
+			DeferCleanup(func() {
+				_, err := cvClient.Delete(ctx, privatev1.ClusterVersionsDeleteRequest_builder{
+					Id: object.GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			})
+			versionName = object.GetMetadata().GetName()
+		}
+
+		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-invalid-version-%s", uuid.New()[24:32]),
+				}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Version:  publicv1.ClusterVersionReference_builder{Name: versionName}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 1),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		if createResponse != nil {
+			if object := createResponse.GetObject(); object != nil && object.GetId() != "" {
+				clusterID := object.GetId()
+				// Clean up an unexpectedly created cluster before asserting the expected error.
+				DeferCleanup(func() {
+					_, cleanupErr := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
+						Id: clusterID,
+					}.Build())
+					Expect(cleanupErr).ToNot(HaveOccurred())
+				})
+			}
+		}
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(expectedMessage))
+	},
+		Entry("disabled version", "disabled", privatev1.ClusterVersionSpec_builder{
+			Enabled: proto.Bool(false),
+		}.Build(), "disabled"),
+		Entry("obsolete version", "obsolete", privatev1.ClusterVersionSpec_builder{
+			State: privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_OBSOLETE,
+		}.Build(), "obsolete"),
+		Entry("non-existent version", "", (*privatev1.ClusterVersionSpec)(nil), "not found"),
+	)
 
 	It("Sets creator to the ID of the user when creating a cluster", func() {
 		// Look up the user to get their ID:

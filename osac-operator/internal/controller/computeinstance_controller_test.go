@@ -450,6 +450,70 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(instance.Status.RunningInstanceTypeName).To(Equal("standard-8-32-compatible"))
 			Expect(instance.Status.RunningConfigSince.Time).To(BeTemporally(">", oldSince.Time))
 		})
+
+		It("FirstTypeCoversRunningBeforeInitialJobCompletion", func() {
+			// Initial provisioning: the VM enters RUNNING at 10:00:00 but the AAP
+			// job completes at 10:00:20, so ConfigurationApplied turns true only
+			// then. The type is known from the spec at admission and is what the
+			// VM started with, so the first record must date from the phase time:
+			// taking the later of the two leaves the first 20 s of the RUNNING
+			// span permanently without the instance_type dimension.
+			phaseAt := time.Now().Add(-time.Minute).UTC()
+			stoppedAt := phaseAt.Add(40 * time.Second)
+			configAt := phaseAt.Add(20 * time.Second)
+			instance := runningInstanceWithTimes(phaseAt, configAt)
+			version, err := provisioning.ComputeDesiredConfigVersion(instance.Spec)
+			Expect(err).ToNot(HaveOccurred())
+			instance.Status.DesiredConfigVersion = version
+
+			recordRunningConfig(instance)
+
+			Expect(instance.Status.RunningConfigVersion).To(Equal(version))
+			Expect(instance.Status.RunningInstanceTypeName).To(Equal("standard-8-32"))
+			Expect(instance.Status.RunningConfigSince.Time).To(BeTemporally("~", phaseAt, time.Second))
+			// The settled usage keeps all 40 seconds typed: the instance_type
+			// dimension covers the whole [stamp, stop] span with no untimed head.
+			Expect(stoppedAt.Sub(instance.Status.RunningConfigSince.Time)).To(Equal(40 * time.Second))
+
+			// Settling: a later reconcile keeps the stamp.
+			before := *instance.Status.RunningConfigSince
+			recordRunningConfig(instance)
+			Expect(instance.Status.RunningConfigSince.Time).To(Equal(before.Time))
+		})
+
+		It("NameOnlyResizeDoesNotBackdateTheNewType", func() {
+			// A name-only resize: two instance type names resolve to identical
+			// CPU, memory, and GPU specs, so the config hash is unchanged and
+			// only the label moves. The provisioning job has nothing to do, the
+			// ConfigurationApplied condition never flips, and its transition
+			// time stays at the original provisioning an hour earlier. The new
+			// type must stamp from the observation: reusing the stale condition
+			// or phase time would backdate the new type and move the preceding
+			// hour of usage to the new pricing dimension.
+			phaseAt := time.Now().Add(-time.Hour).UTC()
+			configAt := phaseAt.Add(20 * time.Second)
+			instance := runningInstanceWithTimes(phaseAt, configAt)
+			version, err := provisioning.ComputeDesiredConfigVersion(instance.Spec)
+			Expect(err).ToNot(HaveOccurred())
+			// The resources are identical, so the resize leaves the config hash,
+			// and with it the desired version, unchanged.
+			instance.Status.DesiredConfigVersion = version
+			instance.Status.RunningConfigVersion = version
+			instance.Status.RunningInstanceTypeName = "standard-8-32"
+			oldSince := metav1.NewTime(configAt)
+			instance.Status.RunningConfigSince = &oldSince
+			// The reconciler applied the new type: only the label moved.
+			instance.Labels[osacComputeInstanceTypeNameLabel] = "standard-8-32-compatible"
+
+			recordRunningConfig(instance)
+
+			Expect(instance.Status.RunningConfigVersion).To(Equal(version))
+			Expect(instance.Status.RunningInstanceTypeName).To(Equal("standard-8-32-compatible"))
+			// The new type's stamp is the observation time, not the original
+			// phase or condition time.
+			Expect(instance.Status.RunningConfigSince.Time).To(BeTemporally("~", time.Now(), 2*time.Second))
+			Expect(instance.Status.RunningConfigSince.Time).To(BeTemporally(">", configAt))
+		})
 	})
 
 	Context("handleDesiredConfigVersion", func() {
@@ -3728,4 +3792,82 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 	})
 
+})
+
+// runningInstanceWithTimes builds a Running instance whose phase and configuration
+// transitions carry explicit times, so the stamp can be asserted exactly.
+func runningInstanceWithTimes(phaseAt, configAt time.Time) *osacv1alpha1.ComputeInstance {
+	instance := &osacv1alpha1.ComputeInstance{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{
+				osacComputeInstanceTypeNameLabel: "standard-8-32",
+			},
+		},
+	}
+	instance.Status.Conditions = []metav1.Condition{
+		{
+			Type:               string(osacv1alpha1.ComputeInstanceConditionRestartRequired),
+			Status:             metav1.ConditionFalse,
+			Reason:             "AsExpected",
+			LastTransitionTime: metav1.NewTime(phaseAt),
+		},
+		{
+			Type:               string(osacv1alpha1.ComputeInstanceConditionConfigurationApplied),
+			Status:             metav1.ConditionTrue,
+			Reason:             "AsExpected",
+			LastTransitionTime: metav1.NewTime(configAt),
+		},
+	}
+	instance.Status.Phase = osacv1alpha1.ComputeInstancePhaseRunning
+	phaseTime := metav1.NewTime(phaseAt)
+	instance.Status.PhaseTransitionTime = &phaseTime
+	return instance
+}
+
+var _ = Describe("configRunningSince", func() {
+	It("stamps the phase time on the first record", func() {
+		// The first record of a resource dates from the RUNNING phase
+		// transition: the type is known from the spec at admission and is what
+		// the VM started with, so the interval from the phase change carries
+		// the instance_type dimension.
+		phaseAt := time.Now().Add(-15 * time.Second).UTC()
+		configAt := phaseAt.Add(-time.Minute)
+		instance := runningInstanceWithTimes(phaseAt, configAt)
+
+		since := configRunningSince(instance)
+
+		Expect(since.Time).To(BeTemporally("~", phaseAt, time.Second))
+	})
+
+	It("stamps the observation time when the config landed after the phase change", func() {
+		// A change of the recorded version stamps from the observation time:
+		// the ConfigurationApplied condition can stay untouched by the change
+		// (a name-only resize), so its transition time is arbitrarily stale and
+		// must not be reused. The observation time cannot backdate the new
+		// type and lags the change by at most one reconcile.
+		phaseAt := time.Now().Add(-time.Hour).UTC()
+		configAt := time.Now().Add(-time.Minute).UTC()
+		instance := runningInstanceWithTimes(phaseAt, configAt)
+		// A previous configuration is already recorded, so this observation is
+		// a change of the recorded version, not a first record.
+		instance.Status.RunningConfigVersion = "previous-version"
+		instance.Status.RunningInstanceTypeName = "previous-type"
+
+		since := configRunningSince(instance)
+
+		Expect(since.Time).To(BeTemporally("~", time.Now(), 2*time.Second))
+	})
+
+	It("falls back to the observation time when the phase carries no transition time", func() {
+		// Legacy resources can reach RUNNING without a recorded phase
+		// transition; the first record then falls back to the observation time
+		// rather than the zero time.
+		configAt := time.Now().Add(-time.Minute).UTC()
+		instance := runningInstanceWithTimes(time.Now().UTC(), configAt)
+		instance.Status.PhaseTransitionTime = nil
+
+		since := configRunningSince(instance)
+
+		Expect(since.Time).To(BeTemporally("~", time.Now(), 2*time.Second))
+	})
 })

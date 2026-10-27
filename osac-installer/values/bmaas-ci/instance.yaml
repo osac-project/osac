@@ -222,6 +222,20 @@ bmf:
 hubAccess:
   enabled: true
 
+# --- Metering ---
+# The service itself is always deployed (chart default): the database wiring
+# in charts/osac/values.yaml points at the secrets the chart creates for the
+# bundled PostgreSQL. Only the test adapter is profile-specific.
+metering:
+  # Echo adapter -- test/development tool only. Consumes metering events from
+  # Kafka and exposes them via HTTP for E2E test assertions.
+  echoAdapter:
+    enabled: true
+    image:
+      repository: ghcr.io/osac-project/metering-echo-adapter
+      tag: latest
+      pullPolicy: Always
+
 # --- LVMS StorageBackend registration ---
 lvms:
   enabled: true

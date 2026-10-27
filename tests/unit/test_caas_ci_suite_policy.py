@@ -18,7 +18,9 @@ def _workflow(root: Path, filename: str) -> dict:
     return yaml.safe_load((root / ".github/workflows" / filename).read_text())
 
 
-def _selection(expression: str, event: str, suite: str = "", marker: str = "", pr: str = "") -> str:
+def _selection(
+    expression: str, event: str, suite: str = "", marker: str = "", pr: str = "", *, sha: str = "", tier: str = ""
+) -> str:
     # These selectors use only string comparisons and &&/|| short-circuiting.
     # Substitute contexts from the real YAML rather than reimplementing policy.
     values = {
@@ -26,6 +28,8 @@ def _selection(expression: str, event: str, suite: str = "", marker: str = "", p
         "inputs.test-suite": suite,
         "inputs.test-marker": marker,
         "inputs.pr-number": pr,
+        "inputs.sha": sha,
+        "inputs.tier": tier,
         "github.event.pull_request.labels.*.name": ["e2e-serial", "e2e-regression"],
     }
     code = expression.removeprefix("${{").removesuffix("}}").strip()
@@ -51,25 +55,39 @@ def _infra_root() -> Path:
 
 
 @pytest.mark.parametrize(
-    ("event", "suite", "marker"),
+    ("event", "sha", "suite", "marker"),
     [
-        ("pull_request", "caas/sanity", "sanity"),
-        ("merge_group", "caas/sanity", "sanity"),
-        ("schedule", "caas", FULL_MARKER),
-        ("workflow_dispatch", "caas/sanity", FULL_MARKER),
+        ("pull_request", "a" * 40, "caas/sanity", "sanity"),
+        ("merge_group", "b" * 40, "caas/sanity", "sanity"),
+        ("schedule", "", "caas", FULL_MARKER),
+        ("workflow_dispatch", "", "caas/sanity", FULL_MARKER),
     ],
 )
-def test_caller_trigger_policy(caller: dict, event: str, suite: str, marker: str) -> None:
+def test_caller_trigger_policy(caller: dict, event: str, sha: str, suite: str, marker: str) -> None:
     inputs = caller["jobs"]["e2e-caas-full-install"]["with"]
-    assert _selection(inputs["test-suite"], event) == suite
-    assert _selection(inputs.get("test-marker", "''"), event) == marker
+    assert _selection(inputs["test-suite"], event, sha=sha) == suite
+    assert _selection(inputs.get("test-marker", "''"), event, sha=sha) == marker
 
 
 @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
 def test_pr_events_ignore_overrides(caller: dict, event: str) -> None:
     inputs = caller["jobs"]["e2e-caas-full-install"]["with"]
-    assert _selection(inputs["test-suite"], event, "caas/regression") == "caas/sanity"
-    assert _selection(inputs["test-marker"], event, marker="regression") == "sanity"
+    assert _selection(inputs["test-suite"], event, "caas/regression", sha="a" * 40) == "caas/sanity"
+    assert _selection(inputs["test-marker"], event, marker="regression", sha="a" * 40) == "sanity"
+
+
+@pytest.mark.parametrize("event", ["pull_request", "merge_group", "workflow_dispatch"])
+@pytest.mark.parametrize("tier", ["", "full"])
+def test_osac_workflow_call_tier_policy(event: str, tier: str) -> None:
+    workflow = _workflow(ROOT, "e2e-caas-full-install.yml")
+    call_inputs = workflow[True]["workflow_call"]["inputs"]
+    assert call_inputs["sha"]["required"] is True
+    assert call_inputs["tier"]["default"] == ""
+    inputs = workflow["jobs"]["e2e-caas-full-install"]["with"]
+    expected_suite = "caas" if tier == "full" else "caas/sanity"
+    expected_marker = FULL_MARKER if tier == "full" else "sanity"
+    assert _selection(inputs["test-suite"], event, "caas/regression", sha="a" * 40, tier=tier) == expected_suite
+    assert _selection(inputs["test-marker"], event, marker="regression", sha="a" * 40, tier=tier) == expected_marker
 
 
 def test_dispatch_defaults(caller: dict) -> None:

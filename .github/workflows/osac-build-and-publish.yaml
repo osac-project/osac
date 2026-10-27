@@ -2215,12 +2215,19 @@ jobs:
             # long before any real build even started. Confirmed live:
             # every "Wait for Konflux build" row failed in ~10s.
             check_name = f"Konflux kflux-prd-rh02 / {COMPONENT}-on-release"
+            # Header passed via curl's own -K stdin config, not -H on the
+            # argv -- an argv value is visible to anything that can read
+            # this host's process table (ps/proc) for as long as curl
+            # runs; GH_TOKEN never needs to appear there at all.
+            curl_config = (
+                f'header = "Authorization: Bearer {os.environ["GH_TOKEN"]}"\n'
+                'header = "Accept: application/vnd.github+json"\n'
+                f'url = "https://api.github.com/repos/{GITHUB_REPOSITORY}/commits/{COMMIT_SHA}/check-runs"\n'
+            )
             try:
                 out = subprocess.run(
-                    ["curl", "-sf",
-                     "-H", f"Authorization: Bearer {os.environ['GH_TOKEN']}",
-                     "-H", "Accept: application/vnd.github+json",
-                     f"https://api.github.com/repos/{GITHUB_REPOSITORY}/commits/{COMMIT_SHA}/check-runs"],
+                    ["curl", "-sf", "-K", "-"],
+                    input=curl_config,
                     capture_output=True, text=True, check=True,
                 )
                 data = json.loads(out.stdout)
@@ -2446,12 +2453,19 @@ jobs:
             # long before any real build even started. Confirmed live:
             # every "Wait for Konflux build" row failed in ~10s.
             check_name = f"Konflux kflux-prd-rh02 / {COMPONENT}-on-release"
+            # Header passed via curl's own -K stdin config, not -H on the
+            # argv -- an argv value is visible to anything that can read
+            # this host's process table (ps/proc) for as long as curl
+            # runs; GH_TOKEN never needs to appear there at all.
+            curl_config = (
+                f'header = "Authorization: Bearer {os.environ["GH_TOKEN"]}"\n'
+                'header = "Accept: application/vnd.github+json"\n'
+                f'url = "https://api.github.com/repos/{GITHUB_REPOSITORY}/commits/{COMMIT_SHA}/check-runs"\n'
+            )
             try:
                 out = subprocess.run(
-                    ["curl", "-sf",
-                     "-H", f"Authorization: Bearer {os.environ['GH_TOKEN']}",
-                     "-H", "Accept: application/vnd.github+json",
-                     f"https://api.github.com/repos/{GITHUB_REPOSITORY}/commits/{COMMIT_SHA}/check-runs"],
+                    ["curl", "-sf", "-K", "-"],
+                    input=curl_config,
                     capture_output=True, text=True, check=True,
                 )
                 data = json.loads(out.stdout)

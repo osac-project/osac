@@ -80,6 +80,18 @@ echo "Removing stale KubeVirt/CDI admission webhooks (virt-api is scaled down)..
 kubectl delete mutatingwebhookconfigurations --all --ignore-not-found 2>/dev/null || echo "Could not remove one or more mutating webhook configurations"
 kubectl delete validatingwebhookconfigurations --all --ignore-not-found 2>/dev/null || echo "Could not remove one or more validating webhook configurations"
 
+# KubeVirt can stop before replacing its generated installation placeholders.
+# They point to a fake service and also reject workload API writes.
+kubevirt_webhooks="$(kubectl get validatingwebhookconfiguration \
+  -l app.kubernetes.io/managed-by=virt-operator -o name)"
+while IFS= read -r webhook; do
+  case "$webhook" in
+    validatingwebhookconfiguration.admissionregistration.k8s.io/virt-operator-tmp-webhook*)
+      kubectl delete "$webhook"
+      ;;
+  esac
+done <<< "$kubevirt_webhooks"
+
 echo "KubeVirt and CDI deployments scaled down. CRs and CRDs remain available for testing."
 
 echo "Installing OLM CRDs..."

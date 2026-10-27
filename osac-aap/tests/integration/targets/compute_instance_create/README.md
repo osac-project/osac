@@ -36,9 +36,9 @@ KUBECONFIG="$PWD/tests/integration/kubeconfig-osac-test" \
 The target requires the ComputeInstance, DataVolume and VirtualMachine CRDs.
 Use an API-only test environment: active controllers or admission webhooks can
 introduce provider behavior outside this test's scope.
-The standard setup removes the four workload admission configurations after
-stopping CDI/KubeVirt, so writes do not call their unavailable services. CRD
-schema validation stays enabled.
+The standard setup removes the four workload admission configurations and any
+KubeVirt installation placeholder after stopping CDI/KubeVirt, so writes do not
+call their unavailable services. CRD schema validation stays enabled.
 
 ## Minimal isolated environment
 

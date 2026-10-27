@@ -298,11 +298,16 @@ func (c *OpenStackClient) AssignHost(ctx context.Context, inventoryHostID string
 	}, nil
 }
 
-func (c *OpenStackClient) UnassignHost(ctx context.Context, inventoryHostID string, labels []string) error {
+func (c *OpenStackClient) UnassignHost(ctx context.Context, inventoryHostID, bareMetalInstanceID string, labels []string) error {
 	// Get current node state to check what labels exist
 	node, err := nodes.Get(ctx, c.client, inventoryHostID).Extract()
 	if err != nil {
 		return fmt.Errorf("getting node %s: %w", inventoryHostID, err)
+	}
+
+	currentBareMetalInstanceID, assigned := getNestedLabel(node, BareMetalInstanceIDLabel)
+	if !assigned || currentBareMetalInstanceID != bareMetalInstanceID {
+		return nil
 	}
 
 	existing, _ := node.Extra["osac_labels"].(map[string]any)

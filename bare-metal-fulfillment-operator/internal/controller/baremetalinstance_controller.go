@@ -1123,7 +1123,7 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 			labelsToRemove = append(labelsToRemove, shared.OsacBareMetalPoolIDLabel)
 		}
 
-		err := r.InventoryClient.UnassignHost(ctx, hostID, labelsToRemove)
+		err := r.InventoryClient.UnassignHost(ctx, hostID, string(bareMetalInstance.UID), labelsToRemove)
 		if err != nil {
 			log.Error(err, "Failed to unassign host in inventory")
 			return ctrl.Result{}, err

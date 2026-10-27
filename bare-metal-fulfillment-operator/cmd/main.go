@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -55,6 +56,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/profile"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/secretapi"
 	"github.com/osac-project/osac/osac-operator/pkg/aap"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	// +kubebuilder:scaffold:imports
@@ -90,6 +92,12 @@ const (
 	envAAPInsecureSkipVerify        = "OSAC_AAP_INSECURE_SKIP_VERIFY"
 	envAAPTemplatePrefix            = "OSAC_AAP_TEMPLATE_PREFIX"
 	envEnableNetworkingProvisioning = "OSAC_ENABLE_NETWORKING_PROVISIONING"
+
+	envSecretAPIURL              = "OSAC_SECRET_API_URL"
+	envSecretAPIIssuerURL        = "OSAC_SECRET_API_ISSUER_URL"
+	envSecretAPIClientIDFile     = "OSAC_SECRET_API_CLIENT_ID_FILE"
+	envSecretAPIClientSecretFile = "OSAC_SECRET_API_CLIENT_SECRET_FILE"
+	envSecretAPICAFile           = "OSAC_SECRET_API_CA_FILE"
 )
 
 func init() {
@@ -465,7 +473,13 @@ func setupBareMetalInstanceController(
 	if err != nil {
 		return err
 	}
-
+	if closer, ok := inventoryClient.(io.Closer); ok {
+		context.AfterFunc(ctx, func() {
+			if closeErr := closer.Close(); closeErr != nil {
+				setupLog.Error(closeErr, "Failed to close inventory client")
+			}
+		})
+	}
 	managementClient, err := management.NewClient(ctx, &managementConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create management client: %w", err)
@@ -530,7 +544,7 @@ func createInventoryClient(
 	case "bcm":
 		return createBCMInventoryClient(ctx, inventoryCfg, managementCfg, mgr)
 	case "netbox":
-		return createNetBoxInventoryClient(inventoryCfg, managementCfg, mgr)
+		return createNetBoxInventoryClient(ctx, inventoryCfg, managementCfg, mgr)
 	}
 
 	inventoryClient, err := inventory.NewClient(ctx, inventoryCfg)
@@ -553,33 +567,59 @@ func validateNetBoxManagementConfig(managementCfg *management.Config) error {
 }
 
 func createNetBoxInventoryClient(
+	ctx context.Context,
 	inventoryCfg *inventory.Config,
 	managementCfg *management.Config,
 	mgr ctrl.Manager,
 ) (inventory.Client, error) {
+	if err := validateNetBoxInventoryConfig(inventoryCfg, managementCfg); err != nil {
+		return nil, err
+	}
+	bmhManager, err := createMetal3BMHManager(managementCfg, mgr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to configure Metal3 BMH manager for NetBox: %w", err)
+	}
+	return createNetBoxInventoryClientWithManager(ctx, inventoryCfg, bmhManager)
+}
+
+func validateNetBoxInventoryConfig(inventoryCfg *inventory.Config, managementCfg *management.Config) error {
 	if inventoryCfg.HostClass != metal3Backend {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"NetBox backend requires inventory.hostClass=%s (got %q)",
 			metal3Backend,
 			inventoryCfg.HostClass,
 		)
 	}
-	if err := validateNetBoxManagementConfig(managementCfg); err != nil {
-		return nil, err
-	}
+	return validateNetBoxManagementConfig(managementCfg)
+}
 
-	bmhManager, err := createMetal3BMHManager(managementCfg, mgr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to configure Metal3 BMH manager for NetBox: %w", err)
-	}
-
+func createNetBoxInventoryClientWithManager(
+	ctx context.Context,
+	inventoryCfg *inventory.Config,
+	bmhManager *baremetalhost.Manager,
+) (inventory.Client, error) {
 	netBoxAPI, err := inventory.NewNetBoxAPI(inventoryCfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create inventory client: %w", err)
+		return nil, fmt.Errorf("failed to create NetBox inventory client: %w", err)
+	}
+	secretsClient, err := createSecretAPIClientFromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Secret API client for NetBox inventory: %w", err)
 	}
 	setupLog.Info("BMH manager configured", "namespace", bmhManager.Namespace())
 
-	return inventory.NewNetBoxClient(netBoxAPI, bmhManager, inventoryCfg.HostClass), nil
+	netBoxClient := inventory.NewNetBoxClient(netBoxAPI, bmhManager, inventoryCfg.HostClass, secretsClient)
+	return netBoxClient, nil
+}
+
+func createSecretAPIClientFromEnv() (inventory.SecretAPIClient, error) {
+	return secretapi.New(secretapi.Config{
+		Endpoint:         os.Getenv(envSecretAPIURL),
+		IssuerURL:        os.Getenv(envSecretAPIIssuerURL),
+		ClientIDFile:     os.Getenv(envSecretAPIClientIDFile),
+		ClientSecretFile: os.Getenv(envSecretAPIClientSecretFile),
+		CAFile:           os.Getenv(envSecretAPICAFile),
+	})
 }
 
 func createBCMInventoryClient(

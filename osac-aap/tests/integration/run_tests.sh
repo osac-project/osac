@@ -68,6 +68,7 @@ ROLE_TESTS=(
   "agentless_net_external_ip_attachment"
   "agentless_net_subnet"
   "agentless_net_attachment"
+  "compute_instance_delete_vmi_recovery"
   "metallb_l2_detach_annotation"
   "netris_subnet_delete"
   "netris_parent_delete"

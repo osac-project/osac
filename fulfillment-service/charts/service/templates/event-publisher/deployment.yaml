@@ -141,6 +141,7 @@ spec:
         - --grpc-listener-tls-key=/etc/fulfillment-event-publisher/tls/tls.key
         - --metrics-listener-address=0.0.0.0:8002
         - --kafka-properties-file=/etc/fulfillment-event-publisher/kafka
+        - --kafka-topic-retention={{ .Values.eventPublisher.topicRetention | default "-1s" }}
         - --ca-file=/etc/ca-bundle/bundle.pem
         ports:
         - name: grpc

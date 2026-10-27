@@ -334,3 +334,53 @@ var _ = Describe("Role binding reconciler", func() {
 		Entry("cloud-provider-reader", "cloud-provider-reader", "sales"),
 	)
 })
+
+var _ = Describe("RoleBinding references", func() {
+	It("resolves a global role by name for a tenant RoleBinding", func() {
+		ctx := context.Background()
+		conn := tool.InternalView().AdminConn()
+		tenantClient := privatev1.NewTenantsClient(conn)
+		projectsClient := privatev1.NewProjectsClient(conn)
+		client := privatev1.NewRoleBindingsClient(conn)
+		tenantName := "role-binding-reference-" + uuid.New()
+		tenantResponse, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
+			Object: privatev1.Tenant_builder{
+				Metadata: privatev1.Metadata_builder{Name: tenantName}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		tenantID := tenantResponse.GetObject().GetId()
+
+		bindingID := ""
+		DeferCleanup(func(cleanupCtx context.Context) {
+			if bindingID != "" {
+				_, err := client.Delete(cleanupCtx, privatev1.RoleBindingsDeleteRequest_builder{Id: bindingID}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Eventually(func(g Gomega) {
+					_, err := client.Get(cleanupCtx, privatev1.RoleBindingsGetRequest_builder{Id: bindingID}.Build())
+					status, ok := grpcstatus.FromError(err)
+					g.Expect(ok).To(BeTrue())
+					g.Expect(status.Code()).To(Equal(grpccodes.NotFound))
+				}, time.Minute, time.Second).Should(Succeed())
+			}
+			deleteTenant(cleanupCtx, tenantClient, projectsClient, tenantID, tenantName)
+		})
+
+		name := "tenant-admin-binding-" + uuid.New()
+		response, err := client.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+			Object: privatev1.RoleBinding_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   name,
+					Tenant: tenantName,
+				}.Build(),
+				Spec: privatev1.RoleBindingSpec_builder{
+					Role: privatev1.RoleReference_builder{Name: "tenant-admin"}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		bindingID = response.GetObject().GetId()
+		Expect(response.GetObject().GetSpec().GetRole().GetId()).ToNot(BeEmpty())
+	})
+})

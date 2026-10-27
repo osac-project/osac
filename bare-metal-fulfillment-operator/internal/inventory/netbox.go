@@ -26,6 +26,7 @@ import (
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/netboxclient"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/secretapi"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
 
@@ -55,6 +56,13 @@ type NetBoxAPI interface {
 	ForEachDeviceCustomField(ctx context.Context, visit func(netboxclient.CustomField) (bool, error)) error
 	GetDevice(ctx context.Context, id string) (netboxclient.DeviceSnapshot, error)
 	PatchDevice(ctx context.Context, id string, patch netboxclient.DevicePatch, etag string) (netboxclient.DeviceSnapshot, error)
+}
+
+// SecretAPIClient defines the Secret API operations used by the NetBox inventory.
+type SecretAPIClient interface {
+	List(ctx context.Context, filter secretapi.Filter, limit int32) (secretapi.ListResult, error)
+	Get(ctx context.Context, id string) (secretapi.Secret, error)
+	Close() error
 }
 
 // NetBoxClientConfig contains the mounted-file and endpoint settings for NetBox.
@@ -96,6 +104,7 @@ type NetBoxClient struct {
 	api        NetBoxAPI
 	bmhManager baremetalhost.BMHLifecycleManager
 	hostClass  string
+	secretAPI  SecretAPIClient
 }
 
 var (
@@ -125,12 +134,21 @@ func NewNetBoxAPI(config *Config) (NetBoxAPI, error) {
 }
 
 // NewNetBoxClient creates a NetBox inventory client with injected dependencies.
-func NewNetBoxClient(api NetBoxAPI, bmhManager baremetalhost.BMHLifecycleManager, hostClass string) *NetBoxClient {
+func NewNetBoxClient(api NetBoxAPI, bmhManager baremetalhost.BMHLifecycleManager, hostClass string, secretAPI SecretAPIClient) *NetBoxClient {
 	return &NetBoxClient{
 		api:        api,
 		bmhManager: bmhManager,
 		hostClass:  hostClass,
+		secretAPI:  secretAPI,
 	}
+}
+
+// Close releases the Secret API connection used by the NetBox client.
+func (c *NetBoxClient) Close() error {
+	if c == nil || c.secretAPI == nil {
+		return nil
+	}
+	return c.secretAPI.Close()
 }
 
 func (c *NetBoxClient) FindFreeHost(ctx context.Context, selector map[string]string) (*Host, error) {
@@ -353,7 +371,7 @@ func netBoxInstanceOwner(device netboxclient.Device) (string, error) {
 	return owner, nil
 }
 
-func (*NetBoxClient) UnassignHost(_ context.Context, _ string, _ []string) error {
+func (*NetBoxClient) UnassignHost(_ context.Context, _, _ string, _ []string) error {
 	return errNetBoxClientNotImplemented
 }
 

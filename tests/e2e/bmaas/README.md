@@ -54,6 +54,7 @@ the backend needs:
 | `OSAC_NETBOX_URL` / `OSAC_NETBOX_TOKEN` | NetBox URL and API token overrides | from BMF Secrets |
 | `OSAC_NETBOX_CA_FILE` / `OSAC_NETBOX_INSECURE` | CA PEM file / disable TLS certificate verification — the only verification switch; the deployed `allowInsecureHTTP` merely permits an `http://` URL and never disables verification | CA from the `osac-netbox-ca` Secret / verification on |
 | `OSAC_NETBOX_SITE` | Site slug for fixture devices (required on netbox) | — |
+| `OSAC_NETBOX_DEVICE_TYPE` | Device type slug for fixture devices (required on netbox) | — |
 | `OSAC_NETBOX_ROLE` | Device role slug for fixture devices | `server` |
 | `OSAC_NETBOX_FIXTURE_HOSTS` | JSON list of virtual host specs: `{"bmc_address": ..., "boot_mac": ..., "interface_macs"?: {...}, "custom_fields"?: {...}}` — one per lab host; `custom_fields` carries capability fields matching the instance type's host selector, and `interface_macs` feeds the operator's logical-port MAC mapping (used by DHCP/networking, not by the sanity and serial assertions, which read BMH inspection data) | — |
 

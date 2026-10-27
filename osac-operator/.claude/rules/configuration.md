@@ -27,11 +27,18 @@ Config via environment variables from a Secret (see `config/samples/osac-config-
   ConfigMap changes (default: 5m). Only active when the fulfillment-service gRPC
   connection is configured and `OSAC_NETWORKING_NAMESPACE` is non-empty.
 
+## Remote Cluster
+
+- `OSAC_REMOTE_CLUSTER_KUBECONFIG` / `--remote-cluster-kubeconfig` — path to kubeconfig for the remote VMaaS cluster (not supported with `cluster` or `baremetal-instance` controllers)
+
 ## Controller Enable Flags
 
 - `OSAC_ENABLE_CLUSTER_CONTROLLER` / `--enable-cluster-controller`
 - `OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER` / `--enable-compute-instance-controller`
 - `OSAC_ENABLE_TENANT_CONTROLLER` / `--enable-tenant-controller`
+- `OSAC_ENABLE_STORAGE_CONTROLLER` / `--enable-storage-controller`
+- `OSAC_ENABLE_VOLUME_CONTROLLER` / `--enable-volume-controller`
 - `OSAC_ENABLE_NETWORKING_CONTROLLER` / `--enable-networking-controller`
+- `OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER` / `--enable-baremetal-instance-controller`
 
 If none set, all controllers run. If any set, only flagged controllers run.

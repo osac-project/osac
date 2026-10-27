@@ -183,6 +183,17 @@ var AllHostConditionTypes = []BareMetalInstanceConditionType{
 	HostConditionNetworkOffboardComplete,
 }
 
+// IsProvisionRetrying reports whether cond marks a BareMetalInstance whose
+// provision-template attempt failed and is waiting to retry (OSAC-1700). It
+// is nil-safe and is the single classification of "retrying" shared by
+// DeriveProvisioningProgress and the controller's reconciliation guards.
+func IsProvisionRetrying(cond *metav1.Condition) bool {
+	return cond != nil &&
+		cond.Type == string(HostConditionProvisionTemplateComplete) &&
+		cond.Status == metav1.ConditionFalse &&
+		cond.Reason == HostConditionReasonRetrying
+}
+
 // DeriveProvisioningProgress maps a BareMetalInstance's lifecycle conditions to the
 // furthest-advanced provisioning progress, order-independently (each condition is
 // read by type, never by slice position). It is the authoritative,
@@ -209,7 +220,7 @@ func DeriveProvisioningProgress(conds []metav1.Condition) ProvisioningProgress {
 			continue
 		}
 		if cond.Reason == HostConditionReasonProgressing ||
-			(ct == HostConditionProvisionTemplateComplete && cond.Reason == HostConditionReasonRetrying) ||
+			IsProvisionRetrying(cond) ||
 			cond.Reason == HostConditionReasonPowerSyncRequired ||
 			cond.Reason == "" {
 			continue
@@ -221,7 +232,7 @@ func DeriveProvisioningProgress(conds []metav1.Condition) ProvisioningProgress {
 	// 2. Retrying: a failed provision attempt remains in progress. This precedes
 	//    retained success conditions so in-place reprovisioning does not appear Ready
 	//    while its replacement attempt is backing off.
-	if cond := apimeta.FindStatusCondition(conds, string(HostConditionProvisionTemplateComplete)); cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == HostConditionReasonRetrying {
+	if IsProvisionRetrying(apimeta.FindStatusCondition(conds, string(HostConditionProvisionTemplateComplete))) {
 		return ProvisioningProgress{State: StateInProgress, Step: StepProvisioning, Retrying: true}
 	}
 

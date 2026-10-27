@@ -409,9 +409,7 @@ func (r *BareMetalInstanceReconciler) reconcileManagement(ctx context.Context, b
 	// the Ready phase must wait until provisioning succeeds or fails for good
 	// (OSAC-1700). Without this guard the failure-observing reconcile returns
 	// a zero result and falls through to the Ready transition.
-	if provisionCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete); provisionCond != nil &&
-		provisionCond.Status == metav1.ConditionFalse &&
-		provisionCond.Reason == v1alpha1.HostConditionReasonRetrying {
+	if v1alpha1.IsProvisionRetrying(bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)) {
 		return ctrl.Result{}, nil
 	}
 
@@ -595,7 +593,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 		}
 		provisionCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
 		if provisionCond != nil && provisionCond.Status != metav1.ConditionTrue {
-			if provisionCond.Reason == v1alpha1.HostConditionReasonRetrying {
+			if v1alpha1.IsProvisionRetrying(provisionCond) {
 				bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 				return ctrl.Result{}, nil
 			}

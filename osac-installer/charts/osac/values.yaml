@@ -74,13 +74,10 @@ global:
     aap: false
     networkClass: false
     networkManagers: false
-
 cliImage: quay.io/openshift/origin-cli:4.20.0
-
 # Shared PostgreSQL host for the db-init hook.
 dbInit:
   host: "postgres.osac-infra.svc.cluster.local"
-
 # Kafka cluster coordinates for per-instance topic/user creation. Set enabled
 # to false when service.kafka.connection targets an external Kafka cluster.
 kafka:
@@ -88,11 +85,9 @@ kafka:
   clusterName: osac-kafka
   clusterNamespace: osac-kafka
   replicas: 3
-
 # --- Operator CRDs ---
 operatorCrds:
   install: true
-
 # --- Operator ---
 operator:
   enabled: true
@@ -100,7 +95,7 @@ operator:
   # Nonempty maps create osac-fabric-domain-inventory in the release namespace.
   fabricDomainInventory: {}
   image:
-    repository: ghcr.io/osac-project/osac-operator
+    repository: registry.stage.redhat.io/cloud-extensions/osac-operator-rhel10
     tag: 0.0.38
     pullPolicy: Always
   replicaCount: 1
@@ -157,13 +152,12 @@ operator:
   remoteClusterKubeconfigSecretKey: kubeconfig
   hubAccess:
     enabled: false
-  # Network manager ConfigMaps use the nested operator.networkManagers map
-  # (fabricManagers / k8sManagers). Defaults live in the osac-operator subchart;
-  # override operator.networkManagers here to enable netris/k8s_only or change
-  # capabilitiesSyncInterval. Manager registrations can set
-  # externalIPContractVersion / externalIPAttachmentContractVersion select
-  # independent v1 result contracts.
-
+    # Network manager ConfigMaps use the nested operator.networkManagers map
+    # (fabricManagers / k8sManagers). Defaults live in the osac-operator subchart;
+    # override operator.networkManagers here to enable netris/k8s_only or change
+    # capabilitiesSyncInterval. Manager registrations can set
+    # externalIPContractVersion / externalIPAttachmentContractVersion select
+    # independent v1 result contracts.
 # --- Fulfillment Service ---
 service:
   enabled: true
@@ -192,7 +186,7 @@ service:
         memory: 512Mi
   images:
     service:
-      repository: ghcr.io/osac-project/fulfillment-service
+      repository: registry.stage.redhat.io/cloud-extensions/fulfillment-service-rhel10
       tag: 0.0.130
       pullPolicy: Always
     envoy:
@@ -267,16 +261,15 @@ service:
   # already trusted.
   kafka:
     connection:
-    - secret:
-        name: fulfillment-service-kafka
-        items:
-        - key: brokers
-          param: brokers
-        - key: user
-          param: user
-        - key: password
-          param: password
-
+      - secret:
+          name: fulfillment-service-kafka
+          items:
+            - key: brokers
+              param: brokers
+            - key: user
+              param: user
+            - key: password
+              param: password
 # --- AAP ---
 aap:
   aap:
@@ -295,7 +288,7 @@ aap:
       imagePullPolicy: IfNotPresent
   bootstrap:
     enabled: true
-    image: ghcr.io/osac-project/osac-aap:0.0.44
+    image: registry.stage.redhat.io/cloud-extensions/osac-aap-rhel10:0.0.44
     backoffLimit: 15
     readinessConsecutiveSuccesses: 3
     gateway:
@@ -307,7 +300,7 @@ aap:
     secret: "config-as-code-ig"
     # Maximum number of add-on operator jobs allowed to run concurrently.
     addonOperatorMaxConcurrentJobs: 50
-    eeImage: ghcr.io/osac-project/osac-aap:0.0.44
+    eeImage: registry.stage.redhat.io/cloud-extensions/osac-aap-rhel10:0.0.44
     projectGitUri: https://github.com/osac-project/osac
     projectGitBranch: 7e92b8dba357821cad91723bf733ca6cdc097f81
     remoteClusterKubeconfigSecretName: ""
@@ -350,7 +343,6 @@ aap:
       config:
         OSAC_TEMPLATE_COLLECTIONS: "osac.templates"
         OSAC_FULFILLMENT_SERVICE_URI: "https://fulfillment-internal-api:8001"
-
 # --- UI ---
 ui:
   enabled: true
@@ -375,24 +367,21 @@ ui:
   log:
     level: info
   images:
-    ui: ghcr.io/osac-project/osac-ui:0.0.29
+    ui: registry.stage.redhat.io/cloud-extensions/osac-ui-rhel10:0.0.29
     pullPolicy: auto
-
 # --- Metering ---
 metering:
   enabled: false
   image:
-    repository: ghcr.io/osac-project/metering-service
+    repository: registry.stage.redhat.io/cloud-extensions/metering-service-rhel10
     tag: 0.0.26
     pullPolicy: Always
-
 # --- Bare Metal Fulfillment Operator CRDs ---
 bmfCrds: {}
-
 # --- Bare Metal Fulfillment Operator ---
 bmf:
   image:
-    repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
+    repository: registry.stage.redhat.io/cloud-extensions/bare-metal-fulfillment-operator-rhel10
     tag: 0.0.37
     pullPolicy: Always
   replicaCount: 1
@@ -458,14 +447,11 @@ bmf:
     # Namespace where Metal3 inventory reads BareMetalHost resources.
     namespace: ""
     hostClass: "metal3"
-
 # --- Validation hooks ---
 validation:
   enabled: true
-
 hubAccess:
   enabled: false
-
 clusterVersions:
   enabled: false
   versions: []
@@ -484,13 +470,11 @@ clusterVersions:
   #     name: rhcos-4-22
   #     sourceRef: oci://quay.io/osac-project/rhcos:4.22.0
   #     architecture: [ARCHITECTURE_AMD64]
-
 lvms:
   # Register LVMS as a local StorageBackend + StorageTier in the fulfillment service
   # after install. For CI/development environments only — production deployments
   # should use their own storage operators (Ceph, Pure, VAST, etc.).
   enabled: false
-
 networkClass:
   # Legacy expert override. Used only when global.expertOverrides.networkClass
   # is true. Normal deployments leave this block disabled and configure
@@ -514,8 +498,8 @@ networkClass:
     subnetIPv4CIDR: "10.200.0.0/20"
     enableNatGateway: false
     egressRules:
-    - protocol: PROTOCOL_ALL
-      ipv4Cidr: "0.0.0.0/0"
+      - protocol: PROTOCOL_ALL
+        ipv4Cidr: "0.0.0.0/0"
   # Example expert override (k8s-only):
   # enabled: true
   # title: "K8s-only networking"

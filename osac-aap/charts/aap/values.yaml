@@ -15,7 +15,7 @@ aap:
     imagePullPolicy: IfNotPresent
 bootstrap:
   enabled: true
-  image: ghcr.io/osac-project/osac-aap:0.0.44 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+  image: registry.stage.redhat.io/cloud-extensions/osac-aap-rhel10:0.0.44 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
   cliImage: quay.io/openshift/origin-cli:4.20.0
   backoffLimit: 15
   readinessConsecutiveSuccesses: 3
@@ -24,7 +24,7 @@ configAsCode:
   secret: "config-as-code-ig"
   # Maximum number of add-on operator jobs allowed to run concurrently.
   addonOperatorMaxConcurrentJobs: 50
-  eeImage: "ghcr.io/osac-project/osac-aap:0.0.44"
+  eeImage: "registry.stage.redhat.io/cloud-extensions/osac-aap-rhel10:0.0.44"
   # Controller's own execution_environment.pull field (always / missing /
   # never). Left empty by default (config-as-code-secret.yaml omits the env
   # var, Ansible side falls back to "always", preserving today's behavior

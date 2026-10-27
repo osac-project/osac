@@ -143,7 +143,7 @@ bundledPostgres:
 # Vault-compatible secret store for testing and CI. Not for production.
 bundledVault:
   enabled: false
-  image: "ghcr.io/openbao/openbao:2.6.2"
+  image: "ghcr.io/openbao/openbao:2.7.2"
   # Default podSecurityContext omits a hardcoded UID so that OpenShift's
   # restricted-v2 SCC can allocate from the namespace UID range. Override
   # this in a profile's infra.yaml when a specific UID is required (e.g. Kind).

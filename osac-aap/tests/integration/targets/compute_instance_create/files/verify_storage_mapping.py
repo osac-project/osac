@@ -78,11 +78,6 @@ class StorageMappingTests(unittest.TestCase):
                     {"sizeGiB": 100, "storageTier": "balanced"},
                     {"sizeGiB": 250, "storageTier": "archive"},
                 ],
-                "diskVolumeIDs": {
-                    "disk-2": "volume-data-2",
-                    "boot": "volume-boot",
-                    "disk-1": "volume-data-1",
-                },
                 "image": {
                     "sourceType": "registry",
                     "sourceRef": "quay.io/containerdisks/fedora:latest",
@@ -203,22 +198,13 @@ class StorageMappingTests(unittest.TestCase):
         self._assert_shared_classes_unchanged()
 
     def _assert_disk_specs(self, classes: list[str]) -> list[str]:
-        expected = (
-            ("root-disk", "40Gi", "boot", "volume-boot"),
-            ("disk-1", "100Gi", "disk-1", "volume-data-1"),
-            ("disk-2", "250Gi", "disk-2", "volume-data-2"),
-        )
+        expected = (("root-disk", "40Gi"), ("disk-1", "100Gi"), ("disk-2", "250Gi"))
         identities = []
         all_disks = self.custom.list_namespaced_custom_object(
-            VOLUME_GROUP,
-            VOLUME_VERSION,
-            self.namespace,
-            "datavolumes",
+            VOLUME_GROUP, VOLUME_VERSION, self.namespace, "datavolumes"
         )["items"]
         self.assertEqual(len(all_disks), 3)
-        for (suffix, size, key, volume_id), storage_class in zip(
-            expected, classes, strict=True
-        ):
+        for (suffix, size), storage_class in zip(expected, classes, strict=True):
             disk = self.custom.get_namespaced_custom_object(
                 VOLUME_GROUP,
                 VOLUME_VERSION,
@@ -236,19 +222,13 @@ class StorageMappingTests(unittest.TestCase):
                 WORKLOAD_NAME,
             )
             self.assertEqual(disk["metadata"]["namespace"], self.namespace)
-            annotations = disk["metadata"].get("annotations", {})
-            self.assertEqual(
-                annotations.get("osac.openshift.io/storage-volume-id"),
-                volume_id,
-                key,
-            )
-            if key == "boot":
+            if suffix == "root-disk":
                 self.assertEqual(
                     disk["spec"]["source"],
                     {
                         "registry": {
                             "url": "docker://quay.io/containerdisks/fedora:latest"
-                        },
+                        }
                     },
                 )
             else:

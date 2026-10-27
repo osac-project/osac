@@ -2,7 +2,7 @@
 
 `storage_tier_mapping` runs the real top-level ComputeInstance create playbook
 against Kind. It checks boot and additional-disk StorageClasses, sizes, sources,
-access modes and Volume-ID annotations on persisted DataVolumes, including
+access modes on persisted DataVolumes, including
 retries. Missing, empty, incomplete and ambiguous mappings must fail before any
 DataVolume or VM exists.
 Shared StorageClasses must remain unchanged. A mixed case also exercises the
@@ -68,15 +68,15 @@ The verifier requires an explicit `KUBECONFIG`, creates unique namespaces and
 StorageClasses, and removes only its own resources. It clears inherited
 Kubernetes module overrides before invoking the provisioning playbook.
 
-## Volume-ID dependency
+## Deferred Volume-ID coverage
 
-Volume-ID checks always run, including in normal CI. The test depends on the
-AAP consumer from [PR #1907](https://github.com/osac-project/osac/pull/1907).
-Keep this PR in draft until that dependency merges, then rebase and require
-the integration checks to pass before merging.
+This target tests StorageClass selection independently of Volume-ID propagation
+and has no dependency on [PR #1907](https://github.com/osac-project/osac/pull/1907).
+It supplies no `diskVolumeIDs` and makes no Volume-ID coverage claim.
 
-The fixture supplies distinct `boot`, `disk-1` and `disk-2` entries in shuffled
-order and requires the corresponding `osac.openshift.io/storage-volume-id`
-annotation on each stored DataVolume. Missing consumer support fails the test.
-This tests the AAP consumer; Fulfillment's creation of Volume records and the
-operator's producer contract require their own coverage.
+The Volume-ID portion of [OSAC-6682](https://redhat.atlassian.net/browse/OSAC-6682)
+is deferred until after the Developer Preview, when the Volume API's ownership
+of DataVolume creation is established. Follow-up tests must verify per-disk
+Volume identity through that workflow, including boot/additional-disk mapping
+and retries. They should exercise the new owner rather than add conditional
+checks to this StorageClass target.

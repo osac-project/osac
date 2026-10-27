@@ -130,6 +130,8 @@ type StorageReconciler struct {
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=volumes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=hypershift.openshift.io,resources=hostedcontrolplanes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
@@ -697,6 +699,35 @@ func (r *StorageReconciler) upsertTenantClusterStorage(tenant *v1alpha1.Tenant, 
 	})
 }
 
+// hasActiveTenantWorkloads reports the number of ComputeInstance and Volume
+// CRs on the hub cluster that still belong to tenantName (including CRs
+// with a DeletionTimestamp whose own finalizers are still running).
+func (r *StorageReconciler) hasActiveTenantWorkloads(ctx context.Context, tenantName string) (int, int, error) {
+	computeInstances := &v1alpha1.ComputeInstanceList{}
+	if err := r.List(ctx, computeInstances); err != nil {
+		return 0, 0, fmt.Errorf("list ComputeInstances for tenant %s: %w", tenantName, err)
+	}
+	ciCount := 0
+	for i := range computeInstances.Items {
+		if computeInstances.Items[i].GetAnnotations()[osacTenantKey] == tenantName {
+			ciCount++
+		}
+	}
+
+	volumes := &v1alpha1.VolumeList{}
+	if err := r.List(ctx, volumes); err != nil {
+		return 0, 0, fmt.Errorf("list Volumes for tenant %s: %w", tenantName, err)
+	}
+	volCount := 0
+	for i := range volumes.Items {
+		if volumes.Items[i].GetAnnotations()[osacTenantKey] == tenantName {
+			volCount++
+		}
+	}
+
+	return ciCount, volCount, nil
+}
+
 // handleDelete tears down CaaS and VMaaS storage resources for a deleting Tenant
 // and removes the storage finalizer once cleanup completes.
 func (r *StorageReconciler) handleDelete(ctx context.Context, tenant *v1alpha1.Tenant) (ctrl.Result, error) {
@@ -707,12 +738,43 @@ func (r *StorageReconciler) handleDelete(ctx context.Context, tenant *v1alpha1.T
 		return ctrl.Result{}, nil
 	}
 
+	ciCount, volCount, err := r.hasActiveTenantWorkloads(ctx, tenant.Name)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if ciCount > 0 || volCount > 0 {
+		log.Info("waiting for tenant workloads and volumes to finish deleting before tearing down storage",
+			"tenant", tenant.Name, "computeInstances", ciCount, "volumes", volCount, "retryAfter", r.StatusPollInterval)
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
+
 	// Resolved independently from handleUpdate's resolution (no caching between
 	// create and delete paths), before the first AAP-triggering call in this
 	// function, so every downstream call in this reconcile sees the same result.
 	ctx, osacTiers, _, skippedOSACTiers, tierErr := resolveAndPartitionTierContext(ctx, r.TiersClient, r.BackendsClient, r.SecretsClient, "tenant", tenant.Name)
 	if tierErr != nil {
 		log.Error(tierErr, "tier resolution failed during deletion", "tenant", tenant.Name)
+	}
+
+	// Guard: when tier resolution failed or was incomplete, do not strip CaaS
+	// ClusterOrder finalizers or start/retry tenant deprovisioning AAP jobs —
+	// they would run without complete backend connections or tier definitions.
+	// Retain the finalizer and requeue so the controller retries when the
+	// fulfillment service or secret dependency recovers, rather than orphaning
+	// cluster-side or backend resources. When tier clients are nil (no
+	// fulfillment service configured), tierErr and skippedOSACTiers are false/nil
+	// and deprovisioning proceeds normally.
+	if (tierErr != nil || skippedOSACTiers) && (r.ClusterStorageProvider != nil || r.BackendProvider != nil) {
+		log.Info("tier resolution failed or incomplete during deletion, retaining finalizer and requeueing",
+			"tenant", tenant.Name, "skippedOSACTiers", skippedOSACTiers, "retryAfter", r.StatusPollInterval)
+		if tierErr != nil {
+			r.Recorder.Eventf(tenant, nil, corev1.EventTypeWarning, "TierResolutionFailed", "Teardown",
+				"Storage tier resolution failed during deletion, deferring deprovisioning: %v", tierErr)
+		} else {
+			r.Recorder.Eventf(tenant, nil, corev1.EventTypeWarning, "TierResolutionFailed", "Teardown",
+				"One or more storage tiers could not be resolved during deletion, deferring deprovisioning")
+		}
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// CaaS cleanup: remove cluster-side storage (StorageClasses, CSI) from
@@ -728,24 +790,6 @@ func (r *StorageReconciler) handleDelete(ctx context.Context, tenant *v1alpha1.T
 	caasResult, caasErr := r.handleCaaSDelete(ctx, tenant, true)
 	if caasErr != nil || caasResult.RequeueAfter > 0 {
 		return caasResult, caasErr
-	}
-
-	// Guard: when tier resolution failed, do not start or retry tenant
-	// deprovisioning AAP jobs — they would run without backend connections
-	// and fail. Retain the finalizer and requeue so the controller retries
-	// when the fulfillment service recovers, rather than orphaning backend
-	// resources. This differs from the handleCaaSDelete guard (OSAC-4855)
-	// which removes the CaaS finalizer because the cluster being destroyed
-	// makes resource cleanup moot; tenant-level resources (hub Secrets,
-	// StorageClasses on the target cluster) outlive the Tenant CR and must
-	// be cleaned up. When tier clients are nil (no fulfillment service
-	// configured), tierErr is nil and deprovisioning proceeds normally.
-	if tierErr != nil && (r.ClusterStorageProvider != nil || r.BackendProvider != nil) {
-		log.Info("tier resolution failed during deletion, retaining finalizer and requeueing",
-			"tenant", tenant.Name, "retryAfter", r.StatusPollInterval)
-		r.Recorder.Eventf(tenant, nil, corev1.EventTypeWarning, "TierResolutionFailed", "Teardown",
-			"Storage tier resolution failed during deletion, deferring deprovisioning: %v", tierErr)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Stage 1: class cleanup
@@ -993,13 +1037,8 @@ func (r *StorageReconciler) handleClusterStorageDeprovisioning(
 		return ctrl.Result{}, nil
 	}
 
-	skip, err := r.canSkipOSACDeprovisioning(ctx, tenant, osacTiers, skippedOSACTiers)
-	if err != nil {
-		log.Error(err, "failed to verify OSAC-managed storage state during deletion, retaining finalizer and requeueing",
-			"tenant", tenant.Name, "retryAfter", r.StatusPollInterval)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-	if skip {
+	if r.canSkipOSACDeprovisioning(tenant, osacTiers, skippedOSACTiers) {
+		log.Info("no OSAC storage tiers resolved, skipping cluster storage deprovisioning job", "tenant", tenant.Name)
 		return ctrl.Result{}, nil
 	}
 
@@ -1031,6 +1070,11 @@ func (r *StorageReconciler) handleBackendDeprovisioning(ctx context.Context, ten
 		latestJob.State.IsTerminal() &&
 		!latestJob.State.IsSuccessful() &&
 		latestJob.BlockDeletionOnFailure
+
+	if !r.canProvisionOSACStorage(ctx) && !deprovJobActive && !deprovJobBlocking {
+		log.Info("no OSAC storage tiers resolved, skipping backend deprovisioning job", "tenant", tenant.Name)
+		return ctrl.Result{}, nil
+	}
 
 	if !hubSecretReady && !deprovJobActive && !deprovJobBlocking {
 		return ctrl.Result{}, nil
@@ -1464,39 +1508,25 @@ func (r *StorageReconciler) isPureCSPTenant(
 }
 
 // canSkipOSACDeprovisioning reports whether Tenant deletion can safely bypass
-// OSAC-managed cluster storage and backend deprovisioning. It returns true only
-// when tier/backend gRPC clients are configured, no OSAC-managed tiers resolved,
-// no tiers were skipped during resolution (e.g., due to a missing backend
-// password Secret), no non-CSP StorageBackend is registered in the fulfillment
-// service, no tenant hub Secret exists, and no OSAC storage status or job
-// history exists on the Tenant.
+// OSAC-managed cluster storage deprovisioning. It returns true when tier and
+// backend gRPC clients are configured, no OSAC-managed tiers resolved, no
+// tiers were skipped during resolution, and no cluster storage deprovision job
+// is currently active or blocking deletion.
 func (r *StorageReconciler) canSkipOSACDeprovisioning(
-	ctx context.Context,
 	tenant *v1alpha1.Tenant,
 	osacTiers []provisioning.TierDefinition,
 	skippedOSACTiers bool,
-) (bool, error) {
+) bool {
 	if r.TiersClient == nil || r.BackendsClient == nil || len(osacTiers) > 0 || skippedOSACTiers {
-		return false, nil
+		return false
 	}
-	if len(tenant.Status.StorageBackends) > 0 ||
-		len(tenant.Status.ClusterStorage) > 0 ||
-		len(tenant.Status.StorageBackendJobs) > 0 ||
-		len(tenant.Status.ClusterStorageJobs) > 0 {
-		return false, nil
-	}
-	osacBackendRegistered, err := r.fetchBackendRegistered(ctx)
-	if err != nil {
-		return false, err
-	}
-	if osacBackendRegistered {
-		return false, nil
-	}
-	hubSecretReady, err := r.hubSecretExists(ctx, tenant.GetName(), "")
-	if err != nil {
-		return false, err
-	}
-	return !hubSecretReady, nil
+	latestJob := provisioning.FindLatestJobByType(tenant.Status.ClusterStorageJobs, v1alpha1.JobTypeDeprovision)
+	deprovJobActive := latestJob != nil && latestJob.JobID != "" && !latestJob.State.IsTerminal()
+	deprovJobBlocking := latestJob != nil &&
+		latestJob.State.IsTerminal() &&
+		!latestJob.State.IsSuccessful() &&
+		latestJob.BlockDeletionOnFailure
+	return !deprovJobActive && !deprovJobBlocking
 }
 
 // mergeResolvedStorageClasses merges CSP-managed and OSAC-managed resolved

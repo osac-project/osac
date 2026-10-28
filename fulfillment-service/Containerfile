@@ -24,7 +24,8 @@ COPY --chown=1001:1001 osac-ui/proxy/go.mod osac-ui/proxy/go.sum osac-ui/proxy/
 # (GOPROXY/GOFLAGS pointed at the prefetched module cache) when present --
 # i.e. a hermetic Konflux build. Absent entirely for local/non-hermetic
 # builds, where go mod download falls back to the real network as before.
-RUN \
+# Share module downloads and checksum database state across component builds.
+RUN --mount=type=cache,id=osac-go-pkg,target=/opt/app-root/src/go/pkg,uid=1001,gid=0 \
   set -e; \
   cd fulfillment-service; \
   [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; \
@@ -39,7 +40,8 @@ COPY --chown=1001:1001 bare-metal-fulfillment-operator/ bare-metal-fulfillment-o
 COPY --chown=1001:1001 osac-operator/api/ osac-operator/api/
 
 WORKDIR /opt/app-root/src/fulfillment-service
-RUN \
+RUN --mount=type=cache,id=osac-go-pkg,target=/opt/app-root/src/go/pkg,uid=1001,gid=0 \
+    --mount=type=cache,id=osac-go-build,target=/opt/app-root/src/.cache/go-build,uid=1001,gid=0 \
   set -e; \
   [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; \
   version="${VERSION}"; \

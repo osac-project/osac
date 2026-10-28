@@ -254,48 +254,6 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 	})
 })
 
-var _ = Describe("parseSSHKeyFlag", func() {
-	DescribeTable("parses tenant-scoped SSH Secret references",
-		func(input, wantName, wantProject string) {
-			ref, err := parseSSHKeyFlag(input)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ref.GetName()).To(Equal(wantName))
-			Expect(ref.GetProject()).To(Equal(wantProject))
-			Expect(ref.GetShared()).To(BeFalse())
-		},
-		Entry("bare name", "login-key", "login-key", ""),
-		Entry("name key", "name=login-key", "login-key", ""),
-		Entry("named project", "name=login-key,project=apps", "login-key", "apps"),
-		Entry("empty project", "name=login-key,project=", "login-key", ""),
-	)
-
-	DescribeTable("rejects malformed SSH key values before API access",
-		func(input string) {
-			_, err := parseSSHKeyFlag(input)
-			Expect(err).To(HaveOccurred())
-		},
-		Entry("empty value", " "),
-		Entry("empty name", "name="),
-		Entry("duplicate name", "name=first,name=second"),
-		Entry("duplicate project", "name=login-key,project=apps,project=ops"),
-		Entry("unknown key", "name=login-key,tenant=tenant-a"),
-		Entry("fragment without equals", "name=login-key,project"),
-		Entry("empty fragment", "name=login-key,,project=apps"),
-		Entry("bare value with comma", "login-key,apps"),
-	)
-
-	DescribeTable("formats details in malformed SSH key errors",
-		func(input, want string) {
-			_, err := parseSSHKeyFlag(input)
-			Expect(err).To(MatchError(want))
-		},
-		Entry("malformed fragment", "name=login-key,project",
-			`invalid --ssh-key value "name=login-key,project": fragment "project" must use key=value syntax`),
-		Entry("unknown key", "name=login-key,tenant=tenant-a",
-			`invalid --ssh-key value "name=login-key,tenant=tenant-a": unknown key "tenant"`),
-	)
-})
-
 var _ = Describe("Create computeinstance flag registration", func() {
 	It("should register --catalog-item flag", func() {
 		cmd := Cmd()

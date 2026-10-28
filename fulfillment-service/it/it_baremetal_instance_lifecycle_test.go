@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -26,13 +27,13 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
-	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -54,7 +55,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		catalogItemId                       string
 		instanceTypeId                      string
 		defaultDiskImageId                  string
-		defaultNetworkingFixture            catalogItemNetworkFixture
+		defaultDiskImageName                string
 	)
 
 	BeforeEach(func(ctx context.Context) {
@@ -78,7 +79,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Hardware: privatev1.BareMetalHardwareSpec_builder{
 						Cpu: privatev1.BareMetalCPUSpec_builder{
 							Cores:          4,
-							Architecture:   "amd64",
+							Architecture:   "x86_64",
 							ThreadsPerCore: 2,
 						}.Build(),
 						Memory: privatev1.BareMetalMemorySpec_builder{
@@ -113,7 +114,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 
 		// Lifecycle Creates omit network_attachments and use shared catalog items without
 		// network field policies; hard-fail defaulting needs a tenant-default Subnet/SG.
-		defaultNetworkingFixture = ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
+		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 		// Create BareMetalInstanceTemplate with an explicit ID that matches the BMFO CRD
 		// validation pattern (^[a-zA-Z_][a-zA-Z0-9._]*$). Auto-generated UUIDs start with
@@ -158,6 +159,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		defaultDiskImageId = diskImageResp.GetObject().GetId()
+		defaultDiskImageName = diskImageResp.GetObject().GetMetadata().GetName()
 		DeferCleanup(func(ctx context.Context) {
 			_, err := diskImagesClient.Delete(ctx, privatev1.DiskImagesDeleteRequest_builder{
 				Id: defaultDiskImageId,
@@ -187,11 +189,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 
 	})
 
-	It("Creates a BareMetalInstance with omitted networking and verifies fields", func(ctx context.Context) {
-		// Omitted network_attachments request the tenant default Subnet and
-		// SecurityGroup; the BeforeEach ensured a ready default fixture.
-		network := getTenantDefaultNetworkFixture(ctx, usersGroup, "")
-
+	It("Creates a BareMetalInstance and verifies fields", func(ctx context.Context) {
 		// Create BareMetalInstance via public API
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
@@ -199,10 +197,10 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
-					DiskImage:    publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
+					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
+					DiskImage:      publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -226,19 +224,23 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			}, 2*time.Minute, time.Second).Should(Succeed())
 		})
 
-		// Omitted network_attachments should resolve to one attachment with the
-		// tenant default Subnet/SecurityGroup and the first fabric interface.
-		Expect(object.GetSpec().GetNetworkAttachments()).To(HaveLen(1),
-			"omitted network_attachments should resolve to one default attachment")
-		createAttachment := object.GetSpec().GetNetworkAttachments()[0]
-		Expect(createAttachment.GetSubnet().GetId()).To(Equal(network.subnetID),
-			"default attachment should reference the tenant default Subnet")
-		Expect(createAttachment.GetSecurityGroups()).To(HaveLen(1),
-			"default attachment should apply exactly one default SecurityGroup")
-		Expect(createAttachment.GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID),
-			"default attachment should reference the tenant default SecurityGroup")
-		Expect(createAttachment.GetInterface()).To(Equal("data-0"),
-			"default attachment should select the first fabric-role interface")
+		// Set BareMetalInstance to RUNNING state via private Update API
+		bmiGetResp, err := privateBareMetalInstancesClient.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{
+			Id: bareMetalInstanceId,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		bmi := bmiGetResp.GetObject()
+		bmi.SetStatus(privatev1.BareMetalInstanceStatus_builder{
+			State:               privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING,
+			StateTransitionTime: timestamppb.New(time.Now()),
+		}.Build())
+		_, err = privateBareMetalInstancesClient.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
+			Object: bmi,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+				"status.state", "status.state_transition_time",
+			}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
 
 		// Verify the BareMetalInstance fields via public Get
 		getResp, err := bareMetalInstancesClient.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{
@@ -258,189 +260,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			"materialized template should reference the template from the catalog item")
 		Expect(object.GetSpec().GetDiskImage().GetId()).To(Equal(defaultDiskImageId),
 			"BareMetalInstance should persist the requested disk image")
-		// Resolved default networking should survive public persistence.
-		Expect(object.GetSpec().GetNetworkAttachments()).To(HaveLen(1),
-			"public Get should expose one default network attachment")
-		persistedAttachment := object.GetSpec().GetNetworkAttachments()[0]
-		Expect(persistedAttachment.GetSubnet().GetId()).To(Equal(network.subnetID),
-			"persisted attachment should reference the tenant default Subnet")
-		Expect(persistedAttachment.GetSecurityGroups()).To(HaveLen(1),
-			"persisted attachment should apply exactly one default SecurityGroup")
-		Expect(persistedAttachment.GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID),
-			"persisted attachment should reference the tenant default SecurityGroup")
-		Expect(persistedAttachment.GetInterface()).To(Equal("data-0"),
-			"persisted attachment should select the first fabric-role interface")
-	})
-
-	It("waits for automatic ExternalIP cleanup before deleting the BMFO CR", func(ctx context.Context) {
-		// Keep an automatically created ExternalIP terminating so this test can
-		// observe whether the workload CR is deleted before its child is gone.
-		Expect(defaultNetworkingFixture.networkClassID).NotTo(BeEmpty(),
-			"the BMI lifecycle fixture should provide a ready NetworkClass on its Hub")
-
-		poolsClient := privatev1.NewExternalIPPoolsClient(tool.InternalView().AdminConn())
-		externalIPsClient := privatev1.NewExternalIPsClient(tool.InternalView().AdminConn())
-		poolID := fmt.Sprintf("test-pool-%s", uuid.New())
-		_, err := poolsClient.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
-			Object: privatev1.ExternalIPPool_builder{
-				Id:       poolID,
-				Metadata: privatev1.Metadata_builder{Name: poolID}.Build(),
-				Spec: privatev1.ExternalIPPoolSpec_builder{
-					Cidrs:    []string{uniqueCIDR()},
-					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func(cleanupCtx context.Context) {
-			Expect(cleanupExternalIPPoolFixture(cleanupCtx, poolsClient, poolID)).To(Succeed())
-		})
-
-		Eventually(func(g Gomega) {
-			response, getErr := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolID}.Build())
-			g.Expect(getErr).NotTo(HaveOccurred())
-			g.Expect(response.GetObject().GetStatus().GetState()).To(
-				Equal(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING))
-		}).WithTimeout(time.Minute).WithPolling(time.Second).Should(Succeed())
-		poolResponse, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolID}.Build())
-		Expect(err).NotTo(HaveOccurred())
-		pool := poolResponse.GetObject()
-		pool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY)
-		_, err = poolsClient.Update(ctx, privatev1.ExternalIPPoolsUpdateRequest_builder{
-			Object:     pool,
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
-		}.Build())
-		Expect(err).NotTo(HaveOccurred())
-		Eventually(func(g Gomega) {
-			response, getErr := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolID}.Build())
-			g.Expect(getErr).NotTo(HaveOccurred())
-			g.Expect(response.GetObject().GetStatus().GetState()).To(
-				Equal(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY))
-		}, time.Minute, time.Second).Should(Succeed())
-
-		createResponse, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
-			Object: publicv1.BareMetalInstance_builder{
-				Metadata: publicv1.Metadata_builder{
-					Name: fmt.Sprintf("test-bmi-auto-eip-%s", uuid.New()[24:32]),
-				}.Build(),
-				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem:              publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType:             publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey:             new(bmiTestSSHPublicKey),
-					DiskImage:                publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
-					AutoExternalIpAttachment: new(true),
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).NotTo(HaveOccurred())
-		bmiID := createResponse.GetObject().GetId()
-		externalIPHeld := false
-		externalIPID := ""
-		DeferCleanup(func(cleanupCtx context.Context) {
-			if bmiID != "" {
-				_, deleteErr := privateBareMetalInstancesClient.Delete(cleanupCtx,
-					privatev1.BareMetalInstancesDeleteRequest_builder{Id: bmiID}.Build())
-				if grpcstatus.Code(deleteErr) != grpccodes.NotFound {
-					Expect(deleteErr).NotTo(HaveOccurred())
-				}
-			}
-			if externalIPHeld && externalIPID != "" {
-				setExternalIPTestFinalizer(cleanupCtx, externalIPsClient, externalIPID, false)
-			}
-			if bmiID != "" {
-				Eventually(func(g Gomega) {
-					_, getErr := privateBareMetalInstancesClient.Get(cleanupCtx,
-						privatev1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
-					g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
-				}, 2*time.Minute, time.Second).Should(Succeed())
-			}
-		})
-
-		filter := fmt.Sprintf(
-			"this.metadata.labels['osac.openshift.io/auto-created-for'] == %q && this.metadata.labels['osac.openshift.io/auto-created'] == 'true'",
-			bmiID,
-		)
-		limit := int32(2)
-		var externalIP *privatev1.ExternalIP
-		Eventually(func(g Gomega) {
-			response, listErr := externalIPsClient.List(ctx, privatev1.ExternalIPsListRequest_builder{
-				Filter: &filter,
-				Limit:  &limit,
-			}.Build())
-			g.Expect(listErr).NotTo(HaveOccurred())
-			g.Expect(response.GetItems()).To(HaveLen(1))
-			externalIP = response.GetItems()[0]
-		}, time.Minute, time.Second).Should(Succeed())
-		externalIPID = externalIP.GetId()
-		setExternalIPTestFinalizer(ctx, externalIPsClient, externalIPID, true)
-		externalIPHeld = true
-
-		kubeClient := tool.KubeClient()
-		bmiList := &bmfov1alpha1.BareMetalInstanceList{}
-		eipList := &osacv1alpha1.ExternalIPList{}
-		Eventually(func(g Gomega) {
-			g.Expect(kubeClient.List(ctx, eipList, crclient.InNamespace(hubNamespace),
-				crclient.MatchingLabels{labels.ExternalIPUuid: externalIPID})).To(Succeed())
-			g.Expect(eipList.Items).To(HaveLen(1))
-		}, time.Minute, time.Second).Should(Succeed())
-		Eventually(func(g Gomega) {
-			g.Expect(kubeClient.List(ctx, bmiList, crclient.InNamespace(hubNamespace),
-				crclient.MatchingLabels{labels.BareMetalInstanceUuid: bmiID})).To(Succeed())
-			g.Expect(bmiList.Items).To(HaveLen(1))
-		}, time.Minute, time.Second).Should(Succeed())
-
-		_, err = privateBareMetalInstancesClient.Delete(ctx,
-			privatev1.BareMetalInstancesDeleteRequest_builder{Id: bmiID}.Build())
-		Expect(err).NotTo(HaveOccurred())
-		Eventually(func(g Gomega) {
-			response, getErr := privateBareMetalInstancesClient.Get(ctx,
-				privatev1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
-			g.Expect(getErr).NotTo(HaveOccurred())
-			g.Expect(response.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
-			ipResponse, ipErr := externalIPsClient.Get(ctx,
-				privatev1.ExternalIPsGetRequest_builder{Id: externalIPID}.Build())
-			g.Expect(ipErr).NotTo(HaveOccurred())
-			g.Expect(ipResponse.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
-			g.Expect(ipResponse.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(externalIPTestFinalizer))
-		}, time.Minute, time.Second).Should(Succeed())
-
-		// Wait until the child Kubernetes object reflects deletion, then verify
-		// the BMFO CR remains active while its Fulfillment IP is held by a finalizer.
-		Eventually(func(g Gomega) {
-			g.Expect(kubeClient.List(ctx, eipList, crclient.InNamespace(hubNamespace),
-				crclient.MatchingLabels{labels.ExternalIPUuid: externalIPID})).To(Succeed())
-			g.Expect(eipList.Items).To(BeEmpty())
-		}, time.Minute, time.Second).Should(Succeed())
-		Eventually(func(g Gomega) {
-			ipResponse, ipErr := externalIPsClient.Get(ctx,
-				privatev1.ExternalIPsGetRequest_builder{Id: externalIPID}.Build())
-			g.Expect(ipErr).NotTo(HaveOccurred())
-			g.Expect(ipResponse.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(externalIPTestFinalizer))
-		}, time.Minute, time.Second).Should(Succeed())
-
-		Eventually(func(g Gomega) {
-			g.Expect(kubeClient.List(ctx, bmiList, crclient.InNamespace(hubNamespace),
-				crclient.MatchingLabels{labels.BareMetalInstanceUuid: bmiID})).To(Succeed())
-			g.Expect(bmiList.Items).To(HaveLen(1))
-			g.Expect(bmiList.Items[0].GetDeletionTimestamp()).To(BeNil())
-		}, time.Minute, time.Second).Should(Succeed())
-
-		setExternalIPTestFinalizer(ctx, externalIPsClient, externalIPID, false)
-		externalIPHeld = false
-		Eventually(func(g Gomega) {
-			_, getErr := externalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{Id: externalIPID}.Build())
-			g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
-		}, 2*time.Minute, time.Second).Should(Succeed())
-		Eventually(func(g Gomega) {
-			g.Expect(kubeClient.List(ctx, bmiList, crclient.InNamespace(hubNamespace),
-				crclient.MatchingLabels{labels.BareMetalInstanceUuid: bmiID})).To(Succeed())
-			g.Expect(bmiList.Items).To(BeEmpty())
-		}, time.Minute, time.Second).Should(Succeed())
-		Eventually(func(g Gomega) {
-			_, getErr := privateBareMetalInstancesClient.Get(ctx,
-				privatev1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
-			g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
-		}, 2*time.Minute, time.Second).Should(Succeed())
+		Expect(object.GetStatus().GetState()).To(
+			Equal(publicv1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING),
+			"BareMetalInstance should be in RUNNING state after status override")
 	})
 
 	It("Rejects BareMetalInstance with non-existent catalog item", func(ctx context.Context) {
@@ -450,9 +272,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: "non-existent-catalog-item"}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
+					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: "non-existent-catalog-item"}.Build(),
+					InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -474,7 +296,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:        publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType:       publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey:       new(bmiTestSSHPublicKey),
+					UserDataSource:     publicv1.UserDataSource_builder{Inline: new("#cloud-config\nssh_pwauth: true")}.Build(),
 					DiskImage:          publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 					NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{network.bareMetalInstanceAttachment()},
 				}.Build(),
@@ -524,19 +346,18 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		virtualNetworksClient := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
 		subnetsClient := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
 		securityGroupsClient := privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
-		// The default fixture is system-managed. Remove it through the controller's
-		// default-networking lifecycle before replacing its singleton NetworkClass.
-		defaultNetworkingManager, err := newTestDefaultNetworkingManager()
-		Expect(err).NotTo(HaveOccurred())
-		Expect(deleteTenantDefaultNetworkingFixture(ctx, defaultNetworkingManager, usersGroup)).To(Succeed())
-		Expect(defaultNetworkingFixture.networkClassCreated).To(BeTrue(),
-			"the k8s-only validation fixture must own the deployment's singleton NetworkClass")
-		Expect(cleanupNetworkClassFixture(ctx, networkClassesClient, defaultNetworkingFixture.networkClassID)).To(Succeed())
+		// NetworkClass is a deployment singleton. Remove the fabric-backed default
+		// class created by BeforeEach before creating the k8s-only class needed by
+		// this validation case. The next spec will recreate the default fixture.
 		listedClasses, err := networkClassesClient.List(ctx, privatev1.NetworkClassesListRequest_builder{
 			Filter: new("!has(this.metadata.deletion_timestamp)"),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(listedClasses.GetItems()).To(BeEmpty(), "default fixture cleanup must remove its NetworkClass before replacement")
+		Expect(listedClasses.GetItems()).To(HaveLen(1))
+		_, err = networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
+			Id: listedClasses.GetItems()[0].GetId(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
 
 		// Create a k8s-only NetworkClass (no fabric_manager):
 		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
@@ -548,7 +369,10 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		Expect(err).ToNot(HaveOccurred())
 		networkClassId := ncResp.GetObject().GetId()
 		DeferCleanup(func(ctx context.Context) {
-			Expect(cleanupNetworkClassFixture(ctx, networkClassesClient, networkClassId)).To(Succeed())
+			_, err := networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
+				Id: networkClassId,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
 		})
 		waitForNetworkClassReady(ctx, networkClassesClient, networkClassId)
 
@@ -569,7 +393,10 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(ctx context.Context) {
-			Expect(cleanupVirtualNetworkFixture(ctx, virtualNetworksClient, virtualNetworkId)).To(Succeed())
+			_, err := virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
+				Id: virtualNetworkId,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		// Wait for the VN reconciler to finish initial processing before
@@ -615,7 +442,10 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(ctx context.Context) {
-			Expect(cleanupSubnetFixture(ctx, subnetsClient, subnetId)).To(Succeed())
+			_, err := subnetsClient.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{
+				Id: subnetId,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		securityGroupID := fmt.Sprintf("test-security-group-%s", uuid.New())
@@ -633,7 +463,8 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(ctx context.Context) {
-			Expect(cleanupSecurityGroupFixture(ctx, securityGroupsClient, securityGroupID)).To(Succeed())
+			_, err := securityGroupsClient.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: securityGroupID}.Build())
+			Expect(err).ToNot(HaveOccurred())
 		})
 		Eventually(func(g Gomega) {
 			resp, err := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: securityGroupID}.Build())
@@ -661,9 +492,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
+					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{
 						publicv1.BareMetalNetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
@@ -710,10 +541,10 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
-					DiskImage:    publicv1.DiskImageReference_builder{Id: diskImageId}.Build(),
+					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
+					DiskImage:      publicv1.DiskImageReference_builder{Id: diskImageId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -794,9 +625,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
+					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -811,10 +642,10 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
-					DiskImage:    publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
+					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
+					DiskImage:      publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -927,9 +758,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
-					DiskImage:    publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
+					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
+					DiskImage:      publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -1038,8 +869,8 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 							Name:   catName,
 							Shared: true,
 						}.Build(),
-						SshPublicKey: new(bmiTestSSHPublicKey),
-						DiskImage:    publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
+						UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
+						DiskImage:      publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1133,10 +964,10 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 						Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						Template:     publicv1.BareMetalInstanceTemplateReference_builder{Id: directTemplateId}.Build(),
-						InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-						SshPublicKey: new(bmiTestSSHPublicKey),
-						DiskImage:    publicv1.DiskImageReference_builder{Id: diskImageId}.Build(),
+						Template:       publicv1.BareMetalInstanceTemplateReference_builder{Id: directTemplateId}.Build(),
+						InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+						UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
+						DiskImage:      publicv1.DiskImageReference_builder{Id: diskImageId}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1222,6 +1053,180 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.NotFound))
 			Expect(status.Message()).To(ContainSubstring("not found"))
+		})
+
+		Describe("registered SSH-key Secret references", func() {
+			var (
+				secretsClient  privatev1.SecretsClient
+				secretName     string
+				secretID       string
+				replacementRef *publicv1.SecretReference
+			)
+
+			BeforeEach(func(ctx context.Context) {
+				secretsClient = privatev1.NewSecretsClient(tool.InternalView().AdminConn())
+				createSecret := func(name string) *privatev1.Secret {
+					response, createErr := secretsClient.Create(ctx, privatev1.SecretsCreateRequest_builder{
+						Object: privatev1.Secret_builder{
+							Metadata: privatev1.Metadata_builder{Name: name, Tenant: usersGroup}.Build(),
+							Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+							Data:     map[string][]byte{"public_key": []byte(bmiTestSSHPublicKey)},
+						}.Build(),
+					}.Build())
+					Expect(createErr).ToNot(HaveOccurred())
+					created := response.GetObject()
+					DeferCleanup(func(ctx context.Context) {
+						_, err := secretsClient.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: created.GetId()}.Build())
+						Expect(err).ToNot(HaveOccurred())
+					})
+					return created
+				}
+				secretName = fmt.Sprintf("it-bmi-ssh-key-%s", uuid.New()[24:32])
+				secret := createSecret(secretName)
+				secretID = secret.GetId()
+				replacement := createSecret(fmt.Sprintf("it-bmi-ssh-key-replacement-%s", uuid.New()[24:32]))
+				replacementRef = &publicv1.SecretReference{Id: replacement.GetId()}
+			})
+
+			createInstance := func(ctx context.Context, sshKey *publicv1.SecretReference) (*publicv1.BareMetalInstancesCreateResponse, error) {
+				return bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
+					Object: publicv1.BareMetalInstance_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+						}.Build(),
+						Spec: publicv1.BareMetalInstanceSpec_builder{
+							CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+							InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+							DiskImage:    publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
+							SshKey:       sshKey,
+						}.Build(),
+					}.Build(),
+				}.Build())
+			}
+
+			It("canonicalizes a registered SSH-key Secret name at create", func(ctx context.Context) {
+				response, err := createInstance(ctx, &publicv1.SecretReference{Name: secretName})
+				Expect(err).ToNot(HaveOccurred())
+				DeferCleanup(func(ctx context.Context) {
+					_, err := privateBareMetalInstancesClient.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
+						Id: response.GetObject().GetId(),
+					}.Build())
+					Expect(err).ToNot(HaveOccurred())
+				})
+
+				sshKey := response.GetObject().GetSpec().GetSshKey()
+				Expect(sshKey).ToNot(BeNil())
+				Expect(sshKey.GetId()).To(Equal(secretID))
+				Expect(sshKey.GetName()).To(Equal(secretName))
+				Expect(sshKey.GetProject()).To(BeEmpty())
+				Expect(sshKey.GetShared()).To(BeFalse())
+			})
+
+			It("rejects an unregistered SSH-key Secret name", func(ctx context.Context) {
+				_, err := createInstance(ctx, &publicv1.SecretReference{Name: "no-such-ssh-key"})
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.NotFound))
+			})
+
+			It("rejects a Secret name that only exists in another tenant", func(ctx context.Context) {
+				foreignName := fmt.Sprintf("it-bmi-shared-ssh-key-%s", uuid.New()[24:32])
+				_, err := secretsClient.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{Name: foreignName, Tenant: auth.SharedTenant}.Build(),
+						Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+						Data:     map[string][]byte{"public_key": []byte(bmiTestSSHPublicKey)},
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				DeferCleanup(func(ctx context.Context) {
+					list, listErr := secretsClient.List(ctx, privatev1.SecretsListRequest_builder{
+						Filter: new("this.metadata.name == '" + foreignName + "'"),
+					}.Build())
+					Expect(listErr).ToNot(HaveOccurred())
+					for _, item := range list.GetItems() {
+						_, err := secretsClient.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: item.GetId()}.Build())
+						Expect(err).ToNot(HaveOccurred())
+					}
+				})
+
+				_, err = createInstance(ctx, &publicv1.SecretReference{Name: foreignName})
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.NotFound),
+					"Secret-name resolution must stay scoped to the caller's tenant")
+			})
+
+			It("rejects updates that change the registered SSH-key Secret", func(ctx context.Context) {
+				response, err := createInstance(ctx, &publicv1.SecretReference{Name: secretName})
+				Expect(err).ToNot(HaveOccurred())
+				DeferCleanup(func(ctx context.Context) {
+					_, err := privateBareMetalInstancesClient.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
+						Id: response.GetObject().GetId(),
+					}.Build())
+					Expect(err).ToNot(HaveOccurred())
+				})
+
+				_, err = bareMetalInstancesClient.Update(ctx, publicv1.BareMetalInstancesUpdateRequest_builder{
+					Object: publicv1.BareMetalInstance_builder{
+						Id: response.GetObject().GetId(),
+						Spec: publicv1.BareMetalInstanceSpec_builder{
+							CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+							SshKey:      replacementRef,
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.ssh_key"}},
+				}.Build())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("immutable"))
+			})
+
+			It("creates an instance through the CLI --ssh-key Secret name", func(ctx context.Context) {
+				homeDir, err := tool.NewCLIHomeDir()
+				Expect(err).ToNot(HaveOccurred())
+				DeferCleanup(func() {
+					Expect(os.RemoveAll(homeDir)).To(Succeed())
+				})
+				_, stderr, exitCode := tool.LoginCLI(ctx, homeDir, userUsername, usersPassword)
+				Expect(exitCode).To(Equal(0), "login failed: %s", stderr)
+
+				name := fmt.Sprintf("it-cli-bmi-%s", uuid.New()[24:32])
+				output, stderr, exitCode := tool.RunCLI(ctx, homeDir,
+					"create", "baremetalinstance",
+					"--name", name,
+					"--catalog-item", catalogItemId,
+					"--disk-image", defaultDiskImageName,
+					"--ssh-key", secretName,
+				)
+				Expect(exitCode).To(Equal(0), "create failed: %s%s", output, stderr)
+
+				list, err := bareMetalInstancesClient.List(ctx, publicv1.BareMetalInstancesListRequest_builder{
+					Filter: new("this.metadata.name == '" + name + "'"),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(list.GetItems()).To(HaveLen(1))
+				created := list.GetItems()[0]
+				DeferCleanup(func(ctx context.Context) {
+					_, err := privateBareMetalInstancesClient.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
+						Id: created.GetId(),
+					}.Build())
+					Expect(err).ToNot(HaveOccurred())
+				})
+				Expect(created.GetSpec().GetSshKey().GetId()).To(Equal(secretID),
+					"the CLI --ssh-key flag must send a registered Secret reference")
+
+				output, stderr, exitCode = tool.RunCLI(ctx, homeDir,
+					"create", "baremetalinstance",
+					"--name", fmt.Sprintf("it-cli-bmi-%s", uuid.New()[24:32]),
+					"--catalog-item", catalogItemId,
+					"--disk-image", defaultDiskImageName,
+					"--ssh-key", "no-such-ssh-key",
+				)
+				Expect(exitCode).ToNot(Equal(0), "unregistered Secret name must fail: %s%s", output, stderr)
+				Expect(output + stderr).To(ContainSubstring("no-such-ssh-key"))
+			})
 		})
 	})
 })

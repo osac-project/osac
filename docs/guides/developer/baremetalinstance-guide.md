@@ -15,6 +15,8 @@ It uses the OSAC CLI for all OSAC operations.
 - An existing whole-disk QCOW2 image is available locally. OSAC bare metal
   provisioning requires an image with a complete partition table, all required
   partitions, and a bootloader; root-partition-only images are not supported.
+- A registered SSH public-key Secret is available, or user data supplies the
+  instance's access credentials.
 
 ## 1. Publish the disk artifact
 
@@ -80,12 +82,28 @@ not be sent. `disk_image` is immutable after creation.
 Use `--disk-image` with a DiskImage name or ID. The command requires a
 CatalogItem; it has no `--image` or `--image-source-type` flags.
 
+Register an SSH public key as a Secret before using it. The required data key is
+`public_key`; Secret data remains immutable after creation.
+
+```bash
+osac create secret \
+  --name worker-login-key \
+  --type ssh-public-key \
+  --from-file public_key="$HOME/.ssh/id_ed25519.pub"
+```
+
+An unqualified `--ssh-key` value resolves in the tenant's default (root)
+project. A project-qualified `SecretReference` may select any SSH-key Secret
+in the instance's tenant, including projects other than the instance's own;
+shared SSH-key Secrets are rejected. The removed inline `spec.ssh_public_key`
+raw-key field is reserved: requests that still send it are rejected.
+
 ```bash
 osac create baremetalinstance \
   --name worker-0 \
   --catalog-item standard-bare-metal \
   --disk-image rhel-9-4-amd64 \
-  --ssh-key "$(cat ~/.ssh/id_ed25519.pub)"
+  --ssh-key worker-login-key
 ```
 
 ## Validation, lifecycle, and deletion
@@ -129,10 +147,23 @@ Template instance-type updates return `FailedPrecondition` with
 type and its locked or default DiskImage does not support the new architecture.
 Compatible type changes and descriptive template edits remain supported.
 
+BMaaS resolves the SSH-key Secret during Create and reconciliation. The
+instance stores only the canonical `SecretReference`; it never stores resolved
+public-key bytes. The Secret must have type `SSH_PUBLIC_KEY` and a non-empty
+`public_key` value, and it must live in the instance's tenant: an empty
+reference project selects the tenant's default (root) project, and an
+explicit reference project selects any project of that tenant, including
+projects other than the instance's own. Shared SSH-key Secrets are rejected.
+Deleting a referenced
+Secret is allowed, but a future reconciliation can then fail permanently
+unless the instance already has materialized `sshPublicKey` data in its BMFO
+object.
+
 ## CatalogItem defaults
 
-CatalogItems express DiskImage policy under `fields.disk_image`; templates do
-not supply a BareMetalInstance DiskImage default. A locked policy always
+CatalogItems express DiskImage policy under `fields.disk_image` and registered
+BMaaS SSH-key policy under `fields.ssh_key`; templates do not supply a
+BareMetalInstance DiskImage default. A locked policy always
 supplies the selected image. An editable policy with a `default_value` supplies
 it only when the caller omits `spec.disk_image`.
 

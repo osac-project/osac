@@ -36,6 +36,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -46,6 +47,7 @@ type PrivateClustersServerBuilder struct {
 	metricsRegisterer            prometheus.Registerer
 	filterDesc                   protoreflect.MessageDescriptor
 	addOnOperatorResolverFactory addOnOperatorResolverFactory
+	secretStore                  vault.SecretStore
 }
 
 var _ privatev1.ClustersServer = (*PrivateClustersServer)(nil)
@@ -66,8 +68,16 @@ type PrivateClustersServer struct {
 	secretsDao                *dao.GenericDAO[*privatev1.Secret]
 	addOnOperators            *addOnOperatorResourceResolver
 	generic                   *GenericServer[*privatev1.Cluster]
+	secretStore               vault.SecretStore
 	lifecycle                 *externalIPLifecycle
 	bareMetalInstanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType]
+}
+
+// SetSecretStore sets the store used to load Vault-backed SSH-key Secret data
+// during reference validation.
+func (b *PrivateClustersServerBuilder) SetSecretStore(value vault.SecretStore) *PrivateClustersServerBuilder {
+	b.secretStore = value
+	return b
 }
 
 func NewPrivateClustersServer() *PrivateClustersServerBuilder {
@@ -269,6 +279,7 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		secretsDao:                secretsDao,
 		addOnOperators:            addOnOperators,
 		generic:                   generic,
+		secretStore:               b.secretStore,
 	}
 	result.lifecycle = newExternalIPLifecycle(
 		externalIPDao,
@@ -343,10 +354,13 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	if err := s.validateCreatedNodeSetVersions(ctx, candidate); err != nil {
 		return err
 	}
-	if key := spec.GetSshPublicKey(); key != "" {
-		if err = validateOpenSSHPublicKey(key); err != nil {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
+	if spec.GetSshKey() != nil {
+		canonical, keyErr := resolveAndCanonicalizeSSHKeyReference(ctx, s.logger, s.secretsDao, s.secretStore,
+			candidate.GetMetadata(), spec.GetSshKey())
+		if keyErr != nil {
+			return keyErr
 		}
+		spec.SetSshKey(canonical)
 	}
 
 	if err = s.validateAndExpandAddOnOperators(ctx, candidate, clusterVersion); err != nil {
@@ -452,6 +466,18 @@ func (s *PrivateClustersServer) prepareUpdatedCluster(ctx context.Context, curre
 	if err := validateClusterEndpointAddresses(candidate.GetStatus(), request.GetUpdateMask()); err != nil {
 		return err
 	}
+	// Only an explicit spec.ssh_key change resolves the replacement Secret; the
+	// previous reference is not revalidated, so a Cluster can switch away from
+	// a deleted key and unrelated updates keep a stale reference. The stored
+	// object's metadata supplies the tenant scope for the resolution.
+	if updateIncludesField(request.GetUpdateMask(), "spec.ssh_key") && candidate.GetSpec().GetSshKey() != nil {
+		canonical, keyErr := resolveAndCanonicalizeSSHKeyReference(ctx, s.logger, s.secretsDao, s.secretStore,
+			current.GetMetadata(), candidate.GetSpec().GetSshKey())
+		if keyErr != nil {
+			return keyErr
+		}
+		candidate.GetSpec().SetSshKey(canonical)
+	}
 	if err := validateClusterNetworkAttachmentImmutability(current, candidate, request.GetUpdateMask()); err != nil {
 		return err
 	}
@@ -511,13 +537,6 @@ func (s *PrivateClustersServer) initializeAddedNodeSetVersions(ctx context.Conte
 
 func (s *PrivateClustersServer) validateUpdatedClusterSpec(current, candidate *privatev1.Cluster,
 	mask *fieldmaskpb.FieldMask) error {
-	if updateIncludesField(mask, "spec.ssh_public_key") {
-		if key := candidate.GetSpec().GetSshPublicKey(); key != "" {
-			if err := validateOpenSSHPublicKey(key); err != nil {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
-			}
-		}
-	}
 	if err := s.validateAddOnOperatorImmutability(current, candidate, mask); err != nil {
 		return err
 	}

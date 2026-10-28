@@ -20,7 +20,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     cli, grpc, private = (clients[name] for name in ("cli", "grpc", "private_grpc"))
     cli.create_cluster.return_value = "cluster-id"
     private.ensure_disk_image.return_value = "disk-id"
-    private.ensure_cluster_version.return_value = {"name": "version-name"}
+    private.ensure_cluster_version.return_value = {"id": "version-id", "name": "version-name"}
     grpc.list_cluster_ids.return_value = ["cluster-id"]
     grpc.get_cluster.return_value = {
         "object": {
@@ -122,7 +122,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
 
 def _run_scenario(clients: dict[str, Mock]) -> None:
     regression.test_cluster_create_with_two_node_sets(
-        **clients, cluster_template="template", pull_secret_name="pull-secret", ssh_public_key_path="/tmp/key.pub"
+        **clients, cluster_template="template", pull_secret_name="pull-secret", ssh_key_secret="test-ssh-key-secret"
     )
 
 

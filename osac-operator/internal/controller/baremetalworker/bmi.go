@@ -10,6 +10,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -63,7 +64,11 @@ func (r *Reconciler) ensureBMI(
 	// The worker lives in its cluster's project and records its cluster in status.cluster.
 	req, err := r.buildBMICreateRequest(co, cluster.GetMetadata().GetTenant(), cluster, nodeSet, workerName, image, ignitionRaw)
 	if err != nil {
-		return nil, ctrl.Result{}, err
+		// A Cluster/ClusterOrder SSH-key reference mismatch resolves when the
+		// order catches up; hold this Create without touching existing workers.
+		ctrllog.FromContext(ctx).Info("holding BMI create: cluster SSH key reference",
+			"worker", workerName, "reason", err.Error())
+		return nil, ctrl.Result{RequeueAfter: sshKeyResolutionRetry}, nil
 	}
 	created, err := r.fulfillment.CreateBareMetalInstance(ctx, req)
 	if err == nil {
@@ -161,8 +166,17 @@ func (r *Reconciler) buildBMICreateRequest(
 		InstanceType:       instanceType,
 		NetworkAttachments: netAttachments,
 	}
-	if sshKey := r.resolveSSHPublicKey(co); sshKey != "" {
-		specBuilder.SshPublicKey = &sshKey
+	// The child BMI carries the Cluster's canonical Secret reference, never
+	// key bytes. The ID is checked against the ClusterOrder so a mid-flight
+	// Cluster key change cannot hand a worker a reference the order does not
+	// carry; cloning preserves a non-default project selector.
+	if clusterKey := cluster.GetSpec().GetSshKey(); clusterKey.GetId() != "" {
+		if co.Spec.SSHKey == nil || co.Spec.SSHKey.ID != clusterKey.GetId() {
+			return nil, fmt.Errorf(
+				"cluster ssh key secret '%s' does not match the ClusterOrder reference; update the cluster and retry",
+				clusterKey.GetId())
+		}
+		specBuilder.SshKey = proto.Clone(clusterKey).(*privatev1.SecretReference)
 	}
 
 	return privatev1.BareMetalInstance_builder{

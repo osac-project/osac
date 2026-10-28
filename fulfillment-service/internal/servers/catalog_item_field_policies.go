@@ -199,26 +199,6 @@ func catalogItemPolicyError(field, reason string) error {
 	return grpcstatus.Errorf(grpccodes.InvalidArgument, "field '%s': %s", field, reason)
 }
 
-// validateCatalogItemStringPolicy checks the selected locked/default string with validate without changing the policy.
-// Absent policies and editable policies without defaults have no value to validate.
-func validateCatalogItemStringPolicy(policy *privatev1.StringFieldPolicy, field string, validate func(string) error) error {
-	state, err := decodeStringPolicy(policy)
-	if err != nil {
-		return catalogItemPolicyError(field, err.Error())
-	}
-	if state.hasLocked {
-		if err := validate(state.lockedValue); err != nil {
-			return catalogItemPolicyError(field, err.Error())
-		}
-	}
-	if state.hasDefault {
-		if err := validate(state.defaultValue); err != nil {
-			return catalogItemPolicyError(field, err.Error())
-		}
-	}
-	return nil
-}
-
 // canonicalizeCatalogItemCIDRPolicy validates and replaces locked/default cluster CIDRs with their canonical form.
 // It mutates the detached policy and returns a field-qualified error for invalid CIDRs.
 func canonicalizeCatalogItemCIDRPolicy(policy *privatev1.StringFieldPolicy, field string) error {

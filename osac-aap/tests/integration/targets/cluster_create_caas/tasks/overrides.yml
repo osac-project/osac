@@ -1,0 +1,75 @@
+---
+- name: Cluster Create CaaS - SSH key launch variable Test Setup
+  hosts: localhost
+  gather_facts: true
+  vars_files:
+    - ../../../common_vars.yml
+
+  vars:
+    ssh_key_launch_value: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILaunchVariableKeyForCaaSOvrrides test@example.com"
+
+  tasks:
+    - name: Read CaaS ClusterOrder fixture
+      ansible.builtin.set_fact:
+        test_cluster_order: "{{ lookup('file', '../../../fixtures/clusterorder-ci-test.yaml') | from_yaml }}"
+
+    - name: Set test variables with the operator launch variable
+      ansible.builtin.set_fact:
+        # The operator resolves the Cluster's registered SSH-key Secret and
+        # supplies the material only as this top-level launch variable.
+        ssh_public_key: "{{ ssh_key_launch_value }}"
+        osac_job_vars:
+          resource: "{{ test_cluster_order }}"
+        cluster_working_namespace: "cluster-test-cluster-work"
+        install_step_hosted_cluster_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+        install_step_cluster_network_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+        install_step_external_access_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+        install_step_retrieve_kubeconfig_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+        install_step_wait_for_cluster_operators_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+
+- name: Import CaaS cluster create workflow with a launch-variable SSH key
+  ansible.builtin.import_playbook: osac.workflows.cluster.create
+
+- name: Verify CaaS SSH key launch variable results
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  vars:
+    ssh_key_launch_value: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILaunchVariableKeyForCaaSOvrrides test@example.com"
+
+  tasks:
+    - name: Record the launch-variable override in the harness log
+      ansible.builtin.lineinfile:
+        path: /tmp/osac_test_overrides.log
+        line: "cluster_create_caas ssh_public_key launch variable"
+        create: true
+
+    - name: Verify the launch variable was consumed as the cluster SSH key
+      ansible.builtin.assert:
+        that:
+          - cluster_settings_ssh_public_key is defined
+          - cluster_settings_ssh_public_key == ssh_key_launch_value
+        fail_msg: >-
+          The launch-variable ssh_public_key must be consumed by
+          cluster_settings instead of any template-parameter or CR value.
+
+    - name: Verify the launch variable was materialized for provider roles
+      ansible.builtin.assert:
+        that:
+          - cluster_settings_template_parameters.ssh_public_key is defined
+          - cluster_settings_template_parameters.ssh_public_key == ssh_key_launch_value
+        fail_msg: >-
+          The launch-variable ssh_public_key must be merged into the internal
+          template parameters consumed by the provider roles.

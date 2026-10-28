@@ -49,6 +49,7 @@ import (
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	sharedsshkey "github.com/osac-project/osac/proto/sshkey"
 )
 
 // NewComponentFn is the type of a function that creates a required component
@@ -88,7 +89,11 @@ type ClusterOrderReconciler struct {
 	MaxJobHistory               int
 	StallThresholds             ClusterOrderStallThresholds
 	Recorder                    events.EventRecorder
-	now                         func() time.Time
+	// SecretsClient resolves the Cluster's registered SSH-key Secret through
+	// the fulfillment private API. The resolved material is passed only as an
+	// AAP launch variable; it is never persisted on the ClusterOrder.
+	SecretsClient sharedsshkey.SecretsGetter
+	now           func() time.Time
 }
 
 const (
@@ -1275,7 +1280,7 @@ func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instanc
 		return ctrl.Result{}, nil
 	}
 
-	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, instance,
+	return provisioning.RunProvisioningLifecycleWithPrepareTrigger(ctx, r.ProvisioningProvider, instance,
 		r.provisionState(instance),
 		r.MaxJobHistory, r.StatusPollInterval,
 		r.provisioningCallbacks(instance),
@@ -1294,7 +1299,46 @@ func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instanc
 			}
 			return nil
 		},
+		r.prepareSSHKeyLaunch(ctx, instance),
 	)
+}
+
+// sshKeyResolutionRetry bounds the requeue delay while the Cluster's SSH-key
+// Secret cannot be resolved. The controller-runtime backoff provides the
+// retry loop; this delay only prevents a hot loop.
+const sshKeyResolutionRetry = time.Minute
+
+// prepareSSHKeyLaunch resolves the Cluster's registered SSH-key Secret only
+// when a new provisioning job is about to be launched. The resolved material
+// is supplied as a trigger-only AAP variable and never persisted. A nil or
+// empty reference yields no variable so the provider default remains
+// available. A resolution failure holds provisioning with a recoverable
+// condition; the message identifies the Secret by ID only.
+func (r *ClusterOrderReconciler) prepareSSHKeyLaunch(ctx context.Context, instance *v1alpha1.ClusterOrder) provisioning.PrepareTriggerFunc {
+	return func() (map[string]any, bool, time.Duration) {
+		ref := instance.Spec.SSHKey
+		if ref == nil || ref.ID == "" {
+			return nil, true, 0
+		}
+		if r.SecretsClient == nil {
+			r.setSSHKeyResolutionPending(instance, "ssh key secret resolution is not configured")
+			return nil, false, sshKeyResolutionRetry
+		}
+		tenant := instance.Annotations[osacTenantKey]
+		key, err := sharedsshkey.Fetch(ctx, r.SecretsClient, ref.ID, tenant)
+		if err != nil {
+			r.setSSHKeyResolutionPending(instance, err.Error())
+			return nil, false, sshKeyResolutionRetry
+		}
+		return map[string]any{"ssh_public_key": key}, true, 0
+	}
+}
+
+// setSSHKeyResolutionPending records a recoverable SSH-key resolution failure
+// on the ClusterOrder. The condition never carries key material.
+func (r *ClusterOrderReconciler) setSSHKeyResolutionPending(instance *v1alpha1.ClusterOrder, message string) {
+	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
+		message, v1alpha1.ReasonSSHKeyResolutionPending)
 }
 
 func (r *ClusterOrderReconciler) handleDesiredConfigVersion(instance *v1alpha1.ClusterOrder) error {

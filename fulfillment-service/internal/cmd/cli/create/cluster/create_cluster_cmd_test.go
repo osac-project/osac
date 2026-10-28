@@ -327,6 +327,28 @@ var _ = Describe("Create cluster pull secret flags", func() {
 
 })
 
+var _ = Describe("Create cluster SSH key flags", func() {
+	It("should register --ssh-key flag", func() {
+		cmd := Cmd()
+		flag := cmd.Flags().Lookup("ssh-key")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.DefValue).To(Equal(""))
+	})
+
+	It("sets --ssh-key as a registered Secret reference", func() {
+		runner := &runnerContext{}
+		runner.args.template = "sandbox"
+		runner.args.sshKey = "tenant-login"
+
+		specBuilder := &publicv1.ClusterSpec_builder{}
+		err := runner.applyOptionalSpecFields(specBuilder)
+		Expect(err).ToNot(HaveOccurred())
+		spec := specBuilder.Build()
+		Expect(spec.GetSshKey()).NotTo(BeNil())
+		Expect(spec.GetSshKey().GetName()).To(Equal("tenant-login"))
+	})
+})
+
 var _ = Describe("Create cluster networking flags", func() {
 	It("should register --network-attachment flag", func() {
 		cmd := Cmd()

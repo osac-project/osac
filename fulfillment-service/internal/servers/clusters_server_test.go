@@ -2450,7 +2450,6 @@ var _ = Describe("Clusters server", func() {
 		})
 
 		It("Preserves explicit fields through create and get", func() {
-			sshKey := testSSHPublicKey
 			podCIDR := "10.128.0.0/14"
 			serviceCIDR := "172.30.0.0/16"
 
@@ -2477,9 +2476,8 @@ var _ = Describe("Clusters server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						Template:     publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
-						SshPublicKey: &sshKey,
-						Version:      &publicv1.ClusterVersionReference{Name: versionName},
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
+						Version:  &publicv1.ClusterVersionReference{Name: versionName},
 						Network: publicv1.ClusterNetwork_builder{
 							PodCidr:     &podCIDR,
 							ServiceCidr: &serviceCIDR,
@@ -2495,7 +2493,6 @@ var _ = Describe("Clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			spec := getResponse.GetObject().GetSpec()
 
-			Expect(spec.GetSshPublicKey()).To(Equal(sshKey))
 			Expect(spec.GetVersion().GetName()).To(Equal(versionName))
 			Expect(spec.GetNetwork().GetPodCidr()).To(Equal(podCIDR))
 			Expect(spec.GetNetwork().GetServiceCidr()).To(Equal(serviceCIDR))

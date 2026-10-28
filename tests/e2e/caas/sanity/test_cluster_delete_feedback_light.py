@@ -36,8 +36,7 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
     cluster_template: str,
     caas_disk_image_version: str,
     pull_secret_name: str,
-    ssh_public_key_path: str,
-    metering: MeteringCollector,
+    ssh_key_secret: str,
 ) -> None:
     """Verify that cluster deletion transitions through DELETING state
     without waiting for full provisioning (OSAC-1586).
@@ -62,7 +61,7 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
         version=caas_disk_image_version,
         node_sets=node_sets,
         pull_secret=pull_secret_name,
-        ssh_public_key_file=ssh_public_key_path,
+        ssh_key=ssh_key_secret,
     )
 
     try:

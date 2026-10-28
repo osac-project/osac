@@ -44,7 +44,7 @@ func (r *Reconciler) reconcileWorkers(ctx context.Context, co *v1alpha1.ClusterO
 	// persisting a stale-worker classification is a durable boundary; a missing
 	// creation prerequisite, an unknown lookup or a foreign object is held so
 	// existing-worker work still runs.
-	infra, infraRes, infraMutated, infraBoundaryErr := r.observeInfraEnvEvidence(ctx, co)
+	infra, infraRes, infraMutated, infraBoundaryErr := r.observeInfraEnvEvidence(ctx, co, cluster)
 	if infraMutated {
 		return infraRes, infraBoundaryErr
 	}

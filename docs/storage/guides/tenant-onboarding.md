@@ -50,17 +50,17 @@ Readiness is recorded on the Tenant resource in the management cluster:
 ```shell
 # Conditions (mode-appropriate: StorageReady for CSP-managed;
 # StorageBackendReady and ClusterStorageReady for OSAC-managed)
-kubectl get tenant <tenant-name> -o jsonpath='{.status.conditions}'
+oc get tenant <tenant-name> -o jsonpath='{.status.conditions}'
 
 # Resolved tier-to-class mapping
-kubectl get tenant <tenant-name> -o jsonpath='{.status.storageClasses}'
+oc get tenant <tenant-name> -o jsonpath='{.status.storageClasses}'
 ```
 
 Warning events on the Tenant (for example, duplicate-class detection) carry
 the same details as the condition messages:
 
 ```shell
-kubectl describe tenant <tenant-name>
+oc describe tenant <tenant-name>
 ```
 
 For the meaning of each condition and its reasons, see
@@ -91,7 +91,7 @@ When a tenant is deleted:
 
 | Symptom | Likely cause | Where to look |
 |---|---|---|
-| Tenant onboarding incomplete (`NotFound`) | A configured tier has no matching StorageClass on the target cluster | `kubectl get tenant <name> -o jsonpath='{.status.conditions}'`; check the tier's class labels |
+| Tenant onboarding incomplete (`NotFound`) | A configured tier has no matching StorageClass on the target cluster | `oc get tenant <name> -o jsonpath='{.status.conditions}'`; check the tier's class labels |
 | Condition `False` with `MultipleFound` | More than one class matches a tier | Condition message names the duplicates; remove or relabel one |
 | Readiness not evaluated; operator logs show target access errors | The operator's configured target is unreachable or access is missing | Operator logs; verify the target access configuration (the operator fails closed and never queries the local cluster as a fallback) |
 | Tier not selectable by a tenant user | The tier is not configured in OSAC | `osac get storagetier` |

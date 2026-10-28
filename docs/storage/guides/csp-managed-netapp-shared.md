@@ -57,6 +57,26 @@ Complete these before onboarding tenants to the storage service:
 - [ ] No backend management credentials are needed: CSP-managed readiness
       does not depend on hub Secrets or provider automation.
 
+### Verifying the prerequisites
+
+The OSAC readiness check only verifies StorageClass presence. Before
+onboarding the first tenant, confirm the storage side on the VMaaS target:
+
+```shell
+# Trident is registered
+oc get csidriver
+
+# The shared Trident backend is bound
+oc get tridentbackendconfigs -A
+
+# One class per offered tier, with the required labels
+oc get storageclass -l osac.openshift.io/tenant=csp-managed
+```
+
+The last command is the same lookup OSAC performs during onboarding, so
+missing or mislabeled classes surface here rather than as a `StorageReady=False`
+condition later.
+
 ## Configure storage in OSAC
 
 Register one backend for the NetApp cluster and one tier per offered pool:
@@ -98,10 +118,10 @@ latches the result:
 
 ```shell
 # Conditions on the operator's Tenant resource (management cluster)
-kubectl get tenant <tenant-name> -o jsonpath='{.status.conditions}'
+oc get tenant <tenant-name> -o jsonpath='{.status.conditions}'
 
 # Resolved tier-to-class mapping
-kubectl get tenant <tenant-name> -o jsonpath='{.status.storageClasses}'
+oc get tenant <tenant-name> -o jsonpath='{.status.storageClasses}'
 # [{"name":"ontap-gold","tier":"gold"},{"name":"ontap-silver","tier":"silver"}]
 ```
 
@@ -143,7 +163,7 @@ Warning events on the Tenant (reason `DuplicateStorageClass`) repeat the
 duplicate details:
 
 ```shell
-kubectl describe tenant <tenant-name>
+oc describe tenant <tenant-name>
 ```
 
 ## Dev Preview caveats

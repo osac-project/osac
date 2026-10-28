@@ -71,13 +71,13 @@ Readiness is recorded on the operator's Tenant custom resource in the
 management cluster:
 
 ```shell
-kubectl get tenant <tenant-name> -o jsonpath='{.status.conditions}'
+oc get tenant <tenant-name> -o jsonpath='{.status.conditions}'
 ```
 
 Resolved tier-to-class mappings are also recorded on the tenant status:
 
 ```shell
-kubectl get tenant <tenant-name> -o jsonpath='{.status.storageClasses}'
+oc get tenant <tenant-name> -o jsonpath='{.status.storageClasses}'
 # e.g. [{"name":"ontap-gold","tier":"gold"},{"name":"ontap-silver","tier":"silver"}]
 ```
 

@@ -16,18 +16,50 @@ The profile provides:
 - the standard Netris AAP instance-group configuration needed by the EVPN
   fabric and network fulfillment jobs.
 
-Before installing, the target OpenShift cluster must already have the Phase 1
-EVPN/BGP/VTEP prerequisites, the EVPN `FRRConfiguration`, the `cudn_evpn`
-implementation, and the Metal3 BareMetalHost inventory needed by BMaaS. This
-profile only registers and selects the managers; it does not install the FRR
-operator, create the `FRRConfiguration`, provision the external fabric, or
-implement the manager.
+With `evpn.enabled: true` in an infra values file, the installer configures the
+OpenShift side of EVPN: FRR, route advertisements, NMState, per-node uplink and
+VTEP addresses, the `tenant-vtep`, and fabric BGP sessions. The Netris fabric
+side remains external; the fabric admin configures the links, VTEP range, and
+switch-side node ASN. The `cudn_evpn` manager creates the CUDN later during
+OSAC operation.
+The Metal3 BareMetalHost inventory needed by BMaaS remains a separate
+prerequisite.
 
-Netris passwords, SSH keys, and site-specific values must be supplied through
-a private values file. From `osac-installer/`:
+Supply Netris credentials through a private instance values file and the
+site-specific EVPN addresses through a private infra values file. For example,
+save this as `cudn-evpn-netris-test-evpn.private.yaml` and replace the sample
+node, interfaces, addresses, and ASNs with values from the cluster and fabric
+admins:
+
+```yaml
+evpn:
+  enabled: true
+  nmstate:
+    install: true
+    channel: stable
+  configureClusterNetwork: true
+  vtepCIDR: 10.200.255.0/24
+  bgp:
+    asn: 4209999999
+    acceptPrefixes:
+      - 10.200.0.0/16
+    waitForEstablished: true
+    timeoutSeconds: 900
+  nodes:
+    - name: worker-0
+      vtepIP: 10.200.255.1
+      uplinks:
+        - interface: ens6
+          address: 169.254.133.2/31
+          peerAddress: 169.254.133.3
+          peerASN: 4200300002
+```
+
+From `osac-installer/`:
 
 ```bash
 make install PLATFORM=openshift PROFILE=cudn-evpn-netris-test NS=osac \
+  INFRA_VALUES_EXTRA="-f cudn-evpn-netris-test-evpn.private.yaml" \
   INSTANCE_VALUES_EXTRA="-f cudn-evpn-netris-test-secrets.local.yaml"
 ```
 

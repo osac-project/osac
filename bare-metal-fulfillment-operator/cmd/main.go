@@ -608,7 +608,8 @@ func createNetBoxInventoryClientWithManager(
 	}
 	setupLog.Info("BMH manager configured", "namespace", bmhManager.Namespace())
 
-	netBoxClient := inventory.NewNetBoxClient(netBoxAPI, bmhManager, inventoryCfg.HostClass, secretsClient)
+	credentialsReader := inventory.NewNetBoxCredentialResolver(secretsClient)
+	netBoxClient := inventory.NewNetBoxClient(netBoxAPI, bmhManager, inventoryCfg.HostClass, credentialsReader)
 	return netBoxClient, nil
 }
 

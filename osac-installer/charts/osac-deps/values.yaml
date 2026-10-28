@@ -28,6 +28,12 @@ cnv:
   enabled: false
   channel: "stable"
 
+evpn:
+  enabled: false
+  nmstate:
+    install: true
+    channel: stable
+
 mce:
   # Opt in only when this installation owns the multicluster engine lifecycle.
   enabled: false

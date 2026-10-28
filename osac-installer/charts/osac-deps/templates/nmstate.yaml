@@ -1,0 +1,33 @@
+{{- if and .Values.evpn.enabled .Values.evpn.nmstate.install }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openshift-nmstate
+  labels:
+    {{- include "osac-deps.labels" . | nindent 4 }}
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-nmstate
+  namespace: openshift-nmstate
+  labels:
+    {{- include "osac-deps.labels" . | nindent 4 }}
+spec:
+  targetNamespaces:
+    - openshift-nmstate
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: kubernetes-nmstate-operator
+  namespace: openshift-nmstate
+  labels:
+    {{- include "osac-deps.labels" . | nindent 4 }}
+spec:
+  channel: {{ .Values.evpn.nmstate.channel }}
+  name: kubernetes-nmstate-operator
+  source: {{ .Values.catalogSource }}
+  sourceNamespace: {{ .Values.catalogSourceNamespace }}
+  installPlanApproval: Automatic
+{{- end }}

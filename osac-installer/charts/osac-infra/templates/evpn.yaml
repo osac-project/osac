@@ -1,0 +1,192 @@
+{{- if .Values.evpn.enabled }}
+{{- $seenNames := dict }}
+{{- $seenVTEPs := dict }}
+{{- range $node := .Values.evpn.nodes }}
+  {{- if hasKey $seenNames $node.name }}
+    {{- fail (printf "evpn.nodes: duplicate node name %s" $node.name) }}
+  {{- end }}
+  {{- $_ := set $seenNames $node.name true }}
+  {{- if hasKey $seenVTEPs $node.vtepIP }}
+    {{- fail (printf "evpn.nodes: duplicate vtepIP %s" $node.vtepIP) }}
+  {{- end }}
+  {{- $_ := set $seenVTEPs $node.vtepIP true }}
+  {{- $seenPeers := dict }}
+  {{- range $uplink := $node.uplinks }}
+    {{- if hasKey $seenPeers $uplink.peerAddress }}
+      {{- fail (printf "evpn.nodes: node %s has duplicate peerAddress %s" $node.name $uplink.peerAddress) }}
+    {{- end }}
+    {{- $_ := set $seenPeers $uplink.peerAddress true }}
+  {{- end }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osac-infra-evpn-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+    osac.openshift.io/evpn: "true"
+data:
+  settings.env: |
+    CONFIGURE_CLUSTER_NETWORK={{ .Values.evpn.configureClusterNetwork }}
+    WAIT_FOR_ESTABLISHED={{ .Values.evpn.bgp.waitForEstablished }}
+    BGP_TIMEOUT_SECONDS={{ int .Values.evpn.bgp.timeoutSeconds }}
+  nodes.txt: {{ $nodeNames := list }}{{- range .Values.evpn.nodes }}{{- $nodeNames = append $nodeNames .name }}{{- end }}{{ join "\n" $nodeNames | quote }}
+  peers.txt: {{ $peerLines := list }}{{- range $node := .Values.evpn.nodes }}{{- range $uplink := $node.uplinks }}{{- $peerLines = append $peerLines (printf "%s %s" $node.name $uplink.peerAddress) }}{{- end }}{{- end }}{{ join "\n" $peerLines | quote }}
+  cluster-network-patch.json: |
+    {"spec":{"additionalRoutingCapabilities":{"providers":["FRR"]},"defaultNetwork":{"ovnKubernetesConfig":{"routeAdvertisements":"Enabled","gatewayConfig":{"routingViaHost":true,"ipForwarding":"Global"}}}}}
+  nmstate.yaml: |
+    apiVersion: nmstate.io/v1
+    kind: NMState
+    metadata:
+      name: nmstate
+      labels:
+        osac.openshift.io/evpn: "true"
+  nncp.yaml: |
+    {{- range $nodeIndex, $node := .Values.evpn.nodes }}
+    {{- if $nodeIndex }}
+    ---
+    {{- end }}
+    apiVersion: nmstate.io/v1
+    kind: NodeNetworkConfigurationPolicy
+    metadata:
+      name: osac-evpn-{{ $node.name }}
+      labels:
+        osac.openshift.io/evpn: "true"
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: {{ $node.name | quote }}
+      desiredState:
+        interfaces:
+    {{- range $uplink := $node.uplinks }}
+      {{- if $uplink.address }}
+      {{- $uplinkAddress := split "/" $uplink.address }}
+        - name: {{ $uplink.interface | quote }}
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            dhcp: false
+            address:
+              - ip: {{ $uplinkAddress._0 | quote }}
+                prefix-length: {{ int $uplinkAddress._1 }}
+          ipv6:
+            enabled: false
+      {{- end }}
+    {{- end }}
+        - name: evpn-vtep0
+          type: dummy
+          state: up
+          ipv4:
+            enabled: true
+            dhcp: false
+            address:
+              - ip: {{ $node.vtepIP | quote }}
+                prefix-length: 32
+          ipv6:
+            enabled: false
+    {{- end }}
+  vtep.yaml: |
+    apiVersion: k8s.ovn.org/v1
+    kind: VTEP
+    metadata:
+      name: tenant-vtep
+      labels:
+        osac.openshift.io/evpn: "true"
+    spec:
+      mode: Unmanaged
+      cidrs:
+        - {{ .Values.evpn.vtepCIDR | quote }}
+  frr.yaml: |
+    {{- range $nodeIndex, $node := .Values.evpn.nodes }}
+    {{- if $nodeIndex }}
+    ---
+    {{- end }}
+    {{- $nodeASN := $.Values.evpn.bgp.asn }}
+    {{- if hasKey $node "asn" }}{{ $nodeASN = $node.asn }}{{ end }}
+    apiVersion: frrk8s.metallb.io/v1beta1
+    kind: FRRConfiguration
+    metadata:
+      name: osac-evpn-{{ $node.name }}
+      namespace: openshift-frr-k8s
+      labels:
+        evpn: "true"
+        osac.openshift.io/evpn: "true"
+    spec:
+      nodeSelector:
+        matchLabels:
+          kubernetes.io/hostname: {{ $node.name | quote }}
+      bgp:
+        routers:
+          - asn: {{ int64 $nodeASN }}
+            prefixes:
+              - {{ printf "%s/32" $node.vtepIP | quote }}
+            neighbors:
+    {{- range $uplink := $node.uplinks }}
+              - address: {{ $uplink.peerAddress | quote }}
+                asn: {{ int64 $uplink.peerASN }}
+                ebgpMultiHop: true
+                port: 179
+    {{- if $uplink.address }}
+    {{- $uplinkAddress := split "/" $uplink.address }}
+                sourceaddress: {{ $uplinkAddress._0 | quote }}
+    {{- end }}
+                toReceive:
+                  allowed:
+                    mode: filtered
+                    prefixes:
+    {{- range $prefix := $.Values.evpn.bgp.acceptPrefixes }}
+                      - prefix: {{ $prefix | quote }}
+                        ge: 32
+                        le: 32
+    {{- end }}
+                toAdvertise:
+                  allowed:
+                    mode: all
+    {{- end }}
+    ---
+    apiVersion: frrk8s.metallb.io/v1beta1
+    kind: FRRConfiguration
+    metadata:
+      name: osac-evpn-raw-{{ $node.name }}
+      namespace: openshift-frr-k8s
+      labels:
+        osac.openshift.io/evpn: "true"
+    spec:
+      nodeSelector:
+        matchLabels:
+          kubernetes.io/hostname: {{ $node.name | quote }}
+      raw:
+        priority: 5
+        rawConfig: |
+          router bgp {{ int64 $nodeASN }}
+            address-family l2vpn evpn
+    {{- range $uplink := $node.uplinks }}
+              neighbor {{ $uplink.peerAddress }} activate
+              neighbor {{ $uplink.peerAddress }} allowas-in origin
+    {{- end }}
+              advertise-all-vni
+            exit-address-family
+    {{- end }}
+  routeadvertisements.yaml: |
+    apiVersion: k8s.ovn.org/v1
+    kind: RouteAdvertisements
+    metadata:
+      name: osac-evpn
+      labels:
+        osac.openshift.io/evpn: "true"
+    spec:
+      targetVRF: auto
+      advertisements:
+        - PodNetwork
+      nodeSelector: {}
+      frrConfigurationSelector:
+        matchLabels:
+          evpn: "true"
+      networkSelectors:
+        - networkSelectionType: ClusterUserDefinedNetworks
+          clusterUserDefinedNetworkSelector:
+            networkSelector:
+              matchLabels:
+                evpn: "true"
+{{- end }}

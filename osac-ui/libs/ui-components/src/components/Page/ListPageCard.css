@@ -1,0 +1,13 @@
+.list-page-card__header {
+    --pf-v6-c-card__actions--MarginBlockStart: 0;
+}
+
+.list-page-card__icon {
+    border-radius: var(--pf-t--global--border--radius--medium);
+    background-color: var(--pf-t--global--background--color--secondary--default);
+    width: 2.75rem;
+    height: 2.75rem;
+    justify-content: center;
+    align-items: center;
+    display: inline-flex;
+}

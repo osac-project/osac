@@ -2,3 +2,8 @@
 # install. setup-remote-cluster.sh prepares them there before OSAC is installed.
 cnv:
   enabled: false
+
+# EVPN host networking is configured on the workload cluster by
+# setup-remote-cluster.sh.
+evpn:
+  enabled: false

@@ -413,6 +413,129 @@ var _ = Describe("BareMetalInstance Metal3 Integration", func() {
 		})
 	})
 
+	Describe("Provisioning retry flow", func() {
+		const bmiName = "retry-test-bmi"
+		const bmhName = "retry-test-bmh"
+		const providerError = "AAP workflow failed: inventory service unavailable"
+
+		AfterEach(func() {
+			cleanupBMI(bmiName)
+			cleanupBMH(bmhName)
+		})
+
+		newFailingProvider := func() *mockProvisioningProvider {
+			return &mockProvisioningProvider{
+				getProvisionStatusFunc: func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+					return provisioning.ProvisionStatus{
+						JobID:   jobID,
+						State:   opv1alpha1.JobStateFailed,
+						Message: providerError,
+					}, nil
+				},
+			}
+		}
+
+		It("keeps a failed provision attempt retrying through the public reconciler", func() {
+			createMetal3BMH(bmhName, map[string]string{
+				inventory.Metal3HostTypeLabel: "retry-node",
+			}, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+
+			bmi := &v1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: bmiName, Namespace: metal3TestNS},
+				Spec: v1alpha1.BareMetalInstanceSpec{
+					Selector: v1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"type": "retry-node"},
+					},
+					TemplateID: "image_provision",
+				},
+			}
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+
+			reconciler := newMetal3Reconciler()
+			reconciler.ProvisioningProvider = newFailingProvider()
+
+			// Allocation (finalizer, find, assign) then the management finalizer.
+			reconcileN(reconciler, bmiName, 4)
+			bmi = getBMI(bmiName)
+			Expect(bmi.Spec.HostClass).To(Equal(metal3HostClass))
+
+			// Trigger the first provision attempt.
+			reconcileN(reconciler, bmiName, 1)
+
+			// The poll observes the provider failure: the persisted state must
+			// stay a retrying Progressing instance, never Failed or Ready.
+			reconcileN(reconciler, bmiName, 1)
+			bmi = getBMI(bmiName)
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+			condition := bmi.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonRetrying))
+			Expect(condition.Message).To(Equal(
+				"Provisioning retry scheduled after failed attempt: " + providerError))
+			Expect(bmi.Status.ProvisioningJobs).To(HaveLen(1))
+			Expect(bmi.Status.ProvisioningJobs[0].State).To(Equal(opv1alpha1.JobStateFailed))
+
+			// The next reconcile enters exponential backoff and stays retrying.
+			result := reconcileN(reconciler, bmiName, 1)
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			bmi = getBMI(bmiName)
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+			condition = bmi.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
+			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonRetrying))
+		})
+
+		It("migrates a persisted legacy template failure to retrying during backoff", func() {
+			createMetal3BMH(bmhName, map[string]string{
+				inventory.Metal3HostTypeLabel: "retry-node",
+			}, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+
+			bmi := &v1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: bmiName, Namespace: metal3TestNS},
+				Spec: v1alpha1.BareMetalInstanceSpec{
+					Selector: v1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"type": "retry-node"},
+					},
+					TemplateID: "image_provision",
+				},
+			}
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+
+			reconciler := newMetal3Reconciler()
+			reconciler.ProvisioningProvider = newFailingProvider()
+
+			// Allocation, management finalizer, and the first job trigger.
+			reconcileN(reconciler, bmiName, 5)
+
+			// Simulate a pre-fix persisted CR: the job is terminally failed
+			// and the condition still carries the legacy TemplateFailed reason.
+			bmi = getBMI(bmiName)
+			Expect(bmi.Status.ProvisioningJobs).To(HaveLen(1))
+			bmi.Status.ProvisioningJobs[0].State = opv1alpha1.JobStateFailed
+			bmi.Status.ProvisioningJobs[0].Message = providerError
+			bmi.SetStatusCondition(
+				v1alpha1.HostConditionProvisionTemplateComplete,
+				metav1.ConditionFalse,
+				v1alpha1.HostConditionReasonTemplateFailed,
+				providerError,
+			)
+			Expect(k8sClient.Status().Update(ctx, bmi)).To(Succeed())
+
+			// The backoff reconcile migrates the condition without losing the
+			// backend error, and the instance stays Progressing.
+			result := reconcileN(reconciler, bmiName, 1)
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			bmi = getBMI(bmiName)
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+			condition := bmi.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonRetrying))
+			Expect(condition.Message).To(Equal(
+				"Provisioning retry scheduled after failed attempt: " + providerError))
+		})
+	})
+
 	Describe("Power management flow", func() {
 		const bmiName = "power-test-bmi"
 		const bmhName = "power-test-bmh"

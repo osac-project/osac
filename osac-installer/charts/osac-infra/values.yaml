@@ -95,6 +95,42 @@ cnv:
   enabled: false
   channel: "stable"
 
+# EVPN host networking for VMaaS (k8sManager cudn_evpn). OpenShift only.
+# Configures FRR, route advertisements, NMState, per-node underlay addresses,
+# the tenant-vtep VTEP and BGP peering with the fabric. The fabric side
+# (switch ports, the node ASN on the fabric) must be configured separately.
+evpn:
+  enabled: false
+  nmstate:
+    # false when the NMState operator is already installed on the cluster.
+    install: true
+    channel: stable
+  # Patch the cluster network operator (FRR, route advertisements, routing via
+  # host, global IP forwarding). This restarts OVN-Kubernetes once.
+  configureClusterNetwork: true
+  # [REQUIRED when enabled] Range holding every node's VTEP IP.
+  vtepCIDR: ""
+  bgp:
+    # [REQUIRED when enabled] Node ASN; a node can override it.
+    asn: 0
+    # [REQUIRED when enabled] Fabric loopback ranges (remote VTEPs). Only /32
+    # routes inside these ranges are accepted from the fabric.
+    acceptPrefixes: []
+    # Fail the install when sessions are not Established within the timeout.
+    waitForEstablished: true
+    timeoutSeconds: 900
+  # [REQUIRED when enabled] One entry per node that runs VMs.
+  # nodes:
+  #   - name: worker-0            # Kubernetes node name
+  #     vtepIP: 10.200.255.1      # inside vtepCIDR, unique per node
+  #     asn: 4209999999           # optional, defaults to bgp.asn
+  #     uplinks:                  # one per cable to a leaf
+  #       - interface: ens6
+  #         address: 169.254.133.2/31   # optional; omit if already configured
+  #         peerAddress: 169.254.133.1
+  #         peerASN: 4200300002
+  nodes: []
+
 mce:
   # Opt in only when this installation owns the multicluster engine lifecycle.
   enabled: false

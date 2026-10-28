@@ -74,11 +74,24 @@ are chart-level constants — use them as-is.
 | Kafka | event bus (fulfillment → metering) | podman container, KRaft, SASL_SSL | 9092 |
 
 Reasons to externalize: free cluster storage (a bundled PG + OpenBao + Kafka
-easily holds 300+ Gi of PVCs), host-level backup and ops tooling, isolating
-stateful services from cluster reinstalls, and lab resource constraints.
+easily holds 300+ Gi of PVCs), host-level backup and ops tooling, and
+isolating stateful services from cluster reinstalls.
 What typically **stays** in-cluster: AAP, CNV/KubeVirt, cert-manager,
 trust-manager, MetalLB, MCE (multicluster engine for Kubernetes) with the
 workload clusters it manages, the operator, and the UI.
+
+**Profiles and status — what you are getting.** The Appendix A recipes
+are a *reference profile*, not an availability or durability design.
+Before following any of them, know which parts are lab-grade, which are
+production-grade, and which are experimental:
+
+| Component | Reference recipe (Appendix A) | For production |
+|---|---|---|
+| PostgreSQL | single container, TLS + cert auth | same shape; size, HA and PITR are yours to add |
+| OpenBao | single node, file storage, auto-unseal drop-in | single-node Raft on ≥ 2.7 (A.3 note); unseal-key escrow (§10.4) |
+| Keycloak | H2 database — **lab/evaluation only** | PostgreSQL-backed variant (A.4) |
+| Kafka | single broker, replication factor 1 | a second durable copy of metering events is **required** for event durability (§10 policy) |
+| Off-cluster metering | **experimental**, opt-in (§6.2) | not upstream-supported; alternatives in §6.2 |
 
 ### 1.2 The integration pattern
 
@@ -95,12 +108,10 @@ Because the integration is entirely declarative, nothing needs re-applying
 after a `helm upgrade`: the values re-render the same external wiring every
 time (§8).
 
-**What Keycloak's values path does not cover:** the issuer/IdP/UI values
-point consumers at an external Keycloak, but they do not provision it.
-The bundled path gets its service-client credentials generated and its
-realm imported by chart machinery that is all gated on `keycloak.enabled`;
-with the flag off, you create the client-credential Secrets and import
-the realm yourself (§5.2, §5.3).
+**What Keycloak's values path does not cover:** the values point
+consumers at an external Keycloak but do not provision it — the realm
+and the client-credential Secrets are yours to create before
+`helm install` (§5.1–5.3).
 
 ### 1.3 What must not change
 
@@ -176,6 +187,16 @@ make the externals trusted — in order of preference:
 > still fail with `x509: certificate signed by unknown authority`, restart
 > the consuming deployments — some cache the bundle at startup.
 
+**Who has to trust what.** Trusting a CA in one place does not document
+it anywhere else — every leg of the picture needs its own decision:
+
+| Connection | Must trust the CA that signs… |
+|---|---|
+| cluster pods → each external service | the service's server cert — via the `ca-bundle` (this section) |
+| OpenBao → Keycloak (JWT discovery) | Keycloak's server cert — `oidc_discovery_ca_pem` in A.3 |
+| browser → UI route and `<kc-host>` | the UI route cert and Keycloak's server cert — usually a public/corporate CA |
+| administrator host → services | each service's server cert — the `--cacert` flags in this guide's commands |
+
 ### 2.3 Clock synchronization
 
 JWT validation fails beyond ~30 s skew between the Keycloak host and cluster
@@ -240,7 +261,7 @@ dbInit:
 
 The `osac-db-config` (URL) and `osac-db-client-cert` (tls.crt/tls.key/ca.crt)
 Secrets in ns `osac` are chart-consumed and are created against
-`dbInit.host` from the start. Use a current installer chart pin.
+`dbInit.host` from the start.
 
 ### 3.3 Verify
 
@@ -277,7 +298,8 @@ podman exec osac-postgres psql -U postgres -Atc \
 
 ### 4.2 External-mode configuration — what to modify
 
-Pattern A — values only (survives upgrades). Every key involved:
+Values only — the wiring is declarative and survives upgrades (§8).
+Every key involved:
 
 | # | Release | Parameter | Value |
 |---|---|---|---|
@@ -324,11 +346,16 @@ break-glass secret with a front-door tenant token.
 
 ### 5.1 The strategy
 
-`keycloak.enabled: false` plus the issuer/IdP/UI values — you provision
-the realm and the client-credential Secrets yourself. Every consumer is
-configured by values from the start; no imperative wiring exists
-anywhere on this path. (This exact flow was not exercised end-to-end in
-the validation lab — see the provenance note in the introduction.)
+`keycloak.enabled: false` plus the issuer/IdP/UI values — every consumer
+is configured by values from the start; no imperative wiring exists
+anywhere on this path. What the flag does **not** cover is everything the
+chart's Keycloak machinery did: the hooks that generate the
+service-client credentials and the realm import are all gated on
+`keycloak.enabled`, so with the flag off **you provision the
+client-credential Secrets and the realm yourself, before
+`helm install`** — the exact checklist is §5.2 step 1–3 and the seed
+procedure is §5.3. (This flow was not exercised end-to-end in the
+validation lab — see the provenance note in the introduction.)
 
 ### 5.2 Clean install: external issuer
 
@@ -348,7 +375,7 @@ below):
 | 7 | `osac` release | `service.vault.keycloakIssuerUrl` | `https://<kc-host>:8443/realms/osac` |
 | 8 | `osac` release | `service.vault.credentials` | Secret `vault-credentials` (client-secret) |
 | 9 | `osac` release | `ui.auth.oidcIssuerURL` | `https://<kc-host>:8443/realms/osac` — full URL, not tpl-expanded |
-| 10 | ns `osac` | Secrets (yours to create) | rows 3/6/8's Secrets + UI-backend / CSI-driver if referenced |
+| 10 | ns `osac` | Secrets (yours to create) | rows 3/6/8's Secrets — plus UI-backend / CSI-driver Secrets **only if** your values add credential entries for them; the shape above does not, but §5.3 still assigns their realm clients secrets, so pick values once and keep them consistent |
 | 11 | external Keycloak | realm `osac` | seeded per §5.3, clients matching the Secrets' IDs and secrets |
 
 `osac-infra` release:
@@ -397,10 +424,8 @@ deployment projects the credentials to files named by the `param`s
 (`client-id`, `client-secret`) and mounts them under
 `/etc/fulfillment-controller/idp`.
 
-What the flag does **not** cover: everything the chart's Keycloak
-machinery did. It is all gated on `keycloak.enabled` — the hooks that
-generate the service-client credentials, and the realm import. With the
-flag off, provide them yourself before `helm install`:
+What the flag does **not** cover (§5.1): the chart's credential hooks
+and realm import. Provide them yourself before `helm install`:
 
 1. **Client-credential Secrets** — the ones the values above reference,
    carrying the realm's client IDs and secrets:
@@ -442,11 +467,13 @@ your real `<ui-origin>` in the same preprocessing step:
 ```bash
 # resolve placeholders and patch the osac-ui client into a resolved
 # realm file (secret values are yours — they must match the §5.2
-# client-credential Secrets). <ui-origin> is the origin the browser
-# loads the UI from — scheme, host and port only, no path, no trailing
-# slash (e.g. https://osac-ui.example.com), same origin every time.
+# client-credential Secrets). UI_ORIGIN is the FULL origin the browser
+# loads the UI from — scheme, host and port, no path, no trailing slash
+# (e.g. https://osac-ui.example.com). It is used AS-IS: the script
+# appends only the callback paths below, so do not strip the scheme.
 python3 - realm.json > realm-resolved.json <<'PY'
 import json, sys
+UI_ORIGIN = "https://<ui-origin>"
 subs = {
   "__OSAC_REALM_ADMIN_USERNAME__": "<realm-admin-user>",
   "__OSAC_REALM_ADMIN_PASSWORD__": "<realm-admin-password>",
@@ -460,9 +487,9 @@ for k, v in subs.items(): text = text.replace(k, v)
 realm = json.loads(text)             # fail loudly on a bad resolve
 
 ui = next(c for c in realm["clients"] if c["clientId"] == "osac-ui")
-ui["redirectUris"] = ["https://<ui-origin>/callback",
-                      "https://<ui-origin>/*"]
-ui["webOrigins"] = ["https://<ui-origin>"]
+ui["redirectUris"] = [UI_ORIGIN + "/callback",
+                      UI_ORIGIN + "/*"]
+ui["webOrigins"] = [UI_ORIGIN]
 for scope in ("profile", "email"):
     if scope not in ui["defaultClientScopes"]:
         ui["defaultClientScopes"].append(scope)
@@ -475,12 +502,14 @@ chmod 600 realm-resolved.json    # it contains client secrets
 # The import runs against the master realm, so authenticate as the
 # bootstrap admin created in A.4 — <realm-admin-*> only becomes usable
 # once the osac realm (which defines that user) has been imported.
+# CA is the Keycloak server CA provisioned in A.4 — verify, don't -k.
 KC="https://<kc-host>:8443"
-TOKEN=$(curl -sk -d "client_id=admin-cli" -d "username=admin" \
+CA=/root/kc-ca.pem
+TOKEN=$(curl -s --cacert "$CA" -d "client_id=admin-cli" -d "username=admin" \
   -d "password=<kc-admin-password>" -d "grant_type=password" \
   "${KC}/realms/master/protocol/openid-connect/token" \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-curl -sk -X POST -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" \
+curl -s --cacert "$CA" -X POST -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" \
   -d @realm-resolved.json "${KC}/admin/realms"
 ```
 
@@ -491,12 +520,13 @@ one at the validated pin.)
 ### 5.4 Verify
 
 ```bash
-curl -sk https://<kc-host>:8443/realms/osac \
+curl -s --cacert /root/kc-ca.pem https://<kc-host>:8443/realms/osac \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['realm'])"    # osac
 
 # token end-to-end (ROPC works for tenant users; the UI client is public
 # PKCE and cannot do it — use the browser for that flow)
-curl -sk -d "client_id=admin-cli&username=<user>&password=<password>&grant_type=password" \
+curl -s --cacert /root/kc-ca.pem \
+  -d "client_id=admin-cli&username=<user>&password=<password>&grant_type=password" \
   https://<kc-host>:8443/realms/osac/protocol/openid-connect/token
 ```
 
@@ -576,7 +606,7 @@ stringData:
   password: "<osac-metering SCRAM password>"
 ```
 
-Values (pattern A):
+Values (all keys; the wiring is declarative and survives upgrades, §8):
 
 ```yaml
 # osac-deps AND osac-infra releases — disable the bundled Strimzi stack
@@ -633,12 +663,14 @@ metering:
 
 On a clean install these values and objects are in place before the first
 `helm install`. Applying them to an already-running deployment is the
-ordinary upgrade flow of §8: apply the objects, one surgical upgrade
-(`helm upgrade osac <chart> -n osac --reuse-values --timeout 20m`, with
-`set -o pipefail` before any `| tail` pipeline — the AAP bootstrap hook
-needs the 20 m timeout), then verify.
+ordinary upgrade flow of §7/§8: apply the objects, then one surgical
+upgrade — the exact command and its caveats are in §8.
 
 ### 6.3 Verify
+
+If you disabled metering (§6.2's options), there is no heartbeat
+publisher — skip the canary; the broker reachability check in §9 still
+applies.
 
 ```bash
 # the canary: metering publishes one heartbeat event per minute to
@@ -654,6 +686,10 @@ kafka-consumer-groups.sh … --describe --group <group>
 # in-cluster: the publisher's kafka config comes from the external objects
 oc -n osac get deploy fulfillment-event-publisher -o jsonpath='{.spec.template.spec.volumes[0].projected.sources}'
 ```
+
+`<admin-props>` is the client properties file created in A.5 step 4
+(`client-admin.properties`) — SCRAM user plus truststore pointing at the
+broker CA.
 
 ### 6.4 Certificates
 
@@ -685,8 +721,9 @@ Keycloak's caveat: the chart's credential hooks and realm import stop
 with the flag, so the client Secrets and the realm are yours to
 provision (§5.2).
 
-Split the values by release — three files, no key repeated (the
-per-service annotation lives in §3–§6):
+Split the values by release — three files, no key repeated. Each file is
+complete: paste it as-is, substitute the placeholders, and nothing else
+is needed for that release (per-key annotation lives in §3–§6):
 
 ```yaml
 # ── values/external-infra.yaml — osac-infra release ────────────────────
@@ -731,14 +768,37 @@ service:
     endpoint: https://<host-ip>:8200
     caBundle: {configMap: ca-bundle}
     keycloakIssuerUrl: https://<kc-host>:8443/realms/osac
+    credentials:                # §5.2 — OpenBao's Keycloak client
+    - secret:
+        name: vault-credentials
+        items:
+        - {key: client-secret, param: client-secret}
     keycloakClientId: osac-controller
     keycloakAudience: osac-api
     namespace: osac
     kvMountPath: secret
     lifecycleMountPath: jwt
     lifecycleRole: lifecycle
-  # service.auth (issuerUrl, controllerCredentials), service.idp, and
-  # ui.auth.oidcIssuerURL: the §5.2 blocks belong here too
+  auth:                         # §5.2 — issuer + controller credentials
+    issuerUrl: https://<kc-host>:8443/realms/osac
+    controllerCredentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - {key: client-id, param: client-id}
+        - {key: client-secret, param: client-secret}
+  idp:                          # §5.2 — fulfillment controller IdP
+    provider: keycloak
+    url: https://<kc-host>:8443
+    credentials:                # the same Secret is fine
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - {key: client-id, param: client-id}
+        - {key: client-secret, param: client-secret}
+ui:
+  auth:
+    oidcIssuerURL: https://<kc-host>:8443/realms/osac   # §5.2 — full URL, not tpl-expanded
 ```
 
 The `osac-deps` release takes a single key — `kafka.enabled: false`
@@ -785,15 +845,14 @@ behavior in ways worth catching immediately. After every upgrade:
    re-creates them; check they are what you expect.
 3. **Confirm trust and credentials still validate.** A 401 on the API
    negative control plus a working real token (§9), a successful OpenBao
-   tenant provisioning (§4.3), and metering events flowing (§6.3) cover
-   the three credential chains.
+   tenant provisioning (§4.3), and — if metering is enabled — metering
+   events flowing (§6.3) cover the three credential chains.
 4. **Rerun the verification battery** (§9) and the per-service checks
    (§3.3, §4.3, §5.4, §6.3).
 
 If a new chart version renders a chart-bug workaround you applied by
-hand (envoy ALPN order, operator memory, missing RBAC rules — §11),
-re-check whether the workaround is still needed and remove it when the
-fix ships.
+hand (the envoy ALPN order workaround — §11), re-check whether the
+workaround is still needed and remove it when the fix ships.
 
 ---
 
@@ -819,17 +878,21 @@ podman exec osac-postgres psql -U postgres -Atc \
 # auth chain — negative control: 401 on a dummy token is the GREEN answer
 # (probe a path the public API actually serves, e.g. compute_instances —
 # an unserved path 404s before the auth filter runs and proves nothing)
-curl -sk -o /dev/null -w '%{http_code}\n' -H 'Authorization: Bearer dummy' \
+curl -s --cacert <cluster-ca> -o /dev/null -w '%{http_code}\n' \
+  -H 'Authorization: Bearer dummy' \
   https://<api-route>/api/fulfillment/v1/compute_instances                             # 401
 # …and positive control: a real token must WORK — a 401 alone proves only
 # that the filter exists. Get a token per §5.4, then:
-curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer ${TOKEN}" \
+curl -s --cacert <cluster-ca> -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer ${TOKEN}" \
   https://<api-route>/api/fulfillment/v1/compute_instances                             # 200
-# note: -k skips trust validation — from the services host prefer
-# --cacert <cluster-ca> so the probe also proves the trust chain (§2.2)
-# (from a cluster node: add --resolve <api-route>:443:127.0.0.1)
+# <cluster-ca> is the CA that signed the API route's certificate (from the
+# cluster's trust bundle, §2.2) — the probe then also proves the trust
+# chain, which -k would skip (from a cluster node: add
+# --resolve <api-route>:443:127.0.0.1)
 
-# Kafka canary (§6.3): heartbeat offsets advance, consumer lag 0
+# Kafka canary (§6.3 — skip if metering is disabled): heartbeat offsets
+# advance, consumer lag 0
 ```
 
 REST paths are snake_case (`/api/fulfillment/v1/compute_instances/{id}`) —
@@ -943,6 +1006,12 @@ drop-in re-seals→unseals; the `:z` mounts relabel), health-check. (On a
 Raft-backed instance, prefer `bao operator raft snapshot save`/restore
 over the tar — see the storage note in A.3.)
 
+**The archive does not contain the unseal material.** `bao-data` holds the
+encrypted store, but the init output (`/root/openbao-init.json` — unseal
+key shards and root token) lives outside the data directory and outside
+this archive. A restored archive without the unseal key is unrecoverable
+— escrow that file separately per §10.4.
+
 ### 10.3 Keycloak
 
 Two layers, because the deployment options differ (A.4):
@@ -1008,59 +1077,92 @@ re-import the newest JSON only for anything the database restore missed;
 realm misconfigured — re-import the partial export over it; total loss —
 database restore plus the §5.3 realm seed.
 
+### 10.4 Recovery material
+
+"Backups" (§10.1–10.3) cover service data. Recovering from the loss of
+the services **host** needs more than data — collect the full catalogue
+below, and know where every row lives:
+
+| Category | What | Where it comes from |
+|---|---|---|
+| Service data | PG dumps, OpenBao data-dir archives / Raft snapshots, Keycloak DB backups or exports | §10.1–10.3 |
+| Config files | `server.conf`/`access.conf` (PG), `server.properties` (Kafka), OpenBao config + unseal drop-in, container run definitions (A.1–A.5) | the host, `/etc/…` and `/root/…` |
+| Certificates & keys | server certs/keys per service, `ca-bundle.pem`, kc/bao CAs | §2.2, A.2–A.4 |
+| Credentials | SCRAM passwords, Keycloak bootstrap admin, DB passwords, client-credential Secrets' values | your credential store — the values behind §5.2's Secrets and A.5's users |
+| Systemd units | the generated/hand-written unit files | A.1 |
+| Unseal material | OpenBao init output (unseal key shards + root token), escrowed per §10.4 | **outside the data-dir archive** |
+
+Two rules:
+
+- **Store the catalogue off-host, encrypted.** An archive on the machine
+  it is a backup of does not survive that machine.
+- **Escrow sensitive recovery keys separately from the data.** Unseal
+  shards, root tokens, and password material go to a distinct,
+  access-controlled location (a vault, a sealed envelope procedure) —
+  not into the same tarball as the encrypted data, so one disclosure
+  does not unlock both.
+
+Rehearse against the real thing: restoring a data dir on the live
+machine only proves the backup mechanism. Host-loss recovery — rebuild
+on a fresh machine from the catalogue alone, then run §9 — is the test
+that matters, and it is part of the validation exercise noted in §1.
+
 ---
 
 ## 11. Gotchas compendium
 
-1. **systemd unit shapes** — the Appendix A.1 table. The two that bite
-   hardest: a `--new`-style unit un-does a bare `podman stop` within
-   ~100 ms (use `systemctl stop`), and a detached-run container under a
-   plain unit needs the oneshot shape with **no** ExecStop.
-2. **trust-manager owns `ca-bundle`** — patch the `Bundle` CR, never the
-   ConfigMap; and restart consuming deployments after adding a CA (cached
-   bundles).
-3. **Clock skew** breaks JWT validation at ~30 s (§2.3).
-4. **Keycloak image runs as uid 1000** — root-owned TLS key files abort
-   startup with `AccessDeniedException`.
-5. **Keycloak `kc.sh export` drops LDAP federations and org memberships** —
-   replay them after import (§10.3).
-6. **Kafka listener-name casing** — `listener.name.*` keys are lowercase;
-   a listener named `SASL_SSL` never picks up its config and the broker
-   dies with a JAAS lookup error.
-7. **Kafka server-side SCRAM JAAS is credential-free** —
-   `ScramLoginModule required;` with nothing else; users live in KRaft
-   metadata (`kafka-storage.sh --add-scram` needs `name=` inside the
-   brackets, `kafka-configs.sh --add-config` takes the name from
-   `--entity-name` and must NOT have it).
-8. **Kafka SASL listener needs a truststore** — even as a server, the
-   channel-builder self-test connects to itself; without
-   `listener.name.sasl_ssl.ssl.truststore.*` it dies with
-   `PKIX path building failed`.
-9. **`podman run` forwards stdin only with `-i`** — piping into
-    `kafka-console-producer` without `-i` silently no-ops (exit 0, zero
-    messages). Deprecated CLI flags print warnings on **stdout** — compare
-    output by grepping for the expected token, never by string equality.
-    `kafka.tools.GetOffsetShell` no longer exists — use
-    `kafka-get-offsets.sh`.
-10. **The generated `server.properties` holds the broker private key** —
-    generate it with a script (mode 600), never paste it into docs/tickets.
-11. **`--reuse-values` reuses the previous revision's computed values** —
-    values-file *and* past `--set` overrides — so nothing needs
-    re-passing; pass only what changes. And `set -o pipefail` before any
-    `helm … | tail`, or the upgrade checks run after a *failed* helm.
-12. **AAP bootstrap hook needs `--timeout 20m`** — it alone takes ~7 min;
-    helm's 5-min default kills the upgrade.
-13. **values.schema.json** — root `additionalProperties: false`; image
-    tags live under `service.images.*` (§7).
-14. **Envoy ALPN** — chart versions have rendered `[http1.1, h2]`
-    (invalid ALPN id, wrong order — gRPC clients pin to HTTP/1.1 and drop
-    trailers, which shows up as a UI login spinner). Workaround: patch both
-    listeners to `[h2, http/1.1]` in the envoy ConfigMap and restart —
-    re-check after every upgrade until the chart fix ships.
-15. **REST paths are snake_case** (§9).
-16. **Routes from a cluster node need `--resolve`** for SNI (§5.4).
-17. **cron PATH is minimal** — scripts run from cron need an explicit PATH
-    export or host tools (`iptables` in `/usr/sbin`) silently disappear.
+Operational recipe traps (systemd unit shapes, Kafka broker config,
+cron environment) are documented inline where you meet them — the A.1
+table, A.5's Kafka steps, §10.3's cron script. This list is the
+integration-level set: cross-cutting failures whose symptom shows up far
+from the cause. Format: symptom → check → remedy.
+
+1. **Cluster workloads reject the external servers' certificates**
+   (`unknown ca`, `x509: certificate signed by unknown authority`, TLS
+   handshake failures in pod logs) → check `oc -n osac get
+   configmap ca-bundle -o jsonpath='{.data}'` actually contains the
+   services CA → the trust bundle is owned by trust-manager: patch the
+   `Bundle` CR, never the ConfigMap (it reverts), and restart consuming
+   deployments after adding a CA — they cache the bundle (§2.2).
+2. **API returns 401 for tokens issued moments ago, or auth works then
+   fails intermittently** → check clock sync on every host involved
+   (`chronyc tracking`, §2.3) — JWT validation breaks at ~30 s of skew
+   → fix NTP; a `token issued in the future` log line is the tell.
+3. **Keycloak container aborts at startup with `AccessDeniedException`**
+   on the TLS key → check the key file's ownership — the image runs as
+   uid 1000 and cannot read a root-owned key → `chown 1000:0` the cert
+   and key (A.4).
+4. **Restored/re-imported Keycloak loses LDAP users or organization
+   memberships** → nothing is wrong with the restore — `kc.sh export`
+   drops LDAP federations and org memberships by design → replay them
+   after import (§10.3).
+5. **`helm upgrade` reports success but nothing changed, or upgrade
+   checks run after a failed helm** → check for `set -o pipefail` before
+   any `helm … | tail` pipeline — without it the pipeline's exit status
+   is `tail`'s → also remember `--reuse-values` carries the previous
+   revision's computed values including past `--set` overrides; pass only
+   what changes (§8).
+6. **`helm upgrade` times out at 5 minutes with the AAP bootstrap hook
+   still running** → not hung — the hook alone takes ~7 min → use
+   `--timeout 20m` (§7).
+7. **`--set images.service.tag=…` fails with `additional properties
+   'images' not allowed`** → the chart's `values.schema.json` sets
+   `additionalProperties: false` at the root → image tags live at
+   `service.images.service.tag` and `operator.image.tag` (§7).
+8. **UI login spins forever after install/upgrade; gRPC calls from the
+   UI backend silently fail** → check the envoy listeners' ALPN order —
+   some chart versions render `[http1.1, h2]` (an invalid ALPN id, and
+   the wrong order), which pins gRPC clients to HTTP/1.1 and drops
+   trailers → patch both listeners to `[h2, http/1.1]` in the envoy
+   ConfigMap and restart; re-check after every upgrade until the chart
+   fix ships.
+9. **REST calls return 404 on a path you know exists** → check the
+   casing — REST paths are snake_case
+   (`/api/fulfillment/v1/compute_instances/{id}`); camelCase 404s and
+   prove nothing (§9).
+10. **`curl` to a route from a cluster node fails TLS while working
+    elsewhere** → the node resolves the route to itself but SNI still
+    needs the hostname → add `--resolve <route>:443:127.0.0.1` (§5.4).
 
 ---
 
@@ -1108,8 +1210,7 @@ Host layout:
 ├── server.conf                # ssl=on + pointers below
 ├── access.conf                # HBA rules
 ├── ca-bundle.pem              # CA that signs the client certs
-├── tls.crt / tls.key          # server certificate
-└── client-service.crt/.key, client-metering.crt/.key
+└── tls.crt / tls.key          # server certificate
 
 /var/lib/osac/postgres/        # data dir (bind-mounted)
 /var/lib/osac/backups/         # nightly dumps
@@ -1400,7 +1501,8 @@ a privileged mapping, which this recipe does not add). Verify the
 discovery document agrees before wiring any consumer:
 
 ```bash
-curl -sk https://<kc-host>:8443/realms/osac/.well-known/openid-configuration \
+curl -s --cacert /root/kc-ca.pem \
+  https://<kc-host>:8443/realms/osac/.well-known/openid-configuration \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['issuer'])"
 # must print exactly: https://<kc-host>:8443/realms/osac
 ```
@@ -1421,10 +1523,13 @@ Keycloak container, e.g.
 `-v /root/ca-bundle.pem:/etc/x509/pg/ca.pem:ro,z`) and check the
 hostname, instead of accepting any certificate; without it the
 connection either fails closed or, with `sslmode` relaxed, silently
-skips verification. `verify-ca` is the fallback if the server
-certificate carries no DNS SAN matching `<host-ip>` (an IP-SAN-only
-cert, as in the A.3 lab shortcut, will fail `verify-full` hostname
-checking when reached by IP).
+skips verification. If `verify-full` fails on hostname checking, the
+right fix is the certificate, not the mode: the server certificate must
+carry a SAN matching the address in the JDBC URL (an IP-SAN-only cert
+will fail `verify-full` when reached by IP — give the cert a DNS SAN
+and connect by name, or re-issue it with the IP). `sslmode=verify-ca`
+exists but skips hostname verification; treat any use of it as a marked,
+justified exception in your records, not an ordinary configuration.
 
 Two setup steps make that work against an A.2-style instance:
 

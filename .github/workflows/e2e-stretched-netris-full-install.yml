@@ -52,8 +52,8 @@ jobs:
         { "repo": "${{ inputs.repo }}", "ref": "${{ inputs.sha }}", "containerfile": "osac-aap/execution-environment/execution-environment.yaml", "context": ".", "imageKey": "aap.configAsCode.eeImage", "buildType": "ansible-builder" }
         ]
       test-infra-repository: osac-project/osac-test-infra
-      test-infra-ref: 1bfaa44e7b4b3e5bd865c94197e3afbd4ce2f7e0
-      test-infra-sha: 1bfaa44e7b4b3e5bd865c94197e3afbd4ce2f7e0
+      test-infra-ref: 8ef9d36d3c817bf57f63f340609493aca105aadb
+      test-infra-sha: 8ef9d36d3c817bf57f63f340609493aca105aadb
       pr-repository: ${{ inputs.pr-number != '' && inputs.repo || '' }}
       pr-sha: ${{ inputs.pr-number != '' && inputs.sha || '' }}
       pr-number: ${{ inputs.pr-number }}

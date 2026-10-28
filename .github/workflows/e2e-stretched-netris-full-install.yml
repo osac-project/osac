@@ -1,6 +1,5 @@
 ---
-# Optional Netris stretched networking suite. It uses the full-ci profile
-# because the shared-subnet test creates both a ComputeInstance and a BMI.
+# Netris full-ci deployment running only the stretched networking test suite.
 name: E2E Stretched Netris Full Install
 
 permissions:
@@ -39,9 +38,10 @@ jobs:
       id-token: write
       checks: write
       pull-requests: read
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-stretched-netris-full-install.yml@49f45bac1325ae583dc829c70662ed8b675d8de7
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-stretched-netris-full-install.yml@1bfaa44
     with:
-      suite: stretched
+      suite: full
+      test-suite: stretched
       osac-repo: https://github.com/${{ inputs.repo }}.git
       osac-branch: ${{ inputs.sha }}
       components: >-
@@ -52,8 +52,8 @@ jobs:
         { "repo": "${{ inputs.repo }}", "ref": "${{ inputs.sha }}", "containerfile": "osac-aap/execution-environment/execution-environment.yaml", "context": ".", "imageKey": "aap.configAsCode.eeImage", "buildType": "ansible-builder" }
         ]
       test-infra-repository: osac-project/osac-test-infra
-      test-infra-ref: 49f45bac1325ae583dc829c70662ed8b675d8de7
-      test-infra-sha: 49f45bac1325ae583dc829c70662ed8b675d8de7
+      test-infra-ref: 1bfaa44
+      test-infra-sha: 1bfaa44
       pr-repository: ${{ inputs.pr-number != '' && inputs.repo || '' }}
       pr-sha: ${{ inputs.pr-number != '' && inputs.sha || '' }}
       pr-number: ${{ inputs.pr-number }}

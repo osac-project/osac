@@ -178,7 +178,8 @@ def test_stretched_netris_calls_its_runner_with_full_profile() -> None:
     job = workflow["jobs"]["e2e-stretched-netris"]
     workflow_path, workflow_ref = job["uses"].rsplit("@", 1)
     assert workflow_path == "osac-project/osac-test-infra/.github/workflows/e2e-stretched-netris-full-install.yml"
-    assert job["with"]["suite"] == "stretched"
+    assert job["with"]["suite"] == "full"
+    assert job["with"]["test-suite"] == "stretched"
     assert "test-scope" not in job["with"]
     assert "osac-profile" not in job["with"]
     assert workflow_ref == job["with"]["test-infra-ref"]

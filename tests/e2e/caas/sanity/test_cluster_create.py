@@ -29,6 +29,7 @@ from tests.e2e.core.helpers import (
     wait_for_cluster_order_condition,
     wait_for_cluster_order_cr,
     wait_for_cluster_progressing,
+    wait_for_cluster_ready,
     wait_for_hosted_cluster_kubeconfig,
 )
 from tests.e2e.core.k8s_client import K8sClient
@@ -420,15 +421,6 @@ def assert_cluster_available(
 
     wait_for_cluster_order_condition(k8s=k8s, name=co_name, condition_type="ClusterAvailable")
 
-    # The cluster was created without a project, so its heartbeats must carry
-    # no project dimension: the engine emits only the facts a resource carries.
-    metering.expect_no_project()
-    # The control-plane meter has once: [READY] semantics: a cluster bills its
-    # installation time only when it reaches READY, so the heartbeat expectation can
-    # start only after the cluster is available.
-    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
-    metering.verify()
-
     cluster = grpc.get_cluster(cluster_id=uuid)
     cluster_order_spec = k8s.get_cluster_order_spec(name=co_name)
     hosted_cluster_name, hosted_cluster_ns = _assert_cluster_version_propagated(
@@ -447,6 +439,15 @@ def assert_cluster_available(
         worker_instance_type=worker_instance_type,
         expected_workers=original_size,
     )
+    # The cluster was created without a project, so its heartbeats must carry
+    # no project dimension: the engine emits only the facts a resource carries.
+    metering.expect_no_project()
+    # The control-plane meter has once: [READY] semantics: a cluster bills its
+    # installation time only when it reaches READY, so the heartbeat expectation can
+    # start only after full guest readiness.
+    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
+    metering.verify()
+
     owned_bmi_ids = _assert_worker_bmi_resources(
         k8s=k8s,
         co_name=co_name,
@@ -879,13 +880,14 @@ def assert_cluster_with_two_node_sets_available(
         expected_replicas=expected_replicas,
         instance_types=instance_types,
     )
+    wait_for_cluster_ready(k8s=k8s, name=co_name)
 
     # The cluster was created without a project, so its heartbeats must carry
     # no project dimension: the engine emits only the facts a resource carries.
     metering.expect_no_project()
     # The control-plane meter has once: [READY] semantics: a cluster bills its
     # installation time only when it reaches READY, so the heartbeat expectation can
-    # start only after the worker and agent readiness checks above.
+    # start only after the full ClusterOrder Ready prerequisite.
     metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
     metering.verify()
 

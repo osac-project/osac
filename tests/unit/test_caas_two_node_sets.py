@@ -105,6 +105,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     monkeypatch.setattr(scenario, "wait_for_cluster_order_cr", Mock(return_value="order-a"))
     for name in (
         "wait_for_cluster_progressing",
+        "wait_for_cluster_ready",
         "wait_for_cluster_deleting",
         "wait_for_cluster_grpc_deleting_or_archived",
         "wait_for_cluster_grpc_removal",

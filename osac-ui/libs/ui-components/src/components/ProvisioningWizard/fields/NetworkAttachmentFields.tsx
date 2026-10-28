@@ -9,7 +9,7 @@ import { getEmptyNetworkAttachmentFormFields } from './networkAttachments';
 import type { NetworkAttachmentFormFields } from './networkAttachments';
 import NetworkSelectionCards from './NetworkSelectionCards';
 import PopulateVirtualNetworkFromSubnet from './PopulateVirtualNetworkFromSubnet';
-import SecurityGroupsField from './SecurityGroupsField';
+import SecurityGroupsMultiSelectField from './SecurityGroupsMultiSelectField';
 import SubnetField from './SubnetField';
 import VirtualNetworkField from './VirtualNetworkField';
 import { useInvalidateServiceQueries } from '../../../api/use-resource';
@@ -107,7 +107,7 @@ const NetworkAttachmentFields = ({
               isDisabled={isDisabled}
             />
             {showSecurityGroups && (
-              <SecurityGroupsField
+              <SecurityGroupsMultiSelectField
                 name={`${name}.securityGroups`}
                 virtualNetworkName={`${name}.virtualNetwork`}
                 isDisabled={isDisabled}

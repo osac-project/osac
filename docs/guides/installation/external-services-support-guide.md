@@ -80,9 +80,10 @@ Guide](helm-deployment-guide.md), which owns the cluster-side install
 (the `osac-deps` → `osac-infra` → `osac` releases). Vocabulary maps
 directly: that guide's `my-infra-values.yaml` absorbs this guide's
 `values/external-infra.yaml`, and its `my-values.yaml` absorbs
-`values/external-services.yaml` + `values/external-kafka.yaml` (§7). The
-external-services work happens **before and between** that guide's
-phases, exactly where this section puts it.
+`values/external-services.yaml` + `values/external-kafka.yaml` (§7).
+The prerequisite phases (`osac-deps`, `osac-infra`) install in stage 2
+with the external overlay from the start; the external services start
+in stage 3; only the final `osac` release installs in stage 4.
 
 ### Before you begin — the worksheet
 
@@ -120,82 +121,103 @@ rotating it later touches every consumer).
 **Gate:** the worksheet is complete — every `<placeholder>` you will
 meet in stages 2–5 has a value.
 
-### Stage 2 — Prepare prerequisites
+### Stage 2 — Prerequisites and cluster foundation
 
-**Run from:** admin host (cluster checks) and services host (host
-checks). **Privileges:** cluster admin; root on the services host.
+**Run from:** admin host (cluster) and services host (host prep).
+**Privileges:** cluster admin; root on the services host.
 
 1. Services host: OS prepared, the stable `<host-ip>` chosen, firewall
-   open **only** to the cluster's subnet on the service ports (§2.1).
-2. Routing proof: run §2.1's in-cluster netcheck probe for each port
-   (5432, 8200, 8443, 9092) — from a pod, not from the host.
+   rules scoped per port per §2.1 (this stage **checks the
+   configuration** — the reachability probes run in stage 3, after the
+   listeners exist; a closed port now means "not started yet", not a
+   network fault).
+2. Cluster side — install the [Helm Deployment
+   Guide](helm-deployment-guide.md)'s prerequisite phases **now**, with
+   the external overlay applied from the start: phase 1a (`osac-deps`)
+   per that guide, then phase 1b (`osac-infra`) with
+   `my-infra-values.yaml` carrying §7's infra block
+   (`bundledPostgres/bundledVault/keycloak: false`, `kafka: false`) —
+   the bundled operands are skipped, and the pieces the external path
+   *does* need from these phases are created: namespaces, cert-manager
+   with its ClusterIssuer, and the trust-manager Bundle (§2.2 option 1
+   depends on them for cluster-issued certificates).
 3. Clock: `chronyc tracking` sane on the services host and the cluster
    nodes (§2.3 — JWT validation breaks at ~30 s skew).
-4. Cluster side: the `osac` namespace exists and the trust bundle that
-   will carry the services CAs is planned (§2.2 — decide option 1 or 2;
-   the bundle itself is created in stage 3 when the CAs exist).
+4. Wait for the required resources: operator CSVs succeeded
+   (that guide's phase-1a checks), the `osac` namespace exists, the
+   ClusterIssuer reports Ready, and the trust Bundle is created (its
+   CA entries are added in stage 3, when the service CAs exist).
 
-**Gate:** all four netcheck probes print `reachable`; clock offsets are
-small. **Stop if:** routing or firewall fails — nothing later in the
-install will diagnose this better than the probe does.
+**Gate:** phase 1a and 1b releases report success; issuer and Bundle
+exist. **Stop if:** the infra release fails — nothing in the external
+services path will fix a cluster-side prerequisite failure.
 
-### Stage 3 — Bootstrap the external services
+### Stage 3 — Start the external services
 
 **Run from:** services host (recipes, realm seed) and admin host
 (Secrets, Kafka objects). **Privileges:** root on the services host;
 cluster admin.
 
-This is everything that must exist **before `helm install`**:
+Everything here must exist **before phase 2 (`helm install` of the
+`osac` release)**:
 
-1. Run the Appendix A recipes for the services you are externalizing
-   (A.2 PostgreSQL, A.3 OpenBao, A.4 Keycloak, A.5 Kafka), or stand up
-   your own instances to the §3.1/§4.1/§5.2/§6.1 contracts.
+1. Run the Appendix A recipes for the services you are externalizing —
+   A.2 PostgreSQL, A.4 Keycloak, A.5 Kafka first — or stand up your own
+   instances to the §3.1/§5.2/§6.1 contracts. **Configure OpenBao
+   (A.3) last**: its JWT auth and auto-unseal point at Keycloak, so the
+   issuer must be up and its realm seeded (§5.3) before OpenBao's
+   Keycloak-facing configuration runs.
 2. Seed the Keycloak realm (§5.3) and create the client-credential
    Secrets (§5.2) — the part the chart's `keycloak.enabled: false` flag
    does not do for you.
 3. Create the Kafka connection objects if Kafka is external (§6.2), and
    the metering topics/user if metering is on (A.5 steps 7–9).
-4. Load the services CAs into the cluster trust bundle (§2.2) and
-   restart nothing yet — consumers come with stage 4.
-5. Start the §10 backup cron jobs and escrow the OpenBao init output and
-   credential material per §10.4 — recovery material exists from the
-   moment the services do.
+4. Load the services CAs into the trust Bundle created in stage 2
+   (§2.2) — consumers come with stage 4.
+5. Start the §10 backup cron jobs and escrow the OpenBao init output
+   and credential material per §10.4 — recovery material exists from
+   the moment the services do.
 
-**Gate:** every per-service verify block is green on its own:
-§3.3 (PostgreSQL), §4.3 (OpenBao), §5.4 (Keycloak), §6.3 (Kafka).
-**Stop if:** any service fails its own verification — the chart will
-not improve this, and stage 5's battery will only re-report it.
+**Gate — standalone readiness, not application tests.** The listeners
+exist now, so prove the path and each service on its own terms:
+§2.1's in-cluster netcheck probe for each port (5432, 8200, 8443,
+9092 — from a pod, not from the host); PostgreSQL reachable with a
+client certificate over TLS (`psql`); OpenBao health 200/unsealed (§4.3's
+health checks); Keycloak serving the realm and issuing a token (§5.4);
+Kafka accepting an admin-client connection (§6.3's connection-level
+checks). Checks that need the **application** — OSAC's PG sessions,
+OpenBao tenant provisioning, metering heartbeats, UI login — belong to
+stage 5; a fresh install cannot pass them here. **Stop if:** a probe
+fails — the chart will not improve it, and stage 5's battery will only
+re-report it.
 
-### Stage 4 — Install OSAC
+### Stage 4 — Install the OSAC application
 
 **Run from:** admin host with the installer checkout.
 **Privileges:** cluster admin.
 
-Follow the [Helm Deployment Guide](helm-deployment-guide.md) start to
-finish — namespace and AAP license secret, phase 1a (`osac-deps`),
-phase 1b (`osac-infra`), phase 2 (`osac`) — with your worksheet values
-folded into `my-infra-values.yaml` and `my-values.yaml` per §7's three
-files. The external-services deltas to that guide's defaults:
+Phase 2 of the [Helm Deployment Guide](helm-deployment-guide.md) —
+`helm upgrade --install osac ./charts/osac` — with `my-values.yaml`
+carrying §7's complete external-services + Kafka overlays. The
+deltas to that guide's bundled defaults:
 
-- `my-infra-values.yaml`: `bundledPostgres.enabled: false`,
-  `bundledVault.enabled: false`, `keycloak.enabled: false` (§7's
-  infra block) — phase 1b then skips those operands; pass
-  `--take-ownership` only for the reasons that guide states.
-- `my-values.yaml`: the full `values/external-services.yaml` +
-  `values/external-kafka.yaml` content (§7) — including
-  `ui.auth.oidcIssuerURL`, which must be the **full** external issuer
-  URL, not the `--set` default that guide shows for the bundled
-  Keycloak.
-- `osac-deps` takes `kafka.enabled: false` if Kafka is external.
+- `ui.auth.oidcIssuerURL` must be the **full** external issuer URL,
+  not the `--set` default that guide shows for the bundled Keycloak.
+- The overlays are the external-services **delta**, not the whole of
+  `my-values.yaml` — combine them with the base installation values
+  that guide describes (services you deploy, storage, CNV, and so on).
+- Do not pass the external keys as one-off `--set` flags — §8's
+  `--reuse-values` semantics will faithfully carry typos forward.
 
-Do not pass the external keys as one-off `--set` flags — §8's
-`--reuse-values` semantics will faithfully carry typos forward.
-
-**Gate:** `helm upgrade --install` of all three releases reports success
-and `oc -n osac get pods` shows no CrashLoopBackOff. **Stop if:** pods
-crash — read the logs before re-running helm; the two usual causes are
-a Secret the chart expects but stage 3 didn't create (§5.2), and trust
-failures to the services CAs (§2.2, §11 item 1).
+**Gate:** the release reports success **and** the workloads are
+actually ready: every deployment in `osac` reports
+`Available=True` (`oc -n osac get deploy`), no pods remain unready or
+CrashLoopBackOff, and the initialization Jobs (db-init, AAP bootstrap)
+completed successfully — `oc -n osac get jobs` shows them
+`Complete`. **Stop if:** pods crash — read the logs before re-running
+helm; the two usual causes are a Secret the chart expects but stage 3
+didn't create (§5.2), and trust failures to the services CAs (§2.2,
+§11 item 1).
 
 ### Stage 5 — Accept and rehearse
 
@@ -203,16 +225,24 @@ failures to the services CAs (§2.2, §11 item 1).
 
 1. Run the full §9 verification battery — including the **positive**
    auth control (a real token gets 200), not just the 401 negative one.
-2. Exercise one end-to-end tenant workflow (create a tenant, provision
-   something small, observe metering events if metering is on).
-3. Rehearse recovery per §10.4: restore each service's data from the
-   backups stage 3 started, on a machine that is not the live one if
-   you can, and re-run §9. An unrestorable backup is a defect **now**,
-   while fixing it is cheap.
+   This is where the application-level checks from stage 3's gate
+   land: OSAC's database sessions, OpenBao tenant provisioning,
+   metering heartbeats (if metering is on), and a UI login.
+2. Run one specific smoke workflow end to end — create a tenant via
+   the API, expect it to reach `Ready`, list it, then delete it and
+   expect it gone (exact commands: §9's battery plus the fulfillment
+   API's tenant endpoints). If your organization defines its own
+   acceptance smoke, run that instead — the requirement is one
+   workflow with expected results and cleanup, not an impression.
+3. Rehearse recovery per §10.4: restore **each service's** data from
+   the backups stage 3 started, on a machine that is not the live one
+   if you can, and re-run §9. An unrestorable backup is a defect
+   **now**, while fixing it is cheap.
 
-**Gate:** §9 all green, one tenant workflow completes, one restore
-succeeds. Done — continue operating with §8 (upgrades), §10 (backups),
-and §11 (gotchas) as the running references.
+**Gate:** §9 all green, the smoke workflow completes with its expected
+results, and every service's restore rehearsal succeeds. Done —
+continue operating with §8 (upgrades), §10 (backups), and §11
+(gotchas) as the running references.
 
 ---
 
@@ -309,7 +339,15 @@ network the cluster can reach. Three rules:
   services off every other interface the host owns, and pins the
   address the cluster and the helm values point at (a DHCP-changing
   address breaks TLS SANs and Endpoints together).
-- **Open the ports in the host firewall** for the cluster subnet.
+- **Open the ports in the host firewall — scoped per port, not one
+  cluster-only rule.** The consumers differ by service (§2.2's trust
+  map): PostgreSQL (5432), OpenBao (8200), and Kafka (9092) are
+  consumed by cluster workloads and by the admin host this guide's
+  probes run from; Keycloak (8443) is additionally reached by
+  **browsers** loading the OSAC UI's login redirect. Open each port to
+  the cluster subnet plus the admin host, and 8443 additionally to the
+  approved browser/client networks — and to nothing else. This does
+  not expose the data-plane services to browser or public networks.
 
 ### 2.2 TLS trust model
 
@@ -875,9 +913,13 @@ Keycloak's caveat: the chart's credential hooks and realm import stop
 with the flag, so the client Secrets and the realm are yours to
 provision (§5.2).
 
-Split the values by release — three files, no key repeated. Each file is
-complete: paste it as-is, substitute the placeholders, and nothing else
-is needed for that release (per-key annotation lives in §3–§6):
+Split the values by release — three files, no key repeated. Each file
+is the **complete external-services overlay** for its release: paste it
+as-is and substitute the placeholders (per-key annotation lives in
+§3–§6). Note what these files are **not**: the entirety of the release's
+values. Combine them with the base installation values the [Helm
+Deployment Guide](helm-deployment-guide.md) describes — the overlays
+carry only the external-services delta.
 
 ```yaml
 # ── values/external-infra.yaml — osac-infra release ────────────────────
@@ -1309,7 +1351,9 @@ from the cause. Format: symptom → check → remedy.
    the wrong order), which pins gRPC clients to HTTP/1.1 and drops
    trailers → patch both listeners to `[h2, http/1.1]` in the envoy
    ConfigMap and restart; re-check after every upgrade until the chart
-   fix ships.
+   fix ships. (Observed at installer pin `fc7a09f`; no fixed version
+   identified yet — the greenfield validation exercise will pin
+   affected/fixed ranges when it runs.)
 9. **REST calls return 404 on a path you know exists** → check the
    casing — REST paths are snake_case
    (`/api/fulfillment/v1/compute_instances/{id}`); camelCase 404s and

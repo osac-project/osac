@@ -835,8 +835,10 @@ bmf-netbox-render-test: helm-deps ## Check NetBox, Metal3 management, and Secret
 	uv run --project .. python scripts/test-bmf-netbox-render.py
 
 .PHONY: chart-name-independence-render-test
-chart-name-independence-render-test: helm-deps ## Check cross-chart secret/cert names survive repackaging under a different Chart.yaml name
-	python3 scripts/test-chart-name-independence-render.py
+chart-name-independence-render-test: ## Check cross-chart secret/cert names survive repackaging under a different Chart.yaml name
+	rm -rf $(OSAC_CHART)/charts
+	helm --repository-config $(LOCAL_HELM_REPOSITORY_CONFIG) dependency build $(OSAC_CHART)
+	uv run --project .. python scripts/test-chart-name-independence-render.py
 
 .PHONY: helm-validate
 helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)

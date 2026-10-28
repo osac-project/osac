@@ -19,17 +19,20 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+from typing import Any
+
+import yaml
 
 CHART = pathlib.Path(__file__).resolve().parents[1] / "charts/osac"
-# Suffix only: Helm's "# Source:" comment is prefixed by the chart's own
-# name ("osac/templates/..." vs "osac-chart/templates/..."), which is
-# exactly what this test varies between the two renders.
-SOURCE_SUFFIX = "/templates/workload-db-secrets.yaml\n"
+# "**/" (not "*/", which Helm's --show-only glob does not match across the
+# chart-name/templates boundary) so this matches regardless of the chart's
+# own declared name -- exactly the thing this test varies.
+SHOW_ONLY_GLOB = "**/workload-db-secrets.yaml"
 
 # (kind, field, name): the resource kind and the metadata field whose value
 # a sibling chart or values file (service.database.connection,
 # metering.database.connection) references by this literal name. "field" is
-# "name" for the Secret/Job's own metadata.name, "secretName" for a
+# "name" for the Secret's own metadata.name, "secretName" for a
 # Certificate's spec.secretName (the Secret cert-manager creates from it).
 EXPECTED_RESOURCES = (
     ("Secret", "name", "osac-db-config"),
@@ -39,7 +42,7 @@ EXPECTED_RESOURCES = (
 )
 
 
-def render(chart_dir: pathlib.Path) -> list[str]:
+def render(chart_dir: pathlib.Path) -> list[dict[str, Any]]:
     cmd = [
         "helm",
         "template",
@@ -51,20 +54,23 @@ def render(chart_dir: pathlib.Path) -> list[str]:
         "metering.enabled=true",
         "--set",
         "global.osacDeploymentId=test/osac",
+        "--show-only",
+        SHOW_ONLY_GLOB,
     ]
     manifest = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
-    return [doc for doc in manifest.split("\n---\n") if doc.split("\n", 1)[0].endswith(SOURCE_SUFFIX.rstrip("\n"))]
+    return [doc for doc in yaml.safe_load_all(manifest) if doc]
 
 
-def check_producing_resources(docs: list[str], context: str) -> None:
+def check_producing_resources(docs: list[dict[str, Any]], context: str) -> None:
     for kind, field, name in EXPECTED_RESOURCES:
-        matches = [
-            doc for doc in docs if f"kind: {kind}\n" in doc and f"  {field}: {name}\n" in doc
-        ]
+        if field == "name":
+            matches = [doc for doc in docs if doc.get("kind") == kind and doc.get("metadata", {}).get("name") == name]
+        else:
+            matches = [doc for doc in docs if doc.get("kind") == kind and doc.get("spec", {}).get(field) == name]
         assert matches, (
-            f"{context}: expected exactly one {kind} with {field}: {name!r} rendered from "
-            f"*{SOURCE_SUFFIX.rstrip(chr(10))}, found none -- the producing resource's name "
-            "changed, even though sibling charts/values still reference it by this fixed literal"
+            f"{context}: expected exactly one {kind} with {field}={name!r} rendered from "
+            f"{SHOW_ONLY_GLOB}, found none -- the producing resource's name changed, even "
+            "though sibling charts/values still reference it by this fixed literal"
         )
 
 

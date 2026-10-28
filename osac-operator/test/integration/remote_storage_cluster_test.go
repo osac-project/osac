@@ -35,15 +35,22 @@ import (
 )
 
 const (
-	remoteKindClusterName      = "osac-remote"
-	remoteKubeconfigSecretName = "osac-remote-kubeconfig"
-	remoteKubeconfigMountDir   = "/etc/osac-remote"
-	remoteKubeconfigMountPath  = "/etc/osac-remote/remote-cluster-kubeconfig"
-	remoteServiceAccountName   = "osac-remote-access"
-	remoteTestTenantName       = "tenant-two-kind"
-	remoteTestSecretName       = "vast-tenant-config-tenant-two-kind"
-	localDecoyStorageClass     = "local-mgmt-only-gold-sc"
-	remoteWorkloadStorageClass = "remote-workload-gold-sc"
+	remoteKindClusterName            = "osac-remote"
+	remoteKubeconfigSecretName       = "osac-remote-kubeconfig"
+	remoteKubeconfigMountDir         = "/etc/osac-remote"
+	remoteKubeconfigMountPath        = "/etc/osac-remote/remote-cluster-kubeconfig"
+	remoteServiceAccountName         = "osac-remote-access"
+	remoteRestrictedSAName           = "osac-remote-no-storage"
+	operatorLeaderLeaseName          = "95f7e044.openshift.io"
+	remoteTestTenantName             = "tenant-two-kind"
+	remoteTestSecretName             = "vast-tenant-config-tenant-two-kind"
+	remoteForbiddenTenantName        = "tenant-two-kind-forbidden"
+	remoteForbiddenSecretName        = "vast-tenant-config-tenant-two-kind-forbidden"
+	localDecoyStorageClass           = "local-mgmt-only-gold-sc"
+	localForbiddenDecoyStorageClass  = "local-mgmt-forbidden-gold-sc"
+	remoteWorkloadStorageClass       = "remote-workload-gold-sc"
+	remoteWorkloadSilverStorageClass = "remote-workload-silver-sc"
+	remoteForbiddenStorageClass      = "remote-forbidden-gold-sc"
 )
 
 var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clusters", Ordered, Serial, func() {
@@ -54,9 +61,8 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 	)
 
 	BeforeAll(func() {
-		if _, err := exec.LookPath("kind"); err != nil {
-			Skip("kind binary not found on PATH; skipping two-Kind-cluster integration test")
-		}
+		_, lookErr := exec.LookPath("kind")
+		Expect(lookErr).NotTo(HaveOccurred(), "kind binary must be present on PATH")
 
 		clustersOut, err := runKind("get", "clusters")
 		Expect(err).NotTo(HaveOccurred())
@@ -64,12 +70,9 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 		if mgmtCluster == "" {
 			mgmtCluster = "osac-dev"
 		}
-		if !containsLine(string(clustersOut), mgmtCluster) {
-			Skip(fmt.Sprintf(
-				"management Kind cluster %q not found in `kind get clusters`; skipping two-Kind-cluster test",
-				mgmtCluster,
-			))
-		}
+		Expect(containsLine(string(clustersOut), mgmtCluster)).To(
+			BeTrue(), "management Kind cluster %q must exist in `kind get clusters`", mgmtCluster,
+		)
 
 		By("snapshotting the management cluster operator Deployment template to a restore patch file")
 		restorePatchFilePath = filepath.Join(GinkgoT().TempDir(), "local-mode-restore-patch.json")
@@ -92,24 +95,37 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 				Expect(kindErr).NotTo(HaveOccurred())
 			}()
 
-			removeFinalizers("tenant", remoteTestTenantName, operatorNamespace)
-			_, tenantDelErr := runKubectl(
-				"delete", "tenant", remoteTestTenantName,
-				"-n", operatorNamespace, "--ignore-not-found", "--wait=false",
-			)
-			removeFinalizers("tenant", remoteTestTenantName, operatorNamespace)
-			_, testSecretDelErr := runKubectl(
-				"delete", "secret", remoteTestSecretName,
-				"-n", operatorNamespace, "--ignore-not-found",
-			)
-			_, scDelErr := runKubectl("delete", "sc", localDecoyStorageClass, "--ignore-not-found")
+			var cleanupErrs []error
+			for _, tName := range []string{remoteTestTenantName, remoteForbiddenTenantName} {
+				_, delErr := runKubectl(
+					"delete", "tenant", tName,
+					"-n", operatorNamespace, "--ignore-not-found", "--wait=false",
+				)
+				removeFinalizers("tenant", tName, operatorNamespace)
+				if delErr != nil {
+					cleanupErrs = append(cleanupErrs, delErr)
+				}
+			}
+			for _, secName := range []string{remoteTestSecretName, remoteForbiddenSecretName} {
+				_, secErr := runKubectl(
+					"delete", "secret", secName,
+					"-n", operatorNamespace, "--ignore-not-found",
+				)
+				if secErr != nil {
+					cleanupErrs = append(cleanupErrs, secErr)
+				}
+			}
+			for _, scName := range []string{localDecoyStorageClass, localForbiddenDecoyStorageClass} {
+				_, scErr := runKubectl("delete", "sc", scName, "--ignore-not-found")
+				if scErr != nil {
+					cleanupErrs = append(cleanupErrs, scErr)
+				}
+			}
 
 			if remoteModeReconfigured {
 				restoreOperatorDeploymentToLocalMode(restorePatchFilePath)
 			}
-			Expect(tenantDelErr).NotTo(HaveOccurred())
-			Expect(testSecretDelErr).NotTo(HaveOccurred())
-			Expect(scDelErr).NotTo(HaveOccurred())
+			Expect(cleanupErrs).To(BeEmpty())
 		})
 
 		By("creating the second Kind workload cluster (" + remoteKindClusterName + ")")
@@ -167,7 +183,7 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 
 		By("staging the remote cluster kubeconfig Secret on the management Kind cluster")
 		inClusterKubeconfigFile := filepath.Join(GinkgoT().TempDir(), "in-cluster-remote.kubeconfig")
-		writeRemoteInClusterKubeconfig(remoteKubeconfigPath, inClusterKubeconfigFile)
+		writeRemoteInClusterKubeconfig(remoteKubeconfigPath, inClusterKubeconfigFile, remoteServiceAccountName)
 
 		_, err = runKubectl("delete", "secret", remoteKubeconfigSecretName, "-n", operatorNamespace, "--ignore-not-found")
 		Expect(err).NotTo(HaveOccurred())
@@ -244,7 +260,139 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 				{Name: remoteWorkloadStorageClass, Tier: "gold"},
 			}))
 		}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+		By("creating a second-tier StorageClass on the remote Kind cluster and verifying live watch updates")
+		_, err = runKubectlWithStdin(
+			remoteKubeconfigPath,
+			storageClassYAML(remoteWorkloadSilverStorageClass, remoteTestTenantName, "silver"),
+			"apply", "-f", "-",
+		)
+		Expect(err).NotTo(HaveOccurred())
+
+		Eventually(func(g Gomega) {
+			status := fetchTenantStatus(g, remoteTestTenantName)
+			g.Expect(status.StorageClasses).To(Equal([]tenantResolvedStorageClass{
+				{Name: remoteWorkloadStorageClass, Tier: "gold"},
+				{Name: remoteWorkloadSilverStorageClass, Tier: "silver"},
+			}))
+		}, 60*time.Second, 2*time.Second).Should(Succeed())
 	})
+
+	It(
+		"rotates the remote kubeconfig Secret via watchRemoteKubeconfig, fails closed on Forbidden RBAC, and recovers",
+		func() {
+			By("provisioning a restricted ServiceAccount on the remote Kind cluster without StorageClass RBAC")
+			_, err := runKubectlWithStdin(
+				remoteKubeconfigPath, remoteRestrictedRBACManifest(false), "apply", "-f", "-",
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			restrictedIdentity := fmt.Sprintf("system:serviceaccount:%s:%s", operatorNamespace, remoteRestrictedSAName)
+			nsOut, err := runKubectlWithKubeconfig(
+				remoteKubeconfigPath,
+				"auth", "can-i", "-A", "list", "namespaces", "--as="+restrictedIdentity,
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(lastNonEmptyLine(string(nsOut))).To(Equal("yes"))
+
+			for _, verb := range []string{"get", "list", "watch"} {
+				scOut, scErr := runKubectlWithKubeconfig(
+					remoteKubeconfigPath,
+					"auth", "can-i", "-A", verb, "storageclasses.storage.k8s.io", "--as="+restrictedIdentity,
+				)
+				Expect(scErr).To(HaveOccurred(), "expected restricted SA %s on storageclasses to exit non-zero", verb)
+				Expect(lastNonEmptyLine(string(scOut))).To(Equal("no"))
+			}
+
+			By("rotating the remote kubeconfig Secret on the management cluster without modifying the Deployment")
+			podName, initialRestarts := currentOperatorPodRestartCount()
+			restrictedKubeconfigFile := filepath.Join(GinkgoT().TempDir(), "restricted-remote.kubeconfig")
+			writeRemoteInClusterKubeconfig(remoteKubeconfigPath, restrictedKubeconfigFile, remoteRestrictedSAName)
+			updateRemoteKubeconfigSecretAndTriggerSync(restrictedKubeconfigFile, podName)
+
+			By("verifying watchRemoteKubeconfig detects the mounted Secret digest change and restarts the manager container")
+			waitForOperatorContainerRestart(podName, initialRestarts)
+
+			By("creating remote and local decoy StorageClasses and a second Tenant while StorageClass RBAC is forbidden")
+			_, err = runKubectlWithStdin(
+				remoteKubeconfigPath,
+				storageClassYAML(remoteForbiddenStorageClass, remoteForbiddenTenantName, "gold"),
+				"apply", "-f", "-",
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = runKubectlWithStdin(
+				"", storageClassYAML(localForbiddenDecoyStorageClass, remoteForbiddenTenantName, "gold"), "apply", "-f", "-",
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = runKubectlWithStdin(
+				"",
+				tenantStorageSecretYAML(remoteForbiddenSecretName, operatorNamespace, remoteForbiddenTenantName),
+				"apply", "-f", "-",
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = runKubectlWithStdin("", tenantCRYAML(remoteForbiddenTenantName, operatorNamespace), "apply", "-f", "-")
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying TenantReconciler marks the Tenant Ready while StorageReconciler fails closed without local fallback")
+			Eventually(func(g Gomega) {
+				status := fetchTenantStatus(g, remoteForbiddenTenantName)
+				g.Expect(status.Phase).To(Equal("Ready"))
+			}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+			Consistently(func(g Gomega) {
+				forbiddenStatus := fetchTenantStatus(g, remoteForbiddenTenantName)
+				g.Expect(forbiddenStatus.StorageClasses).To(
+					BeEmpty(), "StorageReconciler must fail closed and never fall back to local StorageClasses",
+				)
+				clusterCond := findCondition(forbiddenStatus.Conditions, "ClusterStorageReady")
+				if clusterCond != nil {
+					g.Expect(clusterCond.Status).NotTo(Equal("True"))
+				}
+
+				existingStatus := fetchTenantStatus(g, remoteTestTenantName)
+				existingClusterCond := findCondition(existingStatus.Conditions, "ClusterStorageReady")
+				g.Expect(existingClusterCond).NotTo(BeNil())
+				g.Expect(existingClusterCond.Status).To(Equal("True"))
+				g.Expect(existingStatus.StorageClasses).To(Equal([]tenantResolvedStorageClass{
+					{Name: remoteWorkloadStorageClass, Tier: "gold"},
+					{Name: remoteWorkloadSilverStorageClass, Tier: "silver"},
+				}))
+			}, 8*time.Second, time.Second).Should(Succeed())
+
+			By("granting read-only StorageClass RBAC to the restricted ServiceAccount on the remote Kind cluster")
+			_, err = runKubectlWithStdin(
+				remoteKubeconfigPath, remoteRestrictedRBACManifest(true), "apply", "-f", "-",
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying StorageReconciler recovers automatically and resolves the remote StorageClass")
+			Eventually(func(g Gomega) {
+				status := fetchTenantStatus(g, remoteForbiddenTenantName)
+
+				backendCond := findCondition(status.Conditions, "StorageBackendReady")
+				g.Expect(backendCond).NotTo(BeNil())
+				g.Expect(backendCond.Status).To(Equal("True"))
+
+				clusterCond := findCondition(status.Conditions, "ClusterStorageReady")
+				g.Expect(clusterCond).NotTo(BeNil())
+				g.Expect(clusterCond.Status).To(Equal("True"))
+				g.Expect(clusterCond.Reason).To(Equal("Found"))
+				g.Expect(clusterCond.Message).To(ContainSubstring(remoteForbiddenStorageClass))
+				g.Expect(clusterCond.Message).NotTo(ContainSubstring(localForbiddenDecoyStorageClass))
+
+				g.Expect(status.ClusterStorage).To(ContainElement(tenantClusterStorageEntry{
+					ClusterName: "remote",
+					Ready:       true,
+					Reason:      "Found",
+				}))
+				g.Expect(status.StorageClasses).To(Equal([]tenantResolvedStorageClass{
+					{Name: remoteForbiddenStorageClass, Tier: "gold"},
+				}))
+			}, 60*time.Second, 2*time.Second).Should(Succeed())
+		})
 })
 
 type tenantConditionEntry struct {
@@ -358,7 +506,7 @@ func lastNonEmptyLine(output string) string {
 // points the cluster server at the control-plane node InternalIP on the shared
 // Kind bridge network, sets the ServiceAccount bearer credential in AuthInfos,
 // and writes the updated kubeconfig to destPath without logging credentials.
-func writeRemoteInClusterKubeconfig(remoteKubeconfigPath, destPath string) {
+func writeRemoteInClusterKubeconfig(remoteKubeconfigPath, destPath, serviceAccountName string) {
 	ipOut, err := runKubectlWithKubeconfig(
 		remoteKubeconfigPath,
 		"get", "nodes", "-o", `jsonpath={.items[0].status.addresses[?(@.type=="InternalIP")].address}`,
@@ -369,7 +517,7 @@ func writeRemoteInClusterKubeconfig(remoteKubeconfigPath, destPath string) {
 
 	credOut, err := runKubectlWithKubeconfig(
 		remoteKubeconfigPath,
-		"create", "token", remoteServiceAccountName, "-n", operatorNamespace, "--duration=1h",
+		"create", "token", serviceAccountName, "-n", operatorNamespace, "--duration=1h",
 	)
 	Expect(err).NotTo(HaveOccurred())
 	bearerValue := strings.TrimSpace(string(credOut))
@@ -388,20 +536,131 @@ func writeRemoteInClusterKubeconfig(remoteKubeconfigPath, destPath string) {
 	Expect(clusterEntryName).NotTo(BeEmpty())
 
 	kubeCfg.AuthInfos = map[string]*clientcmdapi.AuthInfo{
-		remoteServiceAccountName: {
+		serviceAccountName: {
 			Token: bearerValue,
 		},
 	}
 	kubeCfg.Contexts = map[string]*clientcmdapi.Context{
 		"remote": {
 			Cluster:   clusterEntryName,
-			AuthInfo:  remoteServiceAccountName,
+			AuthInfo:  serviceAccountName,
 			Namespace: operatorNamespace,
 		},
 	}
 	kubeCfg.CurrentContext = "remote"
 
 	Expect(clientcmd.WriteToFile(*kubeCfg, destPath)).To(Succeed())
+}
+
+// updateRemoteKubeconfigSecretAndTriggerSync updates the remote kubeconfig Secret
+// on the management cluster and annotates the running operator Pod so kubelet
+// immediately syncs the projected Secret volume on disk.
+func updateRemoteKubeconfigSecretAndTriggerSync(kubeconfigFile, podName string) {
+	renderedSecret, err := runKubectl(
+		"create", "secret", "generic", remoteKubeconfigSecretName,
+		"-n", operatorNamespace,
+		"--from-file=kubeconfig="+kubeconfigFile,
+		"--dry-run=client", "-o", "yaml",
+	)
+	Expect(err).NotTo(HaveOccurred())
+
+	_, err = runKubectlWithStdin("", string(renderedSecret), "apply", "-f", "-")
+	Expect(err).NotTo(HaveOccurred())
+
+	syncStamp := fmt.Sprintf("osac.openshift.io/kubeconfig-sync=%d", time.Now().UnixNano())
+	_, err = runKubectl(
+		"annotate", "pod", podName, "-n", operatorNamespace, syncStamp, "--overwrite",
+	)
+	Expect(err).NotTo(HaveOccurred())
+}
+
+// currentOperatorPodRestartCount returns the name and current manager container
+// restartCount of the running operator controller-manager Pod.
+func currentOperatorPodRestartCount() (string, int) {
+	output, err := runKubectl(
+		"get", "pods",
+		"-l", "control-plane=controller-manager,app.kubernetes.io/name=operator",
+		"-n", operatorNamespace, "-o", "json",
+	)
+	Expect(err).NotTo(HaveOccurred())
+
+	var podList struct {
+		Items []struct {
+			Metadata struct {
+				Name              string     `json:"name"`
+				DeletionTimestamp *time.Time `json:"deletionTimestamp"`
+			} `json:"metadata"`
+			Status struct {
+				ContainerStatuses []struct {
+					Name         string `json:"name"`
+					RestartCount int    `json:"restartCount"`
+				} `json:"containerStatuses"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	Expect(json.Unmarshal(output, &podList)).To(Succeed())
+
+	for _, pod := range podList.Items {
+		if pod.Metadata.DeletionTimestamp != nil {
+			continue
+		}
+		for _, cs := range pod.Status.ContainerStatuses {
+			if cs.Name == "manager" {
+				return pod.Metadata.Name, cs.RestartCount
+			}
+		}
+	}
+	Fail("running operator controller-manager pod not found")
+	return "", 0
+}
+
+// waitForOperatorContainerRestart waits for watchRemoteKubeconfig to restart the
+// manager container in podName, verifies the previous container log records the
+// kubeconfig digest change, and clears the leader election Lease if held.
+func waitForOperatorContainerRestart(podName string, initialRestarts int) {
+	Eventually(func(g Gomega) {
+		output, err := runKubectl("get", "pod", podName, "-n", operatorNamespace, "-o", "json")
+		g.Expect(err).NotTo(HaveOccurred())
+
+		var pod struct {
+			Status struct {
+				Phase             string `json:"phase"`
+				ContainerStatuses []struct {
+					Name         string `json:"name"`
+					Ready        bool   `json:"ready"`
+					RestartCount int    `json:"restartCount"`
+				} `json:"containerStatuses"`
+			} `json:"status"`
+		}
+		g.Expect(json.Unmarshal(output, &pod)).To(Succeed())
+		g.Expect(pod.Status.Phase).To(Equal("Running"))
+
+		var managerStatus *struct {
+			Name         string `json:"name"`
+			Ready        bool   `json:"ready"`
+			RestartCount int    `json:"restartCount"`
+		}
+		for i := range pod.Status.ContainerStatuses {
+			if pod.Status.ContainerStatuses[i].Name == "manager" {
+				managerStatus = &pod.Status.ContainerStatuses[i]
+				break
+			}
+		}
+		g.Expect(managerStatus).NotTo(BeNil())
+		g.Expect(managerStatus.RestartCount).To(BeNumerically(">", initialRestarts))
+		g.Expect(managerStatus.Ready).To(BeTrue())
+
+		prevLogs, logErr := runKubectl(
+			"logs", podName, "-n", operatorNamespace, "-c", "manager", "--previous",
+		)
+		g.Expect(logErr).NotTo(HaveOccurred())
+		g.Expect(string(prevLogs)).To(ContainSubstring("remote cluster kubeconfig changed; restarting operator"))
+	}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+	_, leaseErr := runKubectl(
+		"delete", "lease", operatorLeaderLeaseName, "-n", operatorNamespace, "--ignore-not-found",
+	)
+	Expect(leaseErr).NotTo(HaveOccurred())
 }
 
 // configureOperatorDeploymentForRemoteMode patches the deployed operator on the
@@ -470,6 +729,11 @@ func configureOperatorDeploymentForRemoteMode() {
 		ctx, "kubectl", "rollout", "status", "deployment/"+deployName, "-n", operatorNamespace, "--timeout=90s",
 	))
 	Expect(err).NotTo(HaveOccurred())
+
+	_, leaseErr := runKubectl(
+		"delete", "lease", operatorLeaderLeaseName, "-n", operatorNamespace, "--ignore-not-found",
+	)
+	Expect(leaseErr).NotTo(HaveOccurred())
 }
 
 // writeLocalModeRestorePatchFile snapshots the operator Deployment's original
@@ -517,6 +781,11 @@ func restoreOperatorDeploymentToLocalMode(restorePatchFilePath string) {
 		ctx, "kubectl", "rollout", "status", "deployment/"+deployName, "-n", operatorNamespace, "--timeout=90s",
 	))
 	Expect(err).NotTo(HaveOccurred())
+
+	_, leaseErr := runKubectl(
+		"delete", "lease", operatorLeaderLeaseName, "-n", operatorNamespace, "--ignore-not-found",
+	)
+	Expect(leaseErr).NotTo(HaveOccurred())
 	waitForSingleReadyOperatorPod("")
 }
 
@@ -656,6 +925,53 @@ subjects:
   name: %s
   namespace: %s
 `, operatorNamespace, remoteServiceAccountName, operatorNamespace, remoteServiceAccountName, operatorNamespace)
+}
+
+// remoteRestrictedRBACManifest returns the ServiceAccount, ClusterRole, and
+// ClusterRoleBinding manifest for remoteRestrictedSAName, optionally including
+// read-only StorageClass permissions when allowStorageClasses is true.
+func remoteRestrictedRBACManifest(allowStorageClasses bool) string {
+	storageClassRule := ""
+	if allowStorageClasses {
+		storageClassRule = `- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get", "list", "watch"]
+`
+	}
+	return fmt.Sprintf(`apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: %s
+  namespace: %s
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: osac-remote-no-storage-role
+rules:
+%s- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["k8s.ovn.org"]
+  resources: ["userdefinednetworks"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachines", "virtualmachineinstances"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: osac-remote-no-storage-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: osac-remote-no-storage-role
+subjects:
+- kind: ServiceAccount
+  name: %s
+  namespace: %s
+`, remoteRestrictedSAName, operatorNamespace, storageClassRule, remoteRestrictedSAName, operatorNamespace)
 }
 
 // storageClassYAML returns a StorageClass manifest labeled for tenantName and tierName.

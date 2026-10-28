@@ -30,6 +30,7 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
+	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/internal/controller"
@@ -631,7 +632,7 @@ var _ = Describe("newClusterFromKubeconfig", func() {
 	BeforeEach(func() {
 		localScheme := runtime.NewScheme()
 		remoteScheme = runtime.NewScheme()
-		addSchemesForRemoteControllers(localScheme, remoteScheme, true, true, true)
+		addSchemesForRemoteControllers(localScheme, remoteScheme, true, true, true, true)
 	})
 
 	It("rejects empty or whitespace-only kubeconfig paths without falling back to in-cluster config", func() {
@@ -735,12 +736,20 @@ var _ = Describe("controllerFlags.validateRemoteCluster", func() {
 })
 
 var _ = Describe("addSchemesForRemoteControllers", func() {
-	It("registers StorageClass on remoteScheme and bmfov1alpha1 on localScheme when networking is enabled", func() {
+	It("registers StorageClass on remoteScheme and HostedControlPlane/BareMetalInstance on localScheme", func() {
 		localScheme := runtime.NewScheme()
 		remoteScheme := runtime.NewScheme()
-		addSchemesForRemoteControllers(localScheme, remoteScheme, false, false, true)
+		addSchemesForRemoteControllers(localScheme, remoteScheme, false, false, true, true)
 
 		Expect(remoteScheme.Recognizes(storagev1.SchemeGroupVersion.WithKind("StorageClass"))).To(BeTrue())
+		Expect(localScheme.Recognizes(hypershiftv1beta1.GroupVersion.WithKind("HostedControlPlane"))).To(BeTrue())
 		Expect(localScheme.Recognizes(bmfov1alpha1.GroupVersion.WithKind("BareMetalInstance"))).To(BeTrue())
+	})
+
+	It("registers HostedControlPlane on localScheme in local mode when storage is enabled without cluster", func() {
+		localScheme := runtime.NewScheme()
+		addSchemesForLocalControllers(localScheme, false, false, false, true, false, false)
+
+		Expect(localScheme.Recognizes(hypershiftv1beta1.GroupVersion.WithKind("HostedControlPlane"))).To(BeTrue())
 	})
 })

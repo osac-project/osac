@@ -20,6 +20,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"sync"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -36,6 +38,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -3262,9 +3266,10 @@ var _ = Describe("Storage Controller", func() {
 		//
 		// The watch engagement options (WithEngageWithLocalCluster/
 		// WithEngageWithProviderClusters) on the ClusterOrder Watches call
-		// are verified by source inspection — envtest runs against the
-		// local cluster only, so it cannot exercise multicluster watch
-		// delivery. The functional tests below verify the behavioral fix:
+		// keep ClusterOrder watches on the local cluster; cross-cluster
+		// StorageClass MultiClusterWatch delivery is exercised in the
+		// "Remote cluster StorageClass target selection" dual-envtest spec.
+		// The functional tests below verify the CaaS deletion behavior:
 		// once a reconcile is triggered, CaaS deletion runs regardless of
 		// provider or Stage 1 state.
 
@@ -5077,6 +5082,7 @@ var _ = Describe("Storage Controller", func() {
 
 		It("should automatically reconcile CSP and tenant StorageClasses via live MultiClusterWatch across two separate envtest API servers", func() {
 			name := "csp-remote-live-watch"
+			secondTenantName := "csp-remote-live-watch-second"
 			watchNamespace := "test-remote-watch-ns"
 			cspCondType := storageOwnedConditionTypes[0]
 
@@ -5094,12 +5100,44 @@ var _ = Describe("Storage Controller", func() {
 				Expect(remoteTestEnv.Stop()).To(Succeed())
 			})
 
-			remoteScheme := runtime.NewScheme()
-			Expect(clientgoscheme.AddToScheme(remoteScheme)).To(Succeed())
-			remoteK8sClient, err := client.New(remoteCfg, client.Options{Scheme: remoteScheme})
+			By("writing the remote API server rest.Config to a kubeconfig file and loading it via clientcmd")
+			remoteKubeconfigPath := filepath.Join(GinkgoT().TempDir(), "remote-envtest.kubeconfig")
+			remoteAPIConfig := clientcmdapi.Config{
+				Clusters: map[string]*clientcmdapi.Cluster{
+					"remote": {
+						Server:                   remoteCfg.Host,
+						CertificateAuthorityData: remoteCfg.CAData,
+						CertificateAuthority:     remoteCfg.CAFile,
+						InsecureSkipTLSVerify:    remoteCfg.Insecure,
+					},
+				},
+				AuthInfos: map[string]*clientcmdapi.AuthInfo{
+					"remote-user": {
+						ClientCertificateData: remoteCfg.CertData,
+						ClientCertificate:     remoteCfg.CertFile,
+						ClientKeyData:         remoteCfg.KeyData,
+						ClientKey:             remoteCfg.KeyFile,
+						Token:                 remoteCfg.BearerToken,
+					},
+				},
+				Contexts: map[string]*clientcmdapi.Context{
+					"remote": {
+						Cluster:  "remote",
+						AuthInfo: "remote-user",
+					},
+				},
+				CurrentContext: "remote",
+			}
+			Expect(clientcmd.WriteToFile(remoteAPIConfig, remoteKubeconfigPath)).To(Succeed())
+			loadedRemoteCfg, err := clientcmd.BuildConfigFromFlags("", remoteKubeconfigPath)
 			Expect(err).NotTo(HaveOccurred())
 
-			remoteCluster, err := cluster.New(remoteCfg, func(o *cluster.Options) {
+			remoteScheme := runtime.NewScheme()
+			Expect(clientgoscheme.AddToScheme(remoteScheme)).To(Succeed())
+			remoteK8sClient, err := client.New(loadedRemoteCfg, client.Options{Scheme: remoteScheme})
+			Expect(err).NotTo(HaveOccurred())
+
+			remoteCluster, err := cluster.New(loadedRemoteCfg, func(o *cluster.Options) {
 				o.Scheme = remoteScheme
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -5145,60 +5183,81 @@ var _ = Describe("Storage Controller", func() {
 			Expect(r.SetupWithManager(mcMgr)).To(Succeed())
 
 			watchCtx, watchCancel := context.WithCancel(ctx)
-			DeferCleanup(watchCancel)
+			var wg sync.WaitGroup
+			wg.Add(3)
 			go func() {
-				_ = remoteCluster.Start(watchCtx)
+				defer GinkgoRecover()
+				defer wg.Done()
+				Expect(remoteCluster.Start(watchCtx)).To(Or(BeNil(), MatchError(context.Canceled)))
 			}()
 			go func() {
-				_ = remoteProvider.Start(watchCtx, mcMgr)
+				defer GinkgoRecover()
+				defer wg.Done()
+				Expect(remoteProvider.Start(watchCtx, mcMgr)).To(Or(BeNil(), MatchError(context.Canceled)))
 			}()
 			go func() {
-				_ = mcMgr.Start(watchCtx)
+				defer GinkgoRecover()
+				defer wg.Done()
+				Expect(mcMgr.Start(watchCtx)).To(Or(BeNil(), MatchError(context.Canceled)))
 			}()
+			DeferCleanup(func() {
+				watchCancel()
+				wg.Wait()
+			})
 
 			// Create decoy StorageClasses on the local management cluster that must be ignored.
 			createLabeledStorageClass(ctx, "local-live-watch-csp-sc", cspManagedTenantValue, "csp-live-watch-gold")
 			createLabeledStorageClass(ctx, "local-live-watch-vast-sc", name, "osac-live-watch-fast")
 
-			vastSecret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      fmt.Sprintf("vast-tenant-config-%s", name),
-					Namespace: secretsNamespace,
-					Labels: map[string]string{
-						osacTenantKey:            name,
-						osacStorageProviderLabel: "vast",
+			for _, tName := range []string{name, secondTenantName} {
+				vastSecret := &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      fmt.Sprintf("vast-tenant-config-%s", tName),
+						Namespace: secretsNamespace,
+						Labels: map[string]string{
+							osacTenantKey:            tName,
+							osacStorageProviderLabel: "vast",
+						},
 					},
-				},
-				StringData: map[string]string{"provider": "vast"},
+					StringData: map[string]string{"provider": "vast"},
+				}
+				Expect(k8sClient.Create(ctx, vastSecret)).To(Succeed())
+				secretCopy := vastSecret
+				DeferCleanup(func() {
+					Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, secretCopy))).To(Succeed())
+				})
 			}
-			Expect(k8sClient.Create(ctx, vastSecret)).To(Succeed())
-			DeferCleanup(func() {
-				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vastSecret))).To(Succeed())
-			})
 
 			createReadyTenantForStorage(ctx, name, watchNamespace)
+			createReadyTenantForStorage(ctx, secondTenantName, watchNamespace)
 			nn := types.NamespacedName{Name: name, Namespace: watchNamespace}
-			DeferCleanup(func() {
-				t := &v1alpha1.Tenant{}
-				if err := k8sClient.Get(ctx, nn, t); err == nil {
-					t.Finalizers = nil
-					_ = k8sClient.Update(ctx, t)
-					_ = k8sClient.Delete(ctx, t)
-				}
-			})
+			secondNN := types.NamespacedName{Name: secondTenantName, Namespace: watchNamespace}
+			for _, tenantKey := range []types.NamespacedName{nn, secondNN} {
+				keyCopy := tenantKey
+				DeferCleanup(func() {
+					t := &v1alpha1.Tenant{}
+					if err := k8sClient.Get(ctx, keyCopy, t); err == nil {
+						t.Finalizers = nil
+						Expect(k8sClient.Update(ctx, t)).To(Succeed())
+						Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, t))).To(Succeed())
+					}
+				})
+			}
 
 			By("observing initial automatic Tenant reconciliation on local cluster with remote StorageClasses still absent")
-			Eventually(func(g Gomega) {
-				tenant := &v1alpha1.Tenant{}
-				g.Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
-				cspCond := tenant.GetStatusCondition(cspCondType)
-				g.Expect(cspCond).NotTo(BeNil())
-				g.Expect(cspCond.Status).To(Equal(metav1.ConditionFalse))
-				g.Expect(cspCond.Reason).To(Equal(v1alpha1.TenantReasonNotFound))
-				g.Expect(tenant.Status.StorageClasses).To(BeEmpty())
-			}, 10*time.Second, 100*time.Millisecond).Should(Succeed())
+			for _, tenantKey := range []types.NamespacedName{nn, secondNN} {
+				Eventually(func(g Gomega) {
+					tenant := &v1alpha1.Tenant{}
+					g.Expect(k8sClient.Get(ctx, tenantKey, tenant)).To(Succeed())
+					cspCond := tenant.GetStatusCondition(cspCondType)
+					g.Expect(cspCond).NotTo(BeNil())
+					g.Expect(cspCond.Status).To(Equal(metav1.ConditionFalse))
+					g.Expect(cspCond.Reason).To(Equal(v1alpha1.TenantReasonNotFound))
+					g.Expect(tenant.Status.StorageClasses).To(BeEmpty())
+				}, 10*time.Second, 100*time.Millisecond).Should(Succeed())
+			}
 
-			By("creating CSP and tenant StorageClasses on the second envtest API server and verifying MultiClusterWatch triggers reconciliation")
+			By("creating CSP and tenant StorageClasses on the second envtest API server and verifying MultiClusterWatch fan-out")
 			remoteCSPSC := &storagev1.StorageClass{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "remote-live-watch-csp-sc",
@@ -5245,6 +5304,31 @@ var _ = Describe("Storage Controller", func() {
 				g.Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
 					{Name: "remote-live-watch-csp-sc", Tier: "csp-live-watch-gold"},
 					{Name: name + "-remote-live-vast-sc", Tier: "osac-live-watch-fast"},
+				}))
+
+				secondTenant := &v1alpha1.Tenant{}
+				g.Expect(k8sClient.Get(ctx, secondNN, secondTenant)).To(Succeed())
+				secondCSPCond := secondTenant.GetStatusCondition(cspCondType)
+				g.Expect(secondCSPCond).NotTo(BeNil())
+				g.Expect(secondCSPCond.Status).To(Equal(metav1.ConditionTrue))
+				g.Expect(secondTenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+					{Name: "remote-live-watch-csp-sc", Tier: "csp-live-watch-gold"},
+				}))
+			}, 10*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			By("deleting the tenant StorageClass on the remote API server and verifying MultiClusterWatch updates Tenant.status.storageClasses")
+			Expect(remoteK8sClient.Delete(ctx, remoteTenantSC)).To(Succeed())
+
+			Eventually(func(g Gomega) {
+				tenant := &v1alpha1.Tenant{}
+				g.Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+				clusterCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+				g.Expect(clusterCond).NotTo(BeNil())
+				g.Expect(clusterCond.Status).To(Equal(metav1.ConditionFalse))
+				g.Expect(clusterCond.Reason).To(Equal(v1alpha1.TenantReasonNotFound))
+				g.Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+					{Name: "remote-live-watch-csp-sc", Tier: "csp-live-watch-gold"},
 				}))
 			}, 10*time.Second, 100*time.Millisecond).Should(Succeed())
 		})

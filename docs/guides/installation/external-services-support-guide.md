@@ -433,11 +433,11 @@ In a bundled install the chart does this itself: a
 `--import-realm`. On this path there is no such machinery — pick the
 client secrets yourself (they must match the Secrets you created in
 §5.2), resolve the placeholders, **and fix the `osac-ui` client**: the
-chart's `realm.json` ships it with development values
-(`http://ui.osac.localhost:8080` redirect URIs and web origins, and a
-`defaultClientScopes` list that omits `profile` and `email`) — the
-placeholder substitution does not touch any of those, so patch them in
-the same preprocessing step:
+chart's `realm.json` ships it with development-only values — redirect
+URIs and web origins pointing at a throwaway localhost dev origin, and
+a `defaultClientScopes` list that omits `profile` and `email` — the
+placeholder substitution does not touch any of those, so patch them to
+your real `<ui-origin>` in the same preprocessing step:
 
 ```bash
 # resolve placeholders and patch the osac-ui client into a resolved
@@ -1503,8 +1503,6 @@ spec:
     rotationPolicy: Always
   ipAddresses:
     - <host-ip>
-  dnsNames:
-    - localhost
 EOF
 
 # wait for secret osac-external-kafka-tls to become ready, then:

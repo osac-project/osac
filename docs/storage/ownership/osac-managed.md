@@ -31,8 +31,10 @@ operator dispatches the backend and tier definitions to provider roles.
   automation infrastructure.
 - The credentials must have sufficient rights on the storage system to
   create per-tenant resources.
-- The vendor CSI driver on the target cluster must be installed and operated
-  (OSAC does not install vendor CSI drivers).
+- CSI driver installation depends on the provider integration. The VAST
+  provider automation installs and operates the VAST CSI operator on the
+  target cluster as part of tenant provisioning; other provider
+  integrations may require the CSI driver to be prepared externally.
 
 ## Credentials
 

@@ -9,7 +9,7 @@ the platform (Fulfillment API, operator, automation provider).
 | Resource | OSAC-managed | CSP-managed |
 |---|---|---|
 | Storage system (array, SVMs, pools) | CSP-owned; OSAC provisions tenants on it via API | CSP-owned; OSAC never touches it |
-| Vendor CSI driver (e.g., Trident) | Installed and operated outside OSAC | Installed and operated by the CSP |
+| Vendor CSI driver | Provider-dependent: installed by the provider automation for VAST, otherwise prepared externally | Installed and operated by the CSP |
 | CSI backend config (e.g., TBC) | Per-tenant, provisioned by OSAC | Shared, configured by the CSP |
 | StorageBackend record | Created by CSP admin; includes endpoint + credentials | Created by CSP admin; `cspManaged: true`, endpoint/credentials optional |
 | Management credentials | Required; used by OSAC; rotated through OSAC | Optional; never used by OSAC; rotated outside OSAC |

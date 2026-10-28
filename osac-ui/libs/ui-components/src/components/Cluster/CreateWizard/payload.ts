@@ -69,9 +69,6 @@ export const buildClusterCreatePayload = (
     if (subnetId) {
       spec.networkAttachment = {
         subnet: { id: subnetId },
-        securityGroups: values.spec.networkAttachment.value.securityGroups
-          .filter((sg) => sg.id.trim())
-          .map((sg) => ({ id: sg.id })),
       };
     }
   }

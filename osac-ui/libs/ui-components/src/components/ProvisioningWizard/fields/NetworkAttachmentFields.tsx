@@ -26,17 +26,13 @@ interface NetworkWizardValues {
 interface NetworkAttachmentFieldsProps {
   name: string;
   isDisabled?: boolean;
-  isRequired?: boolean;
-  securityGroupsRequired?: boolean;
-  singleSecurityGroup?: boolean;
+  showSecurityGroups?: boolean;
 }
 
 const NetworkAttachmentFields = ({
   name,
   isDisabled = false,
-  isRequired = true,
-  securityGroupsRequired = false,
-  singleSecurityGroup = false,
+  showSecurityGroups = true,
 }: NetworkAttachmentFieldsProps) => {
   const { t } = useTranslation();
   const { values } = useFormikContext<NetworkWizardValues>();
@@ -65,12 +61,15 @@ const NetworkAttachmentFields = ({
         fieldName={name}
         useDefaultNetwork={useDefaultNetwork}
         isDisabled={isDisabled}
-        singleSecurityGroup={singleSecurityGroup}
+        showSecurityGroups={showSecurityGroups}
         onSelect={selectNetwork}
       />
       <div className="network-attachment-fields__details">
         {useDefaultNetwork ? (
-          <DefaultNetworkSummary project={values.metadata.project} />
+          <DefaultNetworkSummary
+            project={values.metadata.project}
+            showSecurityGroups={showSecurityGroups}
+          />
         ) : (
           <>
             {createdNetworkName && (
@@ -97,24 +96,23 @@ const NetworkAttachmentFields = ({
               securityGroupsName={`${name}.securityGroups`}
               showDescription
               onCreate={canCreateVirtualNetwork ? () => setIsCreateModalOpen(true) : undefined}
-              isRequired={isRequired}
+              isRequired
               isDisabled={isDisabled}
             />
             <SubnetField
               name={`${name}.subnet`}
               virtualNetworkName={`${name}.virtualNetwork`}
-              isRequired={isRequired}
+              isRequired
               showCidr
               isDisabled={isDisabled}
             />
-            <SecurityGroupsField
-              name={`${name}.securityGroups`}
-              virtualNetworkName={`${name}.virtualNetwork`}
-              isRequired={securityGroupsRequired}
-              showDescription
-              isSingleSelection={singleSecurityGroup}
-              isDisabled={isDisabled}
-            />
+            {showSecurityGroups && (
+              <SecurityGroupsField
+                name={`${name}.securityGroups`}
+                virtualNetworkName={`${name}.virtualNetwork`}
+                isDisabled={isDisabled}
+              />
+            )}
           </>
         )}
       </div>

@@ -96,8 +96,9 @@ describe('ClusterNetworkingStep', () => {
     expect(screen.getByText('Primary tenant compute network')).toBeInTheDocument();
     expect(screen.getByText('default-ipv4')).toBeInTheDocument();
     expect(screen.getByText('10.42.0.0/24')).toBeInTheDocument();
-    expect(screen.getByText('allow-ssh-https')).toBeInTheDocument();
-    expect(screen.getByText('SSH + HTTPS ingress')).toBeInTheDocument();
+    expect(screen.queryByText('allow-ssh-https')).not.toBeInTheDocument();
+    expect(screen.queryByText('SSH + HTTPS ingress')).not.toBeInTheDocument();
+    expect(screen.queryByText('Security group')).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/^Select virtual network/)).not.toBeInTheDocument();
   });
 
@@ -150,11 +151,11 @@ describe('ClusterNetworkingStep', () => {
     );
 
     expect(await screen.findByText('project-a-default')).toBeInTheDocument();
-    expect(screen.getByText('project-a-group')).toBeInTheDocument();
+    expect(screen.queryByText('project-a-group')).not.toBeInTheDocument();
     expect(screen.queryByText('project-b-default')).not.toBeInTheDocument();
   });
 
-  it('summarizes the newest ready tenant defaults used by the server', async () => {
+  it('summarizes the newest ready tenant default subnet', async () => {
     const defaultMetadata = { labels: { 'osac.openshift.io/default': 'true' } };
     const makeSubnet = (id: string, seconds: bigint) =>
       create(SubnetSchema, {
@@ -193,7 +194,7 @@ describe('ClusterNetworkingStep', () => {
     );
 
     expect(await screen.findByText('new-subnet')).toBeInTheDocument();
-    expect(screen.getByText('new-group')).toBeInTheDocument();
+    expect(screen.queryByText('new-group')).not.toBeInTheDocument();
     expect(screen.queryByText('old-subnet')).not.toBeInTheDocument();
     expect(screen.queryByText('old-group')).not.toBeInTheDocument();
   });
@@ -204,6 +205,7 @@ describe('ClusterNetworkingStep', () => {
     await user.click(screen.getByRole('radio', { name: /Custom network/ }));
     expect(screen.getByRole('radio', { name: /Custom network/ })).toBeChecked();
     expect(screen.queryByText('default-ipv4')).not.toBeInTheDocument();
+    expect(screen.getByText('Choose a virtual network and subnet.')).toBeInTheDocument();
 
     const virtualNetwork = screen.getByLabelText(/^Virtual network/);
     await user.click(virtualNetwork);
@@ -219,21 +221,7 @@ describe('ClusterNetworkingStep', () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /default-ipv4/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole('option', { name: 'team-subnet · 10.43.0.0/24' }));
-
-    const securityGroup = screen.getByLabelText(/^Security group/);
-    await waitFor(() => expect(securityGroup).not.toBeDisabled());
-    await user.click(securityGroup);
-    expect(
-      screen.getByRole('option', { name: 'isolated-group · Private ingress' }),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: /allow-ssh-https/ })).not.toBeInTheDocument();
-    await user.click(screen.getByRole('option', { name: 'isolated-group · Private ingress' }));
-    expect(securityGroup).toHaveTextContent('isolated-group · Private ingress');
-
-    await user.click(securityGroup);
-    await user.click(screen.getByRole('option', { name: 'isolated-strict · Restricted ingress' }));
-    expect(securityGroup).toHaveTextContent('isolated-strict · Restricted ingress');
-    expect(securityGroup).not.toHaveTextContent('isolated-group · Private ingress');
+    expect(screen.queryByLabelText(/^Security group/)).not.toBeInTheDocument();
   });
 
   it('clears custom selections when returning to tenant defaults', async () => {

@@ -155,10 +155,7 @@ export const buildClusterStepSchema = (
                 is: false,
                 then: () => na.requiredSubnet,
               }),
-              securityGroups: na.securityGroupsSchema.when('useDefaultNetwork', {
-                is: false,
-                then: (schema) => schema.min(1, t('Select at least one security group')),
-              }),
+              securityGroups: na.securityGroupsSchema,
             }),
           ),
           autoExternalIpAttachment: lockedField(fields.specAutoExternalIpAttachment),

@@ -55,11 +55,12 @@ cluster:
 
 | OSAC tier protocol | Trident driver | Transports |
 |---|---|---|
-| `BLOCK` | `ontap-san` (or economy variant) | Fibre Channel, iSCSI |
-| `NFS` | `ontap-nas` (or economy variant) | NFS over Ethernet |
+| `BLOCK` | `ontap-san` | Fibre Channel, iSCSI |
+| `BLOCK` | `ontap-san-economy` | iSCSI |
 
-The Dev Preview profile is validated with block storage. NFS-backed tiers
-through the same label contract are not part of the Dev Preview scope.
+The supported NetApp profile provides block storage only. NFS-backed tiers
+are not supported for NetApp in this release, even though the tier
+protocol exists in the API.
 
 OSAC's readiness check verifies **StorageClass presence only**. It does not
 validate Fibre Channel zoning, iSCSI networking, the SVM's health, or

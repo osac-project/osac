@@ -457,6 +457,37 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 		OutputSchema: compatibleToolSchema[UpdateComputeInstanceOutput](),
 	}, writeToolContract{Destructive: true, Idempotent: false}, handleUpdateComputeInstance(newComputeInstanceClients(deps)))
 	registerWriteTool(registry, &mcp.Tool{
+		Name: "set_compute_instance_power",
+		Description: "Use this tool only after the user confirms the requested VM power change and you have the current " +
+			"metadata.version from get_resource. action is start or stop; start sets run_strategy to ALWAYS and stop " +
+			"sets it to HALTED. The public update is asynchronous and acceptance does not mean the VM is ready.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Set OSAC compute instance power",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(false),
+			IdempotentHint:  true,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  computeInstancePowerToolSchema(),
+		OutputSchema: compatibleToolSchema[SetComputeInstancePowerOutput](),
+	}, writeToolContract{Destructive: false, Idempotent: true}, handleSetComputeInstancePower(deps.ComputeInstancesClient))
+	registerWriteTool(registry, &mcp.Tool{
+		Name: "restart_compute_instance",
+		Description: "Use this tool only when the user explicitly requests a VM restart and you have the current " +
+			"metadata.version from get_resource. This tool generates the restart trigger timestamp and sends one " +
+			"optimistically locked public update. The restart is asynchronous and acceptance does not mean the " +
+			"VM is ready.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Restart OSAC compute instance",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(true),
+			IdempotentHint:  false,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  computeInstanceRestartToolSchema(),
+		OutputSchema: compatibleToolSchema[RestartComputeInstanceOutput](),
+	}, writeToolContract{Destructive: true, Idempotent: false}, handleRestartComputeInstance(deps.ComputeInstancesClient))
+	registerWriteTool(registry, &mcp.Tool{
 		Name: "delete_compute_instance",
 		Description: "Use this tool only when the user explicitly requests deletion or cleanup. Deletes a compute instance by ID " +
 			"asynchronously.",
@@ -655,6 +686,31 @@ func computeInstanceUpdateToolSchema() json.RawMessage {
 		version, ok := properties["version"].(map[string]any)
 		if !ok {
 			panic("compute instance update tool schema has no version property")
+		}
+		version["minimum"] = 1
+	})
+}
+
+func computeInstancePowerToolSchema() json.RawMessage {
+	return toolSchemaWithProperties[SetComputeInstancePowerInput](func(properties map[string]any) {
+		version, ok := properties["version"].(map[string]any)
+		if !ok {
+			panic("compute instance power tool schema has no version property")
+		}
+		version["minimum"] = 1
+		action, ok := properties["action"].(map[string]any)
+		if !ok {
+			panic("compute instance power tool schema has no action property")
+		}
+		action["enum"] = []string{"start", "stop"}
+	})
+}
+
+func computeInstanceRestartToolSchema() json.RawMessage {
+	return toolSchemaWithProperties[RestartComputeInstanceInput](func(properties map[string]any) {
+		version, ok := properties["version"].(map[string]any)
+		if !ok {
+			panic("compute instance restart tool schema has no version property")
 		}
 		version["minimum"] = 1
 	})

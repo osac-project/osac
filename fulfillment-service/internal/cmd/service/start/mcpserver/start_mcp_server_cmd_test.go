@@ -102,7 +102,7 @@ var _ = Describe("newServer", func() {
 
 		response, err := clientSession.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(response.Tools).To(HaveLen(8))
+		Expect(response.Tools).To(HaveLen(10))
 
 		tools := make(map[string]*mcp.Tool, len(response.Tools))
 		for _, tool := range response.Tools {
@@ -115,6 +115,8 @@ var _ = Describe("newServer", func() {
 		Expect(tools).To(HaveKey("get_resource"))
 		Expect(tools).To(HaveKey("create_compute_instance"))
 		Expect(tools).To(HaveKey("update_compute_instance"))
+		Expect(tools).To(HaveKey("set_compute_instance_power"))
+		Expect(tools).To(HaveKey("restart_compute_instance"))
 		Expect(tools).To(HaveKey("delete_compute_instance"))
 		Expect(tools).To(HaveKey("create_project"))
 		Expect(tools).To(HaveKey("update_project"))
@@ -129,6 +131,8 @@ var _ = Describe("newServer", func() {
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("disk_image_id"))
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("project_id"))
 		Expect(tools["update_compute_instance"].Description).To(ContainSubstring("current metadata.version"))
+		Expect(tools["set_compute_instance_power"].Description).To(ContainSubstring("run_strategy"))
+		Expect(tools["restart_compute_instance"].Description).To(ContainSubstring("restart"))
 		Expect(tools["create_project"].Description).To(ContainSubstring("existing tenant"))
 		Expect(tools["update_project"].Description).To(ContainSubstring("last-write-wins"))
 		Expect(tools["update_project"].Description).To(ContainSubstring("title"))
@@ -139,13 +143,19 @@ var _ = Describe("newServer", func() {
 		expectToolAnnotations(tools["get_resource"], "Get OSAC deployment resource", true, false, true, true)
 		expectToolAnnotations(tools["create_compute_instance"], "Create OSAC compute instance", false, false, false, true)
 		expectToolAnnotations(tools["update_compute_instance"], "Update OSAC compute instance", false, true, false, true)
+		expectToolAnnotations(tools["set_compute_instance_power"], "Set OSAC compute instance power", false, false, true, true)
+		expectToolAnnotations(tools["restart_compute_instance"], "Restart OSAC compute instance", false, true, false, true)
 		expectToolAnnotations(tools["delete_compute_instance"], "Delete OSAC compute instance", false, true, false, true)
 		expectToolAnnotations(tools["create_project"], "Create OSAC project", false, false, false, true)
 		expectToolAnnotations(tools["update_project"], "Update OSAC project", false, true, false, true)
 		expectComputeInstanceCreateSchema(tools["create_compute_instance"].InputSchema)
 		expectComputeInstanceUpdateSchema(tools["update_compute_instance"].InputSchema)
+		expectComputeInstancePowerSchema(tools["set_compute_instance_power"].InputSchema)
+		expectComputeInstanceRestartSchema(tools["restart_compute_instance"].InputSchema)
 		expectTypedWriteSchema(tools["create_compute_instance"].InputSchema, "name", "catalog_item")
 		expectTypedWriteSchema(tools["update_compute_instance"].InputSchema, "id", "version")
+		expectTypedWriteSchema(tools["set_compute_instance_power"].InputSchema, "id", "version", "action")
+		expectTypedWriteSchema(tools["restart_compute_instance"].InputSchema, "id", "version")
 		expectTypedWriteSchema(tools["delete_compute_instance"].InputSchema, "id")
 		expectTypedWriteSchema(tools["create_project"].InputSchema, "name")
 		expectTypedWriteSchema(tools["update_project"].InputSchema, "id")
@@ -499,6 +509,41 @@ func expectComputeInstanceUpdateSchema(schema any) {
 	Expect(ok).To(BeTrue())
 	Expect(bootDiskProperties).To(HaveKey("size_gib"))
 	Expect(bootDiskProperties).To(HaveKey("storage_tier_id"))
+}
+
+func expectComputeInstancePowerSchema(schema any) {
+	document, ok := schema.(map[string]any)
+	Expect(ok).To(BeTrue())
+	properties, ok := document["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	id, ok := properties["id"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(id["type"]).To(Equal("string"))
+	action, ok := properties["action"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(action["type"]).To(Equal("string"))
+	Expect(action["enum"]).To(ConsistOf("start", "stop"))
+	version, ok := properties["version"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(version["type"]).To(Equal("integer"))
+	Expect(version["minimum"]).To(Equal(float64(1)))
+	Expect(properties).ToNot(HaveKey("run_strategy"))
+}
+
+func expectComputeInstanceRestartSchema(schema any) {
+	document, ok := schema.(map[string]any)
+	Expect(ok).To(BeTrue())
+	properties, ok := document["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	id, ok := properties["id"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(id["type"]).To(Equal("string"))
+	version, ok := properties["version"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(version["type"]).To(Equal("integer"))
+	Expect(version["minimum"]).To(Equal(float64(1)))
+	Expect(properties).ToNot(HaveKey("action"))
+	Expect(properties).ToNot(HaveKey("restart_requested_at"))
 }
 
 func expectTypedWriteSchema(schema any, required ...string) {

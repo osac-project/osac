@@ -57,6 +57,23 @@ when the list or its method checks are incomplete. The method-specific
 included tenant. Tenant visibility does not grant those methods, and the summary
 is a point-in-time check rather than a guarantee for later requests.
 
+## ComputeInstance lifecycle tools
+
+`set_compute_instance_power` accepts an instance ID, current version, and a
+`start` or `stop` action. It maps the action to the existing public
+`run_strategy` field, sends only `spec.run_strategy` with an optimistic
+version lock, and returns the public response ID, version, state, and run
+strategy. A no-op follows the public Update response rather than applying a
+separate MCP special case.
+
+`restart_compute_instance` accepts an instance ID and current version,
+generates the restart timestamp at the MCP edge, sends only
+`spec.restart_requested_at` with an optimistic version lock, and returns the
+accepted timestamp. The tool is annotated destructive because a restart
+interrupts work; delete remains a separate typed tool. Both lifecycle tools
+forward the caller's exchanged token and rely on the public API for tenant and
+method authorization.
+
 ## Project write tools
 
 `create_project` creates a Project through the public Projects/Create API as

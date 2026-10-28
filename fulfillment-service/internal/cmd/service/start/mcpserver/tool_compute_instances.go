@@ -17,11 +17,13 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -99,6 +101,31 @@ type UpdateComputeInstanceOutput struct {
 	Version  int32    `json:"version"`
 	State    string   `json:"state"`
 	Warnings []string `json:"warnings,omitempty"`
+}
+
+type SetComputeInstancePowerInput struct {
+	ID      string `json:"id" jsonschema:"compute instance ID from get_resource"`
+	Version int32  `json:"version" jsonschema:"current metadata.version from get_resource; must be greater than zero"`
+	Action  string `json:"action" jsonschema:"power action: start or stop"`
+}
+
+type SetComputeInstancePowerOutput struct {
+	ID          string `json:"id"`
+	Version     int32  `json:"version"`
+	State       string `json:"state"`
+	RunStrategy string `json:"run_strategy"`
+}
+
+type RestartComputeInstanceInput struct {
+	ID      string `json:"id" jsonschema:"compute instance ID from get_resource"`
+	Version int32  `json:"version" jsonschema:"current metadata.version from get_resource; must be greater than zero"`
+}
+
+type RestartComputeInstanceOutput struct {
+	ID                 string `json:"id"`
+	Version            int32  `json:"version"`
+	State              string `json:"state"`
+	RestartRequestedAt string `json:"restart_requested_at"`
 }
 
 type DeleteComputeInstanceInput struct {
@@ -409,15 +436,9 @@ func handleUpdateComputeInstance(
 			return nil, UpdateComputeInstanceOutput{}, err
 		}
 
-		currentResponse, err := clients.instances.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
-			Id: input.ID,
-		}.Build())
+		current, err := getComputeInstanceAtVersion(ctx, clients.instances, input.ID, input.Version)
 		if err != nil {
-			return nil, UpdateComputeInstanceOutput{}, safePrerequisiteError("ComputeInstance", input.ID, err)
-		}
-		current := currentResponse.GetObject()
-		if current.GetMetadata().GetVersion() != input.Version {
-			return nil, UpdateComputeInstanceOutput{}, safeStaleVersionError()
+			return nil, UpdateComputeInstanceOutput{}, err
 		}
 
 		catalogItemID := current.GetSpec().GetCatalogItem().GetId()
@@ -486,13 +507,7 @@ func handleUpdateComputeInstance(
 			Lock:       true,
 		}.Build())
 		if err != nil {
-			if status.Code(err) == codes.Aborted {
-				return nil, UpdateComputeInstanceOutput{}, safeStaleVersionError()
-			}
-			if status.Code(err) == codes.FailedPrecondition {
-				return nil, UpdateComputeInstanceOutput{}, safeUpdatePreconditionError()
-			}
-			return nil, UpdateComputeInstanceOutput{}, safePublicAPIError(err)
+			return nil, UpdateComputeInstanceOutput{}, safeComputeInstanceUpdateError(err)
 		}
 		updated := response.GetObject()
 		updatedID := updated.GetId()
@@ -519,6 +534,174 @@ func safeUpdatePreconditionError() error {
 		"Choose an available instance type with the same GPU configuration.",
 	}
 	return envelope
+}
+
+func getComputeInstanceAtVersion(
+	ctx context.Context, client publicv1.ComputeInstancesClient, id string, version int32,
+) (*publicv1.ComputeInstance, error) {
+	response, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+	if err != nil {
+		return nil, safePrerequisiteError("ComputeInstance", id, err)
+	}
+	current := response.GetObject()
+	if current.GetMetadata().GetVersion() != version {
+		return nil, safeStaleVersionError()
+	}
+	return current, nil
+}
+
+func safeComputeInstanceUpdateError(err error) error {
+	if status.Code(err) == codes.Aborted {
+		return safeStaleVersionError()
+	}
+	if status.Code(err) == codes.FailedPrecondition {
+		return safeUpdatePreconditionError()
+	}
+	return safePublicAPIError(err)
+}
+
+func handleSetComputeInstancePower(
+	client publicv1.ComputeInstancesClient,
+) mcp.ToolHandlerFor[SetComputeInstancePowerInput, SetComputeInstancePowerOutput] {
+	return func(
+		ctx context.Context, req *mcp.CallToolRequest, input SetComputeInstancePowerInput,
+	) (*mcp.CallToolResult, SetComputeInstancePowerOutput, error) {
+		var err error
+		input, err = normalizeSetComputeInstancePowerInput(input)
+		if err != nil {
+			return nil, SetComputeInstancePowerOutput{}, safeInvalidRequestError(err)
+		}
+		ctx, cancel := toolCallContext(ctx)
+		defer cancel()
+		ctx, err = forwardAPIToken(ctx, req)
+		if err != nil {
+			return nil, SetComputeInstancePowerOutput{}, err
+		}
+		if _, err = getComputeInstanceAtVersion(ctx, client, input.ID, input.Version); err != nil {
+			return nil, SetComputeInstancePowerOutput{}, err
+		}
+
+		runStrategy := publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS
+		if input.Action == "stop" {
+			runStrategy = publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED
+		}
+		response, err := client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+			Object: publicv1.ComputeInstance_builder{
+				Id:       input.ID,
+				Metadata: publicv1.Metadata_builder{Version: input.Version}.Build(),
+				Spec: publicv1.ComputeInstanceSpec_builder{
+					RunStrategy: runStrategy.Enum(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.run_strategy"}},
+			Lock:       true,
+		}.Build())
+		if err != nil {
+			return nil, SetComputeInstancePowerOutput{}, safeComputeInstanceUpdateError(err)
+		}
+		updated := response.GetObject()
+		updatedID := updated.GetId()
+		if updatedID == "" {
+			updatedID = input.ID
+		}
+		return nil, SetComputeInstancePowerOutput{
+			ID:          updatedID,
+			Version:     updated.GetMetadata().GetVersion(),
+			State:       updated.GetStatus().GetState().String(),
+			RunStrategy: computeInstanceRunStrategyName(updated.GetSpec().GetRunStrategy()),
+		}, nil
+	}
+}
+
+func handleRestartComputeInstance(
+	client publicv1.ComputeInstancesClient,
+) mcp.ToolHandlerFor[RestartComputeInstanceInput, RestartComputeInstanceOutput] {
+	return func(
+		ctx context.Context, req *mcp.CallToolRequest, input RestartComputeInstanceInput,
+	) (*mcp.CallToolResult, RestartComputeInstanceOutput, error) {
+		var err error
+		input, err = normalizeRestartComputeInstanceInput(input)
+		if err != nil {
+			return nil, RestartComputeInstanceOutput{}, safeInvalidRequestError(err)
+		}
+		ctx, cancel := toolCallContext(ctx)
+		defer cancel()
+		ctx, err = forwardAPIToken(ctx, req)
+		if err != nil {
+			return nil, RestartComputeInstanceOutput{}, err
+		}
+		if _, err = getComputeInstanceAtVersion(ctx, client, input.ID, input.Version); err != nil {
+			return nil, RestartComputeInstanceOutput{}, err
+		}
+
+		restartRequestedAt := timestamppb.New(time.Now().UTC())
+		response, err := client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+			Object: publicv1.ComputeInstance_builder{
+				Id:       input.ID,
+				Metadata: publicv1.Metadata_builder{Version: input.Version}.Build(),
+				Spec: publicv1.ComputeInstanceSpec_builder{
+					RestartRequestedAt: restartRequestedAt,
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.restart_requested_at"}},
+			Lock:       true,
+		}.Build())
+		if err != nil {
+			return nil, RestartComputeInstanceOutput{}, safeComputeInstanceUpdateError(err)
+		}
+		updated := response.GetObject()
+		updatedID := updated.GetId()
+		if updatedID == "" {
+			updatedID = input.ID
+		}
+		updatedRestartRequestedAt := updated.GetSpec().GetRestartRequestedAt()
+		if updatedRestartRequestedAt == nil {
+			updatedRestartRequestedAt = restartRequestedAt
+		}
+		return nil, RestartComputeInstanceOutput{
+			ID:                 updatedID,
+			Version:            updated.GetMetadata().GetVersion(),
+			State:              updated.GetStatus().GetState().String(),
+			RestartRequestedAt: updatedRestartRequestedAt.AsTime().UTC().Format(time.RFC3339Nano),
+		}, nil
+	}
+}
+
+func normalizeSetComputeInstancePowerInput(input SetComputeInstancePowerInput) (SetComputeInstancePowerInput, error) {
+	input.ID = strings.TrimSpace(input.ID)
+	input.Action = strings.ToLower(strings.TrimSpace(input.Action))
+	if input.ID == "" {
+		return SetComputeInstancePowerInput{}, fmt.Errorf("id is required")
+	}
+	if input.Version < 1 {
+		return SetComputeInstancePowerInput{}, fmt.Errorf("version must be greater than zero")
+	}
+	if input.Action != "start" && input.Action != "stop" {
+		return SetComputeInstancePowerInput{}, fmt.Errorf("action must be start or stop")
+	}
+	return input, nil
+}
+
+func normalizeRestartComputeInstanceInput(input RestartComputeInstanceInput) (RestartComputeInstanceInput, error) {
+	input.ID = strings.TrimSpace(input.ID)
+	if input.ID == "" {
+		return RestartComputeInstanceInput{}, fmt.Errorf("id is required")
+	}
+	if input.Version < 1 {
+		return RestartComputeInstanceInput{}, fmt.Errorf("version must be greater than zero")
+	}
+	return input, nil
+}
+
+func computeInstanceRunStrategyName(value publicv1.ComputeInstanceRunStrategy) string {
+	switch value {
+	case publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS:
+		return "ALWAYS"
+	case publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED:
+		return "HALTED"
+	default:
+		return "UNSPECIFIED"
+	}
 }
 
 func normalizeUpdateComputeInstanceInput(input UpdateComputeInstanceInput) (UpdateComputeInstanceInput, error) {

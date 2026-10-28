@@ -18,6 +18,10 @@ see the [secrets management configuration
 guide](secrets-management-configuration.md), and for the OSAC realm layout
 see the [Keycloak configuration guide](../keycloak-configuration.md).
 
+**Doing a clean install?** Start with the [installation
+walkthrough](#start-here-the-installation-walkthrough) — the single
+ordered path through this guide — and treat the rest as reference.
+
 **What was validated.** The container recipes in Appendix A and the
 external services themselves were exercised end-to-end on a lab deployment
 (single-node OpenShift hub plus a podman services host, October 2026,
@@ -38,6 +42,7 @@ This guide contains no credentials: secrets always appear as
 
 ## Table of Contents
 
+0. [Start here: the installation walkthrough](#start-here-the-installation-walkthrough)
 1. [Overview and integration patterns](#1-overview-and-integration-patterns)
 2. [Common prerequisites](#2-common-prerequisites)
 3. [PostgreSQL](#3-postgresql)
@@ -59,6 +64,155 @@ guide carries the port explicitly; everything in angle brackets
 is a value to substitute. The namespaces (`osac`, `osac-infra`,
 `keycloak`, …) and object names (`external-kafka`, `osac-db-config`, …)
 are chart-level constants — use them as-is.
+
+---
+
+## Start here: the installation walkthrough
+
+The rest of this guide is reference material — each section is complete
+for its service. This section is the **single ordered path** through all
+of them for a clean install. Follow it top to bottom; every stage ends
+with a gate that must be green before you continue, so a failure surfaces
+in the stage that caused it instead of three stages later.
+
+It walks alongside the [Helm Deployment
+Guide](helm-deployment-guide.md), which owns the cluster-side install
+(the `osac-deps` → `osac-infra` → `osac` releases). Vocabulary maps
+directly: that guide's `my-infra-values.yaml` absorbs this guide's
+`values/external-infra.yaml`, and its `my-values.yaml` absorbs
+`values/external-services.yaml` + `values/external-kafka.yaml` (§7). The
+external-services work happens **before and between** that guide's
+phases, exactly where this section puts it.
+
+### Before you begin — the worksheet
+
+Complete this before touching any host. Every `<placeholder>` in this
+guide resolves to a row here; filling it once prevents the most common
+class of install failure (inconsistent names, addresses, and secrets
+between stages).
+
+| # | Item | Your value | Decided by / notes |
+|---|---|---|---|
+| 1 | Installer chart pin + image digests | | a tagged release or tested commit; §7's digest-pinning trap |
+| 2 | Services host: OS, resources, address `<host-ip>` | | dedicated machine, §2.1; the worksheet value is what every consumer points at |
+| 3 | Privileges you hold | | cluster admin on the hub; root (or sudo) on the services host |
+| 4 | DNS names: `<kc-host>`, `<ui-origin>`, `<api-route>` | | resolvable from cluster **and** from admin/browser machines; §1.3 hostname stability |
+| 5 | CA strategy per service | | corporate CA or self-signed per §2.2; same CA signs server + client certs where mTLS applies |
+| 6 | Keycloak: `<kc-host>`, port 8443, realm-admin + bootstrap admin credentials, client secrets (5) | | §5.2 rows 1–9; generated, stored in your credential store |
+| 7 | PostgreSQL: DB names/users, server + client cert plan | | §3.1; HBA source IPs (cluster egress, `<kc-source-ip>`) |
+| 8 | OpenBao: storage (file vs Raft), unseal strategy, init-output escrow location | | A.3; escrow is a §10.4 requirement, not an afterthought |
+| 9 | Kafka: listener address, SCRAM users, broker CA | | §6.1/A.5; metering on or off (§6.2 status note) |
+| 10 | Namespaces: `osac`, `osac-infra`, `osac-deps` | | chart constants — use as-is |
+| 11 | Backup + escrow destination (off-host, encrypted) | | §10.4; decide before stage 3, use from stage 3 on |
+| 12 | Secret values behind every chart Secret | | §5.2/§6.2 object names are fixed; the **values** are yours |
+
+### Stage 1 — Decide and gather
+
+**Run from:** anywhere. **Privileges:** none.
+
+Read §1.1's profiles-and-status matrix and decide, per service, whether
+the reference recipe (Appendix A) or your own production-grade instance
+is the starting point. Fill the worksheet. Two decisions are hard to
+reverse later and worth extra care: the Keycloak hostname (§1.3 — baked
+into deployments and OpenBao's JWT config) and the CA strategy (§2.2 —
+rotating it later touches every consumer).
+
+**Gate:** the worksheet is complete — every `<placeholder>` you will
+meet in stages 2–5 has a value.
+
+### Stage 2 — Prepare prerequisites
+
+**Run from:** admin host (cluster checks) and services host (host
+checks). **Privileges:** cluster admin; root on the services host.
+
+1. Services host: OS prepared, the stable `<host-ip>` chosen, firewall
+   open **only** to the cluster's subnet on the service ports (§2.1).
+2. Routing proof: run §2.1's in-cluster netcheck probe for each port
+   (5432, 8200, 8443, 9092) — from a pod, not from the host.
+3. Clock: `chronyc tracking` sane on the services host and the cluster
+   nodes (§2.3 — JWT validation breaks at ~30 s skew).
+4. Cluster side: the `osac` namespace exists and the trust bundle that
+   will carry the services CAs is planned (§2.2 — decide option 1 or 2;
+   the bundle itself is created in stage 3 when the CAs exist).
+
+**Gate:** all four netcheck probes print `reachable`; clock offsets are
+small. **Stop if:** routing or firewall fails — nothing later in the
+install will diagnose this better than the probe does.
+
+### Stage 3 — Bootstrap the external services
+
+**Run from:** services host (recipes, realm seed) and admin host
+(Secrets, Kafka objects). **Privileges:** root on the services host;
+cluster admin.
+
+This is everything that must exist **before `helm install`**:
+
+1. Run the Appendix A recipes for the services you are externalizing
+   (A.2 PostgreSQL, A.3 OpenBao, A.4 Keycloak, A.5 Kafka), or stand up
+   your own instances to the §3.1/§4.1/§5.2/§6.1 contracts.
+2. Seed the Keycloak realm (§5.3) and create the client-credential
+   Secrets (§5.2) — the part the chart's `keycloak.enabled: false` flag
+   does not do for you.
+3. Create the Kafka connection objects if Kafka is external (§6.2), and
+   the metering topics/user if metering is on (A.5 steps 7–9).
+4. Load the services CAs into the cluster trust bundle (§2.2) and
+   restart nothing yet — consumers come with stage 4.
+5. Start the §10 backup cron jobs and escrow the OpenBao init output and
+   credential material per §10.4 — recovery material exists from the
+   moment the services do.
+
+**Gate:** every per-service verify block is green on its own:
+§3.3 (PostgreSQL), §4.3 (OpenBao), §5.4 (Keycloak), §6.3 (Kafka).
+**Stop if:** any service fails its own verification — the chart will
+not improve this, and stage 5's battery will only re-report it.
+
+### Stage 4 — Install OSAC
+
+**Run from:** admin host with the installer checkout.
+**Privileges:** cluster admin.
+
+Follow the [Helm Deployment Guide](helm-deployment-guide.md) start to
+finish — namespace and AAP license secret, phase 1a (`osac-deps`),
+phase 1b (`osac-infra`), phase 2 (`osac`) — with your worksheet values
+folded into `my-infra-values.yaml` and `my-values.yaml` per §7's three
+files. The external-services deltas to that guide's defaults:
+
+- `my-infra-values.yaml`: `bundledPostgres.enabled: false`,
+  `bundledVault.enabled: false`, `keycloak.enabled: false` (§7's
+  infra block) — phase 1b then skips those operands; pass
+  `--take-ownership` only for the reasons that guide states.
+- `my-values.yaml`: the full `values/external-services.yaml` +
+  `values/external-kafka.yaml` content (§7) — including
+  `ui.auth.oidcIssuerURL`, which must be the **full** external issuer
+  URL, not the `--set` default that guide shows for the bundled
+  Keycloak.
+- `osac-deps` takes `kafka.enabled: false` if Kafka is external.
+
+Do not pass the external keys as one-off `--set` flags — §8's
+`--reuse-values` semantics will faithfully carry typos forward.
+
+**Gate:** `helm upgrade --install` of all three releases reports success
+and `oc -n osac get pods` shows no CrashLoopBackOff. **Stop if:** pods
+crash — read the logs before re-running helm; the two usual causes are
+a Secret the chart expects but stage 3 didn't create (§5.2), and trust
+failures to the services CAs (§2.2, §11 item 1).
+
+### Stage 5 — Accept and rehearse
+
+**Run from:** admin host. **Privileges:** cluster admin.
+
+1. Run the full §9 verification battery — including the **positive**
+   auth control (a real token gets 200), not just the 401 negative one.
+2. Exercise one end-to-end tenant workflow (create a tenant, provision
+   something small, observe metering events if metering is on).
+3. Rehearse recovery per §10.4: restore each service's data from the
+   backups stage 3 started, on a machine that is not the live one if
+   you can, and re-run §9. An unrestorable backup is a defect **now**,
+   while fixing it is cheap.
+
+**Gate:** §9 all green, one tenant workflow completes, one restore
+succeeds. Done — continue operating with §8 (upgrades), §10 (backups),
+and §11 (gotchas) as the running references.
 
 ---
 

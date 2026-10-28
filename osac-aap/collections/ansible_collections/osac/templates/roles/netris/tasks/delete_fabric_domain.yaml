@@ -78,6 +78,8 @@
         server_cluster_backend_id: "{{ _fd_backend_id }}"
         server_cluster_vpc_id: "{{ _fd_vpc_id | int }}"
   rescue:
+    - name: Preserve the underlying provider failure for the legacy report
+      ansible.builtin.include_tasks: _preserve_failure.yaml
     - name: Publish the sanitized FabricDomain error
       ansible.builtin.include_tasks: _fail_task.yaml
       vars:

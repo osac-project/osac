@@ -175,6 +175,8 @@
           (ID: {{ nat_id | default('unknown') }})
           — {{ attachment_external_ip }} -> {{ attachment_target_ip }}
   rescue:
+    - name: Preserve the underlying provider failure for the legacy report
+      ansible.builtin.include_tasks: _preserve_failure.yaml
     - name: Publish the sanitized ExternalIPAttachment attach error
       ansible.builtin.include_tasks: _fail_task.yaml
       vars:

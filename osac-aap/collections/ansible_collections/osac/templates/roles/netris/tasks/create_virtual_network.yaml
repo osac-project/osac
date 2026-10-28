@@ -88,6 +88,8 @@
         aggregate: false
       when: not _osac_contract | default(false) | bool
   rescue:
+    - name: Preserve the underlying provider failure for the legacy report
+      ansible.builtin.include_tasks: _preserve_failure.yaml
     - name: Publish the sanitized VirtualNetwork create error
       ansible.builtin.include_tasks: _fail_task.yaml
       vars:

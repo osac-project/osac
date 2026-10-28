@@ -78,6 +78,8 @@
       ansible.builtin.debug:
         msg: "VPC + IPAM allocation '{{ vn_name }}' deletion completed"
   rescue:
+    - name: Preserve the underlying provider failure for the legacy report
+      ansible.builtin.include_tasks: _preserve_failure.yaml
     - name: Publish the sanitized VirtualNetwork delete error
       ansible.builtin.include_tasks: _fail_task.yaml
       vars:

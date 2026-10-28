@@ -71,6 +71,8 @@
       ansible.builtin.debug:
         msg: "ExternalIPPool '{{ pool_name }}' — {{ pool_cidrs | length }} IPAM allocation(s) with common subnets registered"
   rescue:
+    - name: Preserve the underlying provider failure for the legacy report
+      ansible.builtin.include_tasks: _preserve_failure.yaml
     - name: Publish the sanitized ExternalIPPool error
       ansible.builtin.include_tasks: _fail_task.yaml
       vars:

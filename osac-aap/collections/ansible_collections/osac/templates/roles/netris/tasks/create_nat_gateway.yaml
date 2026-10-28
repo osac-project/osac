@@ -185,6 +185,8 @@
           (ID: {{ nat_id | default('unknown') }})
           — {{ natgw_vn_ipv4_cidr }} -> {{ natgw_snat_ip }}
   rescue:
+    - name: Preserve the underlying provider failure for the legacy report
+      ansible.builtin.include_tasks: _preserve_failure.yaml
     - name: Publish the sanitized NATGateway create error
       ansible.builtin.include_tasks: _fail_task.yaml
       vars:

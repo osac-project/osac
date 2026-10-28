@@ -956,13 +956,17 @@ Two different kinds of keys are mixed below, and the difference matters:
 - **`*.enabled` flags** do one job: stop the chart from deploying its own
   bundled copy of that service.
 - **Endpoint keys** (`dbInit.host`, `service.vault.endpoint`,
-  `service.kafka.connection`) are the other half — they tell the OSAC
-  components where the external instance lives.
+  `service.kafka.connection`) do the other: tell the OSAC components
+  where the external instance lives.
 
-Both halves together are the whole integration, for every service.
-Keycloak's caveat: the chart's credential hooks and realm import stop
-with the flag, so the client Secrets and the realm are yours to
-provision (§5.2).
+Moving a service off the cluster always takes **both actions
+together** — the flag removes the bundled copy, the endpoint keys make
+the components use yours. Skipping either breaks the deployment: the
+flag alone leaves components pointed at a bundled service that no
+longer exists, and the endpoint alone is ignored while the bundled
+copy still runs. Keycloak's caveat: the chart's credential hooks and
+realm import stop with the flag, so the client Secrets and the realm
+are yours to provision (§5.2).
 
 Split the values by release — three files, no key repeated. Each file
 is the **complete external-services overlay** for its release: paste it

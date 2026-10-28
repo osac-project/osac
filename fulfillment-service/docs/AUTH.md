@@ -416,7 +416,9 @@ To configure organization membership:
 3. **Add Users to Organizations**:
    - Go to **Organizations** → Select an organization → **Members** tab
    - Click **Add member** and select users to add
-   - **Note**: In Keycloak, a user can only be a member of one organization at a time
+   - **Note**: Regular tenant users, including tenant admins, can belong to only
+     one Keycloak organization at a time. Cloud Provider Admins are the only users
+     who may belong to multiple tenant organizations.
 
 The `organization` claim will be automatically included in JWT tokens for users who are members of
 organizations.
@@ -463,9 +465,12 @@ fulfillment service. Valid values are `default` and `guest`.
    This is used internally for system-level resources. As with the `shared` tenant, tenant-scoped
    resources cannot be created in the `system` tenant.
 
-3. **Single-Organization Limitation**: In Keycloak, a user can only be a member of one organization
-   at a time. This means JWT users have access to exactly one tenant (plus the `shared` tenant for
-   visibility). Each resource is assigned to exactly one tenant.
+3. **Organization Membership**: Regular users, including tenant admins, can
+   belong to only one Keycloak organization at a time. Cloud Provider Admins are
+   the only users who may belong to multiple tenant organizations. For a
+   regular tenant user, the organization claim identifies their single tenant;
+   shared tenant visibility is added separately. Each resource is assigned to
+   exactly one tenant.
 
 4. **Tenant Assignment**: When a user creates a resource:
 
@@ -725,7 +730,9 @@ The authorization system enforces several additional constraints beyond role-bas
 - **Default Attribution:** Creator = User ID (resolved from username via `UserIDResolver`)
 - **Fallback:** If user doesn't exist in database, creator = username (for service accounts)
 - **System Attribution:** Private API uses `"system"` as creator for all objects
-- **JIT Provisioning:** Users automatically provisioned on first access if they have exactly one tenant (excludes system/shared tenants)
+- **JIT Provisioning:** Regular users are automatically provisioned on first
+  access if they have exactly one tenant (excluding system/shared tenants).
+  Cloud Provider Admins with multiple tenants are excluded from this interceptor.
 
 The JIT provisioning interceptor (`grpc_jit_provisioning_interceptor.go`) runs after authentication and authorization, creating user records in the database for users who have been granted access.
 
@@ -741,7 +748,8 @@ The JIT provisioning interceptor (`grpc_jit_provisioning_interceptor.go`) runs a
 
 - **Service Accounts:** Use groups as tenants, username format `system:serviceaccount:namespace:name`
 - **Emergency Accounts:** Configured externally, bypass normal auth (for disaster recovery)
-- **Multi-tenant Users:** Users can belong to multiple tenants (e.g., cloud provider admins)
+- **Multi-tenant Users:** Only Cloud Provider Admins may belong to multiple
+  tenant organizations; regular users are limited to one organization.
 - **Zero-tenant Users:** Cannot create objects (enforced in `DetermineAssignableTenants`)
 
 ### Customizing Authorization Rules

@@ -123,11 +123,15 @@ are assigned to Keycloak Organization Groups to grant access to that tenant's re
 | `my_group` | Test group |
 | `your_group` | Test group |
 
-The `organization` claim in the JWT token carries the user's tenant memberships. The
-fulfillment service uses this claim to enforce tenant isolation — users can only
-access resources belonging to their Organization.
+The `organization` claim in the JWT token carries the user's tenant memberships.
+For regular tenant users, including Tenant Admins, the organizations in this
+claim determine tenant scope. Cloud Provider Admins configured as platform
+administrators are the only OSAC user persona with universal tenant scope
+(`*`); the organization claim does not limit their visibility.
 
-Users can only belong to one tenant (Organization) at a time.
+Regular tenant users, including tenant admins, can belong to only one tenant
+Organization at a time. Cloud Provider Admins are the only users who may belong
+to multiple tenant Organizations.
 
 ### Realm Roles
 

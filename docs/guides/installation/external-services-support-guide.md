@@ -93,6 +93,16 @@ The prerequisite phases (`osac-deps`, `osac-infra`) install in stage 2
 with the external overlay from the start; the external services start
 in stage 3; only the final `osac` release installs in stage 4.
 
+How the integration itself works, for every service, is one sentence:
+a chart flag (`*.enabled: false`) stops the chart from deploying its
+bundled copy, and endpoint keys point the OSAC components at your
+external instance — always both actions together (§7 has the full key
+reference and what breaks when either is skipped). The wiring is
+entirely declarative, so nothing needs re-applying after a
+`helm upgrade` (§8). One caveat: for Keycloak, the values point
+consumers at the external issuer but do not provision it — the realm
+and client-credential Secrets are stage-3 work (§5.1–5.3).
+
 ### Before you begin — the worksheet
 
 Complete this before touching any host. Every `<placeholder>` in this
@@ -105,7 +115,7 @@ between stages).
 | 1 | Installer chart pin + image digests | | a tagged release or tested commit; §7's digest-pinning trap |
 | 2 | Services host: OS, resources, address `<host-ip>` | | dedicated machine, §2.1; the worksheet value is what every consumer points at |
 | 3 | Privileges you hold | | cluster admin on the hub; root (or sudo) on the services host |
-| 4 | DNS names: `<kc-host>`, `<ui-origin>`, `<api-route>` | | resolvable from cluster **and** from admin/browser machines; §1.3 hostname stability |
+| 4 | DNS names: `<kc-host>`, `<ui-origin>`, `<api-route>` | | resolvable from cluster **and** from admin/browser machines; §1.2 hostname stability |
 | 5 | CA strategy per service | | corporate CA or self-signed per §2.2; same CA signs server + client certs where mTLS applies |
 | 6 | Keycloak: `<kc-host>`, port 8443, realm-admin + bootstrap admin credentials, client secrets (5) | | §5.2 rows 1–9; generated, stored in your credential store |
 | 7 | PostgreSQL: DB names/users, server + client cert plan | | §3.1; HBA source IPs (cluster egress, `<kc-source-ip>`) |
@@ -122,7 +132,7 @@ between stages).
 Read §1.1's profiles-and-status matrix and decide, per service, whether
 the reference recipe (Appendix A) or your own production-grade instance
 is the starting point. Fill the worksheet. Two decisions are hard to
-reverse later and worth extra care: the Keycloak hostname (§1.3 — baked
+reverse later and worth extra care: the Keycloak hostname (§1.2 — baked
 into deployments and OpenBao's JWT config) and the CA strategy (§2.2 —
 rotating it later touches every consumer).
 
@@ -290,27 +300,7 @@ production-grade, and which are experimental:
 | Kafka | single broker, replication factor 1 | a second durable copy of metering events is **required** for event durability (§10 policy) |
 | Off-cluster metering | **experimental** (§6.2) — metering itself is always deployed on current chart pins | not upstream-supported; alternatives in §6.2 |
 
-### 1.2 The integration pattern
-
-Everything OSAC needs to talk to an external service is done with values:
-a chart flag disables the bundled instance, and values keys point the
-components at the external endpoint. PostgreSQL, OpenBao, and Kafka each
-have both halves (`bundledPostgres.enabled: false` + `dbInit.host`;
-`bundledVault.enabled: false` + `service.vault.endpoint`;
-`kafka.enabled: false` + `service.kafka.connection`). Keycloak joins them
-with `keycloak.enabled: false` plus the issuer/IdP/UI keys (§5.2) — with
-one caveat below.
-
-Because the integration is entirely declarative, nothing needs re-applying
-after a `helm upgrade`: the values re-render the same external wiring every
-time (§8).
-
-**What Keycloak's values path does not cover:** the values point
-consumers at an external Keycloak but do not provision it — the realm
-and the client-credential Secrets are yours to create before
-`helm install` (§5.1–5.3).
-
-### 1.3 What must not change
+### 1.2 What must not change
 
 The in-cluster consumers verify identity, not location:
 

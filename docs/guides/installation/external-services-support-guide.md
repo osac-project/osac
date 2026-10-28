@@ -117,10 +117,10 @@ between stages).
 | 3 | Privileges you hold | | cluster admin on the hub; root (or sudo) on the services host |
 | 4 | DNS names: `<kc-host>`, `<ui-origin>`, `<api-route>` | | resolvable from cluster **and** from admin/browser machines; §1.2 hostname stability |
 | 5 | CA strategy per service | | corporate CA or self-signed per §2.2; same CA signs server + client certs where mTLS applies |
-| 6 | Keycloak: `<kc-host>`, port 8443, realm-admin + bootstrap admin credentials, client secrets (5) | | §5.2 rows 1–9; generated, stored in your credential store |
+| 6 | Keycloak: `<kc-host>`, port 8443, realm-admin + bootstrap admin credentials, client secrets (5) | | §5.2 rows 1–11; generated, stored in your credential store |
 | 7 | PostgreSQL: DB names/users, server + client cert plan | | §3.1; HBA source IPs (cluster egress, `<kc-source-ip>`) |
 | 8 | OpenBao: storage (file vs Raft), unseal strategy, init-output escrow location | | A.3; escrow is a §10.4 requirement, not an afterthought |
-| 9 | Kafka: listener address, SCRAM users, broker CA | | §6.1/A.5; metering on or off (§6.2 status note) |
+| 9 | Kafka: listener address, SCRAM users, broker CA | | §6.1/A.5; metering is always on at current pins (§6.2 status note) |
 | 10 | Namespaces: `osac`, `osac-infra`, `osac-deps` | | chart constants — use as-is |
 | 11 | Backup + escrow destination (off-host, encrypted) | | §10.4; decide before stage 3, use from stage 3 on |
 | 12 | Secret values behind every chart Secret | | §5.2/§6.2 object names are fixed; the **values** are yours |
@@ -202,8 +202,8 @@ exist now, so prove the path and each service on its own terms:
 9092 — from a pod, not from the host); PostgreSQL reachable with a
 client certificate over TLS (`psql`); OpenBao health 200/unsealed (§4.3's
 health checks); Keycloak serving the realm and issuing a token (§5.4);
-Kafka accepting an admin-client connection (§6.3's connection-level
-checks). Checks that need the **application** — OSAC's PG sessions,
+Kafka accepting an admin-client connection (§6.3's offset query).
+Checks that need the **application** — OSAC's PG sessions,
 OpenBao tenant provisioning, metering heartbeats, UI login — belong to
 stage 5; a fresh install cannot pass them here. **Stop if:** a probe
 fails — the chart will not improve it, and stage 5's battery will only
@@ -1349,7 +1349,8 @@ Two rules:
 Rehearse against the real thing: restoring a data dir on the live
 machine only proves the backup mechanism. Host-loss recovery — rebuild
 on a fresh machine from the catalogue alone, then run §9 — is the test
-that matters, and it is part of the validation exercise noted in §1.
+that matters, and it is part of the validation exercise noted in the
+introduction.
 
 ---
 

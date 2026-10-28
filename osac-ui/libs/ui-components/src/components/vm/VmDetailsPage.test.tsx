@@ -29,11 +29,18 @@ vi.mock('../Resource/ResourceDetailsPage', () => ({
     children,
     found,
     isLoading,
+    tabLabels,
   }: {
     children: ReactNode;
     found: boolean;
     isLoading: boolean;
-  }) => <div>{isLoading ? 'Resource loading' : found ? children : 'Resource not found'}</div>,
+    tabLabels?: string[];
+  }) => (
+    <div>
+      {tabLabels ? <span data-testid="tabbed-resource-loading" /> : null}
+      {isLoading ? 'Resource loading' : found ? children : 'Resource not found'}
+    </div>
+  ),
 }));
 
 vi.mock('./DetailsPage/VmDetails', () => ({
@@ -76,6 +83,8 @@ describe('VmDetailsPage', () => {
     renderPage();
 
     expect(screen.getByText('Resource loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('tabbed-resource-loading')).not.toBeInTheDocument();
+    expect(mocks.useGetResource).toHaveBeenCalledTimes(1);
     expect(mocks.useGetResource).toHaveBeenCalledWith(
       ComputeInstances,
       { id: 'vm-1' },

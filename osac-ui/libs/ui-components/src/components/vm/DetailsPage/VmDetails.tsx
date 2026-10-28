@@ -22,6 +22,7 @@ import VmDetailsSummary from './VmDetailsSummary';
 import VmNetworkingTab from './VmNetworkingTab';
 import { useInstanceType } from '../../../api/v1/instance-types';
 import { useTranslation } from '../../../hooks/useTranslation';
+import { CatalogItemIcon } from '../../../icons';
 import { getErrorMessage } from '../../../utils/error';
 import { VmStatusLabel } from '../../../VmStatusLabel';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
@@ -72,6 +73,10 @@ const VmDetails = ({ vm }: Props) => {
                     },
                   ]}
                   resourceName={vm.metadata?.name ?? vm.id}
+                  description={t(
+                    'Review configuration, networking, storage, and utilization for this virtual machine.',
+                  )}
+                  titlePrefix={<CatalogItemIcon kind="vm" />}
                   titleAddon={<VmStatusLabel state={vm.status?.state} />}
                 />
               </FlexItem>

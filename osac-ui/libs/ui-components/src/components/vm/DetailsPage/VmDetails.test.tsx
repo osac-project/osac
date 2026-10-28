@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -32,7 +33,21 @@ vi.mock('../console/VmConsoleTab', () => ({
 }));
 
 vi.mock('../../Resource/ResourceDetailHeader', () => ({
-  ResourceDetailHeader: ({ resourceName }: { resourceName: string }) => <h1>{resourceName}</h1>,
+  ResourceDetailHeader: ({
+    resourceName,
+    description,
+    titlePrefix,
+  }: {
+    resourceName: string;
+    description?: string;
+    titlePrefix?: ReactNode;
+  }) => (
+    <>
+      {titlePrefix ? <span>VM icon</span> : null}
+      <h1>{resourceName}</h1>
+      {description ? <p>{description}</p> : null}
+    </>
+  ),
 }));
 
 vi.mock('../../../VmStatusLabel', () => ({
@@ -79,6 +94,12 @@ describe('VmDetails', () => {
     expect(screen.getByText('Could not load instance types')).toBeInTheDocument();
     expect(screen.getByText('Instance type unavailable')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'web-01' })).toBeInTheDocument();
+    expect(screen.getByText('VM icon')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Review configuration, networking, storage, and utilization for this virtual machine.',
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByText('VM summary')).toBeInTheDocument();
   });
 });

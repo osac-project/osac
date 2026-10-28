@@ -21,13 +21,18 @@ def verify_datavolume_storage_classes(
     The fulfillment service resolves a tier independently for the boot disk and each
     additional disk; the resulting names determine the DataVolume StorageClasses.
     """
-    _ = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name)
+    vm_namespace = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name) or None
+    tenant_name = (
+        cr.get("status", {}).get("tenantReference", {}).get("name")
+        or cr.get("metadata", {}).get("annotations", {}).get("osac.openshift.io/tenant")
+        or None
+    )
 
     # Verify boot disk
     boot_tier = cr["spec"]["bootDisk"]["storageTier"]
-    expected_boot_sc = k8s_hub_client.get_storage_class_for_tier(tier_name=boot_tier)
+    expected_boot_sc = k8s_hub_client.get_storage_class_for_tier(tier_name=boot_tier, tenant_name=tenant_name)
     boot_dv_name = f"{ci_name}-root-disk"
-    actual_boot_sc = k8s_virt_client.get_datavolume_storage_class(name=boot_dv_name)
+    actual_boot_sc = k8s_virt_client.get_datavolume_storage_class(name=boot_dv_name, namespace=vm_namespace)
     assert actual_boot_sc == expected_boot_sc, (
         f"Boot disk StorageClass mismatch: {actual_boot_sc!r} != {expected_boot_sc!r}"
     )
@@ -35,10 +40,10 @@ def verify_datavolume_storage_classes(
     # Verify additional disks (1-indexed)
     for idx, disk in enumerate(cr.get("spec", {}).get("additionalDisks", [])):
         tier = disk["storageTier"]
-        expected_sc = k8s_hub_client.get_storage_class_for_tier(tier_name=tier)
+        expected_sc = k8s_hub_client.get_storage_class_for_tier(tier_name=tier, tenant_name=tenant_name)
 
         dv_name = f"{ci_name}-disk-{idx + 1}"
-        actual_sc = k8s_virt_client.get_datavolume_storage_class(name=dv_name)
+        actual_sc = k8s_virt_client.get_datavolume_storage_class(name=dv_name, namespace=vm_namespace)
         assert actual_sc == expected_sc, (
             f"Additional disk {idx} StorageClass mismatch: {actual_sc!r} != {expected_sc!r}"
         )
@@ -75,13 +80,9 @@ def test_compute_instance_explicit_boot_disk_tier(
             f"Boot disk tier mismatch: {cr['spec']['bootDisk']['storageTier']!r} != {default_storage_tier!r}"
         )
 
-        # E2E: Verify DataVolume StorageClass (commented out until osac PR #257)
-        # verify_datavolume_storage_classes(
-        #     k8s_hub_client=k8s_hub_client,
-        #     k8s_virt_client=k8s_virt_client,
-        #     ci_name=ci_name,
-        #     cr=cr,
-        # )
+        verify_datavolume_storage_classes(
+            k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+        )
     finally:
         grpc.delete_compute_instance(ci_id=uuid)
         if ci_name is not None:
@@ -128,13 +129,9 @@ def test_compute_instance_multiple_disks_different_tiers(
         assert cr["spec"]["additionalDisks"][0]["storageTier"] == default_storage_tier
         assert cr["spec"]["additionalDisks"][1]["storageTier"] == archive_tier
 
-        # E2E: Verify DataVolume StorageClass (commented out until osac PR #257)
-        # verify_datavolume_storage_classes(
-        #     k8s_hub_client=k8s_hub_client,
-        #     k8s_virt_client=k8s_virt_client,
-        #     ci_name=ci_name,
-        #     cr=cr,
-        # )
+        verify_datavolume_storage_classes(
+            k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+        )
     finally:
         grpc.delete_compute_instance(ci_id=uuid)
         if ci_name is not None:

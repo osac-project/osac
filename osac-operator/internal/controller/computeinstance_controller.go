@@ -633,6 +633,9 @@ func (r *ComputeInstanceReconciler) prepareStorageContext(
 	kv *kubevirtv1.VirtualMachine,
 	priorProvisionedReason string,
 ) (context.Context, bool, error) {
+	if !r.willTriggerProvisioning(instance) {
+		return ctx, false, nil
+	}
 	log := ctrllog.FromContext(ctx)
 
 	// Resolve and partition storage tier definitions and backend connections.
@@ -1369,15 +1372,15 @@ func unresolvedRequestedTiers(
 	return out
 }
 
-// shouldGateBeforeProvisioning reports whether the reconciler would trigger a
-// new provisioning job on this reconcile pass. Storage readiness gating is
-// scoped strictly to pre-job triggers so running VMs, in-flight job polling,
-// completed configs, and failed-job backoff are never overwritten.
-func (r *ComputeInstanceReconciler) shouldGateBeforeProvisioning(
+// willTriggerProvisioning reports whether handleProvisioning will trigger a new
+// provisioning job on this reconcile pass. When false (manual management state,
+// nil provider, or EvaluateAction returning Skip, Poll, or Backoff), storage
+// context resolution and readiness gating are skipped so steady-state VM/VMI
+// updates and job polls make zero gRPC or StorageClass API calls.
+func (r *ComputeInstanceReconciler) willTriggerProvisioning(
 	instance *v1alpha1.ComputeInstance,
-	kv *kubevirtv1.VirtualMachine,
 ) bool {
-	if kv != nil || r.ProvisioningProvider == nil {
+	if r.ProvisioningProvider == nil {
 		return false
 	}
 	if val, exists := instance.Annotations[osacComputeInstanceManagementStateAnnotation]; exists && val == ManagementStateManual {
@@ -1385,6 +1388,18 @@ func (r *ComputeInstanceReconciler) shouldGateBeforeProvisioning(
 	}
 	action, _ := provisioning.EvaluateAction(r.provisionState(instance), func() bool { return false })
 	return action == provisioning.Trigger
+}
+
+// shouldGateBeforeProvisioning reports whether the reconciler should gate on
+// CSP storage readiness on this reconcile pass. Gating applies only before
+// initial VM creation (kv == nil) when a new provisioning job would be
+// triggered, so running VMs, in-flight job polling, completed configs, and
+// failed-job backoff are never overwritten.
+func (r *ComputeInstanceReconciler) shouldGateBeforeProvisioning(
+	instance *v1alpha1.ComputeInstance,
+	kv *kubevirtv1.VirtualMachine,
+) bool {
+	return kv == nil && r.willTriggerProvisioning(instance)
 }
 
 // checkCSPStorageReadiness verifies that catalog tier resolution succeeded, no

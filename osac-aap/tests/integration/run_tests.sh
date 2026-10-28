@@ -84,6 +84,7 @@ ROLE_SCENARIO_TESTS=(
   "cluster_working_namespace:test_found"
   "compute_instance_create:sysprep_secret_copy"
   "compute_instance_create:storage_tier_mapping"
+  "compute_instance_create:csp_storage_tiers"
 )
 
 echo "=== Running Workflow Integration Tests ==="

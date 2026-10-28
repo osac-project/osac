@@ -415,20 +415,30 @@ class K8sClient:
 
     # Storage tier resolution
 
-    def get_storage_class_for_tier(self, *, tier_name: str) -> str:
-        """Resolve StorageClass name from tier name via Tenant.status.storageClasses."""
-        tenant = self.get_json(resource="tenant", name=self.namespace)
+    def get_storage_class_for_tier(self, *, tier_name: str, tenant_name: str | None = None) -> str:
+        """Resolve StorageClass name from tier name via Tenant.status.storageClasses or labeled StorageClasses."""
+        target_tenant = tenant_name or self.namespace
+        tenant = self.get_json(resource="tenant", name=target_tenant)
         storage_classes = tenant.get("status", {}).get("storageClasses", [])
 
         for sc in storage_classes:
-            if sc.get("tier", "").lower() == tier_name.lower():
-                return sc.get("name", "")
+            if sc.get("tier", "").lower() == tier_name.lower() and sc.get("name"):
+                return sc["name"]
 
-        raise ValueError(f"No StorageClass found for tier '{tier_name}' in Tenant {self.namespace}")
+        for item in self.list_json(resource="storageclass").get("items", []):
+            labels = item.get("metadata", {}).get("labels", {})
+            sc_tier = labels.get("osac.openshift.io/storage-tier", "")
+            sc_tenant = labels.get("osac.openshift.io/tenant", "")
+            if sc_tier.lower() == tier_name.lower() and sc_tenant in {target_tenant, "csp-managed", "shared"}:
+                name = item.get("metadata", {}).get("name", "")
+                if name:
+                    return name
 
-    def get_datavolume_storage_class(self, *, name: str) -> str:
+        raise ValueError(f"No StorageClass found for tier '{tier_name}' in Tenant {target_tenant}")
+
+    def get_datavolume_storage_class(self, *, name: str, namespace: str | None = None) -> str:
         """Get the StorageClass name from a DataVolume's PVC spec."""
-        dv = self.get_json(resource="datavolume", name=name)
+        dv = self.get_json(resource="datavolume", name=name, namespace=namespace)
         return dv.get("spec", {}).get("pvc", {}).get("storageClassName", "")
 
     # ExternalIPPool queries

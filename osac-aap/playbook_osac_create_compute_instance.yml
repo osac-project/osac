@@ -123,54 +123,15 @@
           {% set _ = _normalized.append(_sc | combine({'tier': (_sc.tier | default('') | string | trim | lower)})) -%}
           {% endfor -%}
           {{ _normalized | unique | list }}
-        _resolved_valid_tiers: >-
-          {{ tenant_storage_class_storage_classes
-             | selectattr('name', 'defined')
-             | rejectattr('name', 'equalto', '')
-             | map(attribute='tier')
-             | map('trim')
-             | map('lower')
-             | reject('equalto', '')
-             | unique
-             | list }}
 
-    - name: Check requested storage tier coverage and ambiguity
-      ansible.builtin.set_fact:
-        _missing_requested_tiers: "{{ _cr_requested_tiers | difference(_resolved_valid_tiers) }}"
-        _ambiguous_requested_tiers: >-
-          {% set _ambiguous = [] -%}
-          {% for _tier in _cr_requested_tiers -%}
-          {% set _names = tenant_storage_class_storage_classes
-             | selectattr('tier', 'equalto', _tier)
-             | selectattr('name', 'defined')
-             | map(attribute='name')
-             | reject('equalto', '')
-             | unique
-             | sort
-             | list -%}
-          {% if (_names | length) > 1 -%}
-          {% set _ = _ambiguous.append(_tier ~ ' (' ~ (_names | join(', ')) ~ ')') -%}
-          {% endif -%}
-          {% endfor -%}
-          {{ _ambiguous }}
-
-    - name: Fail if any requested storage tier is not resolved
-      ansible.builtin.fail:
-        msg: >-
-          ComputeInstance '{{ compute_instance_name }}' for tenant
-          '{{ tenant_storage_class_tenant_name }}' requested storage tier(s)
-          {{ _missing_requested_tiers | to_json }} that are not available in
-          resolved tenant_storage_classes (available tiers:
-          {{ _resolved_valid_tiers | sort | join(', ') | default('none', true) }}).
-      when: _missing_requested_tiers | length > 0
-
-    - name: Fail if any requested storage tier maps to multiple conflicting StorageClasses
-      ansible.builtin.fail:
-        msg: >-
-          ComputeInstance '{{ compute_instance_name }}' for tenant
-          '{{ tenant_storage_class_tenant_name }}' has ambiguous StorageClass
-          mappings for requested tier(s): {{ _ambiguous_requested_tiers | join('; ') }}.
-      when: _ambiguous_requested_tiers | length > 0
+    - name: Validate requested storage tiers resolve unambiguously before finalizer attachment
+      ansible.builtin.include_role:
+        name: osac.service.tenant_storage_class
+      vars:
+        tenant_storage_class_storage_tier: "{{ _req_tier }}"
+      loop: "{{ _cr_requested_tiers }}"
+      loop_control:
+        loop_var: _req_tier
 
   tasks:
     - name: Display compute instance information

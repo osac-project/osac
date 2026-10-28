@@ -422,7 +422,8 @@
           ansible.builtin.assert:
             that:
               - _ambiguous_tier_playbook_run.rc != 0
-              - "'fast (vast-fast-1, vast-fast-2)' in (_ambiguous_tier_playbook_run.stdout + _ambiguous_tier_playbook_run.stderr)"
+              - "'is ambiguous for tenant' in (_ambiguous_tier_playbook_run.stdout + _ambiguous_tier_playbook_run.stderr)"
+              - "'vast-fast-1, vast-fast-2' in (_ambiguous_tier_playbook_run.stdout + _ambiguous_tier_playbook_run.stderr)"
               - "'Display compute instance information' not in (_ambiguous_tier_playbook_run.stdout + _ambiguous_tier_playbook_run.stderr)"
             fail_msg: >-
               Expected ambiguous tier 'fast' to fail in pre_tasks before tasks:,

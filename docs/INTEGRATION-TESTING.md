@@ -310,31 +310,43 @@ installer command in the tier table remains the component-integration check.
 - **VMaaS ComputeInstance network-attachment Create contract ([OSAC-5562](https://redhat.atlassian.net/browse/OSAC-5562), [OSAC-5563](https://redhat.atlassian.net/browse/OSAC-5563), DEV):** `fulfillment-service/it/it_compute_subnet_test.go` exercises the public API's one-attachment limit, no-persistence errors for missing tenant defaults and missing SecurityGroups on a non-default VirtualNetwork, and persistence of an explicitly specified attachment. `internal/servers/private_compute_instances_server_test.go` covers successful field-by-field tenant-default completion. This is Fulfillment Service and database coverage; provider provisioning remains E2E coverage.
 - **Omitted network-attachment defaulting ([OSAC-6480](https://redhat.atlassian.net/browse/OSAC-6480), DEV):** `it_compute_subnet_test.go` (`uses tenant defaults when network_attachments is omitted`), `it_baremetal_instance_lifecycle_test.go` (`Creates a BareMetalInstance with omitted networking and verifies fields`), and `it_public_clusters_network_attachment_test.go` (`Uses tenant defaults when network_attachment is omitted`) create each resource through the public API with the attachment field omitted and assert Create and public Get return one resolved attachment carrying the tenant default fixture's exact Subnet and SecurityGroup IDs; the bare-metal case additionally asserts interface `data-0` from the first fabric port. Tenant default networking fixtures are ensured inside each spec with `ensureTenantDefaultNetworkingFixture`/`getTenantDefaultNetworkFixture`; fixtures simulate network readiness. Partial-attachment defaulting (supplied values survive field-level completion) is unit coverage: `internal/servers/private_baremetal_instances_server_test.go`'s `Default network_attachments population` suite proves omitted, empty-list, and partial attachments fill the missing subnet, empty security groups, and the first-fabric-port interface, and `internal/servers/private_compute_instances_server_test.go` proves partial defaults plus partial user input satisfy validation; Cluster default resolution has no dedicated partial-input unit spec and is covered by the omission case above. Run through the documented Fulfillment installer target (`SUITE=fulfillment`). This is deployed Fulfillment Service, database, and authenticated-client coverage; provider provisioning remains E2E coverage.
 - **VMaaS ComputeInstance public update contracts ([OSAC-6617](https://redhat.atlassian.net/browse/OSAC-6617), DEV):** `fulfillment-service/it/it_compute_instance_network_attachment_status_test.go` extends the attachment-feedback case with a real metadata edit, asserts attachment status in the update response and a subsequent public Get, and rejects explicit `status.state` and attachment-status masks alongside their normalized spellings without persistence. `internal/servers/compute_instances_server_test.go` covers status-path rejection, omitted-mask inference, explicit-mask clearing, targeted map replacement, and a real two-transaction reproduction in which concurrent private status feedback survives a maskless public update. The servers suite uses real PostgreSQL row locks and the metering trigger, while suite tenancy and attribution are doubles; the deployed case uses real Fulfillment gRPC APIs, PostgreSQL, and test identities. Run `ginkgo run --timeout 10m internal/servers` from `fulfillment-service/` and the documented Fulfillment installer target above; against an already deployed compatible Kind environment, run `ginkgo run --timeout 20m --focus 'Compute instance network attachment status' it` from `fulfillment-service/`. Neither suite provisions a real VM; provider feedback remains E2E coverage.
-- **MCP server:** `fulfillment-service/it/it_mcp_server_test.go` uses a real MCP
-  SDK client and an in-process MCP handler; its exchanger forwards a caller API
-  token to deployed Fulfillment and PostgreSQL. It covers six-tool discovery,
-  connection summaries, tenant visibility, Project and image prerequisite
-  selection, creator attribution, asynchronous create and update acceptance
-  with resource IDs and versions, optimistic-conflict rejection, rejected
-  arbitrary service/method/payload arguments, and rejected writes without
-  persisted mutations. `it_mcp_discovery_test.go` creates
-  Projects and Secret references for two tenants, verifies caller-scoped
-  Project and Secret-reference listing, confirms Secret-reference results
-  contain only reference metadata, and checks list-only Secret Get rejection
-  through the shared safe-error contract. `it_mcp_deployed_test.go` runs in the
-  Fulfillment Kind CI job with `MCP_TEST_ENABLED=true` and real Keycloak; it
-  checks TLS metadata and valid calls, plus rejection of the Fulfillment API
-  audience, a wrong issuer, an expired token, and a wrong resource. It also
-  verifies token-exchange rejection, changed tenant permissions, and retryable
-  unavailability while Keycloak is stopped; cleanup restores changed client
-  settings and replica counts. `internal/auth/auth_jwt_validator_test.go`
-  covers expired and untrusted-issuer tokens; MCP ingress tests cover wrong
-  resource audiences. `mcpserver` unit tests cover 4xx/429/5xx and transport
-  exchange failures, typed registration, caller/permission mismatch, safe
-  errors, prerequisite checks, and connection checks. Helm lint and rendering
-  cover opt-in templates and schema; ordinary
-  profile renders exercise the disabled default. Provider provisioning, VM
-  readiness, and external MCP-host interoperability remain outside these tests.
+- **MCP server:** `fulfillment-service/it/it_mcp_server_test.go` uses a real
+  MCP SDK client and an in-process MCP handler; its exchanger forwards a
+  caller API token to deployed Fulfillment and PostgreSQL. It covers ten-tool
+  discovery, connection summaries, tenant visibility, Project and image
+  prerequisite selection, creator attribution, asynchronous create, update,
+  power, and restart acceptance with resource IDs and versions, persisted
+  run-strategy/restart-trigger state, optimistic-conflict rejection,
+  cross-tenant power/restart rejection, rejected arbitrary
+  service/method/payload arguments, and rejected writes without persisted
+  mutations. `it_mcp_discovery_test.go` creates Projects and Secret references
+  for two tenants, verifies caller-scoped Project and Secret-reference
+  listing, confirms Secret-reference results contain only reference metadata,
+  and checks list-only Secret Get rejection through the shared safe-error
+  contract. `it_mcp_project_test.go` creates and updates Projects through the
+  real public API as a tenant administrator, verifies independent
+  title/description masks, same-field last-write behavior,
+  identity/tenant/hierarchy/membership/status/unselected-field preservation,
+  unsupported-field rejection without mutation, and
+  Project-manager/ordinary-member/cross-tenant authorization. Safe
+  `get_resource` results are covered by exact summary-contract tests for every
+  get-capable resource and integration assertions that exclude free text,
+  annotations, status messages, and nested specs. `it_mcp_deployed_test.go`
+  runs in the Fulfillment Kind CI job with `MCP_TEST_ENABLED=true` and real
+  Keycloak; it checks TLS metadata and valid calls, plus rejection of the
+  Fulfillment API audience, a wrong issuer, an expired token, and a wrong
+  resource. It also verifies token-exchange rejection, changed tenant
+  permissions, and retryable unavailability while Keycloak is stopped; cleanup
+  restores changed client settings and replica counts.
+  `internal/auth/auth_jwt_validator_test.go` covers expired and
+  untrusted-issuer tokens; MCP ingress tests cover wrong resource audiences.
+  `mcpserver` unit tests cover 4xx/429/5xx and transport exchange failures,
+  typed registration, caller/permission mismatch, safe errors, prerequisite
+  checks, project writes, power/restart, and connection checks. Helm lint and
+  rendering cover opt-in templates and schema; ordinary profile renders
+  exercise the disabled default. Provider provisioning, VM readiness, real VM
+  power transitions, and external MCP-host interoperability remain outside
+  these tests.
 - **ComputeInstance deletion feedback with stale references ([OSAC-6513](https://redhat.atlassian.net/browse/OSAC-6513), DEV):** `internal/references/reference_validator_test.go` covers status-only, spec, mixed, and empty masks at Unit tier. `it/it_compute_instance_update_test.go` holds a deleting ComputeInstance, removes its referenced user-data Secret, then checks that status feedback persists through the deployed private Fulfillment API and PostgreSQL while spec, mixed, and empty-mask updates still reject the missing reference. Run it with the Fulfillment installer target above; against an already deployed compatible Kind environment, run `ginkgo run --timeout 20m --focus 'persists deletion feedback after a referenced Secret disappears' it` from `fulfillment-service/`. The suite omits the operator, AAP, and VM provider, so it does not prove dependent network teardown.
 - **ExternalIP allocation capacity ([DEV] OSAC-6307):** `internal/servers/private_external_ips_server_test.go` verifies capacity remains held while the ExternalIP has a finalizer and returns after archive. Migration 125 backfills pending deletions and checks exactly-once release in PostgreSQL. Application and database checks keep terminating consumers exclusive until archive. Provider cleanup is covered by operator tests with fixtures.
 - **Canonical networking Hub routing:** [`fulfillment-service/it/it_networking_hub_placement_test.go`](../fulfillment-service/it/it_networking_hub_placement_test.go) covers VirtualNetwork, Subnet, SecurityGroup, ExternalIPPool, ExternalIP, ExternalIPAttachment, and NATGateway CR placement on the NetworkClass canonical Hub and absence on a valid alternate Hub. It also verifies that two separately provisioned network-attached Cluster resources sharing a subnet use the same Hub, repeated reconciliation does not create duplicate ClusterOrders, a cross-Hub Cluster create fails without a database row or CR, and SecurityGroup retains its stored Hub assignment when the canonical Hub changes. The fixture uses distinct Hub entries and namespaces on the service Kind cluster; it tests Hub entry and namespace routing, not isolation across separate Kubernetes clusters or real provider provisioning. Unavailable-canonical/no-fallback, ComputeInstance, and BareMetalInstance placement remain controller unit coverage because this deployed-service fixture does not isolate reconcilers between cases or exercise provider workflows.

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import ipaddress
-import time
 
 from ansible_collections.osac.templates.plugins.module_utils.netris_external_ip import (
     NetrisExternalIPError as NetrisIpamError,
     NetrisSubnetClient,
+    _canonical_ipv4,
+    _pause,
+    _required_text,
+    _reservation_address,
 )
 
 OPERATIONS = ("cluster_ingress.reserve", "cluster_ingress.release")
@@ -37,26 +40,6 @@ class NetrisClusterIngressError(NetrisIpamError):
 def is_retryable(category: str) -> bool:
     """Return whether OSAC should retry a failure of this category."""
     return category in RETRYABLE_CATEGORIES
-
-
-def _required_text(value, context: str) -> str:
-    """Return the value, or raise ValueError unless it is nonempty stripped text."""
-    if not isinstance(value, str) or not value or value != value.strip():
-        raise ValueError(f"{context} must be a nonempty string")
-    return value
-
-
-def _canonical_ipv4(value, context: str) -> ipaddress.IPv4Network:
-    """Parse a strict canonical IPv4 CIDR string, or raise ValueError."""
-    if not isinstance(value, str) or "/" not in value:
-        raise ValueError(f"{context} must be a canonical IPv4 CIDR string")
-    try:
-        network = ipaddress.ip_network(value, strict=True)
-    except ValueError as error:
-        raise ValueError(f"{context} must be a canonical IPv4 CIDR") from error
-    if not isinstance(network, ipaddress.IPv4Network):
-        raise ValueError(f"{context} must be an IPv4 CIDR")
-    return network
 
 
 def validate_request(
@@ -234,17 +217,6 @@ def _owned_record(
             category="malformed_response",
         )
     return record
-
-
-def _reservation_address(record: dict) -> str:
-    """Return the network address of a reservation's /32 prefix."""
-    return str(ipaddress.ip_network(record["prefix"]).network_address)
-
-
-def _pause(delay_seconds: float, attempt: int, max_attempts: int) -> None:
-    """Sleep between attempts until the attempt bound is reached."""
-    if attempt < max_attempts and delay_seconds > 0:
-        time.sleep(delay_seconds)
 
 
 def _reconcile_reserve(request, client, site_id, tenant_id, delay_seconds) -> dict:

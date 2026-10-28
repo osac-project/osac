@@ -28,6 +28,7 @@ import ansible.module_utils.basic as ansible_basic  # noqa: E402
 
 from ansible_collections.osac.templates.plugins.module_utils import (  # noqa: E402
     netris_cluster_ingress as netris_ci,
+    netris_external_ip as netris_eip,
 )
 
 CLUSTER_ID = "9f3d4c21-7a6b-4c58-8d2e-1b0a9c8d7e6f"
@@ -331,7 +332,8 @@ def module_args(**overrides):
 
 def run_main(monkeypatch, capsys, args, client):
     loaded = load_module()
-    monkeypatch.setattr(netris_ci.time, "sleep", lambda *_: None)
+    # The retry pause is shared with the ExternalIP module.
+    monkeypatch.setattr(netris_eip.time, "sleep", lambda *_: None)
     monkeypatch.setattr(
         ansible_basic,
         "_ANSIBLE_ARGS",

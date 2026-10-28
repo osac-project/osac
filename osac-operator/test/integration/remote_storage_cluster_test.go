@@ -78,6 +78,15 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 		Expect(containsLine(string(clustersOut), remoteKindClusterName)).To(
 			BeFalse(), "remote Kind cluster %q must not already exist before test setup", remoteKindClusterName,
 		)
+		existingSecretOut, err := runMgmtKubectl(
+			"get", "secret", remoteKubeconfigSecretName,
+			"-n", operatorNamespace, "--ignore-not-found", "-o", "name",
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.TrimSpace(string(existingSecretOut))).To(
+			BeEmpty(),
+			"remote kubeconfig Secret %q must not already exist before test setup", remoteKubeconfigSecretName,
+		)
 
 		By("snapshotting the management cluster operator Deployment template to a restore patch file")
 		restorePatchFilePath = filepath.Join(GinkgoT().TempDir(), "local-mode-restore-patch.json")
@@ -203,15 +212,13 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 		inClusterKubeconfigFile := filepath.Join(GinkgoT().TempDir(), "in-cluster-remote.kubeconfig")
 		writeRemoteInClusterKubeconfig(remoteKubeconfigPath, inClusterKubeconfigFile, remoteServiceAccountName)
 
-		_, err = runMgmtKubectl("delete", "secret", remoteKubeconfigSecretName, "-n", operatorNamespace, "--ignore-not-found")
-		Expect(err).NotTo(HaveOccurred())
+		remoteSecretCreated = true
 		_, err = runMgmtKubectl(
 			"create", "secret", "generic", remoteKubeconfigSecretName,
 			"-n", operatorNamespace,
 			"--from-file=kubeconfig="+inClusterKubeconfigFile,
 		)
 		Expect(err).NotTo(HaveOccurred())
-		remoteSecretCreated = true
 
 		By("reconfiguring the deployed operator on the management cluster into remote-cluster mode")
 		remoteModeReconfigured = true

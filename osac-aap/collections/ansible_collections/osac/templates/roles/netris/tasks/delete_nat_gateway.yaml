@@ -21,13 +21,17 @@
 - name: Delete the NATGateway from the contract snapshot
   when: _osac_contract | default(false) | bool
   block:
-    - name: Require the NATGateway identity
+    - name: Require the NATGateway identity and ownership inputs
       ansible.builtin.assert:
         that:
           - _osac_resource.id | default('') | length > 0
+          - _osac_virtual_network.metadata.name | default('') | length > 0
+          - _osac_virtual_network.spec.ipv4Cidr | default('') | length > 0
+          - _osac_external_ip_ref.address | default('') | length > 0
         fail_msg: >-
-          A NATGateway delete needs the gateway API ID in the resource
-          snapshot.
+          A NATGateway delete needs the gateway API ID, the VirtualNetwork
+          name and IPv4 CIDR, and the external_ip address, so the SNAT rule
+          can be verified before deletion.
 
     - name: Ensure Netris auth
       ansible.builtin.include_role:
@@ -36,6 +40,23 @@
         - netris_session_cookie is not defined
         - not ansible_check_mode
 
+    - name: Look up the tenant VPC by VirtualNetwork name
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: read
+      vars:
+        vpc_name: "{{ _osac_virtual_network.metadata.name }}"
+        vpc_tenant_id: "{{ netris_tenant_id }}"
+
+    - name: Require the tenant VPC
+      ansible.builtin.assert:
+        that:
+          - netris_vpc is mapping
+          - netris_vpc.id is defined
+        fail_msg: >-
+          VirtualNetwork '{{ _osac_virtual_network.metadata.name }}' has no
+          Netris VPC; refusing to delete an SNAT rule without a VPC scope.
+
     - name: Delete the SNAT rule for the NATGateway
       ansible.builtin.include_role:
         name: netris.controller.nat
@@ -43,6 +64,12 @@
       vars:
         nat_name: "{{ _osac_resource.id }}-snat"
         nat_site_id: "{{ netris_site_id }}"
+        nat_expected_fields:
+          action: SNAT
+          "site.id": "{{ netris_site_id }}"
+          "vpc.id": "{{ netris_vpc.id }}"
+          sourceAddress: "{{ _osac_virtual_network.spec.ipv4Cidr }}"
+          snatToIP: "{{ _osac_external_ip_ref.address }}/32"
 
     - name: Display deletion result
       ansible.builtin.debug:

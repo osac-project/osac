@@ -16,6 +16,47 @@
   vars:
     vnet_name: "{{ _op_vnet_name }}"
 
+- name: Scope the V-Net match to the requested identity
+  when: vnet_vpc_id | default(0) | int > 0 or vnet_tenant_id | default(0) | int > 0
+  block:
+    - name: Collect V-Net candidates by name
+      ansible.builtin.set_fact:
+        _vnet_candidates: >-
+          {{ (netris_vnets | default([]))
+             | selectattr('name', 'equalto', _op_vnet_name)
+             | list }}
+
+    - name: Filter V-Net candidates by VPC
+      ansible.builtin.set_fact:
+        _vnet_candidates: >-
+          {{ _vnet_candidates
+             | selectattr('vpc.id', 'defined')
+             | selectattr('vpc.id', 'equalto', vnet_vpc_id | int)
+             | list }}
+      when: vnet_vpc_id | default(0) | int > 0
+
+    - name: Filter V-Net candidates by tenant
+      ansible.builtin.set_fact:
+        _vnet_candidates: >-
+          {{ _vnet_candidates
+             | selectattr('tenant.id', 'defined')
+             | selectattr('tenant.id', 'equalto', vnet_tenant_id | int)
+             | list }}
+      when: vnet_tenant_id | default(0) | int > 0
+
+    - name: Fail on an ambiguous V-Net identity
+      ansible.builtin.assert:
+        that:
+          - _vnet_candidates | length <= 1
+        fail_msg: >-
+          More than one Netris V-Net named '{{ _op_vnet_name }}' matches the
+          supplied VPC/tenant identity. Refusing to move a port against an
+          ambiguous V-Net.
+
+    - name: Set the scoped V-Net
+      ansible.builtin.set_fact:
+        netris_vnet: "{{ _vnet_candidates | first | default(none) }}"
+
 - name: Fail if V-Net not found
   ansible.builtin.fail:
     msg: "V-Net '{{ _op_vnet_name }}' not found in Netris controller."

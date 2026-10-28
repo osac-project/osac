@@ -111,36 +111,71 @@ def validate_request(
     }
 
 
+def _merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Merge inclusive integer intervals into sorted, disjoint ranges."""
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def select_ingress_address(
     ranges: list[str], subnet_cidr: str, gateway_ipv4: str, occupied_prefixes: list[str]
 ) -> str:
-    """Return the lowest free eligible address across the supplied ranges."""
+    """Return the lowest free eligible address across the supplied ranges.
+
+    Occupied prefixes and the Subnet's own excluded addresses are merged into
+    intervals once per range, so the scan is O(n log n) in the provider subnet
+    list rather than O(range_size x provider_subnets).
+    """
     subnet = _canonical_ipv4(subnet_cidr, "Subnet CIDR")
     gateway = ipaddress.IPv4Address(gateway_ipv4) if gateway_ipv4 else None
     occupied = [
         _canonical_ipv4(prefix, "provider subnet prefix")
         for prefix in occupied_prefixes
     ]
+    reserved = {
+        int(subnet.network_address),
+        int(subnet.broadcast_address),
+    }
+    if gateway is not None:
+        reserved.add(int(gateway))
 
     for cidr in ranges:
         network = _canonical_ipv4(cidr, "ipam.lb_vip_ipv4_cidrs entry")
-        # A prefix that contains the whole range is its parent allocation, not
-        # a reservation inside it; only deletions inside the range block
-        # addresses.
-        blockers = [prefix for prefix in occupied if not network.subnet_of(prefix)]
         if network.prefixlen >= 31:
             first = int(network.network_address)
             last = int(network.broadcast_address)
         else:
             first = int(network.network_address) + 1
             last = int(network.broadcast_address) - 1
-        for value in range(first, last + 1):
-            address = ipaddress.IPv4Address(value)
-            if address in (subnet.network_address, subnet.broadcast_address, gateway):
+
+        # A prefix that contains the whole range is its parent allocation, not
+        # a reservation inside it; only deletions inside the range block
+        # addresses.
+        blocked = [
+            (int(prefix.network_address), int(prefix.broadcast_address))
+            for prefix in occupied
+            if not network.subnet_of(prefix)
+        ]
+        blocked.extend((value, value) for value in reserved)
+        blocked.append((0, first - 1))
+        blocked.append((last + 1, 0xFFFFFFFF))
+
+        candidate = first
+        for start, end in _merge_intervals(blocked):
+            if end < candidate:
                 continue
-            if any(address in prefix for prefix in blockers):
-                continue
-            return str(address)
+            if start > candidate:
+                break
+            candidate = end + 1
+            if candidate > last:
+                break
+        if candidate <= last:
+            return str(ipaddress.IPv4Address(candidate))
 
     raise NetrisClusterIngressError(
         f"the load-balancer VIP range {ranges} is full", category="exhausted"

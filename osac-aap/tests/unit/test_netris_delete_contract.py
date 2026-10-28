@@ -262,3 +262,37 @@ def test_subnet_delete_runs_the_evpn_cleanup_on_the_contract_path(
     assert ("GET", "/api/v2/vpc") in calls
     assert ("DELETE", "/api/v2/vnet/7") in calls
     assert ("DELETE", "/api/v2/ipam/subnet/5") in calls
+
+
+def _contract_nat_delete(tasks: list[dict]) -> dict:
+    return next(
+        task
+        for task in tasks
+        if task.get("ansible.builtin.include_role", {}).get("name")
+        == "netris.controller.nat"
+        and "_osac_resource.id" in str(task.get("vars", {}).get("nat_name", ""))
+    )
+
+
+def test_nat_gateway_contract_delete_verifies_the_snat_rule() -> None:
+    fields = _contract_nat_delete(list(_walk(_tasks("delete_nat_gateway"))))["vars"][
+        "nat_expected_fields"
+    ]
+
+    assert fields["action"] == "SNAT"
+    assert "site.id" in fields
+    assert fields["vpc.id"] == "{{ netris_vpc.id }}"
+    assert fields["sourceAddress"] == "{{ _osac_virtual_network.spec.ipv4Cidr }}"
+    assert fields["snatToIP"] == "{{ _osac_external_ip_ref.address }}/32"
+
+
+def test_external_ip_contract_detach_verifies_the_dnat_rule() -> None:
+    fields = _contract_nat_delete(list(_walk(_tasks("detach_external_ip"))))["vars"][
+        "nat_expected_fields"
+    ]
+
+    assert fields["action"] == "DNAT"
+    assert "site.id" in fields
+    assert fields["vpc.id"] == "{{ netris_mgmt_vpc_id }}"
+    assert fields["destinationAddress"] == "{{ _osac_external_ip_ref.address }}/32"
+    assert fields["dnatToIP"] == "{{ _osac_destination.address }}/32"

@@ -14,6 +14,10 @@
     na_logical_interface: "{{ network_attachment.logical_interface_name }}"
     _na_from: "{{ network_attachment.from_vnet_name | default('', true) }}"
     _na_to: "{{ network_attachment.to_vnet_name | default('', true) }}"
+    _na_from_vpc_id: "{{ network_attachment.from_vpc_id | default(0) | int }}"
+    _na_from_tenant_id: "{{ network_attachment.from_tenant_id | default(0) | int }}"
+    _na_to_vpc_id: "{{ network_attachment.to_vpc_id | default(0) | int }}"
+    _na_to_tenant_id: "{{ network_attachment.to_tenant_id | default(0) | int }}"
 
 - name: Resolve server port
   ansible.builtin.include_tasks: _resolve_server_port.yaml
@@ -29,6 +33,8 @@
   ansible.builtin.include_tasks: _detach_port_from_vnet.yaml
   vars:
     _op_vnet_name: "{{ _na_from }}"
+    vnet_vpc_id: "{{ _na_from_vpc_id }}"
+    vnet_tenant_id: "{{ _na_from_tenant_id }}"
   when: _na_from | length > 0
 
 - name: Wait for fabric to settle after detach
@@ -40,6 +46,8 @@
   ansible.builtin.include_tasks: _attach_port_to_vnet.yaml
   vars:
     _op_vnet_name: "{{ _na_to }}"
+    vnet_vpc_id: "{{ _na_to_vpc_id }}"
+    vnet_tenant_id: "{{ _na_to_tenant_id }}"
   when: _na_to | length > 0
 
 - name: Display move completion

@@ -13,13 +13,29 @@
 - name: Detach the ExternalIP from the contract snapshot
   when: _osac_contract | default(false) | bool
   block:
-    - name: Require the attachment identity
+    - name: Require the attachment identity and ownership inputs
       ansible.builtin.assert:
         that:
           - _osac_resource.id | default('') | length > 0
+          - _osac_external_ip_ref.address | default('') | length > 0
+          - _osac_destination.address | default('') | length > 0
+          - >-
+            _osac_destination.routing_domain.type | default('')
+            in ['provider_management', 'tenant_virtual_network']
         fail_msg: >-
-          An ExternalIPAttachment delete needs the attachment API ID in the
-          resource snapshot.
+          An ExternalIPAttachment delete needs the attachment API ID, the
+          external_ip address, the destination address, and a routing
+          domain, so the DNAT rule can be verified before deletion.
+
+    - name: Require a routing domain the Fabric can resolve
+      ansible.builtin.fail:
+        msg: >-
+          The ExternalIPAttachment routing domain is tenant_virtual_network,
+          which carries only the VirtualNetwork API ID. Netris names its VPC
+          after the VirtualNetwork, so the VPC cannot be resolved here until
+          the core dispatch supplies the VirtualNetwork name. Nothing was
+          changed.
+      when: _osac_destination.routing_domain.type == 'tenant_virtual_network'
 
     - name: Ensure Netris auth
       ansible.builtin.include_role:
@@ -28,6 +44,15 @@
         - netris_session_cookie is not defined
         - not ansible_check_mode
 
+    - name: Require the management VPC for the DNAT scope
+      ansible.builtin.assert:
+        that:
+          - netris_mgmt_vpc_id | default('') | string | length > 0
+        fail_msg: >-
+          A provider_management ExternalIPAttachment delete needs
+          netris_mgmt_vpc_id so the DNAT rule can be scoped to the
+          management VPC.
+
     - name: Delete the DNAT rule for the attachment
       ansible.builtin.include_role:
         name: netris.controller.nat
@@ -35,6 +60,12 @@
       vars:
         nat_name: "{{ _osac_resource.id }}-dnat"
         nat_site_id: "{{ netris_site_id }}"
+        nat_expected_fields:
+          action: DNAT
+          "site.id": "{{ netris_site_id }}"
+          "vpc.id": "{{ netris_mgmt_vpc_id }}"
+          destinationAddress: "{{ _osac_external_ip_ref.address }}/32"
+          dnatToIP: "{{ _osac_destination.address }}/32"
 
     - name: Display deletion result
       ansible.builtin.debug:

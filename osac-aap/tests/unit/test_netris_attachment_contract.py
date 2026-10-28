@@ -102,7 +102,21 @@ def test_detach_runs_on_the_contract_path_without_annotations(tmp_path: Path) ->
         def do_GET(self):
             calls.append(("GET", self.path))
             assert self.path == "/api/v2/nat"
-            self.respond({"data": [{"id": 42, "name": "att-1-dnat"}]})
+            return self.respond(
+                {
+                    "data": [
+                        {
+                            "id": 42,
+                            "name": "att-1-dnat",
+                            "action": "DNAT",
+                            "site": {"id": 1},
+                            "vpc": {"id": 9},
+                            "destinationAddress": "198.51.100.10/32",
+                            "dnatToIP": "10.0.1.17/32",
+                        }
+                    ]
+                }
+            )
 
         def do_DELETE(self):
             calls.append(("DELETE", self.path))
@@ -127,6 +141,7 @@ def test_detach_runs_on_the_contract_path_without_annotations(tmp_path: Path) ->
                             "netris_validate_certs": False,
                             "netris_site_id": 1,
                             "netris_tenant_id": 1,
+                            "netris_mgmt_vpc_id": 9,
                             "osac_job_vars": {
                                 "manager": {
                                     "name": "netris",
@@ -146,6 +161,16 @@ def test_detach_runs_on_the_contract_path_without_annotations(tmp_path: Path) ->
                                         "generation": 1,
                                     },
                                     "spec": {},
+                                },
+                                "external_ip": {
+                                    "id": "eip-1",
+                                    "address": "198.51.100.10",
+                                },
+                                "destination": {
+                                    "address": "10.0.1.17",
+                                    "routing_domain": {
+                                        "type": "provider_management",
+                                    },
                                 },
                             },
                         },
@@ -185,3 +210,31 @@ def test_detach_runs_on_the_contract_path_without_annotations(tmp_path: Path) ->
     assert result.returncode == 0, output
     assert "required ownership annotations" not in output
     assert ("DELETE", "/api/v2/nat/42") in calls
+
+
+def test_apply_scopes_the_port_move_to_the_tenant_vpc() -> None:
+    move = _move_vars(_tasks("apply_network_attachment"))
+
+    assert move["to_vpc_id"] == "{{ netris_vpc.id }}"
+    assert move["to_tenant_id"] == "{{ netris_tenant_id }}"
+    assert move["from_vpc_id"] == "{{ netris_mgmt_vpc_id | default(0) | int }}"
+
+
+def test_delete_scopes_the_port_move_to_the_source_vpc() -> None:
+    move = _move_vars(_tasks("delete_network_attachment"))
+
+    assert move["from_vpc_id"] == "{{ netris_vpc.id }}"
+    assert move["from_tenant_id"] == "{{ netris_tenant_id }}"
+    assert move["to_vpc_id"] == "{{ netris_mgmt_vpc_id | default(0) | int }}"
+
+
+def test_port_helpers_refuse_an_ambiguous_vnet_identity() -> None:
+    for name in ("_attach_port_to_vnet", "_detach_port_from_vnet"):
+        asserts = [
+            task["ansible.builtin.assert"]
+            for task in _walk(_tasks(name))
+            if "ansible.builtin.assert" in task
+        ]
+        assert any(
+            "_vnet_candidates | length <= 1" in str(item["that"]) for item in asserts
+        ), f"{name} must refuse an ambiguous V-Net match"

@@ -30,10 +30,29 @@
           - _osac_interface.name | default('') | length > 0
           - _osac_interface.mac_address | default('') | length > 0
           - subnet.metadata.name | default('') | length > 0
+          - _osac_virtual_network.metadata.name | default('') | length > 0
           - provisioning_vnet | default('') | length > 0
         fail_msg: >-
           A physical attachment needs target.host_name, interface.name,
-          interface.mac_address, the Subnet name and the provisioning V-Net.
+          interface.mac_address, the Subnet name, the parent VirtualNetwork
+          and the provisioning V-Net.
+
+    - name: Look up the tenant VPC for the Subnet segment
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: read
+      vars:
+        vpc_name: "{{ _osac_virtual_network.metadata.name }}"
+        vpc_tenant_id: "{{ netris_tenant_id }}"
+
+    - name: Require the tenant VPC
+      ansible.builtin.assert:
+        that:
+          - netris_vpc is mapping
+          - netris_vpc.id is defined
+        fail_msg: >-
+          VirtualNetwork '{{ _osac_virtual_network.metadata.name }}' has no
+          Netris VPC; refusing to move a port into an unresolved segment.
 
     - name: Move the port to the Subnet segment
       ansible.builtin.include_tasks: _move_port.yaml
@@ -42,4 +61,7 @@
           host_name: "{{ _osac_target.host_name }}"
           logical_interface_name: "{{ _osac_interface.name }}"
           from_vnet_name: "{{ provisioning_vnet }}"
+          from_vpc_id: "{{ netris_mgmt_vpc_id | default(0) | int }}"
           to_vnet_name: "{{ subnet.metadata.name }}"
+          to_vpc_id: "{{ netris_vpc.id }}"
+          to_tenant_id: "{{ netris_tenant_id }}"

@@ -135,8 +135,10 @@ network the cluster can reach. Three rules:
 - **Plain L3 routing, no NAT.** Cluster nodes (and therefore pods) must
   be able to route to `<host-ip>` directly — a normal routable address
   on your management network, not one translated or hidden behind NAT
-  on the path from the cluster. Verify with a `TCP` probe from a pod:
-  `oc -n osac run netcheck --rm -it --image=quay.io/toolbox/netcat -- nc -vz <host-ip> 5432`.
+  on the path from the cluster. Verify with a `TCP` probe from a pod
+  (any image with a shell works; the `/dev/tcp` builtin needs nothing
+  else installed):
+  `oc -n osac run netcheck --rm -i --restart=Never --image=registry.access.redhat.com/ubi9/ubi-minimal -- bash -c 'exec 3<>/dev/tcp/<host-ip>/5432 && echo reachable'`.
 - **Publish each service only on the specific, stable IP**
   (`-p <host-ip>:<port>:<port>`), never on `0.0.0.0` — keeps the
   services off every other interface the host owns, and pins the
@@ -797,12 +799,14 @@ podman exec osac-postgres psql -U postgres -Atc \
   "select count(*) from pg_stat_activity where usename in ('osac_service','osac_metering')"   # >0
 
 # auth chain — negative control: 401 on a dummy token is the GREEN answer
+# (probe a path the public API actually serves, e.g. compute_instances —
+# an unserved path 404s before the auth filter runs and proves nothing)
 curl -sk -o /dev/null -w '%{http_code}\n' -H 'Authorization: Bearer dummy' \
-  https://<api-route>/api/fulfillment/v1/tenants                                          # 401
+  https://<api-route>/api/fulfillment/v1/compute_instances                             # 401
 # …and positive control: a real token must WORK — a 401 alone proves only
 # that the filter exists. Get a token per §5.4, then:
 curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer ${TOKEN}" \
-  https://<api-route>/api/fulfillment/v1/tenants                                          # 200
+  https://<api-route>/api/fulfillment/v1/compute_instances                             # 200
 # note: -k skips trust validation — from the services host prefer
 # --cacert <cluster-ca> so the probe also proves the trust chain (§2.2)
 # (from a cluster node: add --resolve <api-route>:443:127.0.0.1)

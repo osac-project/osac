@@ -115,12 +115,12 @@ def test_stretched_networking_test_uses_the_networking_path() -> None:
     assert not any(marker.startswith("requires_netris") for marker in markers)
 
 
-def test_vmaas_netris_selects_networking_tests_from_its_suite() -> None:
+def test_vmaas_netris_selects_networking_tests_from_its_deploy_suite() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/e2e-vmaas-netris-full-install.yml").read_text())
     job = workflow["jobs"]["e2e-vmaas-netris"]
     workflow_path, workflow_ref = job["uses"].rsplit("@", 1)
     assert workflow_path == "osac-project/osac-test-infra/.github/workflows/e2e-vmaas-netris-full-install.yml"
-    assert job["with"]["suite"] == "vmaas"
+    assert job["with"]["deploy-suite"] == "vmaas"
     assert "test-scope" not in job["with"]
     assert "osac-profile" not in job["with"]
     test_infra_ref = job["with"]["test-infra-ref"]
@@ -151,12 +151,12 @@ def test_netris_profiles_define_the_cudn_evpn_default_networkclass() -> None:
     assert full_values["metering"]["echoAdapter"]["enabled"] is True
 
 
-def test_bmaas_netris_selects_networking_tests_from_its_suite() -> None:
+def test_bmaas_netris_selects_networking_tests_from_its_deploy_suite() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/e2e-bmaas-netris-full-install.yml").read_text())
     job = workflow["jobs"]["e2e-bmaas-netris"]
     workflow_path, workflow_ref = job["uses"].rsplit("@", 1)
     assert workflow_path == "osac-project/osac-test-infra/.github/workflows/e2e-bmaas-netris-full-install.yml"
-    assert job["with"]["suite"] == "bmaas"
+    assert job["with"]["deploy-suite"] == "bmaas"
     assert "test-scope" not in job["with"]
     assert "osac-profile" not in job["with"]
     assert workflow_ref == job["with"]["test-infra-ref"]
@@ -178,7 +178,7 @@ def test_stretched_netris_calls_its_runner_with_full_profile() -> None:
     job = workflow["jobs"]["e2e-stretched-netris"]
     workflow_path, workflow_ref = job["uses"].rsplit("@", 1)
     assert workflow_path == "osac-project/osac-test-infra/.github/workflows/e2e-stretched-netris-full-install.yml"
-    assert job["with"]["suite"] == "full"
+    assert job["with"]["deploy-suite"] == "full"
     assert job["with"]["test-suite"] == "stretched"
     assert "test-scope" not in job["with"]
     assert "osac-profile" not in job["with"]

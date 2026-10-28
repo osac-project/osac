@@ -134,7 +134,10 @@ def _validate_contract_request(
         "operation": operation,
         "uid": uid,
         "generation": generation,
-        "reservation_name": f"{RESERVATION_NAME_PREFIX}{uid}",
+        # Key the reservation by the stable fulfillment API ID, not the CR UID:
+        # a recreated CR keeps its API ID, so a retry after the hub UID changed
+        # reuses the same reservation instead of leaking the first one.
+        "reservation_name": f"{RESERVATION_NAME_PREFIX}{resource_id}",
         "resource_id": resource_id,
         "tenant_id": "",
         "pool_id": pool_id,

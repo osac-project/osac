@@ -4,7 +4,7 @@ argument_specs:
     options:
       virtual_network:
         type: dict
-        required: true
+        required: false
         description: VirtualNetwork CR from fulfillment-api via osac_job_vars
       template_parameters:
         type: dict
@@ -16,14 +16,14 @@ argument_specs:
     options:
       virtual_network:
         type: dict
-        required: true
+        required: false
         description: VirtualNetwork CR from fulfillment-api via osac_job_vars
 
   create_subnet:
     options:
       subnet:
         type: dict
-        required: true
+        required: false
         description: Subnet CR from fulfillment-api via osac_job_vars
       template_parameters:
         type: dict
@@ -35,14 +35,14 @@ argument_specs:
     options:
       subnet:
         type: dict
-        required: true
+        required: false
         description: Subnet CR from fulfillment-api via osac_job_vars
 
   create_security_group:
     options:
       security_group:
         type: dict
-        required: true
+        required: false
         description: SecurityGroup CR from fulfillment-api via osac_job_vars
       template_parameters:
         type: dict
@@ -54,14 +54,14 @@ argument_specs:
     options:
       security_group:
         type: dict
-        required: true
+        required: false
         description: SecurityGroup CR from fulfillment-api via osac_job_vars
 
   create_external_ip:
     options:
       external_ip:
         type: dict
-        required: true
+        required: false
         description: ExternalIP CR from fulfillment-api via osac_job_vars
       template_parameters:
         type: dict
@@ -73,14 +73,14 @@ argument_specs:
     options:
       external_ip:
         type: dict
-        required: true
+        required: false
         description: ExternalIP CR from fulfillment-api via osac_job_vars
 
   create_nat_gateway:
     options:
       nat_gateway:
         type: dict
-        required: true
+        required: false
         description: NATGateway CR from fulfillment-api via osac_job_vars
       template_parameters:
         type: dict
@@ -92,7 +92,7 @@ argument_specs:
     options:
       nat_gateway:
         type: dict
-        required: true
+        required: false
         description: NATGateway CR from fulfillment-api via osac_job_vars
 
   apply_network_attachment:
@@ -123,18 +123,18 @@ argument_specs:
     options:
       network_attachment:
         type: dict
-        required: true
+        required: false
         description: >-
           Move a server's fabric port between Netris V-Nets: detach from
           from_vnet_name (if set) then attach to to_vnet_name (if set).
         options:
           host_name:
             type: str
-            required: true
+            required: false
             description: Netris server (host) name.
           logical_interface_name:
             type: str
-            required: true
+            required: false
             description: Server port / logical interface name (e.g. eth9).
           subnet_ref:
             type: str

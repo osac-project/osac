@@ -33,7 +33,10 @@ def test_every_entry_point_declares_its_resource_argument() -> None:
         assert task in SPECS, f"{task} missing from argument_specs.yaml"
         options = SPECS[task]["options"]
         assert option in options, f"{task} does not declare {option}"
-        assert options[option].get("required") is True, f"{task}.{option} must be required"
+        assert options[option].get("required") is not True, (
+            f"{task}.{option} must stay optional so a contract-only"
+            " include_role validates before the normalizer runs"
+        )
 
 
 def test_the_contract_envelope_is_not_a_role_requirement() -> None:

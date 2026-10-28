@@ -238,3 +238,16 @@ def test_port_helpers_refuse_an_ambiguous_vnet_identity() -> None:
         assert any(
             "_vnet_candidates | length <= 1" in str(item["that"]) for item in asserts
         ), f"{name} must refuse an ambiguous V-Net match"
+
+
+def test_dhcp_query_reads_the_contract_attachment_inputs() -> None:
+    extract = next(
+        task
+        for task in _walk(_tasks("query_dhcp_lease"))
+        if task.get("name") == "Extract network attachment configuration"
+    )
+    facts = extract["ansible.builtin.set_fact"]
+
+    assert "_osac_target.host_name" in facts["_dq_host_name"]
+    assert "_osac_subnet.id" in facts["_dq_subnet_ref"]
+    assert "_osac_interface.name" in facts["_dq_interface"]

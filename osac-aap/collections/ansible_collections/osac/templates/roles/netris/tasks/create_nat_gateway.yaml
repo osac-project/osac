@@ -65,6 +65,11 @@
         nat_source_address: "{{ _osac_virtual_network.spec.ipv4Cidr }}"
         nat_snat_to_ip: "{{ _osac_external_ip_ref.address }}/32"
         nat_comment: "OSAC NATGateway {{ natgw_name }}"
+  rescue:
+    - name: Publish the sanitized NATGateway create error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
+      vars:
+        _osac_error_label: NATGateway create
 
 - name: Run the legacy natgateway create path
   when: not _osac_contract | default(false) | bool

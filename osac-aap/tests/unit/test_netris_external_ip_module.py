@@ -521,7 +521,7 @@ def test_contract_shape_allocates_from_the_snapshot_pool(monkeypatch, capsys):
 
     assert result["changed"] is True
     assert result["address"] == "10.20.0.1"
-    assert client.created == [(f"osac-eip-{RESOURCE_UID}", "10.20.0.1/32", 1, 7)]
+    assert client.created == [(f"osac-eip-{EXTERNAL_IP_API_ID}", "10.20.0.1/32", 1, 7)]
     module_args_result = result["invocation"]["module_args"]
     assert module_args_result["shape"] == "contract"
     assert module_args_result["resource"] == "VALUE_SPECIFIED_IN_NO_LOG_PARAMETER"

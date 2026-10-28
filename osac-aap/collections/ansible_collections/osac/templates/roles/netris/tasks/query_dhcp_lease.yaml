@@ -17,9 +17,18 @@
 
 - name: Extract network attachment configuration
   ansible.builtin.set_fact:
-    _dq_host_name: "{{ network_attachment.host_name }}"
-    _dq_subnet_ref: "{{ network_attachment.subnet_ref }}"
-    _dq_interface: "{{ network_attachment.logical_interface_name | default('') }}"
+    _dq_host_name: >-
+      {{ _osac_target.host_name | default('')
+         if _osac_contract | default(false) | bool
+         else network_attachment.host_name | default('') }}
+    _dq_subnet_ref: >-
+      {{ _osac_subnet.id | default('')
+         if _osac_contract | default(false) | bool
+         else network_attachment.subnet_ref | default('') }}
+    _dq_interface: >-
+      {{ _osac_interface.name | default('')
+         if _osac_contract | default(false) | bool
+         else network_attachment.logical_interface_name | default('') }}
 
 - name: Set the Subnet name from the supplied snapshot
   ansible.builtin.set_fact:
@@ -112,31 +121,39 @@
     label: "{{ item.name | default('') }}"
   when: _dq_mac in (item.mac | map(attribute='address', default='') | map('lower') | list)
 
-- name: Require exactly one active lease for the MAC
-  ansible.builtin.fail:
-    msg: >-
-      Expected exactly one DHCP lease for mac '{{ _dq_mac }}' in subnet
-      '{{ _dq_subnet_name }}', found {{ _dq_matched_hosts | length }}.
-  when: _dq_matched_hosts | length != 1
+- name: Require one resolvable DHCP lease
+  block:
+    - name: Require exactly one active lease for the MAC
+      ansible.builtin.fail:
+        msg: >-
+          Expected exactly one DHCP lease for mac '{{ _dq_mac }}' in subnet
+          '{{ _dq_subnet_name }}', found {{ _dq_matched_hosts | length }}.
+      when: _dq_matched_hosts | length != 1
 
-- name: Set the matched lease host
-  ansible.builtin.set_fact:
-    _dq_matched_host: "{{ _dq_matched_hosts | first }}"
+    - name: Set the matched lease host
+      ansible.builtin.set_fact:
+        _dq_matched_host: "{{ _dq_matched_hosts | first }}"
 
-- name: Set discovered IP address
-  ansible.builtin.set_fact:
-    discovered_ip_address: >-
-      {{ (_dq_matched_host is not none and _dq_matched_host is mapping)
-         | ternary(_dq_matched_host.address | default(''), '') }}
+    - name: Set discovered IP address
+      ansible.builtin.set_fact:
+        discovered_ip_address: >-
+          {{ (_dq_matched_host is not none and _dq_matched_host is mapping)
+             | ternary(_dq_matched_host.address | default(''), '') }}
 
-- name: Fail if no DHCP lease found yet
-  ansible.builtin.fail:
-    msg: >-
-      No DHCP lease found for host '{{ _dq_host_name }}'
-      (interface '{{ _dq_interface }}', mac '{{ _dq_mac }}')
-      in subnet '{{ _dq_subnet_name }}'.
-      The server may not have booted yet or DHCP has not assigned a lease.
-  when: discovered_ip_address | length == 0
+    - name: Fail if no DHCP lease found yet
+      ansible.builtin.fail:
+        msg: >-
+          No DHCP lease found for host '{{ _dq_host_name }}'
+          (interface '{{ _dq_interface }}', mac '{{ _dq_mac }}')
+          in subnet '{{ _dq_subnet_name }}'.
+          The server may not have booted yet or DHCP has not assigned a lease.
+      when: discovered_ip_address | length == 0
+  rescue:
+    - name: Publish the sanitized DHCP lease error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
+      vars:
+        _osac_error_label: DHCP lease query
+        _osac_error_retryable_default: true
 
 # Accumulate across the playbook's per-attachment loop; the playbook publishes
 # the aggregated list once as the job's leases artifact. Keys match the

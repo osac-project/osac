@@ -902,14 +902,14 @@ def contract_request(**overrides):
     )
 
 
-def test_contract_allocate_request_uses_the_api_id_and_uid():
+def test_contract_allocate_request_is_keyed_by_the_api_id():
     request = contract_request()
 
     assert request == {
         "operation": "external_ip.allocate",
         "uid": RESOURCE_UID,
         "generation": 2,
-        "reservation_name": f"osac-eip-{RESOURCE_UID}",
+        "reservation_name": f"osac-eip-{EXTERNAL_IP_ID}",
         "resource_id": EXTERNAL_IP_ID,
         "tenant_id": "",
         "pool_id": POOL_FULFILLMENT_ID,
@@ -924,8 +924,25 @@ def test_contract_release_needs_no_deletion_timestamp():
     request = contract_request(operation="external_ip.release")
 
     assert request["operation"] == "external_ip.release"
-    assert request["reservation_name"] == f"osac-eip-{RESOURCE_UID}"
+    assert request["reservation_name"] == f"osac-eip-{EXTERNAL_IP_ID}"
     assert request["phase"] == "Deleting"
+
+
+def test_contract_reservation_survives_a_recreated_cr_uid():
+    first = contract_request()
+    recreated = contract_request(
+        resource=contract_resource(
+            metadata={
+                "name": "eip-test",
+                "namespace": "osac",
+                "uid": "22222222-2222-4222-8222-222222222222",
+                "generation": 1,
+            }
+        )
+    )
+
+    assert recreated["uid"] != first["uid"]
+    assert recreated["reservation_name"] == first["reservation_name"]
 
 
 @pytest.mark.parametrize(

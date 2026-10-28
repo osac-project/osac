@@ -48,7 +48,7 @@ from tests.e2e.vmaas.networking_lifecycle_helpers import (
     delete_and_wait_for_virtual_network,
 )
 
-pytestmark = [pytest.mark.regression, pytest.mark.requires_netris, pytest.mark.requires_netris_vmaas]
+pytestmark = pytest.mark.regression
 
 _EXTERNAL_PATH_FLAG = "OSAC_NETRIS_VM_EXTERNAL_PATH_ENABLED"
 _NETWORKING_SUITE_PREREQUISITE = (

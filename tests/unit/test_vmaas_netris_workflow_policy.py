@@ -9,7 +9,12 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 NETWORKING_TESTS = "tests/e2e/networking/**"
 VMAAS_TEST_FILE = "tests/e2e/networking/vmaas/test_vmaas_networking.py"
-NETRIS_MARKER = "requires_netris_vmaas"
+NETWORKING_TEST_FILES = (
+    VMAAS_TEST_FILE,
+    "tests/e2e/networking/bmaas/test_bmaas_networking.py",
+    "tests/e2e/networking/bmaas/test_cross_tenant_bmaas_networking.py",
+    "tests/e2e/networking/stretched/test_shared_subnet_bmi_compute_instance.py",
+)
 
 
 def _pytest_markers(path: Path) -> set[str]:
@@ -30,21 +35,24 @@ def _pytest_markers(path: Path) -> set[str]:
     return set()
 
 
-def test_netris_vmaas_tests_have_a_dedicated_marker() -> None:
-    test_file = ROOT / VMAAS_TEST_FILE
-    assert {"requires_netris", NETRIS_MARKER} <= _pytest_markers(test_file)
+def test_networking_tests_are_selected_by_path_not_backend_markers() -> None:
+    for test_file in NETWORKING_TEST_FILES:
+        path = ROOT / test_file
+        assert path.is_relative_to(ROOT / "tests/e2e/networking")
+        assert not any(marker.startswith("requires_netris") for marker in _pytest_markers(path))
 
 
-def test_generic_vmaas_workflow_excludes_netris_tests() -> None:
+def test_generic_vmaas_workflow_uses_service_test_markers_only() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/e2e-vmaas-full-install.yml").read_text())
     test_marker = workflow["jobs"]["e2e-vmaas-full-install"]["with"]["test-marker"]
-    assert "and not requires_netris" in test_marker
+    assert "requires_netris" not in test_marker
 
 
-def test_generic_bmaas_workflow_excludes_netris_tests() -> None:
+def test_generic_bmaas_workflow_uses_service_test_markers_only() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/e2e-bmaas-full-install.yml").read_text())
-    test_marker = workflow["jobs"]["e2e-bmaas-full-install"]["with"]["test-marker"]
-    assert "and not requires_netris" in test_marker
+    job = workflow["jobs"]["e2e-bmaas-full-install"]["with"]
+    assert "requires_netris" not in job["test-marker"]
+    assert "TestBmaasNetworking" not in job.get("test-filter", "")
 
 
 def test_generic_vmaas_path_filter_skips_netris_only_tests() -> None:
@@ -101,20 +109,20 @@ def test_netris_suites_are_separate_manual_suites() -> None:
         assert wrapper["name"] in workflow_names
 
 
-def test_stretched_networking_test_uses_a_backend_agnostic_marker() -> None:
+def test_stretched_networking_test_uses_the_networking_path() -> None:
     markers = _pytest_markers(ROOT / "tests/e2e/networking/stretched/test_shared_subnet_bmi_compute_instance.py")
-    assert {"regression", "requires_stretched_networking"} <= markers
+    assert markers == {"regression"}
     assert not any(marker.startswith("requires_netris") for marker in markers)
 
 
-def test_vmaas_netris_selects_networking_scope_for_vmaas_deployment() -> None:
+def test_vmaas_netris_selects_networking_tests_from_its_suite() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/e2e-vmaas-netris-full-install.yml").read_text())
     job = workflow["jobs"]["e2e-vmaas-netris"]
     workflow_path, workflow_ref = job["uses"].rsplit("@", 1)
     assert workflow_path == "osac-project/osac-test-infra/.github/workflows/e2e-vmaas-netris-full-install.yml"
     assert job["with"]["suite"] == "vmaas"
-    assert job["with"]["test-scope"] == "networking"
-    assert job["with"]["osac-profile"] == "vmaas-ci"
+    assert "test-scope" not in job["with"]
+    assert "osac-profile" not in job["with"]
     test_infra_ref = job["with"]["test-infra-ref"]
     assert workflow_ref == test_infra_ref
 
@@ -143,14 +151,14 @@ def test_netris_profiles_define_the_cudn_evpn_default_networkclass() -> None:
     assert full_values["metering"]["echoAdapter"]["enabled"] is True
 
 
-def test_bmaas_netris_selects_networking_scope_for_bmaas_deployment() -> None:
+def test_bmaas_netris_selects_networking_tests_from_its_suite() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/e2e-bmaas-netris-full-install.yml").read_text())
     job = workflow["jobs"]["e2e-bmaas-netris"]
     workflow_path, workflow_ref = job["uses"].rsplit("@", 1)
     assert workflow_path == "osac-project/osac-test-infra/.github/workflows/e2e-bmaas-netris-full-install.yml"
     assert job["with"]["suite"] == "bmaas"
-    assert job["with"]["test-scope"] == "networking"
-    assert job["with"]["osac-profile"] == "bmaas-ci"
+    assert "test-scope" not in job["with"]
+    assert "osac-profile" not in job["with"]
     assert workflow_ref == job["with"]["test-infra-ref"]
 
 
@@ -171,7 +179,8 @@ def test_stretched_netris_calls_its_runner_with_full_profile() -> None:
     workflow_path, workflow_ref = job["uses"].rsplit("@", 1)
     assert workflow_path == "osac-project/osac-test-infra/.github/workflows/e2e-stretched-netris-full-install.yml"
     assert job["with"]["suite"] == "stretched"
-    assert job["with"]["osac-profile"] == "full-ci"
+    assert "test-scope" not in job["with"]
+    assert "osac-profile" not in job["with"]
     assert workflow_ref == job["with"]["test-infra-ref"]
 
 

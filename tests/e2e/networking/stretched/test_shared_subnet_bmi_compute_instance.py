@@ -36,7 +36,7 @@ from tests.e2e.core.runner import env, poll_until
 from tests.e2e.networking.bmaas import bmi_ssh
 from tests.e2e.networking.vmaas import guest_ssh
 
-pytestmark = [pytest.mark.regression, pytest.mark.requires_stretched_networking]
+pytestmark = [pytest.mark.regression]
 
 
 @pytest.fixture(scope="module")

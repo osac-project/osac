@@ -53,7 +53,7 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
 from tests.e2e.networking.bmaas import bmi_ssh, guest_ssh
 
-pytestmark = [pytest.mark.regression, pytest.mark.requires_netris, pytest.mark.requires_netris_bmaas]
+pytestmark = pytest.mark.regression
 
 _NETRIS_BMI_RUNNING_RETRIES = 240
 # Poll often; proceed as soon as API + CR are gone. Caps match existing helpers (~5m / ~10m).

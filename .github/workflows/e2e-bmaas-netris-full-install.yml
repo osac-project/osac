@@ -49,8 +49,6 @@ jobs:
     uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-netris-full-install.yml@a2996c771dd200ab81c810a119b7fb3044f135f4
     with:
       suite: bmaas
-      test-scope: networking
-      osac-profile: bmaas-ci
       osac-repo: https://github.com/${{ inputs.repo }}.git
       osac-branch: ${{ inputs.sha }}
       components: >-

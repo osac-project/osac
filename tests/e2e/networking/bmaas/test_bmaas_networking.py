@@ -38,7 +38,7 @@ from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
 from tests.e2e.networking.bmaas import bmi_ssh
 
-pytestmark = [pytest.mark.regression, pytest.mark.requires_netris, pytest.mark.requires_netris_bmaas]
+pytestmark = pytest.mark.regression
 
 _NETRIS_BMI_RUNNING_RETRIES = 240
 

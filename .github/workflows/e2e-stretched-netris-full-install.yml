@@ -42,7 +42,6 @@ jobs:
     uses: osac-project/osac-test-infra/.github/workflows/e2e-stretched-netris-full-install.yml@a2996c771dd200ab81c810a119b7fb3044f135f4
     with:
       suite: stretched
-      osac-profile: full-ci
       osac-repo: https://github.com/${{ inputs.repo }}.git
       osac-branch: ${{ inputs.sha }}
       components: >-

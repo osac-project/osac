@@ -10,11 +10,13 @@ from tests.e2e.caas.regression import test_cluster_node_sets as regression
 from tests.e2e.caas.sanity import test_cluster_create as scenario
 from tests.e2e.core import helpers, runner
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.metering import MeteringCollector
 
 
 @pytest.fixture
 def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
-    clients = {name: Mock() for name in ("cli", "grpc", "private_grpc", "metering")}
+    clients = {name: Mock() for name in ("cli", "grpc", "private_grpc")}
+    clients["metering"] = Mock(spec_set=MeteringCollector)
     k8s = clients["k8s_hub_client"] = Mock(spec=K8sClient)
     k8s.namespace = "osac"
     cli, grpc, private = (clients[name] for name in ("cli", "grpc", "private_grpc"))

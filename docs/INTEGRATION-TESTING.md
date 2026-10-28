@@ -447,30 +447,12 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
   `baremetalworker_test.go` queries Kubernetes authorization for the installed
   service account's ClusterOrder/status, InfraEnv, Agent, NodePool and Secret
   permissions. This is RBAC coverage, not worker watch delivery or host allocation.
-- **Remote VMaaS cluster `StorageClass` readiness and cross-cluster watch delivery ([OSAC-6576](https://redhat.atlassian.net/browse/OSAC-6576), DEV):**
-  `cmd/main_test.go` covers `targetClusterFromManager`, `newClusterFromKubeconfig`
-  fail-closed path/content validation, `controllerFlags.validateRemoteCluster`, and
-  `addSchemesForLocalControllers` / `addSchemesForRemoteControllers` (`StorageClass` on
-  `remoteScheme` and `HostedControlPlane` / `BareMetalInstance` on `localScheme`).
-  `test/contract/manager_rbac_test.go` and `test/contract/remote_kubeconfig_helm_test.go`
-  verify read-only `storage.k8s.io/storageclasses` (`get`, `list`, `watch`) RBAC and Helm
-  `remoteClusterKubeconfig` Secret mount rendering.
-  `internal/controller/storage_controller_test.go` (`Remote cluster StorageClass target selection`)
-  exercises both direct reconciliation (`Forbidden` fail-closed and latched-readiness
-  preservation) and a dual-`envtest` (`two separate envtest API servers`) spec that writes
-  the second `envtest` API server's `rest.Config` to a kubeconfig file, starts
-  `StorageReconciler.SetupWithManager` against both real `kube-apiserver` instances, and
-  verifies `MultiClusterWatch` fan-out across multiple `Tenant`s for `csp-managed` and
-  tenant `StorageClass` creation and deletion.
-  `test/integration/remote_storage_cluster_test.go` (run by `make integration-tests` and
-  `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator`) spins up
-  a second Kind workload cluster (`osac-remote`) alongside `osac-dev`, configures a
-  least-privilege remote `ServiceAccount` with read-only `StorageClass` RBAC, mounts the
-  remote kubeconfig Secret into the deployed operator on `osac-dev`, and verifies local
-  decoy `StorageClass` isolation, live multi-tier `StorageClass` watch reconciliation on
-  `osac-remote`, mounted Secret rotation via `watchRemoteKubeconfig`, `Forbidden` RBAC
-  fail-closed behavior with latched readiness preservation, and automatic recovery when
-  remote `StorageClass` RBAC is granted.
+- **Remote VMaaS cluster `StorageClass` readiness ([OSAC-6576](https://redhat.atlassian.net/browse/OSAC-6576), DEV):**
+  `internal/controller/storage_controller_test.go` covers dual-`envtest`
+  `MultiClusterWatch` fan-out across two API servers, and
+  `test/integration/remote_storage_cluster_test.go` exercises a live second Kind
+  cluster (`osac-remote`) for remote `StorageClass` watches, kubeconfig Secret
+  rotation, and `Forbidden` RBAC fail-closed recovery.
 - **AAP, dispatcher, provisioning, KubeVirt and fulfillment:** A test-local
   dependency double does not prove the receiving service/provider boundary.
 - **Generated CRDs/manifests:** Change the source and run the owning generator.

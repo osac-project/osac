@@ -18,7 +18,7 @@ cluster are managed by different personas.
 |---|---|---|
 | ComputeInstance controller | reconciles ComputeInstance CRs | watch KubeVirt VirtualMachine/VirtualMachineInstance |
 | Tenant controller | reconciles Tenant CRs | manage Tenant namespace, UDN resources |
-| Storage controller | reconciles Tenant CRs, watches hub Secrets and ClusterOrders | watch and list StorageClasses (`storage.k8s.io/storageclasses`) |
+| Storage controller | reconciles Tenant CRs | watch and list StorageClasses |
 | AAP | executes playbooks | manage KubeVirt VirtualMachine/VirtualMachineInstance |
 | Console Proxy | -- | connects to KubeVirt VM subresources (console, VNC) via WebSocket |
 
@@ -34,9 +34,8 @@ standard [kubernetes.core](https://github.com/ansible-collections/kubernetes.cor
 Ansible collection, passing a kubeconfig to each task to target the remote
 cluster.
 
-The `cluster` (`ClusterOrder`) and `baremetal-instance` (`BareMetalInstance`)
-controllers are incompatible with the remote cluster option (see
-[Constraints](#constraints)).
+The `cluster` and `baremetal-instance` controllers are incompatible with the
+remote cluster option (see [Constraints](#constraints)).
 
 ## Configuration
 
@@ -55,10 +54,7 @@ target the remote cluster instead of the local one.
 
 > **Note:** When no `--enable-*-controller` flag is set, the operator enables
 > all controllers by default. When using a remote cluster, enable only the
-> compatible controllers (`tenant`, `compute-instance`, `storage`,
-> `networking`, and/or `volume`) explicitly to avoid also enabling the
-> `cluster` or `baremetal-instance` controllers, which are incompatible with
-> the remote cluster option and cause the operator to fail fast at startup.
+> compatible controllers explicitly (see [Constraints](#constraints)).
 
 The kubeconfig is typically provided to the operator pod as a mounted
 Kubernetes Secret volume.
@@ -68,9 +64,9 @@ The operator Helm chart renders this configuration when both
 `remoteClusterKubeconfigSecretName` are set. The Secret key defaults to
 `kubeconfig` and can be changed with `remoteClusterKubeconfigSecretKey`.
 
-On the remote VMaaS cluster, the ServiceAccount referenced by the kubeconfig
-must have cluster-scoped read-only RBAC permissions (`get`, `list`, `watch`) on
-`storage.k8s.io/storageclasses` when the `Storage` controller is enabled.
+When the `Storage` controller is enabled, the remote cluster ServiceAccount must
+have cluster-scoped `get`, `list`, and `watch` permissions on
+`storage.k8s.io/storageclasses`.
 
 #### Example: operator deployment with remote cluster
 
@@ -142,16 +138,9 @@ mounted file path instead and do not need the label.
 
 ### 2. Configure the operator
 
-Set `OSAC_REMOTE_CLUSTER_KUBECONFIG` and mount the Secret (see example
-above), or configure the Helm chart values `remoteClusterKubeconfig`,
-`remoteClusterKubeconfigSecretName`, and optionally
-`remoteClusterKubeconfigSecretKey`. Enable only the compatible controllers
-(`tenant`, `compute-instance`, `storage`, `networking`, and/or `volume`). Ensure
-the remote VMaaS cluster ServiceAccount has cluster-scoped `get`, `list`, and
-`watch` permissions on `storage.k8s.io/storageclasses` when `storage` is
-enabled. The `cluster` (`ClusterOrder`) and `baremetal-instance`
-(`BareMetalInstance`) controllers, if needed, are incompatible with the remote
-kubeconfig and must run in a separate operator instance without it.
+Set `OSAC_REMOTE_CLUSTER_KUBECONFIG` and mount the Secret (or set the
+`remoteClusterKubeconfig*` Helm values), and enable only compatible controllers
+(see [Configuration](#osac-operator) and [Constraints](#constraints)).
 
 ### 3. Configure AAP
 
@@ -172,12 +161,10 @@ be readable by the `osac-sa` service account in the AAP namespace.
 
 ## Constraints
 
-- `--remote-cluster-kubeconfig` (`OSAC_REMOTE_CLUSTER_KUBECONFIG`) is compatible
-  with the `tenant`, `compute-instance`, `storage`, `networking`, and `volume`
-  controllers. The operator will fail fast at startup and exit with an error if
-  the `cluster` (`ClusterOrder`) or `baremetal-instance` (`BareMetalInstance`)
-  controller is enabled alongside it. Run the `cluster` and
-  `baremetal-instance` controllers in a separate operator instance without the
-  remote kubeconfig.
+- `--remote-cluster-kubeconfig` is compatible with the `tenant`,
+  `compute-instance`, `storage`, `networking`, and `volume` controllers. The
+  operator exits with an error at startup if the `cluster` or
+  `baremetal-instance` controller is enabled alongside it; run those in a
+  separate operator instance without the remote kubeconfig.
 - When no remote kubeconfig is configured, the operator operates in
   single-cluster mode with no behaviour change.

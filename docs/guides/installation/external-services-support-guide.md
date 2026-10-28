@@ -129,14 +129,20 @@ labels and systemd unit shapes — are covered in
 
 ### 2.1 Network
 
-- Cluster nodes (and therefore pods) must route to `<host-ip>`. On a KVM
-  host running the cluster VM, the bridge address works naturally; on other
-  layouts verify with a `TCP` probe from a pod:
+The services host is a separate machine from the cluster nodes, on a
+network the cluster can reach. Three rules:
+
+- **Plain L3 routing, no NAT.** Cluster nodes (and therefore pods) must
+  be able to route to `<host-ip>` directly — a normal routable address
+  on your management network, not one translated or hidden behind NAT
+  on the path from the cluster. Verify with a `TCP` probe from a pod:
   `oc -n osac run netcheck --rm -it --image=quay.io/toolbox/netcat -- nc -vz <host-ip> 5432`.
-- Publish each service **only on the specific IP**
-  (`-p <host-ip>:<port>:<port>`), never on `0.0.0.0` — keeps the services off
-  every other interface the host owns.
-- Open the ports in the host firewall for the cluster subnet.
+- **Publish each service only on the specific, stable IP**
+  (`-p <host-ip>:<port>:<port>`), never on `0.0.0.0` — keeps the
+  services off every other interface the host owns, and pins the
+  address the cluster and the helm values point at (a DHCP-changing
+  address breaks TLS SANs and Endpoints together).
+- **Open the ports in the host firewall** for the cluster subnet.
 
 ### 2.2 TLS trust model
 

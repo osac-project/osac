@@ -15,7 +15,6 @@ package it
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -502,15 +501,7 @@ var _ = Describe("Default networking provisioning", func() {
 		}, 5*time.Second, time.Second).Should(Succeed())
 
 		By("Preparing a second live tenant with all five default networking resources")
-		captureDefaultNetworkingDiagnostic("first-tenant-ready", []string{tenantName},
-			map[string]string{"first_tenant": tenantID, "first_external_ip": externalIPID, "first_nat": gatewayID}, externalIPsClient, natGatewaysClient)
 		secondTenantID, secondTenantName, _ := createTenantAndDefaultVirtualNetwork(ctx, virtualNetworksClient)
-		DeferCleanup(func() {
-			if reporting.CurrentSpecReport().Failed() {
-				captureDefaultNetworkingDiagnostic("before-failed-tenant-cleanup", []string{tenantName, secondTenantName},
-					map[string]string{"first_tenant": tenantID, "second_tenant": secondTenantID, "first_external_ip": externalIPID, "first_nat": gatewayID}, externalIPsClient, natGatewaysClient)
-			}
-		})
 		type defaultResource struct {
 			object interface {
 				GetId() string
@@ -1391,159 +1382,6 @@ func setNetworkClassCanonicalHub(ctx context.Context, client privatev1.NetworkCl
 		}.Build())
 		g.Expect(err).ToNot(HaveOccurred())
 	}, time.Minute, time.Second).Should(Succeed())
-}
-
-type defaultNetworkingDiagnosticRow struct {
-	ID                 string `json:"id"`
-	Tenant             string `json:"tenant"`
-	Name               string `json:"name"`
-	Default            bool   `json:"default"`
-	Deleting           bool   `json:"deleting"`
-	ExternalIPID       string `json:"external_ip_id,omitempty"`
-	ExternalIPName     string `json:"external_ip_name,omitempty"`
-	VirtualNetworkID   string `json:"virtual_network_id,omitempty"`
-	VirtualNetworkName string `json:"virtual_network_name,omitempty"`
-	ProjectionClipped  bool   `json:"projection_clipped"`
-}
-
-type defaultNetworkingDiagnosticList struct {
-	Rows      []defaultNetworkingDiagnosticRow `json:"rows"`
-	Total     int32                            `json:"total"`
-	Pages     int                              `json:"pages"`
-	Complete  bool                             `json:"complete"`
-	Truncated bool                             `json:"truncated"`
-	Code      string                           `json:"code"`
-}
-
-func diagnosticText(value string, clipped *bool) string {
-	if len(value) > 128 {
-		*clipped = true
-		return value[:128]
-	}
-	return value
-}
-
-func diagnosticRow(id string, metadata *privatev1.Metadata) defaultNetworkingDiagnosticRow {
-	row := defaultNetworkingDiagnosticRow{
-		Default:  metadata.GetLabels()["osac.openshift.io/default"] == "true",
-		Deleting: metadata.HasDeletionTimestamp(),
-	}
-	row.ID = diagnosticText(id, &row.ProjectionClipped)
-	row.Tenant = diagnosticText(metadata.GetTenant(), &row.ProjectionClipped)
-	row.Name = diagnosticText(metadata.GetName(), &row.ProjectionClipped)
-	return row
-}
-
-func collectDefaultNetworkingDiagnostic(ctx context.Context,
-	fetch func(context.Context, int32, int32) ([]defaultNetworkingDiagnosticRow, int32, error),
-) defaultNetworkingDiagnosticList {
-	const pageSize int32 = 16
-	result := defaultNetworkingDiagnosticList{Rows: []defaultNetworkingDiagnosticRow{}, Total: -1, Code: "OK"}
-	seen := map[string]bool{}
-	for page := 0; page < 4; page++ {
-		if err := ctx.Err(); err != nil {
-			result.Code = grpcstatus.Code(grpcstatus.FromContextError(err).Err()).String()
-			break
-		}
-		rows, total, err := fetch(ctx, int32(len(result.Rows)), pageSize)
-		result.Pages++
-		if err != nil {
-			result.Code = grpcstatus.Code(err).String()
-			break
-		}
-		if result.Total >= 0 && result.Total != total || total < 0 || len(rows) > int(pageSize) {
-			break
-		}
-		result.Total = total
-		for _, row := range rows {
-			if row.ID == "" || seen[row.ID] {
-				result.Truncated = true
-				return result
-			}
-			seen[row.ID] = true
-			result.Rows = append(result.Rows, row)
-		}
-		if int32(len(result.Rows)) == total {
-			result.Complete = true
-			return result
-		}
-		if len(rows) == 0 || int32(len(result.Rows)) > total {
-			break
-		}
-	}
-	result.Truncated = true
-	return result
-}
-
-func captureDefaultNetworkingDiagnostic(stage string, tenants []string, knownIDs map[string]string,
-	ips privatev1.ExternalIPsClient, gateways privatev1.NATGatewaysClient,
-) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	capturedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	nats := collectDefaultNetworkingDiagnostic(ctx, func(ctx context.Context, offset, limit int32) ([]defaultNetworkingDiagnosticRow, int32, error) {
-		order := "id asc"
-		response, err := gateways.List(ctx, privatev1.NATGatewaysListRequest_builder{
-			Offset: &offset, Limit: &limit, Order: &order,
-		}.Build())
-		if err != nil {
-			return nil, 0, err
-		}
-		rows := make([]defaultNetworkingDiagnosticRow, 0, len(response.GetItems()))
-		for _, object := range response.GetItems() {
-			row := diagnosticRow(object.GetId(), object.GetMetadata())
-			row.ExternalIPID = diagnosticText(object.GetSpec().GetExternalIp().GetId(), &row.ProjectionClipped)
-			row.ExternalIPName = diagnosticText(object.GetSpec().GetExternalIp().GetName(), &row.ProjectionClipped)
-			row.VirtualNetworkID = diagnosticText(object.GetSpec().GetVirtualNetwork().GetId(), &row.ProjectionClipped)
-			row.VirtualNetworkName = diagnosticText(object.GetSpec().GetVirtualNetwork().GetName(), &row.ProjectionClipped)
-			rows = append(rows, row)
-		}
-		return rows, response.GetTotal(), nil
-	})
-	filters := make([]string, 0, len(tenants))
-	for _, tenant := range tenants {
-		filters = append(filters, fmt.Sprintf("this.metadata.tenant == %q", tenant))
-	}
-	filter := "false"
-	if len(filters) > 0 {
-		filter = strings.Join(filters, " || ")
-	}
-	externalIPs := collectDefaultNetworkingDiagnostic(ctx, func(ctx context.Context, offset, limit int32) ([]defaultNetworkingDiagnosticRow, int32, error) {
-		order := "id asc"
-		response, err := ips.List(ctx, privatev1.ExternalIPsListRequest_builder{
-			Offset: &offset, Limit: &limit, Order: &order, Filter: &filter,
-		}.Build())
-		if err != nil {
-			return nil, 0, err
-		}
-		rows := make([]defaultNetworkingDiagnosticRow, 0, len(response.GetItems()))
-		for _, object := range response.GetItems() {
-			rows = append(rows, diagnosticRow(object.GetId(), object.GetMetadata()))
-		}
-		return rows, response.GetTotal(), nil
-	})
-	clipped := false
-	ids := make(map[string]string, len(knownIDs))
-	for name, id := range knownIDs {
-		ids[name] = diagnosticText(id, &clipped)
-	}
-	names := make([]string, 0, len(tenants))
-	for _, tenant := range tenants {
-		names = append(names, diagnosticText(tenant, &clipped))
-	}
-	payload, err := json.Marshal(struct {
-		Version     int                             `json:"version"`
-		Stage       string                          `json:"stage"`
-		CapturedAt  string                          `json:"captured_at"`
-		KnownIDs    map[string]string               `json:"known_ids"`
-		TenantNames []string                        `json:"tenant_names"`
-		IDsClipped  bool                            `json:"ids_clipped"`
-		NATs        defaultNetworkingDiagnosticList `json:"nats"`
-		ExternalIPs defaultNetworkingDiagnosticList `json:"external_ips"`
-	}{1, stage, capturedAt, ids, names, clipped, nats, externalIPs})
-	if err == nil {
-		_, _ = fmt.Fprintf(GinkgoWriter, "DEFAULT_NETWORKING_DIAGNOSTIC_V1 %s\n", payload)
-	}
 }
 
 func createTenantAndDefaultVirtualNetwork(

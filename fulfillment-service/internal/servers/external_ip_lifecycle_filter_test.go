@@ -69,7 +69,10 @@ func TestExternalIPConsumerFilterIncludesLegacyAndMalformedCandidates(t *testing
 			`((!has(this.spec.external_ip.id) || this.spec.external_ip.id == "") && (!has(this.spec.external_ip.name) || this.spec.external_ip.name == "")))`,
 		strconv.Quote(id), strconv.Quote(id), strconv.Quote(name), strconv.Quote(name),
 	)
-	got, err := externalIPConsumerFilter(id, name)
+	owner := privatev1.Metadata_builder{Tenant: "tenant"}.Build()
+	want = fmt.Sprintf("(this.spec.external_ip.id == %s || (this.metadata.tenant == %s && this.metadata.project == %s && (%s)))",
+		strconv.Quote(id), strconv.Quote(owner.GetTenant()), strconv.Quote(owner.GetProject()), want[1:len(want)-1])
+	got, err := externalIPConsumerFilter(id, name, owner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,16 +82,28 @@ func TestExternalIPConsumerFilterIncludesLegacyAndMalformedCandidates(t *testing
 }
 
 func TestExternalIPLookupRejectsUnsupportedLiterals(t *testing.T) {
-	if _, err := externalIPConsumerFilter("", "default-nat"); err == nil {
+	owner := privatev1.Metadata_builder{Tenant: "tenant"}.Build()
+	if _, err := externalIPConsumerFilter("", "default-nat", owner); err == nil {
 		t.Fatal("missing parent identity was accepted")
+	}
+	if _, err := externalIPConsumerFilter("eip", "default-nat", nil); err == nil {
+		t.Fatal("missing parent owner was accepted")
 	}
 	for _, value := range []string{"path\\name", "quote'name", "quote\"name", "line\nname", "control\x00", "non-ascii-π"} {
 		t.Run(strconv.Quote(value), func(t *testing.T) {
 			if err := externalIPLookupValue(value); err == nil {
 				t.Fatal("unsupported literal was accepted")
 			}
-			if _, err := externalIPConsumerFilter(value, "default-nat"); err == nil {
+			if _, err := externalIPConsumerFilter(value, "default-nat", owner); err == nil {
 				t.Fatal("unsupported candidate filter was accepted")
+			}
+			for _, invalidOwner := range []*privatev1.Metadata{
+				privatev1.Metadata_builder{Tenant: value}.Build(),
+				privatev1.Metadata_builder{Tenant: "tenant", Project: value}.Build(),
+			} {
+				if _, err := externalIPConsumerFilter("eip", "default-nat", invalidOwner); err == nil {
+					t.Fatal("unsupported owner filter was accepted")
+				}
 			}
 		})
 	}

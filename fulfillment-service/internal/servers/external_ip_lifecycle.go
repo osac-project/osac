@@ -361,9 +361,17 @@ func (l *externalIPLifecycle) ensureExternalIPAvailableExcept(
 	return nil
 }
 
-func externalIPConsumerFilter(externalIPID, externalIPName string) (string, error) {
+func externalIPConsumerFilter(externalIPID, externalIPName string, owner *privatev1.Metadata) (string, error) {
 	if externalIPID == "" {
 		return "", grpcstatus.Error(grpccodes.FailedPrecondition, "ExternalIP parent has no canonical identity")
+	}
+	if owner.GetTenant() == "" {
+		return "", grpcstatus.Error(grpccodes.FailedPrecondition, "ExternalIP legacy consumer has no name or owner")
+	}
+	for _, value := range []string{owner.GetTenant(), owner.GetProject()} {
+		if err := externalIPLookupValue(value); err != nil {
+			return "", err
+		}
 	}
 	keys := []string{externalIPID}
 	if externalIPName != "" && externalIPName != externalIPID {
@@ -380,7 +388,10 @@ func externalIPConsumerFilter(externalIPID, externalIPName string) (string, erro
 			"this.spec.external_ip.name == "+quotedKey)
 	}
 	conditions = append(conditions, `((!has(this.spec.external_ip.id) || this.spec.external_ip.id == "") && (!has(this.spec.external_ip.name) || this.spec.external_ip.name == ""))`)
-	return "(" + strings.Join(conditions, " || ") + ")", nil
+	// Canonical references remain global blockers. Scope legacy and malformed
+	// candidates before the cap so unrelated owners cannot exhaust it.
+	return fmt.Sprintf("(this.spec.external_ip.id == %s || (this.metadata.tenant == %s && this.metadata.project == %s && (%s)))",
+		strconv.Quote(externalIPID), strconv.Quote(owner.GetTenant()), strconv.Quote(owner.GetProject()), strings.Join(conditions, " || ")), nil
 }
 
 func externalIPLookupValue(value string) error {
@@ -476,7 +487,7 @@ func (l *externalIPLifecycle) externalIPConsumerAlias(ctx context.Context, name 
 }
 
 func (l *externalIPLifecycle) externalIPAttachments(ctx context.Context, parent *privatev1.ExternalIP) ([]*privatev1.ExternalIPAttachment, error) {
-	filter, err := externalIPConsumerFilter(parent.GetId(), parent.GetMetadata().GetName())
+	filter, err := externalIPConsumerFilter(parent.GetId(), parent.GetMetadata().GetName(), parent.GetMetadata())
 	if err != nil {
 		return nil, err
 	}
@@ -504,7 +515,7 @@ func (l *externalIPLifecycle) externalIPAttachments(ctx context.Context, parent 
 }
 
 func (l *externalIPLifecycle) externalIPNATGateways(ctx context.Context, parent *privatev1.ExternalIP) ([]*privatev1.NATGateway, error) {
-	filter, err := externalIPConsumerFilter(parent.GetId(), parent.GetMetadata().GetName())
+	filter, err := externalIPConsumerFilter(parent.GetId(), parent.GetMetadata().GetName(), parent.GetMetadata())
 	if err != nil {
 		return nil, err
 	}

@@ -454,6 +454,73 @@ var _ = Describe("Private NAT gateways server", func() {
 			}
 		})
 
+		DescribeTable("scopes ExternalIP candidate capacity before collecting foreign owners", func(foreignProjects bool) {
+			tenants, err := dao.NewGenericDAO[*privatev1.Tenant]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			projects, err := dao.NewGenericDAO[*privatev1.Project]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			pool, err := externalIPPoolDao.Create().SetObject(privatev1.ExternalIPPool_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant, Name: "capacity-pool"}.Build(),
+				Spec:     privatev1.ExternalIPPoolSpec_builder{Cidrs: []string{"198.18.0.0/15"}}.Build(),
+				Status:   privatev1.ExternalIPPoolStatus_builder{State: privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, Total: 2000, Available: 2000}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			networkClass := createNetworkClass(new("netris"), nil)
+			makeIP := func(tenant, project string, ordinal int) *privatev1.ExternalIP {
+				response, createErr := externalIPDao.Create().SetObject(privatev1.ExternalIP_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: tenant, Project: project, Name: "default-nat"}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetObject().GetId()}.Build()}.Build(),
+					Status:   privatev1.ExternalIPStatus_builder{State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, Address: fmt.Sprintf("198.18.%d.%d", ordinal/256, ordinal%256), Hub: "network-hub-a"}.Build(),
+				}.Build()).Do(ctx)
+				Expect(createErr).ToNot(HaveOccurred())
+				return response.GetObject()
+			}
+			parent := makeIP(testTenant, "", 1)
+			for ordinal := 2; ordinal < 1003; ordinal++ {
+				tenant, project := testTenant, ""
+				if foreignProjects {
+					project = fmt.Sprintf("foreign-project-%d", ordinal)
+					_, err = projects.Create().SetObject(privatev1.Project_builder{
+						Metadata: privatev1.Metadata_builder{Tenant: tenant, Name: project}.Build(),
+					}.Build()).Do(ctx)
+				} else {
+					tenant = fmt.Sprintf("foreign-tenant-%d", ordinal)
+					_, err = tenants.Create().SetObject(privatev1.Tenant_builder{
+						Id: tenant, Metadata: privatev1.Metadata_builder{Tenant: tenant, Name: tenant}.Build(),
+					}.Build()).Do(ctx)
+				}
+				Expect(err).ToNot(HaveOccurred())
+				foreign := makeIP(tenant, project, ordinal)
+				network, createErr := vnDao.Create().SetObject(privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: tenant, Project: project, Name: "default"}.Build(),
+					Spec:     privatev1.VirtualNetworkSpec_builder{NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClass.GetId()}.Build()}.Build(),
+					Status:   privatev1.VirtualNetworkStatus_builder{State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY, Hub: "network-hub-a"}.Build(),
+				}.Build()).Do(ctx)
+				Expect(createErr).ToNot(HaveOccurred())
+				_, err = natGatewaysServer.lifecycle.natGatewayDao.Create().SetObject(privatev1.NATGateway_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: tenant, Project: project, Name: "default"}.Build(),
+					Spec: privatev1.NATGatewaySpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: network.GetObject().GetId()}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: foreign.GetId(), Name: foreign.GetMetadata().GetName()}.Build(),
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+			population, err := natGatewaysServer.lifecycle.natGatewayDao.List().SetLimit(1).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(population.GetTotal()).To(Equal(int32(1001)))
+			Expect(natGatewaysServer.lifecycle.ensureExternalIPAvailable(ctx, parent.GetId(), "")).To(Succeed())
+			_, err = natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{Object: privatev1.NATGateway_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: testTenant, Name: "target-consumer"}.Build(),
+				Spec: privatev1.NATGatewaySpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+					ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: parent.GetId()}.Build(),
+				}.Build(),
+			}.Build()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(grpcstatus.Code(natGatewaysServer.lifecycle.ensureExternalIPAvailable(ctx, parent.GetId(), ""))).To(Equal(grpccodes.FailedPrecondition))
+		}, Entry("foreign tenants with default projects", false), Entry("foreign projects in the same tenant", true))
+
 		It("bounds ExternalIP candidates and retains live and terminating consumer locks", func() {
 			parent := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(), privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
 			_, err := suiteTx.Exec(ctx, "create temporary table nat_gateways (like public.nat_gateways including defaults) on commit drop")

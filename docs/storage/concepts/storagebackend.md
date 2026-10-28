@@ -89,7 +89,7 @@ For CSP-managed backends, credential management happens entirely outside OSAC.
 osac create storagebackend --name vast-prod \
   --provider vast \
   --endpoint https://storage.example.com:8443 \
-  --username admin \
+  --username osac-provisioner \
   --password '<password>'
 
 # CSP-managed backend (no endpoint or credentials required)
@@ -99,6 +99,11 @@ osac create storagebackend --name netapp-prod \
 
 osac describe storagebackend netapp-prod
 ```
+
+Use a dedicated, least-privilege management account for OSAC-managed
+backends rather than a shared administrator identity. The example uses a
+placeholder password; the API also accepts a Secret reference
+(`passwordSecret`) instead of an inline value.
 
 ## See also
 

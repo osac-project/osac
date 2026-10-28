@@ -146,7 +146,7 @@ metalsmith==2.5.0
     # via python-esiclient
 msgpack==1.1.2
     # via oslo-serialization
-multidict==6.7.1
+multidict==7.2.1
     # via
     #   aiobotocore
     #   aiohttp

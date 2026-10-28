@@ -1,0 +1,33 @@
+# OpenShell provider profile for the GitHub CLI in the Carbonite sandbox.
+#
+# The sandbox only ever holds a placeholder for GITHUB_TOKEN/GH_TOKEN; the
+# OpenShell proxy swaps in the real token on requests to the endpoints below.
+# A credentialed endpoint must be inspected at HTTP level, so github.com:443
+# (L4-only in policy.yaml for git) is deliberately not listed here. Import
+# with: openshell provider profile import -f <this file>
+id: osac-github
+display_name: OSAC GitHub
+description: GitHub API for the gh CLI in the OSAC Carbonite sandbox
+category: source_control
+credentials:
+  - name: api_token
+    description: GitHub token
+    env_vars: [GITHUB_TOKEN, GH_TOKEN]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+discovery:
+  credentials: [api_token]
+endpoints:
+  - host: api.github.com
+    port: 443
+    protocol: rest
+    access: full
+    enforcement: enforce
+  - host: api.github.com
+    port: 443
+    path: /graphql
+    protocol: graphql
+    access: full
+    enforcement: enforce
+binaries: [/usr/bin/gh, /usr/local/bin/gh]

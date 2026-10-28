@@ -1,0 +1,100 @@
+# Containerfile.local-carbonite
+# Stage 1: Local Carbonite Level 3 toolchain image for osac-project/osac
+
+# Base Carbonite Fedora image (or output of 'make build-fedora' in carbonite repo)
+ARG CARBONITE_BASE=quay.io/aap/carbonite:release-fedora
+FROM ${CARBONITE_BASE}
+
+USER root
+
+# 1. System packages & build tools (DNF phase - executed before OpenShell locks layers)
+RUN dnf install -y \
+    bash bc bzip2 curl diffutils dnf-plugins-core findutils git gnupg2 \
+    hostname iproute iputils keyutils less lsof man-db man-pages \
+    mesa-dri-drivers mesa-vulkan-drivers ncurses nss-mdns openssh-clients \
+    openssl passwd pinentry pigz procps-ng rsync shadow-utils sudo tar time \
+    tree unzip util-linux vte-profile wget which words xorg-x11-xauth xz \
+    zip zsh \
+    nodejs npm python3 python3-pip python3-pyyaml python3.13 \
+    make gcc gcc-c++ jq ripgrep rpm-build postgresql-server \
+    && dnf config-manager addrepo --from-repofile=https://cli.github.com/packages/rpm/gh-cli.repo \
+    && dnf install -y gh \
+    && dnf clean all
+
+# 2. Binary Toolchain Versions (pinned to osac-project baseline)
+ARG GO_VERSION=1.26.3
+ARG BUF_VERSION=1.50.0
+ARG KUBECTL_VERSION=1.33.1
+ARG HELM_VERSION=3.22.0
+ARG HELM_SHA256=1e4ab49e429626cf6c6958d914248b78c9730803c2751b87627e171dc800e7bb
+ARG JIRA_VERSION=1.7.0
+ARG GRPCURL_VERSION=1.9.3
+ARG GINKGO_VERSION=2.33.1
+ARG ANSIBLE_VERSION=11.5.0
+ARG ANSIBLE_CORE_VERSION=2.18.5
+ARG PYTEST_VERSION=9.1.1
+ARG CODEX_VERSION=0.164.0
+ARG CLAUDE_CODE_VERSION=2.1.310
+
+# 3. Verified Binary Downloads
+RUN set -e \
+    # -- Go --
+    && curl -fsSLo /tmp/go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+    && curl -fsSL "https://dl.google.com/go/go${GO_VERSION}.linux-amd64.tar.gz.sha256" | tr -d '[:space:]' > /tmp/go.sha256 \
+    && echo "  /tmp/go.tar.gz" >> /tmp/go.sha256 \
+    && sha256sum -c /tmp/go.sha256 \
+    && tar -C /usr/local -xzf /tmp/go.tar.gz \
+    && ln -s /usr/local/go/bin/go /usr/local/bin/go \
+    && ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt \
+    && GOBIN=/usr/local/bin /usr/local/go/bin/go install "github.com/onsi/ginkgo/v2/ginkgo@v${GINKGO_VERSION}" \
+    # -- buf --
+    && curl -fsSLo /tmp/buf.tar.gz "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/buf-Linux-x86_64.tar.gz" \
+    && curl -fsSL "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/sha256.txt" \
+       | grep 'buf-Linux-x86_64.tar.gz' | sed 's|buf-Linux-x86_64.tar.gz|/tmp/buf.tar.gz|' > /tmp/buf.sha256 \
+    && sha256sum -c /tmp/buf.sha256 \
+    && tar -C /usr/local -xzf /tmp/buf.tar.gz --strip-components=1 buf/bin/buf buf/bin/protoc-gen-buf-breaking buf/bin/protoc-gen-buf-lint \
+    # -- kubectl --
+    && curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+    && curl -fsSL "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256" | tr -d '[:space:]' > /tmp/kubectl.sha256 \
+    && echo "  /usr/local/bin/kubectl" >> /tmp/kubectl.sha256 \
+    && sha256sum -c /tmp/kubectl.sha256 \
+    && chmod +x /usr/local/bin/kubectl \
+    # -- Helm --
+    && curl -fsSLo /tmp/helm.tar.gz "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" \
+    && echo "${HELM_SHA256}  /tmp/helm.tar.gz" | sha256sum -c - \
+    && tar -C /usr/local/bin -xzf /tmp/helm.tar.gz --strip-components=1 linux-amd64/helm \
+    && chmod +x /usr/local/bin/helm \
+    # -- jira --
+    && curl -fsSLo /tmp/jira.tar.gz "https://github.com/ankitpokhrel/jira-cli/releases/download/v${JIRA_VERSION}/jira_${JIRA_VERSION}_linux_x86_64.tar.gz" \
+    && curl -fsSL "https://github.com/ankitpokhrel/jira-cli/releases/download/v${JIRA_VERSION}/checksums.txt" \
+       | grep "jira_${JIRA_VERSION}_linux_x86_64.tar.gz" | sed "s|jira_${JIRA_VERSION}_linux_x86_64.tar.gz|/tmp/jira.tar.gz|" > /tmp/jira.sha256 \
+    && sha256sum -c /tmp/jira.sha256 \
+    && tar -C /usr/local/bin -xzf /tmp/jira.tar.gz --strip-components=2 --wildcards '*/bin/jira' \
+    && chmod +x /usr/local/bin/jira \
+    # -- grpcurl --
+    && curl -fsSLo /tmp/grpcurl.tar.gz "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz" \
+    && curl -fsSL "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_checksums.txt" \
+       | grep "grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz" | sed "s|grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz|/tmp/grpcurl.tar.gz|" > /tmp/grpcurl.sha256 \
+    && sha256sum -c /tmp/grpcurl.sha256 \
+    && tar -C /usr/local/bin --no-same-owner -xzf /tmp/grpcurl.tar.gz grpcurl \
+    && chmod +x /usr/local/bin/grpcurl \
+    # Cleanup tmp archives
+    && rm -rf /tmp/*
+
+# 4. Python and Node.js Global Tooling
+# Keep CLI entry points and `python` on the same stable interpreter. Fedora's
+# default Python in this base image is 3.15 RC, while osac-aap uses Python 3.13.
+RUN uv venv --python /usr/bin/python3.13 /opt/osac-python \
+    && uv pip install --no-cache --python /opt/osac-python/bin/python \
+       "ansible==${ANSIBLE_VERSION}" "ansible-core==${ANSIBLE_CORE_VERSION}" \
+       "pytest==${PYTEST_VERSION}" \
+    && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" pnpm@9.15.9
+
+ENV PATH="/opt/osac-python/bin:/usr/local/go/bin:${PATH}"
+
+# Root's Go and npm installs populate caches under the inherited sandbox HOME.
+# Runtime dependency downloads and compilation must use them as sandbox.
+RUN mkdir -p /sandbox/go/pkg/mod/cache /sandbox/.cache/go-build /sandbox/.cache/uv /sandbox/.npm/_cacache/tmp \
+    && chown -R sandbox:sandbox /sandbox/go /sandbox/.cache/go-build /sandbox/.cache/uv /sandbox/.npm
+
+USER sandbox

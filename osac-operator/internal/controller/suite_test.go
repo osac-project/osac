@@ -123,6 +123,8 @@ var _ = BeforeSuite(func() {
 		BinaryAssetsDirectory: filepath.Join("..", "..", "bin", "k8s",
 			fmt.Sprintf("1.31.0-%s-%s", runtime.GOOS, runtime.GOARCH)),
 	}
+	// Envtest is local, including in network namespaces with no default route.
+	testEnv.ControlPlane.GetAPIServer().Configure().Set("advertise-address", "127.0.0.1")
 
 	var err error
 	// cfg is defined in this file globally.

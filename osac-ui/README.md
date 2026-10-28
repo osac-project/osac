@@ -50,6 +50,15 @@ Start the Go proxy (requires a running fulfillment API) and Vite dev server:
 FULFILLMENT_API_URL=https://fulfillment.your-env.example.com pnpm dev
 ```
 
+The default `make` target builds the production container image with Podman.
+From the host at the OSAC repository root, run `make -C osac-ui`; from a host
+shell already in `osac-ui/`, run `make`. The Carbonite/OpenShell level-3 sandbox
+blocks nested Podman container creation, so a plain `make` there cannot build
+this image. After the optional host-build channel is enabled (see the root
+README and `docs/guides/developer/carbonite-host-build.md`), `make image-build`
+in `osac-ui/` dispatches the build to the host's Podman. For a source build
+inside the sandbox, use `pnpm install --frozen-lockfile` and `pnpm build`.
+
 ## Documentation
 
 | Document | Description |

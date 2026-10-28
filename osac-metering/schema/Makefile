@@ -9,7 +9,12 @@ GO_VERSION ?= $(shell grep '^go ' go.mod | cut -d' ' -f2)
 GOTOOLCHAIN ?= go$(GO_VERSION)
 GINKGO ?= go run github.com/onsi/ginkgo/v2/ginkgo
 
-include $(shell git rev-parse --show-toplevel)/tools/golangci-lint.mk
+# Derive the repo root from this Makefile's location rather than git: the
+# Carbonite sandbox mounts the worktree without its host-only gitdir, so
+# `git rev-parse --show-toplevel` fails there and the include path collapses.
+OSAC_REPO_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
+
+include $(OSAC_REPO_ROOT)/tools/golangci-lint.mk
 
 .PHONY: all test lint clean
 

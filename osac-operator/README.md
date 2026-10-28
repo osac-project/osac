@@ -310,6 +310,19 @@ test/e2e/console_proxy_test.go     # E2E tests
 - kubectl version v1.11.3+.
 - Access to a Kubernetes v1.11.3+ cluster.
 
+Run `make test` for local unit and controller tests. Envtest downloads and starts
+its own Kubernetes control plane, with the API server advertising `127.0.0.1` so
+it can start in isolated sandbox networks without a default route. A Carbonite
+sandbox needs the Go dependency and GitHub envtest download rules from the root
+development policy. See the [Carbonite section](../README.md#carbonite--openshell-linuxx86_64)
+for the OpenShell 0.1.2 process-group teardown restriction and proposed post-PoC
+cleanup workaround.
+
+`make integration-tests` requires a deployed operator on KiND. In Carbonite,
+follow the [KiND integration guide](../docs/guides/developer/carbonite-kind-integration.md)
+to mount a scoped kubeconfig and allow the one host API endpoint. The target
+checks API reachability and the operator pod before starting its longer suite.
+
 ### To Deploy on the cluster
 
 **Build and push your image to the location specified by `IMG`:**

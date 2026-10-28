@@ -1,0 +1,30 @@
+# OpenShell provider profile for the Codex CLI in the Carbonite sandbox.
+#
+# Codex reads OPENAI_API_KEY (or CODEX_API_KEY) from the environment, so the
+# sandbox only ever holds an opaque placeholder and the proxy swaps in the real
+# key on requests to the endpoints below. Import with:
+#   openshell provider profile import -f tools/carbonite/providers/osac-openai.yaml
+id: osac-openai
+display_name: OSAC OpenAI
+description: OpenAI API for the Codex CLI in the OSAC Carbonite sandbox
+category: inference
+credentials:
+  - name: api_key
+    description: OpenAI API key
+    env_vars: [OPENAI_API_KEY]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+discovery:
+  credentials: [api_key]
+endpoints:
+  - host: api.openai.com
+    port: 443
+    protocol: rest
+    access: full
+    enforcement: enforce
+binaries:
+  - /sandbox/.codex/packages/*/releases/*/bin/*
+  - /usr/local/bin/codex
+  - /usr/local/lib/node_modules/@openai/codex/bin/codex.js
+  - /usr/local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/*/bin/*

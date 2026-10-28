@@ -200,8 +200,13 @@ ENVTEST_VERSION ?= $(shell go list -m -f "{{ .Version }}" sigs.k8s.io/controller
 #ENVTEST_K8S_VERSION is the version of Kubernetes to use for setting up ENVTEST binaries (i.e. 1.31)
 ENVTEST_K8S_VERSION ?= $(shell go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
 
-include $(shell git rev-parse --show-toplevel)/tools/golangci-lint.mk
-include $(shell git rev-parse --show-toplevel)/osac-installer/scripts/dev-full/kind-load-image.mk
+# Derive the repo root from this Makefile's location rather than git: the
+# Carbonite sandbox mounts the worktree without its host-only gitdir, so
+# `git rev-parse --show-toplevel` fails there and the include path collapses.
+OSAC_REPO_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
+
+include $(OSAC_REPO_ROOT)/tools/golangci-lint.mk
+include $(OSAC_REPO_ROOT)/osac-installer/scripts/dev-full/kind-load-image.mk
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.

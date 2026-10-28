@@ -1,0 +1,26 @@
+# OpenShell provider profile for the Jira CLI in the Carbonite sandbox.
+#
+# jira.internal.example is a reserved placeholder; render the real host with
+# tools/carbonite/render-policy.sh (CARBONITE_JIRA_HOST) before importing, and
+# never commit the rendered copy. Jira Cloud uses Basic auth (email:token);
+# the proxy rewrites the placeholder in the Authorization header.
+id: osac-jira
+display_name: OSAC Jira
+description: Jira Cloud REST API for the OSAC Carbonite sandbox
+category: knowledge
+credentials:
+  - name: api_token
+    description: Jira Cloud API token
+    env_vars: [JIRA_API_TOKEN]
+    required: true
+    auth_style: basic
+    header_name: authorization
+discovery:
+  credentials: [api_token]
+endpoints:
+  - host: jira.internal.example
+    port: 443
+    protocol: rest
+    access: full
+    enforcement: enforce
+binaries: [/usr/local/bin/jira]

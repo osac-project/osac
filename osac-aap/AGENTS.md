@@ -105,7 +105,7 @@ From `osac-aap/`:
 ```bash
 uv sync --all-groups
 uv run pytest tests/unit      # Unit tests
-make lint                     # uv run ansible-lint
+make lint                     # uv run --group development ansible-lint
 make test                     # Kind setup, integration tests, teardown
 helm lint charts/aap
 ```

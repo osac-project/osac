@@ -300,6 +300,163 @@ make rebuild
 
 The image lives in `tools/distrobox/`. It shares `$HOME` by default (`HOME_DIR` to override).
 
+## Carbonite / OpenShell (Linux/x86_64)
+
+Each development-container target also has a `-carb` counterpart:
+
+```bash
+make check-carb                # Check host commands and the selected gateway
+make image-carb                # Build tools/carbonite/Containerfile
+make enter-carb                # Create/reuse the sandbox and enter a login shell
+make claude-carb ARGS='--model sonnet'
+make status-carb
+make stop-carb                 # Retain the sandbox workspace
+make rm-carb
+make rebuild-carb              # Remove, rebuild and enter
+```
+
+Ordinary development-container targets default to Distrobox. Select Carbonite
+with `make enter USE_CARBONITE=true`, or export
+`OSAC_USE_CARBONITE=true` before running the ordinary target. A command-line
+`USE_CARBONITE` value overrides the environment, including an explicit
+`USE_CARBONITE=false`. The selector applies to `image`, `enter`, `claude`,
+`stop`, `rm`, `rebuild`, and `status`; explicit `-carb` targets always use
+Carbonite. Only `true` and `false` are valid; any other value fails
+immediately.
+
+To dry-run every selector permutation without building either image, run
+`bash tools/test/test_carbonite_make_selector.sh`.
+
+These targets use OpenShell directly with the Carbonite image and policy, a
+cluster-enabled sandbox (`CARBONITE_NAME`, default `osac-carbonite-kind`) in
+the `osac-kind` workspace, and a writable bind mount of this checkout at
+`/sandbox/osac`, backed by an approved Podman volume. The default host-only
+policy and scoped kubeconfig live under
+`${XDG_STATE_HOME:-$HOME/.local/state}/osac-carbonite-kind`; Carbonite fails
+fast if those prerequisites are missing. Inside the sandbox,
+`PROJECT_DIR=/sandbox/osac` and `KUBECONFIG=/sandbox/kube/config`.
+
+For an ordinary Carbonite sandbox without cluster access, explicitly override
+the defaults:
+
+```bash
+make enter-carb \
+  CARBONITE_NAME=osac-carbonite \
+  CARBONITE_WORKSPACE=default \
+  CARBONITE_POLICY=tools/carbonite/policy.yaml \
+  CARBONITE_KUBECONFIG_DIR=
+```
+
+They require host-side Podman, OpenShell 0.1.2 and `jq`, plus a running local
+Podman gateway with these settings under `[openshell.drivers.podman]` in its
+schema-2 configuration:
+
+```toml
+allow_driver_config = true
+enable_bind_mounts = true
+userns = "keep-id:uid=1000,gid=1000"
+```
+
+Podman is a **runtime prerequisite for this Carbonite PoC**. Publishing the
+Carbonite image from GitHub CI/CD to an external registry is a separate image
+creation step; it does not select the engine that runs the sandbox. The current
+`make enter-carb` also runs `make image-carb` locally, creates a Podman-backed
+project volume, and passes a `podman` mount configuration to OpenShell. Docker
+being installed on the host, or setting `CONTAINER_CMD=docker`, does not make
+this Podman gateway workflow Docker-compatible. Supporting OpenShell's Docker
+compute driver requires separate gateway, mount, ownership, and verification
+work and is deferred. The proposed host-build broker concerns OSAC component
+images; it does not remove the Podman prerequisite for running Carbonite here.
+For the separate first-time opt-in to approved host image builds, see the
+[Carbonite host-build guide](docs/guides/developer/carbonite-host-build.md).
+For opt-in access to a host KiND cluster, including the dedicated read-only
+kubeconfig mount and API relay, see the
+[Carbonite KiND integration guide](docs/guides/developer/carbonite-kind-integration.md).
+
+`make check-carb` checks that the configured container engine, OpenShell and
+`jq` are available on the host, that the engine responds, and that the selected
+gateway reports both `connected` and `authenticated`. The sandbox targets run
+this check automatically before building an image or changing sandbox state,
+including with `make -j`. Failures stop the target and print troubleshooting
+commands. Install the commands and configure/register the gateway before first
+use; renew gateway authentication when needed. `make image-carb` checks only the
+container engine, so an image can be built before the gateway is ready. The check
+does not validate the gateway's mount settings or the project's policy and
+toolchain.
+
+The user mapping makes the image's sandbox user (UID/GID 1000) the host checkout
+owner, so it can read and write the project without changing host ownership.
+Resource admission stays enabled: the targets label the project volume for
+`CARBONITE_WORKSPACE` (default `osac-kind`) before attaching it. `CARBONITE_VOLUME` defaults to
+`$(CARBONITE_NAME)-workspace`; use a distinct name for a different checkout.
+An existing volume with a different host path or approval labels is rejected.
+Before creation, a temporary container applies Podman's shared `:z` SELinux
+label to this checkout so Fedora sandboxes can access it while SELinux is
+enforcing. Host file ownership is preserved.
+The gateway registration defaults to `openshell`; override `CARBONITE_GATEWAY`
+to select another local gateway.
+
+The repository ships `tools/carbonite/policy.yaml`, adapted from Carbonite for
+the OpenShell 0.1 policy schema. The Makefile default is
+`$CARBONITE_STATE_DIR/policy-kind.yaml`, the host-only copy the KiND guide
+creates (see below). Its deployment-internal endpoints are reserved `.example`
+placeholders; set `CARBONITE_GITLAB_HOST`,
+`CARBONITE_JIRA_HOST` and `CARBONITE_PATTERNS_HOST` to substitute them at
+sandbox creation, and keep the substituted policy outside the repository. The
+[KiND integration guide](docs/guides/developer/carbonite-kind-integration.md)
+shows the substitution step. Set `CARBONITE_POLICY` for another
+project policy. Use that policy to allow the project's dependencies and cluster
+API. `CARBONITE_CREATE_ARGS` accepts additional OpenShell creation options,
+including an approved provider, for example
+`CARBONITE_CREATE_ARGS='--provider my-claude-provider'`. Authenticate Claude in
+the sandbox or attach a provider before using it. GitHub and Jira credentials
+use OpenShell providers, set up once and attached to every new sandbox with
+`CARBONITE_PROVIDERS`; see the
+[credentials guide](docs/guides/developer/carbonite-credentials.md). Codex is
+installed too and authenticates with an API key (device sign-in is not
+permitted), and Claude Code can use Google Vertex AI; the same guide covers
+both. The targets use the tools
+installed in the image; Carbonite's host-side credential import and plugin setup
+are separate launcher features.
+
+Go selects the toolchain required by `go.work` / `go.mod` and may download a
+newer version than the image's bundled Go. The image makes `/sandbox/go` and
+`/sandbox/.cache/go-build` writable by the `sandbox` user after installing tools
+as root. The policy allows the bundled Go and toolchains downloaded under
+`/sandbox/go/pkg/mod` to reach the Go module proxy, checksum service and archive
+storage. Keep these binary paths aligned if you customize `GOPATH`. Verify cache
+permissions on a built image with `bash tools/test/test_carbonite_image.sh`.
+The envtest rule allows `setup-envtest*` under `/sandbox/osac/*/bin` to fetch its
+release index and Kubernetes test binaries from GitHub. Adjust that path if you
+customize `CARBONITE_WORKDIR`.
+
+Under OpenShell, envtest teardown fails with `operation not permitted`: it
+signals a process group, which OpenShell rejects. When `OPENSHELL_SANDBOX` is
+set, the operator's `make test` therefore runs through
+`osac-operator/hack/go-test-openshell.sh`. The wrapper reads the
+controller-runtime version from `go.mod`, patches that module's signal call in
+a throwaway copy so each test-owned process is signalled by its positive PID,
+and runs the suite. The operator's controller specs pass this way, from the
+host and in Carbonite.
+
+The patch is temporary. The wrapper fails with a drift message when the patched
+source cannot be found, so a controller-runtime upgrade cannot silently
+reintroduce the teardown failure; remove the wrapper once envtest gains
+per-process cleanup.
+
+For `osac-ui`, the Carbonite image includes pnpm 9.15.9 and a writable npm
+cache for source development. Inside the sandbox, `pnpm install --frozen-lockfile`
+and `pnpm build` build the SPA and Go proxy. With the optional
+[host-build setup](docs/guides/developer/carbonite-host-build.md), the default
+`make` in `osac-ui/` requests a fixed image build from the host's Podman.
+Without that opt-in, run `make -C osac-ui` on the host. OpenShell level 3 does
+not permit Podman to create nested containers in the sandbox.
+
+Image, policy, provider and mount options are applied when the sandbox is
+created. Use `make rebuild-carb` to recreate it after changing those options.
+The checkout remains on the host when the sandbox is removed.
+The project volume registration is also retained for reuse.
+
 ## Parallel worktrees
 
 ```bash

@@ -1,3 +1,7 @@
+# Single definition of "inside an OpenShell sandbox" (tools/openshell.mk).
+OSAC_REPO_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
+include $(OSAC_REPO_ROOT)/tools/openshell.mk
+
 OSAC_DEV_NAMESPACE ?= osac-operator-dev
 
 # Image URL to use all building/pushing image targets
@@ -11,6 +15,13 @@ ENVTEST_K8S_VERSION = 1.31.0
 GO_VERSION ?= 1.26.3
 GOTOOLCHAIN ?= go$(GO_VERSION)
 GOTOOLCHAIN_AUTO ?= $(GOTOOLCHAIN)+auto
+
+# OpenShell mediates signals to owned PIDs but rejects envtest's process-group signals.
+ifeq ($(OPENSHELL_SANDBOX_ACTIVE),true)
+ENVTEST_GO_TEST := bash hack/go-test-openshell.sh
+else
+ENVTEST_GO_TEST := go test
+endif
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -74,7 +85,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests.
-	GOTOOLCHAIN=$(GOTOOLCHAIN_AUTO) KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v '/test/integration') -coverprofile cover.out
+	GOTOOLCHAIN=$(GOTOOLCHAIN_AUTO) KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" $(ENVTEST_GO_TEST) $$(go list ./... | grep -v '/test/integration') -coverprofile cover.out
 
 .PHONY: helm-lint
 helm-lint: ## Lint Helm charts.
@@ -86,11 +97,12 @@ helm-validate: helm-lint ## Lint and template-render Helm charts.
 	helm template osac-operator-crds charts/operator-crds/
 	helm template osac-operator charts/operator/
 
-# Run integration tests against a pre-existing Kind cluster deployed via
-# the root Makefile's `make dev-env` + `make integration-test-operator`.
+# Run integration tests against a pre-existing Kind cluster with the operator
+# and console proxy deployed. The preflight reports missing access promptly.
 .PHONY: integration-tests
 integration-tests: manifests generate helm-crds ## Run integration tests against a Kind cluster.
-	ginkgo run --timeout 30m -v test/integration
+	bash hack/check-integration-cluster.sh
+	go run github.com/onsi/ginkgo/v2/ginkgo run --timeout 30m -v test/integration
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
@@ -157,7 +169,20 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: image-build
 image-build: ## Build container image with manager and console-proxy.
+
+ifeq ($(OPENSHELL_SANDBOX_ACTIVE),true)
+	@if [ "$(origin IMG)" != file ] || [ "$(origin CONTAINERFILE)" != file ] || [ "$(origin CONTAINER_TOOL)" != file ]; then \
+		printf 'Carbonite image-build does not support IMG, CONTAINERFILE, or CONTAINER_TOOL overrides\n' >&2; \
+		exit 1; \
+	fi
+	@if [ ! -x ../tools/carbonite/host-build ]; then \
+		printf 'Carbonite host-build helper is missing; enable host builds on the host and re-enter the sandbox\n' >&2; \
+		exit 1; \
+	fi
+	@../tools/carbonite/host-build operator
+else
 	$(CONTAINER_TOOL) build -t ${IMG} -f ${CONTAINERFILE} ..
+endif
 
 .PHONY: image-push
 image-push: ## Push container image.
@@ -241,8 +266,12 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest
 CONTROLLER_TOOLS_VERSION ?= v0.20.0
 ENVTEST_VERSION ?= release-0.19
 
-include $(shell git rev-parse --show-toplevel)/tools/golangci-lint.mk
-include $(shell git rev-parse --show-toplevel)/osac-installer/scripts/dev-full/kind-load-image.mk
+# Derive the repo root from this Makefile's location rather than git: the
+# Carbonite sandbox mounts the worktree without its host-only gitdir, so
+# `git rev-parse --show-toplevel` fails there and the include path collapses.
+
+include $(OSAC_REPO_ROOT)/tools/golangci-lint.mk
+include $(OSAC_REPO_ROOT)/osac-installer/scripts/dev-full/kind-load-image.mk
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.

@@ -155,5 +155,9 @@ make check-helm-crds
 make integration-tests       # Requires a pre-existing Kind cluster
 ```
 
-`make build` also runs the unit-test path. The console proxy integration tests
-are under `test/integration/`; E2E suites are under [`../tests/e2e/`](../tests/e2e/).
+`make build` also runs the unit-test path. Under `OPENSHELL_SANDBOX`, `make
+test` routes through `hack/go-test-openshell.sh`: it derives the
+controller-runtime version from `go.mod` and patches that module's
+process-group signal so envtest teardown works in Carbonite (see the root
+README). The console proxy integration tests are under `test/integration/`; E2E
+suites are under [`../tests/e2e/`](../tests/e2e/).

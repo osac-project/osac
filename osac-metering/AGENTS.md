@@ -39,7 +39,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-met
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
 | Event schema or transition mapping | Unit across affected modules | `make test` |
-| Projection/database code | Component integration (database) | `make test` |
+| Projection/database code | Component integration (database) | `make test`; in Carbonite the database is a sandbox-local PostgreSQL server rather than a Podman container |
 | Fulfillment client CA parsing, TLS verification, or bundle rotation | Unit with local TLS endpoint plus Helm render | `make test` and `make -C ../osac-installer fulfillment-trust-render-test`; deployed Watch contract remains [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) |
 | Fulfillment client service-account OAuth, credential rotation, or issuer configuration | Unit with local TLS token endpoint plus profile Helm render | `make test` and `make -C ../osac-installer metering-auth-render-test`; deployed cross-cluster auth remains with QE under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) |
 | Kafka producer/consumer, CloudEvents transport, offsets, retries, or DLQ | Component integration | Required suite is currently unavailable; track [OSAC-4846](https://redhat.atlassian.net/browse/OSAC-4846) |

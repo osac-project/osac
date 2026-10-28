@@ -5,6 +5,10 @@
 #
 #   http://www.apache.org/licenses/LICENSE-2.0
 
+# Single definition of "inside an OpenShell sandbox" (tools/openshell.mk).
+OSAC_REPO_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
+include $(OSAC_REPO_ROOT)/tools/openshell.mk
+
 GO_VERSION ?= $(shell grep '^go ' go.mod | cut -d' ' -f2)
 GOTOOLCHAIN ?= go$(GO_VERSION)
 GINKGO ?= go run github.com/onsi/ginkgo/v2/ginkgo
@@ -14,7 +18,11 @@ CONTAINER_TOOL ?= podman
 IMG_M360_ADAPTER ?= ghcr.io/osac-project/metering-m360-adapter:latest
 IMG_ECHO_ADAPTER ?= ghcr.io/osac-project/metering-echo-adapter:latest
 
-include $(shell git rev-parse --show-toplevel)/tools/golangci-lint.mk
+# Derive the repo root from this Makefile's location rather than git: the
+# Carbonite sandbox mounts the worktree without its host-only gitdir, so
+# `git rev-parse --show-toplevel` fails there and the include path collapses.
+
+include $(OSAC_REPO_ROOT)/tools/golangci-lint.mk
 
 .PHONY: all build-echo-adapter build-m360-adapter test lint clean \
 	image-build-m360-adapter image-push-m360-adapter \
@@ -45,13 +53,37 @@ lint: golangci-lint
 # build-metering-{m360,echo}-adapter-image.yaml's `context: .`,
 # `file: osac-metering/adapters/Containerfile.*`).
 image-build-m360-adapter:
+ifeq ($(OPENSHELL_SANDBOX_ACTIVE),true)
+	@if [ "$(origin IMG_M360_ADAPTER)" != file ] || [ "$(origin CONTAINER_TOOL)" != file ]; then \
+		printf 'Carbonite image-build-m360-adapter does not support IMG_M360_ADAPTER or CONTAINER_TOOL overrides\n' >&2; \
+		exit 1; \
+	fi
+	@if [ ! -x ../../tools/carbonite/host-build ]; then \
+		printf 'Carbonite host-build helper is missing; enable host builds on the host and re-enter the sandbox\n' >&2; \
+		exit 1; \
+	fi
+	@../../tools/carbonite/host-build metering-m360
+else
 	$(CONTAINER_TOOL) build -t $(IMG_M360_ADAPTER) -f Containerfile.m360-adapter ../..
+endif
 
 image-push-m360-adapter:
 	$(CONTAINER_TOOL) push $(IMG_M360_ADAPTER)
 
 image-build-echo-adapter:
+ifeq ($(OPENSHELL_SANDBOX_ACTIVE),true)
+	@if [ "$(origin IMG_ECHO_ADAPTER)" != file ] || [ "$(origin CONTAINER_TOOL)" != file ]; then \
+		printf 'Carbonite image-build-echo-adapter does not support IMG_ECHO_ADAPTER or CONTAINER_TOOL overrides\n' >&2; \
+		exit 1; \
+	fi
+	@if [ ! -x ../../tools/carbonite/host-build ]; then \
+		printf 'Carbonite host-build helper is missing; enable host builds on the host and re-enter the sandbox\n' >&2; \
+		exit 1; \
+	fi
+	@../../tools/carbonite/host-build metering-echo
+else
 	$(CONTAINER_TOOL) build -t $(IMG_ECHO_ADAPTER) -f Containerfile.echo-adapter ../..
+endif
 
 image-push-echo-adapter:
 	$(CONTAINER_TOOL) push $(IMG_ECHO_ADAPTER)

@@ -1,0 +1,442 @@
+# Adapted from ATAT Carbonite config/openshell/policy.yaml at 9f466d662ac2.
+# OpenShell 0.1 uses automatic TLS inspection when the tls field is omitted.
+# Carbonite sandbox policy — OpenShell policy for AI-SDLC skill execution
+#
+# Usage: openshell sandbox create --from osac-dev-carbonite:latest \
+#   --policy tools/carbonite/policy.yaml --detach -- sleep infinity
+version: 1
+
+# OAuth credential auto-refresh for long-running sandboxes
+# Requires OpenShell PR #22 (NVIDIA/OpenShell) — uncomment when merged
+# oauth_credentials:
+#   auto_refresh: true              # Enable automatic token refresh
+#   refresh_margin_seconds: 300     # Refresh 5 minutes before expiry
+#   max_lifetime_seconds: 7200      # Maximum sandbox lifetime: 2 hours
+
+# Filesystem: system paths read-only, sandbox tree read-write
+# /dev is read-write because /etc/profile sources fail with "Permission denied"
+# on /dev/null without it. Landlock operates on paths, not individual device nodes,
+# so per-device narrowing is not possible.
+filesystem_policy:
+  read_only:
+    - /usr
+    - /lib
+    - /etc
+    # ai-guardian is installed via `uv tool install` into /opt/uv-tools
+    # (see Containerfile's UV_TOOL_DIR), symlinked from /usr/local/bin --
+    # without this allowed, Landlock's default-deny blocks even
+    # executing the symlink target, failing with a bare "Permission
+    # denied" and no indication it's a policy gap rather than a real
+    # permissions bug. Scoped to uv-tools specifically (not all of
+    # /opt) so nothing else installed under /opt is exposed.
+    - /opt/uv-tools
+    # Project Python 3.13 venv contains the python and ansible-galaxy entry points.
+    - /opt/osac-python
+    # ansible-lint reads CPU quota metadata to size its worker pool.
+    - /sys/fs/cgroup
+  read_write:
+    - /sandbox
+    - /tmp
+    - /dev
+
+# Landlock kernel enforcement
+landlock:
+  compatibility: best_effort
+
+# Run as unprivileged sandbox user
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+# Network: Inference routing, Anthropic API, Vertex AI, Google OAuth, GitLab, and Jira
+network_policies:
+  inference_local:
+    name: inference-local
+    endpoints:
+      # OpenShell inference routing endpoint (used when --provider is specified)
+      - host: inference.local
+        port: 80
+      - host: inference.local
+        port: 443
+    binaries:
+      - path: /usr/bin/curl
+      - path: /usr/bin/python3
+      - path: /usr/bin/python3.13
+      - path: /sandbox/.local/bin/claude
+      - path: /sandbox/.local/bin/opencode
+      - path: /sandbox/.local/bin/claude-bin
+      - path: /sandbox/.opencode/bin/opencode-bin
+      - path: /sandbox/.local/share/claude/versions/*
+      - path: /usr/bin/node
+      - path: /usr/local/bin/node
+
+  anthropic_api:
+    name: anthropic-api
+    endpoints:
+      - host: api.anthropic.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+      - host: platform.claude.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+    binaries:
+      - path: /usr/bin/curl
+      # Claude Code installed from npm: /usr/local/bin/claude resolves to the
+      # packaged native binary.
+      - path: /usr/local/bin/claude
+      - path: /usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe
+      - path: /sandbox/.local/bin/claude
+      - path: /sandbox/.local/bin/opencode
+      - path: /sandbox/.local/bin/claude-bin
+      - path: /sandbox/.opencode/bin/opencode-bin
+      - path: /sandbox/.local/share/claude/versions/*
+
+  openai_codex:
+    name: openai-codex
+    endpoints:
+      - host: api.openai.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+      - host: chatgpt.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+      - host: auth.openai.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+      - host: ab.chatgpt.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+    binaries:
+      # Codex ships in the image from npm; the launcher is a node script that
+      # execs the vendored native binary.
+      - path: /usr/local/bin/codex
+      - path: /usr/local/lib/node_modules/@openai/codex/bin/codex.js
+      - path: /usr/local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/*/bin/*
+      - path: /usr/bin/node
+      - path: /usr/local/bin/node
+      # A standalone install by the sandbox user is also accepted.
+      - path: /sandbox/.local/bin/codex
+      - path: /sandbox/.local/bin/codex-bin
+      - path: /sandbox/.codex/packages/*/releases/*/bin/*
+      - path: /sandbox/.local/bin/opencode
+      - path: /sandbox/.opencode/bin/opencode-bin
+
+  vertex_api:
+    name: vertex-api
+    endpoints:
+      # Vertex AI regional endpoints
+      # oauth: blocks require OpenShell PR #22 — add when merged
+      - host: aiplatform.googleapis.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+      - host: us-east5-aiplatform.googleapis.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+      - host: us-central1-aiplatform.googleapis.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+      - host: us-west1-aiplatform.googleapis.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+      - host: europe-west1-aiplatform.googleapis.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+      - host: europe-west4-aiplatform.googleapis.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+      - host: asia-northeast1-aiplatform.googleapis.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+    binaries:
+      - path: /sandbox/.local/bin/claude
+      - path: /sandbox/.local/bin/opencode
+      - path: /sandbox/.local/bin/claude-bin
+      - path: /sandbox/.opencode/bin/opencode-bin
+      - path: /sandbox/.local/share/claude/versions/*
+      - path: /usr/bin/curl
+      - path: /usr/bin/node
+      - path: /usr/local/bin/node
+      - path: /usr/bin/python3
+      - path: /usr/bin/python3.13
+      - path: /usr/local/bin/claude
+      - path: /usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe
+
+  google_oauth:
+    name: google-oauth-passthrough
+    endpoints:
+      - host: oauth2.googleapis.com
+        port: 443
+        tls: skip
+        enforcement: enforce
+    binaries:
+      - path: /sandbox/.local/bin/claude
+      - path: /sandbox/.local/bin/opencode
+      - path: /sandbox/.local/bin/claude-bin
+      - path: /sandbox/.opencode/bin/opencode-bin
+      - path: /sandbox/.local/share/claude/versions/*
+      - path: /usr/bin/curl
+      - path: /usr/bin/node
+      - path: /usr/local/bin/node
+      - path: /usr/local/bin/claude
+      - path: /usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe
+
+  google_accounts:
+    name: google-accounts-passthrough
+    endpoints:
+      - host: accounts.google.com
+        port: 443
+        tls: skip
+        enforcement: enforce
+    binaries:
+      - path: /sandbox/.local/bin/claude
+      - path: /sandbox/.local/bin/opencode
+      - path: /sandbox/.local/bin/claude-bin
+      - path: /sandbox/.opencode/bin/opencode-bin
+      - path: /sandbox/.local/share/claude/versions/*
+      - path: /usr/bin/node
+      - path: /usr/local/bin/node
+      - path: /usr/local/bin/claude
+      - path: /usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe
+
+  gitlab:
+    name: gitlab
+    # allowed_ips omitted: the internal GitLab host has no stable IP, so the
+    # hostname restriction + TLS is sufficient — the OpenShell proxy validates
+    # the destination hostname. The endpoint is a reserved placeholder;
+    # substitute the internal host when copying this policy to a host-only
+    # path (see docs/guides/developer/carbonite-kind-integration.md).
+    endpoints:
+      - host: gitlab.internal.example
+        port: 443
+        tls: skip
+        enforcement: enforce
+      - host: gitlab.internal.example
+        port: 22
+        enforcement: enforce
+    binaries:
+      - path: /usr/bin/git
+      - path: /usr/libexec/git-core/*
+      - path: /usr/bin/ssh
+      - path: /usr/bin/curl
+      - path: /usr/local/bin/glab
+      - path: /sandbox/.local/bin/claude-bin
+      - path: /sandbox/.opencode/bin/opencode-bin
+      - path: /sandbox/.local/share/claude/versions/*
+      - path: /usr/bin/node
+      - path: /usr/local/bin/node
+
+  github:
+    name: github-api
+    endpoints:
+      - host: api.github.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+      - host: github.com
+        port: 443
+        enforcement: enforce
+      - host: github.com
+        port: 22
+        enforcement: enforce
+    binaries:
+      - path: /usr/local/bin/gh
+      - path: /usr/bin/gh
+      - path: /usr/bin/curl
+      - path: /usr/bin/git
+      - path: /usr/libexec/git-core/*
+      - path: /usr/bin/ssh
+      - path: /sandbox/.local/bin/claude-bin
+      - path: /sandbox/.opencode/bin/opencode-bin
+      - path: /sandbox/.local/share/claude/versions/*
+      - path: /usr/bin/node
+      - path: /usr/local/bin/node
+
+  jira:
+    name: jira-api
+    endpoints:
+      - host: jira.internal.example
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+      - host: api.atlassian.com
+        port: 443
+        enforcement: enforce
+      - host: auth.atlassian.com
+        port: 443
+        enforcement: enforce
+    binaries:
+      - path: /usr/bin/curl
+      - path: /usr/local/bin/jira
+
+  rh_pattern_server:
+    name: rh-pattern-server
+    endpoints:
+      - host: patterns.internal.example
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+    binaries:
+      - path: /usr/bin/curl
+      - path: /usr/bin/python3
+      - path: /usr/bin/python3.13
+      - path: /usr/local/bin/ai-guardian
+
+  github_raw:
+    name: github-raw
+    endpoints:
+      - host: raw.githubusercontent.com
+        port: 443
+        enforcement: enforce
+    binaries:
+      - path: /usr/bin/curl
+      - path: /usr/bin/python3
+      - path: /usr/bin/python3.13
+      - path: /usr/local/bin/ai-guardian
+      - path: /usr/local/bin/betterleaks
+      - path: /usr/local/bin/gitleaks
+      - path: /usr/local/bin/oc
+      - path: /usr/local/bin/kubectl
+
+  # Go modules, checksums and toolchain archives (including proxy redirects).
+  go_modules:
+    name: go-modules
+    endpoints:
+      - host: proxy.golang.org
+        port: 443
+        enforcement: enforce
+      - host: sum.golang.org
+        port: 443
+        enforcement: enforce
+      - host: storage.googleapis.com
+        port: 443
+        enforcement: enforce
+    binaries:
+      - path: /usr/local/go/bin/go
+      - path: /sandbox/go/pkg/mod/golang.org/toolchain@*/bin/go
+
+  # Operator envtest downloads its index and Kubernetes test binaries from GitHub.
+  envtest_downloads:
+    name: envtest-downloads
+    endpoints:
+      - host: raw.githubusercontent.com
+        port: 443
+        enforcement: enforce
+      - host: github.com
+        port: 443
+        enforcement: enforce
+      - host: release-assets.githubusercontent.com
+        port: 443
+        enforcement: enforce
+    binaries:
+      # Relative to the project workdir, which CARBONITE_WORKDIR may change.
+      - path: /sandbox/*/*/bin/setup-envtest*
+
+  google_storage:
+    name: google-cloud-storage
+    endpoints:
+      - host: storage.googleapis.com
+        port: 443
+        enforcement: enforce
+      - host: "*.storage.googleapis.com"
+        port: 443
+        enforcement: enforce
+    binaries:
+      - path: /usr/bin/python3
+      - path: /usr/bin/python3.13
+      - path: /usr/bin/curl
+
+  pypi:
+    name: pypi
+    endpoints:
+      - host: pypi.org
+        port: 443
+        enforcement: enforce
+      - host: files.pythonhosted.org
+        port: 443
+        enforcement: enforce
+    binaries:
+      - path: /usr/bin/python3
+      - path: /usr/bin/python3.13
+      - path: /usr/local/bin/uv
+      - path: /usr/local/bin/pip
+      - path: /usr/local/bin/pip3
+      - path: /sandbox/.local/bin/uv
+
+  ansible_galaxy:
+    name: ansible-galaxy
+    endpoints:
+      - host: galaxy.ansible.com
+        port: 443
+        enforcement: enforce
+      # Galaxy redirects collection archives to its dedicated S3 bucket.
+      - host: ansible-galaxy-ng.s3.dualstack.us-east-1.amazonaws.com
+        port: 443
+        enforcement: enforce
+    binaries:
+      # uv's project venv links its Python executable to /usr/bin/python3.13.
+      - path: /usr/bin/python3.13
+      - path: /sandbox/*/osac-aap/.venv/bin/python
+      - path: /opt/osac-python/bin/python
+
+  npm_registry:
+    name: npm-registry
+    endpoints:
+      - host: registry.npmjs.org
+        port: 443
+        enforcement: enforce
+    binaries:
+      - path: /usr/bin/node
+      # Fedora's node command resolves to this versioned executable.
+      - path: /usr/bin/node-22
+      - path: /usr/local/bin/node
+      - path: /sandbox/.local/bin/claude
+      - path: /sandbox/.local/bin/opencode
+      - path: /sandbox/.local/bin/claude-bin
+      - path: /sandbox/.opencode/bin/opencode-bin
+      - path: /sandbox/.local/share/claude/versions/*
+
+  claude_plugin:
+    name: claude-plugin-infra
+    endpoints:
+      - host: claude.ai
+        port: 443
+        enforcement: enforce
+      - host: api.claude.ai
+        port: 443
+        enforcement: enforce
+    binaries:
+      - path: /sandbox/.local/bin/claude-bin
+      - path: /sandbox/.opencode/bin/opencode-bin
+      - path: /sandbox/.local/share/claude/versions/*
+      - path: /usr/bin/node
+      - path: /usr/local/bin/node
+      - path: /usr/bin/curl

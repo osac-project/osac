@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Sandbox-side client for the optional, forced-command host build key.
+set -euo pipefail
+
+if (($# != 1)); then
+    echo 'unsupported host-build action' >&2
+    exit 2
+fi
+
+# sandbox creation sets PROJECT_DIR from CARBONITE_WORKDIR; default for older
+# sandboxes.
+project_dir="${PROJECT_DIR:-/sandbox/osac}"
+project_dir="${project_dir%/}"
+case "$1" in
+    probe) expected_dir= ;;
+    ui) expected_dir="$project_dir/osac-ui" ;;
+    fulfillment) expected_dir="$project_dir/fulfillment-service" ;;
+    operator) expected_dir="$project_dir/osac-operator" ;;
+    metering-service) expected_dir="$project_dir/osac-metering/metering-service" ;;
+    metering-m360|metering-echo) expected_dir="$project_dir/osac-metering/adapters" ;;
+    devstack-cli-tools) expected_dir="$project_dir/osac-installer/charts/osac-devstack" ;;
+    *) echo 'unsupported host-build action' >&2; exit 2 ;;
+esac
+
+if [[ -n "$expected_dir" && "$(pwd -P)" != "$expected_dir" ]]; then
+    echo 'unsupported worktree or checkout for host build' >&2
+    exit 2
+fi
+
+ssh_dir=/sandbox/.ssh
+for file in osac-host-build osac-host-build-known_hosts osac-host-build-user; do
+    if [[ ! -f "$ssh_dir/$file" || -L "$ssh_dir/$file" ]]; then
+        echo 'host build is not enabled for this sandbox' >&2
+        exit 1
+    fi
+done
+
+IFS= read -r host_user < "$ssh_dir/osac-host-build-user"
+if [[ ! "$host_user" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]]; then
+    echo 'invalid host-build account' >&2
+    exit 1
+fi
+
+exec /usr/bin/ssh -F /dev/null \
+    -i "$ssh_dir/osac-host-build" \
+    -o BatchMode=yes \
+    -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=yes \
+    -o ConnectTimeout=5 \
+    -o HostKeyAlgorithms=ssh-ed25519 \
+    -o HostKeyAlias=osac-host-build \
+    -o UserKnownHostsFile="$ssh_dir/osac-host-build-known_hosts" \
+    -o GlobalKnownHostsFile=/dev/null \
+    -o ClearAllForwardings=yes \
+    -T "${host_user}@host.openshell.internal" "$1"

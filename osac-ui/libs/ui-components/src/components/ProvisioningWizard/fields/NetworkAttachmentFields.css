@@ -1,0 +1,9 @@
+.network-attachment-fields__details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pf-t--global--spacer--lg);
+  margin-inline-start: var(--pf-t--global--spacer--md);
+  padding-inline-start: var(--pf-t--global--spacer--lg);
+  border-inline-start: var(--pf-t--global--border--width--box--default) solid
+    var(--pf-t--global--border--color--default);
+}

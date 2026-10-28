@@ -249,12 +249,12 @@ const matchesStringEqualityFilter = (
   if (!filter?.startsWith(prefix)) {
     return true;
   }
-  if (!filter.endsWith('"')) {
+  const match = /^((?:\\.|[^"\\])*)"(?:\s*&&.*)?$/.exec(filter.slice(prefix.length));
+  if (!match) {
     return false;
   }
-  const encodedValue = filter.slice(prefix.length, -1);
   try {
-    return value === JSON.parse('"' + encodedValue + '"');
+    return value === JSON.parse('"' + match[1] + '"');
   } catch {
     return false;
   }

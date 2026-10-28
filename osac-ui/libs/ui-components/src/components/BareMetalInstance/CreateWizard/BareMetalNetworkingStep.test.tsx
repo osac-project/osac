@@ -14,7 +14,7 @@ import {
 } from '@osac/types';
 
 import { BareMetalNetworkingStep } from './BareMetalNetworkingStep';
-import { getBareMetalInstanceInitialValues } from './fields';
+import { createEmptyBareMetalInstanceValues, getBareMetalInstanceInitialValues } from './fields';
 import {
   expectResourceSelectDisabled,
   getResourceSelectCombobox,
@@ -22,6 +22,18 @@ import {
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
 describe('BareMetalNetworkingStep', () => {
+  it('uses the shared network cards and external IP switch by default', () => {
+    renderWithProviders(
+      <Formik initialValues={createEmptyBareMetalInstanceValues()} onSubmit={() => undefined}>
+        <BareMetalNetworkingStep />
+      </Formik>,
+    );
+
+    expect(screen.getByRole('radio', { name: /Tenant default/ })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /Custom network/ })).not.toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Auto-attach external IP' })).not.toBeChecked();
+  });
+
   it('shows catalog network attachments when the wizard opens', async () => {
     const catalogItem = create(BareMetalInstanceCatalogItemSchema, {
       id: 'catalog-bm-1',
@@ -85,13 +97,14 @@ describe('BareMetalNetworkingStep', () => {
       },
     );
 
-    expect(screen.getByRole('checkbox', { name: 'Use tenant default network' })).not.toBeChecked();
-    expect(screen.getByRole('checkbox', { name: 'Use tenant default network' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: /Custom network/ })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /Tenant default/ })).toBeDisabled();
     await waitFor(() =>
       expect(getResourceSelectCombobox(/^Virtual network/)).toHaveValue('vn-prod'),
     );
-    await waitFor(() => expect(getResourceSelectCombobox(/^Subnet/)).toHaveValue('subnet-a'));
+    await waitFor(() => expect(getResourceSelectCombobox(/^Subnet/)).toHaveValue('subnet-a · 10.0.1.0/24'));
     expectResourceSelectDisabled(/^Virtual network/);
     expectResourceSelectDisabled(/^Subnet/);
+    expect(screen.getByRole('switch', { name: 'Auto-attach external IP' })).not.toBeChecked();
   });
 });

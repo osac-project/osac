@@ -4141,6 +4141,53 @@ var _ = Describe("Storage Controller", func() {
 
 			controllerutil.RemoveFinalizer(tenantSkipped, storageFinalizer)
 			Expect(k8sClient.Update(ctx, tenantSkipped)).To(Succeed())
+
+			By("allowing a pure-CSP Tenant with no OSAC footprint to delete when an unrelated catalog tier is skipped")
+			deprovTriggers = 0
+			namePureCSPSkipped := "csp-delete-pure-csp-unrelated-skipped"
+			createReadyTenantForStorage(ctx, namePureCSPSkipped, testNamespace)
+			nnPureCSPSkipped := types.NamespacedName{Name: namePureCSPSkipped, Namespace: testNamespace}
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-del-gold", "backend-csp"),
+							newTestStorageTier("osac-unrelated-skipped", "backend-missing"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, req *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					if req.GetId() == "backend-csp" {
+						return newTestCSPManagedBackendGetResponse("aws-ebs"), nil
+					}
+					return nil, status.Error(codes.NotFound, "backend not found")
+				},
+			}
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nnPureCSPSkipped))
+			Expect(err).NotTo(HaveOccurred())
+			for len(fakeRecorder.Events) > 0 {
+				<-fakeRecorder.Events
+			}
+
+			tenantPureCSPSkipped := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nnPureCSPSkipped, tenantPureCSPSkipped)).To(Succeed())
+			Expect(tenantPureCSPSkipped.Finalizers).To(ContainElement(storageFinalizer))
+			Expect(k8sClient.Delete(ctx, tenantPureCSPSkipped)).To(Succeed())
+
+			res, err = r.Reconcile(ctx, storageReconcileRequest(nnPureCSPSkipped))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeZero())
+			Expect(deprovTriggers).To(BeZero())
+			Expect(fakeRecorder.Events).To(BeEmpty())
+
+			err = k8sClient.Get(ctx, nnPureCSPSkipped, tenantPureCSPSkipped)
+			if err == nil {
+				Expect(tenantPureCSPSkipped.Finalizers).NotTo(ContainElement(storageFinalizer))
+			} else {
+				Expect(client.IgnoreNotFound(err)).To(Succeed())
+			}
 		})
 
 		It("should not skip cluster or backend deprovisioning when 0 OSAC tiers resolve but a deprovision job is active or failed with BlockDeletionOnFailure", func() {

@@ -1717,6 +1717,53 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 		Expect(err.Error()).To(ContainSubstring("project(s) pending deletion"))
 	})
 
+	It("should log warning and continue when signaling a DELETE_FAILED root project fails", func() {
+		tenant := privatev1.Tenant_builder{
+			Id: "org-root-signal-err",
+			Metadata: privatev1.Metadata_builder{
+				Name:              "test-org",
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
+				DeletionTimestamp: timestamppb.Now(),
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
+				IdpTenantName: "test-org",
+			}.Build(),
+		}.Build()
+
+		rootProject := privatev1.Project_builder{
+			Id: "root-proj-id",
+			Metadata: privatev1.Metadata_builder{
+				Name:              "",
+				Tenant:            "test-org",
+				DeletionTimestamp: timestamppb.Now(),
+			}.Build(),
+			Status: privatev1.ProjectStatus_builder{
+				State: privatev1.ProjectState_PROJECT_STATE_DELETE_FAILED,
+			}.Build(),
+		}.Build()
+
+		gomock.InOrder(
+			mockProjectsClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				Return(privatev1.ProjectsListResponse_builder{
+					Items: []*privatev1.Project{rootProject},
+					Total: 1,
+				}.Build(), nil),
+			mockProjectsClient.EXPECT().
+				Signal(gomock.Any(), gomock.Any()).
+				Return(nil, fmt.Errorf("signal rpc failed")),
+			mockProjectsClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				Return(privatev1.ProjectsListResponse_builder{Total: 1}.Build(), nil),
+		)
+
+		t := &task{r: reconciler, tenant: tenant}
+		err := t.delete(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("project(s) pending deletion"))
+	})
+
 	It("should return error when root project list fails", func() {
 		tenant := privatev1.Tenant_builder{
 			Id: "org-root-err",

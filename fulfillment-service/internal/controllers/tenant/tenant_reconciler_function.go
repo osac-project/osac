@@ -699,9 +699,16 @@ func (t *task) deleteRootProject(ctx context.Context) error {
 	for _, project := range listResp.GetItems() {
 		if project.GetMetadata().HasDeletionTimestamp() {
 			if project.GetStatus().GetState() == privatev1.ProjectState_PROJECT_STATE_DELETE_FAILED {
-				_, _ = t.r.projectsClient.Signal(ctx, privatev1.ProjectsSignalRequest_builder{
+				_, signalErr := t.r.projectsClient.Signal(ctx, privatev1.ProjectsSignalRequest_builder{
 					Id: project.GetId(),
 				}.Build())
+				if signalErr != nil {
+					t.r.logger.WarnContext(ctx, "Failed to signal root project stuck in DELETE_FAILED",
+						slog.String("tenant_id", t.tenant.GetId()),
+						slog.String("project_id", project.GetId()),
+						slog.Any("error", signalErr),
+					)
+				}
 			}
 			continue
 		}

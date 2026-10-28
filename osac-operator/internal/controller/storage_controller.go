@@ -751,20 +751,25 @@ func (r *StorageReconciler) handleDelete(ctx context.Context, tenant *v1alpha1.T
 	// Resolved independently from handleUpdate's resolution (no caching between
 	// create and delete paths), before the first AAP-triggering call in this
 	// function, so every downstream call in this reconcile sees the same result.
-	ctx, _, _, skippedOSACTiers, tierErr := resolveAndPartitionTierContext(ctx, r.TiersClient, r.BackendsClient, r.SecretsClient, "tenant", tenant.Name)
+	ctx, osacTiers, cspTiers, skippedOSACTiers, tierErr := resolveAndPartitionTierContext(ctx, r.TiersClient, r.BackendsClient, r.SecretsClient, "tenant", tenant.Name)
 	if tierErr != nil {
 		log.Error(tierErr, "tier resolution failed during deletion", "tenant", tenant.Name)
 	}
 
-	// Guard: when tier resolution failed or was incomplete, do not strip CaaS
-	// ClusterOrder finalizers or start/retry tenant deprovisioning AAP jobs —
-	// they would run without complete backend connections or tier definitions.
-	// Retain the finalizer and requeue so the controller retries when the
-	// fulfillment service or secret dependency recovers, rather than orphaning
-	// cluster-side or backend resources. When tier clients are nil (no
-	// fulfillment service configured), tierErr and skippedOSACTiers are false/nil
-	// and deprovisioning proceeds normally.
-	if (tierErr != nil || skippedOSACTiers) && (r.ClusterStorageProvider != nil || r.BackendProvider != nil) {
+	// Guard: when tier resolution failed or an OSAC tier affecting this tenant was
+	// skipped, do not strip CaaS ClusterOrder finalizers or start/retry tenant
+	// deprovisioning AAP jobs — they would run without complete backend
+	// connections or tier definitions. A pure-CSP Tenant with no OSAC storage
+	// footprint is not blocked by an unrelated skipped tier in the global catalog.
+	blockOnSkippedTiers := false
+	if tierErr == nil && skippedOSACTiers && (r.ClusterStorageProvider != nil || r.BackendProvider != nil) {
+		var footprintErr error
+		blockOnSkippedTiers, footprintErr = r.hasOSACFootprintForDelete(ctx, tenant, cspTiers, osacTiers, skippedOSACTiers)
+		if footprintErr != nil {
+			return ctrl.Result{}, footprintErr
+		}
+	}
+	if (tierErr != nil || blockOnSkippedTiers) && (r.ClusterStorageProvider != nil || r.BackendProvider != nil) {
 		log.Info("tier resolution failed or incomplete during deletion, retaining finalizer and requeueing",
 			"tenant", tenant.Name, "skippedOSACTiers", skippedOSACTiers, "retryAfter", r.StatusPollInterval)
 		if tierErr != nil {
@@ -1496,6 +1501,70 @@ func (r *StorageReconciler) isPureCSPTenant(
 		return false, err
 	}
 	return len(scResult.resolved) == 0 && len(scResult.duplicateMessages) == 0, nil
+}
+
+// hasOSACFootprintForDelete reports whether a deleting Tenant has any
+// OSAC-managed storage state that could be orphaned if deprovisioning ran while
+// a catalog tier was skipped. A pure-CSP Tenant (at least one CSP tier
+// resolved, zero OSAC tiers resolved, no non-CSP status.storageClasses, no
+// OSAC job history, no CaaS ClusterOrder holding clusterStorageFinalizer, no
+// hub Secret, and no tenant-labeled StorageClasses) returns false so an
+// unrelated broken tier in the global catalog does not block its deletion.
+func (r *StorageReconciler) hasOSACFootprintForDelete(
+	ctx context.Context,
+	tenant *v1alpha1.Tenant,
+	cspTiers []provisioning.TierDefinition,
+	osacTiers []provisioning.TierDefinition,
+	skippedOSACTiers bool,
+) (bool, error) {
+	if len(cspTiers) == 0 || len(osacTiers) > 0 {
+		return true, nil
+	}
+	if len(retainOSACStorageClasses(tenant.Status.StorageClasses, cspTiers, osacTiers, skippedOSACTiers)) > 0 ||
+		len(tenant.Status.StorageBackendJobs) > 0 ||
+		len(tenant.Status.ClusterStorageJobs) > 0 {
+		return true, nil
+	}
+	hasCaaS, err := r.hasTenantCaaSClusterOrderFinalizer(ctx, tenant.GetName())
+	if err != nil {
+		return false, err
+	}
+	if hasCaaS {
+		return true, nil
+	}
+	hubSecretReady, err := r.hubSecretExists(ctx, tenant.GetName(), "")
+	if err != nil {
+		return false, err
+	}
+	if hubSecretReady {
+		return true, nil
+	}
+	targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
+	if err != nil {
+		return false, err
+	}
+	scResult, err := getTenantStorageClasses(ctx, targetClient, tenant.GetName())
+	if err != nil {
+		return false, err
+	}
+	return len(scResult.resolved) > 0 || len(scResult.duplicateMessages) > 0, nil
+}
+
+func (r *StorageReconciler) hasTenantCaaSClusterOrderFinalizer(ctx context.Context, tenantName string) (bool, error) {
+	clusterOrders := &v1alpha1.ClusterOrderList{}
+	if err := r.List(ctx, clusterOrders); err != nil {
+		return false, fmt.Errorf("list ClusterOrders for CaaS footprint check: %w", err)
+	}
+	for i := range clusterOrders.Items {
+		co := &clusterOrders.Items[i]
+		if !controllerutil.ContainsFinalizer(co, clusterStorageFinalizer) {
+			continue
+		}
+		if co.GetAnnotations()[osacTenantKey] == tenantName {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // canSkipOSACDeprovisioning reports whether Tenant deletion can safely bypass

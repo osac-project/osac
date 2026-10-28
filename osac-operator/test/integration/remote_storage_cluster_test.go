@@ -28,8 +28,11 @@ import (
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/osac-operator/test/utils"
 )
@@ -57,11 +60,18 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 		remoteKubeconfigPath   string
 		restorePatchFilePath   string
 		remoteClusterCreated   bool
-		remoteSecretCreated    bool
+		remoteSecretUID        string
 		remoteModeReconfigured bool
+		tenantUIDs             map[string]string
+		secretUIDs             map[string]string
+		scUIDs                 map[string]string
 	)
 
 	BeforeAll(func() {
+		tenantUIDs = make(map[string]string)
+		secretUIDs = make(map[string]string)
+		scUIDs = make(map[string]string)
+
 		_, lookErr := exec.LookPath("kind")
 		Expect(lookErr).NotTo(HaveOccurred(), "kind binary must be present on PATH")
 
@@ -103,10 +113,9 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 					return
 				}
 				var secretErr, kindErr error
-				if remoteSecretCreated {
-					_, secretErr = runMgmtKubectl(
-						"delete", "secret", remoteKubeconfigSecretName,
-						"-n", operatorNamespace, "--ignore-not-found",
+				if remoteSecretUID != "" {
+					secretErr = deleteMgmtObjectByUID(
+						"v1", "Secret", operatorNamespace, remoteKubeconfigSecretName, remoteSecretUID,
 					)
 				}
 				if remoteClusterCreated {
@@ -121,29 +130,38 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 
 			var cleanupErrs []error
 			for _, tName := range []string{remoteTestTenantName, remoteForbiddenTenantName} {
-				_, delErr := runMgmtKubectl(
-					"delete", "tenant", tName,
-					"-n", operatorNamespace, "--ignore-not-found", "--wait=false",
-				)
-				if delErr != nil {
+				uid := tenantUIDs[tName]
+				if uid == "" {
+					continue
+				}
+				if delErr := deleteMgmtObjectByUID(
+					"osac.openshift.io/v1alpha1", "Tenant", operatorNamespace, tName, uid,
+				); delErr != nil {
 					cleanupErrs = append(cleanupErrs, delErr)
 				}
-				if finErr := removeMgmtTenantFinalizers(tName); finErr != nil {
+				if finErr := removeMgmtTenantFinalizers(tName, uid); finErr != nil {
 					cleanupErrs = append(cleanupErrs, finErr)
 				}
 			}
 			for _, secName := range []string{remoteTestSecretName, remoteForbiddenSecretName} {
-				_, secErr := runMgmtKubectl(
-					"delete", "secret", secName,
-					"-n", operatorNamespace, "--ignore-not-found",
-				)
-				if secErr != nil {
+				uid := secretUIDs[secName]
+				if uid == "" {
+					continue
+				}
+				if secErr := deleteMgmtObjectByUID(
+					"v1", "Secret", operatorNamespace, secName, uid,
+				); secErr != nil {
 					cleanupErrs = append(cleanupErrs, secErr)
 				}
 			}
 			for _, scName := range []string{localDecoyStorageClass, localForbiddenDecoyStorageClass} {
-				_, scErr := runMgmtKubectl("delete", "sc", scName, "--ignore-not-found")
-				if scErr != nil {
+				uid := scUIDs[scName]
+				if uid == "" {
+					continue
+				}
+				if scErr := deleteMgmtObjectByUID(
+					"storage.k8s.io/v1", "StorageClass", "", scName, uid,
+				); scErr != nil {
 					cleanupErrs = append(cleanupErrs, scErr)
 				}
 			}
@@ -212,13 +230,15 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 		inClusterKubeconfigFile := filepath.Join(GinkgoT().TempDir(), "in-cluster-remote.kubeconfig")
 		writeRemoteInClusterKubeconfig(remoteKubeconfigPath, inClusterKubeconfigFile, remoteServiceAccountName)
 
-		remoteSecretCreated = true
-		_, err = runMgmtKubectl(
+		secretUIDOut, err := runMgmtKubectl(
 			"create", "secret", "generic", remoteKubeconfigSecretName,
 			"-n", operatorNamespace,
 			"--from-file=kubeconfig="+inClusterKubeconfigFile,
+			"-o", "jsonpath={.metadata.uid}",
 		)
 		Expect(err).NotTo(HaveOccurred())
+		remoteSecretUID = strings.TrimSpace(string(secretUIDOut))
+		Expect(remoteSecretUID).NotTo(BeEmpty())
 
 		By("reconfiguring the deployed operator on the management cluster into remote-cluster mode")
 		remoteModeReconfigured = true
@@ -228,23 +248,25 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 
 	It("ignores management StorageClasses and reconciles remote StorageClasses via live watch", func() {
 		By("creating a decoy StorageClass on the local management cluster that must be ignored in remote mode")
-		_, err := runKubectlWithStdin(
-			"", storageClassYAML(localDecoyStorageClass, remoteTestTenantName, "gold"), "apply", "-f", "-",
-		)
+		scUID, err := createMgmtFixtureFromYAML(storageClassYAML(localDecoyStorageClass, remoteTestTenantName, "gold"))
 		Expect(err).NotTo(HaveOccurred())
+		scUIDs[localDecoyStorageClass] = scUID
 
 		By("creating the tenant storage hub Secret and Tenant CR on the management cluster")
-		_, err = runKubectlWithStdin(
-			"", tenantStorageSecretYAML(remoteTestSecretName, operatorNamespace, remoteTestTenantName), "apply", "-f", "-",
+		secUID, err := createMgmtFixtureFromYAML(
+			tenantStorageSecretYAML(remoteTestSecretName, operatorNamespace, remoteTestTenantName),
 		)
 		Expect(err).NotTo(HaveOccurred())
+		secretUIDs[remoteTestSecretName] = secUID
 
-		_, err = runKubectlWithStdin("", tenantCRYAML(remoteTestTenantName, operatorNamespace), "apply", "-f", "-")
+		tenantUID, err := createMgmtFixtureFromYAML(tenantCRYAML(remoteTestTenantName, operatorNamespace))
 		Expect(err).NotTo(HaveOccurred())
+		tenantUIDs[remoteTestTenantName] = tenantUID
 
 		By("verifying StorageReconciler ignores the local decoy StorageClass and reports ClusterStorageReady=False")
 		Eventually(func(g Gomega) {
 			status := fetchTenantStatus(g, remoteTestTenantName)
+			g.Expect(status.Finalizers).To(ContainElement("osac.openshift.io/storage"))
 			g.Expect(status.Phase).To(Equal("Ready"))
 
 			backendCond := findCondition(status.Conditions, "StorageBackendReady")
@@ -347,20 +369,21 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 			)
 			Expect(err).NotTo(HaveOccurred())
 
-			_, err = runKubectlWithStdin(
-				"", storageClassYAML(localForbiddenDecoyStorageClass, remoteForbiddenTenantName, "gold"), "apply", "-f", "-",
+			scUID, err := createMgmtFixtureFromYAML(
+				storageClassYAML(localForbiddenDecoyStorageClass, remoteForbiddenTenantName, "gold"),
 			)
 			Expect(err).NotTo(HaveOccurred())
+			scUIDs[localForbiddenDecoyStorageClass] = scUID
 
-			_, err = runKubectlWithStdin(
-				"",
+			secUID, err := createMgmtFixtureFromYAML(
 				tenantStorageSecretYAML(remoteForbiddenSecretName, operatorNamespace, remoteForbiddenTenantName),
-				"apply", "-f", "-",
 			)
 			Expect(err).NotTo(HaveOccurred())
+			secretUIDs[remoteForbiddenSecretName] = secUID
 
-			_, err = runKubectlWithStdin("", tenantCRYAML(remoteForbiddenTenantName, operatorNamespace), "apply", "-f", "-")
+			tenantUID, err := createMgmtFixtureFromYAML(tenantCRYAML(remoteForbiddenTenantName, operatorNamespace))
 			Expect(err).NotTo(HaveOccurred())
+			tenantUIDs[remoteForbiddenTenantName] = tenantUID
 
 			By("verifying the operator logs the remote StorageClass Forbidden error and fails closed without local fallback")
 			Eventually(func(g Gomega) {
@@ -369,8 +392,13 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 				g.Expect(string(logsOut)).To(ContainSubstring("storageclasses.storage.k8s.io is forbidden"))
 			}, 60*time.Second, 2*time.Second).Should(Succeed())
 
+			// multicluster-runtime's MultiClusterWatch waits for remoteCluster.GetCache().WaitForCacheSync(ctx)
+			// before starting StorageReconciler workers, so a 403 Forbidden on remote StorageClasses blocks
+			// cache sync and prevents StorageReconciler from adding its finalizer or falling back to local
+			// StorageClasses until RBAC is granted.
 			Consistently(func(g Gomega) {
 				forbiddenStatus := fetchTenantStatus(g, remoteForbiddenTenantName)
+				g.Expect(forbiddenStatus.Finalizers).NotTo(ContainElement("osac.openshift.io/storage"))
 				g.Expect(forbiddenStatus.StorageClasses).To(
 					BeEmpty(), "StorageReconciler must fail closed and never fall back to local StorageClasses",
 				)
@@ -399,6 +427,7 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 			By("verifying the operator recovers automatically and resolves the remote StorageClass")
 			Eventually(func(g Gomega) {
 				status := fetchTenantStatus(g, remoteForbiddenTenantName)
+				g.Expect(status.Finalizers).To(ContainElement("osac.openshift.io/storage"))
 				g.Expect(status.Phase).To(Equal("Ready"))
 
 				backendCond := findCondition(status.Conditions, "StorageBackendReady")
@@ -443,6 +472,7 @@ type tenantResolvedStorageClass struct {
 }
 
 type tenantStatusSnapshot struct {
+	Finalizers     []string                     `json:"-"`
 	Phase          string                       `json:"phase"`
 	Conditions     []tenantConditionEntry       `json:"conditions"`
 	ClusterStorage []tenantClusterStorageEntry  `json:"clusterStorage"`
@@ -469,12 +499,61 @@ func runMgmtKubectl(args ...string) ([]byte, error) {
 	return runKubectl(args...)
 }
 
+// createMgmtFixtureFromYAML exclusively creates a fixture on the management
+// cluster from YAML and returns its metadata.uid.
+func createMgmtFixtureFromYAML(manifest string) (string, error) {
+	out, err := runKubectlWithStdin("", manifest, "create", "-f", "-", "-o", "jsonpath={.metadata.uid}")
+	if err != nil {
+		return "", err
+	}
+	uid := strings.TrimSpace(string(out))
+	if uid == "" {
+		return "", fmt.Errorf("created fixture returned empty metadata.uid")
+	}
+	return uid, nil
+}
+
+// deleteMgmtObjectByUID deletes an object on the management cluster with an
+// atomic UID precondition, ignoring NotFound.
+func deleteMgmtObjectByUID(apiVersion, kind, namespace, name, uid string) error {
+	if uid == "" {
+		return nil
+	}
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	overrides := &clientcmd.ConfigOverrides{CurrentContext: mgmtKubeContext()}
+	restCfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
+	if err != nil {
+		return err
+	}
+	c, err := client.New(restCfg, client.Options{})
+	if err != nil {
+		return err
+	}
+	obj := &unstructured.Unstructured{}
+	obj.SetAPIVersion(apiVersion)
+	obj.SetKind(kind)
+	obj.SetNamespace(namespace)
+	obj.SetName(name)
+	uidTyped := types.UID(uid)
+	ctx, cancel := context.WithTimeout(context.Background(), kubectlCommandTimeout)
+	defer cancel()
+	err = c.Delete(ctx, obj, client.Preconditions{UID: &uidTyped})
+	return client.IgnoreNotFound(err)
+}
+
 // removeMgmtTenantFinalizers clears finalizers on a Tenant in the management
-// cluster, ignoring NotFound when the Tenant has already been deleted.
-func removeMgmtTenantFinalizers(name string) error {
+// cluster using an atomic RFC 6902 JSON Patch UID test, ignoring NotFound.
+func removeMgmtTenantFinalizers(name, uid string) error {
+	if uid == "" {
+		return nil
+	}
+	patch := fmt.Sprintf(
+		`[{"op":"test","path":"/metadata/uid","value":%q},{"op":"replace","path":"/metadata/finalizers","value":null}]`,
+		uid,
+	)
 	out, err := runMgmtKubectl(
 		"patch", "tenant", name, "-n", operatorNamespace,
-		"--type=merge", "-p", `{"metadata":{"finalizers":[]}}`,
+		"--type=json", "-p", patch,
 	)
 	if err != nil && !strings.Contains(string(out), "NotFound") {
 		return err
@@ -482,15 +561,20 @@ func removeMgmtTenantFinalizers(name string) error {
 	return nil
 }
 
-// fetchTenantStatus reads and unmarshals the Tenant status from the management cluster.
+// fetchTenantStatus reads and unmarshals the Tenant status and metadata
+// finalizers from the management cluster.
 func fetchTenantStatus(g Gomega, name string) tenantStatusSnapshot {
 	out, err := runMgmtKubectl("get", "tenant", name, "-n", operatorNamespace, "-o", "json")
 	g.Expect(err).NotTo(HaveOccurred())
 
 	var wrapper struct {
+		Metadata struct {
+			Finalizers []string `json:"finalizers"`
+		} `json:"metadata"`
 		Status tenantStatusSnapshot `json:"status"`
 	}
 	g.Expect(json.Unmarshal(out, &wrapper)).To(Succeed())
+	wrapper.Status.Finalizers = wrapper.Metadata.Finalizers
 	return wrapper.Status
 }
 

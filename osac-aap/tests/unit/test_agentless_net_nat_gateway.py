@@ -175,6 +175,51 @@ def test_reconcile_keeps_shared_chain_return_rules_last_before_route(
     assert events[route_index] == ("route", EXTERNAL_IP, NEXT_HOP)
 
 
+def test_reconcile_accepts_iptables_forward_rule_selector_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = gateway_state()
+    outbound, inbound = nat_gateway._forward_rules(gateway)
+    canonical_outbound = [
+        "-s", f"{EXTERNAL_IP}/32", "-i", HOST_INTERFACE, "-o", EXTERNAL_INTERFACE,
+        *outbound[outbound.index("-m"):],
+    ]
+    canonical_inbound = [
+        "-d", f"{EXTERNAL_IP}/32", "-i", EXTERNAL_INTERFACE, "-o", HOST_INTERFACE,
+        *inbound[inbound.index("-m"):],
+    ]
+    monkeypatch.setattr(nat_gateway, "_validate_parent", lambda *_args: None)
+    monkeypatch.setattr(nat_gateway, "_ensure_shared_chain", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(nat_gateway, "verify_snat_forwarding_hook", lambda: None)
+    monkeypatch.setattr(nat_gateway, "verify_snat_bypass_hook", lambda: None)
+    monkeypatch.setattr(nat_gateway, "_existing_snat_rules", lambda *_args: [])
+    monkeypatch.setattr(nat_gateway.network, "ensure_iptables_rules", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(nat_gateway, "_ensure_rule", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        nat_gateway,
+        "_owned_rules",
+        lambda table, chain, _uid, **_kwargs: (
+            [(canonical_outbound, "forward-out"), (canonical_inbound, "forward-in")]
+            if (table, chain) == ("filter", nat_gateway.SNAT_FORWARD_CHAIN)
+            else ([(nat_gateway._bypass_rule(gateway), "bypass")]
+                  if (table, chain) == ("nat", nat_gateway.SNAT_BYPASS_CHAIN)
+                  else [])
+        ),
+    )
+    monkeypatch.setattr(
+        nat_gateway.agentless_net_external_ip,
+        "ensure_external_route",
+        lambda *_args: True,
+    )
+    monkeypatch.setattr(
+        nat_gateway.agentless_net_external_ip,
+        "_route_uses_next_hop",
+        lambda *_args: True,
+    )
+
+    assert nat_gateway.reconcile_nat_gateway(parent_state(), gateway, []) is True
+
+
 def test_reconcile_rejects_a_broad_owned_snat_rule_before_route(monkeypatch):
     gateway = gateway_state()
     broad = [

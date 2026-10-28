@@ -403,7 +403,11 @@ def reconcile_nat_gateway(
         outbound, inbound = _forward_rules(gateway)
         for rule, kind in ((outbound, "forward-out"), (inbound, "forward-in")):
             owned = [item for item, owner_kind in _owned_rules("filter", SNAT_FORWARD_CHAIN, uid) if owner_kind == kind]
-            if len(owned) > 1 or (owned and owned[0] != rule):
+            if len(owned) > 1 or (
+                owned
+                and agentless_net_external_ip._forwarding_rule_signature(owned[0])
+                != agentless_net_external_ip._forwarding_rule_signature(rule)
+            ):
                 raise NATGatewayProviderError("NATGateway forwarding rule changed under the same owner")
             # Keep owned rules before the chain's terminal RETURN sentinel.
             changed = _ensure_rule("filter", SNAT_FORWARD_CHAIN, rule, insert=True) or changed

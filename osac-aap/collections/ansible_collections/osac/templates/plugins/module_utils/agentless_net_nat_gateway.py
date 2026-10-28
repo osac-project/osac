@@ -398,6 +398,7 @@ def reconcile_nat_gateway(
             "POSTROUTING",
             list(desired_snat.values()),
             namespace=namespace,
+            insert=True,
         ) or changed
 
         outbound, inbound = _forward_rules(gateway)

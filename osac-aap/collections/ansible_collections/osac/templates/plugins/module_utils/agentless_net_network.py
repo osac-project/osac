@@ -131,8 +131,9 @@ def ensure_iptables_rules(
     rules: list[list[str]],
     *,
     namespace: str | None = None,
+    insert: bool = False,
 ) -> bool:
-    """Append missing rules after one chain snapshot, avoiding repeated scans."""
+    """Ensure missing rules after one chain snapshot, avoiding repeated scans."""
     existing_rules = iptables_chain_rules(runner, table, chain, namespace=namespace)
     present = {tuple(rule) for rule in existing_rules}
     prefix = iptables_prefix(table, namespace)
@@ -141,7 +142,8 @@ def ensure_iptables_rules(
         signature = tuple(rule)
         if signature in present:
             continue
-        runner([*prefix, "-A", chain, *rule])
+        action = ["-I", chain, "1"] if insert else ["-A", chain]
+        runner([*prefix, *action, *rule])
         present.add(signature)
         changed = True
     return changed

@@ -299,6 +299,36 @@ def test_ensure_iptables_rules_uses_one_snapshot_for_many_rules():
     assert all(command[:5] == ["ip", "netns", "exec", "vn-test", "iptables"] for command in commands)
 
 
+def test_ensure_iptables_rules_can_insert_missing_rules():
+    existing = [["-j", "RETURN"]]
+    desired = [["-s", "10.0.1.0/24", "-j", "SNAT", "--to-source", "198.51.100.10"]]
+    commands = []
+
+    def run(command, check=True):
+        commands.append(command)
+        action_index = next(
+            (index for index, part in enumerate(command) if part in {"-S", "-I"}),
+            None,
+        )
+        assert action_index is not None
+        action = command[action_index]
+        chain = command[action_index + 1]
+        if action == "-S":
+            output = "\n".join(f"-A {chain} {shlex.join(rule)}" for rule in existing)
+            return completed(command, output)
+        existing.insert(0, command[action_index + 3 :])
+        return completed(command)
+
+    changed = agentless_net_network.ensure_iptables_rules(
+        run, "nat", "POSTROUTING", desired, namespace="vn-test", insert=True
+    )
+
+    assert changed is True
+    assert existing == desired + [["-j", "RETURN"]]
+    assert sum("-S" in command for command in commands) == 1
+    assert sum("-I" in command for command in commands) == 1
+
+
 def test_ensure_iptables_rule_uses_shared_namespace_command_and_verifies_insert():
     commands = []
     present = False

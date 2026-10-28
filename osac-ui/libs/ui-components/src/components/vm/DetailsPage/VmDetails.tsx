@@ -81,7 +81,7 @@ const VmDetails = ({ vm }: Props) => {
                 />
               </FlexItem>
               <FlexItem>
-                <VmDetailsActionButtons vm={vm} />
+                <VmDetailsActionButtons vm={vm} onOpenConsole={() => setActiveTab(2)} />
               </FlexItem>
             </Flex>
           </StackItem>

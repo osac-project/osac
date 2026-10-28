@@ -1,21 +1,12 @@
 import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import type {
-  ComputeInstance,
-  ExternalIPAttachment,
-  ExternalIPAttachmentsListResponse,
-} from '@osac/types';
-import { ComputeInstanceState, ExternalIPAttachmentState } from '@osac/types';
+import type { ComputeInstance } from '@osac/types';
+import { ComputeInstanceState } from '@osac/types';
 
 import VmDetailsActionButtons from './VmDetailsActionButtons';
-import * as resourceModule from '../../../api/use-resource';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
-
-vi.mock('../../../api/use-resource', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../api/use-resource')>();
-  return { ...actual, useListResource: vi.fn() };
-});
 
 vi.mock('../useVmPowerAction', () => ({
   useVmPowerAction: () => ({ runPowerAction: vi.fn() }),
@@ -27,37 +18,25 @@ const vm = {
   status: { state: ComputeInstanceState.RUNNING },
 } as ComputeInstance;
 
-const attachment = (state: ExternalIPAttachmentState, message?: string) =>
-  ({ status: { state, message } }) as ExternalIPAttachment;
+describe('VmDetailsActionButtons', () => {
+  it('renders lifecycle and delete actions without external IP controls', () => {
+    renderWithProviders(<VmDetailsActionButtons vm={vm} onOpenConsole={vi.fn()} />);
 
-const setAttachment = (state: ExternalIPAttachmentState, message?: string) => {
-  vi.mocked(resourceModule.useListResource).mockReturnValue({
-    data: { items: [attachment(state, message)] } as ExternalIPAttachmentsListResponse,
-    isLoading: false,
-    isFetching: false,
-    error: null,
-  } as unknown as ReturnType<typeof resourceModule.useListResource>);
-};
-
-describe('VmDetailsActionButtons external IP states', () => {
-  it('shows a disabled progress button while the attachment is provisioning', () => {
-    setAttachment(ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_PENDING);
-
-    renderWithProviders(<VmDetailsActionButtons vm={vm} />);
-
-    expect(screen.getByRole('button', { name: /Attaching External IP/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Restart' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /external ip/i })).not.toBeInTheDocument();
   });
 
-  it('shows an alert when the attachment fails', () => {
-    setAttachment(
-      ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_FAILED,
-      'external IP binding failed',
-    );
+  it('opens the existing console surface through the supplied callback', async () => {
+    const onOpenConsole = vi.fn();
+    const user = userEvent.setup();
 
-    renderWithProviders(<VmDetailsActionButtons vm={vm} />);
+    renderWithProviders(<VmDetailsActionButtons vm={vm} onOpenConsole={onOpenConsole} />);
 
-    expect(screen.getByText('External IP attachment failed')).toBeInTheDocument();
-    expect(screen.getByText('external IP binding failed')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Detach external IP' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Open console' }));
+
+    expect(onOpenConsole).toHaveBeenCalledOnce();
   });
 });

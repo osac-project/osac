@@ -205,6 +205,12 @@ class RedirectHandler(BaseHTTPRequestHandler):
         if self.path == "/start" and authenticated:
             self.send_response(self.server.redirect_status)
             self.send_header("Location", self.server.destination)
+            if self.server.response_cookies in ("session", "both"):
+                self.send_header(
+                    "Set-Cookie", f"connect.sid={self.server.minted_session}; Path=/; HttpOnly"
+                )
+            if self.server.response_cookies in ("other", "both"):
+                self.send_header("Set-Cookie", f"probe={self.server.minted_other}; Path=/")
             payload = b""
         else:
             self.send_response(200 if self.path == "/landing" else 401)
@@ -247,10 +253,11 @@ def test_redirect_handler_rejects_invalid_session(transport_module, cookie):
     for policy in ("urllib2", "all")
 ])
 @pytest.mark.parametrize("cross_origin", [False, True])
+@pytest.mark.parametrize("response_cookies", ["none", "session", "other", "both"])
 def test_real_redirect_transport_never_forwards_cookie(
-    transport_module, method, status, policy, followed, cross_origin
+    transport_module, method, status, policy, followed, cross_origin, response_cookies
 ):
-    """Strip the session on followed redirects without changing policy."""
+    """Exclude supplied and response cookies without changing redirect policy."""
     with contextlib.ExitStack() as stack:
         origin = stack.enter_context(running_server(ThreadingHTTPServer(
             ("127.0.0.1", 0), RedirectHandler
@@ -265,6 +272,9 @@ def test_real_redirect_transport_never_forwards_cookie(
             server.observations = []
         origin.redirect_status = status
         origin.destination = f"http://127.0.0.1:{target.server_port}/landing"
+        origin.response_cookies = response_cookies
+        origin.minted_session = secrets.token_hex(16)
+        origin.minted_other = secrets.token_hex(16)
         client = client_for(origin, transport_module)
         transport_module.params["follow_redirects"] = policy
         body = {"probe": True} if method == "POST" else None
@@ -285,3 +295,4 @@ def test_real_redirect_transport_never_forwards_cookie(
             assert not observations[1]["cookie_present"]
             assert observations[1]["method"] == method
             assert observations[1]["body"] == initial["body"]
+            assert observations[1]["content_type"] == initial["content_type"]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import time
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 
 from ansible.module_utils.urls import fetch_url
 
@@ -348,6 +349,8 @@ class NetrisSubnetClient:
             data=json.dumps(body).encode() if body is not None else None,
             headers=headers,
             unredirected_headers=["Cookie"],
+            # An empty allowlist prevents response cookies from reappearing on redirects.
+            cookies=CookieJar(policy=DefaultCookiePolicy(allowed_domains=[])),
             method=method,
             timeout=self._timeout,
             use_proxy=True,

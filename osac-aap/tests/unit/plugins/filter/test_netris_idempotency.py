@@ -350,3 +350,40 @@ class TestFilterModuleRegistration:
         assert "netris_immutable_missing_fields" in filters
         assert "netris_safe_error_detail" in filters
         assert "netris_ip_in_cidrs" in filters
+
+
+class TestNetrisRetryableError:
+    def test_explicit_retryable_wins(self):
+        assert idempotency.netris_retryable_error(
+            {"retryable": False, "status": 503, "msg": "provider unavailable"}
+        ) is False
+        assert idempotency.netris_retryable_error(
+            {"retryable": True, "status": 400, "msg": "bad request"}
+        ) is True
+
+    def test_server_and_throttling_statuses_are_retryable(self):
+        for status in (500, 502, 503, 504, 408, 425, 429):
+            assert idempotency.netris_retryable_error({"status": status}) is True
+
+    def test_client_statuses_are_final(self):
+        for status in (400, 401, 403, 404, 409, 422):
+            assert idempotency.netris_retryable_error({"status": status}) is False
+
+    def test_transport_failure_without_status_is_retryable(self):
+        assert idempotency.netris_retryable_error(
+            {"msg": "Status code was 503 and not [200]: HTTP Error 503: Service Unavailable"}
+        ) is True
+        assert idempotency.netris_retryable_error(
+            {"msg": "Connection failure: [Errno 111] Connection refused"}
+        ) is True
+
+    def test_assert_and_tls_failures_are_final(self):
+        assert idempotency.netris_retryable_error(
+            {"failed": True, "msg": "Netris VPC 'demo' was not found"}
+        ) is False
+        assert idempotency.netris_retryable_error(
+            {"msg": "TLS certificate verification failed"}
+        ) is False
+
+    def test_non_mapping_result_is_final(self):
+        assert idempotency.netris_retryable_error("boom") is False

@@ -62,3 +62,8 @@
           from_tenant_id: "{{ netris_tenant_id }}"
           to_vnet_name: "{{ provisioning_vnet }}"
           to_vpc_id: "{{ netris_mgmt_vpc_id | default(0) | int }}"
+  rescue:
+    - name: Publish the sanitized NetworkAttachment delete error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
+      vars:
+        _osac_error_label: NetworkAttachment delete

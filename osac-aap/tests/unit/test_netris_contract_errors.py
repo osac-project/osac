@@ -44,10 +44,13 @@ SHARED_TASK_FILES = (
     "create_external_ip_pool",
     "create_fabric_domain",
     "create_nat_gateway",
+    "create_subnet",
     "create_virtual_network",
     "delete_external_ip_pool",
     "delete_fabric_domain",
+    "delete_subnet",
     "delete_virtual_network",
+    "move_network_attachment",
 )
 
 
@@ -69,3 +72,45 @@ def test_legacy_reporter_prefers_the_preserved_failure() -> None:
 
     assert "_netris_failure_origin_task" in reporter
     assert "_netris_failure_origin_result" in reporter
+
+
+def _walk(tasks):
+    for task in tasks or []:
+        if not isinstance(task, dict):
+            continue
+        yield task
+        for key in ("block", "rescue", "always"):
+            yield from _walk(task.get(key))
+
+
+def _includes(tasks):
+    for task in _walk(tasks):
+        for key, value in task.items():
+            if key.endswith("include_tasks") and isinstance(value, str):
+                yield value
+
+
+def _publishes(name: str, depth: int = 2) -> bool:
+    tasks = _tasks(name)
+    if any(
+        value in ("_fail_task.yaml", "_contract_rescue.yaml")
+        for task in _walk(tasks)
+        for key, value in task.items()
+        if key.endswith("include_tasks")
+    ):
+        return True
+    return depth > 0 and any(
+        _publishes(include.removesuffix(".yaml"), depth - 1)
+        for include in _includes(tasks)
+        if include.startswith("_")
+    )
+
+
+def test_every_routed_task_publishes_a_sanitized_error() -> None:
+    spec = yaml.safe_load((TASKS.parent / "meta" / "argument_specs.yaml").read_text())
+    missing = [name for name in spec["argument_specs"] if not _publishes(name)]
+
+    assert not missing, (
+        "these contract task entry points never publish osac_error, so a "
+        f"transient provider failure is treated as final: {missing}"
+    )

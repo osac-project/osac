@@ -15,7 +15,11 @@ TASKS = ROOT / "collections/ansible_collections/osac/templates/roles/netris/task
 
 
 def _tasks(name: str) -> list[dict]:
-    return yaml.safe_load((TASKS / f"{name}.yaml").read_text(encoding="utf-8"))
+    tasks = yaml.safe_load((TASKS / f"{name}.yaml").read_text(encoding="utf-8"))
+    work = TASKS / f"_{name}_work.yaml"
+    if work.exists():
+        tasks = tasks + yaml.safe_load(work.read_text(encoding="utf-8"))
+    return tasks
 
 
 def _walk(tasks):

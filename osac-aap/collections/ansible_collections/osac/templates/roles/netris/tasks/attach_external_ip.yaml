@@ -61,6 +61,11 @@
         nat_destination_address: "{{ _osac_external_ip_ref.address }}/32"
         nat_dnat_to_ip: "{{ _osac_destination.address }}/32"
         nat_comment: "OSAC ExternalIPAttachment {{ attachment_name }}"
+  rescue:
+    - name: Publish the sanitized ExternalIPAttachment attach error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
+      vars:
+        _osac_error_label: ExternalIPAttachment attach
 
 - name: Run the legacy externalipattachment attach path
   when: not _osac_contract | default(false) | bool

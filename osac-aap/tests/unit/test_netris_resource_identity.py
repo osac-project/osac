@@ -15,7 +15,11 @@ VPC_ROLE = COLLECTIONS / "netris/controller/roles/vpc/tasks"
 
 
 def _tasks(path: Path) -> list[dict]:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+    tasks = yaml.safe_load(path.read_text(encoding="utf-8"))
+    work = path.with_name(f"_{path.stem}_work.yaml")
+    if path.parent == TEMPLATE_NETRIS and work.exists():
+        tasks = tasks + yaml.safe_load(work.read_text(encoding="utf-8"))
+    return tasks
 
 
 def _named_task(tasks: list[dict], name: str) -> dict:

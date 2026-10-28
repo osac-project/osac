@@ -11,7 +11,9 @@
          | default('The Netris ' ~ _osac_error_label ~ ' failed') }}
     _osac_error_retryable: >-
       {{ ansible_failed_result.retryable
-         | default(_osac_error_retryable_default | default(true)) }}
+         | default(_osac_error_retryable_default
+                   | default(ansible_failed_result
+                             | netris.controller.netris_retryable_error)) }}
   when: _osac_contract | default(false) | bool
 
 - name: Fail the task after the rescue

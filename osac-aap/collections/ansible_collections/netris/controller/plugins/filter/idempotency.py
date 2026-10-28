@@ -248,6 +248,47 @@ def netris_safe_error_detail(result: Any) -> str:
     return f"HTTP {status}; {detail}"
 
 
+RETRYABLE_HTTP_STATUSES = frozenset({408, 425, 429})
+
+TRANSIENT_ERROR_MARKERS = (
+    "connection failure",
+    "connection refused",
+    "connection reset",
+    "temporary failure",
+    "timed out",
+    "timeout",
+    "bad gateway",
+    "gateway timeout",
+    "service unavailable",
+    "eof occurred",
+    "remote end closed connection",
+    "broken pipe",
+)
+
+
+def netris_retryable_error(result: Any) -> bool:
+    """Return whether a failed task is transient enough for OSAC to retry.
+
+    An explicit ``retryable`` field wins. Otherwise a provider HTTP status
+    decides: 5xx and 408/425/429 are transient, every other status is final.
+    Without a status only a recognized transport failure retries; an assert
+    or an explicit ``fail`` is a permanent input or contract problem.
+    """
+    if not isinstance(result, dict):
+        return False
+    explicit = result.get("retryable")
+    if isinstance(explicit, bool):
+        return explicit
+    status = result.get("status")
+    if isinstance(status, int) and not isinstance(status, bool):
+        return status >= 500 or status in RETRYABLE_HTTP_STATUSES
+    message = result.get("msg")
+    if not isinstance(message, str):
+        return False
+    lowered = message.lower()
+    return any(marker in lowered for marker in TRANSIENT_ERROR_MARKERS)
+
+
 def netris_ip_in_cidrs(address: Any, cidrs: Any) -> bool:
     """Return whether an address or host prefix belongs to any allocation CIDR."""
     if not isinstance(address, str) or not isinstance(cidrs, (list, tuple)):
@@ -284,5 +325,6 @@ class FilterModule:
             "netris_ports_excluding": netris_ports_excluding,
             "format_immutable_mismatch_message": format_immutable_mismatch_message,
             "netris_safe_error_detail": netris_safe_error_detail,
+            "netris_retryable_error": netris_retryable_error,
             "netris_ip_in_cidrs": netris_ip_in_cidrs,
         }

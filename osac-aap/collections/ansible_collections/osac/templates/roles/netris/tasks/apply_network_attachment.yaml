@@ -65,3 +65,8 @@
           to_vnet_name: "{{ subnet.metadata.name }}"
           to_vpc_id: "{{ netris_vpc.id }}"
           to_tenant_id: "{{ netris_tenant_id }}"
+  rescue:
+    - name: Publish the sanitized NetworkAttachment apply error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
+      vars:
+        _osac_error_label: NetworkAttachment apply

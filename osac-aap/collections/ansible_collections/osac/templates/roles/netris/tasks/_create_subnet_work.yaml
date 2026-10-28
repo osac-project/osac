@@ -1,0 +1,398 @@
+---
+- name: Extract Subnet configuration
+  ansible.builtin.set_fact:
+    subnet_name: "{{ subnet.metadata.name }}"
+    subnet_ipv4_cidr: "{{ subnet.spec.ipv4Cidr | default('') }}"
+    subnet_virtual_network_id: "{{ subnet.spec.virtualNetwork | default('') }}"
+    is_cudn_evpn: >-
+      {{ (_osac_network_type | default('') == 'evpn')
+         if _osac_contract | default(false) | bool
+         else ((subnet.metadata.annotations | default({})).get('osac.openshift.io/k8s-cleanup-strategy', '') == 'cudn_evpn') }}
+
+- name: Set the parent VirtualNetwork from the supplied snapshot
+  ansible.builtin.set_fact:
+    subnet_virtual_network_name: "{{ _osac_virtual_network.metadata.name }}"
+    subnet_virtual_network_vpc_id: ""
+  when: _osac_contract | default(false) | bool
+
+- name: Initialize the published fabric range from the Subnet CIDR
+  ansible.builtin.set_fact:
+    _fabric_reserved_range: "{{ subnet_ipv4_cidr }}"
+  when: not _osac_contract | default(false) | bool
+
+- name: Validate Subnet IPv4 CIDR for a disjoint fabric pool
+  ansible.builtin.assert:
+    that:
+      - subnet_ipv4_cidr is string
+      - subnet_ipv4_cidr | ansible.utils.ipaddr('version') == 4
+      - subnet_ipv4_cidr | ansible.utils.ipaddr('network/prefix') == subnet_ipv4_cidr
+      - subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') | int <= 29
+    fail_msg: >-
+      Subnet '{{ subnet_name }}' must have a canonical IPv4 CIDR with prefix length /29 or shorter
+      so the Netris fabric pool has addresses for the gateway, OVN management port, and DHCP clients.
+  when:
+    - is_cudn_evpn
+    - not _osac_contract | default(false) | bool
+
+- name: Calculate the Netris fabric pool prefix
+  ansible.builtin.set_fact:
+    # Bound DHCP to the first of two equal address blocks. For a /24 Subnet,
+    # this gives the first /25; the Netris gateway remains on the full /24.
+    _fabric_reserved_prefix: "{{ (subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') | int) + 1 }}"
+  when:
+    - is_cudn_evpn
+    - not _osac_contract | default(false) | bool
+
+- name: Calculate the Netris fabric pool CIDR
+  ansible.builtin.set_fact:
+    _fabric_reserved_range: >-
+      {{ subnet_ipv4_cidr | ansible.utils.ipaddr('network') }}/{{ _fabric_reserved_prefix }}
+  when:
+    - is_cudn_evpn
+    - not _osac_contract | default(false) | bool
+
+- name: Look up VirtualNetwork CR by UUID label
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: VirtualNetwork
+    namespace: "{{ subnet.metadata.namespace }}"
+    label_selectors:
+      - "osac.openshift.io/virtualnetwork-uuid={{ subnet_virtual_network_id }}"
+  register: _vn_lookup
+  when: not _osac_contract | default(false) | bool
+
+- name: Require exactly one parent VirtualNetwork CR
+  ansible.builtin.fail:
+    msg: >-
+      Expected exactly one VirtualNetwork with UUID '{{ subnet_virtual_network_id }}' in
+      namespace '{{ subnet.metadata.namespace }}'; refusing to use an ambiguous parent.
+  when: >-
+    not _osac_contract | default(false) | bool and _vn_lookup.resources | length != 1
+
+- name: Set VirtualNetwork identity
+  ansible.builtin.set_fact:
+    subnet_virtual_network_name: "{{ _vn_lookup.resources[0].metadata.name }}"
+    subnet_virtual_network_vpc_id: "{{ _vn_lookup.resources[0].status.backendNetworkId | default('') }}"
+  when: not _osac_contract | default(false) | bool
+
+- name: Validate the parent VPC ID from VirtualNetwork status
+  ansible.builtin.assert:
+    that:
+      - subnet_virtual_network_vpc_id | string | trim is match('^[1-9][0-9]*$')
+    fail_msg: >-
+      VirtualNetwork '{{ subnet_virtual_network_name }}' has no positive Netris VPC ID in
+      status.backendNetworkId; refusing to provision its Subnet against a name-only match.
+  when: not _osac_contract | default(false) | bool
+
+- name: Look up parent VPC by the VirtualNetwork status ID
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+    tasks_from: read
+  vars:
+    vpc_name: "{{ subnet_virtual_network_name }}"
+    vpc_lookup_id: "{{ subnet_virtual_network_vpc_id | int }}"
+    vpc_tenant_id: "{{ netris_tenant_id }}"
+  when: >-
+    subnet_virtual_network_vpc_id | default('') | string | trim
+    is match('^[1-9][0-9]*$')
+
+- name: Look up parent VPC by name
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+    tasks_from: read
+  vars:
+    vpc_name: "{{ subnet_virtual_network_name }}"
+    vpc_tenant_id: "{{ netris_tenant_id }}"
+  when: >-
+    not (subnet_virtual_network_vpc_id | default('') | string | trim
+    is match('^[1-9][0-9]*$'))
+
+- name: Set parent VPC
+  ansible.builtin.set_fact:
+    _parent_vpc: "{{ netris_vpc }}"
+
+- name: Fail if parent VPC not found
+  ansible.builtin.fail:
+    msg: >-
+      Parent VPC '{{ subnet_virtual_network_name }}' not found in Netris controller.
+      Ensure the VirtualNetwork has been created before creating a Subnet.
+  when: _parent_vpc is none
+
+- name: Validate Netris VPC L3 VNI
+  ansible.builtin.assert:
+    that:
+      - _parent_vpc is mapping
+      - _parent_vpc.vni is defined
+      - (_parent_vpc.vni | string | trim) is match('^[0-9]+$')
+      - (_parent_vpc.vni | string | trim | int) >= 1
+      - (_parent_vpc.vni | string | trim | int) <= 16777215
+    fail_msg: >-
+      Netris VPC '{{ subnet_virtual_network_name }}' did not return a usable L3 VNI. Expected a decimal value
+      between 1 and 16777215 in the VPC vni field. No Subnet fabric outputs were published.
+
+- name: Export Subnet L3 VNI
+  ansible.builtin.set_fact:
+    subnet_l3_vni: "{{ _parent_vpc.vni | string | trim | int }}"
+
+- name: Compute the Fabric address plan from the OSAC layout
+  ansible.builtin.set_fact:
+    _subnet_address_plan: "{{ _osac_ipam | osac.templates.subnet_dhcp_plan }}"
+  when: _osac_contract | default(false) | bool
+
+- name: Apply the Fabric address plan from the OSAC layout
+  ansible.builtin.set_fact:
+    _subnet_dhcp_enabled: "{{ _subnet_address_plan.dhcp_enabled | bool }}"
+    _gateway_ip: "{{ _subnet_address_plan.gateway_ipv4 }}"
+    _gateway_cidr: >-
+      {{ _subnet_address_plan.gateway_ipv4 }}/{{ subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') }}
+    _dhcp_start: "{{ _subnet_address_plan.dhcp_start | default('', true) }}"
+    _dhcp_end: "{{ _subnet_address_plan.dhcp_end | default('', true) }}"
+  when: _osac_contract | default(false) | bool
+
+- name: Set gateway IP for the existing Netris Subnet contract
+  ansible.builtin.set_fact:
+    _gateway_ip: "{{ subnet_ipv4_cidr | ansible.utils.ipaddr('next_usable') }}"
+    _gateway_cidr: >-
+      {{ subnet_ipv4_cidr | ansible.utils.ipaddr('next_usable') }}/{{ subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') }}
+    _last_usable: "{{ subnet_ipv4_cidr | ansible.utils.ipaddr('last_usable') }}"
+  when:
+    - not is_cudn_evpn
+    - subnet_ipv4_cidr | length > 0
+    - not _osac_contract | default(false) | bool
+
+- name: Compute DHCP range for the existing Netris Subnet contract
+  ansible.builtin.set_fact:
+    _dhcp_start: "{{ subnet_ipv4_cidr | ansible.utils.ipaddr('2') | ansible.utils.ipaddr('address') }}"
+    _dhcp_end: "{{ _last_usable }}"
+  when:
+    - not is_cudn_evpn
+    - subnet_ipv4_cidr | length > 0
+    - not _osac_contract | default(false) | bool
+
+- name: Set gateway IP using the full EVPN Subnet CIDR
+  ansible.builtin.set_fact:
+    _gateway_ip: "{{ subnet_ipv4_cidr | ansible.utils.ipaddr('next_usable') }}"
+    _gateway_cidr: >-
+      {{ subnet_ipv4_cidr | ansible.utils.ipaddr('next_usable') }}/{{ subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') }}
+  when:
+    - is_cudn_evpn
+    - not _osac_contract | default(false) | bool
+
+- name: Compute DHCP range inside the reserved EVPN fabric pool
+  ansible.builtin.set_fact:
+    # The gateway uses the first usable address and OVN's management port the
+    # second; DHCP clients start at the third address. Include the first-half
+    # boundary because the configured subnet remains the full Subnet CIDR.
+    # This leaves one DHCP lease (.3-.3) for a /29 Subnet.
+    _dhcp_start: "{{ _fabric_reserved_range | ansible.utils.ipaddr('3') | ansible.utils.ipaddr('address') }}"
+    _dhcp_end: "{{ _fabric_reserved_range | ansible.utils.ipaddr('broadcast') }}"
+  when:
+    - is_cudn_evpn
+    - not _osac_contract | default(false) | bool
+
+- name: Display Subnet information
+  ansible.builtin.debug:
+    msg:
+      - "Creating Netris IPAM subnet + V-Net for Subnet '{{ subnet_name }}'"
+      - "VirtualNetwork: {{ subnet_virtual_network_name }} (VPC ID: {{ _parent_vpc.id }})"
+      - "IPv4 CIDR: {{ subnet_ipv4_cidr }}"
+      - "Gateway: {{ _gateway_cidr | default('none') }}"
+      - "DHCP range: {{ _dhcp_start | default('none') }} - {{ _dhcp_end | default('none') }}"
+
+- name: Create IPAM subnet in Netris controller
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: create_subnet
+  vars:
+    ipam_name: "{{ subnet_name }}"
+    ipam_cidr: "{{ subnet_ipv4_cidr }}"
+    ipam_purpose: "common"
+    ipam_site_id: "{{ netris_site_id }}"
+    ipam_tenant_id: "{{ netris_tenant_id }}"
+    ipam_vpc_id: "{{ _parent_vpc.id }}"
+
+- name: Display IPAM subnet creation result
+  ansible.builtin.debug:
+    msg: >-
+      IPAM subnet '{{ subnet_name }}' {{ (ipam_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
+      (ID: {{ ipam_subnet_id | default('unknown') }})
+
+- name: Ensure the reserved EVPN fabric prefix exists in Netris IPAM
+  ansible.builtin.include_tasks: ensure_fabric_ipam.yaml
+  when:
+    - is_cudn_evpn
+    - not _osac_contract | default(false) | bool
+
+- name: Create V-Net in Netris controller
+  ansible.builtin.include_role:
+    name: netris.controller.vnet
+    tasks_from: create
+  vars:
+    vnet_name: "{{ subnet_name }}"
+    vnet_vpc_id: "{{ _parent_vpc.id }}"
+    vnet_site_id: "{{ netris_site_id }}"
+    vnet_tenant_id: "{{ netris_tenant_id }}"
+    vnet_gateway: "{{ _gateway_cidr | default(omit) }}"
+    vnet_dhcp_enabled: "{{ _subnet_dhcp_enabled | default(true) | bool }}"
+    vnet_dhcp_start_ip: "{{ _dhcp_start | default(omit, true) }}"
+    vnet_dhcp_end_ip: "{{ _dhcp_end | default(omit, true) }}"
+
+- name: Display V-Net creation result
+  ansible.builtin.debug:
+    msg: >-
+      V-Net '{{ subnet_name }}' {{ (vnet_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
+      (ID: {{ vnet_id | default('unknown') }})
+
+- name: Read V-Net details before EVPN gateway reconciliation
+  ansible.builtin.include_role:
+    name: netris.controller.vnet
+    tasks_from: read_by_id
+
+- name: Validate V-Net ownership before gateway reconciliation
+  ansible.builtin.assert:
+    that:
+      - netris_vnet_detail is mapping
+      - netris_vnet_detail.get('vpc', {}).get('id', 0) | int == _parent_vpc.id | int
+      - netris_vnet_detail.get('tenant', {}).get('id', 0) | int == netris_tenant_id | int
+    fail_msg: >-
+      Netris returned V-Net ID '{{ vnet_id }}' with a different VPC or tenant than
+      Subnet '{{ subnet_name }}'. Refusing to update its gateway or DHCP settings.
+  when: is_cudn_evpn
+
+- name: Check whether existing V-Net matches EVPN gateway contract
+  ansible.builtin.set_fact:
+    _evpn_gateway_contract_matches: >-
+      {{
+        (netris_vnet_detail.gateways | default([]) | length == 1) and
+        (netris_vnet_detail.gateways[0].prefix | default('') | string | trim == _gateway_cidr) and
+        (netris_vnet_detail.gateways[0].dhcpEnabled | default(false) | bool) ==
+        (_subnet_dhcp_enabled | default(true) | bool) and
+        (((netris_vnet_detail.gateways[0].get('dhcp') or {}).get('start') |
+          default(netris_vnet_detail.gateways[0].get('dhcpStartIp', ''), true) | string | trim) == _dhcp_start) and
+        (((netris_vnet_detail.gateways[0].get('dhcp') or {}).get('end') |
+          default(netris_vnet_detail.gateways[0].get('dhcpEndIp', ''), true) | string | trim) == _dhcp_end)
+      }}
+  when: is_cudn_evpn
+
+- name: Capture the existing gateway before EVPN reconciliation
+  ansible.builtin.set_fact:
+    _existing_vnet_gateway: "{{ (netris_vnet_detail.gateways | default([]) | first) | default({}) }}"
+  when:
+    - is_cudn_evpn
+    - not _evpn_gateway_contract_matches
+
+# Netris 4.16 returns DHCP values under gateway.dhcp. Preserve the returned
+# gateway ID and nested DHCP metadata because the update role PUTs the full V-Net.
+- name: Build V-Net gateway update preserving existing fields
+  ansible.builtin.set_fact:
+    _vnet_gateway_update: >-
+      {{
+        _existing_vnet_gateway
+        | combine({'prefix': _gateway_cidr, 'dhcpEnabled': (_subnet_dhcp_enabled | default(true) | bool)})
+        | combine(
+            (
+              {
+                'dhcp': ((_existing_vnet_gateway.get('dhcp') or {}) | combine({
+                  'start': _dhcp_start,
+                  'end': _dhcp_end
+                }))
+              }
+              if (_existing_vnet_gateway.get('dhcp') | default(none)) is mapping
+              else {
+                'dhcpStartIp': _dhcp_start,
+                'dhcpEndIp': _dhcp_end
+              }
+            )
+          )
+      }}
+  when:
+    - is_cudn_evpn
+    - not _evpn_gateway_contract_matches
+
+- name: Build V-Net update preserving existing configuration
+  ansible.builtin.set_fact:
+    _vnet_update_body: "{{ netris_vnet_detail | combine({'gateways': [_vnet_gateway_update]}) }}"
+  when:
+    - is_cudn_evpn
+    - not _evpn_gateway_contract_matches
+
+- name: Update existing V-Net gateway and DHCP range
+  ansible.builtin.include_role:
+    name: netris.controller.vnet
+    tasks_from: update
+  vars:
+    vnet_body: "{{ _vnet_update_body }}"
+  when: is_cudn_evpn and not _evpn_gateway_contract_matches
+
+- name: Read V-Net details after EVPN gateway reconciliation
+  ansible.builtin.include_role:
+    name: netris.controller.vnet
+    tasks_from: read_by_id
+  when: is_cudn_evpn and not _evpn_gateway_contract_matches
+
+- name: Validate Netris fabric outputs
+  ansible.builtin.assert:
+    that:
+      - netris_vnet_detail is mapping
+      - netris_vnet_detail.vxlanID is defined
+      - (netris_vnet_detail.vxlanID | string | trim) is match('^[0-9]+$')
+      - (netris_vnet_detail.vxlanID | string | trim | int) >= 1
+      - (netris_vnet_detail.vxlanID | string | trim | int) <= 16777215
+      - _parent_vpc is mapping
+      - _parent_vpc.vni is defined
+      - (_parent_vpc.vni | string | trim) is match('^[0-9]+$')
+      - (_parent_vpc.vni | string | trim | int) >= 1
+      - (_parent_vpc.vni | string | trim | int) <= 16777215
+      - >-
+        _fabric_reserved_range | default('') | string | trim | length > 0
+        or _osac_ipam | default({}) | length > 0
+      - >-
+        not is_cudn_evpn or (
+          (netris_vnet_detail.gateways | default([]) | length == 1) and
+          (netris_vnet_detail.gateways[0].prefix | default('') | string | trim == _gateway_cidr) and
+          (netris_vnet_detail.gateways[0].dhcpEnabled | default(false) | bool) ==
+        (_subnet_dhcp_enabled | default(true) | bool) and
+          (((netris_vnet_detail.gateways[0].get('dhcp') or {}).get('start') |
+            default(netris_vnet_detail.gateways[0].get('dhcpStartIp', ''), true) | string | trim) == _dhcp_start) and
+          (((netris_vnet_detail.gateways[0].get('dhcp') or {}).get('end') |
+            default(netris_vnet_detail.gateways[0].get('dhcpEndIp', ''), true) | string | trim) == _dhcp_end)
+        )
+    fail_msg: >-
+      Refusing to publish incomplete fabric outputs: Netris must return valid L2/L3 VNIs and a Subnet range;
+      cudn_evpn additionally requires the V-Net gateway and DHCP values to match the reserved fabric CIDR.
+
+- name: Build the network segment result
+  ansible.builtin.set_fact:
+    _subnet_network_segment: >-
+      {{ {'type': _osac_network_type | default(''),
+          'l2_vni': netris_vnet_detail.vxlanID | int,
+          'l3_vni': subnet_l3_vni | int} }}
+    _osac_result_data: >-
+      {{ {'network_segment': {'type': _osac_network_type | default(''),
+                              'l2_vni': netris_vnet_detail.vxlanID | int,
+                              'l3_vni': subnet_l3_vni | int}} }}
+  when:
+    - _osac_contract | default(false) | bool
+    - _osac_network_type | default('') | length > 0
+
+- name: Emit the network segment result
+  ansible.builtin.include_tasks: _emit_result.yaml
+  when:
+    - _osac_contract | default(false) | bool
+    - _osac_network_type | default('') | length > 0
+
+- name: Publish fabric outputs for the k8s manager
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "subnet-{{ subnet_name }}-fabric-output"
+        namespace: "{{ subnet.metadata.namespace }}"
+      data: "{{ {
+        'l2_vni': netris_vnet_detail.vxlanID | string | trim,
+        'l3_vni': subnet_l3_vni | string,
+        'fabric_reserved_range': _fabric_reserved_range | string | trim
+      } }}"
+  when: not _osac_contract | default(false) | bool

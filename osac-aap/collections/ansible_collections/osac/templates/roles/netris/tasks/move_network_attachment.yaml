@@ -8,4 +8,13 @@
     _osac_task_name: move_network_attachment
 
 - name: Move the server port
-  ansible.builtin.include_tasks: _move_port.yaml
+  block:
+    - name: Move the server port
+      ansible.builtin.include_tasks: _move_port.yaml
+  rescue:
+    - name: Preserve the underlying provider failure for the legacy report
+      ansible.builtin.include_tasks: _preserve_failure.yaml
+    - name: Publish the sanitized NetworkAttachment move error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
+      vars:
+        _osac_error_label: NetworkAttachment move

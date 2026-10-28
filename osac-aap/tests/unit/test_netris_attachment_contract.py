@@ -61,7 +61,8 @@ def test_legacy_move_entry_point_keeps_using_the_shared_port_helper() -> None:
     tasks = _tasks("move_network_attachment")
 
     assert any(
-        task.get("ansible.builtin.include_tasks") == "_move_port.yaml" for task in tasks
+        task.get("ansible.builtin.include_tasks") == "_move_port.yaml"
+        for task in _walk(tasks)
     )
 
 

@@ -19,7 +19,7 @@ def _create_subnet_tasks() -> list[dict]:
         / "roles"
         / "netris"
         / "tasks"
-        / "create_subnet.yaml"
+        / "_create_subnet_work.yaml"
     )
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 

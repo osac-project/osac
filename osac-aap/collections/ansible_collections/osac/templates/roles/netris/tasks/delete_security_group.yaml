@@ -45,6 +45,12 @@
         msg: >-
           SecurityGroup '{{ sg_name }}': the Fabric SecurityGroup task is a
           documented no-op, so there is no ACL object to remove.
+  rescue:
+    - name: Publish the sanitized SecurityGroup delete error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
+      vars:
+        _osac_error_label: SecurityGroup delete
+        _osac_error_retryable_default: false
 
 - name: Delete Netris ACL rules from the legacy CR input
   when: not _osac_contract | default(false) | bool

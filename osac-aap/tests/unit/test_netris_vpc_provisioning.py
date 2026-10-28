@@ -49,7 +49,7 @@ def _virtual_network_tasks() -> list[dict]:
 def _subnet_tasks() -> list[dict]:
     return _flatten_blocks(
         yaml.safe_load(
-            (ROLE_ROOT / "tasks" / "create_subnet.yaml").read_text(encoding="utf-8")
+            (ROLE_ROOT / "tasks" / "_create_subnet_work.yaml").read_text(encoding="utf-8")
         )
     )
 

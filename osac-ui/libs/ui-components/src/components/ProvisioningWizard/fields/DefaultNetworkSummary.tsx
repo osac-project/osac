@@ -25,6 +25,7 @@ import { getErrorMessage } from '../../../utils/error';
 
 interface DefaultNetworkSummaryProps {
   project: string;
+  showSecurityGroups?: boolean;
 }
 
 const newestFirst = (
@@ -39,7 +40,10 @@ const newestFirst = (
   return (bTime?.nanos ?? 0) - (aTime?.nanos ?? 0);
 };
 
-const DefaultNetworkSummary = ({ project }: DefaultNetworkSummaryProps) => {
+const DefaultNetworkSummary = ({
+  project,
+  showSecurityGroups = true,
+}: DefaultNetworkSummaryProps) => {
   const { t } = useTranslation();
   const subnetsQuery = useSubnets({ filter: defaultSubnetListFilter(project) });
   const subnet = subnetsQuery.data
@@ -56,7 +60,7 @@ const DefaultNetworkSummary = ({ project }: DefaultNetworkSummaryProps) => {
   const virtualNetworkQuery = useVirtualNetwork(virtualNetworkId);
   const securityGroupsQuery = useSecurityGroups(
     { filter: defaultSecurityGroupListFilter(project, virtualNetworkId) },
-    { enabled: Boolean(virtualNetworkId) },
+    { enabled: showSecurityGroups && Boolean(virtualNetworkId) },
   );
   const securityGroup = securityGroupsQuery.data
     ?.filter(
@@ -69,11 +73,18 @@ const DefaultNetworkSummary = ({ project }: DefaultNetworkSummaryProps) => {
     )
     .sort(newestFirst)[0];
 
-  if (subnetsQuery.isLoading || virtualNetworkQuery.isLoading || securityGroupsQuery.isLoading) {
+  if (
+    subnetsQuery.isLoading ||
+    virtualNetworkQuery.isLoading ||
+    (showSecurityGroups && securityGroupsQuery.isLoading)
+  ) {
     return <Spinner size="md" aria-label={t('Loading tenant default network')} />;
   }
 
-  const error = subnetsQuery.error ?? virtualNetworkQuery.error ?? securityGroupsQuery.error;
+  const error =
+    subnetsQuery.error ??
+    virtualNetworkQuery.error ??
+    (showSecurityGroups ? securityGroupsQuery.error : null);
   if (error) {
     return (
       <Alert variant="danger" isInline title={t('Could not load tenant default network')}>
@@ -115,7 +126,7 @@ const DefaultNetworkSummary = ({ project }: DefaultNetworkSummaryProps) => {
 
   return (
     <Stack hasGutter>
-      {!securityGroup && (
+      {showSecurityGroups && !securityGroup && (
         <StackItem>
           <Alert
             variant="warning"
@@ -144,15 +155,17 @@ const DefaultNetworkSummary = ({ project }: DefaultNetworkSummaryProps) => {
               {subnet.spec?.ipv4Cidr && <Content component="p">{subnet.spec.ipv4Cidr}</Content>}
             </DescriptionListDescription>
           </DescriptionListGroup>
-          <DescriptionListGroup>
-            <DescriptionListTerm>{t('Security group')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              <strong>{securityGroup?.metadata?.name || securityGroup?.id || '—'}</strong>
-              {securityGroup?.metadata?.description && (
-                <Content component="p">{securityGroup.metadata.description}</Content>
-              )}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
+          {showSecurityGroups && (
+            <DescriptionListGroup>
+              <DescriptionListTerm>{t('Security group')}</DescriptionListTerm>
+              <DescriptionListDescription>
+                <strong>{securityGroup?.metadata?.name || securityGroup?.id || '—'}</strong>
+                {securityGroup?.metadata?.description && (
+                  <Content component="p">{securityGroup.metadata.description}</Content>
+                )}
+              </DescriptionListDescription>
+            </DescriptionListGroup>
+          )}
         </DescriptionList>
       </StackItem>
     </Stack>

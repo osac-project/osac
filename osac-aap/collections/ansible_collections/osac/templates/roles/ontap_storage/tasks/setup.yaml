@@ -1,0 +1,44 @@
+---
+# ONTAP setup: validate operator-resolved ONTAP backend parameters per
+# dispatched backend in Shared-TBC mode (provider_config.profiles) or
+# Dedicated-SVM mode (endpoint + tenant_preparation.provider_config).
+# Networking to the ONTAP management LIF is only assumed on the target VMaaS
+# cluster where NetApp Trident runs (not on the hub cluster). This action
+# validates the dispatched tiers and per-backend inputs without cluster or
+# ONTAP network calls and outputs storage_provider_tenant_config.
+
+- name: Include shared tier validation
+  ansible.builtin.include_tasks: _validate_tiers.yaml
+
+- name: Compute the dispatched backend ids
+  ansible.builtin.set_fact:
+    _ontap_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique | list }}"
+  no_log: true
+
+- name: Fail if no connection details were provided for a dispatched backend
+  ansible.builtin.fail:
+    msg: >-
+      No entry for a dispatched backend_id in storage_backend_connections.
+      osac-operator must resolve and pass connection details (endpoint and
+      tenant_preparation, or provider_config.profiles) for every backend_id
+      referenced by storage_tier_definitions.
+  when: >-
+    (_ontap_backend_ids | difference((_provider_backend_connections | default({}, true)).keys() | list) | length) > 0
+  no_log: true
+
+- name: Initialize the per-backend tenant config accumulator
+  ansible.builtin.set_fact:
+    _ontap_tenant_configs: {}
+  no_log: true
+
+- name: Validate the prepared SVM assignment for each dispatched backend
+  ansible.builtin.include_tasks: _setup_backend.yaml
+  loop: "{{ _ontap_backend_ids }}"
+  loop_control:
+    loop_var: _ontap_backend_id
+    label: "ontap-backend"
+
+- name: Set tenant config output fact
+  ansible.builtin.set_fact:
+    storage_provider_tenant_config: "{{ _ontap_tenant_configs }}"
+  no_log: true

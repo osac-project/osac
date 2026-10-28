@@ -1,0 +1,23 @@
+---
+# ONTAP-specific defaults — all use ontap_storage_ prefix.
+# CA bundle path (storage_provider_ca_bundle_path) is provided by the
+# osac.service.storage_provider dispatcher.
+
+# Namespace where Trident is installed on the target hosting cluster.
+# The TridentBackendConfig CRD is namespaced and Trident only reconciles TBCs
+# (and their credentials Secrets) in its own install namespace, so both the
+# CSI Secret and the TBC must live here. Configurable via ONTAP_TRIDENT_NAMESPACE.
+ontap_storage_trident_namespace: "{{ lookup('env', 'ONTAP_TRIDENT_NAMESPACE') | default('trident', true) }}"
+
+# SAN transport for the ontap-san driver. Valid values: iscsi, fcp, nvme.
+# Must match what the prepared SVM's LIFs actually carry; Trident validates
+# the value against its own allowlist. Configurable via ONTAP_SAN_TYPE.
+ontap_storage_san_type: "{{ lookup('env', 'ONTAP_SAN_TYPE') | default('fcp', true) }}"
+
+# Keep TLS certificate verification enabled unless ONTAP_VALIDATE_CERTS is
+# explicitly set to "false" (e.g. for a lab ONTAP endpoint with a self-signed
+# or expired certificate). Blank or malformed values fail closed to true.
+# When false, trustedCACertificate is omitted from the TridentBackendConfig.
+ontap_storage_validate_certs: >-
+  {{ (lookup('env', 'ONTAP_VALIDATE_CERTS')
+      | default('true', true) | lower | trim) != 'false' }}

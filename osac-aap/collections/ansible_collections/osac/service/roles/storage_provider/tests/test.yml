@@ -370,6 +370,42 @@
             success_msg: "Role correctly rejected invalid input"
 
 # ──────────────────────────────────────────────────────────────
+# Test 11b: Invalid DNS label tenant_name -- error path
+# Expected: role fails with tenant_name DNS label validation message
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- invalid DNS label tenant_name (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run invalid-dns-label-tenant-name failure test
+      block:
+        - name: Attempt with tenant_name containing uppercase and invalid characters (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+            storage_provider_action: setup
+            tenant_name: "Invalid_Name!"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when tenant_name is not a valid DNS label"
+
+      rescue:
+        - name: Verify role failed with expected tenant_name DNS label message
+          ansible.builtin.assert:
+            that:
+              - "'tenant_name' in ansible_failed_result.msg"
+              - "'not a valid DNS label' in ansible_failed_result.msg"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected invalid tenant_name DNS label"
+
+# ──────────────────────────────────────────────────────────────
 # Test 12: Missing tenant_namespace -- error path
 # Expected: role fails with tenant_namespace required message
 # ──────────────────────────────────────────────────────────────

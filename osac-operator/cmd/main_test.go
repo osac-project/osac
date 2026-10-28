@@ -692,6 +692,14 @@ users:
 		Expect(err).NotTo(HaveOccurred())
 		Expect(cl).NotTo(BeNil())
 		Expect(cl.GetScheme()).To(Equal(remoteScheme))
+
+		trailingSpacePath := filepath.Join(GinkgoT().TempDir(), "valid-kubeconfig ")
+		Expect(os.WriteFile(trailingSpacePath, testKubeconfigFixture, 0o600)).To(Succeed())
+
+		clWithTrailingSpace, err := newClusterFromKubeconfig(trailingSpacePath, remoteScheme)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(clWithTrailingSpace).NotTo(BeNil())
+		Expect(clWithTrailingSpace.GetScheme()).To(Equal(remoteScheme))
 	})
 })
 

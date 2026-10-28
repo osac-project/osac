@@ -1378,7 +1378,6 @@ func main() {
 		setupLog.Error(err, err.Error())
 		os.Exit(1)
 	}
-	remoteClusterKubeconfig = strings.TrimSpace(remoteClusterKubeconfig)
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will

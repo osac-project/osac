@@ -56,6 +56,8 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 	var (
 		remoteKubeconfigPath   string
 		restorePatchFilePath   string
+		remoteClusterCreated   bool
+		remoteSecretCreated    bool
 		remoteModeReconfigured bool
 	)
 
@@ -66,8 +68,15 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 		clustersOut, err := runKind("get", "clusters")
 		Expect(err).NotTo(HaveOccurred())
 		mgmtCluster := mgmtKindClusterName()
+		Expect(mgmtCluster).NotTo(
+			Equal(remoteKindClusterName),
+			"KIND_CLUSTER_NAME must not equal the remote test cluster name %q", remoteKindClusterName,
+		)
 		Expect(containsLine(string(clustersOut), mgmtCluster)).To(
 			BeTrue(), "management Kind cluster %q must exist in `kind get clusters`", mgmtCluster,
+		)
+		Expect(containsLine(string(clustersOut), remoteKindClusterName)).To(
+			BeFalse(), "remote Kind cluster %q must not already exist before test setup", remoteKindClusterName,
 		)
 
 		By("snapshotting the management cluster operator Deployment template to a restore patch file")
@@ -84,14 +93,19 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 					Fail("skipping remote Secret and Kind cluster deletion because operator Deployment restore patch failed")
 					return
 				}
-				_, secretErr := runMgmtKubectl(
-					"delete", "secret", remoteKubeconfigSecretName,
-					"-n", operatorNamespace, "--ignore-not-found",
-				)
-				_, kindErr := runKind(
-					"delete", "cluster", "--name", remoteKindClusterName,
-					"--kubeconfig", remoteKubeconfigPath,
-				)
+				var secretErr, kindErr error
+				if remoteSecretCreated {
+					_, secretErr = runMgmtKubectl(
+						"delete", "secret", remoteKubeconfigSecretName,
+						"-n", operatorNamespace, "--ignore-not-found",
+					)
+				}
+				if remoteClusterCreated {
+					_, kindErr = runKind(
+						"delete", "cluster", "--name", remoteKindClusterName,
+						"--kubeconfig", remoteKubeconfigPath,
+					)
+				}
 				Expect(secretErr).NotTo(HaveOccurred())
 				Expect(kindErr).NotTo(HaveOccurred())
 			}()
@@ -134,8 +148,7 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 		})
 
 		By("creating the second Kind workload cluster (" + remoteKindClusterName + ")")
-		_, err = runKind("delete", "cluster", "--name", remoteKindClusterName, "--kubeconfig", remoteKubeconfigPath)
-		Expect(err).NotTo(HaveOccurred())
+		remoteClusterCreated = true
 		_, err = runKindWithTimeout(
 			3*time.Minute,
 			"create", "cluster",
@@ -198,6 +211,7 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 			"--from-file=kubeconfig="+inClusterKubeconfigFile,
 		)
 		Expect(err).NotTo(HaveOccurred())
+		remoteSecretCreated = true
 
 		By("reconfiguring the deployed operator on the management cluster into remote-cluster mode")
 		remoteModeReconfigured = true

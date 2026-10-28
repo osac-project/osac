@@ -30,7 +30,10 @@ installer chart pin `fc7a09f`; PostgreSQL 18, Keycloak 26.6.4, OpenBao
 those external services. The clean-install values-first flow this guide
 teaches uses the same chart interface and the same services, yet was
 **not** separately exercised end-to-end: prove it on a scratch install
-before relying on it in production. (Migrating an already-bundled
+before relying on it in production. One chart interface change postdates
+that pin: `metering.enabled` was removed upstream — metering is now
+always deployed (§6.2). The lab ran with metering on, so the validated
+behavior matches current pins; only the off-switch is gone. (Migrating an already-bundled
 deployment is a different procedure — sequencing, data movement, rollback
 points — and is outside this guide's scope.)
 
@@ -171,7 +174,7 @@ Everything here must exist **before phase 2 (`helm install` of the
    Secrets (§5.2) — the part the chart's `keycloak.enabled: false` flag
    does not do for you.
 3. Create the Kafka connection objects if Kafka is external (§6.2), and
-   the metering topics/user if metering is on (A.5 steps 7–9).
+   the metering topics/user (A.5 steps 7–9).
 4. Load the services CAs into the trust Bundle created in stage 2
    (§2.2) — consumers come with stage 4.
 5. Start the §10 backup cron jobs and escrow the OpenBao init output
@@ -227,7 +230,7 @@ didn't create (§5.2), and trust failures to the services CAs (§2.2,
    auth control (a real token gets 200), not just the 401 negative one.
    This is where the application-level checks from stage 3's gate
    land: OSAC's database sessions, OpenBao tenant provisioning,
-   metering heartbeats (if metering is on), and a UI login.
+   metering heartbeats, and a UI login.
 2. Run one specific smoke workflow end to end — create a tenant via
    the API, expect it to reach `Ready`, list it, then delete it and
    expect it gone (exact commands: §9's battery plus the fulfillment
@@ -275,7 +278,7 @@ production-grade, and which are experimental:
 | OpenBao | single node, file storage, auto-unseal drop-in | single-node Raft on ≥ 2.7 (A.3 note); unseal-key escrow (§10.4) |
 | Keycloak | H2 database — **lab/evaluation only** | PostgreSQL-backed variant (A.4) |
 | Kafka | single broker, replication factor 1 | a second durable copy of metering events is **required** for event durability (§10 policy) |
-| Off-cluster metering | **experimental**, opt-in (§6.2) | not upstream-supported; alternatives in §6.2 |
+| Off-cluster metering | **experimental** (§6.2) — metering itself is always deployed on current chart pins | not upstream-supported; alternatives in §6.2 |
 
 ### 1.2 The integration pattern
 
@@ -838,10 +841,12 @@ metering:
   before the `osac` release installs or upgrades, or helm fails on
   unknown kinds. Your options: keep the CRDs applied (inert without the
   Strimzi operator — you create the topics and users on the external
-  broker yourself, A.5 steps 7–9), disable metering
-  (`metering.enabled: false`), or run the broker Strimzi-managed per the
-  [Kafka configuration guide](kafka-configuration.md) — the
-  upstream-supported flow — and externalize only what that guide covers.
+  broker yourself, A.5 steps 7–9), or run the broker Strimzi-managed
+  per the [Kafka configuration guide](kafka-configuration.md) — the
+  upstream-supported flow — and externalize only what that guide
+  covers. (Older chart pins — through `fc7a09f` — also allowed
+  disabling metering with `metering.enabled: false`; current pins
+  deploy metering unconditionally, and the flag no longer exists.)
 - **The off-cluster metering extension is experimental.** The Secret-name
   convention plus `clusterNamespace` pointing at a plain namespace is a
   lab-validated extension, not an upstream-supported path; re-verify it
@@ -850,8 +855,8 @@ metering:
   `osac-metering` Kafka user and its SCRAM credential (including
   rotation — update both the broker and the Secret in
   `clusterNamespace` together), and the billing adapters downstream of
-  the metering consumer. If any of that is unacceptable, disable
-  metering or run the broker Strimzi-managed (the options above).
+  the metering consumer. If any of that is unacceptable, run the
+  broker Strimzi-managed (the option above).
 
 On a clean install these values and objects are in place before the first
 `helm install`. Applying them to an already-running deployment is the
@@ -860,9 +865,8 @@ upgrade — the exact command and its caveats are in §8.
 
 ### 6.3 Verify
 
-If you disabled metering (§6.2's options), there is no heartbeat
-publisher — skip the canary; the broker reachability check in §9 still
-applies.
+Metering is always deployed on current chart pins (§6.2), so the
+heartbeat publisher is always present.
 
 ```bash
 # the canary: metering publishes one heartbeat event per minute to
@@ -1041,8 +1045,8 @@ behavior in ways worth catching immediately. After every upgrade:
    re-creates them; check they are what you expect.
 3. **Confirm trust and credentials still validate.** A 401 on the API
    negative control plus a working real token (§9), a successful OpenBao
-   tenant provisioning (§4.3), and — if metering is enabled — metering
-   events flowing (§6.3) cover the three credential chains.
+   tenant provisioning (§4.3), and metering events flowing (§6.3)
+   cover the three credential chains.
 4. **Rerun the verification battery** (§9) and the per-service checks
    (§3.3, §4.3, §5.4, §6.3).
 
@@ -1087,7 +1091,7 @@ curl -s --cacert <cluster-ca> -o /dev/null -w '%{http_code}\n' \
 # chain, which -k would skip (from a cluster node: add
 # --resolve <api-route>:443:127.0.0.1)
 
-# Kafka canary (§6.3 — skip if metering is disabled): heartbeat offsets
+# Kafka canary (§6.3): heartbeat offsets
 # advance, consumer lag 0
 ```
 

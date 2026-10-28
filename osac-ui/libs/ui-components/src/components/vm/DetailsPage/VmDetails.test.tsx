@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ComputeInstance } from '@osac/types';
@@ -12,24 +13,24 @@ vi.mock('../../../api/v1/instance-types', () => ({
   useInstanceType: vi.fn(),
 }));
 
+vi.mock('../../../api/v1/disk-image', () => ({
+  useDiskImage: vi.fn(),
+}));
+
 vi.mock('./VmDetailsActionButtons', () => ({
-  default: () => <div>Action buttons</div>,
+  default: ({ onOpenConsole }: { onOpenConsole: VoidFunction }) => (
+    <button type="button" onClick={onOpenConsole}>
+      Open console
+    </button>
+  ),
 }));
 
-vi.mock('./VmDetailsSummary', () => ({
-  default: () => <div>VM summary</div>,
-}));
-
-vi.mock('./VmDetailsOverviewTab', () => ({
-  default: () => <div>Overview tab</div>,
-}));
-
-vi.mock('./VmNetworkingTab', () => ({
-  default: () => <div>Networking tab</div>,
+vi.mock('./VmDetailsSections', () => ({
+  default: () => <div>VM detail sections</div>,
 }));
 
 vi.mock('../console/VmConsoleTab', () => ({
-  default: () => <div>Console tab</div>,
+  default: () => <div>Console surface</div>,
 }));
 
 vi.mock('../../Resource/ResourceDetailHeader', () => ({
@@ -55,6 +56,7 @@ vi.mock('../../../VmStatusLabel', () => ({
 }));
 
 const { useInstanceType } = await import('../../../api/v1/instance-types');
+const { useDiskImage } = await import('../../../api/v1/disk-image');
 
 const vm = {
   id: 'vm-1',
@@ -72,14 +74,27 @@ describe('VmDetails', () => {
       isLoading: false,
       error: null,
     } as ReturnType<typeof useInstanceType>);
+    vi.mocked(useDiskImage).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+    } as ReturnType<typeof useDiskImage>);
   });
 
-  it('renders the Console tab alongside Overview and Networking', () => {
+  it('renders the continuous VM details page without a tab strip', () => {
     renderDetails();
 
-    expect(screen.getByRole('tab', { name: 'Overview' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Networking' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Console' })).toBeInTheDocument();
+    expect(screen.getByText('VM detail sections')).toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+  });
+
+  it('opens the console surface from the header action', async () => {
+    const user = userEvent.setup();
+    renderDetails();
+
+    await user.click(screen.getByRole('button', { name: 'Open console' }));
+
+    expect(screen.getByText('Console surface')).toBeInTheDocument();
   });
 
   it('shows an alert and still renders the page when instance type lookup fails', () => {
@@ -100,6 +115,6 @@ describe('VmDetails', () => {
         'Review configuration, networking, storage, and utilization for this virtual machine.',
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText('VM summary')).toBeInTheDocument();
+    expect(screen.getByText('VM detail sections')).toBeInTheDocument();
   });
 });

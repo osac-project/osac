@@ -1,4 +1,4 @@
-import { Card, CardBody, CardTitle } from '@patternfly/react-core';
+import { Card, CardBody, CardTitle, Title } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import type { ComputeInstance } from '@osac/types';
@@ -7,17 +7,21 @@ import { useVmNetworkAttachmentRows } from './useVmNetworkAttachmentRows';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { SubtleContent } from '../../SubtleContent/SubtleContent';
 
-interface VmNetworkingTabProps {
+interface VmNetworkingSectionProps {
   vm: ComputeInstance;
 }
 
-const VmNetworkingTab = ({ vm }: VmNetworkingTabProps) => {
+const VmNetworkingSection = ({ vm }: VmNetworkingSectionProps) => {
   const { t } = useTranslation();
   const rows = useVmNetworkAttachmentRows(vm);
 
   return (
-    <Card isFullHeight>
-      <CardTitle>{t('Networking')}</CardTitle>
+    <Card>
+      <CardTitle>
+        <Title headingLevel="h2" size="lg">
+          {t('Networking')}
+        </Title>
+      </CardTitle>
       <CardBody>
         {rows.length > 0 ? (
           <Table aria-label={t('Networking')} variant="compact" borders>
@@ -26,6 +30,7 @@ const VmNetworkingTab = ({ vm }: VmNetworkingTabProps) => {
                 <Th>{t('Virtual network')}</Th>
                 <Th>{t('Subnet')}</Th>
                 <Th>{t('Security groups')}</Th>
+                <Th>{t('Internal IP')}</Th>
               </Tr>
             </Thead>
             <Tbody>
@@ -34,6 +39,7 @@ const VmNetworkingTab = ({ vm }: VmNetworkingTabProps) => {
                   <Td dataLabel={t('Virtual network')}>{row.virtualNetwork}</Td>
                   <Td dataLabel={t('Subnet')}>{row.subnet}</Td>
                   <Td dataLabel={t('Security groups')}>{row.securityGroups}</Td>
+                  <Td dataLabel={t('Internal IP')}>{row.internalIp}</Td>
                 </Tr>
               ))}
             </Tbody>
@@ -46,4 +52,4 @@ const VmNetworkingTab = ({ vm }: VmNetworkingTabProps) => {
   );
 };
 
-export default VmNetworkingTab;
+export default VmNetworkingSection;

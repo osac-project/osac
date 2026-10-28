@@ -1,6 +1,6 @@
 # Tenant Identity and Access Guide (Fulfillment API / CLI)
 
-**Last Updated**: 2026-10-26
+**Last Updated**: 2026-10-28
 **Audience**: Cloud provider administrators, tenant administrators, developers validating fulfillment-service
 **Status**: Draft
 
@@ -9,6 +9,7 @@
 - [Overview](#overview)
 - [Why This Flow Matters](#why-this-flow-matters)
 - [Concepts](#concepts)
+  - [Tenant organization membership](#tenant-organization-membership)
 - [Checking the current user with `osac whoami`](#checking-the-current-user-with-osac-whoami)
 - [Flow map](#flow-map)
 - [Prerequisites](#prerequisites)
@@ -89,6 +90,14 @@ After the IdP is registered and READY:
 | Break-glass | `{tenant}-osac-break-glass` | Password printed **once** on tenant create |
 | Tenant admin | `alice` | Public API: device login → tenant IdP (`--flow device`) |
 | Tenant user | `bob` | Public API: device login → tenant IdP |
+
+### Tenant organization membership
+
+Each Keycloak Organization maps to an OSAC tenant. Regular users, including
+tenant admins, can belong to only one tenant Organization at a time. Cloud
+Provider Admins are the only users who may belong to multiple tenant
+Organizations. Their access across tenants remains governed by their assigned
+OSAC permissions.
 
 ### Private vs public API
 

@@ -1,0 +1,270 @@
+---
+# Shared per-backend mode discriminator and input validator for ONTAP backends
+# (included by _setup_backend.yaml and _ensure_storage_class_backend.yaml with
+# _ontap_backend_id in scope).
+#
+# Sets:
+#   _backend_tiers:           list of dispatched tiers for _ontap_backend_id
+#   _ontap_is_shared_tbc:     boolean (true = Shared-TBC mode, false = Dedicated-SVM mode)
+#   _ontap_shared_profile_map: mapping of profile.name -> {tbc_namespace, tbc_name} (when Shared-TBC)
+
+- name: Fail if backend connection details are missing or invalid for dispatched backend
+  ansible.builtin.fail:
+    msg: >-
+      No valid mapping entry for a dispatched backend_id in
+      storage_backend_connections.
+  when: >-
+    _provider_backend_connections is not defined or
+    _ontap_backend_id not in _provider_backend_connections or
+    _provider_backend_connections[_ontap_backend_id] is not mapping
+  no_log: true
+
+- name: Select backend tiers and determine ONTAP backend tenancy mode
+  ansible.builtin.set_fact:
+    _backend_tiers: "{{ _provider_tiers | selectattr('backend_id', 'equalto', _ontap_backend_id) | list }}"
+    _ontap_is_shared_tbc: >-
+      {{ _provider_backend_connections[_ontap_backend_id].provider_config is defined and
+         _provider_backend_connections[_ontap_backend_id].provider_config is mapping and
+         _provider_backend_connections[_ontap_backend_id].provider_config.profiles is defined }}
+  no_log: true
+
+- name: Fail if backend connection defines both provider_config.profiles and tenant_preparation
+  ansible.builtin.fail:
+    msg: >-
+      storage_backend_connections entry for dispatched backend defines both
+      provider_config.profiles (Shared-TBC mode) and tenant_preparation
+      (Dedicated-SVM mode). Configure exactly one mode per backend.
+  when: >-
+    (_ontap_is_shared_tbc | bool) and
+    _provider_backend_connections[_ontap_backend_id].tenant_preparation is defined
+  no_log: true
+
+- name: Fail if Shared-TBC provider_config.profiles is not a non-empty list
+  ansible.builtin.fail:
+    msg: >-
+      Shared-TBC storage_backend_connections entry must define a non-empty list
+      in provider_config.profiles.
+  when: >-
+    (_ontap_is_shared_tbc | bool) and (
+      _provider_backend_connections[_ontap_backend_id].provider_config.profiles is not sequence or
+      _provider_backend_connections[_ontap_backend_id].provider_config.profiles is string or
+      _provider_backend_connections[_ontap_backend_id].provider_config.profiles is mapping or
+      (_provider_backend_connections[_ontap_backend_id].provider_config.profiles | length) == 0
+    )
+  no_log: true
+
+- name: Validate Shared-TBC profile entries
+  ansible.builtin.fail:
+    msg: >-
+      Invalid entry in provider_config.profiles. Every profile must be a mapping
+      with a valid DNS-label name and shared.tbc_namespace, plus a valid
+      DNS-subdomain shared.tbc_name (max 253 characters).
+  when: >-
+    (_ontap_is_shared_tbc | bool) and (
+      (
+        _provider_backend_connections[_ontap_backend_id].provider_config.profiles
+        | select('mapping')
+        | selectattr('name', 'defined')
+        | selectattr('name', 'string')
+        | selectattr('shared', 'defined')
+        | selectattr('shared', 'mapping')
+        | selectattr('shared.tbc_namespace', 'defined')
+        | selectattr('shared.tbc_namespace', 'string')
+        | selectattr('shared.tbc_name', 'defined')
+        | selectattr('shared.tbc_name', 'string')
+        | list | length
+      ) != (_provider_backend_connections[_ontap_backend_id].provider_config.profiles | length) or
+      (
+        _provider_backend_connections[_ontap_backend_id].provider_config.profiles
+        | map(attribute='name') | map('trim')
+        | reject('regex', '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+        | list | length
+      ) > 0 or
+      (
+        _provider_backend_connections[_ontap_backend_id].provider_config.profiles
+        | map(attribute='shared.tbc_namespace') | map('trim')
+        | reject('regex', '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+        | list | length
+      ) > 0 or
+      (
+        _provider_backend_connections[_ontap_backend_id].provider_config.profiles
+        | map(attribute='shared.tbc_name') | map('trim')
+        | map('length') | select('gt', 253)
+        | list | length
+      ) > 0 or
+      (
+        _provider_backend_connections[_ontap_backend_id].provider_config.profiles
+        | map(attribute='shared.tbc_name') | map('trim')
+        | reject('regex', '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$')
+        | list | length
+      ) > 0
+    )
+  no_log: true
+
+- name: Fail if Shared-TBC profile names are not unique
+  ansible.builtin.fail:
+    msg: >-
+      Duplicate profile name in provider_config.profiles. Each profile name must
+      be unique within a backend connection.
+  when: >-
+    (_ontap_is_shared_tbc | bool) and (
+      (_provider_backend_connections[_ontap_backend_id].provider_config.profiles | map(attribute='name') | map('trim') | list | length) !=
+      (_provider_backend_connections[_ontap_backend_id].provider_config.profiles | map(attribute='name') | map('trim') | unique | list | length)
+    )
+  no_log: true
+
+- name: Build Shared-TBC profile map for dispatched backend
+  ansible.builtin.set_fact:
+    _ontap_shared_profile_map: >-
+      {% set pmap = {} -%}
+      {% for profile in _provider_backend_connections[_ontap_backend_id].provider_config.profiles -%}
+      {% set _ = pmap.update({
+           (profile.name | string | trim): {
+             'tbc_namespace': profile.shared.tbc_namespace | string | trim,
+             'tbc_name': profile.shared.tbc_name | string | trim
+           }
+         }) -%}
+      {% endfor -%}
+      {{ pmap }}
+  when: _ontap_is_shared_tbc | bool
+  no_log: true
+
+- name: Fail if a Shared-TBC tier is missing valid provider_config profile or pool_selector
+  ansible.builtin.fail:
+    msg: >-
+      Every tier targeting a Shared-TBC ONTAP backend must define
+      provider_config.profile referencing a declared profile in
+      provider_config.profiles and a non-empty provider_config.pool_selector
+      mapping.
+  when: >-
+    (_ontap_is_shared_tbc | bool) and (
+      (
+        _backend_tiers
+        | selectattr('provider_config', 'defined')
+        | selectattr('provider_config', 'mapping')
+        | selectattr('provider_config.profile', 'defined')
+        | selectattr('provider_config.profile', 'string')
+        | selectattr('provider_config.pool_selector', 'defined')
+        | selectattr('provider_config.pool_selector', 'mapping')
+        | list | length
+      ) != (_backend_tiers | length) or
+      (
+        _backend_tiers
+        | map(attribute='provider_config.profile')
+        | map('trim')
+        | difference(_ontap_shared_profile_map.keys() | list)
+        | list | length
+      ) > 0 or
+      (
+        _backend_tiers
+        | map(attribute='provider_config.pool_selector')
+        | map('length')
+        | select('equalto', 0)
+        | list | length
+      ) > 0
+    )
+  no_log: true
+
+- name: Fail if any Shared-TBC tier pool_selector key or value is invalid
+  ansible.builtin.fail:
+    msg: >-
+      Invalid key or value in tier provider_config.pool_selector. Every key and
+      value must be a non-empty string matching
+      ^[A-Za-z0-9][A-Za-z0-9_./-]{0,252}$ (no semicolons, equals signs, commas,
+      or whitespace).
+  when: >-
+    (_ontap_is_shared_tbc | bool) and (
+      (
+        _backend_tiers
+        | map(attribute='provider_config.pool_selector')
+        | map('dict2items')
+        | flatten(levels=1)
+        | selectattr('key', 'string')
+        | selectattr('value', 'string')
+        | selectattr('key', 'regex', '^[A-Za-z0-9][A-Za-z0-9_./-]{0,252}$')
+        | selectattr('value', 'regex', '^[A-Za-z0-9][A-Za-z0-9_./-]{0,252}$')
+        | list | length
+      ) != (
+        _backend_tiers
+        | map(attribute='provider_config.pool_selector')
+        | map('dict2items')
+        | flatten(levels=1)
+        | list | length
+      )
+    )
+  no_log: true
+
+- name: Fail if a Shared-TBC tier specifies qos_limits.provider_config.max_iops
+  ansible.builtin.fail:
+    msg: >-
+      Shared-TBC ONTAP tiers cannot specify qos_limits.provider_config.max_iops
+      > 0 because QoS policies are owned by the customer-managed
+      TridentBackendConfig virtual pools.
+  when: >-
+    (_ontap_is_shared_tbc | bool) and (
+      _backend_tiers
+      | selectattr('qos_limits', 'defined')
+      | selectattr('qos_limits', 'mapping')
+      | map(attribute='qos_limits')
+      | selectattr('provider_config', 'defined')
+      | selectattr('provider_config', 'mapping')
+      | map(attribute='provider_config.max_iops', default=0)
+      | map('int')
+      | select('gt', 0)
+      | list | length
+    ) > 0
+  no_log: true
+
+- name: Fail if Dedicated-SVM backend connection is missing endpoint
+  ansible.builtin.fail:
+    msg: >-
+      storage_backend_connections entry is missing a non-empty endpoint.
+  when: >-
+    not (_ontap_is_shared_tbc | bool) and (
+      _provider_backend_connections[_ontap_backend_id].endpoint is not defined or
+      _provider_backend_connections[_ontap_backend_id].endpoint is not string or
+      (_provider_backend_connections[_ontap_backend_id].endpoint | trim | regex_replace('^https?://', '') | regex_replace('/.*$', '') | trim | length) == 0
+    )
+  no_log: true
+
+- name: Fail if tenant_preparation is missing for Dedicated-SVM backend
+  ansible.builtin.fail:
+    msg: >-
+      storage_backend_connections entry is missing
+      tenant_preparation.provider_config. osac-operator must resolve the tenant
+      preparation and supply provider_config (username, password, svm) in
+      storage_backend_connections.
+  when: >-
+    not (_ontap_is_shared_tbc | bool) and (
+      _provider_backend_connections[_ontap_backend_id].tenant_preparation is not defined or
+      _provider_backend_connections[_ontap_backend_id].tenant_preparation is not mapping or
+      _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config is not defined or
+      _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config is not mapping
+    )
+  no_log: true
+
+- name: Validate operator-supplied tenant preparation fields for Dedicated-SVM backend
+  ansible.builtin.fail:
+    msg: >-
+      tenant_preparation is missing one or more required provider_config fields
+      (username, password, svm).
+  when: >-
+    not (_ontap_is_shared_tbc | bool) and (
+      (_provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.username | default('', true) | string | trim | length) == 0 or
+      (_provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.password | default('', true) | string | trim | length) == 0 or
+      (_provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.svm | default('', true) | string | trim | length) == 0
+    )
+  no_log: true
+
+- name: Fail if a Dedicated-SVM tier specifies Shared-TBC provider_config fields
+  ansible.builtin.fail:
+    msg: >-
+      Dedicated-SVM ONTAP tiers must not set provider_config.profile or
+      provider_config.pool_selector.
+  when: >-
+    not (_ontap_is_shared_tbc | bool) and (
+      (_backend_tiers | selectattr('provider_config', 'defined') | rejectattr('provider_config', 'none') | rejectattr('provider_config', 'mapping') | list | length) > 0 or
+      (_backend_tiers | selectattr('provider_config', 'defined') | selectattr('provider_config', 'mapping') | map(attribute='provider_config') | selectattr('profile', 'defined') | list | length) > 0 or
+      (_backend_tiers | selectattr('provider_config', 'defined') | selectattr('provider_config', 'mapping') | map(attribute='provider_config') | selectattr('pool_selector', 'defined') | list | length) > 0
+    )
+  no_log: true

@@ -1,0 +1,73 @@
+---
+# Per-backend validation of operator-supplied ONTAP backend parameters
+# (included by setup.yaml with loop_var _ontap_backend_id).
+#
+# Supports two per-backend tenancy modes:
+# 1. Shared-TBC mode (_provider_backend_connections[_ontap_backend_id].provider_config.profiles):
+#    Validates profile definitions and per-tier profile + pool_selector bindings.
+# 2. Dedicated-SVM mode (_provider_backend_connections[_ontap_backend_id].tenant_preparation):
+#    Consumes the operator-injected tenant_preparation payload:
+#      _provider_backend_connections[_ontap_backend_id].tenant_preparation:
+#        tenant_id:       <immutable-osac-tenant-id>
+#        source:          {namespace, name, uid, resource_version}
+#        provider_config: {username, password, svm}
+#
+# Only SVM-scoped runtime credentials (provider_config.username / password) or
+# shared TBC profile mappings are required, and no direct HTTP calls to ONTAP
+# or Kubernetes API calls are made from the hub cluster during setup.
+
+- name: Validate ONTAP backend mode and record per-backend tenant config
+  block:
+    - name: Compute assignment key for dispatched backend
+      ansible.builtin.set_fact:
+        _assignment_key: >-
+          {{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}
+      no_log: true
+
+    - name: Validate backend tenancy mode and tier parameters
+      ansible.builtin.include_tasks: _validate_backend_mode.yaml
+
+    - name: Record the per-backend tenant config for Shared-TBC mode
+      ansible.builtin.set_fact:
+        _ontap_tenant_configs: >-
+          {{ _ontap_tenant_configs | combine({
+               _ontap_backend_id: {
+                 'assignment_key': _assignment_key,
+                 'mode': 'shared',
+                 'profiles': _ontap_shared_profile_map,
+                 'status': 'ready'
+               }
+             }) }}
+      when: _ontap_is_shared_tbc | bool
+      no_log: true
+
+    - name: Set expected SVM name from operator-supplied preparation
+      ansible.builtin.set_fact:
+        _expected_svm_name: >-
+          {{ _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.svm | string | trim }}
+      when: not (_ontap_is_shared_tbc | bool)
+      no_log: true
+
+    - name: Record the per-backend tenant config for Dedicated-SVM mode
+      ansible.builtin.set_fact:
+        _ontap_tenant_configs: >-
+          {{ _ontap_tenant_configs | combine({
+               _ontap_backend_id: {
+                 'assignment_key': _assignment_key,
+                 'mode': 'dedicated',
+                 'svm_name': _expected_svm_name,
+                 'status': 'ready'
+               }
+             }) }}
+      when: not (_ontap_is_shared_tbc | bool)
+      no_log: true
+
+  always:
+    - name: Clear credential-bearing facts
+      ansible.builtin.set_fact:
+        _expected_svm_name: ""
+        _assignment_key: ""
+        _ontap_shared_profile_map: {}
+        _ontap_is_shared_tbc: false
+        _backend_tiers: []
+      no_log: true

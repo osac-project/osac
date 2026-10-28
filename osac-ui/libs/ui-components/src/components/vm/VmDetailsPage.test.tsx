@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Route, Routes } from 'react-router-dom';
 import { screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,10 +19,21 @@ vi.mock('../../api/use-resource', async (importOriginal) => {
   return { ...actual, useGetResource: mocks.useGetResource };
 });
 
-vi.mock('../Resource/ResourceDetailsPageLoading', () => ({
-  ResourceDetailsPageLoading: ({ tabLabels }: { tabLabels?: string[] }) => (
-    <div>Loading tabs: {tabLabels?.join(', ')}</div>
-  ),
+vi.mock('../../hooks/use-session', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../hooks/use-session')>();
+  return { ...actual, SessionProvider: ({ children }: { children: ReactNode }) => children };
+});
+
+vi.mock('../Resource/ResourceDetailsPage', () => ({
+  default: ({
+    children,
+    found,
+    isLoading,
+  }: {
+    children: ReactNode;
+    found: boolean;
+    isLoading: boolean;
+  }) => <div>{isLoading ? 'Resource loading' : found ? children : 'Resource not found'}</div>,
 }));
 
 vi.mock('./DetailsPage/VmDetails', () => ({
@@ -63,6 +75,11 @@ describe('VmDetailsPage', () => {
 
     renderPage();
 
-    expect(screen.getByText('Loading tabs: Overview, Networking, Console')).toBeInTheDocument();
+    expect(screen.getByText('Resource loading')).toBeInTheDocument();
+    expect(mocks.useGetResource).toHaveBeenCalledWith(
+      ComputeInstances,
+      { id: 'vm-1' },
+      { enabled: true },
+    );
   });
 });

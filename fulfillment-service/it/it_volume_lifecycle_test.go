@@ -274,6 +274,14 @@ var _ = Describe("Volume lifecycle", func() {
 			)).To(Succeed())
 			g.Expect(crList.Items).To(BeEmpty())
 		}, time.Minute, time.Second).Should(Succeed())
+
+		// The API object archives asynchronously after its Volume CR is removed.
+		// Wait for that lifecycle boundary before the project cleanup below.
+		Eventually(func(g Gomega) {
+			_, err := volumesClient.Get(ctx,
+				privatev1.VolumesGetRequest_builder{Id: volId}.Build())
+			g.Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+		}, time.Minute, time.Second).Should(Succeed())
 	})
 
 	// =========================================================================
@@ -321,12 +329,8 @@ var _ = Describe("Volume lifecycle", func() {
 							Name: backend2Name,
 						}.Build(),
 						Spec: privatev1.StorageBackendSpec_builder{
-							Provider: "netapp",
-							Endpoint: "https://test-nfs:2049",
-							Credentials: privatev1.StorageBackendCredentials_builder{
-								Username: "admin",
-								Password: testBackendPassword,
-							}.Build(),
+							Provider:   "netapp",
+							CspManaged: true,
 						}.Build(),
 					}.Build(),
 				}.Build())

@@ -19,7 +19,7 @@
 
 //go:build protoopaque
 
-package v1
+package privatev1
 
 import (
 	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"

@@ -38,8 +38,9 @@ func newValidStorageBackendCreateRequest(provider string) *privatev1.StorageBack
 		Object: privatev1.StorageBackend_builder{
 			Metadata: privatev1.Metadata_builder{Name: "my-backend"}.Build(),
 			Spec: privatev1.StorageBackendSpec_builder{
-				Provider: provider,
-				Endpoint: "https://storage.example.com",
+				Provider:   provider,
+				CspManaged: provider == "netapp",
+				Endpoint:   "https://storage.example.com",
 				Credentials: privatev1.StorageBackendCredentials_builder{
 					Username: "admin",
 					Password: testPassword,

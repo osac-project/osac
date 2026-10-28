@@ -1213,6 +1213,89 @@ var _ = Describe("run", func() {
 				Expect(err).To(MatchError(ContainSubstring("failed to query for remaining projects: projects db error")))
 				Expect(hasFinalizer(tenant)).To(BeTrue())
 			})
+
+			It("converges across reconciles from remaining projects to hub CR deletion to finalizer removal", func() {
+				existing := newTenantCR(tenantID, namespace1, tenantID, nil)
+				existing.Finalizers = []string{"osac.openshift.io/storage"}
+				existingNS := &corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: tenantID,
+					},
+				}
+				fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing, existingNS).Build()
+
+				projectsMock := NewMockProjectsClient(ctrl)
+				gomock.InOrder(
+					projectsMock.EXPECT().
+						List(gomock.Any(), gomock.Any()).
+						Return(privatev1.ProjectsListResponse_builder{Total: 1}.Build(), nil),
+					projectsMock.EXPECT().
+						List(gomock.Any(), gomock.Any()).
+						Return(privatev1.ProjectsListResponse_builder{Total: 0}.Build(), nil),
+					projectsMock.EXPECT().
+						List(gomock.Any(), gomock.Any()).
+						Return(privatev1.ProjectsListResponse_builder{Total: 0}.Build(), nil),
+				)
+
+				mockHubs.EXPECT().
+					List(gomock.Any(), gomock.Any()).
+					Return(&privatev1.HubsListResponse{
+						Size:  1,
+						Total: 1,
+						Items: []*privatev1.Hub{
+							privatev1.Hub_builder{Id: hub1ID}.Build(),
+						},
+					}, nil).
+					Times(2)
+
+				mockHubCache.EXPECT().
+					Get(gomock.Any(), hub1ID).
+					Return(&controllers.HubEntry{Namespace: namespace1, Client: fakeClient}, nil).
+					Times(2)
+
+				mockTenants.EXPECT().
+					Update(gomock.Any(), gomock.Any(), gomock.Any()).
+					DoAndReturn(func(_ context.Context, req *privatev1.TenantsUpdateRequest, _ ...grpc.CallOption) (*privatev1.TenantsUpdateResponse, error) {
+						return &privatev1.TenantsUpdateResponse{Object: req.GetObject()}, nil
+					}).
+					Times(1)
+
+				tenant := privatev1.Tenant_builder{
+					Id: tenantID,
+					Metadata: privatev1.Metadata_builder{
+						Name:              tenantID,
+						Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
+						DeletionTimestamp: timestamppb.Now(),
+						Tenant:            tenantName,
+					}.Build(),
+				}.Build()
+
+				f := newFunction(mockHubCache, mockHubs, mockTenants, projectsMock)
+
+				// Step 1: Project still exists -> hub Tenant CR and Namespace are untouched.
+				err := f.run(ctx, tenant)
+				Expect(err).To(MatchError(ContainSubstring("tenant still has 1 project(s) pending deletion")))
+				Expect(hasFinalizer(tenant)).To(BeTrue())
+				gotCR := &osacv1alpha1.Tenant{}
+				Expect(fakeClient.Get(ctx, clnt.ObjectKey{Namespace: namespace1, Name: tenantID}, gotCR)).To(Succeed())
+				Expect(gotCR.DeletionTimestamp).To(BeNil())
+
+				// Step 2: Project archived -> hub Tenant CR has DeletionTimestamp set (held by storage finalizer), requeues at 1s.
+				err = f.run(ctx, tenant)
+				Expect(err).To(MatchError(ContainSubstring("tenant CR still present")))
+				Expect(hasFinalizer(tenant)).To(BeTrue())
+				Expect(fakeClient.Get(ctx, clnt.ObjectKey{Namespace: namespace1, Name: tenantID}, gotCR)).To(Succeed())
+				Expect(gotCR.DeletionTimestamp).NotTo(BeNil())
+
+				// Simulate StorageReconciler removing its finalizer once workloads and storage teardown complete.
+				gotCR.Finalizers = nil
+				Expect(fakeClient.Update(ctx, gotCR)).To(Succeed())
+
+				// Step 3: Hub Tenant CR is gone -> TenantOnboarding finalizer is removed.
+				err = f.run(ctx, tenant)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(hasFinalizer(tenant)).To(BeFalse())
+			})
 		})
 	})
 })

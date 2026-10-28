@@ -1590,8 +1590,8 @@ func (r *StorageReconciler) mapCatalogEventToTenants(ctx context.Context, _ *v1a
 }
 
 // SetupWithManager registers StorageReconciler, its Tenant, ClusterOrder,
-// StorageClass, Secret, and catalog-change watches, and the periodic storage
-// catalog sync runnable with the multicluster manager.
+// ComputeInstance, Volume, StorageClass, Secret, and catalog-change watches,
+// and the periodic storage catalog sync runnable with the multicluster manager.
 func (r *StorageReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	if r.catalogEvents == nil {
 		r.catalogEvents = make(chan event.TypedGenericEvent[*v1alpha1.Tenant], 1)
@@ -1605,6 +1605,20 @@ func (r *StorageReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 		Watches(
 			&v1alpha1.ClusterOrder{},
 			mchandler.EnqueueRequestsFromMapFunc(r.mapClusterOrderToTenant),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
+		).
+		Watches(
+			&v1alpha1.ComputeInstance{},
+			mchandler.EnqueueRequestsFromMapFunc(r.mapTenantWorkloadToDeletingTenant),
+			mcbuilder.WithPredicates(tenantWorkloadDeletePredicate()),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
+		).
+		Watches(
+			&v1alpha1.Volume{},
+			mchandler.EnqueueRequestsFromMapFunc(r.mapTenantWorkloadToDeletingTenant),
+			mcbuilder.WithPredicates(tenantWorkloadDeletePredicate()),
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(false),
 		).
@@ -1636,6 +1650,39 @@ func (r *StorageReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 		}
 	}
 	return nil
+}
+
+// mapTenantWorkloadToDeletingTenant maps a deleted ComputeInstance or Volume CR
+// to its owning Tenant only when that Tenant is actively being deleted, so
+// StorageReconciler wakes immediately when the last workload drains.
+func (r *StorageReconciler) mapTenantWorkloadToDeletingTenant(ctx context.Context, obj client.Object) []reconcile.Request {
+	tenantName := obj.GetAnnotations()[osacTenantKey]
+	if tenantName == "" {
+		return nil
+	}
+
+	tenant := &v1alpha1.Tenant{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: r.tenantNamespace, Name: tenantName}, tenant); err != nil {
+		return nil
+	}
+	if tenant.DeletionTimestamp.IsZero() {
+		return nil
+	}
+
+	return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(tenant)}}
+}
+
+// tenantWorkloadDeletePredicate passes only Delete events on resources carrying
+// a non-empty osac.openshift.io/tenant annotation.
+func tenantWorkloadDeletePredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc:  func(event.CreateEvent) bool { return false },
+		UpdateFunc:  func(event.UpdateEvent) bool { return false },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return e.Object != nil && e.Object.GetAnnotations()[osacTenantKey] != ""
+		},
+	}
 }
 
 // secretTenantPredicate filters Secret watch events to storage config Secrets

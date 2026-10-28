@@ -50,6 +50,7 @@ import (
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
@@ -4428,6 +4429,61 @@ var _ = Describe("Storage Controller", func() {
 			} else {
 				Expect(client.IgnoreNotFound(err)).To(Succeed())
 			}
+		})
+
+		It("should filter workload watch events to deletions and map them only to deleting Tenants", func() {
+			pred := tenantWorkloadDeletePredicate()
+			annotatedCI := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "watch-pred-ci",
+					Namespace:   testNamespace,
+					Annotations: map[string]string{osacTenantKey: "some-tenant"},
+				},
+			}
+			unannotatedCI := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "watch-pred-ci-no-tenant",
+					Namespace: testNamespace,
+				},
+			}
+			Expect(pred.Create(event.CreateEvent{Object: annotatedCI})).To(BeFalse())
+			Expect(pred.Update(event.UpdateEvent{ObjectNew: annotatedCI})).To(BeFalse())
+			Expect(pred.Generic(event.GenericEvent{Object: annotatedCI})).To(BeFalse())
+			Expect(pred.Delete(event.DeleteEvent{Object: unannotatedCI})).To(BeFalse())
+			Expect(pred.Delete(event.DeleteEvent{Object: annotatedCI})).To(BeTrue())
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+
+			name := "watch-map-deleting-tenant"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			vol := &v1alpha1.Volume{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "watch-map-vol",
+					Namespace:   testNamespace,
+					Annotations: map[string]string{osacTenantKey: name},
+				},
+			}
+			Expect(r.mapTenantWorkloadToDeletingTenant(ctx, vol)).To(BeEmpty())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, tenant)).To(Succeed())
+			Expect(r.mapTenantWorkloadToDeletingTenant(ctx, vol)).To(ConsistOf(
+				reconcile.Request{NamespacedName: nn},
+			))
+
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			controllerutil.RemoveFinalizer(tenant, storageFinalizer)
+			Expect(k8sClient.Update(ctx, tenant)).To(Succeed())
 		})
 
 		It("should fail closed without querying local StorageClasses when r.targetCluster is remote and not registered", func() {

@@ -43,7 +43,7 @@ FROM registry.access.redhat.com/ubi10-minimal:1792742518
 # release-side {{ oci_version }} tag templating resolves to it instead
 # of silently falling back to the base image's own inherited version
 # label.
-ARG VERSION=dev
+ARG VERSION=0.0.38-nightly.20261028.9c7256d.142.1
 LABEL name="cloud-extensions/osac-operator-rhel10"
 LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
 LABEL org.opencontainers.image.version="${VERSION}"

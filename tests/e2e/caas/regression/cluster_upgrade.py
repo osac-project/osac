@@ -1,4 +1,4 @@
-"""Deployed, sequential control-plane and named-node-pool API upgrade."""
+"""Observation and cleanup helpers for the CaaS upgrade E2E journey."""
 
 from __future__ import annotations
 
@@ -10,36 +10,22 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
-import pytest
-
-from tests.e2e.caas.sanity.test_cluster_create import RHCOS_IMAGE
 from tests.e2e.core.grpc_client import GRPCClient
-from tests.e2e.core.helpers import (
-    unique_name,
-    wait_for_cluster_deletion_without_cleanup,
-    wait_for_cluster_grpc_removal,
-    wait_for_cluster_order_cr,
-)
+from tests.e2e.core.helpers import wait_for_cluster_deletion_without_cleanup, wait_for_cluster_grpc_removal
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.core.runner import poll_until
+from tests.e2e.core.runner import env, poll_until
 
-pytestmark = pytest.mark.regression
-
-SOURCE_VERSION = "4.22.0-rhcos"
-SOURCE_IMAGE = "quay.io/openshift-release-dev/ocp-release:4.22.0-multi"
 TARGET_VERSION = "4.22.1"
-TARGET_IMAGE = "quay.io/openshift-release-dev/ocp-release:4.22.1-multi"
+TARGET_IMAGE = env("OSAC_TEST_UPGRADE_RELEASE_IMAGE", "quay.io/openshift-release-dev/ocp-release:4.22.1-multi")
 CP_LIMIT_SECONDS = 60 * 60
 NP_LIMIT_SECONDS_PER_NODE = 30 * 60
 START_LIMIT_SECONDS = 10 * 60
 POLL_SECONDS = 20
-SELECTED_NODE_SET = "compute"
-SIBLING_NODE_SET = "gpu"
-INSTANCE_TYPES = {SELECTED_NODE_SET: "ci-worker-bm", SIBLING_NODE_SET: "ci-worker-bm-gpu"}
 _TERMINAL_JOB_FAILURES = {"Failed", "Canceled"}
 _PHASES = (
     "preparing",
+    "install-completed",
     "control-plane-requested",
     "control-plane-started",
     "control-plane-completed",
@@ -101,7 +87,7 @@ def _condition(resource: dict[str, Any], kind: str) -> dict[str, Any]:
     return next((item for item in resource.get("status", {}).get("conditions", []) if item.get("type") == kind), {})
 
 
-def _pool_identity(k8s: K8sClient, namespace: str, co_name: str) -> dict[str, str]:
+def _pool_identity(k8s: K8sClient, namespace: str, co_name: str, expected_node_sets: set[str]) -> dict[str, str]:
     """Find the test-owned NodePools by their public NodeSet labels."""
     pools = k8s.list_json(resource="nodepools.hypershift.openshift.io", namespace=namespace).get("items", [])
     owned = [
@@ -109,7 +95,7 @@ def _pool_identity(k8s: K8sClient, namespace: str, co_name: str) -> dict[str, st
         for item in pools
         if item.get("metadata", {}).get("labels", {}).get("osac.openshift.io/clusterorder") == co_name
     ]
-    if len(owned) != len(INSTANCE_TYPES):
+    if len(owned) != len(expected_node_sets):
         return {}
     names = {item["metadata"]["labels"]["osac.openshift.io/node-set"]: item["metadata"]["name"] for item in owned}
     return names
@@ -239,24 +225,7 @@ def _np_completed(pool: dict[str, Any], old_transition: str, target_image: str) 
     )
 
 
-def _create_cluster(
-    *, cli: OsacCLI, source_name: str, cluster_template: str, pull_secret_name: str, ssh_public_key_path: str
-) -> str:
-    """Create a test-owned Cluster with two one-node worker sets."""
-    return cli.create_cluster(
-        name=unique_name("e2e-cluster-upgrade"),
-        template=cluster_template,
-        version=source_name,
-        node_sets={
-            node_set: {"size": 1, "baremetal_instance_type": {"name": instance_type}}
-            for node_set, instance_type in INSTANCE_TYPES.items()
-        },
-        pull_secret=pull_secret_name,
-        ssh_public_key_file=ssh_public_key_path,
-    )
-
-
-def _cluster_references(*, k8s: K8sClient, uuid: str, co_name: str) -> _ClusterRefs:
+def _cluster_references(*, k8s: K8sClient, uuid: str, co_name: str, expected_node_sets: set[str]) -> _ClusterRefs:
     """Resolve the test-owned HostedCluster and NodePool names."""
     namespace, hc_name = poll_until(
         fn=lambda: (
@@ -269,8 +238,8 @@ def _cluster_references(*, k8s: K8sClient, uuid: str, co_name: str) -> _ClusterR
         description="test-owned HostedCluster reference",
     )
     pool_names = poll_until(
-        fn=lambda: _pool_identity(k8s, namespace, co_name),
-        until=lambda names: set(names) == set(INSTANCE_TYPES),
+        fn=lambda: _pool_identity(k8s, namespace, co_name, expected_node_sets),
+        until=lambda names: set(names) == expected_node_sets,
         retries=60,
         delay=10,
         description="test-owned NodePool identities",
@@ -369,12 +338,14 @@ def _upgrade_node_pool(
     grpc: GRPCClient,
     k8s: K8sClient,
     evidence: dict[str, Any],
+    upgraded_node_set: str,
+    unchanged_node_set: str,
 ) -> None:
-    """Upgrade one named NodePool while preserving its sibling and control plane."""
+    """Upgrade one named NodePool while preserving another pool and the control plane."""
     initial_state = baseline["cluster"]["status"]["state"]
-    sibling = baseline["pools"][SIBLING_NODE_SET]
-    selected_before = cp_snapshot["pools"][SELECTED_NODE_SET]
-    old_transition = _condition(selected_before, "UpdatingVersion").get("lastTransitionTime", "")
+    unchanged_pool = baseline["pools"][unchanged_node_set]
+    upgraded_before = cp_snapshot["pools"][upgraded_node_set]
+    old_transition = _condition(upgraded_before, "UpdatingVersion").get("lastTransitionTime", "")
     prior_job_ids = {job["jobID"] for job in cp_snapshot["order"].get("status", {}).get("provisioningJobs", [])}
     target_image = target["image"]
 
@@ -383,60 +354,60 @@ def _upgrade_node_pool(
         data={
             "object": {
                 "id": refs.uuid,
-                "spec": {"nodeSets": {SELECTED_NODE_SET: {"version": {"name": target["name"]}}}},
+                "spec": {"nodeSets": {upgraded_node_set: {"version": {"name": target["name"]}}}},
             },
-            "updateMask": {"paths": [f"spec.node_sets.{SELECTED_NODE_SET}.version"]},
+            "updateMask": {"paths": [f"spec.node_sets.{upgraded_node_set}.version"]},
         },
     )
     accepted = time.monotonic()
     evidence["phase"] = "node-pool-requested"
 
     def observe() -> tuple[dict[str, Any], dict[str, Any]]:
-        """Read NodePool progress and recheck sibling and control-plane health."""
+        """Read NodePool progress and recheck the other pool and control-plane health."""
         current = _snapshot(k8s=k8s, grpc=grpc, refs=refs)
         _assert_unchanged(
             current,
             state=initial_state,
-            images={SIBLING_NODE_SET: sibling["spec"]["release"]["image"]},
-            versions={SIBLING_NODE_SET: sibling["status"]["version"]},
+            images={unchanged_node_set: unchanged_pool["spec"]["release"]["image"]},
+            versions={unchanged_node_set: unchanged_pool["status"]["version"]},
             hosted_image=target_image,
         )
         assert _cp_completed(current["hosted"], target_image), "Control plane is not completed and healthy"
-        assert current["cluster"]["spec"]["nodeSets"][SELECTED_NODE_SET]["version"]["name"] == target["name"]
+        assert current["cluster"]["spec"]["nodeSets"][upgraded_node_set]["version"]["name"] == target["name"]
         assert current["order"]["spec"].get("releaseImage") == target_image
-        _check_hypershift_failure(current["pools"][SELECTED_NODE_SET], "selected node pool")
+        _check_hypershift_failure(current["pools"][upgraded_node_set], "upgraded node pool")
         job = _new_provision_job(current, prior_job_ids)
-        _check_job(job, "selected node pool")
+        _check_job(job, "upgraded node pool")
         return current, job
 
     _wait_elapsed(
-        component="selected node pool start",
+        component="upgraded node pool start",
         accepted_at=accepted,
         limit_seconds=START_LIMIT_SECONDS,
         observe=observe,
         ready=lambda pair: (
             any(
-                request.get("nodeSet") == SELECTED_NODE_SET and request.get("releaseImage") == target_image
+                request.get("nodeSet") == upgraded_node_set and request.get("releaseImage") == target_image
                 for request in pair[0]["order"]["spec"].get("nodeRequests", [])
             )
             and bool(pair[1].get("jobID"))
-            and _np_started(pair[0]["pools"][SELECTED_NODE_SET], old_transition, target_image)
+            and _np_started(pair[0]["pools"][upgraded_node_set], old_transition, target_image)
         ),
     )
     evidence["phase"] = "node-pool-started"
     _wait_elapsed(
-        component="selected node pool completion",
+        component="upgraded node pool completion",
         accepted_at=accepted,
-        limit_seconds=NP_LIMIT_SECONDS_PER_NODE * int(selected_before["spec"]["replicas"]),
+        limit_seconds=NP_LIMIT_SECONDS_PER_NODE * int(upgraded_before["spec"]["replicas"]),
         observe=observe,
-        ready=lambda pair: _np_completed(pair[0]["pools"][SELECTED_NODE_SET], old_transition, target_image),
+        ready=lambda pair: _np_completed(pair[0]["pools"][upgraded_node_set], old_transition, target_image),
     )
     evidence["phase"] = "node-pool-completed"
     evidence["np_elapsed_seconds"] = round(time.monotonic() - accepted, 1)
 
 
-def _safe_evidence(evidence: dict[str, Any]) -> dict[str, str | float]:
-    """Allow only fixed states, approved fixture versions, and elapsed times into logs."""
+def _safe_evidence(evidence: dict[str, Any], *, source_version: str) -> dict[str, str | float]:
+    """Allow only fixed states, the install fixture version, and elapsed times into logs."""
     phase = evidence.get("phase")
     outcome = evidence.get("outcome")
     cleanup = evidence.get("cleanup")
@@ -444,7 +415,7 @@ def _safe_evidence(evidence: dict[str, Any]) -> dict[str, str | float]:
         "phase": phase if phase in _PHASES else "unknown",
         "outcome": outcome if outcome in ("failed", "succeeded") else "unknown",
         "cleanup": cleanup if cleanup in ("failed", "completed") else "unknown",
-        "source_release_version": SOURCE_VERSION,
+        "source_release_version": source_version,
         "target_release_version": TARGET_VERSION,
     }
     for field in ("cp_elapsed_seconds", "np_elapsed_seconds"):
@@ -464,13 +435,16 @@ def _cleanup(
     co_name: str | None,
     created_version_ids: list[str],
     evidence: dict[str, Any],
+    source_version: str,
+    delete_cluster_requested: bool = False,
 ) -> None:
     """Try cluster and catalog deletion, then log the sanitized outcome."""
     try:
         first_error: BaseException | None = None
         try:
             if uuid is not None:
-                cli.delete_cluster(uuid=uuid)
+                if not delete_cluster_requested:
+                    cli.delete_cluster(uuid=uuid)
                 if co_name is not None:
                     wait_for_cluster_deletion_without_cleanup(k8s=k8s, name=co_name)
                 wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
@@ -491,79 +465,7 @@ def _cleanup(
     else:
         evidence["cleanup"] = "completed"
     finally:
-        logger.info("CaaS upgrade evidence: %s", json.dumps(_safe_evidence(evidence), sort_keys=True))
-
-
-def test_control_plane_then_named_node_pool_upgrade(
-    cli: OsacCLI,
-    grpc: GRPCClient,
-    private_grpc: GRPCClient,
-    jwt_grpc_tenant1: GRPCClient,
-    k8s_hub_client: K8sClient,
-    cluster_template: str,
-    pull_secret_name: str,
-    ssh_public_key_path: str,
-) -> None:
-    """Upgrade the control plane, then one named pool, on a dedicated Cluster."""
-    evidence: dict[str, Any] = {"phase": "preparing", "outcome": "failed"}
-    uuid: str | None = None
-    co_name: str | None = None
-    created_version_ids: list[str] = []
-    try:
-        for instance_type in INSTANCE_TYPES.values():
-            private_grpc.ensure_bare_metal_instance_type(
-                name=instance_type, host_label_selector={"osac.openshift.io/host-type": "default"}
-            )
-        disk_image = private_grpc.ensure_disk_image(name="rhcos-4-22", source_ref=RHCOS_IMAGE)
-        source_version, source_created = _catalog_version(
-            private_grpc=private_grpc, version=SOURCE_VERSION, image=SOURCE_IMAGE, disk_image=disk_image
-        )
-        if source_created:
-            created_version_ids.append(source_version["id"])
-        target_version, target_created = _catalog_version(
-            private_grpc=private_grpc, version=TARGET_VERSION, image=TARGET_IMAGE, disk_image=disk_image
-        )
-        if target_created:
-            created_version_ids.append(target_version["id"])
-        uuid = _create_cluster(
-            cli=cli,
-            source_name=source_version["name"],
-            cluster_template=cluster_template,
-            pull_secret_name=pull_secret_name,
-            ssh_public_key_path=ssh_public_key_path,
-        )
-        co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=uuid)
-        refs = _cluster_references(k8s=k8s_hub_client, uuid=uuid, co_name=co_name)
-        baseline = _ready_baseline(k8s=k8s_hub_client, grpc=grpc, refs=refs)
-
-        cp_snapshot = _upgrade_control_plane(
-            refs=refs,
-            baseline=baseline,
-            target=target_version,
-            jwt_grpc_tenant1=jwt_grpc_tenant1,
-            grpc=grpc,
-            k8s=k8s_hub_client,
-            evidence=evidence,
-        )
-        _upgrade_node_pool(
-            refs=refs,
-            baseline=baseline,
-            cp_snapshot=cp_snapshot,
-            target=target_version,
-            jwt_grpc_tenant1=jwt_grpc_tenant1,
-            grpc=grpc,
-            k8s=k8s_hub_client,
-            evidence=evidence,
-        )
-        evidence["outcome"] = "succeeded"
-    finally:
-        _cleanup(
-            cli=cli,
-            grpc=grpc,
-            private_grpc=private_grpc,
-            k8s=k8s_hub_client,
-            uuid=uuid,
-            co_name=co_name,
-            created_version_ids=created_version_ids,
-            evidence=evidence,
+        logger.info(
+            "CaaS upgrade evidence: %s",
+            json.dumps(_safe_evidence(evidence, source_version=source_version), sort_keys=True),
         )

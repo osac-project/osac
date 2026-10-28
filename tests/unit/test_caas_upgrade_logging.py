@@ -9,7 +9,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from tests.e2e.caas.regression import test_cluster_upgrade as scenario
+from tests.e2e.caas.regression import cluster_upgrade as scenario
+from tests.e2e.caas.regression import test_cluster_node_sets as journey
 
 
 @pytest.mark.parametrize("cleanup_fails", [False, True])
@@ -50,6 +51,7 @@ def test_cleanup_logs_only_allowlisted_upgrade_evidence(
             co_name="secret-cluster-order",
             created_version_ids=["secret-catalog-id"],
             evidence=evidence,
+            source_version=journey.INSTALL_VERSION,
         )
 
     messages = [record.getMessage() for record in caplog.records if record.name == scenario.logger.name]
@@ -59,7 +61,7 @@ def test_cleanup_logs_only_allowlisted_upgrade_evidence(
         "phase": "node-pool-completed",
         "outcome": "failed" if cleanup_fails else "succeeded",
         "cleanup": "failed" if cleanup_fails else "completed",
-        "source_release_version": scenario.SOURCE_VERSION,
+        "source_release_version": journey.INSTALL_VERSION,
         "target_release_version": scenario.TARGET_VERSION,
         "cp_elapsed_seconds": 12.5,
     }
@@ -80,3 +82,29 @@ def test_cleanup_logs_only_allowlisted_upgrade_evidence(
     ):
         assert secret not in caplog.text
     private_grpc.delete_cluster_version.assert_called_once_with(version_id="secret-catalog-id")
+
+
+def test_cleanup_waits_without_repeating_a_requested_cluster_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed natural teardown may need another wait, not another Delete request."""
+    cli, grpc, private_grpc, k8s = (Mock() for _ in range(4))
+    wait_order = Mock()
+    wait_grpc = Mock()
+    monkeypatch.setattr(scenario, "wait_for_cluster_deletion_without_cleanup", wait_order)
+    monkeypatch.setattr(scenario, "wait_for_cluster_grpc_removal", wait_grpc)
+
+    scenario._cleanup(
+        cli=cli,
+        grpc=grpc,
+        private_grpc=private_grpc,
+        k8s=k8s,
+        uuid="cluster-id",
+        co_name="order-name",
+        created_version_ids=[],
+        evidence={"phase": "node-pool-completed", "outcome": "failed"},
+        source_version=journey.INSTALL_VERSION,
+        delete_cluster_requested=True,
+    )
+
+    cli.delete_cluster.assert_not_called()
+    wait_order.assert_called_once_with(k8s=k8s, name="order-name")
+    wait_grpc.assert_called_once_with(grpc=grpc, uuid="cluster-id")

@@ -10,15 +10,20 @@ from tests.e2e.caas.regression import test_cluster_node_sets as regression
 from tests.e2e.caas.sanity import test_cluster_create as scenario
 from tests.e2e.core import helpers, runner
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.metering import MeteringCollector
+from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
 
 
 @pytest.fixture
 def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
+    monkeypatch.setenv("OSAC_CAAS_RUN_UPGRADE", "false")
     # The metering mock needs the MeteringCollector spec: Python 3.14's Mock
     # denies assert*-prefixed attribute names on unspec'd mocks, and the
     # scenario calls metering.assert_no_events.
-    clients = {"cli": Mock(), "grpc": Mock(), "private_grpc": Mock(), "metering": Mock(spec=MeteringCollector)}
+    clients = {
+        name: Mock()
+        for name in ("request", "cli", "grpc", "private_grpc", "metering")
+    }
+    clients["metering"] = Mock(spec=MeteringCollector)
     k8s = clients["k8s_hub_client"] = Mock(spec=K8sClient)
     k8s.namespace = "osac"
     cli, grpc, private = (clients[name] for name in ("cli", "grpc", "private_grpc"))
@@ -116,6 +121,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     ):
         monkeypatch.setattr(scenario, name, Mock())
     monkeypatch.setattr(scenario, "snapshot_cluster_deletion", Mock(return_value=[]))
+    monkeypatch.setattr(regression.upgrade, "wait_for_cluster_grpc_removal", Mock())
     monkeypatch.setattr(runner.time, "sleep", Mock())
     monkeypatch.setattr(
         helpers,
@@ -157,7 +163,10 @@ def test_two_node_set_scenario_uses_same_natural_teardown_budgets(
     assert runner.time.sleep.call_args_list == [call(5), call(10), call(5)]
     helpers.wait_for_cluster_deletion.assert_not_called()
     scenario.wait_for_cluster_grpc_removal.assert_called_once_with(grpc=two_node_set_clients["grpc"], uuid="cluster-id")
-    two_node_set_clients["cli"].delete_cluster.assert_has_calls([call(uuid="cluster-id"), call(uuid="cluster-id")])
+    two_node_set_clients["metering"].expect.assert_called_once_with(
+        HEARTBEAT_TYPE, resource_id="cluster-id", timeout=180
+    )
+    two_node_set_clients["cli"].delete_cluster.assert_called_once_with(uuid="cluster-id")
     for name in ("patch", "apply", "delete"):
         getattr(two_node_set_clients["k8s_hub_client"], name).assert_not_called()
 

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from copy import deepcopy
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
 
 import pytest
 
-from tests.e2e.caas.regression import test_cluster_upgrade as scenario
+from tests.e2e.caas.regression import cluster_upgrade as scenario
+from tests.e2e.caas.regression import test_cluster_node_sets as journey
 
 
 def test_baseline_waits_for_both_node_pool_readiness_conditions(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -57,8 +59,8 @@ def test_baseline_waits_for_both_node_pool_readiness_conditions(monkeypatch: pyt
 def test_node_pool_poll_rejects_later_control_plane_degradation(monkeypatch: pytest.MonkeyPatch) -> None:
     """Control-plane health must hold during the NodePool completion wait."""
     target_image = "target-image"
-    sibling = {"spec": {"release": {"image": "source-image"}}, "status": {"version": "4.22.0"}}
-    baseline = {"cluster": {"status": {"state": "CLUSTER_STATE_READY"}}, "pools": {"gpu": sibling}}
+    unchanged_pool = {"spec": {"release": {"image": "source-image"}}, "status": {"version": "4.22.0"}}
+    baseline = {"cluster": {"status": {"state": "CLUSTER_STATE_READY"}}, "pools": {"gpu": unchanged_pool}}
     cp_snapshot = {"pools": {"compute": {"spec": {"replicas": 1}}}, "order": {"status": {}}}
     healthy = {
         "cluster": {
@@ -78,7 +80,7 @@ def test_node_pool_poll_rejects_later_control_plane_degradation(monkeypatch: pyt
                 "conditions": [{"type": "Available", "status": "True"}, {"type": "Degraded", "status": "False"}],
             },
         },
-        "pools": {"gpu": sibling, "compute": {}},
+        "pools": {"gpu": unchanged_pool, "compute": {}},
     }
     degraded = deepcopy(healthy)
     degraded["hosted"]["status"]["conditions"][1]["status"] = "True"
@@ -105,7 +107,51 @@ def test_node_pool_poll_rejects_later_control_plane_degradation(monkeypatch: pyt
             grpc=Mock(),
             k8s=Mock(),
             evidence=evidence,
+            upgraded_node_set=journey.REGULAR_NODE_SET,
+            unchanged_node_set=journey.GPU_NODE_SET,
         )
 
     assert snapshot.call_count == 2
     assert evidence["phase"] == "node-pool-started"
+
+
+def test_install_only_skips_upgrade_and_tenant_user_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The on-demand install path retains teardown without requesting an upgrade."""
+    monkeypatch.setenv("OSAC_CAAS_RUN_UPGRADE", "false")
+    monkeypatch.setenv("OSAC_FULFILLMENT_TRUST_E2E", "false")
+    request, cli, grpc, private_grpc, k8s, metering = (Mock() for _ in range(6))
+    cli.create_cluster.return_value = "cluster-id"
+    private_grpc.ensure_disk_image.return_value = "disk-image"
+    private_grpc.ensure_cluster_version.return_value = {"name": "source-version"}
+    cluster = SimpleNamespace(co_name="order-name")
+    installed = Mock(return_value=cluster)
+    deleted = Mock()
+    references = Mock()
+    baseline = Mock()
+    catalog = Mock()
+    monkeypatch.setattr(journey, "assert_cluster_with_two_node_sets_available", installed)
+    monkeypatch.setattr(journey, "_assert_cluster_deleted", deleted)
+    monkeypatch.setattr(scenario, "_cluster_references", references)
+    monkeypatch.setattr(scenario, "_ready_baseline", baseline)
+    monkeypatch.setattr(scenario, "_catalog_version", catalog)
+
+    journey.test_cluster_create_with_two_node_sets(
+        request=request,
+        cli=cli,
+        grpc=grpc,
+        private_grpc=private_grpc,
+        k8s_hub_client=k8s,
+        cluster_template="template",
+        pull_secret_name="pull-secret",
+        ssh_public_key_path="key-path",
+        metering=metering,
+    )
+
+    installed.assert_called_once()
+    metering.expect.assert_not_called()
+    cli.delete_cluster.assert_called_once_with(uuid="cluster-id")
+    deleted.assert_called_once_with(grpc=grpc, k8s=k8s, metering=metering, uuid="cluster-id", cluster=cluster)
+    request.getfixturevalue.assert_not_called()
+    references.assert_not_called()
+    baseline.assert_not_called()
+    catalog.assert_not_called()

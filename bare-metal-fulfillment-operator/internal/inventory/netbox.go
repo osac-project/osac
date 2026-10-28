@@ -331,7 +331,7 @@ func (c *NetBoxClient) resolveNetBoxHostAccess(ctx context.Context, device netbo
 
 func (c *NetBoxClient) prepareMetal3Host(ctx context.Context, host *Host, connection *netBoxConnectionData, credentials *BMCCredentials, bareMetalInstanceID string) (*Host, error) {
 	secretName := host.Name + bmcSecretSuffix
-	if err := c.bmhManager.EnsureBMCSecret(ctx, secretName, string(credentials.Username), string(credentials.Password)); err != nil {
+	if err := c.bmhManager.EnsureOwnedBMCSecret(ctx, secretName, string(credentials.Username), string(credentials.Password), bareMetalInstanceID); err != nil {
 		return nil, fmt.Errorf("failed to ensure BMC credentials Secret for NetBox host: %w", err)
 	}
 
@@ -516,7 +516,7 @@ func (c *NetBoxClient) unassignNetBoxSnapshot(ctx context.Context, deviceID, bar
 	if err != nil {
 		return err
 	}
-	return c.cleanupAndReleaseNetBoxDevice(ctx, deviceID, snapshot.ETag, state)
+	return c.cleanupAndReleaseNetBoxDevice(ctx, deviceID, snapshot.ETag, bareMetalInstanceID, state)
 }
 
 func classifyNetBoxRelease(device netboxclient.Device, bareMetalInstanceID string) (netBoxReleaseState, error) {
@@ -540,16 +540,16 @@ func netBoxReleaseStateFor(status, owner, bareMetalInstanceID string) (netBoxRel
 	return netBoxReleaseUnspecified, errors.New("NetBox device has inconsistent release state")
 }
 
-func (c *NetBoxClient) deleteNetBoxResources(ctx context.Context, deviceID string) error {
+func (c *NetBoxClient) deleteNetBoxResources(ctx context.Context, deviceID, bareMetalInstanceID string) error {
 	name := netBoxHostPrefix + deviceID
-	if err := c.deleteNetBoxBMH(ctx, name); err != nil {
+	if err := c.deleteNetBoxBMH(ctx, name, bareMetalInstanceID); err != nil {
 		return err
 	}
-	return c.bmhManager.DeleteBMCSecret(ctx, name+bmcSecretSuffix)
+	return c.bmhManager.DeleteOwnedBMCSecret(ctx, name+bmcSecretSuffix, bareMetalInstanceID)
 }
 
-func (c *NetBoxClient) deleteNetBoxBMH(ctx context.Context, name string) error {
-	if err := c.bmhManager.DeleteBMH(ctx, name); err != nil {
+func (c *NetBoxClient) deleteNetBoxBMH(ctx context.Context, name, bareMetalInstanceID string) error {
+	if err := c.bmhManager.DeleteOwnedBMH(ctx, name, bareMetalInstanceID); err != nil {
 		return err
 	}
 	return c.confirmNetBoxBMHDeletion(ctx, name)
@@ -563,11 +563,11 @@ func (c *NetBoxClient) confirmNetBoxBMHDeletion(ctx context.Context, name string
 	return errNetBoxBMHDeletionPending
 }
 
-func (c *NetBoxClient) cleanupAndReleaseNetBoxDevice(ctx context.Context, deviceID, etag string, state netBoxReleaseState) error {
+func (c *NetBoxClient) cleanupAndReleaseNetBoxDevice(ctx context.Context, deviceID, etag, bareMetalInstanceID string, state netBoxReleaseState) error {
 	if state == netBoxReleaseOwnedByAnotherInstance {
 		return nil
 	}
-	if err := c.deleteNetBoxResources(ctx, deviceID); err != nil {
+	if err := c.deleteNetBoxResources(ctx, deviceID, bareMetalInstanceID); err != nil {
 		return err
 	}
 	if state == netBoxReleaseComplete {

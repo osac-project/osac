@@ -25,10 +25,13 @@ import "context"
 type BMHLifecycleManager interface {
 	CreateBMH(ctx context.Context, params CreateParams) error
 	DeleteBMH(ctx context.Context, name string) error
+	DeleteOwnedBMH(ctx context.Context, name, ownerUID string) error
 	BMHExists(ctx context.Context, name string) (bool, error)
 	IsBMHAvailable(ctx context.Context, name string) (bool, error)
 	EnsureBMCSecret(ctx context.Context, name, username, password string) error
+	EnsureOwnedBMCSecret(ctx context.Context, name, username, password, ownerUID string) error
 	DeleteBMCSecret(ctx context.Context, name string) error
+	DeleteOwnedBMCSecret(ctx context.Context, name, ownerUID string) error
 	GetHardwareNICs(ctx context.Context, name string) ([]string, error)
 	Namespace() string
 }

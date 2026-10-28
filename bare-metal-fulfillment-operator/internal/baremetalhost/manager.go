@@ -42,6 +42,7 @@ import (
 var (
 	bmcSecretManagedByLabel = shared.OsacPrefix + "/managed-by"
 	bmcSecretManagedByValue = shared.OsacDefaultManagedByValue
+	bmcSecretOwnerLabel     = shared.OsacPrefix + "/bare-metal-instance-uid"
 )
 
 // CreateParams holds the parameters for creating a BareMetalHost CR.
@@ -162,36 +163,55 @@ func (m *Manager) BMHExists(ctx context.Context, name string) (bool, error) {
 // operator-created Secrets apart from admin-created ones. Idempotent: if the
 // Secret already exists its data and label are updated.
 func (m *Manager) EnsureBMCSecret(ctx context.Context, name, username, password string) error {
-	log := ctrllog.FromContext(ctx)
+	return m.ensureBMCSecret(ctx, name, username, password, "")
+}
 
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: m.namespace},
-	}
-	result, err := controllerutil.CreateOrUpdate(ctx, m.uncachedClient, secret, func() error {
-		// Refuse to claim a Secret we did not create: overwriting an unlabeled
-		// (e.g. externally-created) Secret and stamping our label would later
-		// cause DeleteBMCSecret to delete it, violating the "never touch
-		// non-operator Secrets" invariant. A non-empty ResourceVersion means the
-		// Secret already existed (update path).
-		if secret.ResourceVersion != "" && secret.Labels[bmcSecretManagedByLabel] != bmcSecretManagedByValue {
-			return fmt.Errorf("BMC credentials Secret %s/%s already exists and is not operator-managed; refusing to overwrite", m.namespace, name)
-		}
-		if secret.Labels == nil {
-			secret.Labels = map[string]string{}
-		}
-		secret.Labels[bmcSecretManagedByLabel] = bmcSecretManagedByValue
-		secret.Type = corev1.SecretTypeOpaque
-		secret.Data = map[string][]byte{
-			"username": []byte(username),
-			"password": []byte(password),
-		}
-		return nil
-	})
+// EnsureOwnedBMCSecret preserves a NetBox Secret only for its BMI owner.
+func (m *Manager) EnsureOwnedBMCSecret(ctx context.Context, name, username, password, ownerUID string) error {
+	return m.ensureBMCSecret(ctx, name, username, password, ownerUID)
+}
+
+func (m *Manager) ensureBMCSecret(ctx context.Context, name, username, password, ownerUID string) error {
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: m.namespace}}
+	update := func() error { return m.updateBMCSecret(secret, username, password, ownerUID) }
+	result, err := controllerutil.CreateOrUpdate(ctx, m.uncachedClient, secret, update)
 	if err != nil {
 		return fmt.Errorf("failed to ensure BMC credentials Secret %s/%s: %w", m.namespace, name, err)
 	}
+	ctrllog.FromContext(ctx).Info("Ensured BMC credentials Secret", "name", name, "namespace", m.namespace, "result", result)
+	return nil
+}
 
-	log.Info("Ensured BMC credentials Secret", "name", name, "namespace", m.namespace, "result", result)
+func (m *Manager) updateBMCSecret(secret *corev1.Secret, username, password, ownerUID string) error {
+	if err := m.checkBMCSecretOwner(secret, ownerUID); err != nil {
+		return err
+	}
+	setBMCSecretLabels(secret, ownerUID)
+	secret.Type = corev1.SecretTypeOpaque
+	secret.Data = map[string][]byte{"username": []byte(username), "password": []byte(password)}
+	return nil
+}
+
+func setBMCSecretLabels(secret *corev1.Secret, ownerUID string) {
+	if secret.Labels == nil {
+		secret.Labels = map[string]string{}
+	}
+	secret.Labels[bmcSecretManagedByLabel] = bmcSecretManagedByValue
+	if ownerUID != "" {
+		secret.Labels[bmcSecretOwnerLabel] = ownerUID
+	}
+}
+
+func (m *Manager) checkBMCSecretOwner(secret *corev1.Secret, ownerUID string) error {
+	if secret.ResourceVersion == "" {
+		return nil
+	}
+	if secret.Labels[bmcSecretManagedByLabel] != bmcSecretManagedByValue {
+		return fmt.Errorf("BMC credentials Secret %s/%s already exists and is not operator-managed; refusing to overwrite", m.namespace, secret.Name)
+	}
+	if ownerUID != "" && secret.Labels[bmcSecretOwnerLabel] != ownerUID {
+		return fmt.Errorf("BMC credentials Secret %s/%s is not owned by this BMI", m.namespace, secret.Name)
+	}
 	return nil
 }
 
@@ -225,6 +245,30 @@ func (m *Manager) DeleteBMCSecret(ctx context.Context, name string) error {
 	return m.confirmBMCSecretDeletion(ctx, name)
 }
 
+// DeleteOwnedBMCSecret leaves another BMI's Secret untouched.
+func (m *Manager) DeleteOwnedBMCSecret(ctx context.Context, name, ownerUID string) error {
+	secret, err := m.findOwnedBMCSecret(ctx, name, ownerUID)
+	if err != nil || secret == nil {
+		return err
+	}
+	err = m.uncachedClient.Delete(ctx, secret, client.Preconditions{UID: &secret.UID})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete BMC credentials Secret %s/%s: %w", m.namespace, name, err)
+	}
+	return m.confirmBMCSecretDeletion(ctx, name)
+}
+
+func (m *Manager) findOwnedBMCSecret(ctx context.Context, name, ownerUID string) (*corev1.Secret, error) {
+	secret := &corev1.Secret{}
+	if err := m.uncachedClient.Get(ctx, client.ObjectKey{Namespace: m.namespace, Name: name}, secret); err != nil {
+		return nil, client.IgnoreNotFound(err)
+	}
+	if secret.Labels[bmcSecretManagedByLabel] != bmcSecretManagedByValue || secret.Labels[bmcSecretOwnerLabel] != ownerUID {
+		return nil, fmt.Errorf("BMC credentials Secret %s/%s is not owned by this BMI", m.namespace, name)
+	}
+	return secret, nil
+}
+
 func (m *Manager) confirmBMCSecretDeletion(ctx context.Context, name string) error {
 	err := m.uncachedClient.Get(ctx, client.ObjectKey{Namespace: m.namespace, Name: name}, &corev1.Secret{})
 	if err == nil {
@@ -255,6 +299,30 @@ func (m *Manager) DeleteBMH(ctx context.Context, name string) error {
 
 	log.Info("Deleted BareMetalHost", "name", name, "namespace", m.namespace)
 	return nil
+}
+
+// DeleteOwnedBMH leaves a BMH with another consumerRef untouched.
+func (m *Manager) DeleteOwnedBMH(ctx context.Context, name, ownerUID string) error {
+	bmh, err := m.findOwnedBMH(ctx, name, ownerUID)
+	if err != nil || bmh == nil {
+		return err
+	}
+	err = m.uncachedClient.Delete(ctx, bmh, client.Preconditions{UID: &bmh.UID})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete BareMetalHost %s/%s: %w", m.namespace, name, err)
+	}
+	return nil
+}
+
+func (m *Manager) findOwnedBMH(ctx context.Context, name, ownerUID string) (*metal3api.BareMetalHost, error) {
+	bmh := &metal3api.BareMetalHost{}
+	if err := m.uncachedClient.Get(ctx, client.ObjectKey{Namespace: m.namespace, Name: name}, bmh); err != nil {
+		return nil, client.IgnoreNotFound(err)
+	}
+	if bmh.Spec.ConsumerRef == nil || bmh.Spec.ConsumerRef.Name != ownerUID {
+		return nil, fmt.Errorf("BareMetalHost %s/%s is not owned by this BMI", m.namespace, name)
+	}
+	return bmh, nil
 }
 
 // GetHardwareNICs returns the lowercased MAC addresses for the host's NICs,

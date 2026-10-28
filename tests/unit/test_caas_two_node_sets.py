@@ -15,14 +15,10 @@ from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
 
 @pytest.fixture
 def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
-    monkeypatch.setenv("OSAC_CAAS_RUN_UPGRADE", "false")
     # The metering mock needs the MeteringCollector spec: Python 3.14's Mock
     # denies assert*-prefixed attribute names on unspec'd mocks, and the
     # scenario calls metering.assert_no_events.
-    clients = {
-        name: Mock()
-        for name in ("request", "cli", "grpc", "private_grpc", "metering")
-    }
+    clients = {name: Mock() for name in ("request", "cli", "grpc", "private_grpc", "metering")}
     clients["metering"] = Mock(spec=MeteringCollector)
     k8s = clients["k8s_hub_client"] = Mock(spec=K8sClient)
     k8s.namespace = "osac"
@@ -153,6 +149,21 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     metering.get_all_events.side_effect = lambda event_type, bmi_id: (
         [worker_events[bmi_id]] if event_type == HEARTBEAT_TYPE else []
     )
+    refs = Mock()
+    baseline = {"hosted": {"spec": {"release": {"image": regression.TEST_RELEASE_IMAGE}}}}
+    target = {"id": "target-id", "name": "target-version", "image": "target-image"}
+
+    def references_after_install(**_kwargs: object) -> Mock:
+        assert regression.wait_for_cluster_order_condition.called
+        assert metering.get_event.called
+        assert metering.heartbeat_with_dimensions.call_count == len(regression.INSTANCE_TYPES)
+        return refs
+
+    monkeypatch.setattr(regression.upgrade, "_cluster_references", Mock(side_effect=references_after_install))
+    monkeypatch.setattr(regression.upgrade, "_ready_baseline", Mock(return_value=baseline))
+    monkeypatch.setattr(regression.upgrade, "_catalog_version", Mock(return_value=(target, True)))
+    monkeypatch.setattr(regression.upgrade, "_upgrade_control_plane", Mock(return_value={}))
+    monkeypatch.setattr(regression.upgrade, "_upgrade_node_pool", Mock())
     for name in (
         "wait_for_cluster_progressing",
         "wait_for_cluster_ready",
@@ -219,6 +230,11 @@ def test_two_node_set_scenario_uses_same_natural_teardown_budgets(
     regression.wait_for_cluster_order_condition.assert_called_once_with(
         k8s=two_node_set_clients["k8s_hub_client"], name="order-a", condition_type="ClusterAvailable"
     )
+    two_node_set_clients["request"].getfixturevalue.assert_called_once_with("jwt_grpc_tenant1")
+    regression.upgrade._cluster_references.assert_called_once()
+    regression.upgrade._upgrade_control_plane.assert_called_once()
+    regression.upgrade._upgrade_node_pool.assert_called_once()
+    two_node_set_clients["private_grpc"].delete_cluster_version.assert_called_once_with(version_id="target-id")
     two_node_set_clients["cli"].delete_cluster.assert_called_once_with(uuid="cluster-id")
     for name in ("patch", "apply", "delete"):
         getattr(two_node_set_clients["k8s_hub_client"], name).assert_not_called()
@@ -238,6 +254,7 @@ def test_two_node_set_scenario_rejects_foreign_worker_before_teardown(two_node_s
     scenario.wait_for_cluster_deleting.assert_not_called()
     helpers.wait_for_cluster_deletion.assert_not_called()
     two_node_set_clients["k8s_hub_client"].is_absent.assert_not_called()
+    regression.upgrade._cluster_references.assert_not_called()
 
 
 def test_two_node_set_scenario_rejects_wrong_worker_heartbeat(two_node_set_clients: dict[str, Mock]) -> None:
@@ -258,3 +275,4 @@ def test_two_node_set_scenario_rejects_wrong_worker_heartbeat(two_node_set_clien
         _run_scenario(two_node_set_clients)
 
     scenario.wait_for_cluster_deleting.assert_not_called()
+    regression.upgrade._cluster_references.assert_not_called()

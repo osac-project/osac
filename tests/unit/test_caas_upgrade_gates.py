@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from copy import deepcopy
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
 
@@ -116,59 +115,3 @@ def test_node_pool_poll_rejects_later_control_plane_degradation(monkeypatch: pyt
 
     assert snapshot.call_count == 2
     assert evidence["phase"] == "node-pool-started"
-
-
-def test_install_only_skips_upgrade_and_tenant_user_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The on-demand install path retains teardown without requesting an upgrade."""
-    monkeypatch.setenv("OSAC_CAAS_RUN_UPGRADE", "false")
-    monkeypatch.setenv("OSAC_FULFILLMENT_TRUST_E2E", "false")
-    request, cli, grpc, private_grpc, k8s, metering = (Mock() for _ in range(6))
-    cli.create_cluster.return_value = "cluster-id"
-    private_grpc.ensure_disk_image.return_value = "disk-image"
-    private_grpc.ensure_cluster_version.return_value = {"name": "source-version"}
-    cluster = SimpleNamespace(co_name="order-name", owned_bmi_ids={"cpu-id", "gpu-id"})
-    installed = Mock(return_value=cluster)
-    deleted = Mock()
-    references = Mock()
-    baseline = Mock()
-    catalog = Mock()
-    available = Mock()
-    version_propagated = Mock()
-    cluster_metering = Mock()
-    worker_metering = Mock()
-    monkeypatch.setattr(journey, "assert_cluster_with_two_node_sets_available", installed)
-    monkeypatch.setattr(journey, "_assert_cluster_deleted", deleted)
-    monkeypatch.setattr(journey, "wait_for_cluster_order_condition", available)
-    monkeypatch.setattr(journey, "_assert_cluster_version_propagated", version_propagated)
-    monkeypatch.setattr(journey, "_assert_cluster_metering", cluster_metering)
-    monkeypatch.setattr(journey, "_assert_two_node_set_worker_metering", worker_metering)
-    monkeypatch.setattr(scenario, "_cluster_references", references)
-    monkeypatch.setattr(scenario, "_ready_baseline", baseline)
-    monkeypatch.setattr(scenario, "_catalog_version", catalog)
-
-    journey.test_cluster_create_with_two_node_sets(
-        request=request,
-        cli=cli,
-        grpc=grpc,
-        private_grpc=private_grpc,
-        k8s_hub_client=k8s,
-        cluster_template="template",
-        pull_secret_name="pull-secret",
-        ssh_public_key_path="key-path",
-        metering=metering,
-    )
-
-    installed.assert_called_once()
-    available.assert_called_once_with(k8s=k8s, name="order-name", condition_type="ClusterAvailable")
-    version_propagated.assert_called_once()
-    cluster_metering.assert_called_once_with(metering=metering, uuid="cluster-id", cluster_template="template")
-    worker_metering.assert_called_once_with(
-        grpc=grpc, metering=metering, uuid="cluster-id", owned_bmi_ids=cluster.owned_bmi_ids
-    )
-    metering.expect.assert_not_called()
-    cli.delete_cluster.assert_called_once_with(uuid="cluster-id")
-    deleted.assert_called_once_with(grpc=grpc, k8s=k8s, metering=metering, uuid="cluster-id", cluster=cluster)
-    request.getfixturevalue.assert_not_called()
-    references.assert_not_called()
-    baseline.assert_not_called()
-    catalog.assert_not_called()

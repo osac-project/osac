@@ -3745,7 +3745,9 @@ var _ = Describe("Storage Controller", func() {
 			}
 			Expect(recordedEvents).To(HaveLen(2))
 			Expect(recordedEvents[0]).To(ContainSubstring(eventReasonDuplicateStorageClass))
-			Expect(recordedEvents[0]).To(ContainSubstring(`tier "csp-combo-dup": multiple csp-managed StorageClasses [csp-combo-dup-sc-1, csp-combo-dup-sc-2]`))
+			Expect(recordedEvents[0]).To(ContainSubstring(`tier "csp-combo-dup": multiple csp-managed StorageClasses`))
+			Expect(recordedEvents[0]).To(ContainSubstring("csp-combo-dup-sc-1"))
+			Expect(recordedEvents[0]).To(ContainSubstring("csp-combo-dup-sc-2"))
 			Expect(recordedEvents[1]).To(ContainSubstring(eventReasonMissingStorageTier))
 			Expect(recordedEvents[1]).To(ContainSubstring(`tier "csp-combo-missing" has no StorageClass`))
 		})

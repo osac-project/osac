@@ -22,6 +22,10 @@ def _named_task(tasks: list[dict], name: str) -> dict:
     return next(task for task in tasks if task.get("name") == name)
 
 
+def _when(value) -> list[str]:
+    return value if isinstance(value, list) else [value]
+
+
 def test_ipam_create_and_delete_match_the_complete_requested_identity() -> None:
     create = _tasks(IPAM_ROLE / "create_subnet.yaml")
     find = _named_task(create, "Find IPAM subnets by name and CIDR")
@@ -70,7 +74,10 @@ def test_netris_subnet_flow_supplies_full_identity_to_ipam_roles() -> None:
 
     delete = _tasks(TEMPLATE_NETRIS / "delete_subnet.yaml")
     parent_vnet = _named_task(delete, "Set parent VirtualNetwork name")
-    assert parent_vnet["when"] == "is_cudn_evpn"
+    assert _when(parent_vnet["when"]) == [
+        "is_cudn_evpn",
+        "not _osac_contract | default(false) | bool",
+    ]
     parent_lookup = _named_task(delete, "Find the exact IPAM parent for this Subnet")
     assert parent_lookup["ansible.builtin.include_role"]["tasks_from"] == "find_subnet_by_identity"
     assert parent_lookup["vars"] == {

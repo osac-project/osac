@@ -1,32 +1,14 @@
 ---
-# ExternalIPAttachment deletion — removes the DNAT rule from Netris
+# ExternalIPAttachment deletion - removes the DNAT rule from Netris
 
 - name: Normalize task input
   ansible.builtin.include_tasks: _contract_input.yaml
   vars:
     _osac_task_name: detach_external_ip
 
-- name: Validate ExternalIPAttachment ownership annotations
-  ansible.builtin.assert:
-    that:
-      - external_ip_attachment.metadata.annotations is defined
-      - "'osac.openshift.io/externalip-name' in external_ip_attachment.metadata.annotations"
-      - "'osac.openshift.io/target-ip' in external_ip_attachment.metadata.annotations"
-    fail_msg: >-
-      Cannot safely delete Netris DNAT rule for ExternalIPAttachment
-      '{{ external_ip_attachment.metadata.name }}': required ownership
-      annotations 'osac.openshift.io/externalip-name' and
-      'osac.openshift.io/target-ip' are missing.
-
 - name: Extract ExternalIPAttachment name
   ansible.builtin.set_fact:
-    attachment_name: "{{ external_ip_attachment.metadata.name }}"
-    attachment_externalip_name: >-
-      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-name']
-         | default('', true) }}
-    attachment_target_ip: >-
-      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/target-ip']
-         | default('', true) }}
+    attachment_name: "{{ _osac_resource.metadata.name }}"
 
 - name: Detach the ExternalIP from the contract snapshot
   when: _osac_contract | default(false) | bool
@@ -77,6 +59,25 @@
 - name: Run the legacy externalipattachment detach path
   when: not _osac_contract | default(false) | bool
   block:
+    - name: Validate ExternalIPAttachment ownership annotations
+      ansible.builtin.assert:
+        that:
+          - external_ip_attachment.metadata.annotations is defined
+          - "'osac.openshift.io/externalip-name' in external_ip_attachment.metadata.annotations"
+          - "'osac.openshift.io/target-ip' in external_ip_attachment.metadata.annotations"
+        fail_msg: >-
+          Cannot safely delete Netris DNAT rule for ExternalIPAttachment
+          '{{ attachment_name }}': required ownership annotations
+          'osac.openshift.io/externalip-name' and
+          'osac.openshift.io/target-ip' are missing.
+
+    - name: Extract the legacy ownership annotations
+      ansible.builtin.set_fact:
+        attachment_externalip_name: >-
+          {{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-name'] }}
+        attachment_target_ip: >-
+          {{ external_ip_attachment.metadata.annotations['osac.openshift.io/target-ip'] }}
+
     - name: Display ExternalIPAttachment deletion info
       ansible.builtin.debug:
         msg: "Deleting Netris DNAT rule for ExternalIPAttachment '{{ attachment_name }}'"

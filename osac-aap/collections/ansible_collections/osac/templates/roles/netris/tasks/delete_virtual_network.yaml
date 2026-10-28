@@ -31,6 +31,7 @@
         tasks_from: read
       vars:
         vpc_name: "{{ vn_name }}"
+        vpc_tenant_id: "{{ netris_tenant_id }}"
 
     - name: Set VPC ID
       ansible.builtin.set_fact:
@@ -64,7 +65,6 @@
         ipam_name: "{{ vn_name }}"
         ipam_vpc_id: "{{ _vn_vpc_id }}"
         ipam_expected_fields: "{{ _vn_allocation_expected_fields | default({'tenant.id': netris_tenant_id}) }}"
-      when: _vn_vpc_id | string | length > 0
 
     - name: Delete VPC from Netris controller
       ansible.builtin.include_role:

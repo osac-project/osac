@@ -1,14 +1,17 @@
 """Contract tests for the Netris attachment apply and delete entry points."""
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 
 import yaml
 
-TASKS = (
-    Path(__file__).resolve().parents[2]
-    / "collections/ansible_collections/osac/templates/roles/netris/tasks"
-)
+ROOT = Path(__file__).resolve().parents[2]
+TASKS = ROOT / "collections/ansible_collections/osac/templates/roles/netris/tasks"
 
 
 def _tasks(name: str) -> list[dict]:
@@ -60,3 +63,125 @@ def test_legacy_move_entry_point_keeps_using_the_shared_port_helper() -> None:
     assert any(
         task.get("ansible.builtin.include_tasks") == "_move_port.yaml" for task in tasks
     )
+
+
+LEGACY_ANNOTATION_CHECK = "Validate ExternalIPAttachment ownership annotations"
+
+
+def test_detach_keeps_the_legacy_annotation_check_out_of_the_contract_path() -> None:
+    tasks = _tasks("detach_external_ip")
+
+    legacy = next(
+        task
+        for task in tasks
+        if "not _osac_contract" in str(task.get("when")) and task.get("block")
+    )
+    assert LEGACY_ANNOTATION_CHECK in [
+        task.get("name") for task in _walk(legacy["block"])
+    ]
+
+    top_level = [task.get("name") for task in tasks if "block" not in task]
+    assert LEGACY_ANNOTATION_CHECK not in top_level
+
+
+def test_detach_runs_on_the_contract_path_without_annotations(tmp_path: Path) -> None:
+    calls: list[tuple[str, str]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def respond(self, body, status=200):
+            encoded = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def do_GET(self):
+            calls.append(("GET", self.path))
+            assert self.path == "/api/v2/nat"
+            self.respond({"data": [{"id": 42, "name": "att-1-dnat"}]})
+
+        def do_DELETE(self):
+            calls.append(("DELETE", self.path))
+            assert self.path == "/api/v2/nat/42"
+            self.respond({"data": {"id": 42}})
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    fixture_url = f"http://127.0.0.1:{server.server_port}"
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        playbook = tmp_path / "detach_contract.yaml"
+        playbook.write_text(
+            yaml.safe_dump(
+                [
+                    {
+                        "hosts": "localhost",
+                        "gather_facts": False,
+                        "vars": {
+                            "netris_controller_url": fixture_url,
+                            "netris_session_cookie": "fixture",
+                            "netris_validate_certs": False,
+                            "netris_site_id": 1,
+                            "netris_tenant_id": 1,
+                            "osac_job_vars": {
+                                "manager": {
+                                    "name": "netris",
+                                    "type": "fabric",
+                                    "ansible_role": "osac.templates.netris",
+                                },
+                                "task": "detach_external_ip",
+                                "tenant": "tenant-1",
+                                "resource": {
+                                    "apiVersion": "osac.openshift.io/v1alpha1",
+                                    "kind": "ExternalIPAttachment",
+                                    "id": "att-1",
+                                    "metadata": {
+                                        "name": "att",
+                                        "namespace": "ns",
+                                        "uid": "uid-1",
+                                        "generation": 1,
+                                    },
+                                    "spec": {},
+                                },
+                            },
+                        },
+                        "tasks": [
+                            {
+                                "name": "Detach on the contract path",
+                                "ansible.builtin.include_tasks": str(
+                                    TASKS / "detach_external_ip.yaml"
+                                ),
+                            }
+                        ],
+                    }
+                ],
+                sort_keys=False,
+            )
+        )
+        result = subprocess.run(
+            ["ansible-playbook", "-i", "localhost,", "-c", "local", str(playbook)],
+            cwd=ROOT,
+            env={
+                **os.environ,
+                "ANSIBLE_LOCAL_TEMP": str(tmp_path / "local"),
+                "NETRIS_CONTROLLER_URL": fixture_url,
+                "NETRIS_VALIDATE_CERTS": "false",
+                "NETRIS_CA_PATH": "",
+            },
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "required ownership annotations" not in output
+    assert ("DELETE", "/api/v2/nat/42") in calls

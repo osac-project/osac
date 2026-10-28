@@ -11,8 +11,11 @@
     subnet_name: "{{ subnet.metadata.name }}"
     subnet_ipv4_cidr: "{{ subnet.spec.ipv4Cidr | default('') }}"
     subnet_virtual_network_id: "{{ subnet.spec.virtualNetwork | default('') }}"
+    _subnet_parent_vpc_id: ''
     is_cudn_evpn: >-
-      {{ (subnet.metadata.annotations | default({})).get('osac.openshift.io/k8s-cleanup-strategy', '') == 'cudn_evpn' }}
+      {{ (_osac_network_type | default('') == 'evpn')
+         if _osac_contract | default(false) | bool
+         else ((subnet.metadata.annotations | default({})).get('osac.openshift.io/k8s-cleanup-strategy', '') == 'cudn_evpn') }}
 
 - name: Refuse delete of default Subnet
   ansible.builtin.include_tasks: _refuse_if_default.yaml
@@ -26,6 +29,20 @@
   ansible.builtin.debug:
     msg: "Deleting Netris V-Net + IPAM subnet for Subnet '{{ subnet_name }}'"
 
+- name: Require the parent VirtualNetwork snapshot
+  ansible.builtin.assert:
+    that:
+      - _osac_virtual_network.metadata.name | default('') | length > 0
+    fail_msg: >-
+      A Subnet delete needs the parent VirtualNetwork snapshot.
+  when: _osac_contract | default(false) | bool
+
+- name: Set the parent VirtualNetwork name from the supplied snapshot
+  ansible.builtin.set_fact:
+    subnet_virtual_network_name: "{{ _osac_virtual_network.metadata.name }}"
+    _subnet_parent_vn_name: "{{ _osac_virtual_network.metadata.name }}"
+  when: _osac_contract | default(false) | bool
+
 - name: Look up parent VirtualNetwork by UUID
   kubernetes.core.k8s_info:
     api_version: osac.openshift.io/v1alpha1
@@ -34,7 +51,9 @@
     label_selectors:
       - "osac.openshift.io/virtualnetwork-uuid={{ subnet_virtual_network_id }}"
   register: _subnet_parent_vn_lookup
-  when: subnet_virtual_network_id | length > 0
+  when:
+    - not _osac_contract | default(false) | bool
+    - subnet_virtual_network_id | length > 0
 
 - name: Require exactly one parent VirtualNetwork CR for CUDN EVPN cleanup
   ansible.builtin.assert:
@@ -43,19 +62,24 @@
     fail_msg: >-
       Expected exactly one VirtualNetwork with UUID '{{ subnet_virtual_network_id }}' in
       namespace '{{ subnet.metadata.namespace }}'; refusing to delete unscoped Netris resources.
-  when: is_cudn_evpn
+  when:
+    - is_cudn_evpn
+    - not _osac_contract | default(false) | bool
 
 - name: Set parent VirtualNetwork name
   ansible.builtin.set_fact:
     _subnet_parent_vn_name: "{{ _subnet_parent_vn_lookup.resources[0].metadata.name }}"
     subnet_virtual_network_name: "{{ _subnet_parent_vn_lookup.resources[0].metadata.name }}"
     subnet_virtual_network_vpc_id: "{{ _subnet_parent_vn_lookup.resources[0].status.backendNetworkId | default('') }}"
-  when: is_cudn_evpn
+  when:
+    - is_cudn_evpn
+    - not _osac_contract | default(false) | bool
 
 - name: Set parent VirtualNetwork name when it still exists
   ansible.builtin.set_fact:
     _subnet_parent_vn_name: "{{ _subnet_parent_vn_lookup.resources[0].metadata.name }}"
   when:
+    - not _osac_contract | default(false) | bool
     - not is_cudn_evpn
     - _subnet_parent_vn_lookup is defined
     - _subnet_parent_vn_lookup.resources | default([]) | length > 0
@@ -67,13 +91,51 @@
     fail_msg: >-
       VirtualNetwork '{{ _subnet_parent_vn_name }}' has no positive Netris VPC ID in
       status.backendNetworkId; refusing to delete Subnet resources by name alone.
-  when: is_cudn_evpn
+  when:
+    - is_cudn_evpn
+    - not _osac_contract | default(false) | bool
 
 - name: Set parent VPC for CUDN EVPN cleanup
   ansible.builtin.set_fact:
     _parent_vpc:
       id: "{{ subnet_virtual_network_vpc_id | int }}"
-  when: is_cudn_evpn
+  when:
+    - is_cudn_evpn
+    - not _osac_contract | default(false) | bool
+
+- name: Resolve the parent VPC for the contract path
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+    tasks_from: read
+  vars:
+    vpc_name: "{{ _subnet_parent_vn_name }}"
+    vpc_tenant_id: "{{ netris_tenant_id }}"
+  when: _osac_contract | default(false) | bool
+
+- name: Set the parent VPC ID from the contract lookup
+  ansible.builtin.set_fact:
+    _subnet_parent_vpc_id: "{{ netris_vpc.id | default('') }}"
+  when:
+    - _osac_contract | default(false) | bool
+    - netris_vpc is defined
+    - netris_vpc is not none
+
+- name: Require a parent VPC for the contract path
+  ansible.builtin.assert:
+    that:
+      - _subnet_parent_vpc_id | string | length > 0
+    fail_msg: >-
+      VirtualNetwork '{{ _subnet_parent_vn_name }}' has no Netris VPC;
+      refusing to delete Subnet resources without a VPC scope.
+  when: _osac_contract | default(false) | bool
+
+- name: Set the EVPN parent VPC for the contract path
+  ansible.builtin.set_fact:
+    _parent_vpc:
+      id: "{{ _subnet_parent_vpc_id | int }}"
+  when:
+    - _osac_contract | default(false) | bool
+    - is_cudn_evpn
 
 - name: Read parent Netris VPC for ownership checks
   ansible.builtin.include_role:
@@ -82,6 +144,7 @@
   vars:
     vpc_name: "{{ _subnet_parent_vn_name }}"
   when:
+    - not _osac_contract | default(false) | bool
     - not is_cudn_evpn
     - _subnet_parent_vn_name is defined
 
@@ -89,6 +152,7 @@
   ansible.builtin.set_fact:
     _subnet_parent_vpc_id: "{{ netris_vpc.id | default('') }}"
   when:
+    - not _osac_contract | default(false) | bool
     - not is_cudn_evpn
     - netris_vpc is defined
     - netris_vpc is not none
@@ -225,6 +289,7 @@
     kind: ConfigMap
     name: "subnet-{{ subnet_name }}-fabric-output"
     namespace: "{{ subnet.metadata.namespace }}"
+  when: not _osac_contract | default(false) | bool
 
 - name: Display deletion result
   ansible.builtin.debug:

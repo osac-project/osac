@@ -196,32 +196,37 @@
   tasks:
     - name: Run invalid-provider failure test
       block:
-        - name: Attempt with invalid provider 'netapp' (expected to fail)
+        - name: Reset invalid-provider dispatch sentinel
+          ansible.builtin.set_fact:
+            _invalid_provider_dispatch_returned: false
+
+        - name: Attempt with invalid provider 'unknown-provider' (expected to fail)
           ansible.builtin.include_role:
             name: osac.service.storage_provider
           vars:
             storage_provider_tiers:
               - name: default
                 protocol: nfs
-                provider: netapp
+                provider: unknown-provider
             storage_provider_action: setup
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
+
+        - name: Mark successful invalid-provider dispatch
+          ansible.builtin.set_fact:
+            _invalid_provider_dispatch_returned: true
 
         - name: This task should not be reached -- role should have failed
           ansible.builtin.fail:
             msg: "Role did not fail as expected when provider is invalid"
 
       rescue:
-        # ansible_failed_result is NOT refreshed for this kind of failure: a genuinely-missing
-        # role name is a runner-level ERROR! raised during dynamic role resolution, not a normal
-        # task failure, so it never repopulates the rescue block's ansible_failed_result -- it
-        # would still hold whatever an earlier, unrelated task last set it to. There is nothing
-        # reliable to assert about the failure's content from inside the playbook; reaching this
-        # rescue at all already proves the role failed to load for the invalid provider name.
-        - name: Verify role failed for invalid provider
-          ansible.builtin.debug:
-            msg: "Role correctly rejected invalid provider (rescue reached after role-resolution failure)"
+        - name: Verify invalid provider did not dispatch successfully
+          ansible.builtin.assert:
+            that:
+              - not (_invalid_provider_dispatch_returned | default(false) | bool)
+            fail_msg: "Dispatcher accepted an invalid provider and returned successfully"
+            success_msg: "Dispatcher rejected the provider because no matching role exists"
 
 # ──────────────────────────────────────────────────────────────
 # Test 6: Invalid action -- error path

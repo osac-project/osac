@@ -219,7 +219,7 @@ not a CI suite and not something that adds to this repo's persisted test count. 
   `pnpm playwright:run` re-runs just the `scratch/` specs without
   re-authenticating — faster than `pnpm playwright`, which always re-logs in.
 - Use this when asked to verify a UI change actually works in a browser against
-  a real deployment — requires `OSAC_UI_BASE_URL`, `OSAC_USERNAME`, `OSAC_PASSWORD`
+  a real deployment — requires `OSAC_UI_BASE_URL`, `OSAC_ADMIN_USERNAME`, `OSAC_ADMIN_PASSWORD`
   (or `OSAC_UI_BASE_URL=http://localhost:5173` against a local `pnpm dev`
   instance). There is no mock `fulfillment-service`, so this cannot run
   hermetically or in CI.

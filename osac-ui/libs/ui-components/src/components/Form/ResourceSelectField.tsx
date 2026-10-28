@@ -1,6 +1,7 @@
-import { type ReactNode, useEffect, useMemo } from 'react';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Alert, Content, FormGroup } from '@patternfly/react-core';
-import { TypeaheadSelect } from '@patternfly/react-templates';
+import PlusIcon from '@patternfly/react-icons/dist/esm/icons/plus-icon';
+import { TypeaheadSelect, type TypeaheadSelectOption } from '@patternfly/react-templates';
 import { useField } from 'formik';
 
 import type { ListParams } from '@osac/ui-components/api/types';
@@ -19,7 +20,8 @@ export { emptyResourceSelectValue } from './resourceSelectValue';
 
 export interface ResourceListItem {
   id: string;
-  metadata?: { name?: string };
+  metadata?: { name?: string; description?: string };
+  spec?: { ipv4Cidr?: string };
 }
 
 export interface ResourceSelectFieldProps {
@@ -37,6 +39,9 @@ export interface ResourceSelectFieldProps {
   loadErrorTitle?: string;
   emptyTitle?: string;
   emptyDescription?: string;
+  showDescription?: boolean;
+  showIpv4Cidr?: boolean;
+  createOption?: { label: string; onSelect: () => void };
   /** Called after a new resource is selected. Use to trigger cascade resets. */
   onSelectResource?: (value: ResourceSelectValue) => void;
   /** Client-side filter applied after the list response (e.g. GPU-class). */
@@ -67,11 +72,15 @@ export const ResourceSelectField = ({
   loadErrorTitle,
   emptyTitle,
   emptyDescription,
+  showDescription = false,
+  showIpv4Cidr = false,
+  createOption,
   onSelectResource,
   filterItems,
   formatOptionLabel = defaultOptionLabel,
 }: ResourceSelectFieldProps) => {
   const [field, meta, helpers] = useField<ResourceSelectValue>(name);
+  const [typeaheadKey, setTypeaheadKey] = useState(0);
   const showValidationErrors = useShowFieldValidationErrors();
   const error = getVisibleFieldError(meta, showValidationErrors);
   const { data, isLoading, error: loadError } = useListResource(service, request);
@@ -84,20 +93,31 @@ export const ResourceSelectField = ({
 
   const listFailed = Boolean(loadError);
   const listEmpty = !isLoading && !listFailed && items.length === 0;
-  const controlDisabled = isDisabled || isLoading || listFailed || listEmpty;
+  const controlDisabled = isDisabled || isLoading || listFailed || (listEmpty && !createOption);
   const effectivePlaceholder = isLoading ? loadingPlaceholder : placeholder;
   const selectedId = field.value?.id ?? '';
   const validated = error ? 'error' : 'default';
+  const createLabel = createOption?.label;
 
-  const typeaheadOptions = useMemo(
-    () =>
-      items.map((item) => ({
+  const typeaheadOptions = useMemo<TypeaheadSelectOption[]>(() => {
+    const options: TypeaheadSelectOption[] = items.map((item) => {
+      const baseLabel = formatOptionLabel(item);
+      const detail = showDescription
+        ? item.metadata?.description?.trim()
+        : showIpv4Cidr
+          ? item.spec?.ipv4Cidr?.trim()
+          : '';
+      return {
         value: item.id,
-        content: formatOptionLabel(item),
+        content: detail ? `${baseLabel} · ${detail}` : baseLabel,
         selected: item.id === selectedId,
-      })),
-    [formatOptionLabel, items, selectedId],
-  );
+      };
+    });
+    if (createLabel) {
+      options.push({ value: -1, content: createLabel, icon: <PlusIcon /> });
+    }
+    return options;
+  }, [createLabel, formatOptionLabel, items, selectedId, showDescription, showIpv4Cidr]);
 
   useEffect(() => {
     if (
@@ -133,11 +153,17 @@ export const ResourceSelectField = ({
       ) : null}
       <FormGroup label={label} fieldId={fieldId} isRequired={isRequired} labelInfo={labelInfo}>
         <TypeaheadSelect
+          key={typeaheadKey}
           id={`${fieldId}-select`}
           initialOptions={typeaheadOptions}
           isDisabled={controlDisabled}
           placeholder={effectivePlaceholder}
           onSelect={(_event, value) => {
+            if (value === -1 && createOption) {
+              createOption.onSelect();
+              setTypeaheadKey((key) => key + 1);
+              return;
+            }
             const item = items.find((resource) => resource.id === value);
             if (!item) {
               return;

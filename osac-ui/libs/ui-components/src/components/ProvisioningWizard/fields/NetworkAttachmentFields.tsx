@@ -1,90 +1,133 @@
-import { useEffect } from 'react';
-import { Alert, Button, Stack, StackItem } from '@patternfly/react-core';
+import { useState } from 'react';
+import { Alert, Button } from '@patternfly/react-core';
 import { useField, useFormikContext } from 'formik';
 
+import { VirtualNetworks } from '@osac/types';
+
+import DefaultNetworkSummary from './DefaultNetworkSummary';
+import { getEmptyNetworkAttachmentFormFields } from './networkAttachments';
+import type { NetworkAttachmentFormFields } from './networkAttachments';
+import NetworkSelectionCards from './NetworkSelectionCards';
+import PopulateVirtualNetworkFromSubnet from './PopulateVirtualNetworkFromSubnet';
 import SecurityGroupsField from './SecurityGroupsField';
 import SubnetField from './SubnetField';
-import UseDefaultNetworkField from './UseDefaultNetworkField';
 import VirtualNetworkField from './VirtualNetworkField';
-import { useSubnet } from '../../../api/v1/networking';
+import { useInvalidateServiceQueries } from '../../../api/use-resource';
+import { usePermissions } from '../../../hooks/use-permissions';
 import { useTranslation } from '../../../hooks/useTranslation';
-import { getErrorMessage } from '../../../utils/error';
-import type { ResourceSelectValue } from '../../Form/resourceSelectValue';
+import { VirtualNetworkCreateModal } from '../../networking/VirtualNetworkCreateModal';
 
-const CatalogSubnetVirtualNetworkHydrator = ({
-  virtualNetworkName,
-  subnetName,
-}: {
-  virtualNetworkName: string;
-  subnetName: string;
-}) => {
-  const { t } = useTranslation();
-  const { setFieldValue } = useFormikContext();
-  const [subnetField] = useField<ResourceSelectValue>(subnetName);
-  const [virtualNetworkField] = useField<ResourceSelectValue>(virtualNetworkName);
-  const subnetId = subnetField.value?.id?.trim() ?? '';
-  const virtualNetworkId = virtualNetworkField.value?.id?.trim() ?? '';
-  const { data: subnet, error, refetch } = useSubnet(virtualNetworkId ? '' : subnetId);
+import './NetworkAttachmentFields.css';
 
-  useEffect(() => {
-    const reference = subnet?.spec?.virtualNetwork;
-    if (!reference?.id || virtualNetworkId) {
-      return;
-    }
-    void setFieldValue(virtualNetworkName, { id: reference.id, name: reference.name || '' }, false);
-  }, [setFieldValue, subnet?.spec?.virtualNetwork, virtualNetworkId, virtualNetworkName]);
-
-  if (!error) {
-    return null;
-  }
-  return (
-    <Alert variant="danger" isInline title={t('Could not load subnet')}>
-      <Stack hasGutter>
-        <StackItem>{getErrorMessage(error)}</StackItem>
-        <StackItem>
-          <Button variant="link" isInline onClick={() => void refetch()}>
-            {t('Retry')}
-          </Button>
-        </StackItem>
-      </Stack>
-    </Alert>
-  );
-};
+interface NetworkWizardValues {
+  metadata: { project: string };
+}
 
 interface NetworkAttachmentFieldsProps {
   name: string;
   isDisabled?: boolean;
+  isRequired?: boolean;
+  securityGroupsRequired?: boolean;
+  singleSecurityGroup?: boolean;
 }
 
-const NetworkAttachmentFields = ({ name, isDisabled = false }: NetworkAttachmentFieldsProps) => {
-  const [{ value: useDefaultNetwork }] = useField<boolean>(`${name}.useDefaultNetwork`);
+const NetworkAttachmentFields = ({
+  name,
+  isDisabled = false,
+  isRequired = true,
+  securityGroupsRequired = false,
+  singleSecurityGroup = false,
+}: NetworkAttachmentFieldsProps) => {
+  const { t } = useTranslation();
+  const { values } = useFormikContext<NetworkWizardValues>();
+  const [field, , helpers] = useField<NetworkAttachmentFormFields>(name);
+  const { allowed: canCreateVirtualNetwork } = usePermissions(VirtualNetworks, 'create');
+  const invalidateServiceQueries = useInvalidateServiceQueries();
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [createdNetworkName, setCreatedNetworkName] = useState('');
+  const useDefaultNetwork = field.value.useDefaultNetwork;
+
+  const selectNetwork = (useDefault: boolean) => {
+    if (isDisabled || useDefault === useDefaultNetwork) {
+      return;
+    }
+    void helpers.setValue(
+      useDefault
+        ? getEmptyNetworkAttachmentFormFields()
+        : { ...field.value, useDefaultNetwork: false },
+    );
+    setCreatedNetworkName('');
+  };
 
   return (
     <>
-      <UseDefaultNetworkField name={`${name}.useDefaultNetwork`} isDisabled={isDisabled} />
-      {useDefaultNetwork ? null : (
-        <>
-          <CatalogSubnetVirtualNetworkHydrator
-            virtualNetworkName={`${name}.virtualNetwork`}
-            subnetName={`${name}.subnet`}
-          />
-          <VirtualNetworkField
-            name={`${name}.virtualNetwork`}
-            subnetName={`${name}.subnet`}
-            securityGroupsName={`${name}.securityGroups`}
-            isDisabled={isDisabled}
-          />
-          <SubnetField
-            name={`${name}.subnet`}
-            virtualNetworkName={`${name}.virtualNetwork`}
-            isDisabled={isDisabled}
-          />
-          <SecurityGroupsField
-            name={`${name}.securityGroups`}
-            virtualNetworkName={`${name}.virtualNetwork`}
-            isDisabled={isDisabled}
-          />
-        </>
+      <NetworkSelectionCards
+        fieldName={name}
+        useDefaultNetwork={useDefaultNetwork}
+        isDisabled={isDisabled}
+        singleSecurityGroup={singleSecurityGroup}
+        onSelect={selectNetwork}
+      />
+      <div className="network-attachment-fields__details">
+        {useDefaultNetwork ? (
+          <DefaultNetworkSummary project={values.metadata.project} />
+        ) : (
+          <>
+            {createdNetworkName && (
+              <Alert variant="info" isInline title={t('Virtual network created')}>
+                {t('{{name}} will appear in the list when it is ready.', {
+                  name: createdNetworkName,
+                })}
+                <Button
+                  variant="link"
+                  isInline
+                  onClick={() => void invalidateServiceQueries(VirtualNetworks)}
+                >
+                  {t('Refresh virtual networks')}
+                </Button>
+              </Alert>
+            )}
+            <PopulateVirtualNetworkFromSubnet
+              virtualNetworkName={`${name}.virtualNetwork`}
+              subnetName={`${name}.subnet`}
+            />
+            <VirtualNetworkField
+              name={`${name}.virtualNetwork`}
+              subnetName={`${name}.subnet`}
+              securityGroupsName={`${name}.securityGroups`}
+              showDescription
+              onCreate={canCreateVirtualNetwork ? () => setIsCreateModalOpen(true) : undefined}
+              isRequired={isRequired}
+              isDisabled={isDisabled}
+            />
+            <SubnetField
+              name={`${name}.subnet`}
+              virtualNetworkName={`${name}.virtualNetwork`}
+              isRequired={isRequired}
+              showCidr
+              isDisabled={isDisabled}
+            />
+            <SecurityGroupsField
+              name={`${name}.securityGroups`}
+              virtualNetworkName={`${name}.virtualNetwork`}
+              isRequired={securityGroupsRequired}
+              showDescription
+              isSingleSelection={singleSecurityGroup}
+              isDisabled={isDisabled}
+            />
+          </>
+        )}
+      </div>
+      {isCreateModalOpen && (
+        <VirtualNetworkCreateModal
+          initialProject={values.metadata.project}
+          onClose={() => setIsCreateModalOpen(false)}
+          onCreated={(network) => {
+            setIsCreateModalOpen(false);
+            setCreatedNetworkName(network.metadata?.name || network.id);
+            void invalidateServiceQueries(VirtualNetworks);
+          }}
+        />
       )}
     </>
   );

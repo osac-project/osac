@@ -10,9 +10,17 @@ import type { ResourceSelectValue } from '../../Form/resourceSelectValue';
 
 interface SubnetFieldProps extends ProvisioningFieldControlProps {
   virtualNetworkName: string;
+  isRequired?: boolean;
+  showCidr?: boolean;
 }
 
-const SubnetField = ({ name, virtualNetworkName, isDisabled = false }: SubnetFieldProps) => {
+const SubnetField = ({
+  name,
+  virtualNetworkName,
+  isRequired = false,
+  showCidr = false,
+  isDisabled = false,
+}: SubnetFieldProps) => {
   const { t } = useTranslation();
   const [virtualNetwork] = useField<ResourceSelectValue>(virtualNetworkName);
   const virtualNetworkId = virtualNetwork.value?.id ?? '';
@@ -28,6 +36,8 @@ const SubnetField = ({ name, virtualNetworkName, isDisabled = false }: SubnetFie
       }
       isDisabled={isDisabled || !virtualNetworkId}
       autoSelectSingleOption
+      isRequired={isRequired}
+      showIpv4Cidr={showCidr}
       placeholder={t('Select subnet')}
       loadErrorTitle={t('Could not load subnets')}
     />

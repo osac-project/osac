@@ -456,6 +456,7 @@ describe('buildClusterStepSchema', () => {
           value: {
             virtualNetwork: { id: 'Virtual network is required' },
             subnet: { id: 'Subnet is required' },
+            securityGroups: 'Select at least one security group',
           },
         },
       },
@@ -472,7 +473,7 @@ describe('buildClusterStepSchema', () => {
           useDefaultNetwork: false,
           virtualNetwork: { id: 'vn-1', name: 'vn-1' },
           subnet: { id: 'subnet-1', name: 'subnet-1' },
-          securityGroups: [],
+          securityGroups: [{ id: 'sg-1', name: 'sg-1' }],
         }),
       },
     });

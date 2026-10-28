@@ -1128,10 +1128,12 @@ var _ = Describe("Deletion Cleanup", func() {
 		ctrl.Finish()
 	})
 
-	It("should block deletion when child projects exist", func() {
+	It("should fail deletion when child projects are not deleting", func() {
 		project := privatev1.Project_builder{
 			Id: "parent-1",
 			Metadata: privatev1.Metadata_builder{
+				Name:       "parent",
+				Tenant:     "acme",
 				Finalizers: []string{finalizers.Controller},
 			}.Build(),
 			Status: privatev1.ProjectStatus_builder{}.Build(),
@@ -1141,8 +1143,17 @@ var _ = Describe("Deletion Cleanup", func() {
 		mockClient.EXPECT().
 			List(gomock.Any(), gomock.Any()).
 			Return(&privatev1.ProjectsListResponse{
-				Total: 2, // Has 2 children
+				Size:  1,
+				Total: 1,
 			}, nil)
+		mockClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, request *privatev1.ProjectsListRequest,
+				_ ...grpc.CallOption) (*privatev1.ProjectsListResponse, error) {
+				Expect(request.GetFilter()).To(Equal(`this.metadata.tenant == "acme" && this.metadata.project == "parent" && this.metadata.name != "parent" && this.metadata.deletion_timestamp == null`))
+				Expect(request.GetLimit()).To(Equal(int32(1)))
+				return privatev1.ProjectsListResponse_builder{Size: 1, Total: 1}.Build(), nil
+			})
 
 		task := &task{
 			r:       functionObj,
@@ -1151,11 +1162,67 @@ var _ = Describe("Deletion Cleanup", func() {
 
 		err := task.delete(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		// State should be DELETE_FAILED
 		Expect(project.GetStatus().GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_DELETE_FAILED))
-		Expect(project.GetStatus().GetMessage()).To(ContainSubstring("Cannot delete project with 2 child project(s)"))
+		Expect(project.GetStatus().GetMessage()).To(ContainSubstring("child project(s) that are not deleting"))
 		// Finalizer should NOT be removed
 		Expect(project.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+	})
+
+	It("should wait for child projects that are already deleting", func() {
+		project := privatev1.Project_builder{
+			Id: "parent-1",
+			Metadata: privatev1.Metadata_builder{
+				Name:       "parent",
+				Tenant:     "acme",
+				Finalizers: []string{finalizers.Controller},
+			}.Build(),
+			Status: privatev1.ProjectStatus_builder{}.Build(),
+		}.Build()
+		mockClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			Return(privatev1.ProjectsListResponse_builder{
+				Size:  1,
+				Total: 1,
+			}.Build(), nil)
+		mockClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, request *privatev1.ProjectsListRequest,
+				_ ...grpc.CallOption) (*privatev1.ProjectsListResponse, error) {
+				Expect(request.GetFilter()).To(Equal(`this.metadata.tenant == "acme" && this.metadata.project == "parent" && this.metadata.name != "parent" && this.metadata.deletion_timestamp == null`))
+				Expect(request.GetLimit()).To(Equal(int32(1)))
+				return privatev1.ProjectsListResponse_builder{}.Build(), nil
+			})
+
+		task := &task{r: functionObj, project: project}
+
+		Expect(task.delete(ctx)).To(Succeed())
+		Expect(project.GetStatus().GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_DELETING))
+		Expect(project.GetStatus().GetMessage()).To(Equal("Waiting for 1 child project(s) to be deleted."))
+		Expect(project.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+	})
+
+	It("should return an error when querying for non-deleting child projects fails", func() {
+		project := privatev1.Project_builder{
+			Id: "parent-1",
+			Metadata: privatev1.Metadata_builder{
+				Name:       "parent",
+				Tenant:     "acme",
+				Finalizers: []string{finalizers.Controller},
+			}.Build(),
+		}.Build()
+
+		mockClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			Return(privatev1.ProjectsListResponse_builder{Size: 1, Total: 1}.Build(), nil)
+		mockClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(codes.Unavailable, "database unavailable"))
+
+		task := &task{r: functionObj, project: project}
+		err := task.delete(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("failed to query for child projects not pending deletion"))
+		Expect(err.Error()).To(ContainSubstring("database unavailable"))
 	})
 
 	It("should delete Keycloak groups when no children exist", func() {
@@ -1476,6 +1543,56 @@ var _ = Describe("Deletion Cleanup", func() {
 		Expect(project.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
 	})
 
+	It("records a failed deletion when a database reference blocks archiving", func() {
+		project := privatev1.Project_builder{
+			Id: "project-1",
+			Metadata: privatev1.Metadata_builder{
+				Name:              "test-project",
+				Tenant:            "acme",
+				Finalizers:        []string{finalizers.Controller},
+				DeletionTimestamp: timestamppb.Now(),
+			}.Build(),
+		}.Build()
+
+		mockClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsListResponse{Size: 0}, nil)
+		mockProjectMembershipsClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectMembershipsListResponse{}, nil)
+		mockIdpClient.EXPECT().
+			GetGroupIDByPath(gomock.Any(), "acme", "/test-project").
+			Return("project-group-id", nil)
+		mockIdpClient.EXPECT().
+			DeleteGroup(gomock.Any(), "acme", "project-group-id").
+			Return(nil)
+
+		updateCount := 0
+		mockClient.EXPECT().
+			Update(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, req *privatev1.ProjectsUpdateRequest,
+				_ ...grpc.CallOption) (*privatev1.ProjectsUpdateResponse, error) {
+				updateCount++
+				if updateCount == 1 {
+					return nil, status.Error(codes.FailedPrecondition,
+						"object cannot be deleted because it is still referenced by other objects (constraint: secrets_project_fk)")
+				}
+
+				updated := req.GetObject()
+				Expect(updated.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+				Expect(updated.GetStatus().GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_DELETE_FAILED))
+				Expect(updated.GetStatus().GetMessage()).To(ContainSubstring("secrets_project_fk"))
+				return privatev1.ProjectsUpdateResponse_builder{}.Build(), nil
+			}).Times(2)
+
+		functionObj.maskCalculator = masks.NewCalculator().Build()
+		err := functionObj.Run(ctx, project)
+		Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+		Expect(project.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+		Expect(project.GetStatus().GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_DELETE_FAILED))
+		Expect(project.GetStatus().GetMessage()).To(ContainSubstring("secrets_project_fk"))
+	})
+
 	It("should requeue root project deletion while default networking is still deleting", func() {
 		project := privatev1.Project_builder{
 			Id: "project-1",
@@ -1695,6 +1812,18 @@ var _ = Describe("Deletion Cleanup", func() {
 			mockProjectMembershipsClient.EXPECT().
 				List(gomock.Any(), gomock.Any()).
 				Return(nil, status.Error(codes.Unavailable, "database unavailable"))
+			mockClient.EXPECT().
+				Update(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, request *privatev1.ProjectsUpdateRequest,
+					_ ...grpc.CallOption) (*privatev1.ProjectsUpdateResponse, error) {
+					Expect(request.GetObject().GetStatus().GetState()).To(Equal(
+						privatev1.ProjectState_PROJECT_STATE_DELETE_FAILED))
+					Expect(request.GetObject().GetStatus().GetMessage()).To(Equal(
+						"ProjectMembership deletion failed while deleting project."))
+					Expect(request.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+					Expect(request.GetUpdateMask().GetPaths()).To(ContainElement("status"))
+					return privatev1.ProjectsUpdateResponse_builder{}.Build(), nil
+				})
 
 			task := &task{
 				r:       functionObj,
@@ -1704,6 +1833,9 @@ var _ = Describe("Deletion Cleanup", func() {
 			err := task.delete(ctx)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("failed to query for project memberships"))
+			Expect(project.GetStatus().GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_DELETE_FAILED))
+			Expect(project.GetStatus().GetMessage()).To(Equal(
+				"ProjectMembership deletion failed while deleting project."))
 			Expect(project.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
 		})
 

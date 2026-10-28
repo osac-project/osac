@@ -150,6 +150,27 @@ func (r *function) Run(ctx context.Context, project *privatev1.Project) error {
 			UpdateMask: updateMask,
 		}.Build())
 		if err != nil {
+			if status.Code(err) == codes.FailedPrecondition &&
+				strings.Contains(err.Error(), "still referenced by other objects") {
+				// The archive was rejected because another row still references this
+				// project. Keep the controller finalizer so deletion can retry after
+				// that reference is removed, and persist the failure status.
+				project.GetMetadata().SetFinalizers(oldProject.GetMetadata().GetFinalizers())
+				if !project.HasStatus() {
+					project.SetStatus(&privatev1.ProjectStatus{})
+				}
+				project.GetStatus().SetState(privatev1.ProjectState_PROJECT_STATE_DELETE_FAILED)
+				project.GetStatus().SetMessage(err.Error())
+
+				failureMask := r.maskCalculator.Calculate(oldProject, project)
+				if len(failureMask.GetPaths()) > 0 {
+					_, statusErr := r.projectsClient.Update(ctx, privatev1.ProjectsUpdateRequest_builder{
+						Object:     project,
+						UpdateMask: failureMask,
+					}.Build())
+					return errors.Join(err, statusErr)
+				}
+			}
 			return err
 		}
 	}
@@ -403,24 +424,64 @@ func (t *task) delete(ctx context.Context) error {
 		return fmt.Errorf("failed to query for child projects: %w", err)
 	}
 
-	// Block deletion if children exist
+	// Parent projects cannot be archived while child projects still reference them.
 	if listResp.GetTotal() > 0 {
+		activeChildFilter := listFilter + " && this.metadata.deletion_timestamp == null"
+		limit := int32(1)
+		activeChildren, err := t.r.projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
+			Filter: &activeChildFilter,
+			Limit:  &limit,
+		}.Build())
+		if err != nil {
+			return fmt.Errorf("failed to query for child projects not pending deletion: %w", err)
+		}
+		allChildrenDeleting := activeChildren.GetTotal() == 0
+
 		if !t.project.HasStatus() {
 			t.project.SetStatus(&privatev1.ProjectStatus{})
 		}
-		t.project.GetStatus().SetState(privatev1.ProjectState_PROJECT_STATE_DELETE_FAILED)
-		t.project.GetStatus().SetMessage(fmt.Sprintf("Cannot delete project with %d child project(s). Delete children first.", listResp.GetTotal()))
+
+		if allChildrenDeleting {
+			t.project.GetStatus().SetState(privatev1.ProjectState_PROJECT_STATE_DELETING)
+			t.project.GetStatus().SetMessage(fmt.Sprintf(
+				"Waiting for %d child project(s) to be deleted.", listResp.GetTotal()))
+		} else {
+			t.project.GetStatus().SetState(privatev1.ProjectState_PROJECT_STATE_DELETE_FAILED)
+			t.project.GetStatus().SetMessage(fmt.Sprintf(
+				"Cannot delete project with %d child project(s) that are not deleting. Delete children first.",
+				listResp.GetTotal()))
+		}
 		t.r.logger.WarnContext(ctx, "Cannot delete project with children",
 			slog.String("project_id", t.project.GetId()),
 			slog.Int("child_count", int(listResp.GetTotal())),
 		)
-		// Don't remove finalizer - deletion is blocked
+		// Keep the finalizer until all child projects have been archived.
 		return nil
 	}
 
 	// Cascade-delete ProjectMemberships scoped to this project
 	existingMemberships, err := t.deleteProjectMemberships(ctx)
 	if err != nil {
+		t.r.logger.ErrorContext(ctx, "ProjectMembership deletion failed",
+			slog.String("project_id", t.project.GetId()),
+			slog.Any("error", err),
+		)
+		oldProject := proto.Clone(t.project).(*privatev1.Project)
+		if !t.project.HasStatus() {
+			t.project.SetStatus(&privatev1.ProjectStatus{})
+		}
+		t.project.GetStatus().SetState(privatev1.ProjectState_PROJECT_STATE_DELETE_FAILED)
+		t.project.GetStatus().SetMessage(
+			"ProjectMembership deletion failed while deleting project.")
+		updateMask := t.r.maskCalculator.Calculate(oldProject, t.project)
+		if len(updateMask.GetPaths()) > 0 {
+			if _, updateErr := t.r.projectsClient.Update(ctx, privatev1.ProjectsUpdateRequest_builder{
+				Object:     t.project,
+				UpdateMask: updateMask,
+			}.Build()); updateErr != nil {
+				return errors.Join(err, fmt.Errorf("failed to persist project deletion status: %w", updateErr))
+			}
+		}
 		return err
 	}
 

@@ -290,6 +290,7 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `aapOperator.channel` | Update channel for the AAP Operator. | `stable-2.6-cluster-scoped` |
 | `cnv.enabled` | Creates the OpenShift Virtualization `Subscription` and the `HyperConverged` custom resource. Required for VMaaS. | `false` |
 | `cnv.channel` | Update channel for OpenShift Virtualization. | `stable` |
+| `evpn.enabled` | Configures OpenShift host networking for VMaaS CUDN EVPN; requires OpenShift 4.22 or later. Leave disabled on Kind. | `false` |
 | `lvms.enabled` | Creates the LVM Storage `Subscription` and the `LVMCluster` custom resource. | `false` |
 | `lvms.channel` | Update channel for LVM Storage. Set it to `stable-<cluster_minor>` at installation. | `stable-4.22` |
 | `metallb.enabled` | Creates the MetalLB `Subscription`, the `caas-address-pool` `IPAddressPool`, and the `L2Advertisement`. | `false` |
@@ -321,6 +322,82 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `bundledVault.enabled` | Deploys an in-cluster OpenBao secret store for development and evaluation. Set it to `false` for production and configure external Vault in the `osac` values file; see the [secrets management configuration guide](secrets-management-configuration.md). | `true` |
 | `bundledVault.podSecurityContext` | Pod-level `securityContext` for the OpenBao deployment. Defaults to `{runAsNonRoot: true}` with no hardcoded UID so OpenShift's restricted-v2 SCC can allocate from the namespace range. Override with a fixed UID (e.g. `runAsUser: 100`) on platforms that require one. | `{runAsNonRoot: true}` |
 | `cliImage` | The `oc` image that the chart hook jobs use. | `origin-cli:4.20.0` |
+
+## EVPN host networking (VMaaS)
+
+Set the `evpn` values in the same infra values file passed to `osac-deps` and
+`osac-infra`. The installer configures the OpenShift side of the VMaaS CUDN
+EVPN connection in this order:
+
+1. It enables FRR, route advertisements, routing via host, and global IP
+   forwarding in the cluster network operator. This restarts OVN-Kubernetes
+   once while it applies the network settings.
+2. It installs the NMState operator when requested and applies the `nmstate`
+   singleton.
+3. It creates one `NodeNetworkConfigurationPolicy` per configured node. The
+   policy adds each supplied uplink address and creates the `evpn-vtep0` dummy
+   interface with that node's VTEP address.
+4. It creates the `tenant-vtep` VTEP used by the CUDN.
+5. It creates each node's underlay BGP `FRRConfiguration` and a raw FRR
+   configuration that activates the EVPN address family.
+6. It creates a `RouteAdvertisements` resource selecting CUDNs labelled
+   `evpn: "true"`.
+7. It waits for every configured node-to-fabric BGP session to become
+   Established when `waitForEstablished` is enabled.
+
+The cluster admin supplies the OpenShift node names and the NMState operator
+channel. The fabric admin supplies the per-node cabling details: uplink
+interface, optional uplink address, fabric peer address, and peer ASN. The
+fabric admin also assigns the VTEP range, each node VTEP address, and the node
+ASN, and configures the matching VTEP range and node ASN on the fabric. If a
+node has a different ASN, set its `nodes[].asn`; otherwise the installer uses
+`bgp.asn`. `bgp.acceptPrefixes` comes from the fabric admin and lists remote
+fabric loopback ranges; the installer accepts only /32 routes within them.
+
+| Value | Meaning and source |
+|---|---|
+| `evpn.enabled` | Enables EVPN host setup on OpenShift; requires OpenShift 4.22 or later. Keep `false` on Kind. |
+| `evpn.nmstate.install` | Installs the NMState operator subscription; set `false` when it is already installed. |
+| `evpn.nmstate.channel` | NMState operator channel supported by the cluster. |
+| `evpn.configureClusterNetwork` | Applies the cluster network operator settings. It triggers one OVN-Kubernetes restart. |
+| `evpn.vtepCIDR` | Required VTEP address range, assigned with the fabric admin. |
+| `evpn.bgp.asn` | Required default node ASN, assigned with the fabric admin. |
+| `evpn.bgp.acceptPrefixes` | Required fabric loopback IPv4 ranges supplied by the fabric admin. Only /32 routes are accepted. |
+| `evpn.bgp.waitForEstablished` | Fails installation if a configured BGP session does not become Established. |
+| `evpn.bgp.timeoutSeconds` | Maximum wait per BGP session. |
+| `evpn.nodes[].name` | Kubernetes node name from the cluster admin. Add one entry for every VMaaS node. |
+| `evpn.nodes[].vtepIP` | Unique address inside `vtepCIDR`, assigned with the fabric admin and configured on the fabric. |
+| `evpn.nodes[].asn` | Optional node ASN override, assigned by the fabric admin. Defaults to `evpn.bgp.asn`. |
+| `evpn.nodes[].uplinks[].interface` | Node interface name for a cable to a fabric leaf, supplied by the fabric admin. |
+| `evpn.nodes[].uplinks[].address` | Optional IPv4 CIDR for the uplink. Omit it when the address is already configured. The fabric admin supplies it. |
+| `evpn.nodes[].uplinks[].peerAddress` | IPv4 address of the connected fabric BGP peer, supplied by the fabric admin. |
+| `evpn.nodes[].uplinks[].peerASN` | ASN of the connected fabric peer, supplied by the fabric admin. |
+
+For a multicluster VMaaS deployment, `make install-multicluster` uses the
+infra values to configure EVPN on the workload cluster. The management-cluster
+overlay keeps `evpn.enabled` disabled.
+
+Add a node by adding it to `evpn.nodes` and rerunning `make install`. Remove a
+node by deleting its entry and rerunning `make install`; the installer deletes
+that node's NNCP and FRRConfigurations. Deleting the NNCP does not remove its
+interface addresses from the node, so remove stale addresses separately when
+needed.
+
+Uninstalling `osac-infra` does not remove the EVPN resources or revert the
+cluster network operator patch. Helm removes the configure-EVPN ServiceAccount
+and RBAC resources on uninstall. To remove the labeled EVPN resources manually:
+
+```bash
+oc delete routeadvertisements,vteps -l osac.openshift.io/evpn=true
+oc delete frrconfigurations -n openshift-frr-k8s -l osac.openshift.io/evpn=true
+oc delete nncp -l osac.openshift.io/evpn=true
+```
+
+Restore the cluster network operator settings separately if the cluster no
+longer needs them. The VTEP range and uplink ranges must not overlap tenant
+address space. Add these infrastructure ranges to
+`global.networking.excludedIpv4Cidrs` in the `osac` chart when that value is
+available in the installed chart.
 
 ## When Prerequisites Already Exist
 

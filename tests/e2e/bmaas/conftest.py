@@ -53,7 +53,12 @@ def ssh_public_key() -> Generator[str, None, None]:
 def bmi_disk_image(private_grpc: GRPCClient, test_run_id: str) -> Generator[str, None, None]:
     """Create a default DiskImage for BMaaS E2E tests and clean it up afterward."""
     di_name = f"e2e-bmi-di-{test_run_id}"
-    di_id = private_grpc.create_disk_image(name=di_name, source_ref=BMI_DISK_IMAGE_SOURCE_REF, api=PRIVATE_API)
+    di_id = private_grpc.create_disk_image(
+        name=di_name,
+        source_ref=BMI_DISK_IMAGE_SOURCE_REF,
+        architecture=["ARCHITECTURE_AMD64", "ARCHITECTURE_ARM64"],
+        api=PRIVATE_API,
+    )
 
     yield di_name
 

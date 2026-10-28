@@ -15,7 +15,15 @@ package metering
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/descriptorpb"
+
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // The registry is the metering source contract, so the test pins the fields of every resource
@@ -31,8 +39,9 @@ func TestResources(t *testing.T) {
 		{
 			Message: "osac.private.v1.BareMetalInstance",
 			Fields: []Field{
+				{Path: "spec.catalog_item", Kind: KindConstant},
 				{Path: "spec.instance_type", Kind: KindConstant},
-				{Path: "status.cluster", Kind: KindFixedOnceSet},
+				{Path: "status.cluster", Kind: KindFixedOnceSet, OwnerResource: "Cluster"},
 				{Path: "status.node_set", Kind: KindFixedOnceSet},
 				{Path: "status.state", Kind: KindVaries, TransitionTime: "status.state_transition_time"},
 			},
@@ -49,6 +58,7 @@ func TestResources(t *testing.T) {
 			Message: "osac.private.v1.ComputeInstance",
 			Fields: []Field{
 				{Path: "spec.boot_disk.size_gib", Kind: KindConstant},
+				{Path: "spec.catalog_item", Kind: KindConstant},
 				{Path: "spec.disk_image", Kind: KindConstant},
 				{Path: "status.instance_type", Kind: KindVaries, TransitionTime: "status.instance_type_transition_time"},
 				{Path: "status.state", Kind: KindVaries, TransitionTime: "status.state_transition_time"},
@@ -87,4 +97,89 @@ func TestResources(t *testing.T) {
 	if !reflect.DeepEqual(resources, expected) {
 		t.Fatalf("the tracked fields don't match the expected contract:\nexpected: %#v\nactual:   %#v", expected, resources)
 	}
+}
+
+// TestResourcesRejectsUnrenderableKinds checks that an annotated field whose proto kind the
+// fold cannot render fails validation at startup. A float, for example, would be tracked in
+// the registry but never produce a fact, silently unbilled forever. A renderable kind on the
+// same synthetic resource passes, proving the rejection is about the kind.
+func TestResourcesRejectsUnrenderableKinds(t *testing.T) {
+	registryOf := func(fieldType descriptorpb.FieldDescriptorProto_Type) error {
+		options := &descriptorpb.FieldOptions{}
+		proto.SetExtension(options, privatev1.E_Metering, &privatev1.MeteringFieldOptions{
+			Kind: privatev1.MeteringFieldKind_METERING_FIELD_KIND_CONSTANT,
+		})
+		file, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{
+			Name:    proto.String("osac/private/v1/renderable_registry_test.proto"),
+			Package: proto.String("osac.private.v1"),
+			Syntax:  proto.String("proto3"),
+			MessageType: []*descriptorpb.DescriptorProto{
+				{
+					Name: proto.String("RatedResource"),
+					Field: []*descriptorpb.FieldDescriptorProto{
+						fieldDesc("id", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+						fieldDesc("metadata", 2, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+							".osac.private.v1.RatedResourceMetadata", nil),
+						fieldDesc("spec", 3, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+							".osac.private.v1.RatedResourceSpec", nil),
+						fieldDesc("status", 4, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+							".osac.private.v1.RatedResourceStatus", nil),
+					},
+				},
+				{
+					Name: proto.String("RatedResourceMetadata"),
+					Field: []*descriptorpb.FieldDescriptorProto{
+						fieldDesc("tenant", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+					},
+				},
+				{
+					Name: proto.String("RatedResourceSpec"),
+					Field: []*descriptorpb.FieldDescriptorProto{
+						fieldDesc("ratio", 1, fieldType, "", options),
+					},
+				},
+				{Name: proto.String("RatedResourceStatus")},
+			},
+		}, nil)
+		if err != nil {
+			t.Fatalf("building the synthetic proto: %v", err)
+		}
+		files := &protoregistry.Files{}
+		if err := files.RegisterFile(file); err != nil {
+			t.Fatalf("registering the synthetic proto: %v", err)
+		}
+		_, err = resourcesOf(files)
+		return err
+	}
+
+	err := registryOf(descriptorpb.FieldDescriptorProto_TYPE_FLOAT)
+	if err == nil {
+		t.Fatal("an annotated float field must fail validation")
+	}
+	if !strings.Contains(err.Error(), "spec.ratio") || !strings.Contains(err.Error(), "float") {
+		t.Fatalf("the error must name the field and its kind, got: %v", err)
+	}
+
+	if err := registryOf(descriptorpb.FieldDescriptorProto_TYPE_STRING); err != nil {
+		t.Fatalf("an annotated string field must pass validation: %v", err)
+	}
+}
+
+// fieldDesc builds one field of the synthetic resource messages. Only the annotated field
+// carries options.
+func fieldDesc(
+	name string, number int32, fieldType descriptorpb.FieldDescriptorProto_Type,
+	typeName string, options *descriptorpb.FieldOptions,
+) *descriptorpb.FieldDescriptorProto {
+	field := &descriptorpb.FieldDescriptorProto{
+		Name:   proto.String(name),
+		Number: proto.Int32(number),
+		Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+		Type:   fieldType.Enum(),
+	}
+	if typeName != "" {
+		field.TypeName = proto.String(typeName)
+	}
+	field.Options = options
+	return field
 }

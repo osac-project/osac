@@ -157,11 +157,27 @@ var _ = Describe("Role binding reconciler", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		id := createResponse.GetObject().GetId()
-		DeferCleanup(func() {
-			_, _ = client.Delete(ctx, privatev1.RoleBindingsDeleteRequest_builder{
+		bindingDeleted := false
+		deleteRoleBinding := func(requestCtx context.Context) {
+			if bindingDeleted {
+				return
+			}
+			_, err := client.Delete(requestCtx, privatev1.RoleBindingsDeleteRequest_builder{
 				Id: id,
 			}.Build())
-		})
+			if err != nil {
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+			}
+			Eventually(func(g Gomega) {
+				_, getErr := client.Get(requestCtx, privatev1.RoleBindingsGetRequest_builder{
+					Id: id,
+				}.Build())
+				g.Expect(getErr).To(HaveOccurred())
+				g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+			}, time.Minute, time.Second).Should(Succeed())
+			bindingDeleted = true
+		}
+		DeferCleanup(deleteRoleBinding)
 
 		// Verify that reconciler eventually adds the finalizer and sets the state to READY after syncing:
 		Eventually(
@@ -333,6 +349,88 @@ var _ = Describe("Role binding reconciler", func() {
 		Entry("tenant-reader", "tenant-reader", "users"),
 		Entry("cloud-provider-reader", "cloud-provider-reader", "sales"),
 	)
+	It("Assigns and removes the Keycloak role mapping with a role binding", func() {
+		roleMappingPath := fmt.Sprintf("/users/%s/role-mappings/realm", testKeycloakID)
+		expectRoleMapping := func(g Gomega, wantPresent bool) {
+			code, body, err := tool.KeycloakAdminRequest(ctx, "GET", roleMappingPath, nil)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(code).To(Equal(200))
+
+			var roleMappings []map[string]any
+			g.Expect(json.Unmarshal(body, &roleMappings)).To(Succeed())
+
+			mapped := false
+			for _, mapping := range roleMappings {
+				if mapping["name"] == testRoleName {
+					mapped = true
+					break
+				}
+			}
+			g.Expect(mapped).To(Equal(wantPresent))
+		}
+
+		createResponse, err := client.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+			Object: privatev1.RoleBinding_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("my-%s", uuid.New()),
+				}.Build(),
+				Spec: privatev1.RoleBindingSpec_builder{
+					Role: privatev1.RoleReference_builder{Name: testRoleName}.Build(),
+					Users: []*privatev1.UserReference{
+						privatev1.UserReference_builder{Id: testUserID}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		id := createResponse.GetObject().GetId()
+		bindingDeleted := false
+		deleteRoleBinding := func(requestCtx context.Context) {
+			if bindingDeleted {
+				return
+			}
+			_, err := client.Delete(requestCtx, privatev1.RoleBindingsDeleteRequest_builder{
+				Id: id,
+			}.Build())
+			if err != nil {
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+			}
+			Eventually(func(g Gomega) {
+				_, getErr := client.Get(requestCtx, privatev1.RoleBindingsGetRequest_builder{
+					Id: id,
+				}.Build())
+				g.Expect(getErr).To(HaveOccurred())
+				g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+			}, time.Minute, time.Second).Should(Succeed())
+			bindingDeleted = true
+		}
+		DeferCleanup(deleteRoleBinding)
+
+		Eventually(
+			func(g Gomega) {
+				getResponse, err := client.Get(ctx, privatev1.RoleBindingsGetRequest_builder{
+					Id: id,
+				}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				object := getResponse.GetObject()
+				g.Expect(object.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+				g.Expect(object.GetStatus().GetState()).To(
+					Equal(privatev1.RoleBindingState_ROLE_BINDING_STATE_READY),
+				)
+			},
+			time.Minute,
+			time.Second,
+		).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			expectRoleMapping(g, true)
+		}, time.Minute, time.Second).Should(Succeed())
+
+		deleteRoleBinding(ctx)
+		Eventually(func(g Gomega) {
+			expectRoleMapping(g, false)
+		}, time.Minute, time.Second).Should(Succeed())
+	})
 })
 
 var _ = Describe("RoleBinding references", func() {

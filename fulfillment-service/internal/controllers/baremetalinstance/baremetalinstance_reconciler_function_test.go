@@ -2682,6 +2682,40 @@ var _ = Describe("syncStatus", func() {
 		}
 	})
 
+	It("should present a retrying provision attempt as sanitized in-progress provisioning", func() {
+		const rawError = "AAP HTTP 500: internal inventory traceback"
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase: bmfov1alpha1.BareMetalInstancePhaseProgressing,
+				Conditions: []metav1.Condition{
+					{Type: string(bmfov1alpha1.HostConditionAllocated), Status: metav1.ConditionTrue},
+					{
+						Type:    string(bmfov1alpha1.HostConditionProvisionTemplateComplete),
+						Status:  metav1.ConditionFalse,
+						Reason:  bmfov1alpha1.HostConditionReasonRetrying,
+						Message: "Provisioning retry scheduled after failed attempt: " + rawError,
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(Equal(
+			privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING))
+		provisioned := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED)
+		Expect(provisioned).NotTo(BeNil())
+		Expect(provisioned.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(provisioned.GetReason()).To(Equal(string(bmfov1alpha1.StageProvisioning)))
+		Expect(provisioned.GetMessage()).To(Equal("Provisioning is retrying after an unsuccessful attempt."))
+		for _, condition := range t.bareMetalInstance.GetStatus().GetConditions() {
+			Expect(condition.GetReason()).NotTo(ContainSubstring(rawError))
+			Expect(condition.GetMessage()).NotTo(ContainSubstring(rawError))
+		}
+	})
+
 	It("should set READY=False and leave PROVISIONED unchanged for Deleting phase", func() {
 		t := newTask(0)
 		// Pre-populate PROVISIONED=True to verify it is not touched during deletion.

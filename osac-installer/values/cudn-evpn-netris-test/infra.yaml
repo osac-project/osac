@@ -1,10 +1,9 @@
 # CUDN EVPN/Netris VMaaS E2E profile -- infrastructure values for osac-deps
 # and osac-infra charts.
 #
-# The CUDN EVPN/BGP/VTEP fabric and its EVPN FRRConfiguration are external
-# prerequisites. This file enables the VMaaS cluster prerequisites; it does not
-# install the FRR operator, create FRRConfiguration, or create the external
-# EVPN fabric itself.
+# The installer configures the OpenShift side of EVPN when evpn.enabled is set
+# in a private infra values file. Fabric links, switch ASN configuration, and
+# other Netris-side settings remain external and are site-specific.
 
 # --- OLM Subscriptions (osac-deps) ---
 certManager:
@@ -19,6 +18,8 @@ metallb:
   enabled: true
 cnv:
   enabled: true
+evpn:
+  enabled: false
 mce:
   enabled: false
 

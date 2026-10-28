@@ -1,0 +1,203 @@
+{{- if .Values.evpn.enabled }}
+{{- $evpn := .Values.evpn -}}
+{{- $bgpWaitSeconds := 0 -}}
+{{- if $evpn.bgp.waitForEstablished -}}
+  {{- range $evpn.nodes -}}
+    {{- $bgpWaitSeconds = add $bgpWaitSeconds (mul (int $evpn.bgp.timeoutSeconds) (len .uplinks)) -}}
+  {{- end -}}
+{{- end -}}
+{{- $activeDeadlineSeconds := add 3600 $bgpWaitSeconds -}}
+{{- if not (lookup "v1" "Namespace" "" "openshift-frr-k8s") }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openshift-frr-k8s
+  annotations:
+    "helm.sh/resource-policy": keep
+{{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: osac-infra-configure-evpn
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook-weight": "30"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: osac-infra-configure-evpn
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook-weight": "30"
+rules:
+  - apiGroups: ["operator.openshift.io"]
+    resources: ["networks"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["config.openshift.io"]
+    resources: ["clusteroperators"]
+    verbs: ["get"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+  - apiGroups: ["nmstate.io"]
+    resources: ["nmstates"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+  - apiGroups: ["nmstate.io"]
+    resources: ["nodenetworkconfigurationpolicies"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: ["k8s.ovn.org"]
+    resources: ["vteps", "routeadvertisements"]
+    verbs: ["get", "create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: osac-infra-configure-evpn
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook-weight": "30"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: osac-infra-configure-evpn
+subjects:
+  - kind: ServiceAccount
+    name: osac-infra-configure-evpn
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: osac-infra-configure-evpn-nmstate
+  namespace: openshift-nmstate
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook-weight": "30"
+rules:
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["clusterserviceversions"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: osac-infra-configure-evpn-nmstate
+  namespace: openshift-nmstate
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook-weight": "30"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: osac-infra-configure-evpn-nmstate
+subjects:
+  - kind: ServiceAccount
+    name: osac-infra-configure-evpn
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: osac-infra-configure-evpn-frr
+  namespace: openshift-frr-k8s
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook-weight": "30"
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: ["frrk8s.metallb.io"]
+    resources: ["frrconfigurations"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+  - apiGroups: ["frrk8s.metallb.io"]
+    resources: ["bgpsessionstates"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: osac-infra-configure-evpn-frr
+  namespace: openshift-frr-k8s
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook-weight": "30"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: osac-infra-configure-evpn-frr
+subjects:
+  - kind: ServiceAccount
+    name: osac-infra-configure-evpn
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: osac-infra-configure-evpn
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-weight": "30"
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: {{ int64 $activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "osac-infra.hookLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: osac-infra-configure-evpn
+      restartPolicy: OnFailure
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: osac-infra-evpn-config
+        - name: scripts
+          configMap:
+            name: osac-infra-hook-scripts
+      containers:
+        - name: configure-evpn
+          image: {{ .Values.cliImage }}
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: config
+              mountPath: /config
+            - name: scripts
+              mountPath: /scripts
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.hookResources | nindent 12 }}
+          command:
+            - /bin/bash
+            - /scripts/configure-evpn.sh
+{{- end }}

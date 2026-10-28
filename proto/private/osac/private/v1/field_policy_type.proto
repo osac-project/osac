@@ -150,6 +150,21 @@ message EditableSecretReferenceField {
   SecretLocalReference default_value = 1;
 }
 
+// Defines whether a full Secret reference is locked or editable.
+message FullSecretReferenceFieldPolicy {
+  oneof behavior {
+    option (buf.validate.oneof).required = true;
+
+    SecretReference locked = 1;
+    EditableFullSecretReferenceField editable = 2;
+  }
+}
+
+// Configures an editable full Secret reference.
+message EditableFullSecretReferenceField {
+  SecretReference default_value = 1;
+}
+
 // Defines whether a bare metal instance type reference is locked or editable.
 message BareMetalInstanceTypeReferenceFieldPolicy {
   oneof behavior {

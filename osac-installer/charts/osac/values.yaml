@@ -379,12 +379,31 @@ ui:
     pullPolicy: auto
 
 # --- Metering ---
+# Always deployed: billing is not optional. The event publisher writes usage
+# events unconditionally, so an install without metering silently loses
+# revenue. The database wiring points at the secrets this chart's
+# workload-db-secrets template creates for the configured DB host.
 metering:
-  enabled: false
   image:
     repository: ghcr.io/osac-project/metering-service
     tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
     pullPolicy: Always
+  database:
+    connection:
+    - secret:
+        name: osac-db-metering-config
+        items:
+        - key: url
+          param: url
+    - secret:
+        name: osac-db-metering-client-cert
+        items:
+        - key: tls.crt
+          param: sslcert
+        - key: tls.key
+          param: sslkey
+        - key: ca.crt
+          param: sslrootcert
 
 # --- Bare Metal Fulfillment Operator CRDs ---
 bmfCrds: {}

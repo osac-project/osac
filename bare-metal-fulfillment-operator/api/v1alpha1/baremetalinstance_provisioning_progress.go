@@ -145,6 +145,9 @@ type ProvisioningProgress struct {
 	Step ProvisioningStep
 	// Failure is the classification when State == StateFailed; empty otherwise.
 	Failure FailureClassification
+	// Retrying is true when the current in-progress step is waiting to retry after
+	// an unsuccessful attempt.
+	Retrying bool
 }
 
 // hostConditionStageOrder is the fixed, ordered list of the conditions surfaced as
@@ -180,6 +183,17 @@ var AllHostConditionTypes = []BareMetalInstanceConditionType{
 	HostConditionNetworkOffboardComplete,
 }
 
+// IsProvisionRetrying reports whether cond marks a BareMetalInstance whose
+// provision-template attempt failed and is waiting to retry (OSAC-1700). It
+// is nil-safe and is the single classification of "retrying" shared by
+// DeriveProvisioningProgress and the controller's reconciliation guards.
+func IsProvisionRetrying(cond *metav1.Condition) bool {
+	return cond != nil &&
+		cond.Type == string(HostConditionProvisionTemplateComplete) &&
+		cond.Status == metav1.ConditionFalse &&
+		cond.Reason == HostConditionReasonRetrying
+}
+
 // DeriveProvisioningProgress maps a BareMetalInstance's lifecycle conditions to the
 // furthest-advanced provisioning progress, order-independently (each condition is
 // read by type, never by slice position). It is the authoritative,
@@ -187,15 +201,16 @@ var AllHostConditionTypes = []BareMetalInstanceConditionType{
 // constants it reads, and returns machine-readable enums only. The fulfillment
 // reconciler (OSAC-5347) calls this and applies the presentation layer.
 //
-// Precedence: failure (earliest in stage order) > Ready > Provisioned > in-progress.
+// Precedence: failure (earliest in stage order) > retrying > Ready > Provisioned > in-progress.
 func DeriveProvisioningProgress(conds []metav1.Condition) ProvisioningProgress {
 	// 1. Failure takes priority. Walk the surfaced conditions in stage order; the
 	//    first one that is False while carrying a hard-failure reason wins.
 	//
 	//    Failure detection is a denylist: a False condition is a hard failure unless
 	//    its reason is a known benign one. Benign reasons are the in-progress marker
-	//    (Progressing), the empty reason, and PowerSyncRequired — a restart is
-	//    required, a normal in-flight power transition, not a provisioning failure.
+	//    (Progressing), Retrying on the provision-template condition, the empty
+	//    reason, and PowerSyncRequired — a restart is required, a normal in-flight
+	//    power transition, not a provisioning failure.
 	//    A new benign False reason MUST be added to this skip set, or it will be
 	//    misclassified as a hard failure (the exhaustiveness test guards condition
 	//    types, not reason values).
@@ -205,6 +220,7 @@ func DeriveProvisioningProgress(conds []metav1.Condition) ProvisioningProgress {
 			continue
 		}
 		if cond.Reason == HostConditionReasonProgressing ||
+			IsProvisionRetrying(cond) ||
 			cond.Reason == HostConditionReasonPowerSyncRequired ||
 			cond.Reason == "" {
 			continue
@@ -213,7 +229,14 @@ func DeriveProvisioningProgress(conds []metav1.Condition) ProvisioningProgress {
 		return ProvisioningProgress{State: StateFailed, Step: step, Failure: failure}
 	}
 
-	// 2. Ready: PowerSynced True is the READY axis — provisioning is complete and the
+	// 2. Retrying: a failed provision attempt remains in progress. This precedes
+	//    retained success conditions so in-place reprovisioning does not appear Ready
+	//    while its replacement attempt is backing off.
+	if IsProvisionRetrying(apimeta.FindStatusCondition(conds, string(HostConditionProvisionTemplateComplete))) {
+		return ProvisioningProgress{State: StateInProgress, Step: StepProvisioning, Retrying: true}
+	}
+
+	// 3. Ready: PowerSynced True is the READY axis — provisioning is complete and the
 	//    host has reached its desired power state. Nothing is in flight, so Step is
 	//    empty. The end power state (on, or off for RunStrategy=Halted) is steady-state,
 	//    not provisioning progress; callers read the PowerSynced condition directly if a
@@ -222,7 +245,7 @@ func DeriveProvisioningProgress(conds []metav1.Condition) ProvisioningProgress {
 		return ProvisioningProgress{State: StateReady}
 	}
 
-	// 3. Provisioned: the network trio all True marks PROVISIONED True; the READY axis
+	// 4. Provisioned: the network trio all True marks PROVISIONED True; the READY axis
 	//    is now in flight (the host is converging to its desired power state), so the
 	//    in-flight step is StepReadyPowerSync.
 	if apimeta.IsStatusConditionTrue(conds, string(HostConditionNetworkAttachmentsReady)) &&
@@ -231,7 +254,7 @@ func DeriveProvisioningProgress(conds []metav1.Condition) ProvisioningProgress {
 		return ProvisioningProgress{State: StateProvisioned, Step: StepReadyPowerSync}
 	}
 
-	// 4. In progress: the furthest-advanced True condition selects the step in flight.
+	// 5. In progress: the furthest-advanced True condition selects the step in flight.
 	//    Later stages override earlier ones, so the furthest True wins.
 	step := StepHostAllocation
 	if apimeta.IsStatusConditionTrue(conds, string(HostConditionAllocated)) {

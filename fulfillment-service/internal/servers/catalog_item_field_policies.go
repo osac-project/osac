@@ -167,6 +167,33 @@ func decodeDiskImageReferencePolicy(policy *privatev1.DiskImageReferenceFieldPol
 	return policyState[*privatev1.DiskImageReference]{}, fmt.Errorf("disk image policy has no behavior")
 }
 
+// decodeFullSecretReferencePolicy extracts the locked reference or editable default.
+func decodeFullSecretReferencePolicy(
+	policy *privatev1.FullSecretReferenceFieldPolicy,
+) (policyState[*privatev1.SecretReference], error) {
+	if policy == nil {
+		return policyState[*privatev1.SecretReference]{}, nil
+	}
+	if policy.HasLocked() {
+		locked := policy.GetLocked()
+		if locked == nil {
+			return policyState[*privatev1.SecretReference]{}, fmt.Errorf("locked full Secret reference policy is empty")
+		}
+		return policyState[*privatev1.SecretReference]{hasLocked: true, lockedValue: locked}, nil
+	}
+	if policy.HasEditable() {
+		editable := policy.GetEditable()
+		if editable == nil {
+			return policyState[*privatev1.SecretReference]{}, fmt.Errorf("editable full Secret reference policy is empty")
+		}
+		return policyState[*privatev1.SecretReference]{
+			hasDefault:   editable.GetDefaultValue() != nil,
+			defaultValue: editable.GetDefaultValue(),
+		}, nil
+	}
+	return policyState[*privatev1.SecretReference]{}, fmt.Errorf("full Secret reference policy has no behavior")
+}
+
 // catalogItemPolicyError returns an InvalidArgument error identifying the invalid policy field and reason.
 func catalogItemPolicyError(field, reason string) error {
 	return grpcstatus.Errorf(grpccodes.InvalidArgument, "field '%s': %s", field, reason)

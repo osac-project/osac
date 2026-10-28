@@ -21,6 +21,25 @@ def _make_cli(monkeypatch: pytest.MonkeyPatch) -> tuple[osac_cli.OsacCLI, list[s
     return cli, captured_args
 
 
+def test_create_compute_instance_scopes_to_project(monkeypatch: pytest.MonkeyPatch) -> None:
+    cli, args = _make_cli(monkeypatch)
+    cli.default_instance_type = None
+    cli.default_disk_image = None
+    cli.default_storage_tier = None
+
+    cli.create_compute_instance(
+        template="vm-template",
+        instance_type="m-small",
+        disk_image="fedora",
+        boot_disk_storage_tier="tier-x",
+        project="billing",
+    )
+
+    project_index = args.index("--project")
+    assert args[project_index + 1] == "billing"
+    assert project_index > args.index("computeinstance")
+
+
 def test_create_baremetal_instance_sets_explicit_instance_type(monkeypatch: pytest.MonkeyPatch) -> None:
     cli, args = _make_cli(monkeypatch)
 

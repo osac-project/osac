@@ -1361,6 +1361,7 @@ jobs:
           --values "${VALUES_FILE}" \
           --set service.externalHostname=placeholder.example.com \
           --set service.internalHostname=placeholder-internal.example.com \
+          --set-string global.osacDeploymentId=ci/osac \
         | (grep -oP 'image:\s*\K\S+' || true) \
         | tr -d '"' \
         | sort -u \

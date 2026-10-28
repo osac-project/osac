@@ -71,6 +71,7 @@ var _ = Describe("submitWithRetry", func() {
 		adapter *retryTestAdapter
 		event   adapters.MeteringEvent
 		logger  logr.Logger
+		retries *retryCache
 	)
 
 	BeforeEach(func() {
@@ -81,10 +82,11 @@ var _ = Describe("submitWithRetry", func() {
 		ce.SetSource("test")
 		event = adapters.MeteringEvent{CloudEvent: ce, Topic: "t", Partition: 0, Offset: 0}
 		logger = logr.Discard()
+		retries = newRetryCache(time.Hour)
 	})
 
 	It("returns success on first attempt when Submit succeeds", func() {
-		result := submitWithRetry(context.Background(), adapter, event, 3, logger)
+		result := submitWithRetry(context.Background(), adapter, event, 3, logger, retries)
 		Expect(result.Err).NotTo(HaveOccurred())
 		Expect(result.Attempts).To(Equal(1))
 		Expect(adapter.calls).To(Equal(1))
@@ -94,7 +96,7 @@ var _ = Describe("submitWithRetry", func() {
 		adapter.errs = []error{
 			&adapters.NonRetryableError{Err: errors.New("bad schema")},
 		}
-		result := submitWithRetry(context.Background(), adapter, event, 3, logger)
+		result := submitWithRetry(context.Background(), adapter, event, 3, logger, retries)
 		Expect(result.Err).To(HaveOccurred())
 		Expect(result.NonRetryable).To(BeTrue())
 		Expect(result.Attempts).To(Equal(1))
@@ -107,7 +109,7 @@ var _ = Describe("submitWithRetry", func() {
 			errors.New("transient-2"),
 			nil, // third attempt succeeds
 		}
-		result := submitWithRetry(context.Background(), adapter, event, 5, logger)
+		result := submitWithRetry(context.Background(), adapter, event, 5, logger, retries)
 		Expect(result.Err).NotTo(HaveOccurred())
 		Expect(result.Attempts).To(Equal(3))
 		Expect(adapter.calls).To(Equal(3))
@@ -119,14 +121,14 @@ var _ = Describe("submitWithRetry", func() {
 			errors.New("fail-2"),
 			errors.New("fail-3"),
 		}
-		result := submitWithRetry(context.Background(), adapter, event, 3, logger)
+		result := submitWithRetry(context.Background(), adapter, event, 3, logger, retries)
 		Expect(result.Err).To(HaveOccurred())
 		Expect(result.Exhausted).To(BeTrue())
 		Expect(result.Attempts).To(Equal(3))
 	})
 
 	It("clamps maxRetries to 1 and still calls Submit", func() {
-		result := submitWithRetry(context.Background(), adapter, event, 0, logger)
+		result := submitWithRetry(context.Background(), adapter, event, 0, logger, retries)
 		Expect(result.Err).NotTo(HaveOccurred())
 		Expect(result.Attempts).To(Equal(1))
 		Expect(adapter.calls).To(Equal(1))
@@ -137,9 +139,50 @@ var _ = Describe("submitWithRetry", func() {
 		adapter.errs = []error{errors.New("fail")}
 		adapter.onSubmit = func() { cancel() }
 
-		result := submitWithRetry(ctx, adapter, event, 10, logger)
+		result := submitWithRetry(ctx, adapter, event, 10, logger, retries)
 		Expect(result.Err).To(HaveOccurred())
 		Expect(result.Attempts).To(Equal(1))
+	})
+
+	It("continues the attempt budget when a later session resubmits the record", func() {
+		// The first session is interrupted mid-backoff after one attempt.
+		ctx, cancel := context.WithCancel(context.Background())
+		adapter.errs = []error{
+			errors.New("fail-1"),
+			errors.New("fail-2"),
+			errors.New("fail-3"),
+		}
+		adapter.onSubmit = func() { cancel() }
+
+		first := submitWithRetry(ctx, adapter, event, 3, logger, retries)
+		Expect(first.Err).To(HaveOccurred())
+		Expect(first.Attempts).To(Equal(1))
+		Expect(retries.len()).To(Equal(1), "interrupted progress must be recorded")
+
+		// A later session redelivers the same record with a fresh context and
+		// the budget continues instead of restarting at zero.
+		adapter.onSubmit = nil
+		second := submitWithRetry(context.Background(), adapter, event, 3, logger, retries)
+		Expect(second.Exhausted).To(BeTrue())
+		Expect(second.Attempts).To(Equal(3))
+		Expect(adapter.calls).To(Equal(3))
+		Expect(retries.len()).To(Equal(0), "exhaustion must clear the recorded progress")
+	})
+
+	It("clears the recorded progress when the record finally succeeds", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		adapter.errs = []error{errors.New("fail-1")}
+		adapter.onSubmit = func() { cancel() }
+
+		first := submitWithRetry(ctx, adapter, event, 3, logger, retries)
+		Expect(first.Err).To(HaveOccurred())
+		Expect(retries.len()).To(Equal(1))
+
+		adapter.onSubmit = nil
+		second := submitWithRetry(context.Background(), adapter, event, 3, logger, retries)
+		Expect(second.Err).NotTo(HaveOccurred())
+		Expect(second.Attempts).To(Equal(2))
+		Expect(retries.len()).To(Equal(0))
 	})
 })
 

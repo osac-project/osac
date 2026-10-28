@@ -28,6 +28,10 @@ operator:
     pullPolicy: Always
   provisioning:
     provider: "aap"
+  # The Volume controller provisions through LVMS in-cluster, like vmaas-ci:
+  # without an entry volume provisioning is disabled and no volume ever bills.
+  vendorControllers:
+    lvms: none
   aap:
     insecureSkipVerify: "true"
     tokenSecret:
@@ -176,6 +180,10 @@ aap:
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "SingleReplica"
     networkFulfillment:
       enabled: true
+    storageFulfillment:
+      # Per-tenant StorageClasses: the tenant storage controller needs this
+      # instance group for Tenant ClusterStorageReady to become True.
+      enabled: true
 
 # --- Validation ---
 validation:
@@ -190,6 +198,19 @@ bmf:
   env:
     aapUrl: "http://osac-aap/api/controller"
     aapInsecureSkipVerify: "true"
+  metal3:
+    # The operator mounts osac-inventory-config and osac-management-config as
+    # required volumes; with Metal3 inventory enabled the subchart creates
+    # both. The BareMetalHost namespace itself is provisioned by the E2E
+    # harness (setup-virtual-bmh.sh), which also activates Ironic.
+    enabled: true
+    namespace: host-inventory
+    hostClass: metal3
+
+# --- LVMS StorageBackend and StorageTier registration ---
+lvms:
+  # Registers the "local" StorageBackend + StorageTier used by VMaaS disk tests.
+  enabled: true
 
 # --- Cluster Versions ---
 clusterVersions:
@@ -210,7 +231,10 @@ hubAccess:
 
 # --- Metering ---
 metering:
-  enabled: true
+  image:
+    repository: ghcr.io/osac-project/metering-service
+    tag: latest
+    pullPolicy: Always
   database:
     connection:
     - secret:
@@ -227,3 +251,28 @@ metering:
           param: sslkey
         - key: ca.crt
           param: sslrootcert
+  echoAdapter:
+    # Test-only adapter the metering E2E tests read heartbeats from through
+    # METERING_ADAPTER_URL.
+    enabled: true
+    image:
+      repository: ghcr.io/osac-project/metering-echo-adapter
+      tag: latest
+      pullPolicy: Always
+    # Four xdist workers each hold billable VMs for an hour-long session: the
+    # assertions read a resource's whole history, so the buffer must hold it.
+    maxEvents: 10000
+  # Billing can stop while the metering pod stays ready, so the metrics are
+  # scraped and the alerts evaluated: OpenShift user-workload monitoring
+  # selects both.
+  serviceMonitor:
+    enabled: true
+  prometheusRule:
+    enabled: true
+  # M360 adapter — disabled in CI: the UAT endpoint is unreachable from CI
+  # runners and the API key Secret cannot exist there (the adapter pod mounts
+  # it as a required volume, so an enabled adapter without the Secret wedges
+  # the install). Enable locally with an overlay that also sets the image and
+  # the Secret name, and create the Secret before installing.
+  m360Adapter:
+    enabled: false

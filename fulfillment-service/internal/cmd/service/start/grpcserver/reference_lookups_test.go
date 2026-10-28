@@ -57,19 +57,19 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		}
 	})
 
-	It("registers every reference type used in Create or Update requests", func() {
+	It("registers lookups for reference uses not handled by their server", func() {
 		var missing []string
-		for _, name := range createOrUpdateReferenceTypes() {
-			if isHandlerOwnedReferenceType(name) {
+		for _, use := range createOrUpdateReferenceUses() {
+			if isHandlerOwnedReferenceUse(use) {
 				continue
 			}
-			if !validator.HasLookup(name) {
-				missing = append(missing, string(name))
+			if !validator.HasLookup(use.typeName) {
+				missing = append(missing, fmt.Sprintf("%s %s (%s)", use.method, use.path, use.typeName))
 			}
 		}
 		slices.Sort(missing)
 		Expect(missing).To(BeEmpty(),
-			"no lookup registered for Create/Update reference types:\n  %s",
+			"no lookup registered for Create/Update reference uses:\n  %s",
 			strings.Join(missing, "\n  "))
 	})
 
@@ -85,10 +85,32 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		descriptor, err := protodesc.NewFile(file, protoregistry.GlobalFiles)
 		Expect(err).ToNot(HaveOccurred())
 		refs := map[protoreflect.FullName]struct{}{}
-		collectReferenceTypes(descriptor.Messages().ByName("TestRefSpec"), map[protoreflect.FullName]struct{}{}, refs)
+		var uses []referenceUse
+		collectReferenceUses(descriptor.Messages().ByName("TestRefSpec"), "", "", map[protoreflect.FullName]struct{}{}, &uses)
+		for _, use := range uses {
+			refs[use.typeName] = struct{}{}
+		}
 		Expect(refs).To(HaveKey(protoreflect.FullName("osac.tests.v1.TestTargetReference")))
 		Expect(refs).To(HaveKey(protoreflect.FullName("osac.tests.v1.TestTargetLocalReference")))
 		Expect(refs).To(HaveKey(protoreflect.FullName("osac.tests.v1.TestOtherTargetLocalReference")))
+	})
+
+	It("classifies handler-owned SecretReference paths for lookup coverage", func() {
+		Expect(isHandlerOwnedReferenceUse(referenceUse{
+			method:   publicv1.ComputeInstances_Create_FullMethodName,
+			path:     "object.spec.ssh_key",
+			typeName: "osac.public.v1.SecretReference",
+		})).To(BeTrue())
+		Expect(isHandlerOwnedReferenceUse(referenceUse{
+			method:   publicv1.ComputeInstances_Create_FullMethodName,
+			path:     "object.spec.other",
+			typeName: "osac.public.v1.SecretReference",
+		})).To(BeFalse())
+		Expect(isHandlerOwnedReferenceUse(referenceUse{
+			method:   publicv1.ComputeInstanceCatalogItems_Create_FullMethodName,
+			path:     "object.fields.ssh_key.editable.default_value",
+			typeName: "osac.public.v1.SecretReference",
+		})).To(BeTrue())
 	})
 
 	DescribeTableSubtree("CaaS NodeSet reference interception", func(layer, method string) {
@@ -278,6 +300,31 @@ var _ = Describe("RegisterReferenceLookups", func() {
 	})
 })
 
+type referenceUse struct {
+	method   string
+	path     string
+	typeName protoreflect.FullName
+}
+
+// isHandlerOwnedReferenceUse reports whether lookup coverage should exclude a
+// reference use because its handler resolves or intentionally preserves it.
+func isHandlerOwnedReferenceUse(use referenceUse) bool {
+	if isHandlerOwnedReferenceType(use.typeName) {
+		return true
+	}
+
+	switch use.typeName {
+	case "osac.private.v1.SecretReference", "osac.public.v1.SecretReference":
+		if slices.Contains(computeInstanceSSHKeyMethods(), use.method) && use.path == "object.spec.ssh_key" {
+			return true
+		}
+		return slices.Contains(catalogAuthoringMethods(), use.method) &&
+			(use.path == "object.fields" || strings.HasPrefix(use.path, "object.fields."))
+	default:
+		return false
+	}
+}
+
 func isHandlerOwnedReferenceType(name protoreflect.FullName) bool {
 	return name == "osac.private.v1.AddOnOperatorReference" ||
 		name == "osac.public.v1.AddOnOperatorReference"
@@ -294,9 +341,8 @@ func newTestReferenceValidator() *references.ReferenceValidator {
 	return validator
 }
 
-func createOrUpdateReferenceTypes() []protoreflect.FullName {
-	seen := map[protoreflect.FullName]struct{}{}
-	refs := map[protoreflect.FullName]struct{}{}
+func createOrUpdateReferenceUses() []referenceUse {
+	var refs []referenceUse
 	protoregistry.GlobalFiles.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
 		pkg := string(fd.Package())
 		if pkg != "osac.private.v1" && pkg != "osac.public.v1" {
@@ -307,42 +353,44 @@ func createOrUpdateReferenceTypes() []protoreflect.FullName {
 			methods := services.Get(i).Methods()
 			for j := 0; j < methods.Len(); j++ {
 				method := methods.Get(j)
-				name := string(method.Name())
-				if name != "Create" && name != "Update" {
+				methodName := string(method.Name())
+				if methodName != "Create" && methodName != "Update" {
 					continue
 				}
-				collectReferenceTypes(method.Input(), seen, refs)
+				fullMethod := "/" + string(services.Get(i).FullName()) + "/" + methodName
+				collectReferenceUses(method.Input(), fullMethod, "", map[protoreflect.FullName]struct{}{}, &refs)
 			}
 		}
 		return true
 	})
-	result := make([]protoreflect.FullName, 0, len(refs))
-	for name := range refs {
-		result = append(result, name)
-	}
-	slices.Sort(result)
-	return result
+	return refs
 }
 
-func collectReferenceTypes(
+func collectReferenceUses(
 	md protoreflect.MessageDescriptor,
-	seen map[protoreflect.FullName]struct{},
-	refs map[protoreflect.FullName]struct{},
+	method, path string,
+	visiting map[protoreflect.FullName]struct{},
+	refs *[]referenceUse,
 ) {
 	if md == nil {
 		return
 	}
 	name := md.FullName()
-	if _, ok := seen[name]; ok {
+	if _, ok := visiting[name]; ok {
 		return
 	}
-	seen[name] = struct{}{}
+	visiting[name] = struct{}{}
+	defer delete(visiting, name)
 
 	fields := md.Fields()
 	for i := 0; i < fields.Len(); i++ {
 		fd := fields.Get(i)
 		if fd.Kind() != protoreflect.MessageKind {
 			continue
+		}
+		fieldPath := string(fd.Name())
+		if path != "" {
+			fieldPath = path + "." + fieldPath
 		}
 		msg := fd.Message()
 		if fd.IsMap() {
@@ -352,9 +400,13 @@ func collectReferenceTypes(
 			}
 		}
 		if strings.HasSuffix(string(msg.FullName()), "Reference") {
-			refs[msg.FullName()] = struct{}{}
+			*refs = append(*refs, referenceUse{
+				method:   method,
+				path:     fieldPath,
+				typeName: msg.FullName(),
+			})
 			continue
 		}
-		collectReferenceTypes(msg, seen, refs)
+		collectReferenceUses(msg, method, fieldPath, visiting, refs)
 	}
 }

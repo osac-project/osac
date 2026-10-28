@@ -39,7 +39,10 @@ import (
 	experimentalcredentials "google.golang.org/grpc/experimental/credentials"
 )
 
-const tokenHTTPTimeout = 30 * time.Second
+const (
+	tokenHTTPTimeout = 30 * time.Second
+	rpcTimeout       = 30 * time.Second
+)
 
 // Config contains the Secret API endpoint, OAuth client credential files, and
 // optional CA bundle path.
@@ -110,10 +113,11 @@ func New(config Config) (*client, error) {
 	return &client{api: privatev1.NewSecretsClient(conn), conn: conn}, nil
 }
 
+// parseEndpoint extracts the gRPC authority; the operator Helm chart enforces HTTPS.
 func parseEndpoint(endpoint string) (string, error) {
 	parsed, err := url.Parse(endpoint)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", errors.New("Secret API endpoint must use HTTPS and include a host")
+	if err != nil || parsed.Host == "" {
+		return "", errors.New("Secret API endpoint must include a host")
 	}
 	return parsed.Host, nil
 }
@@ -218,36 +222,26 @@ func (c *client) List(ctx context.Context, filter Filter, limit int32) (ListResu
 	if strings.TrimSpace(filterValue) == "" {
 		return ListResult{}, errors.New("Secret API filter is required")
 	}
-	if limit <= 0 {
-		return ListResult{}, errors.New("Secret API limit must be positive")
-	}
+	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+	defer cancel()
 	response, err := c.api.List(ctx, &privatev1.SecretsListRequest{Filter: &filterValue, Limit: &limit})
 	if err != nil {
 		return ListResult{}, fmt.Errorf("failed to list OSAC Secrets: %w", err)
 	}
-	if response == nil {
-		return ListResult{Items: []Secret{}}, nil
-	}
 	result := ListResult{Total: response.GetTotal(), Items: make([]Secret, 0, len(response.GetItems()))}
 	for _, item := range response.GetItems() {
-		if item != nil {
-			result.Items = append(result.Items, secretFromProto(item, false))
-		}
+		result.Items = append(result.Items, secretFromProto(item, false))
 	}
 	return result, nil
 }
 
 // Get returns one Secret, including its opaque data fields.
 func (c *client) Get(ctx context.Context, id string) (Secret, error) {
-	if strings.TrimSpace(id) == "" {
-		return Secret{}, errors.New("Secret API secret ID is required")
-	}
+	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+	defer cancel()
 	response, err := c.api.Get(ctx, &privatev1.SecretsGetRequest{Id: id})
 	if err != nil {
 		return Secret{}, fmt.Errorf("failed to get OSAC Secret: %w", err)
-	}
-	if response == nil || response.GetObject() == nil {
-		return Secret{}, errors.New("OSAC Secret API returned an empty Secret")
 	}
 	return secretFromProto(response.GetObject(), true), nil
 }

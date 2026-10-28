@@ -264,6 +264,9 @@ func (b *ToolBuilder) readPropertiesDirectory(dir string) (properties map[string
 func (b *ToolBuilder) buildConfig(properties map[string]string) (*sarama.Config, error) {
 	config := sarama.NewConfig()
 	config.Version = sarama.V3_9_0_0
+	// A metadata refresh on a topic that does not exist must not create it: the broker
+	// default retention would apply and the recovery window would silently shrink.
+	config.Metadata.AllowAutoTopicCreation = false
 	config.Producer.RequiredAcks = sarama.WaitForAll
 	config.Producer.Idempotent = true
 	config.Producer.Return.Successes = true

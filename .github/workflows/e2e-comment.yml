@@ -16,7 +16,7 @@ permissions: {}
 
 jobs:
   comment:
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-comment.yml@91e792239df392ffee6ffa41f2de076edf7f6ad3  # v1.3.4
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-comment.yml@5aad6bfd62a151d0527c1d6274c440dcaa443eb3  # v1.3.5
     permissions: {}
     secrets:
       OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}

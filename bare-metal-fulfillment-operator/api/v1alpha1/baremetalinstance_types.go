@@ -197,6 +197,9 @@ const (
 	// HostConditionReasonProgressing indicates the template workflow is still running.
 	HostConditionReasonProgressing = "Progressing"
 
+	// HostConditionReasonRetrying indicates a failed template attempt will be retried.
+	HostConditionReasonRetrying = "Retrying"
+
 	// HostConditionReasonTemplateFailed indicates the template workflow failed.
 	HostConditionReasonTemplateFailed = "TemplateFailed"
 

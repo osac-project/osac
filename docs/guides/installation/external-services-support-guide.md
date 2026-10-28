@@ -733,7 +733,7 @@ token. From a node inside the cluster, probe routes with
 ### 6.1 The contract
 
 The broker must satisfy the upstream
-[external-Kafka configuration](https://github.com/osac-project/osac/blob/main/docs/guides/installation/kafka-configuration.md)
+[external-Kafka configuration](kafka-configuration.md)
 (OSAC-4760):
 
 | Requirement | Value |

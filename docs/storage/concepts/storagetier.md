@@ -37,6 +37,13 @@ Each backend association records:
 | `maxWriteBandwidthMBs` | Maximum write bandwidth in MB/s. |
 | `encryptionEnabled` | Whether data at rest is encrypted on this backend. |
 
+> **Note:** These settings describe the tier's advertised service level.
+> Whether they are enforced on the backing storage depends on the ownership
+> model and the provider integration. OSAC-managed provisioning applies
+> them where the provider role supports it (for example, QoS policies for
+> VAST NFS tiers). CSP-managed storage is prepared entirely by the CSP;
+> OSAC applies nothing.
+
 > **Note on protocol:** the tier protocol distinguishes file-based (`NFS`)
 > from volume-based (`BLOCK`) access. Transport-level details (Fibre
 > Channel, iSCSI, NVMe/TCP, Ethernet) are provider data-plane choices and

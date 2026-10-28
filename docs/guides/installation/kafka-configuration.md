@@ -2,8 +2,8 @@
 
 **Audience:** Administrators installing OSAC.
 
-The Fulfillment Service requires Kafka to store and read events, including
-when metering is disabled. You can use a Kafka cluster managed separately
+The Fulfillment Service requires Kafka to store and read events. You can use
+a Kafka cluster managed separately
 from the OSAC installer. Before installing the `osac` Helm chart, prepare
 the broker access, credentials, and certificate trust described here, then
 continue with the [customer install guide](customer-install-guide.md).
@@ -11,8 +11,8 @@ continue with the [customer install guide](customer-install-guide.md).
 This guide covers the current chart's `service.kafka.connection` settings.
 Check that your selected OSAC chart release provides them. The
 [Strimzi example](#example-using-strimzi) shows how to prepare an existing
-operator-managed Kafka cluster. If you enable metering, also complete
-[the metering configuration](#optional-metering).
+operator-managed Kafka cluster. Metering is always deployed, so also
+complete [the metering configuration](#metering).
 
 ## Broker requirements
 
@@ -157,9 +157,6 @@ service:
   certs:
     caBundle:
       configMap: osac-kafka-ca-bundle
-
-metering:
-  enabled: false
 ```
 
 `brokers`, `user`, and `password` are the three required connection
@@ -167,9 +164,8 @@ parameters. The `key` fields identify data in the ConfigMap or Secret;
 `param` maps each key to the OSAC parameter. The same connection settings
 are supplied to the Fulfillment Service components that need Kafka.
 
-Metering is disabled in this base example, matching the chart default.
-To enable it, use the additional settings and prerequisites in
-[Optional metering](#optional-metering).
+Metering brings its own Kafka user and topics; add the settings and
+prerequisites from [Metering](#metering) alongside this base example.
 
 Install or upgrade the complete system using your normal `osac` Helm
 command and the updated `my-values.yaml`, as described in the
@@ -296,7 +292,7 @@ password rotation, repeat the copy and restart the affected OSAC deployments
 as described below. Refresh the combined CA bundle when the listener CA
 rotates.
 
-## Optional metering
+## Metering
 
 Metering uses its own Kafka user and `osac.metering.` topics. The Fulfillment
 Service credentials above do not configure metering.
@@ -317,7 +313,6 @@ global:
   osacDeploymentId: example-osac-installation
 
 metering:
-  enabled: true
   kafka:
     brokers: external-kafka-kafka-bootstrap.messaging.svc:9093
     clusterName: external-kafka
@@ -333,17 +328,21 @@ configuration as required by the [customer install guide](customer-install-guide
 The installing account needs permission to create the Strimzi resources
 and credential-access RBAC in `messaging`.
 
-The chart provisions the `osac-metering` user with `Write` and `Describe`
-on the `osac.metering.` topic prefix and cluster `IdempotentWrite`.
-It creates lifecycle, heartbeat, inference, corrections, and DLQ topics
-with a replication factor of **3**, so the target cluster needs at least
-three brokers. Enabled adapters receive separate users with topic read
+The chart provisions the `osac-metering` user with `Read` and `Describe` on
+the `osac.events.` topic prefix (the fold consumes the event topics) and
+`Create`, `Read`, `Write`, `Describe`, and `DescribeConfigs` on the
+per-tenant `osac.metering.heartbeat.` and `osac.metering.dlq.` prefixes.
+It creates the shared inference topic and its dead-letter topic with a
+single replica, so the target cluster needs only one broker. The
+per-tenant heartbeat and dead-letter topics are created
+by the metering service itself when it first serves a tenant. Enabled
+adapters receive separate users with topic read
 access, DLQ write access, and access to their own consumer groups; these
 groups are separate from the Fulfillment Service's `osac.system.` groups.
 
-For a broker outside this Strimzi setup, keep metering disabled or configure
-metering to use a separate Strimzi-managed Kafka cluster that meets these
-requirements. In the latter case, include that broker's CA in
+For a broker outside this Strimzi setup, configure metering to use a
+separate Strimzi-managed Kafka cluster that meets these
+requirements, and include that broker's CA in
 `metering.certs.caBundle.configMap` too.
 
 ## Verify and maintain the connection

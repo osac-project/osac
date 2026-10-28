@@ -18,9 +18,11 @@ specific language governing permissions and limitations under the License.
 //
 // Resources() walks the compiled proto descriptors of the private package, collects every
 // field carrying a metering annotation, validates it (a varying field must name a real
-// timestamp field as its transition time), and returns the list per resource. It fails loudly
-// on an annotation that is invalid or not reachable from a resource message, so a typo in an
-// annotation is a startup failure, not a silently untracked field.
+// timestamp field as its transition time, and every field's proto kind must be one the
+// fold can render into a fact value), and returns the list per resource. It fails loudly
+// on an annotation that is invalid, not renderable, or not reachable from a resource
+// message, so a typo in an annotation is a startup failure, not a silently untracked
+// field.
 //
 // Two consumers read this one list, which is the point of the registry: fulfillment's
 // database and the metering service agree on what is tracked without either importing the
@@ -90,6 +92,10 @@ type Field struct {
 	// TransitionTime is the proto path of the field that holds the time of the last change of
 	// this field. Set only for varying fields.
 	TransitionTime string `json:"transition_time"`
+
+	// OwnerResource names the resource type the field's reference points at, when the field
+	// carries the resource's ownership root. Empty for fields that are not owner references.
+	OwnerResource string `json:"owner_resource"`
 }
 
 // Resource is a billable resource and the fields metering tracks on it.
@@ -102,9 +108,17 @@ type Resource struct {
 }
 
 // Resources returns every resource that has metering-tracked fields, sorted by message name.
-// It fails if an annotation is invalid, or if an annotated field isn't reachable from a
-// resource message: the source contract only knows how to track fields of a resource.
+// It fails if an annotation is invalid, if an annotated field isn't reachable from a
+// resource message, or if the fold cannot render the field's proto kind into a fact value:
+// the source contract only knows how to track fields of a resource, and only kinds the
+// fold can turn into history.
 func Resources() (result []Resource, err error) {
+	return resourcesOf(protoregistry.GlobalFiles)
+}
+
+// resourcesOf collects the registry over one file registry. Resources reads the compiled
+// private protos; tests feed it a synthetic registry.
+func resourcesOf(files *protoregistry.Files) (result []Resource, err error) {
 	// Collect the annotated fields reachable from each top-level message, so that resource
 	// messages and orphaned annotations can be told apart afterwards:
 	type root struct {
@@ -112,7 +126,7 @@ func Resources() (result []Resource, err error) {
 		fields  []annotatedField
 	}
 	var roots []root
-	protoregistry.GlobalFiles.RangeFiles(func(file protoreflect.FileDescriptor) bool {
+	files.RangeFiles(func(file protoreflect.FileDescriptor) bool {
 		if file.Package() != privatePackage {
 			return true
 		}
@@ -166,7 +180,32 @@ func Resources() (result []Resource, err error) {
 		}
 	}
 
+	// An owner annotation must name a resource the registry knows, so the calculator can
+	// resolve the root:
+	shortNames := map[string]bool{}
+	for _, resource := range result {
+		shortNames[shortName(resource.Message)] = true
+	}
+	for _, resource := range result {
+		for _, field := range resource.Fields {
+			if field.OwnerResource == "" {
+				continue
+			}
+			if !shortNames[field.OwnerResource] {
+				return nil, fmt.Errorf(
+					"field '%s' of '%s' names owner resource '%s', which has no tracked fields",
+					field.Path, resource.Message, field.OwnerResource,
+				)
+			}
+		}
+	}
+
 	return result, nil
+}
+
+// shortName returns the message name without its package.
+func shortName(full protoreflect.FullName) string {
+	return string(full.Name())
 }
 
 // annotatedField is a field carrying a metering annotation, with its path from the message the
@@ -230,10 +269,28 @@ func newField(resource protoreflect.MessageDescriptor, annotated annotatedField)
 		)
 	}
 
+	// The fold renders tracked values into history itself, and only for these proto kinds.
+	// Any other kind, for example a float or bytes, would be tracked but never produce a
+	// fact, silently unbilled forever.
+	if !renderableKind(annotated.descriptor.Kind()) {
+		return Field{}, fmt.Errorf(
+			"field '%s' of '%s' has kind '%s', which the fold cannot render into a fact value",
+			annotated.path, resource.FullName(), annotated.descriptor.Kind(),
+		)
+	}
+
 	result := Field{
 		Path:           annotated.path,
 		Kind:           kind,
 		TransitionTime: options.GetTransitionTime(),
+		OwnerResource:  options.GetOwnerResource(),
+	}
+
+	if result.OwnerResource != "" && kind != KindFixedOnceSet {
+		return Field{}, fmt.Errorf(
+			"field '%s' of '%s' names an owner resource but isn't fixed once set",
+			annotated.path, resource.FullName(),
+		)
 	}
 
 	if kind == KindVaries {
@@ -264,6 +321,20 @@ func newField(resource protoreflect.MessageDescriptor, annotated annotatedField)
 	}
 
 	return result, nil
+}
+
+// renderableKind reports whether the fold can turn a field of this proto kind into a fact
+// value. It mirrors the kind switches of the fold's nonZero and formatValue: bools, ints,
+// uints, strings, enums, and messages (references render by name or id). Anything else,
+// for example a float, double, or bytes, produces no fact.
+func renderableKind(kind protoreflect.Kind) bool {
+	switch kind {
+	case protoreflect.BoolKind, protoreflect.Int32Kind, protoreflect.Int64Kind,
+		protoreflect.Uint32Kind, protoreflect.Uint64Kind, protoreflect.StringKind,
+		protoreflect.EnumKind, protoreflect.MessageKind:
+		return true
+	}
+	return false
 }
 
 // resolveField resolves a proto field path against a message and returns the field it names.

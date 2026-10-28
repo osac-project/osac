@@ -375,7 +375,8 @@ jobs:
           helm template osac-deps charts/osac-deps/ --values values/dev/infra.yaml
           helm template osac-infra charts/osac-infra/ --values values/dev/infra.yaml \
             --set trustManager.upstream.enabled=true
-          helm template osac charts/osac/ --values values/dev/kind-instance.yaml
+          helm template osac charts/osac/ --values values/dev/kind-instance.yaml \
+            --set-string global.osacDeploymentId=ci/osac
 
       # Same real command (and cluster: `make install-infra` creates its own
       # Kind cluster, config, cert-manager/trust-manager/envoy-gateway/osac-infra
@@ -406,6 +407,14 @@ jobs:
           docker build --build-arg GODEBUG=http2client=0 -t localhost/osac-operator:it -f osac-operator/Containerfile .
           kind load docker-image localhost/osac-operator:it --name osac-dev
 
+      - name: Build metering-service image from PR
+        if: inputs.kind == 'it-osac-installer'
+        env:
+          CONTAINER_TOOL: docker
+        run: |
+          docker build --build-arg GODEBUG=http2client=0 -t localhost/metering-service:it -f osac-metering/metering-service/Containerfile .
+          kind load docker-image localhost/metering-service:it --name osac-dev
+
       - name: Deploy charts
         if: inputs.kind == 'it-osac-installer'
         env:
@@ -417,7 +426,10 @@ jobs:
           --set service.images.service.pullPolicy=Never
           --set operator.image.repository=localhost/osac-operator
           --set operator.image.tag=it
-          --set operator.image.pullPolicy=IfNotPresent"
+          --set operator.image.pullPolicy=IfNotPresent
+          --set metering.image.repository=localhost/metering-service
+          --set metering.image.tag=it
+          --set metering.image.pullPolicy=Never"
 
       - name: Collect diagnostic logs
         if: inputs.kind == 'it-osac-installer' && always()
@@ -477,4 +489,7 @@ jobs:
           --set service.images.service.pullPolicy=Never
           --set operator.image.repository=localhost/osac-operator
           --set operator.image.tag=it
-          --set operator.image.pullPolicy=IfNotPresent"
+          --set operator.image.pullPolicy=IfNotPresent
+          --set metering.image.repository=localhost/metering-service
+          --set metering.image.tag=it
+          --set metering.image.pullPolicy=Never"

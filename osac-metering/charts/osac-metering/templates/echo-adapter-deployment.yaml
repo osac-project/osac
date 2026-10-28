@@ -22,7 +22,6 @@ spec:
     spec:
       serviceAccountName: {{ include "osac-metering.fullname" . }}
       securityContext:
-        runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
       volumes:
@@ -37,56 +36,7 @@ spec:
           emptyDir:
             sizeLimit: 10Mi
       initContainers:
-        - name: fetch-kafka-secrets
-          image: {{ .Values.cliImage | default "quay.io/openshift/origin-cli:4.20.0" }}
-          env:
-            - name: HOME
-              value: /tmp
-            - name: SOURCE_NS
-              value: {{ include "osac-metering.kafkaClusterNamespace" . }}
-            - name: SASL_SECRET
-              value: osac-metering-echo-adapter
-          volumeMounts:
-            - name: kafka-secrets
-              mountPath: /etc/kafka-secrets
-            - name: tmp
-              mountPath: /tmp
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop:
-                - ALL
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 100m
-              memory: 128Mi
-          command:
-            - /bin/bash
-            - -euo
-            - pipefail
-            - -c
-            - |
-              DEADLINE=$((SECONDS + 300))
-              wait_for_secret() {
-                local name=$1 ns=$2
-                echo "Waiting for secret ${name} in ${ns} (timeout 5m)..."
-                until oc get secret "${name}" -n "${ns}" > /dev/null 2>&1; do
-                  if [ $SECONDS -ge $DEADLINE ]; then
-                    echo "Timed out waiting for secret ${name} in ${ns}"
-                    exit 1
-                  fi
-                  sleep 5
-                done
-              }
-
-              wait_for_secret "${SASL_SECRET}" "${SOURCE_NS}"
-
-              oc get secret "${SASL_SECRET}" -n "${SOURCE_NS}" -o jsonpath='{.data.password}' | base64 -d > /etc/kafka-secrets/password
-              echo "Kafka SASL secret fetched."
+        {{- include "osac-metering.kafkaSecretsInitContainer" (list . "osac-metering-echo-adapter") | nindent 8 }}
       containers:
         - name: echo-adapter
           image: "{{ .Values.echoAdapter.image.repository }}:{{ .Values.echoAdapter.image.tag }}"
@@ -94,8 +44,6 @@ spec:
           env:
             - name: KAFKA_BROKERS
               value: {{ include "osac-metering.kafkaBrokers" . | quote }}
-            - name: KAFKA_TLS_ENABLED
-              value: "true"
             - name: KAFKA_TLS_CA_CERT
               value: /etc/ca-bundle/bundle.pem
             - name: KAFKA_SASL_USERNAME
@@ -104,12 +52,15 @@ spec:
               value: osac-metering-echo-adapter
             - name: KAFKA_SASL_PASSWORD_FILE
               value: /etc/kafka-secrets/password
-            - name: DLQ_TOPIC
-              value: "osac.metering.dlq"
-            - name: DLQ_ENABLED
-              value: "true"
             - name: METRICS_ADDR
               value: ":8080"
+            {{- with .Values.echoAdapter.maxEvents }}
+            # The ring buffer keeps the most recent heartbeats for the E2E
+            # assertions; a long parallel session evicts old events, so size it
+            # for the session, not for a single test.
+            - name: ECHO_BUFFER_SIZE
+              value: {{ . | quote }}
+            {{- end }}
           volumeMounts:
             - name: kafka-secrets
               mountPath: /etc/kafka-secrets
@@ -134,6 +85,7 @@ spec:
             initialDelaySeconds: 3
             periodSeconds: 10
           securityContext:
+            runAsNonRoot: true
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:

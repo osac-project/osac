@@ -51,8 +51,6 @@ def render(chart_dir: pathlib.Path) -> list[dict[str, Any]]:
         "--values",
         str(CHART / "ci/default-values.yaml"),
         "--set",
-        "metering.enabled=true",
-        "--set",
         "global.osacDeploymentId=test/osac",
         "--show-only",
         SHOW_ONLY_GLOB,

@@ -16,7 +16,7 @@ from tests.e2e.core.helpers import (
     wait_for_running,
 )
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.metering import MeteringCollector
+from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 
 pytestmark = pytest.mark.regression
@@ -45,8 +45,6 @@ def test_compute_instance_lifecycle(
         wait_for_grpc_removal(grpc=grpc, uuid=uuid)
 
     try:
-        metering.expect("osac.resource.created.v1", resource_id=uuid)
-
         assert uuid in grpc.list_compute_instance_ids()
 
         ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
@@ -55,12 +53,21 @@ def test_compute_instance_lifecycle(
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
             assert_management_tls(k8s_hub_client)
 
-        metering.expect("osac.resource.started.v1", resource_id=uuid)
+        # The VM was created without a project, so its heartbeats must carry no
+        # project dimension: the engine emits only the facts a resource carries.
+        metering.expect_no_project()
+        metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
         metering.verify()
 
-        # Verify billing dimensions values match the created resource
-        created_event = metering.get_event("osac.resource.created.v1", resource_id=uuid)
-        bd = created_event.get("data", {}).get("billing_dimensions", {})
+        # Verify billing dimensions match the running resource: the heartbeat's
+        # dimensions name the instance type actually running. The first cached
+        # heartbeat can predate the running-type fact and stay cached after its
+        # reversal and the typed replacement arrive, so wait for the heartbeat
+        # that carries the type instead of inspecting the cached one.
+        heartbeat_event = metering.heartbeat_with_dimensions(
+            uuid, {"instance_type": cli.default_instance_type}, timeout=180
+        )
+        bd = heartbeat_event.get("data", {}).get("billing_dimensions", {})
         assert bd.get("instance_type") == cli.default_instance_type, (
             f"billing_dimensions.instance_type mismatch: {bd.get('instance_type')!r} != {cli.default_instance_type!r}"
         )
@@ -75,5 +82,3 @@ def test_compute_instance_lifecycle(
         raise
     else:
         cleanup()
-
-    metering.expect("osac.resource.deleted.v1", resource_id=uuid)

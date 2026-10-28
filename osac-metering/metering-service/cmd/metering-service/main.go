@@ -1,8 +1,8 @@
 /*
 Copyright (c) 2026 Red Hat, Inc.
 
-Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
-in compliance with the License. You may obtain a copy of the License at
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in
+compliance with the License. You may obtain a copy of the License at
 
   http://www.apache.org/licenses/LICENSE-2.0
 */
@@ -11,16 +11,14 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -28,38 +26,29 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
-	"golang.org/x/oauth2"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/connectivity"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/oauth"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	kafkapkg "github.com/osac-project/osac-metering/internal/kafka"
+
 	"github.com/osac-project/osac-metering/internal/database"
-	"github.com/osac-project/osac-metering/internal/heartbeat"
-	kafkapub "github.com/osac-project/osac-metering/internal/kafka"
-	"github.com/osac-project/osac-metering/internal/projection"
-	"github.com/osac-project/osac-metering/internal/reconciliation"
-	"github.com/osac-project/osac-metering/internal/watch"
-	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	"github.com/osac-project/osac-metering/internal/rules"
+	"github.com/osac-project/osac-metering/internal/service"
 )
 
 type config struct {
-	fulfillmentAddr             string
-	fulfillmentIssuerURL        string
-	fulfillmentClientIDFile     string
-	fulfillmentClientSecretFile string
-	tlsCACert                   string
-	fulfillmentTrustEnabled     bool
-	healthAddr                  string
-	kafka                       kafkapub.ConnectionConfig
-	dbURLFile                   string
-	heartbeatInterval           time.Duration
-	reconciliationInterval      time.Duration
-	deploymentID                string
+	healthAddr    string
+	kafka         kafkapkg.ConnectionConfig
+	dbURLFile     string
+	heartbeatTick time.Duration
+	deploymentID  string
+
+	// topicRetentionMS configures the heartbeat and dead-letter topics metering creates
+	// for a tenant it serves for the first time. The retention is the recovery window,
+	// because metering rebuilds its database from the topics.
+	topicRetentionMS string
 }
 
 func main() {
@@ -74,7 +63,10 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	if err := run(ctx, logger, cfg); err != nil {
+	// A cancelled context is the ordinary SIGTERM path: the service unwound
+	// cleanly, and recording it as a failure turns every rollout and node
+	// drain into pod Error status and false error logs.
+	if err := run(ctx, logger, cfg); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error(err, "metering service exited with error")
 		os.Exit(1)
 	}
@@ -82,23 +74,20 @@ func main() {
 
 func configFromEnv() *config {
 	return &config{
-		fulfillmentAddr:             os.Getenv("FULFILLMENT_SERVER_ADDRESS"),
-		fulfillmentIssuerURL:        os.Getenv("FULFILLMENT_ISSUER_URL"),
-		fulfillmentClientIDFile:     envOrDefault("FULFILLMENT_CLIENT_ID_FILE", "/etc/fulfillment-credentials/client-id"),
-		fulfillmentClientSecretFile: envOrDefault("FULFILLMENT_CLIENT_SECRET_FILE", "/etc/fulfillment-credentials/client-secret"),
-		tlsCACert:                   os.Getenv("TLS_CA_CERT"),
-		fulfillmentTrustEnabled:     os.Getenv("FULFILLMENT_TRUST_ENABLED") == "true",
-		healthAddr:                  envOrDefault("HEALTH_ADDR", ":8080"),
-		kafka: kafkapub.ConnectionConfig{
-			Brokers:      os.Getenv("KAFKA_BROKERS"),
+		healthAddr: envOrDefault("HEALTH_ADDR", ":8080"),
+		kafka: kafkapkg.ConnectionConfig{
+			Brokers: os.Getenv("KAFKA_BROKERS"),
+			// TLS is always on: the Strimzi broker the chart deploys against
+			// only listens with TLS, and no configuration turns it off.
+			TLSEnabled:   true,
 			TLSCACert:    os.Getenv("KAFKA_TLS_CA_CERT"),
 			SASLUser:     os.Getenv("KAFKA_SASL_USERNAME"),
 			SASLPassFile: os.Getenv("KAFKA_SASL_PASSWORD_FILE"),
 		},
-		dbURLFile:              envOrDefault("DB_URL_FILE", "/etc/metering/db"),
-		heartbeatInterval:      parseDurationOrDefault(os.Getenv("HEARTBEAT_INTERVAL"), 60*time.Second),
-		reconciliationInterval: parseDurationOrDefault(os.Getenv("RECONCILIATION_INTERVAL"), 60*time.Minute),
-		deploymentID:           os.Getenv("METERING_DEPLOYMENT_ID"),
+		dbURLFile:        envOrDefault("DB_URL_FILE", "/etc/metering/db/url"),
+		heartbeatTick:    parseDurationOrDefault(os.Getenv("HEARTBEAT_INTERVAL"), time.Minute),
+		deploymentID:     os.Getenv("METERING_DEPLOYMENT_ID"),
+		topicRetentionMS: envOrDefault("METERING_TOPIC_RETENTION_MS", "-1"),
 	}
 }
 
@@ -110,26 +99,8 @@ func envOrDefault(key, fallback string) string {
 }
 
 func (c *config) validate() error {
-	if c.fulfillmentAddr == "" {
-		return fmt.Errorf("FULFILLMENT_SERVER_ADDRESS is required")
-	}
-	if c.fulfillmentIssuerURL == "" {
-		return fmt.Errorf("FULFILLMENT_ISSUER_URL is required")
-	}
-	if c.fulfillmentClientIDFile == "" {
-		return fmt.Errorf("FULFILLMENT_CLIENT_ID_FILE is required")
-	}
-	if c.fulfillmentClientSecretFile == "" {
-		return fmt.Errorf("FULFILLMENT_CLIENT_SECRET_FILE is required")
-	}
 	if c.kafka.Brokers == "" {
 		return fmt.Errorf("KAFKA_BROKERS is required")
-	}
-	if c.kafka.SASLUser == "" {
-		return fmt.Errorf("KAFKA_SASL_USERNAME is required")
-	}
-	if c.kafka.SASLPassFile == "" {
-		return fmt.Errorf("KAFKA_SASL_PASSWORD_FILE is required")
 	}
 	if c.dbURLFile == "" {
 		return fmt.Errorf("DB_URL_FILE is required")
@@ -137,20 +108,46 @@ func (c *config) validate() error {
 	if c.deploymentID == "" {
 		return fmt.Errorf("METERING_DEPLOYMENT_ID is required")
 	}
+	if _, err := strconv.ParseInt(c.topicRetentionMS, 10, 64); err != nil {
+		return fmt.Errorf("METERING_TOPIC_RETENTION_MS must be a whole number of milliseconds: %w", err)
+	}
+	// Zero deletes the heartbeat topics as they are written, and any negative other than
+	// -1 is rejected per record, forever: both fail here.
+	if retention, _ := strconv.ParseInt(c.topicRetentionMS, 10, 64); retention == 0 || retention < -1 {
+		return fmt.Errorf(
+			"METERING_TOPIC_RETENTION_MS must be -1 (indefinite) or positive, but is %s",
+			c.topicRetentionMS,
+		)
+	}
 	return nil
 }
 
 func readDBURL(dir string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(dir, "url"))
+	data, err := os.ReadFile(dir)
 	if err != nil {
-		return "", fmt.Errorf("reading database URL from %s/url: %w", dir, err)
+		return "", fmt.Errorf("reading database URL from %s: %w", dir, err)
 	}
 	return strings.TrimSpace(string(data)), nil
 }
 
+// serviceHealth gates the readiness endpoint. It is ready once the service is built, and
+// stops being ready while any tenant's loops are dead, so a pod that cannot bill is taken
+// out of rotation even though the process is up.
 type serviceHealth struct {
 	ready atomic.Bool
-	conn  interface{ GetState() connectivity.State }
+	loops atomic.Pointer[service.Service]
+}
+
+// setLoops attaches the running service whose tenant loops readiness reflects.
+func (h *serviceHealth) setLoops(s *service.Service) { h.loops.Store(s) }
+
+// healthy reports whether the endpoint should answer ready.
+func (h *serviceHealth) healthy() bool {
+	if !h.ready.Load() {
+		return false
+	}
+	loops := h.loops.Load()
+	return loops == nil || loops.Healthy()
 }
 
 func run(ctx context.Context, logger logr.Logger, cfg *config) error {
@@ -158,70 +155,18 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 	defer runCancel()
 
 	health := &serviceHealth{}
-	tokenSource, err := newFulfillmentTokenSource(fulfillmentOAuthConfig{
-		issuerURL:        cfg.fulfillmentIssuerURL,
-		clientIDFile:     cfg.fulfillmentClientIDFile,
-		clientSecretFile: cfg.fulfillmentClientSecretFile,
-		caFile:           cfg.tlsCACert,
-	})
-	if err != nil {
-		return fmt.Errorf("configuring fulfillment authentication: %w", err)
-	}
 
 	healthListener, err := net.Listen("tcp", cfg.healthAddr)
 	if err != nil {
 		return fmt.Errorf("binding health endpoint %s: %w", cfg.healthAddr, err)
 	}
-	go serveHealth(healthListener, health, logger, runCancel)
-
-	var grpcConn grpc.ClientConnInterface
-	if cfg.fulfillmentTrustEnabled {
-		if cfg.tlsCACert == "" {
-			return fmt.Errorf("TLS_CA_CERT is required for verified fulfillment trust")
-		}
-		verified := &verifiedFulfillmentConn{address: cfg.fulfillmentAddr, caFile: cfg.tlsCACert, tokenSource: tokenSource}
-		if err := waitForVerifiedFulfillment(ctx, verified.reload); err != nil {
-			return fmt.Errorf("verifying fulfillment service: %w", err)
-		}
-		logger.Info("verified fulfillment CA bundle", "sha256", verified.observedHash())
-		defer verified.close()
-		go verified.watch(ctx, logger)
-		grpcConn = verified
-		health.conn = verified
-	} else {
-		legacy, dialErr := dialFulfillment(cfg.fulfillmentAddr, cfg.tlsCACert, tokenSource)
-		if dialErr != nil {
-			return fmt.Errorf("connecting to fulfillment service: %w", dialErr)
-		}
-		defer func() { _ = legacy.Close() }()
-		connectCtx, connectCancel := context.WithTimeout(ctx, 30*time.Second)
-		defer connectCancel()
-		legacy.Connect()
-		for {
-			state := legacy.GetState()
-			if state == connectivity.Ready {
-				break
-			}
-			if !legacy.WaitForStateChange(connectCtx, state) {
-				return fmt.Errorf("fulfillment service at %s is unreachable (state: %s)", cfg.fulfillmentAddr, legacy.GetState())
-			}
-		}
-		grpcConn = legacy
-		health.conn = legacy
-	}
-	logger.Info("connected to fulfillment service", "address", cfg.fulfillmentAddr)
+	go serveHealth(healthListener, health, logger, runCancel, ctx)
 
 	dbURL, err := readDBURL(cfg.dbURLFile)
 	if err != nil {
 		return fmt.Errorf("reading database URL: %w", err)
 	}
-
-	poolCfg, err := pgxpool.ParseConfig(dbURL)
-	if err != nil {
-		return fmt.Errorf("parsing database config: %w", err)
-	}
-
-	dbPool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	dbPool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
 		return fmt.Errorf("creating database connection pool: %w", err)
 	}
@@ -232,131 +177,55 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 		return fmt.Errorf("initializing database schema: %w", err)
 	}
 
-	store := projection.NewPostgresStore(dbPool)
-
-	producer, err := kafkapub.NewSyncProducer(cfg.kafka)
+	namespace, err := podNamespace()
 	if err != nil {
-		return fmt.Errorf("creating kafka producer: %w", err)
+		return err
 	}
-	defer func() { _ = producer.Close() }()
-	logger.Info("kafka producer connected", "brokers", cfg.kafka.Brokers)
-
-	for _, topic := range kafkapub.Topics {
-		if err := kafkapub.VerifyTopicExists(cfg.kafka, topic); err != nil {
-			return fmt.Errorf("kafka topic %q not available: %w", topic, err)
-		}
-		logger.Info("kafka topic verified", "topic", topic)
-	}
-
-	publisher := kafkapub.NewPublisher(producer)
-
-	computeClient := privatev1.NewComputeInstancesClient(grpcConn)
-	clusterClient := privatev1.NewClustersClient(grpcConn)
-	externalIPClient := privatev1.NewExternalIPsClient(grpcConn)
-	natGatewayClient := privatev1.NewNATGatewaysClient(grpcConn)
-	externalIPPoolClient := privatev1.NewExternalIPPoolsClient(grpcConn)
-	volumeClient := privatev1.NewVolumesClient(grpcConn)
-	bareMetalClient := privatev1.NewBareMetalInstancesClient(grpcConn)
-	bmaasPresence := heartbeat.NewBMaaSPresence()
-	reconciler := reconciliation.NewReconciler(
-		computeClient,
-		clusterClient,
-		externalIPClient,
-		natGatewayClient,
-		externalIPPoolClient,
-		volumeClient,
-		bareMetalClient,
-		store,
-		publisher,
-		logger,
-		cfg.heartbeatInterval,
-		cfg.deploymentID,
-		bmaasPresence,
-	)
-	pools, err := reconciliation.LoadExternalIPPools(ctx, externalIPPoolClient)
+	rulesSource, err := rules.NewConfigMapSource(namespace)
 	if err != nil {
-		return fmt.Errorf("loading external IP pool families: %w", err)
+		return err
 	}
-	mapperFactory, err := watch.NewMapperFactory(externalIPPoolClient, cfg.deploymentID, pools)
+	metering, err := service.New(ctx, service.Config{
+		Kafka:            cfg.kafka,
+		Store:            database.NewStore(dbPool),
+		Rules:            rulesSource,
+		HeartbeatTick:    cfg.heartbeatTick,
+		DeploymentID:     cfg.deploymentID,
+		Logger:           logger,
+		TopicRetentionMS: cfg.topicRetentionMS,
+	})
 	if err != nil {
-		return fmt.Errorf("creating Watch mapper factory: %w", err)
+		return err
 	}
-
-	logger.Info("running startup reconciliation")
-	if err := reconciler.Reconcile(ctx); err != nil {
-		return fmt.Errorf("startup reconciliation failed: %w", err)
-	}
-	logger.Info("startup reconciliation completed")
 
 	health.ready.Store(true)
+	health.setLoops(metering)
 	logger.Info("service ready")
 
-	hbGen := heartbeat.NewGenerator(store, publisher, logger, cfg.heartbeatInterval, bmaasPresence)
-
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		_ = hbGen.Run(ctx)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		reconciler.RunPeriodic(ctx, cfg.reconciliationInterval)
-	}()
-
-	eventsClient := privatev1.NewEventsClient(grpcConn)
-	consumer, err := watch.NewConsumer(
-		eventsClient,
-		publisher,
-		store,
-		logger,
-		mapperFactory,
-	)
-	if err != nil {
-		return fmt.Errorf("creating Watch consumer: %w", err)
-	}
-	err = consumer.Run(ctx)
-	runCancel()
-	wg.Wait()
-	return err
+	return metering.Run(ctx)
 }
 
-func dialFulfillment(addr, caCertPath string, tokenSource oauth2.TokenSource) (*grpc.ClientConn, error) {
-	var creds credentials.TransportCredentials
-	if caCertPath != "" {
-		var err error
-		creds, err = tlsCredentialsFromCA(caCertPath)
-		if err != nil {
-			return nil, fmt.Errorf("loading TLS CA cert: %w", err)
-		}
-	} else {
-		creds = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+// podNamespace reads the namespace the pod runs in. Rule revisions are ConfigMaps in the
+// service's own namespace, so no configuration can point the service at a namespace its
+// RBAC does not reach.
+func podNamespace() (string, error) {
+	data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	if err != nil {
+		return "", fmt.Errorf("reading the pod namespace: %w", err)
 	}
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
-	if tokenSource != nil {
-		opts = append(opts, grpc.WithPerRPCCredentials(oauth.TokenSource{
-			TokenSource: tokenSource,
-		}))
+	namespace := strings.TrimSpace(string(data))
+	if namespace == "" {
+		return "", errors.New("the pod namespace file is empty")
 	}
-	return grpc.NewClient(addr, opts...)
+	return namespace, nil
 }
 
-func tlsCredentialsFromCA(caCertPath string) (credentials.TransportCredentials, error) {
-	caCert, err := os.ReadFile(caCertPath)
+func setupLogger() logr.Logger {
+	zapLog, err := zap.NewProduction()
 	if err != nil {
-		return nil, fmt.Errorf("reading CA cert %s: %w", caCertPath, err)
+		panic(fmt.Sprintf("creating zap logger: %v", err))
 	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caCert) {
-		return nil, fmt.Errorf("failed to parse CA cert %s", caCertPath)
-	}
-	return credentials.NewTLS(&tls.Config{
-		RootCAs:    pool,
-		MinVersion: tls.VersionTLS12,
-	}), nil
+	return zapr.NewLogger(zapLog)
 }
 
 func parseDurationOrDefault(s string, fallback time.Duration) time.Duration {
@@ -371,7 +240,13 @@ func parseDurationOrDefault(s string, fallback time.Duration) time.Duration {
 	return d
 }
 
-func serveHealth(listener net.Listener, health *serviceHealth, logger logr.Logger, cancel context.CancelFunc) {
+func serveHealth(
+	listener net.Listener,
+	health *serviceHealth,
+	logger logr.Logger,
+	cancel context.CancelFunc,
+	ctx context.Context,
+) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -379,18 +254,10 @@ func serveHealth(listener net.Listener, health *serviceHealth, logger logr.Logge
 		_, _ = fmt.Fprintln(w, "ok")
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if !health.ready.Load() {
+		if !health.healthy() {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = fmt.Fprintln(w, "not ready")
 			return
-		}
-		if health.conn != nil {
-			state := health.conn.GetState()
-			if state == connectivity.TransientFailure || state == connectivity.Shutdown {
-				w.WriteHeader(http.StatusServiceUnavailable)
-				_, _ = fmt.Fprintln(w, "not ready")
-				return
-			}
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintln(w, "ok")
@@ -402,18 +269,14 @@ func serveHealth(listener net.Listener, health *serviceHealth, logger logr.Logge
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	logger.Info("health probe listening", "address", listener.Addr().String())
-	if err := srv.Serve(listener); err != nil {
-		logger.Error(err, "health server failed")
-		cancel()
-	}
-}
-
-func setupLogger() logr.Logger {
-	zapLog, err := zap.NewProduction()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create logger: %v\n", err)
-		os.Exit(1)
-	}
-	return zapr.NewLogger(zapLog)
+	go func() {
+		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+			logger.Error(err, "health server failed")
+			cancel()
+		}
+	}()
+	<-ctx.Done()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	_ = srv.Shutdown(shutdownCtx)
 }

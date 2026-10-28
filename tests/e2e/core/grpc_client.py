@@ -13,10 +13,12 @@ PUBLIC_API: str = "osac.public.v1"
 PRIVATE_API: str = "osac.private.v1"
 
 
-def _metadata(*, name: str, tenant: str | None = None) -> dict[str, str]:
+def _metadata(*, name: str, tenant: str | None = None, project: str | None = None) -> dict[str, str]:
     meta: dict[str, str] = {"name": name}
     if tenant:
         meta["tenant"] = tenant
+    if project:
+        meta["project"] = project
     return meta
 
 
@@ -110,12 +112,14 @@ class GRPCClient:
 
     # VirtualNetwork operations
 
-    def create_virtual_network(self, *, name: str, ipv4_cidr: str, tenant: str | None = None) -> str:
+    def create_virtual_network(
+        self, *, name: str, ipv4_cidr: str, tenant: str | None = None, project: str | None = None
+    ) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.VirtualNetworks/Create",
             data={
                 "object": {
-                    "metadata": _metadata(name=name, tenant=tenant),
+                    "metadata": _metadata(name=name, tenant=tenant, project=project),
                     "spec": {"ipv4_cidr": ipv4_cidr},
                 }
             },
@@ -134,12 +138,14 @@ class GRPCClient:
 
     # Subnet operations
 
-    def create_subnet(self, *, name: str, virtual_network: str, ipv4_cidr: str, tenant: str | None = None) -> str:
+    def create_subnet(
+        self, *, name: str, virtual_network: str, ipv4_cidr: str, tenant: str | None = None, project: str | None = None
+    ) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.Subnets/Create",
             data={
                 "object": {
-                    "metadata": _metadata(name=name, tenant=tenant),
+                    "metadata": _metadata(name=name, tenant=tenant, project=project),
                     "spec": {"virtual_network": {"id": virtual_network}, "ipv4_cidr": ipv4_cidr},
                 }
             },
@@ -203,6 +209,7 @@ class GRPCClient:
         ingress: list[dict[str, Any]] | None = None,
         egress: list[dict[str, Any]] | None = None,
         tenant: str | None = None,
+        project: str | None = None,
     ) -> str:
         spec: dict[str, Any] = {"virtual_network": {"id": virtual_network}}
         if ingress is not None:
@@ -211,16 +218,12 @@ class GRPCClient:
             spec["egress"] = egress
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.SecurityGroups/Create",
-            data={"object": {"metadata": _metadata(name=name, tenant=tenant), "spec": spec}},
+            data={"object": {"metadata": _metadata(name=name, tenant=tenant, project=project), "spec": spec}},
         )
         return response["object"]["id"]
 
     def update_security_group_rules(
-        self,
-        *,
-        sg_id: str,
-        ingress: list[dict[str, Any]] | None = None,
-        egress: list[dict[str, Any]] | None = None,
+        self, *, sg_id: str, ingress: list[dict[str, Any]] | None = None, egress: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
         spec: dict[str, Any] = {}
         paths: list[str] = []
@@ -283,8 +286,7 @@ class GRPCClient:
             offset = 0
             while True:
                 response: dict[str, Any] = self.call(
-                    service=f"{PRIVATE_API}.Tenants/List",
-                    data={"offset": offset, "limit": 100},
+                    service=f"{PRIVATE_API}.Tenants/List", data={"offset": offset, "limit": 100}
                 )
                 page = response.get("items", [])
                 items.extend(item for item in page if item.get("metadata", {}).get("name") == name)
@@ -325,12 +327,12 @@ class GRPCClient:
 
     # ExternalIP operations (public API)
 
-    def create_external_ip(self, *, name: str, pool: str, tenant: str | None = None) -> str:
+    def create_external_ip(self, *, name: str, pool: str, tenant: str | None = None, project: str | None = None) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.ExternalIPs/Create",
             data={
                 "object": {
-                    "metadata": _metadata(name=name, tenant=tenant),
+                    "metadata": _metadata(name=name, tenant=tenant, project=project),
                     "spec": {"pool": {"id": pool}},
                 }
             },

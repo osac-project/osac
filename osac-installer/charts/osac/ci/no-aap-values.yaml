@@ -1,6 +1,9 @@
 # No-AAP scenario: AAP managed externally, bootstrap and validation disabled.
 # Exercises the disabled-AAP template branches.
 
+global:
+  osacDeploymentId: "ci/osac"
+
 ui:
   enabled: true
   api:

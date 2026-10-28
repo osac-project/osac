@@ -235,10 +235,14 @@ jobs:
             case "${profile}" in
               bmaas-netbox-ci) instance_args+=(--set "bmf.netbox.tokenValue=ci-render-placeholder") ;;
             esac
+            # Metering is always deployed, and its billing identity is a
+            # required value no profile defaults: supply a render-only one,
+            # the same way the hostnames above are supplied.
             helm template osac charts/osac/ "${instance_args[@]}" \
               --set service.externalHostname=fulfillment-api.example.com \
               --set service.internalHostname=fulfillment-internal-api.example.com \
               --set global.clusterDomain=example.com \
+              --set-string global.osacDeploymentId=ci/osac \
               --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.example.com/realms/osac
           fi
         done

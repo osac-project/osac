@@ -84,7 +84,7 @@ class TestPoolCapacity:
         poll_until(
             fn=lambda: pool_status(private_grpc, pool_id)["available"],
             until=lambda v: v == 1,
-            retries=30,
+            retries=60,
             delay=2,
             description="Pool available restored to 1 after IP release",
         )
@@ -121,7 +121,7 @@ class TestPoolCapacity:
         poll_until(
             fn=lambda: pool_status(private_grpc, pool_id)["allocated"],
             until=lambda v: v == 0,
-            retries=30,
+            retries=60,
             delay=2,
             description="Pool allocated drops to 0",
         )

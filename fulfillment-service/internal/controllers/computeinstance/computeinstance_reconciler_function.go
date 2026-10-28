@@ -33,7 +33,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -356,7 +355,7 @@ func (t *task) setDefaults() {
 	}
 	if t.computeInstance.GetStatus().GetState() == privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED {
 		t.computeInstance.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING)
-		t.computeInstance.GetStatus().SetStateTransitionTime(timestamppb.Now())
+		t.computeInstance.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
 	}
 	for value := range privatev1.ComputeInstanceConditionType_name {
 		if value != 0 {
@@ -924,7 +923,7 @@ func (t *task) setReconciliationFailedWithReason(err error, reason string) {
 	}
 	if t.computeInstance.GetStatus().GetState() != privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED ||
 		t.computeInstance.GetStatus().GetStateTransitionTime() == nil {
-		t.computeInstance.GetStatus().SetStateTransitionTime(timestamppb.Now())
+		t.computeInstance.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
 	}
 	t.computeInstance.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED)
 	t.updateCondition(

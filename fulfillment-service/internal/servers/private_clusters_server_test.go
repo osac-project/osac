@@ -761,7 +761,7 @@ var _ = Describe("Private clusters server", func() {
 						Id: id,
 						Status: privatev1.ClusterStatus_builder{
 							State:               privatev1.ClusterState_CLUSTER_STATE_READY,
-							StateTransitionTime: timestamppb.Now(),
+							StateTransitionTime: timestamppb.New(time.Now().Truncate(time.Second)),
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.state_transition_time"}},
@@ -2692,7 +2692,7 @@ var _ = Describe("Private clusters server", func() {
 						Id: object.GetId(),
 						Status: privatev1.ClusterStatus_builder{
 							State:               state,
-							StateTransitionTime: timestamppb.Now(),
+							StateTransitionTime: timestamppb.New(time.Now().Truncate(time.Second)),
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{
@@ -3132,7 +3132,7 @@ var _ = Describe("Private clusters server", func() {
 						Id: object.GetId(),
 						Status: privatev1.ClusterStatus_builder{
 							State:               privatev1.ClusterState_CLUSTER_STATE_READY,
-							StateTransitionTime: timestamppb.Now(),
+							StateTransitionTime: timestamppb.New(time.Now().Truncate(time.Second)),
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{

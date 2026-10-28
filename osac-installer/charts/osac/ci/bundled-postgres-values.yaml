@@ -2,6 +2,9 @@
 # when bundled PostgreSQL is deployed by osac-infra (this values file tests the
 # osac chart in isolation -- bundledPostgres has moved to osac-infra).
 
+global:
+  osacDeploymentId: "ci/osac"
+
 ui:
   enabled: true
   api:

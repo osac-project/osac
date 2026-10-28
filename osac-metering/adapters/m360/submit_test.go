@@ -1,8 +1,8 @@
 /*
 Copyright (c) 2026 Red Hat, Inc.
 
-Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
-in compliance with the License. You may obtain a copy of the License at
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in
+compliance with the License. You may obtain a copy of the License at
 
   http://www.apache.org/licenses/LICENSE-2.0
 */
@@ -15,7 +15,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	. "github.com/onsi/ginkgo/v2"
@@ -26,7 +25,7 @@ import (
 )
 
 var _ = Describe("m360Adapter Submit", func() {
-	It("posts network and storage events to their versioned resource endpoints", func() {
+	It("posts heartbeats to their versioned resource endpoints", func() {
 		var (
 			capturedMethod        string
 			capturedPath          string
@@ -47,44 +46,54 @@ var _ = Describe("m360Adapter Submit", func() {
 			name       string
 			cloudEvent cloudevents.Event
 			path       string
-			eventID    string
 			usageUnit  string
+			quantity   string
 		}{
 			{
 				name: "ExternalIP",
-				cloudEvent: withUsage(buildCloudEvent(
-					"ce-submit-ip", "osac.resource.started.v1", "ip-submit", "external_ip",
-					"tenant-acme", "project-net", map[string]any{
-						"deployment": "installation-a", "pool": "pool-ipv4", "ip_family": "ipv4", "attached": false,
-					},
-				), "60.000000", "resource_second"),
+				cloudEvent: buildHeartbeat(
+					"ce-submit-ip", schema.ResourceTypeExternalIP, "ip-submit", "allocation",
+					"allocation", "60.000000", "second",
+					map[string]any{"deployment": "installation-a", "pool": "pool-ipv4",
+						"ip_family": "ipv4", "attached": false},
+				),
 				path:      "/api/v2/external/run/networking/externalip/event",
-				eventID:   "ce-submit-ip",
-				usageUnit: "resource_second",
+				usageUnit: "second",
+				quantity:  "60.000000",
 			},
 			{
 				name: "NATGateway",
-				cloudEvent: withUsage(buildCloudEvent(
-					"ce-submit-nat", "osac.resource.started.v1", "nat-submit", "nat_gateway",
-					"tenant-acme", "project-net", map[string]any{
-						"deployment": "installation-a", "virtual_network": "vnet-1", "external_ip": "ip-submit",
-					},
-				), "60.000000", "resource_second"),
+				cloudEvent: buildHeartbeat(
+					"ce-submit-nat", schema.ResourceTypeNATGateway, "nat-submit", "allocation",
+					"allocation", "60.000000", "second",
+					map[string]any{"deployment": "installation-a", "virtual_network": "vnet-1",
+						"external_ip": "ip-submit"},
+				),
 				path:      "/api/v2/external/run/networking/natgateway/event",
-				eventID:   "ce-submit-nat",
-				usageUnit: "resource_second",
+				usageUnit: "second",
+				quantity:  "60.000000",
 			},
 			{
 				name: "Volume",
-				cloudEvent: withUsage(buildCloudEvent(
-					"ce-submit-volume", "osac.resource.started.v1", "volume-submit", "volume",
-					"tenant-acme", "project-storage", map[string]any{
-						"volume_id": "volume-submit", "storage_tier": "gold", "size_gib": 100,
-					},
-				), "6000.000000", "gibibyte_second"),
+				cloudEvent: buildHeartbeat(
+					"ce-submit-volume", schema.ResourceTypeVolume, "volume-submit", "capacity",
+					"capacity", "6000.000000", "gibibyte_second",
+					map[string]any{"storage_tier": "gold"},
+				),
 				path:      "/api/v2/external/run/storage/volume/event",
-				eventID:   "ce-submit-volume",
 				usageUnit: "gibibyte_second",
+				quantity:  "6000.000000",
+			},
+			{
+				name: "BareMetalInstance",
+				cloudEvent: buildHeartbeat(
+					"ce-submit-bm", schema.ResourceTypeBareMetalInstance, "bmi-001", "consumption",
+					"consumption", "120.000000", "second",
+					map[string]any{"instance_type": "bmi-type-gpu-large"},
+				),
+				path:      "/api/v2/external/run/bmaas/event",
+				usageUnit: "second",
+				quantity:  "120.000000",
 			},
 		}
 
@@ -99,80 +108,24 @@ var _ = Describe("m360Adapter Submit", func() {
 
 			var payload map[string]any
 			Expect(json.Unmarshal(capturedBody, &payload)).To(Succeed())
-			Expect(payload["event_id"]).To(Equal(tt.eventID))
+			Expect(payload["event_id"]).To(Equal(tt.cloudEvent.ID()))
 			Expect(payload["usage_unit"]).To(Equal(tt.usageUnit))
+			Expect(payload["usage_quantity"]).To(Equal(tt.quantity))
 		}
 	})
 
-	It("submits BMaaS events with the translated timing and resource contract", func() {
-		var (
-			capturedMethod string
-			capturedPath   string
-			capturedAuth   string
-			capturedBody   []byte
-		)
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			capturedMethod = r.Method
-			capturedPath = r.URL.Path
-			capturedAuth = r.Header.Get("Authorization")
-			capturedBody, _ = io.ReadAll(r.Body)
-			w.WriteHeader(http.StatusOK)
+	It("returns the server error when the provider rejects the heartbeat", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
 		}))
-		DeferCleanup(server.Close)
+		defer server.Close()
 
 		adapter := &m360Adapter{client: newM360Client(server.URL, "v1", "key")}
-		cases := []struct {
-			name             string
-			id               string
-			ceType           string
-			meterType        string
-			durationSeconds  float64
-			includeLifecycle bool
-		}{
-			{
-				name:             "allocation started",
-				id:               "ce-bmaas-allocation",
-				ceType:           "osac.resource.started.v1",
-				meterType:        "allocation",
-				includeLifecycle: true,
-			},
-			{
-				name:            "consumption heartbeat",
-				id:              "hb/bmi-001/1726315200/consumption",
-				ceType:          "osac.resource.heartbeat.v1",
-				meterType:       "consumption",
-				durationSeconds: 3600,
-			},
-		}
-
-		for _, tc := range cases {
-			By(tc.name)
-			eventTime := time.Date(2026, 9, 14, 12, 0, 5, 0, time.UTC)
-			transitionTime := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
-			ce := buildBMaaSCloudEvent(
-				tc.id, tc.ceType, tc.meterType, "RUNNING",
-				eventTime, transitionTime, tc.durationSeconds, tc.includeLifecycle,
-			)
-
-			err := adapter.Submit(context.Background(), adapters.MeteringEvent{CloudEvent: ce})
-
-			Expect(err).NotTo(HaveOccurred())
-			Expect(capturedMethod).To(Equal(http.MethodPost))
-			Expect(capturedPath).To(Equal("/api/v1/external/run/bmaas/event"))
-			Expect(capturedAuth).To(Equal("Bearer key"))
-
-			var payload map[string]any
-			Expect(json.Unmarshal(capturedBody, &payload)).To(Succeed())
-			Expect(payload["meter_type"]).To(Equal(tc.meterType))
-			Expect(payload["duration_seconds"]).To(BeEquivalentTo(tc.durationSeconds))
-			Expect(payload["resource_type"]).To(Equal(schema.ResourceTypeBareMetalInstance))
-			Expect(payload["event_time"]).To(Equal("2026-09-14T12:00:05Z"))
-			if tc.includeLifecycle {
-				Expect(payload["event_time"]).NotTo(Equal(payload["transition_time"]))
-			}
-			if tc.ceType == "osac.resource.heartbeat.v1" {
-				Expect(payload["duration_seconds"]).To(Equal(float64(3600)))
-			}
-		}
+		event := buildHeartbeat(
+			"ce-rejected", schema.ResourceTypeComputeInstance, "vm-7", "compute", "compute",
+			"60.000000", "second", nil,
+		)
+		err := adapter.Submit(context.Background(), adapters.MeteringEvent{CloudEvent: event})
+		Expect(err).To(HaveOccurred())
 	})
 })

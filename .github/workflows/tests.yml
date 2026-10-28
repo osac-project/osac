@@ -134,8 +134,7 @@ jobs:
           echo '127.0.0.1 fulfillment-internal-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
           echo '127.0.0.1 keycloak.keycloak.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
           echo '127.0.0.1 mcp.osac.localhost' | sudo tee -a /etc/hosts >/dev/null
-          # Temporary comparison pin: remove after control/candidate runs before PR finalization.
-          make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment "FULFILLMENT_GINKGO_ARGS=--seed=1792940111"
+          make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
       - name: Collect diagnostic logs
         if: inputs.kind == 'it-fulfillment-service' && always()
         run: |

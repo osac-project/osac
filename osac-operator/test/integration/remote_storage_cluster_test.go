@@ -41,7 +41,6 @@ const (
 	remoteKubeconfigMountPath        = "/etc/osac-remote/remote-cluster-kubeconfig"
 	remoteServiceAccountName         = "osac-remote-access"
 	remoteRestrictedSAName           = "osac-remote-no-storage"
-	operatorLeaderLeaseName          = "95f7e044.openshift.io"
 	remoteTestTenantName             = "tenant-two-kind"
 	remoteTestSecretName             = "vast-tenant-config-tenant-two-kind"
 	remoteForbiddenTenantName        = "tenant-two-kind-forbidden"
@@ -336,10 +335,11 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 			_, err = runKubectlWithStdin("", tenantCRYAML(remoteForbiddenTenantName, operatorNamespace), "apply", "-f", "-")
 			Expect(err).NotTo(HaveOccurred())
 
-			By("verifying TenantReconciler marks the Tenant Ready while StorageReconciler fails closed without local fallback")
+			By("verifying the operator logs the remote StorageClass Forbidden error and fails closed without local fallback")
 			Eventually(func(g Gomega) {
-				status := fetchTenantStatus(g, remoteForbiddenTenantName)
-				g.Expect(status.Phase).To(Equal("Ready"))
+				logsOut, logErr := runKubectl("logs", podName, "-n", operatorNamespace, "-c", "manager")
+				g.Expect(logErr).NotTo(HaveOccurred())
+				g.Expect(string(logsOut)).To(ContainSubstring("storageclasses.storage.k8s.io is forbidden"))
 			}, 60*time.Second, 2*time.Second).Should(Succeed())
 
 			Consistently(func(g Gomega) {
@@ -353,6 +353,7 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 				}
 
 				existingStatus := fetchTenantStatus(g, remoteTestTenantName)
+				g.Expect(existingStatus.Phase).To(Equal("Ready"))
 				existingClusterCond := findCondition(existingStatus.Conditions, "ClusterStorageReady")
 				g.Expect(existingClusterCond).NotTo(BeNil())
 				g.Expect(existingClusterCond.Status).To(Equal("True"))
@@ -368,9 +369,10 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 			)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("verifying StorageReconciler recovers automatically and resolves the remote StorageClass")
+			By("verifying the operator recovers automatically and resolves the remote StorageClass")
 			Eventually(func(g Gomega) {
 				status := fetchTenantStatus(g, remoteForbiddenTenantName)
+				g.Expect(status.Phase).To(Equal("Ready"))
 
 				backendCond := findCondition(status.Conditions, "StorageBackendReady")
 				g.Expect(backendCond).NotTo(BeNil())
@@ -615,8 +617,8 @@ func currentOperatorPodRestartCount() (string, int) {
 }
 
 // waitForOperatorContainerRestart waits for watchRemoteKubeconfig to restart the
-// manager container in podName, verifies the previous container log records the
-// kubeconfig digest change, and clears the leader election Lease if held.
+// manager container in podName and verifies the previous container log records
+// the kubeconfig digest change.
 func waitForOperatorContainerRestart(podName string, initialRestarts int) {
 	Eventually(func(g Gomega) {
 		output, err := runKubectl("get", "pod", podName, "-n", operatorNamespace, "-o", "json")
@@ -656,11 +658,6 @@ func waitForOperatorContainerRestart(podName string, initialRestarts int) {
 		g.Expect(logErr).NotTo(HaveOccurred())
 		g.Expect(string(prevLogs)).To(ContainSubstring("remote cluster kubeconfig changed; restarting operator"))
 	}, 60*time.Second, 2*time.Second).Should(Succeed())
-
-	_, leaseErr := runKubectl(
-		"delete", "lease", operatorLeaderLeaseName, "-n", operatorNamespace, "--ignore-not-found",
-	)
-	Expect(leaseErr).NotTo(HaveOccurred())
 }
 
 // configureOperatorDeploymentForRemoteMode patches the deployed operator on the
@@ -729,11 +726,6 @@ func configureOperatorDeploymentForRemoteMode() {
 		ctx, "kubectl", "rollout", "status", "deployment/"+deployName, "-n", operatorNamespace, "--timeout=90s",
 	))
 	Expect(err).NotTo(HaveOccurred())
-
-	_, leaseErr := runKubectl(
-		"delete", "lease", operatorLeaderLeaseName, "-n", operatorNamespace, "--ignore-not-found",
-	)
-	Expect(leaseErr).NotTo(HaveOccurred())
 }
 
 // writeLocalModeRestorePatchFile snapshots the operator Deployment's original
@@ -781,11 +773,6 @@ func restoreOperatorDeploymentToLocalMode(restorePatchFilePath string) {
 		ctx, "kubectl", "rollout", "status", "deployment/"+deployName, "-n", operatorNamespace, "--timeout=90s",
 	))
 	Expect(err).NotTo(HaveOccurred())
-
-	_, leaseErr := runKubectl(
-		"delete", "lease", operatorLeaderLeaseName, "-n", operatorNamespace, "--ignore-not-found",
-	)
-	Expect(leaseErr).NotTo(HaveOccurred())
 	waitForSingleReadyOperatorPod("")
 }
 

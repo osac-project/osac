@@ -1,18 +1,23 @@
 # ComputeInstance volume lifecycle
 
-> **Status: Dev Preview.** Volume lifecycle management is under development;
-> semantics below reflect the current phase.
+> **Status: Dev Preview.** The volume tracking described here is under
+> development and lands as part of the Dev Preview.
 
-Volumes are managed as part of their parent ComputeInstance:
+ComputeInstance disks are tracked as Volume records in the Storage API:
 
-- **Creation:** a volume is created and tracked for each requested disk
-  (boot and additional), provisioned from the tier's resolved StorageClass
-  through the Storage API.
-- **Reporting:** volume identifiers and their parent attachment are reported
-  in ComputeInstance status; the workload cluster's DataVolumes reference the
-  resulting volume IDs.
-- **Deletion:** volumes are deleted with their ComputeInstance. A volume
-  attached to a ComputeInstance cannot be deleted independently.
+- **Creation:** a Volume record is created for each requested disk (boot and
+  additional) before the ComputeInstance is provisioned. The record's
+  identifier is passed to the workload cluster, where the disk is a KubeVirt
+  DataVolume provisioned from the tier's resolved StorageClass and annotated
+  with the volume identifier.
+- **Reporting:** each disk's volume is visible on the ComputeInstance as a
+  read-only correlation.
+- **Deletion:** Volume records are removed with their ComputeInstance, and
+  deletion completes only after the records are cleaned up. A disk attached
+  to a ComputeInstance cannot be deleted independently.
+
+Until the volume tracking lands, disks are provisioned directly as KubeVirt
+DataVolumes from the tier's resolved StorageClass, with no Volume records.
 
 The flow from a tenant's tier selection to a running disk:
 
@@ -23,13 +28,14 @@ selecting a tier per disk            (see "Storage tier selection" in the
         ▼
 Tier resolves to a StorageClass      (see StorageClasses and labels)
         ▼
-Volume created per disk through
-the Storage API, from that class
+Volume record registered per disk
         ▼
-Volume IDs reported in ComputeInstance status;
-DataVolumes on the workload cluster reference them
+DataVolume created per disk from
+that class, annotated with the
+volume identifier
         ▼
-ComputeInstance deletion deletes the volumes
+ComputeInstance deletion removes the
+Volume records, then the DataVolumes
 ```
 
 Not supported in this phase:
@@ -38,5 +44,4 @@ Not supported in this phase:
 - Dynamic volume attach and detach
 - Volume resize, migration, snapshots, and backups
 
-This page will be expanded as the volume lifecycle work lands. See also
-[concepts/volume.md](../concepts/volume.md).
+See also [concepts/volume.md](../concepts/volume.md).

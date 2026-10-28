@@ -231,10 +231,14 @@ func (f *controllerFlags) validate() error {
 }
 
 // validateRemoteCluster verifies that no controllers incompatible with
-// remote-cluster kubeconfig mode are enabled when a kubeconfig path is set.
+// remote-cluster kubeconfig mode are enabled when a kubeconfig path is set,
+// and rejects whitespace-only kubeconfig paths before trimming.
 func (f *controllerFlags) validateRemoteCluster(remoteClusterKubeconfig string) error {
-	if strings.TrimSpace(remoteClusterKubeconfig) == "" {
+	if remoteClusterKubeconfig == "" {
 		return nil
+	}
+	if strings.TrimSpace(remoteClusterKubeconfig) == "" {
+		return fmt.Errorf("remote cluster kubeconfig path is empty")
 	}
 	if f.Cluster {
 		return fmt.Errorf("remote cluster kubeconfig option is not supported along with cluster controller")
@@ -1361,7 +1365,6 @@ func main() {
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
-	remoteClusterKubeconfig = strings.TrimSpace(remoteClusterKubeconfig)
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	ctrlFlags.enableAllIfNoneSet()
@@ -1375,6 +1378,7 @@ func main() {
 		setupLog.Error(err, err.Error())
 		os.Exit(1)
 	}
+	remoteClusterKubeconfig = strings.TrimSpace(remoteClusterKubeconfig)
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will

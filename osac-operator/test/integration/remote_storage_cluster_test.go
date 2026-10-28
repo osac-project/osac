@@ -65,10 +65,7 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 
 		clustersOut, err := runKind("get", "clusters")
 		Expect(err).NotTo(HaveOccurred())
-		mgmtCluster := os.Getenv("KIND_CLUSTER_NAME")
-		if mgmtCluster == "" {
-			mgmtCluster = "osac-dev"
-		}
+		mgmtCluster := mgmtKindClusterName()
 		Expect(containsLine(string(clustersOut), mgmtCluster)).To(
 			BeTrue(), "management Kind cluster %q must exist in `kind get clusters`", mgmtCluster,
 		)
@@ -81,8 +78,13 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 
 		DeferCleanup(func() {
 			By("cleaning up test resources and restoring the operator Deployment to single-cluster mode")
+			restorePatchApplied := !remoteModeReconfigured
 			defer func() {
-				_, secretErr := runKubectl(
+				if !restorePatchApplied {
+					Fail("skipping remote Secret and Kind cluster deletion because operator Deployment restore patch failed")
+					return
+				}
+				_, secretErr := runMgmtKubectl(
 					"delete", "secret", remoteKubeconfigSecretName,
 					"-n", operatorNamespace, "--ignore-not-found",
 				)
@@ -96,17 +98,19 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 
 			var cleanupErrs []error
 			for _, tName := range []string{remoteTestTenantName, remoteForbiddenTenantName} {
-				_, delErr := runKubectl(
+				_, delErr := runMgmtKubectl(
 					"delete", "tenant", tName,
 					"-n", operatorNamespace, "--ignore-not-found", "--wait=false",
 				)
-				removeFinalizers("tenant", tName, operatorNamespace)
 				if delErr != nil {
 					cleanupErrs = append(cleanupErrs, delErr)
 				}
+				if finErr := removeMgmtTenantFinalizers(tName); finErr != nil {
+					cleanupErrs = append(cleanupErrs, finErr)
+				}
 			}
 			for _, secName := range []string{remoteTestSecretName, remoteForbiddenSecretName} {
-				_, secErr := runKubectl(
+				_, secErr := runMgmtKubectl(
 					"delete", "secret", secName,
 					"-n", operatorNamespace, "--ignore-not-found",
 				)
@@ -115,15 +119,17 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 				}
 			}
 			for _, scName := range []string{localDecoyStorageClass, localForbiddenDecoyStorageClass} {
-				_, scErr := runKubectl("delete", "sc", scName, "--ignore-not-found")
+				_, scErr := runMgmtKubectl("delete", "sc", scName, "--ignore-not-found")
 				if scErr != nil {
 					cleanupErrs = append(cleanupErrs, scErr)
 				}
 			}
 
+			var restoreErr error
 			if remoteModeReconfigured {
-				restoreOperatorDeploymentToLocalMode(restorePatchFilePath)
+				restorePatchApplied, restoreErr = restoreOperatorDeploymentToLocalMode(restorePatchFilePath)
 			}
+			Expect(restoreErr).NotTo(HaveOccurred())
 			Expect(cleanupErrs).To(BeEmpty())
 		})
 
@@ -184,9 +190,9 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 		inClusterKubeconfigFile := filepath.Join(GinkgoT().TempDir(), "in-cluster-remote.kubeconfig")
 		writeRemoteInClusterKubeconfig(remoteKubeconfigPath, inClusterKubeconfigFile, remoteServiceAccountName)
 
-		_, err = runKubectl("delete", "secret", remoteKubeconfigSecretName, "-n", operatorNamespace, "--ignore-not-found")
+		_, err = runMgmtKubectl("delete", "secret", remoteKubeconfigSecretName, "-n", operatorNamespace, "--ignore-not-found")
 		Expect(err).NotTo(HaveOccurred())
-		_, err = runKubectl(
+		_, err = runMgmtKubectl(
 			"create", "secret", "generic", remoteKubeconfigSecretName,
 			"-n", operatorNamespace,
 			"--from-file=kubeconfig="+inClusterKubeconfigFile,
@@ -337,7 +343,7 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 
 			By("verifying the operator logs the remote StorageClass Forbidden error and fails closed without local fallback")
 			Eventually(func(g Gomega) {
-				logsOut, logErr := runKubectl("logs", podName, "-n", operatorNamespace, "-c", "manager")
+				logsOut, logErr := runMgmtKubectl("logs", podName, "-n", operatorNamespace, "-c", "manager")
 				g.Expect(logErr).NotTo(HaveOccurred())
 				g.Expect(string(logsOut)).To(ContainSubstring("storageclasses.storage.k8s.io is forbidden"))
 			}, 60*time.Second, 2*time.Second).Should(Succeed())
@@ -422,9 +428,42 @@ type tenantStatusSnapshot struct {
 	StorageClasses []tenantResolvedStorageClass `json:"storageClasses"`
 }
 
+// mgmtKindClusterName returns the management Kind cluster name from
+// KIND_CLUSTER_NAME, defaulting to "osac-dev".
+func mgmtKindClusterName() string {
+	if name := strings.TrimSpace(os.Getenv("KIND_CLUSTER_NAME")); name != "" {
+		return name
+	}
+	return "osac-dev"
+}
+
+// mgmtKubeContext returns the kubectl context name for the management Kind cluster.
+func mgmtKubeContext() string {
+	return "kind-" + mgmtKindClusterName()
+}
+
+// runMgmtKubectl executes kubectl against the management Kind cluster context.
+func runMgmtKubectl(args ...string) ([]byte, error) {
+	args = append([]string{"--context=" + mgmtKubeContext()}, args...)
+	return runKubectl(args...)
+}
+
+// removeMgmtTenantFinalizers clears finalizers on a Tenant in the management
+// cluster, ignoring NotFound when the Tenant has already been deleted.
+func removeMgmtTenantFinalizers(name string) error {
+	out, err := runMgmtKubectl(
+		"patch", "tenant", name, "-n", operatorNamespace,
+		"--type=merge", "-p", `{"metadata":{"finalizers":[]}}`,
+	)
+	if err != nil && !strings.Contains(string(out), "NotFound") {
+		return err
+	}
+	return nil
+}
+
 // fetchTenantStatus reads and unmarshals the Tenant status from the management cluster.
 func fetchTenantStatus(g Gomega, name string) tenantStatusSnapshot {
-	out, err := runKubectl("get", "tenant", name, "-n", operatorNamespace, "-o", "json")
+	out, err := runMgmtKubectl("get", "tenant", name, "-n", operatorNamespace, "-o", "json")
 	g.Expect(err).NotTo(HaveOccurred())
 
 	var wrapper struct {
@@ -462,20 +501,25 @@ func runKindWithTimeout(timeout time.Duration, args ...string) ([]byte, error) {
 	return utils.Run(cmd)
 }
 
-// runKubectlWithKubeconfig runs kubectl against the specified kubeconfig path.
+// runKubectlWithKubeconfig runs kubectl against the specified kubeconfig path,
+// or against the management Kind cluster context when kubeconfigPath is empty.
 func runKubectlWithKubeconfig(kubeconfigPath string, args ...string) ([]byte, error) {
 	if kubeconfigPath != "" {
 		args = append([]string{"--kubeconfig", kubeconfigPath}, args...)
+		return runKubectl(args...)
 	}
-	return runKubectl(args...)
+	return runMgmtKubectl(args...)
 }
 
-// runKubectlWithStdin runs kubectl with stdin populated from manifest.
+// runKubectlWithStdin runs kubectl with stdin populated from manifest, binding
+// to the management Kind cluster context when kubeconfigPath is empty.
 func runKubectlWithStdin(kubeconfigPath, manifest string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), kubectlCommandTimeout)
 	defer cancel()
 	if kubeconfigPath != "" {
 		args = append([]string{"--kubeconfig", kubeconfigPath}, args...)
+	} else {
+		args = append([]string{"--context=" + mgmtKubeContext()}, args...)
 	}
 	cmd := exec.CommandContext(ctx, "kubectl", args...)
 	cmd.Stdin = strings.NewReader(manifest)
@@ -558,7 +602,7 @@ func writeRemoteInClusterKubeconfig(remoteKubeconfigPath, destPath, serviceAccou
 // on the management cluster and annotates the running operator Pod so kubelet
 // immediately syncs the projected Secret volume on disk.
 func updateRemoteKubeconfigSecretAndTriggerSync(kubeconfigFile, podName string) {
-	renderedSecret, err := runKubectl(
+	renderedSecret, err := runMgmtKubectl(
 		"create", "secret", "generic", remoteKubeconfigSecretName,
 		"-n", operatorNamespace,
 		"--from-file=kubeconfig="+kubeconfigFile,
@@ -570,7 +614,7 @@ func updateRemoteKubeconfigSecretAndTriggerSync(kubeconfigFile, podName string) 
 	Expect(err).NotTo(HaveOccurred())
 
 	syncStamp := fmt.Sprintf("osac.openshift.io/kubeconfig-sync=%d", time.Now().UnixNano())
-	_, err = runKubectl(
+	_, err = runMgmtKubectl(
 		"annotate", "pod", podName, "-n", operatorNamespace, syncStamp, "--overwrite",
 	)
 	Expect(err).NotTo(HaveOccurred())
@@ -579,7 +623,7 @@ func updateRemoteKubeconfigSecretAndTriggerSync(kubeconfigFile, podName string) 
 // currentOperatorPodRestartCount returns the name and current manager container
 // restartCount of the running operator controller-manager Pod.
 func currentOperatorPodRestartCount() (string, int) {
-	output, err := runKubectl(
+	output, err := runMgmtKubectl(
 		"get", "pods",
 		"-l", "control-plane=controller-manager,app.kubernetes.io/name=operator",
 		"-n", operatorNamespace, "-o", "json",
@@ -621,7 +665,7 @@ func currentOperatorPodRestartCount() (string, int) {
 // the kubeconfig digest change.
 func waitForOperatorContainerRestart(podName string, initialRestarts int) {
 	Eventually(func(g Gomega) {
-		output, err := runKubectl("get", "pod", podName, "-n", operatorNamespace, "-o", "json")
+		output, err := runMgmtKubectl("get", "pod", podName, "-n", operatorNamespace, "-o", "json")
 		g.Expect(err).NotTo(HaveOccurred())
 
 		var pod struct {
@@ -652,7 +696,7 @@ func waitForOperatorContainerRestart(podName string, initialRestarts int) {
 		g.Expect(managerStatus.RestartCount).To(BeNumerically(">", initialRestarts))
 		g.Expect(managerStatus.Ready).To(BeTrue())
 
-		prevLogs, logErr := runKubectl(
+		prevLogs, logErr := runMgmtKubectl(
 			"logs", podName, "-n", operatorNamespace, "-c", "manager", "--previous",
 		)
 		g.Expect(logErr).NotTo(HaveOccurred())
@@ -714,7 +758,7 @@ func configureOperatorDeploymentForRemoteMode() {
 	patchFile := filepath.Join(GinkgoT().TempDir(), "remote-mode-patch.json")
 	Expect(os.WriteFile(patchFile, []byte(patch), 0o600)).To(Succeed())
 
-	_, err := runKubectl(
+	_, err := runMgmtKubectl(
 		"patch", "deployment", deployName, "-n", operatorNamespace,
 		"--type=strategic", "--patch-file="+patchFile,
 	)
@@ -723,7 +767,8 @@ func configureOperatorDeploymentForRemoteMode() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	_, err = utils.Run(exec.CommandContext(
-		ctx, "kubectl", "rollout", "status", "deployment/"+deployName, "-n", operatorNamespace, "--timeout=90s",
+		ctx, "kubectl", "--context="+mgmtKubeContext(),
+		"rollout", "status", "deployment/"+deployName, "-n", operatorNamespace, "--timeout=90s",
 	))
 	Expect(err).NotTo(HaveOccurred())
 }
@@ -732,7 +777,7 @@ func configureOperatorDeploymentForRemoteMode() {
 // pod template spec into patchFilePath so it can be restored via --patch-file
 // without passing template JSON through command-line arguments.
 func writeLocalModeRestorePatchFile(patchFilePath string) {
-	savedListJSON, err := runKubectl(
+	savedListJSON, err := runMgmtKubectl(
 		"get", "deployment", "-l", "app.kubernetes.io/name=operator",
 		"-n", operatorNamespace, "-o", "json",
 	)
@@ -759,26 +804,32 @@ func writeLocalModeRestorePatchFile(patchFilePath string) {
 
 // restoreOperatorDeploymentToLocalMode restores the operator Deployment's
 // original pod template spec from restorePatchFilePath and verifies rollout.
-func restoreOperatorDeploymentToLocalMode(restorePatchFilePath string) {
+// It returns patchApplied=true once the Deployment patch succeeds so callers
+// can distinguish a patch failure from a subsequent rollout timeout.
+func restoreOperatorDeploymentToLocalMode(restorePatchFilePath string) (bool, error) {
 	deployName := operatorDeploymentName()
-	_, err := runKubectl(
+	if _, err := runMgmtKubectl(
 		"patch", "deployment", deployName, "-n", operatorNamespace,
 		"--type=merge", "--patch-file="+restorePatchFilePath,
-	)
-	Expect(err).NotTo(HaveOccurred())
+	); err != nil {
+		return false, err
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	_, err = utils.Run(exec.CommandContext(
-		ctx, "kubectl", "rollout", "status", "deployment/"+deployName, "-n", operatorNamespace, "--timeout=90s",
-	))
-	Expect(err).NotTo(HaveOccurred())
+	if _, err := utils.Run(exec.CommandContext(
+		ctx, "kubectl", "--context="+mgmtKubeContext(),
+		"rollout", "status", "deployment/"+deployName, "-n", operatorNamespace, "--timeout=90s",
+	)); err != nil {
+		return true, err
+	}
 	waitForSingleReadyOperatorPod("")
+	return true, nil
 }
 
 // operatorDeploymentName returns the name of the deployed osac-operator Deployment.
 func operatorDeploymentName() string {
-	out, err := runKubectl(
+	out, err := runMgmtKubectl(
 		"get", "deployments", "-l", "app.kubernetes.io/name=operator",
 		"-n", operatorNamespace, "-o", "jsonpath={.items[0].metadata.name}",
 	)
@@ -793,7 +844,7 @@ func operatorDeploymentName() string {
 // its OSAC_REMOTE_CLUSTER_KUBECONFIG environment variable.
 func waitForSingleReadyOperatorPod(wantRemoteKubeconfig string) {
 	Eventually(func() error {
-		output, err := runKubectl(
+		output, err := runMgmtKubectl(
 			"get", "pods",
 			"-l", "control-plane=controller-manager,app.kubernetes.io/name=operator",
 			"-n", operatorNamespace, "-o", "json",

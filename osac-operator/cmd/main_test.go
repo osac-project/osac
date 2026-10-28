@@ -718,6 +718,16 @@ var _ = Describe("controllerFlags.validateRemoteCluster", func() {
 		Expect(f.validateRemoteCluster("/etc/osac/remote-cluster-kubeconfig")).To(HaveOccurred())
 	})
 
+	It("rejects whitespace-only remoteClusterKubeconfig instead of falling back to local mode", func() {
+		compatible := &controllerFlags{
+			Tenant:  true,
+			Storage: true,
+		}
+		Expect(compatible.validateRemoteCluster("   ")).To(
+			MatchError(ContainSubstring("remote cluster kubeconfig path is empty")),
+		)
+	})
+
 	It("accepts compatible controllers when remoteClusterKubeconfig is set and all combinations when empty", func() {
 		compatible := &controllerFlags{
 			Tenant:          true,
@@ -731,7 +741,6 @@ var _ = Describe("controllerFlags.validateRemoteCluster", func() {
 		all := &controllerFlags{}
 		all.enableAllIfNoneSet()
 		Expect(all.validateRemoteCluster("")).To(Succeed())
-		Expect(all.validateRemoteCluster("   ")).To(Succeed())
 	})
 })
 

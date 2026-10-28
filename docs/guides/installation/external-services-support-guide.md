@@ -1360,12 +1360,15 @@ re-import the newest JSON only for anything the database restore missed;
 realm misconfigured — re-import the partial export over it; total loss —
 database restore plus the §5.3 realm seed.
 
-**Replaying what exports never carry.** `kc.sh export` omits LDAP user
+**Replaying what exports never carry.** Every export mechanism here —
+`kc.sh export` and the partial-export API alike — omits LDAP user
 federations and organization memberships by design, so after any import
 restore, recreate them before users can log in:
 
 1. **LDAP user federation** — re-create the component through the admin
-   REST API (or the console's *User federation* page):
+   REST API (or the console's *User federation* page; the upstream
+   [LDAP federation guide](../customer-ldap-federation-guide.md)
+   covers the configuration in full):
    `POST /admin/realms/osac/components` with `providerId: ldap`,
    `providerType: org.keycloak.storage.UserStorageProvider`, and the
    connection/bind/users-DN config recorded in your worksheet. Then

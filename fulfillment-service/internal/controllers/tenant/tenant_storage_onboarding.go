@@ -21,25 +21,25 @@ import (
 )
 
 func (t *task) projectStorageOnboardingCondition(sources []*metav1.Condition, incomplete bool) {
-	const conditionType = privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_ONBOARDING_COMPLETE
+	const conditionType = privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_READY
 	if !t.tenant.HasStatus() {
 		t.tenant.SetStatus(&privatev1.TenantStatus{})
 	}
 	switch {
 	case incomplete:
 		t.updateCondition(conditionType, privatev1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED,
-			"StorageOnboardingStatusUnknown", "Operator storage onboarding status could not be observed")
+			"StorageReadyStatusUnknown", "Operator storage onboarding status could not be observed")
 		return
 	case len(sources) == 0:
 		t.updateCondition(conditionType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-			"StorageOnboardingPending", "Waiting for the operator to report storage onboarding completion")
+			"StorageReadyPending", "Waiting for the operator to report storage onboarding completion")
 		return
 	case len(sources) > 1:
 		// Sources are Tenant conditions reported by registered hubs.
 		// Each hub's operator reports readiness for its VMaaS workload target.
 		// Multiple hub reports have no aggregation policy here, so report Unknown.
 		t.updateCondition(conditionType, privatev1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED,
-			"StorageOnboardingStatusAmbiguous", "Multiple hubs report storage onboarding status for this tenant")
+			"StorageReadyStatusAmbiguous", "Multiple hubs report storage onboarding status for this tenant")
 		return
 	}
 

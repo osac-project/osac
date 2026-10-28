@@ -3374,7 +3374,7 @@ var _ = Describe("Storage Controller", func() {
 	})
 
 	Context("CSP-managed storage (pure cspManaged flow)", func() {
-		It("should set StorageOnboardingComplete=True, clear stale OSAC status/conditions, and trigger zero AAP jobs when all csp-managed StorageClasses exist", func() {
+		It("should set StorageReady=True, clear stale OSAC status/conditions, and trigger zero AAP jobs when all csp-managed StorageClasses exist", func() {
 			name := "csp-pure-all-exist"
 			createReadyTenantForStorage(ctx, name, testNamespace)
 
@@ -3463,7 +3463,7 @@ var _ = Describe("Storage Controller", func() {
 
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
 
-			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady)
 			Expect(cspCond).NotTo(BeNil())
 			Expect(cspCond.Status).To(Equal(metav1.ConditionTrue))
 			Expect(cspCond.Reason).To(Equal(v1alpha1.TenantReasonFound))
@@ -3484,7 +3484,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(backendTriggers).To(BeZero())
 			Expect(clusterTriggers).To(BeZero())
 
-			By("keeping StorageOnboardingComplete=True (one-time transition) while refreshing status.storageClasses if a tier lacks a StorageClass after initial onboarding")
+			By("keeping StorageReady=True (one-time transition) while refreshing status.storageClasses if a tier lacks a StorageClass after initial onboarding")
 			r.TiersClient = &mockStorageTiersLister{
 				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
 					return privatev1.StorageTiersListResponse_builder{
@@ -3499,16 +3499,16 @@ var _ = Describe("Storage Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(res.RequeueAfter).To(BeZero())
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
-			cspCondAfter := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			cspCondAfter := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady)
 			Expect(cspCondAfter).NotTo(BeNil())
 			Expect(cspCondAfter.Status).To(Equal(metav1.ConditionTrue),
-				"StorageOnboardingComplete is a one-time transition and must remain True once completed")
+				"StorageReady is a one-time transition and must remain True once completed")
 			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
 				{Name: "csp-pure-gold-sc", Tier: "csp-pure-gold"},
 			}), "status.storageClasses must refresh to reflect currently resolved CSP tiers")
 		})
 
-		It("should set StorageOnboardingComplete=False with NotFound and emit MissingStorageTier events when 1-of-2 or 0-of-2 csp-managed StorageClasses are missing", func() {
+		It("should set StorageReady=False with NotFound and emit MissingStorageTier events when 1-of-2 or 0-of-2 csp-managed StorageClasses are missing", func() {
 			By("0-of-2 missing case")
 			nameZero := "csp-pure-missing-all"
 			createReadyTenantForStorage(ctx, nameZero, testNamespace)
@@ -3560,7 +3560,7 @@ var _ = Describe("Storage Controller", func() {
 
 			tenantZero := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nnZero, tenantZero)).To(Succeed())
-			cspCond := tenantZero.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			cspCond := tenantZero.GetStatusCondition(v1alpha1.TenantConditionStorageReady)
 			Expect(cspCond).NotTo(BeNil())
 			Expect(cspCond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(cspCond.Reason).To(Equal(v1alpha1.TenantReasonNotFound))
@@ -3593,7 +3593,7 @@ var _ = Describe("Storage Controller", func() {
 
 			tenantPartial := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nnPartial, tenantPartial)).To(Succeed())
-			cspCondPartial := tenantPartial.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			cspCondPartial := tenantPartial.GetStatusCondition(v1alpha1.TenantConditionStorageReady)
 			Expect(cspCondPartial).NotTo(BeNil())
 			Expect(cspCondPartial.Status).To(Equal(metav1.ConditionFalse))
 			Expect(cspCondPartial.Reason).To(Equal(v1alpha1.TenantReasonNotFound))
@@ -3616,7 +3616,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(partialEvents[0]).To(ContainSubstring(`tier "csp-miss-silver" has no StorageClass`))
 		})
 
-		It("should set StorageOnboardingComplete=False with MultipleFound and emit DuplicateStorageClass event without MissingStorageTier when duplicate csp-managed SCs exist", func() {
+		It("should set StorageReady=False with MultipleFound and emit DuplicateStorageClass event without MissingStorageTier when duplicate csp-managed SCs exist", func() {
 			name := "csp-pure-duplicate-sc"
 			createReadyTenantForStorage(ctx, name, testNamespace)
 
@@ -3672,7 +3672,7 @@ var _ = Describe("Storage Controller", func() {
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
 
-			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady)
 			Expect(cspCond).NotTo(BeNil())
 			Expect(cspCond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(cspCond.Reason).To(Equal(v1alpha1.TenantReasonMultipleFound))
@@ -3690,7 +3690,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(recordedEvents[0]).NotTo(ContainSubstring(eventReasonMissingStorageTier))
 		})
 
-		It("should set StorageOnboardingComplete=False with NotFound when one csp-managed tier has duplicate StorageClasses and another is missing", func() {
+		It("should set StorageReady=False with NotFound when one csp-managed tier has duplicate StorageClasses and another is missing", func() {
 			name := "csp-pure-dup-and-missing"
 			createReadyTenantForStorage(ctx, name, testNamespace)
 
@@ -3730,7 +3730,7 @@ var _ = Describe("Storage Controller", func() {
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
 
-			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady)
 			Expect(cspCond).NotTo(BeNil())
 			Expect(cspCond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(cspCond.Reason).To(Equal(v1alpha1.TenantReasonNotFound),
@@ -3786,7 +3786,7 @@ var _ = Describe("Storage Controller", func() {
 
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
-			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady)
 			Expect(cspCond).NotTo(BeNil())
 			Expect(cspCond.Status).To(Equal(metav1.ConditionTrue))
 			Expect(cspCond.Message).NotTo(ContainSubstring("csp-uncfg-extra"))
@@ -4047,7 +4047,7 @@ var _ = Describe("Storage Controller", func() {
 
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
-			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)).To(BeNil())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady)).To(BeNil())
 			Expect(tenant.Status.StorageClasses).To(BeEmpty())
 		})
 
@@ -4109,7 +4109,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(backendCond.Message).To(ContainSubstring("no storage backend registered"))
 		})
 
-		It("should preserve status.storageClasses and StorageOnboardingComplete=True when tier resolution fails on an already-onboarded pure-CSP tenant", func() {
+		It("should preserve status.storageClasses and StorageReady=True when tier resolution fails on an already-onboarded pure-CSP tenant", func() {
 			name := "csp-pure-tier-err-preserves-status"
 			createReadyTenantForStorage(ctx, name, testNamespace)
 			createLabeledStorageClass(ctx, "csp-preserve-gold-sc", cspManagedTenantValue, "csp-preserve-gold")
@@ -4146,8 +4146,8 @@ var _ = Describe("Storage Controller", func() {
 
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
-			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)).NotTo(BeNil())
-			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete).Status).To(Equal(metav1.ConditionTrue))
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady)).NotTo(BeNil())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady).Status).To(Equal(metav1.ConditionTrue))
 			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
 				{Name: "csp-preserve-gold-sc", Tier: "csp-preserve-gold"},
 			}))
@@ -4159,8 +4159,8 @@ var _ = Describe("Storage Controller", func() {
 			Expect(res.RequeueAfter).To(Equal(pollInterval))
 
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
-			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
-			Expect(cspCond).NotTo(BeNil(), "existing StorageOnboardingComplete condition must not be wiped on transient tier error")
+			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady)
+			Expect(cspCond).NotTo(BeNil(), "existing StorageReady condition must not be wiped on transient tier error")
 			Expect(cspCond.Status).To(Equal(metav1.ConditionTrue))
 			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
 				{Name: "csp-preserve-gold-sc", Tier: "csp-preserve-gold"},
@@ -4255,7 +4255,7 @@ var _ = Describe("Storage Controller", func() {
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
 
-			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady)
 			Expect(cspCond).NotTo(BeNil())
 			Expect(cspCond.Status).To(Equal(metav1.ConditionTrue))
 			Expect(cspCond.Reason).To(Equal(v1alpha1.TenantReasonFound))
@@ -4375,7 +4375,7 @@ var _ = Describe("Storage Controller", func() {
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
 
-			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)
+			cspCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady)
 			Expect(cspCond).NotTo(BeNil())
 			Expect(cspCond.Status).To(Equal(metav1.ConditionTrue))
 
@@ -4448,7 +4448,7 @@ var _ = Describe("Storage Controller", func() {
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
 
-			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete).Status).To(Equal(metav1.ConditionTrue))
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady).Status).To(Equal(metav1.ConditionTrue))
 			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).Status).To(Equal(metav1.ConditionTrue))
 			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).Status).To(Equal(metav1.ConditionTrue))
 
@@ -4501,7 +4501,7 @@ var _ = Describe("Storage Controller", func() {
 
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
-			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete).Status).To(Equal(metav1.ConditionTrue))
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady).Status).To(Equal(metav1.ConditionTrue))
 			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).Status).To(Equal(metav1.ConditionTrue))
 
 			clusterCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
@@ -4626,7 +4626,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(backendDeprovConns).NotTo(HaveKey("backend-csp"))
 		})
 
-		It("should leave StorageOnboardingComplete nil (and remove stale condition) in pure OSAC-managed mode", func() {
+		It("should leave StorageReady nil (and remove stale condition) in pure OSAC-managed mode", func() {
 			name := "pure-osac-removes-stale-csp-cond"
 			createReadyTenantForStorage(ctx, name, testNamespace)
 			createHubSecret(ctx, name, secretsNamespace)
@@ -4636,7 +4636,7 @@ var _ = Describe("Storage Controller", func() {
 			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
-			tenant.SetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete,
+			tenant.SetStatusCondition(v1alpha1.TenantConditionStorageReady,
 				metav1.ConditionTrue, v1alpha1.TenantReasonFound, "stale csp onboarding condition")
 			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
 
@@ -4665,8 +4665,8 @@ var _ = Describe("Storage Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
-			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)).To(BeNil(),
-				"pure OSAC-managed mode must not set StorageOnboardingComplete and must remove stale condition")
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady)).To(BeNil(),
+				"pure OSAC-managed mode must not set StorageReady and must remove stale condition")
 			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).Status).To(Equal(metav1.ConditionTrue))
 			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).Status).To(Equal(metav1.ConditionTrue))
 		})
@@ -4792,8 +4792,8 @@ var _ = Describe("Storage Controller", func() {
 
 			pureTenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, pureNN, pureTenant)).To(Succeed())
-			Expect(pureTenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete)).NotTo(BeNil())
-			Expect(pureTenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete).Status).To(Equal(metav1.ConditionTrue))
+			Expect(pureTenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady)).NotTo(BeNil())
+			Expect(pureTenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady).Status).To(Equal(metav1.ConditionTrue))
 			Expect(pureTenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)).To(BeNil())
 			Expect(pureTenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)).To(BeNil())
 

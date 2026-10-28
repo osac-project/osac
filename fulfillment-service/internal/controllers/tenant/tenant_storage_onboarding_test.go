@@ -41,8 +41,8 @@ import (
 )
 
 var _ = Describe("Tenant storage onboarding feedback", func() {
-	const conditionType = privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_ONBOARDING_COMPLETE
-	const sourceType = "StorageOnboardingComplete"
+	const conditionType = privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_READY
+	const sourceType = string(osacv1alpha1.TenantConditionStorageReady)
 	const complete = privatev1.ConditionStatus_CONDITION_STATUS_TRUE
 	const pending = privatev1.ConditionStatus_CONDITION_STATUS_FALSE
 	const unknown = privatev1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED
@@ -136,7 +136,7 @@ var _ = Describe("Tenant storage onboarding feedback", func() {
 	It("defines a private storage condition without exposing public Tenant status", func() {
 		value := conditionType.Descriptor().Values().ByNumber(protoreflect.EnumNumber(conditionType))
 		Expect(value).NotTo(BeNil())
-		Expect(string(value.Name())).To(Equal("TENANT_CONDITION_TYPE_STORAGE_ONBOARDING_COMPLETE"))
+		Expect(string(value.Name())).To(Equal("TENANT_CONDITION_TYPE_STORAGE_READY"))
 		Expect((&publicv1.Tenant{}).ProtoReflect().Descriptor().Fields().ByName("status")).To(BeNil())
 	})
 	DescribeTable("copies the operator condition exactly", func(status metav1.ConditionStatus, want privatev1.ConditionStatus) {
@@ -164,7 +164,7 @@ var _ = Describe("Tenant storage onboarding feedback", func() {
 			observe(clientWith(cr))
 		}
 		c := check(pending)
-		Expect(c.GetReason()).To(Equal("StorageOnboardingPending"))
+		Expect(c.GetReason()).To(Equal("StorageReadyPending"))
 	}, Entry("no hubs", "hubs"), Entry("no Tenant CR", "tenant"), Entry("legacy storage condition only", "condition"))
 	DescribeTable("reports unknown when hub observation is not configured", func(missing string) {
 		if missing != "cache" {
@@ -173,7 +173,7 @@ var _ = Describe("Tenant storage onboarding feedback", func() {
 		if missing != "client" {
 			reconciler.hubCache = nil
 		}
-		Expect(check(unknown).GetReason()).To(Equal("StorageOnboardingStatusUnknown"))
+		Expect(check(unknown).GetReason()).To(Equal("StorageReadyStatusUnknown"))
 	}, Entry("missing hubs client", "client"), Entry("missing hub cache", "cache"), Entry("both missing", "both"))
 	It("reports unavailable observation after a previous completion without claiming pending onboarding", func() {
 		observe(clientWith(object(metav1.ConditionTrue)))
@@ -183,7 +183,7 @@ var _ = Describe("Tenant storage onboarding feedback", func() {
 		reconciler.hubsClient = nil
 		reconciler.hubCache = nil
 		c := check(unknown)
-		Expect(c.GetReason()).To(Equal("StorageOnboardingStatusUnknown"))
+		Expect(c.GetReason()).To(Equal("StorageReadyStatusUnknown"))
 		Expect(c.GetMessage()).To(Equal("Operator storage onboarding status could not be observed"))
 		Expect(c.GetLastTransitionTime().AsTime()).To(BeTemporally(">", transition))
 
@@ -202,7 +202,7 @@ var _ = Describe("Tenant storage onboarding feedback", func() {
 	It("reports ambiguous reporting hubs as unknown", func() {
 		observe(clientWith(object(metav1.ConditionTrue)), clientWith(object(metav1.ConditionFalse)))
 		c := check(unknown)
-		Expect(c.GetReason()).To(Equal("StorageOnboardingStatusAmbiguous"))
+		Expect(c.GetReason()).To(Equal("StorageReadyStatusAmbiguous"))
 	})
 	It("does not claim completion when a hub cannot be observed", func() {
 		broken := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
@@ -212,7 +212,7 @@ var _ = Describe("Tenant storage onboarding feedback", func() {
 		}).Build()
 		observe(clientWith(object(metav1.ConditionTrue)), broken)
 		c := check(unknown)
-		Expect(c.GetReason()).To(Equal("StorageOnboardingStatusUnknown"))
+		Expect(c.GetReason()).To(Equal("StorageReadyStatusUnknown"))
 		Expect(c.GetMessage()).NotTo(ContainSubstring("private endpoint"))
 	})
 	It("reports a failed hub listing as unknown", func() {

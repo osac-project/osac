@@ -14,18 +14,22 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/validation"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -48,7 +52,7 @@ var _ = Describe("Storage backend ownership", func() {
 
 	backend := func(cspManaged bool) *privatev1.StorageBackend {
 		spec := privatev1.StorageBackendSpec_builder{
-			Provider: "netapp", CspManaged: cspManaged,
+			Provider: "vast", CspManaged: cspManaged,
 		}.Build()
 		if !cspManaged {
 			spec.SetEndpoint("https://storage.example.com")
@@ -69,6 +73,53 @@ var _ = Describe("Storage backend ownership", func() {
 		return response.GetObject()
 	}
 
+	DescribeTable("validates NetApp ownership before database persistence",
+		func(provider string, cspManaged, accepted bool) {
+			Expect(suiteTx.End(ctx)).To(Succeed())
+			suiteTx = nil
+			ctx = database.TxManagerIntoContext(context.Background(), tm)
+			object := backend(cspManaged)
+			object.GetSpec().SetProvider(provider)
+			request := privatev1.StorageBackendsCreateRequest_builder{Object: object}.Build()
+			interceptor, err := validation.NewProtovalidateInterceptor().SetLogger(logger).Build()
+			Expect(err).NotTo(HaveOccurred())
+			response, err := database.WithNewTx(ctx, func(txCtx context.Context) (*privatev1.StorageBackendsCreateResponse, error) {
+				result, err := interceptor.UnaryServer(txCtx, request, &grpc.UnaryServerInfo{},
+					func(handlerCtx context.Context, _ any) (any, error) {
+						return server.Create(handlerCtx, request)
+					})
+				if err != nil {
+					return nil, err
+				}
+				return result.(*privatev1.StorageBackendsCreateResponse), nil
+			})
+			if accepted {
+				Expect(err).NotTo(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetCspManaged()).To(Equal(cspManaged))
+			} else {
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("OSAC-managed NetApp storage is not supported; set cspManaged to true"))
+				Expect(response).To(BeNil())
+			}
+			listed, err := database.WithNewTx(ctx, func(txCtx context.Context) (*privatev1.StorageBackendsListResponse, error) {
+				return server.List(txCtx, privatev1.StorageBackendsListRequest_builder{
+					Filter: new(fmt.Sprintf("this.metadata.name == %q", object.GetMetadata().GetName())),
+				}.Build())
+			})
+			Expect(err).NotTo(HaveOccurred())
+			if accepted {
+				Expect(listed.GetItems()).To(HaveLen(1))
+				Expect(listed.GetItems()[0].GetId()).To(Equal(response.GetObject().GetId()))
+			} else {
+				Expect(listed.GetItems()).To(BeEmpty())
+			}
+		},
+		Entry("OSAC-managed NetApp", "netapp", false, false),
+		Entry("CSP-managed NetApp", "netapp", true, true),
+		Entry("OSAC-managed VAST", "vast", false, true),
+		Entry("OSAC-managed Pure", "pure", false, true),
+	)
+
 	DescribeTable("persists ownership without adding connection details",
 		func(provider string) {
 			object := backend(true)
@@ -84,6 +135,26 @@ var _ = Describe("Storage backend ownership", func() {
 		},
 		Entry("NetApp", "netapp"), Entry("VAST", "vast"), Entry("Pure", "pure"),
 	)
+
+	It("preserves CSP-managed NetApp ownership on a partial description update", func() {
+		object := backend(true)
+		object.GetSpec().SetProvider("netapp")
+		created, err := server.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{Object: object}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		_, err = server.Update(ctx, privatev1.StorageBackendsUpdateRequest_builder{
+			Object: privatev1.StorageBackend_builder{
+				Id:   created.GetObject().GetId(),
+				Spec: privatev1.StorageBackendSpec_builder{Description: "Updated NetApp description"}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.description"}},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		got, err := server.Get(ctx, privatev1.StorageBackendsGetRequest_builder{Id: created.GetObject().GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got.GetObject().GetSpec().GetProvider()).To(Equal("netapp"))
+		Expect(got.GetObject().GetSpec().GetCspManaged()).To(BeTrue())
+		Expect(got.GetObject().GetSpec().GetDescription()).To(Equal("Updated NetApp description"))
+	})
 
 	DescribeTable("rejects ownership changes after applying the update mask",
 		func(cspManaged bool, paths []string) {

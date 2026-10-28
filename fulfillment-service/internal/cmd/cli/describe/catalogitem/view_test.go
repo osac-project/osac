@@ -65,7 +65,7 @@ var _ = Describe("Catalog item views", func() {
 					SizeGib:     publicv1.Int32FieldPolicy_builder{Editable: publicv1.EditableInt32Field_builder{DefaultValue: new(int32(80))}.Build()}.Build(),
 					StorageTier: publicv1.StorageTierReferenceFieldPolicy_builder{Locked: publicv1.StorageTierReference_builder{Name: "local"}.Build()}.Build(),
 				}.Build(),
-				SshKey:                   publicv1.SecretReferenceFieldPolicy_builder{Editable: publicv1.EditableSecretReferenceField_builder{}.Build()}.Build(),
+				SshKey:                   publicv1.FullSecretReferenceFieldPolicy_builder{Editable: publicv1.EditableFullSecretReferenceField_builder{}.Build()}.Build(),
 				UserDataSource:           publicv1.UserDataSourceFieldPolicy_builder{Locked: publicv1.UserDataSource_builder{Inline: new("#cloud-config\nusers:\n  - name: dev")}.Build()}.Build(),
 				RunStrategy:              publicv1.ComputeInstanceRunStrategyFieldPolicy_builder{Editable: publicv1.EditableComputeInstanceRunStrategyField_builder{DefaultValue: new(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED)}.Build()}.Build(),
 				AutoExternalIpAttachment: publicv1.BoolFieldPolicy_builder{Locked: new(false)}.Build(),

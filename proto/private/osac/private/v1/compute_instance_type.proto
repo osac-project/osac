@@ -174,8 +174,8 @@ message ComputeInstanceSpec {
 
   // Reference to a tenant-scoped Secret containing an OpenSSH public key used to configure cloud-init access.
   // The referenced Secret must have type SECRET_TYPE_SSH_PUBLIC_KEY and a non-empty data["public_key"] entry.
-  // The reference is resolved to its canonical ID and name during creation and cannot be changed afterwards.
-  SecretLocalReference ssh_key = 21 [(google.api.field_behavior) = IMMUTABLE];
+  // The reference is resolved to its canonical ID, name, and project during creation and cannot be changed afterwards.
+  SecretReference ssh_key = 21 [(google.api.field_behavior) = IMMUTABLE];
 
   // Inline user data or a Secret containing a non-empty `userdata` entry.
   // Inline content may be changed or migrated to a Secret. A Secret reference is immutable once set.

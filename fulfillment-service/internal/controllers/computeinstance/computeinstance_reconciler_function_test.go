@@ -53,6 +53,8 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+const testSSHPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com"
+
 var _ = Describe("buildSpec", func() {
 	Describe("RestartRequestedAt field", func() {
 		It("Includes restartRequestedAt in spec map when present", func() {
@@ -187,7 +189,7 @@ var _ = Describe("buildSpec", func() {
 				Return(privatev1.SecretsGetResponse_builder{
 					Object: privatev1.Secret_builder{
 						Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
-						Data: map[string][]byte{"public_key": []byte("ssh-rsa AAAA...")},
+						Data: map[string][]byte{"public_key": []byte(testSSHPublicKey)},
 					}.Build(),
 				}.Build(), nil)
 
@@ -204,7 +206,7 @@ var _ = Describe("buildSpec", func() {
 						Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
 						InstanceType: &privatev1.InstanceTypeReference{Name: "standard-4-8"},
 						RunStrategy:  privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
-						SshKey:       privatev1.SecretLocalReference_builder{Id: "test-ssh-key", Name: "login"}.Build(),
+						SshKey:       privatev1.SecretReference_builder{Id: "test-ssh-key", Name: "login"}.Build(),
 						DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 						BootDisk: privatev1.ComputeInstanceDisk_builder{
 							SizeGib:     proto.Int32(20),
@@ -236,7 +238,7 @@ var _ = Describe("buildSpec", func() {
 			Expect(spec.VCPUs).To(Equal(int32(4)))
 			Expect(spec.MemoryGiB).To(Equal(int32(8)))
 			Expect(spec.RunStrategy).To(Equal(osacv1alpha1.RunStrategyType("Always")))
-			Expect(spec.SSHKey).To(Equal("ssh-rsa AAAA..."))
+			Expect(spec.SSHKey).To(Equal(testSSHPublicKey))
 
 			Expect(spec.Image.SourceType).To(Equal(osacv1alpha1.ImageSourceTypeRegistry))
 			Expect(spec.Image.SourceRef).To(Equal("quay.io/osac/rhel9:latest"))
@@ -537,7 +539,9 @@ var _ = Describe("buildSpec", func() {
 })
 
 var _ = Describe("registered SSH key resolution", func() {
-	newTask := func(ctrl *gomock.Controller, secret *privatev1.Secret, getErr error) *task {
+	const publicKey = testSSHPublicKey
+
+	newTaskWithResponse := func(ctrl *gomock.Controller, response *privatev1.SecretsGetResponse, getErr error) *task {
 		instanceTypesClient := NewMockInstanceTypesClient(ctrl)
 		instanceTypesClient.EXPECT().
 			Get(gomock.Any(), gomock.Any()).
@@ -547,9 +551,7 @@ var _ = Describe("registered SSH key resolution", func() {
 		secretsClient := NewMockSecretsClient(ctrl)
 		secretsClient.EXPECT().
 			Get(gomock.Any(), gomock.Any()).
-			Return(privatev1.SecretsGetResponse_builder{
-				Object: secret,
-			}.Build(), getErr)
+			Return(response, getErr)
 		return &task{
 			r: &function{
 				logger:              logger,
@@ -559,10 +561,13 @@ var _ = Describe("registered SSH key resolution", func() {
 			computeInstance: privatev1.ComputeInstance_builder{
 				Spec: privatev1.ComputeInstanceSpec_builder{
 					InstanceType: privatev1.InstanceTypeReference_builder{Id: "type-id"}.Build(),
-					SshKey:       privatev1.SecretLocalReference_builder{Id: "key-id", Name: "login"}.Build(),
+					SshKey:       privatev1.SecretReference_builder{Id: "key-id", Name: "login"}.Build(),
 				}.Build(),
 			}.Build(),
 		}
+	}
+	newTask := func(ctrl *gomock.Controller, secret *privatev1.Secret, getErr error) *task {
+		return newTaskWithResponse(ctrl, privatev1.SecretsGetResponse_builder{Object: secret}.Build(), getErr)
 	}
 
 	It("hands the registered public key to the operator spec", func() {
@@ -570,12 +575,12 @@ var _ = Describe("registered SSH key resolution", func() {
 		DeferCleanup(ctrl.Finish)
 		t := newTask(ctrl, privatev1.Secret_builder{
 			Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
-			Data: map[string][]byte{"public_key": []byte("ssh-ed25519 AAAA")},
+			Data: map[string][]byte{"public_key": []byte(publicKey)},
 		}.Build(), nil)
 
 		var spec osacv1alpha1.ComputeInstanceSpec
 		Expect(t.addExplicitFields(context.Background(), &spec)).To(Succeed())
-		Expect(spec.SSHKey).To(Equal("ssh-ed25519 AAAA"))
+		Expect(spec.SSHKey).To(Equal(publicKey))
 	})
 
 	DescribeTable("classifies SSH key lookup failures", func(code codes.Code, permanent bool, reason string) {
@@ -583,21 +588,75 @@ var _ = Describe("registered SSH key resolution", func() {
 		DeferCleanup(ctrl.Finish)
 		t := newTask(ctrl, privatev1.Secret_builder{
 			Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
-			Data: map[string][]byte{"public_key": []byte("ssh-ed25519 AAAA")},
+			Data: map[string][]byte{"public_key": []byte(publicKey)},
 		}.Build(), status.Error(code, "lookup failed"))
 
 		err := t.addExplicitFields(context.Background(), &osacv1alpha1.ComputeInstanceSpec{})
-		var resolutionErr *SecretResolutionError
+		var resolutionErr *controllers.SSHKeyResolutionError
 		Expect(errors.As(err, &resolutionErr)).To(BeTrue())
 		Expect(resolutionErr.Permanent).To(Equal(permanent))
 		Expect(resolutionErr.Reason).To(Equal(reason))
 	},
-		Entry("not found", codes.NotFound, true, "SecretNotFound"),
+		Entry("not found", codes.NotFound, false, "SecretNotFound"),
 		Entry("invalid", codes.InvalidArgument, true, "SecretInvalid"),
 		Entry("unavailable", codes.Unavailable, false, ""),
 		Entry("deadline", codes.DeadlineExceeded, false, ""),
 		Entry("canceled", codes.Canceled, false, ""),
 	)
+
+	DescribeTable("classifies invalid SSH key Secrets as permanent", func(secret *privatev1.Secret) {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		t := newTask(ctrl, secret, nil)
+
+		err := t.addExplicitFields(context.Background(), &osacv1alpha1.ComputeInstanceSpec{})
+		var resolutionErr *controllers.SSHKeyResolutionError
+		Expect(errors.As(err, &resolutionErr)).To(BeTrue())
+		Expect(resolutionErr.Permanent).To(BeTrue())
+		Expect(resolutionErr.Reason).To(Equal("SecretInvalid"))
+	},
+		Entry("wrong Secret type", privatev1.Secret_builder{
+			Type: privatev1.SecretType_SECRET_TYPE_VALUE,
+			Data: map[string][]byte{"public_key": []byte(publicKey)},
+		}.Build()),
+		Entry("missing public_key", privatev1.Secret_builder{
+			Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+		}.Build()),
+		Entry("invalid public key", privatev1.Secret_builder{
+			Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			Data: map[string][]byte{"public_key": []byte("not-an-ssh-key")},
+		}.Build()),
+	)
+
+	It("classifies a missing Secret ID as permanent", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		instanceTypesClient := NewMockInstanceTypesClient(ctrl)
+		instanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{}.Build(),
+			}.Build(), nil)
+		t := &task{
+			r: &function{
+				logger:              logger,
+				instanceTypesClient: instanceTypesClient,
+				secretsClient:       NewMockSecretsClient(ctrl),
+			},
+			computeInstance: privatev1.ComputeInstance_builder{
+				Spec: privatev1.ComputeInstanceSpec_builder{
+					InstanceType: privatev1.InstanceTypeReference_builder{Id: "type-id"}.Build(),
+					SshKey:       privatev1.SecretReference_builder{Name: "login"}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		err := t.addExplicitFields(context.Background(), &osacv1alpha1.ComputeInstanceSpec{})
+		var resolutionErr *controllers.SSHKeyResolutionError
+		Expect(errors.As(err, &resolutionErr)).To(BeTrue())
+		Expect(resolutionErr.Permanent).To(BeTrue())
+		Expect(resolutionErr.Reason).To(Equal("SecretInvalid"))
+	})
 })
 
 // newComputeInstanceCR creates a typed ComputeInstance CR for use with the fake client.

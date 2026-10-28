@@ -19,8 +19,8 @@ class FakeGRPCClient:
         self.calls.append((service, data))
         return self.responses[service]
 
-    def create_baremetal_instance_type(self, *, name: str, host_type_label: str, fabric_port: str) -> str:
-        self.created.append((name, host_type_label, fabric_port))
+    def create_baremetal_instance_type(self, *, name: str, host_selector: dict[str, str], fabric_port: str) -> str:
+        self.created.append((name, host_selector, fabric_port))
         return "bmit-123"
 
     def delete_baremetal_instance_type(self, *, type_id: str) -> None:
@@ -96,7 +96,7 @@ def test_creates_type_matching_virtual_hosts_and_cleans_it_up() -> None:
     fixture = bmi_instance_type_for_tests(grpc, template_name="bm-host-provisioning", configured="")
     name = next(fixture)
     assert name.startswith("e2e-bmi-type-")
-    assert grpc.created == [(name, "default", "data-0")]
+    assert grpc.created == [(name, {"osac.openshift.io/host-type": "default"}, "data-0")]
     assert grpc.deleted == []
     with pytest.raises(StopIteration):
         next(fixture)
@@ -113,3 +113,18 @@ def test_configured_type_needs_no_template_lookup_or_cleanup() -> None:
     assert grpc.calls == []
     assert grpc.created == []
     assert grpc.deleted == []
+
+
+def test_creates_type_with_the_given_host_selector() -> None:
+    grpc = FakeGRPCClient(
+        {f"{PRIVATE_API}.BareMetalInstanceTemplates/List": {"items": [{"metadata": {"name": "bm-host-provisioning"}}]}}
+    )
+
+    fixture = bmi_instance_type_for_tests(
+        grpc, template_name="bm-host-provisioning", configured="", host_selector={"host_type": "default"}
+    )
+    name = next(fixture)
+    assert grpc.created == [(name, {"host_type": "default"}, "data-0")]
+    with pytest.raises(StopIteration):
+        next(fixture)
+    assert grpc.deleted == ["bmit-123"]

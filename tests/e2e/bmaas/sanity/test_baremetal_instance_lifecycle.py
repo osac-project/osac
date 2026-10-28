@@ -11,13 +11,17 @@ from tests.e2e.bmaas.conftest import BMI_DISK_IMAGE_SOURCE_REF
 from tests.e2e.core.fulfillment_trust import assert_management_tls
 from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
-    wait_for_bmh_available,
-    wait_for_bmh_provisioned,
+    HostRef,
+    host_consumer_ref,
+    host_hardware_macs,
     wait_for_bmi_cr,
     wait_for_bmi_deletion,
     wait_for_bmi_grpc_removal,
     wait_for_bmi_running,
+    wait_for_host_allocated,
+    wait_for_host_powered,
 )
+from tests.e2e.core.inventory import InventoryBackend
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
@@ -39,26 +43,20 @@ _MAC_PATTERN: re.Pattern[str] = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
 
 
 def _assert_nic_metadata(
-    *,
-    grpc: GRPCClient,
-    bmi_id: str,
-    cli: OsacCLI,
-    bmi_name: str,
-    bmi_cr_name: str,
-    k8s: K8sClient,
-    bmh_name: str,
-    bmh_namespace: str,
+    *, grpc: GRPCClient, bmi_id: str, cli: OsacCLI, bmi_name: str, bmi_cr_name: str, k8s: K8sClient, host: HostRef
 ) -> None:
     """Verify NIC MAC addresses propagate correctly from BMH → BMI CR → gRPC API → CLI."""
-    # 1. BMH is the source of truth — hardware inspection provides the authoritative MAC list
-    bmh_macs: set[str] = set(k8s.get_bmh_hardware_nics(name=bmh_name, bmh_namespace=bmh_namespace))
-    assert bmh_macs, f"BareMetalHost {bmh_name} has no hardware.nics — inspection may not have completed"
+    # 1. The BMH is the source of truth — hardware inspection provides the
+    #    authoritative MAC list (the inventory hands over to a BMH in every mode)
+    source_macs: set[str] = host_hardware_macs(k8s=k8s, host=host)
+    assert source_macs, f"BareMetalHost {host.name} has no hardware.nics — inspection may not have completed"
 
     # 2. BMI CR status.hardware.nics must match the BMH
     cr_macs: set[str] = set(k8s.get_bmi_hardware_nics(name=bmi_cr_name))
     assert cr_macs, f"BareMetalInstance CR {bmi_cr_name} has no status.hardware.nics"
-    assert cr_macs == bmh_macs, (
-        f"BMI CR status.hardware.nics {sorted(cr_macs)} does not match BareMetalHost hardware.nics {sorted(bmh_macs)}"
+    assert cr_macs == source_macs, (
+        f"BMI CR status.hardware.nics {sorted(cr_macs)} does not match "
+        f"BareMetalHost hardware.nics {sorted(source_macs)}"
     )
 
     # 3. gRPC API response must match the BMI CR
@@ -66,18 +64,18 @@ def _assert_nic_metadata(
     nics: list[dict[str, Any]] = response.get("object", {}).get("status", {}).get("hardware", {}).get("nics", [])
     assert nics, f"gRPC API returned no status.hardware.nics for BMI {bmi_id}"
     api_macs: set[str] = {nic.get("mac", "").lower() for nic in nics}
-    assert api_macs == bmh_macs, (
+    assert api_macs == source_macs, (
         f"gRPC API status.hardware.nics {sorted(api_macs)} does not match "
-        f"BareMetalHost hardware.nics {sorted(bmh_macs)}"
+        f"BareMetalHost hardware.nics {sorted(source_macs)}"
     )
 
-    # 4. CLI describe output must list all BMH MACs under the Network Interfaces section
+    # 4. CLI describe output must list all inventory MACs under the Network Interfaces section
     describe_output: str = cli.describe_baremetal_instance(name=bmi_name)
     assert "Network Interfaces:" in describe_output, (
         "osac describe baremetalinstance output missing 'Network Interfaces:' section"
     )
     ni_section = describe_output[describe_output.index("Network Interfaces:") :]
-    for mac in bmh_macs:
+    for mac in source_macs:
         assert mac in ni_section, f"osac describe baremetalinstance 'Network Interfaces:' section missing MAC '{mac}'"
 
 
@@ -111,7 +109,8 @@ def test_baremetal_instance_lifecycle(
     catalog_item: str,
     bmi_instance_type: str,
     bmi_disk_image: str,
-    bmh_namespace: str,
+    inventory_backend: InventoryBackend,
+    inventory_hosts: None,
     test_run_id: str,
     ssh_public_key: str,
 ) -> None:
@@ -124,8 +123,7 @@ def test_baremetal_instance_lifecycle(
     bmi_id, _ = jwt_cli_user.create_baremetal_instance(
         name=name, catalog_item=catalog_item, ssh_key=ssh_public_key, disk_image=bmi_disk_image
     )
-    bmh_ns = ""
-    bmh_name = ""
+    host: HostRef | None = None
 
     try:
         assert bmi_id in jwt_grpc_tenant1.list_baremetal_instance_ids()
@@ -170,10 +168,7 @@ def test_baremetal_instance_lifecycle(
             f"PROVISIONED condition reason {provisioned_condition.get('reason')!r}, expected {_PROVISIONED_REASON!r}"
         )
 
-        external_host_id: str = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi_cr_name)
-        assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"
-        bmh_ns, bmh_name = external_host_id.split("/", 1)
-        assert bmh_ns == bmh_namespace, f"BMH landed in {bmh_ns}, expected {bmh_namespace}"
+        host = inventory_backend.host_for_bmi(bmi_cr_name=bmi_cr_name)
 
         # Verify NIC metadata matches the BMH hardware inventory (OSAC-3254)
         _assert_nic_metadata(
@@ -183,61 +178,33 @@ def test_baremetal_instance_lifecycle(
             bmi_name=name,
             bmi_cr_name=bmi_cr_name,
             k8s=k8s_hub_client,
-            bmh_name=bmh_name,
-            bmh_namespace=bmh_ns,
+            host=host,
         )
 
-        # Verify provisioning
-        wait_for_bmh_provisioned(k8s=k8s_hub_client, name=bmh_name, bmh_namespace=bmh_ns)
+        # Verify provisioning on the BMH the inventory handed over to
+        # (identical on every backend: image, consumerRef, online)
+        wait_for_host_allocated(k8s=k8s_hub_client, host=host, expected_image_url=BMI_DISK_IMAGE_SOURCE_REF)
 
-        image_url: str = k8s_hub_client.get_bmh_image_url(name=bmh_name, bmh_namespace=bmh_ns)
-        assert image_url == BMI_DISK_IMAGE_SOURCE_REF, (
-            f"BMH {bmh_name} image URL {image_url!r} does not match the selected DiskImage"
-        )
-
-        consumer_ref: str = k8s_hub_client.get_bmh_consumer_ref(name=bmh_name, bmh_namespace=bmh_ns)
-        assert consumer_ref != "", f"BMH {bmh_name} has no consumerRef after allocation"
-
-        online: str = k8s_hub_client.get_bmh_online(name=bmh_name, bmh_namespace=bmh_ns)
-        assert online == "true", f"BMH {bmh_name} should be online after provisioning, got: {online}"
+        consumer_ref: str = host_consumer_ref(k8s=k8s_hub_client, host=host)
+        assert consumer_ref != "", f"BMH {host.name} has no consumerRef after allocation"
 
         # Power off
         halted = "BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED"
         jwt_grpc_tenant1.update_baremetal_instance_run_strategy(bmi_id=bmi_id, run_strategy=halted)
-
-        poll_until(
-            fn=lambda: k8s_hub_client.get_bmh_powered_on(name=bmh_name, bmh_namespace=bmh_ns),
-            until=lambda v: v == "false",
-            retries=60,
-            delay=5,
-            description=f"{bmh_name} powered off",
-        )
+        wait_for_host_powered(k8s=k8s_hub_client, host=host, on=False)
 
         # Power on
         jwt_grpc_tenant1.update_baremetal_instance_run_strategy(
             bmi_id=bmi_id, run_strategy="BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS"
         )
-
-        poll_until(
-            fn=lambda: k8s_hub_client.get_bmh_powered_on(name=bmh_name, bmh_namespace=bmh_ns),
-            until=lambda v: v == "true",
-            retries=60,
-            delay=5,
-            description=f"{bmh_name} powered on",
-        )
+        wait_for_host_powered(k8s=k8s_hub_client, host=host, on=True)
 
         # Deprovision
         jwt_cli_user.delete_baremetal_instance(uuid=bmi_id)
         wait_for_bmi_deletion(k8s=k8s_hub_client, name=bmi_cr_name)
         wait_for_bmi_grpc_removal(grpc=jwt_grpc_tenant1, uuid=bmi_id)
 
-        wait_for_bmh_available(k8s=k8s_hub_client, name=bmh_name, bmh_namespace=bmh_ns)
-
-        image_url_after: str = k8s_hub_client.get_bmh_image_url(name=bmh_name, bmh_namespace=bmh_ns)
-        assert image_url_after == "", f"BMH {bmh_name} image not cleared after deprovision: {image_url_after}"
-
-        consumer_ref_after: str = k8s_hub_client.get_bmh_consumer_ref(name=bmh_name, bmh_namespace=bmh_ns)
-        assert consumer_ref_after == "", f"BMH {bmh_name} consumerRef not cleared: {consumer_ref_after}"
+        inventory_backend.wait_for_released(host=host)
     except BaseException:
         bmi_cr: str = k8s_hub_client.get_baremetal_instance_name(uuid=bmi_id, checked=False)
         if bmi_cr:
@@ -245,8 +212,8 @@ def test_baremetal_instance_lifecycle(
                 jwt_cli_user.delete_baremetal_instance(uuid=bmi_id)
                 wait_for_bmi_deletion(k8s=k8s_hub_client, name=bmi_cr)
                 wait_for_bmi_grpc_removal(grpc=jwt_grpc_tenant1, uuid=bmi_id)
-                if bmh_name:
-                    wait_for_bmh_available(k8s=k8s_hub_client, name=bmh_name, bmh_namespace=bmh_ns)
+                if host is not None:
+                    inventory_backend.wait_for_released(host=host)
             except Exception:
                 logger.exception("Failed to clean up BMI %s during error handling", bmi_id)
         raise
@@ -257,7 +224,8 @@ def test_baremetal_instance_restart(
     jwt_grpc_tenant1: GRPCClient,
     k8s_hub_client: K8sClient,
     catalog_item: str,
-    bmh_namespace: str,
+    inventory_backend: InventoryBackend,
+    inventory_hosts: None,
     private_grpc: GRPCClient,
     test_run_id: str,
     ssh_public_key: str,
@@ -268,8 +236,7 @@ def test_baremetal_instance_restart(
         name=deprecated_disk_image_name, source_ref=BMI_DISK_IMAGE_SOURCE_REF, api=PRIVATE_API
     )
     bmi_id: str | None = None
-    bmh_ns = ""
-    bmh_name = ""
+    host: HostRef | None = None
 
     try:
         private_grpc.update_disk_image_lifecycle(
@@ -286,10 +253,7 @@ def test_baremetal_instance_restart(
         bmi_cr_name: str = wait_for_bmi_cr(k8s=k8s_hub_client, uuid=bmi_id)
         wait_for_bmi_running(grpc=jwt_grpc_tenant1, bmi_id=bmi_id)
 
-        external_host_id: str = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi_cr_name)
-        assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"
-        bmh_ns, bmh_name = external_host_id.split("/", 1)
-        assert bmh_ns == bmh_namespace, f"BMH landed in {bmh_ns}, expected {bmh_namespace}"
+        host = inventory_backend.host_for_bmi(bmi_cr_name=bmi_cr_name)
 
         initial_trigger: int = _get_status_restart_trigger(jwt_grpc_tenant1, bmi_id)
         new_trigger: int = initial_trigger + 1
@@ -313,13 +277,7 @@ def test_baremetal_instance_restart(
             description=f"{bmi_id} status.restart_trigger echoes {new_trigger}",
         )
 
-        poll_until(
-            fn=lambda: k8s_hub_client.get_bmh_powered_on(name=bmh_name, bmh_namespace=bmh_ns),
-            until=lambda v: v == "true",
-            retries=60,
-            delay=5,
-            description=f"{bmh_name} powered on after restart",
-        )
+        wait_for_host_powered(k8s=k8s_hub_client, host=host, on=True)
 
         wait_for_bmi_running(grpc=jwt_grpc_tenant1, bmi_id=bmi_id)
 
@@ -337,7 +295,7 @@ def test_baremetal_instance_restart(
         jwt_cli_user.delete_baremetal_instance(uuid=bmi_id)
         wait_for_bmi_deletion(k8s=k8s_hub_client, name=bmi_cr_name)
         wait_for_bmi_grpc_removal(grpc=jwt_grpc_tenant1, uuid=bmi_id)
-        wait_for_bmh_available(k8s=k8s_hub_client, name=bmh_name, bmh_namespace=bmh_ns)
+        inventory_backend.wait_for_released(host=host)
         bmi_id = None
     except BaseException:
         bmi_cr: str = k8s_hub_client.get_baremetal_instance_name(uuid=bmi_id, checked=False) if bmi_id else ""
@@ -346,8 +304,8 @@ def test_baremetal_instance_restart(
                 jwt_cli_user.delete_baremetal_instance(uuid=bmi_id)
                 wait_for_bmi_deletion(k8s=k8s_hub_client, name=bmi_cr)
                 wait_for_bmi_grpc_removal(grpc=jwt_grpc_tenant1, uuid=bmi_id)
-                if bmh_name:
-                    wait_for_bmh_available(k8s=k8s_hub_client, name=bmh_name, bmh_namespace=bmh_ns)
+                if host is not None:
+                    inventory_backend.wait_for_released(host=host)
             except Exception:
                 logger.exception("Failed to delete BMI %s during cleanup", bmi_id)
         raise

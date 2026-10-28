@@ -10,6 +10,8 @@ import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import bmi_instance_type_for_tests
+from tests.e2e.core.inventory import InventoryBackend, make_inventory_backend
+from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import env
 
 BMI_DISK_IMAGE_SOURCE_REF = "oci://quay.io/osac-project/fedora-cloud-bmi:44"
@@ -21,15 +23,52 @@ def bmi_template() -> str:
 
 
 @pytest.fixture(scope="session")
-def bmi_instance_type(private_grpc: GRPCClient, bmi_template: str) -> Generator[str, None, None]:
+def bmi_instance_type(
+    private_grpc: GRPCClient, bmi_template: str, inventory_backend: InventoryBackend
+) -> Generator[str, None, None]:
     yield from bmi_instance_type_for_tests(
-        private_grpc, template_name=bmi_template, configured=env("OSAC_BMI_INSTANCE_TYPE", "").strip()
+        private_grpc,
+        template_name=bmi_template,
+        configured=env("OSAC_BMI_INSTANCE_TYPE", "").strip(),
+        host_selector=inventory_backend.default_host_selector(),
     )
 
 
 @pytest.fixture(scope="session")
 def bmh_namespace() -> str:
     return env("OSAC_BMH_NAMESPACE", "host-inventory")
+
+
+@pytest.fixture(scope="session")
+def inventory_backend(
+    k8s_hub_client: K8sClient, namespace: str, bmh_namespace: str, test_run_id: str
+) -> Generator[InventoryBackend, None, None]:
+    """Inventory backend selected by OSAC_INVENTORY_BACKEND (default metal3).
+
+    On netbox, NetBox connection settings come from the deployed BMF
+    configuration (Secrets in the OSAC namespace), with OSAC_NETBOX_* env
+    vars as debug overrides only.
+    """
+    backend = make_inventory_backend(
+        k8s=k8s_hub_client, namespace=namespace, bmh_namespace=bmh_namespace, test_run_id=test_run_id
+    )
+    yield backend
+    backend.close()
+
+
+@pytest.fixture(scope="session")
+def inventory_hosts(inventory_backend: InventoryBackend) -> Generator[None, None, None]:
+    """Ensure inventory has available hosts; release fixture-created ones after.
+
+    metal3: asserts the BMH pool is non-empty — BMHs are enrolled by the
+    lab/CI infrastructure (the netris Ansible backend) or the platform
+    admin, never by the tests or the OSAC operators.
+    netbox: idempotently creates fixture devices from OSAC_NETBOX_FIXTURE_HOSTS
+    and deletes them on teardown.
+    """
+    inventory_backend.ensure_available_hosts()
+    yield
+    inventory_backend.release_created_hosts()
 
 
 @pytest.fixture(scope="session")

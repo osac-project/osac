@@ -5,6 +5,23 @@
   ansible.builtin.set_fact:
     eip_name: "{{ external_ip.metadata.name }}"
 
+- name: Build ExternalIP subnet ownership fields
+  ansible.builtin.set_fact:
+    _eip_ipam_expected_fields:
+      purpose: nat
+      "tenant.id": "{{ netris_tenant_id }}"
+      "sites.ids": ["{{ netris_site_id }}"]
+
+- name: Add allocated ExternalIP prefix to ownership fields when available
+  ansible.builtin.set_fact:
+    _eip_ipam_expected_fields: >-
+      {{ _eip_ipam_expected_fields | combine({
+           'prefix': external_ip.metadata.annotations['osac.openshift.io/allocated-address'] ~ '/32'
+         }) }}
+  when:
+    - external_ip.metadata.annotations is defined
+    - external_ip.metadata.annotations['osac.openshift.io/allocated-address'] is defined
+
 - name: Display deletion information
   ansible.builtin.debug:
     msg: "Deleting Netris IPAM subnet for ExternalIP '{{ eip_name }}'"
@@ -20,6 +37,7 @@
     tasks_from: delete_subnet
   vars:
     ipam_name: "{{ eip_name }}"
+    ipam_expected_fields: "{{ _eip_ipam_expected_fields }}"
 
 - name: Display deletion result
   ansible.builtin.debug:

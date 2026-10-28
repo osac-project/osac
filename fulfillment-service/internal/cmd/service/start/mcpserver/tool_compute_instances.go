@@ -50,8 +50,9 @@ type ComputeInstanceNetworkAttachmentInput struct {
 }
 
 type CreateComputeInstanceOutput struct {
-	ID    string `json:"id"`
-	State string `json:"state"`
+	ID      string `json:"id"`
+	Version int32  `json:"version"`
+	State   string `json:"state"`
 }
 
 type DeleteComputeInstanceInput struct {
@@ -68,6 +69,11 @@ func handleCreateComputeInstance(
 	return func(
 		ctx context.Context, req *mcp.CallToolRequest, input CreateComputeInstanceInput,
 	) (*mcp.CallToolResult, CreateComputeInstanceOutput, error) {
+		var err error
+		input, err = normalizeCreateComputeInstanceInput(input)
+		if err != nil {
+			return nil, CreateComputeInstanceOutput{}, safeInvalidRequestError(err)
+		}
 		spec, err := computeInstanceSpecFromInput(input)
 		if err != nil {
 			return nil, CreateComputeInstanceOutput{}, safeInvalidRequestError(err)
@@ -89,10 +95,43 @@ func handleCreateComputeInstance(
 		}
 		created := response.GetObject()
 		return nil, CreateComputeInstanceOutput{
-			ID:    created.GetId(),
-			State: created.GetStatus().GetState().String(),
+			ID:      created.GetId(),
+			Version: created.GetMetadata().GetVersion(),
+			State:   created.GetStatus().GetState().String(),
 		}, nil
 	}
+}
+
+func normalizeCreateComputeInstanceInput(input CreateComputeInstanceInput) (CreateComputeInstanceInput, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	input.CatalogItem = strings.TrimSpace(input.CatalogItem)
+	input.InstanceTypeID = strings.TrimSpace(input.InstanceTypeID)
+	if input.Name == "" {
+		return CreateComputeInstanceInput{}, fmt.Errorf("name is required")
+	}
+	if input.CatalogItem == "" {
+		return CreateComputeInstanceInput{}, fmt.Errorf("catalog_item is required")
+	}
+	if input.BootDisk != nil {
+		input.BootDisk = &ComputeInstanceBootDiskInput{
+			SizeGiB:       input.BootDisk.SizeGiB,
+			StorageTierID: strings.TrimSpace(input.BootDisk.StorageTierID),
+		}
+	}
+	if input.NetworkAttachments != nil {
+		attachments := make([]ComputeInstanceNetworkAttachmentInput, len(input.NetworkAttachments))
+		for i, attachment := range input.NetworkAttachments {
+			attachment.SubnetID = strings.TrimSpace(attachment.SubnetID)
+			securityGroupIDs := make([]string, len(attachment.SecurityGroupIDs))
+			for j, securityGroupID := range attachment.SecurityGroupIDs {
+				securityGroupIDs[j] = strings.TrimSpace(securityGroupID)
+			}
+			attachment.SecurityGroupIDs = securityGroupIDs
+			attachments[i] = attachment
+		}
+		input.NetworkAttachments = attachments
+	}
+	return input, nil
 }
 
 func computeInstanceSpecFromInput(input CreateComputeInstanceInput) (*publicv1.ComputeInstanceSpec, error) {
@@ -170,6 +209,12 @@ func handleDeleteComputeInstance(
 		ctx context.Context, req *mcp.CallToolRequest, input DeleteComputeInstanceInput,
 	) (*mcp.CallToolResult, DeleteComputeInstanceOutput, error) {
 		var err error
+		input.ID = strings.TrimSpace(input.ID)
+		if input.ID == "" {
+			return nil, DeleteComputeInstanceOutput{}, safeInvalidRequestError(
+				fmt.Errorf("id is required"),
+			)
+		}
 		ctx, cancel := toolCallContext(ctx)
 		defer cancel()
 		ctx, err = forwardAPIToken(ctx, req)

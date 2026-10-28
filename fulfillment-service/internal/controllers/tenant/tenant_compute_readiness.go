@@ -71,7 +71,7 @@ func (t *task) checkInfrastructureConditions(ctx context.Context) {
 					continue
 				}
 				observed = true
-				if condition := object.GetStatusCondition("StorageOnboardingComplete"); condition != nil {
+				if condition := object.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady); condition != nil {
 					storageConditions = append(storageConditions, condition)
 				}
 				if !object.DeletionTimestamp.IsZero() {

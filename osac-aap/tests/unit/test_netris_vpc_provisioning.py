@@ -199,9 +199,10 @@ def test_configmap_publishes_validated_l3_vni_and_current_reserved_range() -> No
     assert validation_index < export_index < publication_index
 
     data = tasks[publication_index]["kubernetes.core.k8s"]["definition"]["data"]
-    assert data["l2_vni"] == "{{ netris_vnet_detail.vxlanID | string | trim }}"
-    assert data["l3_vni"] == "{{ subnet_l3_vni | string }}"
-    assert data["fabric_reserved_range"] == "{{ _fabric_reserved_range | string | trim }}"
+    assert isinstance(data, str)
+    assert "'l2_vni': netris_vnet_detail.vxlanID | string | trim" in data
+    assert "'l3_vni': subnet_l3_vni | string" in data
+    assert "'fabric_reserved_range': _fabric_reserved_range | string | trim" in data
 
 
 def _vni_validation_tasks() -> list[dict]:

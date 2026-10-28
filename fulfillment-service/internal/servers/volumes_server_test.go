@@ -452,25 +452,27 @@ var _ = Describe("Public volumes server", func() {
 			Expect(response.GetObject().GetSpec().GetStorageTier()).To(Equal("standard-block"))
 		})
 
-		It("Keeps the stored status on a maskless update carrying a spoofed status", func() {
-			created := createVolumeViaPublic("pub-vol-spoof")
+		// TC-U1a: A maskless update carrying a status keeps the stored one. The status is
+		// output-only and the metering trigger guards only its tracked fields, so the
+		// mapper must never copy a caller-supplied status, with or without a mask.
+		It("Drops a caller-supplied status on a maskless update", func() {
+			created := createVolumeViaPublic("pub-vol-spoofed-status")
 
 			response, err := server.Update(ctx, publicv1.VolumesUpdateRequest_builder{
 				Object: publicv1.Volume_builder{
-					Id: created.GetId(),
-					Metadata: publicv1.Metadata_builder{
-						Name: "pub-vol-spoof",
-					}.Build(),
-					Spec: created.GetSpec(),
+					Id:       created.GetId(),
+					Metadata: publicv1.Metadata_builder{Name: "pub-vol-spoofed-status"}.Build(),
+					Spec:     created.GetSpec(),
 					Status: publicv1.VolumeStatus_builder{
-						State: publicv1.VolumeState_VOLUME_STATE_AVAILABLE,
+						State:   publicv1.VolumeState_VOLUME_STATE_FAILED,
+						Message: new("spoofed message"),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			// The spoofed status never reached the database: the state is the system-written
-			// CREATING, not the caller's AVAILABLE.
-			Expect(response.GetObject().GetStatus().GetState()).To(Equal(publicv1.VolumeState_VOLUME_STATE_CREATING))
+			object := response.GetObject()
+			Expect(object.GetStatus().GetState()).To(Equal(created.GetStatus().GetState()))
+			Expect(object.GetStatus().GetMessage()).To(BeEmpty())
 		})
 
 		// TC-U2: Update that changes spec.storage_tier returns InvalidArgument.

@@ -276,7 +276,7 @@ helm-osac-csi-driver:
 helm-osac-metering:
   - '{osac-metering/charts/**,.github/workflows/helm-lint.yaml}'
 helm-osac-installer:
-  - '{osac-installer/charts/**,osac-installer/values/**,osac-installer/ct.yaml,osac-installer/Makefile,osac-installer/scripts/test-mce-render.py,.github/workflows/helm-lint.yaml}'
+  - '{osac-installer/charts/**,osac-installer/values/**,osac-installer/ct.yaml,osac-installer/Makefile,osac-installer/scripts/test-mce-render.py,osac-installer/scripts/test-chart-name-independence-render.py,.github/workflows/helm-lint.yaml}'
 
 # Gates check-generated-code.yaml.
 proto-check:

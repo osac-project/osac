@@ -31,7 +31,7 @@ import (
 
 var _ = Describe("Tenant storage onboarding feedback", func() {
 	It("projects and retains operator storage conditions through signaling and reads", func(ctx context.Context) {
-		const conditionType = privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_ONBOARDING_COMPLETE
+		const conditionType = privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_READY
 		tenants := privatev1.NewTenantsClient(tool.InternalView().AdminConn())
 		projects := privatev1.NewProjectsClient(tool.InternalView().AdminConn())
 		name := fmt.Sprintf("test-storage-%s", uuid.New())
@@ -70,7 +70,7 @@ var _ = Describe("Tenant storage onboarding feedback", func() {
 		}
 
 		By("Keeping absent operator storage evidence incomplete")
-		expectCondition(privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "StorageOnboardingPending", "", time.Time{}, "")
+		expectCondition(privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "StorageReadyPending", "", time.Time{}, "")
 
 		cases := []struct {
 			source metav1.ConditionStatus
@@ -90,7 +90,7 @@ var _ = Describe("Tenant storage onboarding feedback", func() {
 				g.Expect(tool.KubeClient().Get(ctx, key, object)).To(Succeed())
 				object.Status.Phase = osacv1alpha1.TenantPhaseReady
 				apiMeta.SetStatusCondition(&object.Status.Conditions, metav1.Condition{
-					Type: "StorageOnboardingComplete", Status: test.source,
+					Type: string(osacv1alpha1.TenantConditionStorageReady), Status: test.source,
 					Reason: reason, Message: message, LastTransitionTime: metav1.NewTime(transition),
 				})
 				g.Expect(tool.KubeClient().Status().Update(ctx, object)).To(Succeed())

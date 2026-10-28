@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from datetime import datetime, timedelta
 
@@ -18,6 +19,7 @@ from tests.e2e.core.helpers import (
     wait_for_security_group_ready,
 )
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.runner import poll_until
 from tests.e2e.vmaas.networking_lifecycle_helpers import (
     create_and_wait_for_subnet,
     create_and_wait_for_virtual_network,
@@ -33,22 +35,37 @@ DELETION_TEST_FINALIZER = "osac-6513-e2e"
 
 
 def _set_deletion_test_finalizer(private_grpc: GRPCClient, ci_id: str, *, present: bool) -> None:
-    """Hold or release the instance while preserving the current metadata version."""
-    object_ = private_grpc.call(service=f"{PRIVATE_API}.ComputeInstances/Get", data={"id": ci_id})["object"]
-    metadata = object_["metadata"]
-    finalizers = metadata.get("finalizers", [])
-    if present:
-        finalizers = [*finalizers, DELETION_TEST_FINALIZER]
-    else:
-        finalizers = [value for value in finalizers if value != DELETION_TEST_FINALIZER]
-    private_grpc.call(
-        service=f"{PRIVATE_API}.ComputeInstances/Update",
-        data={
-            "object": {"id": ci_id, "metadata": {"finalizers": finalizers, "version": metadata.get("version", 0)}},
-            "updateMask": {"paths": ["metadata.finalizers"]},
-            "lock": True,
-        },
-    )
+    """Hold or release the instance, rereading after concurrent controller updates."""
+
+    def update_finalizers() -> bool:
+        object_ = private_grpc.call(service=f"{PRIVATE_API}.ComputeInstances/Get", data={"id": ci_id})["object"]
+        metadata = object_["metadata"]
+        finalizers = metadata.get("finalizers", [])
+        if (DELETION_TEST_FINALIZER in finalizers) == present:
+            return True
+        if present:
+            finalizers = [*finalizers, DELETION_TEST_FINALIZER]
+        else:
+            finalizers = [value for value in finalizers if value != DELETION_TEST_FINALIZER]
+        try:
+            private_grpc.call(
+                service=f"{PRIVATE_API}.ComputeInstances/Update",
+                data={
+                    "object": {
+                        "id": ci_id,
+                        "metadata": {"finalizers": finalizers, "version": metadata.get("version", 0)},
+                    },
+                    "updateMask": {"paths": ["metadata.finalizers"]},
+                    "lock": True,
+                },
+            )
+        except subprocess.CalledProcessError as exc:
+            if re.search(r"(?m)^\s*Code:\s*Aborted\s*$", (exc.stderr or "") + "\n" + (exc.stdout or "")):
+                return False
+            raise
+        return True
+
+    poll_until(fn=update_finalizers, until=bool, retries=10, delay=1, description="ComputeInstance test finalizer")
 
 
 def test_compute_instance_with_disk_image(

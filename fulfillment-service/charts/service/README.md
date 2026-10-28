@@ -43,6 +43,7 @@ The following table lists the configurable parameters of the chart and their def
 | `images.envoy.tag`         | Envoy proxy container image tag                                                    | `v1.37.1`                                                      |
 | `images.envoy.pullPolicy`  | Envoy proxy image pull policy                                                      | `IfNotPresent`                                                 |
 | `eventPublisher.enabled`   | Deploy the Kafka-backed event publisher                                           | `true`                                                         |
+| `eventPublisher.topicRetention` | How long a tenant's event topic keeps records: `-1s` indefinitely, or a duration like `168h` | `-1s`                                         |
 | `database.connection`      | List of sources for database connection parameters (see below)                    | `[]` (must be configured)                                      |
 | `kafka.connection`         | List of sources for Kafka connection parameters (see below)                       | `[]` (must be configured when the event publisher is enabled)  |
 

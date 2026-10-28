@@ -16,9 +16,11 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/version"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -49,16 +51,12 @@ type CheckConnectionOutput struct {
 
 const maxCheckConnectionTenants = 10
 
-var mcpToolNames = []string{
-	"check_connection",
-	"list_resources",
-	"get_resource",
-	"create_compute_instance",
-	"delete_compute_instance",
-}
-
 func handleCheckConnection(
-	endpoint string, resources resourceRegistry, client publicv1.SelfSubjectAccessReviewsClient,
+	endpoint string,
+	resources resourceRegistry,
+	registry typedToolRegistry,
+	tenantsClient publicv1.TenantsClient,
+	reviewsClient publicv1.SelfSubjectAccessReviewsClient,
 ) mcp.ToolHandlerFor[CheckConnectionInput, CheckConnectionOutput] {
 	return func(
 		ctx context.Context, req *mcp.CallToolRequest, _ CheckConnectionInput,
@@ -74,18 +72,32 @@ func handleCheckConnection(
 			return nil, CheckConnectionOutput{}, err
 		}
 
-		tenants := caller.Tenants
-		if len(tenants) == 0 {
-			tenants = []string{""}
+		limit := int32(maxCheckConnectionTenants + 1)
+		tenantResponse, err := tenantsClient.List(ctx, publicv1.TenantsListRequest_builder{
+			Limit: &limit,
+		}.Build())
+		if err != nil {
+			return nil, CheckConnectionOutput{}, safePublicAPIError(err)
 		}
-		permissionsTruncated := len(tenants) > maxCheckConnectionTenants
-		if permissionsTruncated {
+		visibleTenants := visibleTenantNames(tenantResponse)
+		tenants := slices.DeleteFunc(visibleTenants, func(tenant string) bool {
+			return tenant == auth.SharedTenant
+		})
+		permissionsTruncated := int64(tenantResponse.GetTotal()) > int64(len(visibleTenants)) ||
+			len(tenants) > maxCheckConnectionTenants
+		if len(tenants) > maxCheckConnectionTenants {
 			tenants = tenants[:maxCheckConnectionTenants]
 		}
-		permissions := make([]CheckConnectionPermission, 0, len(tenants)*2)
-		for _, tenant := range tenants {
+		caller.Tenants = tenants
+		permissionTenants := tenants
+		if len(permissionTenants) == 0 && !permissionsTruncated {
+			tenants = []string{""}
+			permissionTenants = tenants
+		}
+		permissions := make([]CheckConnectionPermission, 0, len(permissionTenants)*2)
+		for _, tenant := range permissionTenants {
 			for _, method := range []string{"List", "Create"} {
-				allowed, err := checkComputeInstancePermission(ctx, client, tenant, method)
+				allowed, err := checkComputeInstancePermission(ctx, reviewsClient, tenant, method)
 				if err != nil {
 					return nil, CheckConnectionOutput{}, safePublicAPIError(err)
 				}
@@ -103,11 +115,22 @@ func handleCheckConnection(
 			Server:               CheckConnectionServer{Name: "osac-deployment-mcp", Version: version.Get()},
 			Caller:               caller,
 			ResourceFamilies:     resources.resourceTypes(),
-			Tools:                mcpToolNames,
+			Tools:                registry.toolNames(),
 			Permissions:          permissions,
 			PermissionsTruncated: permissionsTruncated,
 		}, nil
 	}
+}
+
+func visibleTenantNames(response *publicv1.TenantsListResponse) []string {
+	names := make([]string, 0, len(response.GetItems()))
+	for _, tenant := range response.GetItems() {
+		if name := tenant.GetMetadata().GetName(); name != "" {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
 }
 
 func callerFromRequest(req *mcp.CallToolRequest) (safeCallerContext, error) {

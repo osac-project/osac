@@ -473,7 +473,7 @@ subchart's own `values.yaml` file.
 | Parameter | Source | Description | Default |
 |---|---|---|---|
 | `global.clusterDomain` | schema | Apps domain. All route host names and the default issuer, IdP, and Vault URLs derive from it. Set at installation. | `""` |
-| `global.osacDeploymentId` | schema | Required when `metering.enabled` is `true`. A stable identity for this deployment, stored in a retained `ConfigMap`. The chart fails to render without it when metering is on, and fails on upgrade if the value changes — never change it after the first successful install. | Not set |
+| `global.osacDeploymentId` | schema | Required. A stable identity for this deployment, stored in a retained `ConfigMap`. The chart fails to render without it, and fails on upgrade if the value changes — never change it after the first successful install. | Not set |
 | `global.services.vmaas.enabled` | schema | Enables the VMaaS tier. | `true` |
 | `global.services.caas.enabled` | schema | Enables the CaaS tier. | `true` |
 | `global.services.bmaas.enabled` | schema | Enables the BMaaS tier and gates the `bmf` subchart. | `true` |
@@ -561,8 +561,8 @@ subchart's own `values.yaml` file.
 | `operatorCrds.install` | schema | Install the OSAC CRDs. Set it to `false` if a cluster administrator manages them. | `true` |
 | `kafka.enabled` | schema | Creates the Fulfillment Service's Strimzi user and copies its credentials. Set to `false` for an external Kafka connection; this does not disable Kafka use or metering's Strimzi resources. See [Kafka configuration](kafka-configuration.md). | `true` |
 | `service.kafka.connection` | schema | ConfigMap/Secret mappings for the required `brokers`, `user`, and `password` parameters. Supply resources in the OSAC namespace. | `fulfillment-service-kafka` Secret |
-| `metering.enabled` | schema | Deploys the metering service. Requires Strimzi-managed Kafka, a database connection, and `global.osacDeploymentId` (see [Table 5.1](#table-51-service-enablement-my-valuesyaml) and [Kafka configuration](kafka-configuration.md#optional-metering)). | `false` |
-| `metering.reconciliation.interval`, `metering.m360Adapter.enabled`, `metering.m360Adapter.m360.apiUrl`, `metering.m360Adapter.apiKeySecret` | subchart | Reconcile period and the Monetize360 billing adapter. | Not applicable |
+| `metering.database.connection` | schema | Metering service database connection. The metering service is always deployed: billing is not optional, and the event publisher writes usage events unconditionally. Requires Strimzi-managed Kafka, a database connection, and `global.osacDeploymentId` (see [Table 5.1](#table-51-service-enablement-my-valuesyaml) and [Kafka configuration](kafka-configuration.md#metering)). | Secret-based default |
+| `metering.heartbeat.interval`, `metering.m360Adapter.enabled`, `metering.m360Adapter.m360.apiUrl`, `metering.m360Adapter.apiKeySecret` | subchart | Heartbeat round interval and the Monetize360 billing adapter. | Not applicable |
 | `validation.enabled` | schema | Runs the pre-installation validation hook. | `true` |
 | `metallb.enabled`, `metallb.addressCIDR` | schema | In the `osac` chart, creates an `IPAddressPool` and an `L2Advertisement`. Edit the pool after installation to match your network. | `false` and `192.168.40.0/24` |
 | `bundledVault.enabled`, `bundledVault.image` | schema | In-cluster OpenBao for testing and CI. Not intended for production. | `true` and `openbao:2.6.2` |
@@ -900,7 +900,7 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
      `fulfillment-controller`, `fulfillment-ingress-proxy`, `osac-operator`,
      `osac-operator-console-proxy`, and the `osac-aap-*` pods.
    - With `ui.enabled`: `osac-ui`.
-   - With `metering.enabled`: the `osac-metering` pods.
+   - Always: the `osac-metering` pods.
    - With `bundledVault.enabled`: `openbao-0`.
    - VMaaS: `fulfillment-console-proxy`.
    - BMaaS: the Bare Metal Fulfillment Operator pod.

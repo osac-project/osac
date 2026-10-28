@@ -299,6 +299,78 @@ var _ = Describe("Validation and Activation", func() {
 			Expect(syncCondition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 			Expect(syncCondition.GetReason()).To(Equal("GroupsCreated"))
 		})
+
+		It("should retry Keycloak group failures and update status after recovery", func() {
+			project := privatev1.Project_builder{
+				Id: "project-1",
+				Metadata: privatev1.Metadata_builder{
+					Tenant:     "acme",
+					Finalizers: []string{finalizers.Controller},
+				}.Build(),
+				Status: privatev1.ProjectStatus_builder{
+					State: privatev1.ProjectState_PROJECT_STATE_PENDING,
+				}.Build(),
+			}.Build()
+			functionObj.maskCalculator = masks.NewCalculator().Build()
+			keycloakCondition := func(status *privatev1.ProjectStatus) *privatev1.ProjectCondition {
+				for _, condition := range status.GetConditions() {
+					if condition.GetType() == privatev1.ProjectConditionType_PROJECT_CONDITION_TYPE_KEYCLOAK_SYNC {
+						return condition
+					}
+				}
+				return nil
+			}
+
+			mockIdpClient.EXPECT().
+				CreateGroup(gomock.Any(), "acme", "/system:viewers").
+				Return("", errors.New("organization not found"))
+			mockIdpClient.EXPECT().
+				CreateGroup(gomock.Any(), "acme", "/system:viewers").
+				Return("viewers-id", nil)
+			mockIdpClient.EXPECT().
+				CreateGroup(gomock.Any(), "acme", "/system:managers").
+				Return("managers-id", nil)
+
+			mockClient.EXPECT().
+				Update(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, req *privatev1.ProjectsUpdateRequest,
+					_ ...grpc.CallOption) (*privatev1.ProjectsUpdateResponse, error) {
+					status := req.GetObject().GetStatus()
+					Expect(status.GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_PENDING))
+					Expect(keycloakCondition(status)).ToNot(BeNil())
+					Expect(keycloakCondition(status).GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+					return privatev1.ProjectsUpdateResponse_builder{}.Build(), nil
+				}).Times(1)
+			mockClient.EXPECT().
+				Update(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, req *privatev1.ProjectsUpdateRequest,
+					_ ...grpc.CallOption) (*privatev1.ProjectsUpdateResponse, error) {
+					status := req.GetObject().GetStatus()
+					Expect(status.GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_ACTIVE))
+					Expect(keycloakCondition(status)).ToNot(BeNil())
+					Expect(keycloakCondition(status).GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+					return privatev1.ProjectsUpdateResponse_builder{}.Build(), nil
+				}).Times(1)
+
+			firstErr := functionObj.Run(ctx, project)
+			Expect(firstErr).To(HaveOccurred())
+			var retryable interface{ RequeueAfter() time.Duration }
+			Expect(errors.As(firstErr, &retryable)).To(BeTrue())
+			Expect(retryable.RequeueAfter()).To(Equal(projectGroupRetryDelay))
+
+			Expect(functionObj.Run(ctx, project)).To(Succeed())
+			Expect(project.GetStatus().GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_ACTIVE))
+			Expect(project.GetStatus().GetConditions()).To(ContainElement(
+				WithTransform(func(condition *privatev1.ProjectCondition) privatev1.ConditionStatus {
+					return condition.GetStatus()
+				}, Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE)),
+			))
+			Expect(project.GetStatus().GetConditions()).To(ContainElement(
+				WithTransform(func(condition *privatev1.ProjectCondition) string {
+					return condition.GetReason()
+				}, Equal("GroupsCreated")),
+			))
+		})
 	})
 
 	Context("Projects with valid parent", func() {
@@ -1200,6 +1272,9 @@ var _ = Describe("Deletion Cleanup", func() {
 		err := task.delete(ctx)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("failed to delete Keycloak groups"))
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(err, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(projectGroupRetryDelay))
 		Expect(project.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
 	})
 

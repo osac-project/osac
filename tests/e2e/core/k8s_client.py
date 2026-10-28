@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import subprocess
+import tempfile
+import time
+from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 from tests.e2e.core.runner import run, run_unchecked
@@ -19,6 +24,21 @@ _RESOURCE_NOT_FOUND_ALIASES = {
     "clusterorder": {"clusterorders", "clusterorders.osac.openshift.io"},
     "infraenv.agent-install.openshift.io": {"infraenvs.agent-install.openshift.io"},
 }
+
+
+def _watch_lines(path: Path) -> list[str]:
+    """The complete non-empty lines of a growing watch output file.
+
+    kubectl prints one line per watched object; the last line may be a
+    partial write in progress, so only newline-terminated lines count.
+    """
+    text = path.read_text()
+    if not text:
+        return []
+    lines = text.split("\n")
+    if not text.endswith("\n"):
+        lines.pop()
+    return [line for line in lines if line]
 
 
 class K8sClient:
@@ -101,6 +121,72 @@ class K8sClient:
 
     def get_jsonpath(self, *, resource: str, name: str, jsonpath: str) -> str:
         return run(*self._base(), "get", resource, name, "-n", self.namespace, "-o", f"jsonpath={jsonpath}")
+
+    @contextlib.contextmanager
+    def watch_deletion_timestamp(self, *, resource: str, name: str) -> Iterator[Callable[[], str]]:
+        """Yield a callable returning the object's deletionTimestamp once set.
+
+        A plain get loses the race against a fast teardown: controllers can
+        release every finalizer within a second of the delete request, and
+        the object is gone before the next get runs. A watch established
+        before the delete request cannot miss it: Kubernetes delivers the
+        modification that stamps metadata.deletionTimestamp to every watcher
+        already open, whatever happens to the object afterwards.
+
+        The watch is confirmed established (the current object arrived)
+        before the context body runs, so a delete issued inside the body is
+        always after the watch.
+        """
+        with tempfile.TemporaryDirectory() as run_dir:
+            out_path = Path(run_dir) / "watch.out"
+            err_path = Path(run_dir) / "watch.err"
+            with out_path.open("w") as out, err_path.open("w") as err:
+                command = [
+                    *self._base(),
+                    "get",
+                    resource,
+                    name,
+                    "-n",
+                    self.namespace,
+                    # The name always renders, so the first line proves the
+                    # watch is established; the timestamp after the colon is
+                    # empty until the delete stamps it. Object names cannot
+                    # contain colons, so splitting on the first is safe. The
+                    # jsonpath printer emits no newline of its own, so the
+                    # template carries one: without it every watched object
+                    # concatenates into a single unterminated line.
+                    "-o",
+                    'jsonpath={.metadata.name}:{.metadata.deletionTimestamp}{"\\n"}',
+                    "--watch",
+                ]
+                proc = subprocess.Popen(command, stdout=out, stderr=err)
+            try:
+                deadline = time.monotonic() + 30
+                while not _watch_lines(out_path):
+                    if proc.poll() is not None:
+                        raise RuntimeError(f"kubectl watch exited early: {err_path.read_text().strip()}")
+                    if time.monotonic() > deadline:
+                        raise RuntimeError(f"kubectl watch for {resource} {name} produced no output within 30s")
+                    time.sleep(0.2)
+
+                def deletion_stamp() -> str:
+                    if proc.poll() is not None:
+                        raise RuntimeError(f"kubectl watch exited early: {err_path.read_text().strip()}")
+                    for line in _watch_lines(out_path):
+                        stamp = line.split(":", 1)[1]
+                        if stamp:
+                            return stamp
+                    return ""
+
+                yield deletion_stamp
+            finally:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=5)
 
     def get_by_label(self, *, resource: str, label: str, jsonpath: str) -> str:
         return run(*self._base(), "get", resource, "-n", self.namespace, "-l", label, "-o", f"jsonpath={jsonpath}")

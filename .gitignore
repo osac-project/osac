@@ -242,7 +242,9 @@ cython_debug/
 **/dockerconfig.json
 **/*pull-secret.json
 [lL]icense.zip
+[mM]360-api-key
 **/osac-aap-secrets.env
 **/server-ssh-key
 **/server-ssh-bastion-key
 osac-installer/charts/osac/tmpcharts*/
+m360-local.yaml

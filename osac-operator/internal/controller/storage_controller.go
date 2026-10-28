@@ -90,7 +90,7 @@ type SecretsClient interface {
 }
 
 // StorageReconciler reconciles storage lifecycle on Tenant CRs.
-// It owns StorageBackendReady, ClusterStorageReady, and StorageOnboardingComplete conditions,
+// It owns StorageBackendReady, ClusterStorageReady, and StorageReady conditions,
 // status.storageClasses, status.storageBackendJobs, and status.clusterStorageJobs on the Tenant CR.
 type StorageReconciler struct {
 	client.Client
@@ -213,7 +213,7 @@ func (r *StorageReconciler) Reconcile(ctx context.Context, req mcreconcile.Reque
 }
 
 var storageOwnedConditionTypes = []v1alpha1.TenantConditionType{
-	v1alpha1.TenantConditionStorageOnboardingComplete,
+	v1alpha1.TenantConditionStorageReady,
 	v1alpha1.TenantConditionStorageBackendReady,
 	v1alpha1.TenantConditionClusterStorageReady,
 }
@@ -1354,7 +1354,7 @@ func (r *StorageReconciler) getClusterKubeconfig(ctx context.Context, clusterOrd
 }
 
 // handleCSPStorageOnboarding evaluates CSP-managed StorageClass onboarding for
-// the given tenant, updates TenantConditionStorageOnboardingComplete, and
+// the given tenant, updates TenantConditionStorageReady, and
 // reports whether the tenant is pure-CSP (no active or retained OSAC storage).
 func (r *StorageReconciler) handleCSPStorageOnboarding(
 	ctx context.Context,
@@ -1365,7 +1365,7 @@ func (r *StorageReconciler) handleCSPStorageOnboarding(
 	skippedOSACTiers bool,
 ) ([]v1alpha1.ResolvedStorageClass, bool, error) {
 	if len(cspTiers) == 0 {
-		apimeta.RemoveStatusCondition(&tenant.Status.Conditions, string(v1alpha1.TenantConditionStorageOnboardingComplete))
+		apimeta.RemoveStatusCondition(&tenant.Status.Conditions, string(v1alpha1.TenantConditionStorageReady))
 		return nil, false, nil
 	}
 	targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
@@ -1390,16 +1390,16 @@ func (r *StorageReconciler) handleCSPStorageOnboarding(
 	condMsg = r.appendMissingTierWarnings(tenant, cspTiers, cspResult.resolved, cspResult.ambiguousTiers, condMsg)
 
 	if len(missing) == 0 && len(cspResult.duplicateMessages) == 0 {
-		tenant.SetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete,
+		tenant.SetStatusCondition(v1alpha1.TenantConditionStorageReady,
 			metav1.ConditionTrue,
 			v1alpha1.TenantReasonFound,
 			condMsg)
-	} else if existing := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete); existing == nil || existing.Status != metav1.ConditionTrue {
+	} else if existing := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady); existing == nil || existing.Status != metav1.ConditionTrue {
 		reason := v1alpha1.TenantReasonNotFound
 		if len(missing) == 0 {
 			reason = v1alpha1.TenantReasonMultipleFound
 		}
-		tenant.SetStatusCondition(v1alpha1.TenantConditionStorageOnboardingComplete,
+		tenant.SetStatusCondition(v1alpha1.TenantConditionStorageReady,
 			metav1.ConditionFalse,
 			reason,
 			condMsg)

@@ -20,6 +20,7 @@ effects, and follow the instructions for every affected component.
 
 | Area | Required coverage | Location and command | Boundary and prerequisites |
 |---|---|---|---|
+| VMaaS deletion-test finalizer retries | [DEV] Unit for bounded conflict retries, fresh versions, preserved concurrent finalizers, idempotence, and non-conflict failures | From the root: `uv run pytest -n 0 tests/unit/test_vmaas_deletion_finalizer.py` | Test-helper logic only; gRPC responses and time are mocked. Does not establish deployed deletion. |
 | VMaaS deletion feedback with a removed DiskImage | [QE] Regression E2E for status feedback with a stale spec reference, ComputeInstance removal, and explicit dependent SecurityGroup, Subnet, and VirtualNetwork deletion | From the repository root: `uv run pytest -n 0 tests/e2e/vmaas/regression/test_compute_instance_disk_image.py -k deletion_feedback_with_removed_disk_image` | Deployed Fulfillment/database, operator, AAP, and VM provider; a private finalizer holds deletion while the image is removed. Requires the VMaaS template, instance type, storage tier, and networking provider. |
 | AgentlessNet Subnet VLAN, real DHCP clients, retry, and cleanup | Deployed lab E2E for saved allocations, leases, gateway/L2 traffic, service restart, `/30`, and peer-preserving lifecycle | Root orchestrator `vlan-e2e.sh`; reusable client and VLAN assertions live in that script | Requires the running SNO and Containerlab Cumulus VX lab, deployed Fulfillment/operator/AAP, source-pinned EE/project, and container access. Client macvlan children use host links `leaf1-swp2`, `leaf2-swp2`, and `leaf2-swp3`; the runner snapshots and restores the switch ports. Does not establish physical-hardware, BMaaS lease-status, NAT, or full-install CI coverage. |
 | VMaaS ComputeInstance InstanceType resize, including CatalogItem-created instances | Regression E2E for CLI/API outcomes, applied ComputeInstance configuration, and VMI resources | `tests/e2e/vmaas/regression/test_compute_instance_instance_type.py`; from the repository root, run `uv run pytest tests/e2e/vmaas/regression/test_compute_instance_instance_type.py` | Uses the deployed VMaaS API and Kubernetes endpoints, VM kubeconfig, image, storage tier, subnet, and VM template. Restart-required behavior assumes the single-node VMaaS profile. |
@@ -41,10 +42,11 @@ creates its cluster directly with two node sets and verifies ready worker aggreg
 installed Agents, and per-NodeSet NodePool isolation before deleting; it uses the same
 source-pinned environment prerequisites as the focused lifecycle. Run it with
 `uv run pytest -n 0 tests/e2e/caas/regression/test_cluster_node_sets.py::test_cluster_create_with_two_node_sets`.
-CaaS sanity contains only the single-nodepool lifecycle and the fast deletion
-feedback test. Two-node-set isolation and explicit/invalid version cases belong
-in CaaS regression; version cases are consolidated in
-`regression/test_cluster_version.py` rather than duplicated in sanity.
+CaaS sanity contains the single-nodepool lifecycle and the fast deletion
+feedback test; the lifecycle verifies deployed version resolution through the
+ClusterOrder and HostedCluster release image. Two-node-set isolation belongs in
+CaaS regression; invalid-version API validation and ClusterVersion deletion
+protection belong in the Fulfillment integration suite.
 Other CaaS scenarios still using `wait_for_cluster_deletion` do not establish
 that boundary. Both scenarios verify the API worker BMI's tenant, cluster-order
 label and owner-reference annotation, and the Kubernetes CR's tenant annotation

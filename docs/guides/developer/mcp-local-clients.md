@@ -29,7 +29,8 @@ This profile also installs the local VM stack, seeds a sample catalog, and
 onboards `tenant1`; sign in as `tenant1_user` or `tenant1_admin` to see its
 resources. The smaller `PROFILE=dev` profile installs the control plane but
 does not seed a tenant, so all eleven MCP resource lists are empty on a fresh
-installation, including `project` and `secret_reference`.
+installation, including `project` and `secret_reference`. Secret references
+expose only their ID, name, and type; MCP never returns Secret contents.
 
 The Kind infrastructure step registers a dedicated confidential MCP resource
 client in Keycloak and puts its generated exchange secret in the `osac`
@@ -255,10 +256,10 @@ Kind example above. This makes Codex ask before invoking tools that are not
 marked read-only.
 Restart Codex, use `/mcp` to confirm the connection and five available tools,
 call `check_connection` before provisioning, and try a read request first. For
-a VM create or delete, inspect the target and
-check that Codex presents a separate approval prompt for the write call. A
-conversation request alone is not the host approval step. OSAC still
-authorizes each call as the signed-in user through the public Fulfillment API.
+a VM create or delete, inspect the target and check that Codex presents a
+separate approval prompt for the write call. A conversation request alone is
+not the host approval step. OSAC still authorizes each call as the signed-in
+user through the public Fulfillment API.
 
 ## Explore with MCP Inspector
 

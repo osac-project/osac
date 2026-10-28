@@ -255,7 +255,7 @@ var _ = Describe("Private external IP attachments server", func() {
 						ExternalIpAddress:   "198.51.100.11",
 						Message:             &message,
 						Hub:                 "hub-1",
-						StateTransitionTime: timestamppb.Now(),
+						StateTransitionTime: timestamppb.New(time.Now().Truncate(time.Second)),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -432,7 +432,7 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			// The first attachment time must be after the parent's creation: the source
 			// contract clamps a first time on or before it.
-			readyTime := timestamppb.New(time.Now())
+			readyTime := timestamppb.New(time.Now().Truncate(time.Second))
 			ready := createResponse.GetObject()
 			ready.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_READY)
 			ready.GetStatus().SetStateTransitionTime(readyTime)

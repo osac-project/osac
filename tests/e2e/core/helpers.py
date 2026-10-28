@@ -18,6 +18,7 @@ from tests.e2e.core.runner import poll_until, run_unchecked
 
 _POOL_READY_STATE = "EXTERNAL_IP_POOL_STATE_READY"
 _SUBNET_READY_STATE = "SUBNET_STATE_READY"
+_SECURITY_GROUP_READY_STATE = "SECURITY_GROUP_STATE_READY"
 _BMI_RUNNING_RETRIES = 180
 _BMI_RUNNING_DELAY = 10
 _WORKLOAD_HEALTH_RETRIES = 120
@@ -333,6 +334,31 @@ def wait_for_grpc_subnet_ready(*, grpc: GRPCClient, subnet_id: str) -> None:
     )
 
 
+def wait_for_grpc_security_group_ready(*, grpc: GRPCClient, sg_id: str) -> None:
+    """Poll the gRPC API until the security group state is READY.
+
+    Same race as wait_for_grpc_subnet_ready: the K8s CR status reports Ready
+    before the fulfillment-service database reflects it. A ComputeInstance
+    created against a still-PENDING security group is rejected with
+    FailedPrecondition.
+    """
+
+    def _state() -> str:
+        try:
+            sg = grpc.get_security_group(sg_id=sg_id)
+        except subprocess.CalledProcessError:
+            return ""
+        return sg.get("object", {}).get("status", {}).get("state", "")
+
+    poll_until(
+        fn=_state,
+        until=lambda v: v == _SECURITY_GROUP_READY_STATE,
+        retries=60,
+        delay=2,
+        description=f"SecurityGroup {sg_id} gRPC READY",
+    )
+
+
 def wait_for_subnet_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
         fn=lambda: not k8s.is_present(resource="subnet", name=name),
@@ -419,8 +445,9 @@ def wait_for_external_ip_allocated(*, k8s: K8sClient, name: str) -> None:
 
 
 def wait_for_external_ip_deletion(*, k8s: K8sClient, name: str) -> None:
+    """Wait for the exact ExternalIP to be absent; propagate unconfirmed read errors."""
     poll_until(
-        fn=lambda: not k8s.is_present(resource="externalip", name=name),
+        fn=lambda: k8s.is_absent(resource="externalips.osac.openshift.io", name=name),
         until=lambda v: v is True,
         retries=120,
         delay=5,

@@ -729,7 +729,7 @@ func (t *task) setState(state privatev1.BareMetalInstanceState, transitionTime *
 	if transitionTime != nil && !transitionTime.IsZero() {
 		status.SetStateTransitionTime(timestamppb.New(transitionTime.Time))
 	} else {
-		status.SetStateTransitionTime(timestamppb.Now())
+		status.SetStateTransitionTime(controllers.NowTruncated())
 	}
 }
 

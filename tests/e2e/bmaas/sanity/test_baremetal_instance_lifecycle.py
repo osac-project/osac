@@ -118,7 +118,8 @@ def test_baremetal_instance_lifecycle(
     """Provision a BMI end-to-end and assert its terminal stage, NIC metadata, power cycle, and deprovision."""
     name = f"e2e-bmi-{test_run_id}"
     disk_images: dict[str, Any] = jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.DiskImages/List")
-    assert bmi_disk_image in {item["metadata"]["name"] for item in disk_images.get("items", [])}
+    image = next(item for item in disk_images.get("items", []) if item["metadata"]["name"] == bmi_disk_image)
+    assert set(image["spec"]["architecture"]) == {"ARCHITECTURE_AMD64", "ARCHITECTURE_ARM64"}
 
     bmi_id, _ = jwt_cli_user.create_baremetal_instance(
         name=name, catalog_item=catalog_item, ssh_key=ssh_public_key, disk_image=bmi_disk_image

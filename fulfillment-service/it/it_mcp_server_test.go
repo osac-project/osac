@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -74,11 +75,11 @@ var _ = Describe("MCP server", func() {
 		computeInstancesClient         publicv1.ComputeInstancesClient
 		diskImagesClient               privatev1.DiskImagesClient
 		instanceTypesClient            privatev1.InstanceTypesClient
+		networkClassesClient           privatev1.NetworkClassesClient
 		storageBackendsClient          privatev1.StorageBackendsClient
 		storageTiersClient             privatev1.StorageTiersClient
 		subnetsClient                  privatev1.SubnetsClient
 		virtualNetworksClient          privatev1.VirtualNetworksClient
-		networkClassesClient           privatev1.NetworkClassesClient
 		securityGroupsClient           privatev1.SecurityGroupsClient
 
 		catalogItemID          string
@@ -111,11 +112,11 @@ var _ = Describe("MCP server", func() {
 		computeInstancesClient = publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
 		diskImagesClient = privatev1.NewDiskImagesClient(adminConn)
 		instanceTypesClient = privatev1.NewInstanceTypesClient(adminConn)
+		networkClassesClient = privatev1.NewNetworkClassesClient(adminConn)
 		storageBackendsClient = privatev1.NewStorageBackendsClient(adminConn)
 		storageTiersClient = privatev1.NewStorageTiersClient(adminConn)
 		subnetsClient = privatev1.NewSubnetsClient(adminConn)
 		virtualNetworksClient = privatev1.NewVirtualNetworksClient(adminConn)
-		networkClassesClient = privatev1.NewNetworkClassesClient(adminConn)
 		securityGroupsClient = privatev1.NewSecurityGroupsClient(adminConn)
 
 		storageBackendResponse, err := storageBackendsClient.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{
@@ -422,6 +423,10 @@ var _ = Describe("MCP server", func() {
 		listedTools, err := session.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(listedTools.Tools).To(HaveLen(5))
+		toolNames := make([]string, len(listedTools.Tools))
+		for index, tool := range listedTools.Tools {
+			toolNames[index] = tool.Name
+		}
 		Expect([]string{
 			listedTools.Tools[0].Name, listedTools.Tools[1].Name,
 			listedTools.Tools[2].Name, listedTools.Tools[3].Name, listedTools.Tools[4].Name,
@@ -442,9 +447,7 @@ var _ = Describe("MCP server", func() {
 		Expect(connection.Caller.Subject).ToNot(BeEmpty())
 		Expect(connection.Caller.Tenants).To(ContainElement(usersGroup))
 		Expect(connection.ResourceFamilies).To(HaveLen(11))
-		Expect(connection.Tools).To(ConsistOf(
-			"check_connection", "list_resources", "get_resource", "create_compute_instance", "delete_compute_instance",
-		))
+		Expect(connection.Tools).To(ConsistOf(toolNames))
 		Expect(connection.Permissions).To(ConsistOf(
 			mcpserver.CheckConnectionPermission{
 				Tenant: usersGroup, Service: "osac.public.v1.ComputeInstances", Method: "List", Allowed: true,
@@ -526,6 +529,8 @@ var _ = Describe("MCP server", func() {
 		)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(created.ID).ToNot(BeEmpty())
+		Expect(created.Version).To(BeNumerically(">=", 0))
+		Expect(created.State).ToNot(BeEmpty())
 		computeInstanceID = created.ID
 		DeferCleanup(func() {
 			if computeInstanceID == "" {
@@ -598,6 +603,7 @@ var _ = Describe("MCP server", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("tool \"delete_compute_instance\" returned an error result"))
 		Expect(err.Error()).To(MatchRegexp(`(?i)(not.?found|permission.?denied)`))
+		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"NotFound"`))
 		stillPresent, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: computeInstanceID}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(stillPresent.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
@@ -624,6 +630,10 @@ var _ = Describe("MCP server", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring(`"category":"invalid_request"`))
 		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"InvalidArgument"`))
+		deniedEnvelope := regexp.MustCompile(`"category":"([^"]+)".*"grpc_code":"([^"]+)"`).FindStringSubmatch(err.Error())
+		Expect(deniedEnvelope).To(HaveLen(3))
+		Expect(deniedEnvelope[1]).To(Equal("invalid_request"))
+		Expect(deniedEnvelope[2]).To(Equal("InvalidArgument"))
 		adminInstances := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
 		for _, name := range []string{invalidName, deniedName} {
 			invalidList, e := adminInstances.List(ctx, privatev1.ComputeInstancesListRequest_builder{
@@ -632,6 +642,23 @@ var _ = Describe("MCP server", func() {
 			Expect(e).ToNot(HaveOccurred())
 			Expect(invalidList.GetItems()).To(BeEmpty())
 		}
+
+		dispatchName := fmt.Sprintf("mcp-dispatch-compute-%s", uuid.New()[24:32])
+		_, err = callMCPTool[mcpserver.CreateComputeInstanceOutput](
+			ctx, session, "create_compute_instance", map[string]any{
+				"service":      "osac.public.v1.ComputeInstances",
+				"method":       "Delete",
+				"payload":      map[string]any{"id": computeInstanceID},
+				"name":         dispatchName,
+				"catalog_item": catalogItemID,
+			},
+		)
+		Expect(err).To(HaveOccurred())
+		dispatchList, err := adminInstances.List(ctx, privatev1.ComputeInstancesListRequest_builder{
+			Filter: proto.String(fmt.Sprintf("this.metadata.name == %q", dispatchName)),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(dispatchList.GetItems()).To(BeEmpty())
 
 		_, err = callMCPTool[mcpserver.DeleteComputeInstanceOutput](
 			ctx, session, "delete_compute_instance", mcpserver.DeleteComputeInstanceInput{},

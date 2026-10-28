@@ -7,47 +7,52 @@ image:
 # identity at startup when this chart is installed standalone.
 global:
   osacDeploymentId: ""
-  fulfillmentTrust:
-    enabled: false
-  # Issuer URL is read from this ConfigMap's FULFILLMENT_ISSUER_URL key.
-  # The installer creates the default ConfigMap; standalone installs must
-  # create it in the release namespace or set this to another existing ConfigMap.
-  meteringFulfillmentIssuerConfigMapName: osac-metering-fulfillment-config
-
-# Fulfillment address is auto-derived from release namespace.
-# Override fulfillment.address for cross-namespace/cross-cluster (OSAC-3537).
 
 database:
   connection: []
 
+# Heartbeat round interval. One minute by default; each heartbeat is a rated
+# transaction in the billing provider, so a longer interval sends fewer of
+# them and keeps running totals staler.
 heartbeat:
   interval: "60s"
-
-reconciliation:
-  interval: "60m"
 
 certs:
   caBundle:
     configMap: ca-bundle
 
+# Sizing: one catch-up pass reads up to CatchUpBatch (500) round groups of
+# heartbeats into memory before applying them one group per transaction. A
+# caught heartbeat costs ~460 bytes in use (a 208-byte struct plus its ID and
+# dimension JSON, measured on the round package), so a heavy pass — 500 groups
+# of, say, 200 heartbeats each on a busy tenant — holds ~45 MB, and the merge
+# builds transient ledger copies and rational arithmetic on top of that. With
+# the Go runtime and Kafka client baseline (~80 MB), the worst case lands
+# around 200 MB; 512 Mi leaves more than 2x headroom over it.
 resources:
   requests:
     cpu: 100m
     memory: 128Mi
   limits:
     cpu: 500m
-    memory: 256Mi
+    memory: 512Mi
 
-# Kafka connection and topic naming. Override to point at a different
-# Kafka cluster or to prefix topics for per-instance isolation.
+# Kafka connection. Override to point at a different Kafka cluster; the topic
+# names are fixed (the schema's events prefix), so every instance of a shared
+# cluster must use a separate KafkaUser but cannot rename its topics.
 # TLS trust uses certs.caBundle (the shared OSAC CA), not the Strimzi cluster CA.
 kafka:
   brokers: ""          # default: osac-kafka-kafka-bootstrap.osac-kafka.svc.cluster.local:9093
   clusterName: ""      # default: osac-kafka
   clusterNamespace: "" # default: osac-kafka
 
-# Prefix prepended to all topic names (e.g. "pr101" -> "pr101.osac.metering.lifecycle").
-# When set, this chart skips KafkaTopic/KafkaUser creation (the parent chart owns them).
+# The per-tenant heartbeat and dead-letter topics. Metering creates them when
+# it first serves a tenant, on the broker's default replication factor; this
+# chart only creates the KafkaUser ACLs. The retention is the recovery
+# window: metering rebuilds its database from the topics, so -1 (indefinite)
+# keeps every record for a full rebuild.
+topics:
+  retentionMs: "-1"
 
 ## Echo adapter — test/development tool only, not for production use.
 ## Enable and configure via environment-specific values (e.g., values/vmaas-ci/values.yaml).
@@ -57,6 +62,10 @@ echoAdapter:
   #   repository: ghcr.io/osac-project/metering-echo-adapter
   #   tag: latest
   #   pullPolicy: Always
+  # How many heartbeats the adapter keeps for the E2E assertions. The default
+  # (1000) fits a single suite; a long parallel session needs more, because the
+  # assertions read a resource's whole history from the first heartbeat on.
+  # maxEvents: 10000
 
 ## M360 adapter — forwards metering events to Monetize360 Usage API.
 m360Adapter:
@@ -69,3 +78,17 @@ m360Adapter:
     apiUrl: ""
     apiKeySecret: ""     # name of K8s Secret with key "api-key"
     apiVersion: "v1"
+
+## Prometheus monitoring. Both require a Prometheus operator or OpenShift
+## user-workload monitoring that selects these resources. The metrics exist
+## because billing can stop while the metering pod stays ready: the round
+## loop logs its errors and keeps going, so liveness alone proves nothing.
+serviceMonitor:
+  enabled: false
+  # Extra labels for Prometheus instances that select monitors by label.
+  labels: {}
+
+prometheusRule:
+  enabled: false
+  # Extra labels for Prometheus instances that select rules by label.
+  labels: {}

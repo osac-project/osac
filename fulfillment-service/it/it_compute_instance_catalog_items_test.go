@@ -481,8 +481,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 					Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
 					Published: true,
 					Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
-						SshKey: publicv1.SecretReferenceFieldPolicy_builder{
-							Locked: publicv1.SecretLocalReference_builder{Id: sshKeySecret}.Build(),
+						SshKey: publicv1.FullSecretReferenceFieldPolicy_builder{
+							Locked: publicv1.SecretReference_builder{Id: sshKeySecret}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build(),
@@ -691,21 +691,24 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				return result
 			}
 
-			By("creating and reading explicit policy values through REST")
-			template := createCatalogItemComputeInstanceTemplateFixture(ctx, nil, nil)
-			sshKeySecret := createCatalogItemSecretFixture(
-				ctx,
-				usersGroup,
-				privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
-				map[string][]byte{"public_key": []byte(catalogItemFixtureSSHPublicKey)},
-			)
+			By("creating and reading project-aware policy values through REST")
+			userConn := computeInstanceSSHKeyProjectUserConn(ctx, userUsername)
+			projectAdminConn := computeInstanceSSHKeyProjectAdminConn(ctx)
+			project := createComputeInstanceSSHKeyProjectFixture(ctx, usersGroup, projectAdminConn)
+			grantComputeInstanceSSHKeyProjectAccess(ctx, usersGroup, project)
+			secret := createComputeInstanceSSHKeySecretFixture(ctx, usersGroup, project, catalogItemFixtureName())
+			template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
+			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			created := request(http.MethodPost, path, map[string]any{
-				"metadata": map[string]any{"name": catalogItemFixtureName(), "tenant": usersGroup},
-				"template": map[string]any{"id": template},
+				"metadata":  map[string]any{"name": catalogItemFixtureName(), "tenant": usersGroup},
+				"template":  map[string]any{"id": template},
+				"published": true,
 				"fields": map[string]any{
 					"auto_external_ip_attachment": map[string]any{"locked": false},
 					"ssh_key": map[string]any{
-						"editable": map[string]any{"default_value": map[string]any{"id": sshKeySecret}},
+						"editable": map[string]any{"default_value": map[string]any{
+							"name": secret.GetMetadata().GetName(), "project": project,
+						}},
 					},
 				},
 			})
@@ -725,20 +728,37 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			sshKeyPolicy := fields["ssh_key"].(map[string]any)
 			editableSshKey := sshKeyPolicy["editable"].(map[string]any)
 			defaultSshKey := editableSshKey["default_value"].(map[string]any)
-			Expect(defaultSshKey["id"]).To(Equal(sshKeySecret))
+			Expect(defaultSshKey["id"]).To(Equal(secret.GetId()))
+			Expect(defaultSshKey["project"]).To(Equal(project))
+
+			By("applying the named-project default through the public ComputeInstance API")
+			createdInstance, err := createComputeInstanceFixture(ctx, userConn, publicv1.ComputeInstanceSpec_builder{
+				CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: id}.Build(),
+				NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			stored, err := publicv1.NewComputeInstancesClient(userConn).Get(
+				ctx, publicv1.ComputeInstancesGetRequest_builder{Id: createdInstance.GetId()}.Build(),
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(stored.GetObject().GetSpec().GetSshKey().GetId()).To(Equal(secret.GetId()))
+			Expect(stored.GetObject().GetSpec().GetSshKey().GetName()).To(Equal(secret.GetMetadata().GetName()))
+			Expect(stored.GetObject().GetSpec().GetSshKey().GetProject()).To(Equal(project))
+			Expect(stored.GetObject().GetSpec().GetSshKey().GetShared()).To(BeFalse())
 
 			By("updating only the SSH-key policy through REST")
 			request(http.MethodPatch, path+"/"+id+"?updateMask=fields.ssh_key", map[string]any{
 				"id": id,
 				"fields": map[string]any{
-					"ssh_key": map[string]any{"locked": map[string]any{"id": sshKeySecret}},
+					"ssh_key": map[string]any{"locked": map[string]any{"id": secret.GetId(), "project": project}},
 				},
 			})
 			// Read back to confirm the SSH-key policy changed and the external-IP setting did not.
 			fields = request(http.MethodGet, path+"/"+id, nil)["fields"].(map[string]any)
 			sshKeyPolicy = fields["ssh_key"].(map[string]any)
 			lockedSshKey := sshKeyPolicy["locked"].(map[string]any)
-			Expect(lockedSshKey["id"]).To(Equal(sshKeySecret))
+			Expect(lockedSshKey["id"]).To(Equal(secret.GetId()))
+			Expect(lockedSshKey["project"]).To(Equal(project))
 			Expect(fields["auto_external_ip_attachment"]).To(Equal(map[string]any{"locked": false}))
 		})
 

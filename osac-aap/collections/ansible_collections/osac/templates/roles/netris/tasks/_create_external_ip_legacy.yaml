@@ -39,12 +39,74 @@
   ansible.builtin.set_fact:
     _eip_existing_subnet: "{{ netris_ipam_subnet }}"
 
+- name: Find allocations for the requested ExternalIPPool
+  ansible.builtin.set_fact:
+    _eip_pool_allocs: >-
+      {{ netris_ipam_tree
+         | selectattr('name', 'match', '^' + (eip_pool_name | regex_escape) + '(-[0-9]+)?$')
+         | list }}
+
+- name: Fail if the requested ExternalIPPool has no Netris allocation
+  ansible.builtin.fail:
+    msg: >-
+      ExternalIPPool allocations for '{{ eip_pool_name }}' not found in Netris IPAM.
+      Ensure the ExternalIPPool has been created before allocating ExternalIPs.
+  when: (_eip_pool_allocs | default([])) | length == 0
+
 - name: Use existing subnet address (idempotent)
   when: _eip_existing_subnet is defined and _eip_existing_subnet is not none
   block:
+    - name: Find missing ownership fields on the existing ExternalIP
+      ansible.builtin.set_fact:
+        _eip_missing_fields: >-
+          {{ _eip_existing_subnet
+             | netris.controller.netris_immutable_missing_fields({
+                 'prefix': 'required',
+                 'tenant.id': netris_tenant_id,
+                 'purpose': 'nat'
+               }) }}
+
+    - name: Refuse an ExternalIP subnet that cannot be verified
+      ansible.builtin.fail:
+        msg: >-
+          Netris IPAM subnet '{{ eip_name }}' cannot be verified as an ExternalIP
+          owned by tenant '{{ netris_tenant_id }}' and pool '{{ eip_pool_name }}'.
+          Missing fields: {{ _eip_missing_fields | join(', ') }}. No provider mutation was made.
+      when: _eip_missing_fields | length > 0
+
     - name: Set allocated address from existing IPAM subnet
       ansible.builtin.set_fact:
         eip_allocated_address: "{{ _eip_existing_subnet.prefix | ansible.utils.ipaddr('address') }}"
+
+    - name: Verify the existing ExternalIP belongs to the requested pool and tenant
+      ansible.builtin.set_fact:
+        _eip_existing_mismatches: >-
+          {{ _eip_existing_subnet | netris.controller.netris_immutable_mismatch({
+               'tenant.id': netris_tenant_id,
+               'purpose': 'nat'
+             }) }}
+        _eip_address_in_pool: >-
+          {{ eip_allocated_address
+             | netris.controller.netris_ip_in_cidrs(
+                 _eip_pool_allocs | map(attribute='prefix') | list
+               ) }}
+
+    - name: Refuse an ExternalIP allocated outside its requested pool
+      ansible.builtin.fail:
+        msg: >-
+          Existing Netris ExternalIP '{{ eip_name }}' at '{{ eip_allocated_address }}'
+          is not inside an allocation for pool '{{ eip_pool_name }}'; refusing to
+          adopt or modify an address owned by another pool.
+      when: not (_eip_address_in_pool | bool)
+
+    - name: Refuse ExternalIP tenant or purpose drift
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'ExternalIP IPAM subnet'
+             | netris.controller.format_immutable_mismatch_message(
+                 eip_name, _eip_existing_mismatches
+               ) }}
+      when: _eip_existing_mismatches | length > 0
 
     - name: Display existing subnet
       ansible.builtin.debug:
@@ -53,20 +115,6 @@
 - name: Allocate new IP from pool
   when: _eip_existing_subnet is not defined or _eip_existing_subnet is none
   block:
-    - name: Find pool allocations in IPAM tree
-      ansible.builtin.set_fact:
-        _eip_pool_allocs: >-
-          {{ netris_ipam_tree
-             | selectattr('name', 'match', '^' + (eip_pool_name | regex_escape) + '(-[0-9]+)?$')
-             | list }}
-
-    - name: Fail if no pool allocations found
-      ansible.builtin.fail:
-        msg: >-
-          ExternalIPPool allocations for '{{ eip_pool_name }}' not found in Netris IPAM.
-          Ensure the ExternalIPPool has been created before allocating ExternalIPs.
-      when: (_eip_pool_allocs | default([])) | length == 0
-
     - name: Collect all allocated /32 addresses from IPAM
       ansible.builtin.set_fact:
         _eip_allocated_addrs: >-

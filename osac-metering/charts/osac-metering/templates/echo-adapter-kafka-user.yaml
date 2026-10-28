@@ -12,33 +12,5 @@ spec:
   authorization:
     type: simple
     acls:
-      - resource:
-          type: topic
-          name: osac.metering.
-          patternType: prefix
-        operations:
-          - Read
-          - Describe
-        host: "*"
-      - resource:
-          type: topic
-          name: osac.metering.dlq
-          patternType: literal
-        operations:
-          - Write
-        host: "*"
-      - resource:
-          type: cluster
-          name: kafka-cluster
-          patternType: literal
-        operations:
-          - IdempotentWrite
-        host: "*"
-      - resource:
-          type: group
-          name: osac-metering-echo-adapter
-          patternType: literal
-        operations:
-          - Read
-        host: "*"
+      {{- include "osac-metering.adapterKafkaUserAcls" "osac-metering-echo-adapter" | nindent 6 }}
 {{- end }}

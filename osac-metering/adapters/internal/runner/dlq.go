@@ -12,9 +12,7 @@ package runner
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -49,10 +47,13 @@ type DLQProducer struct {
 	client   sarama.Client
 	offsets  kafkaOffsets
 	topic    string
+	// perTenant derives the DLQ topic from the source topic of each failed record.
+	perTenant bool
 }
 
-// NewDLQProducer creates a DLQ producer connected to the given brokers.
-func NewDLQProducer(brokers string, topic string, kafkaCfg kafka.KafkaConfig) (*DLQProducer, error) {
+// NewPerTenantDLQProducer creates a DLQ producer that routes each failed record to the
+// dead-letter topic of the tenant whose heartbeat topic the record came from.
+func NewPerTenantDLQProducer(brokers string, kafkaCfg kafka.KafkaConfig) (*DLQProducer, error) {
 	sc, err := kafka.NewProducerConfig(kafkaCfg)
 	if err != nil {
 		return nil, fmt.Errorf("creating DLQ producer config: %w", err)
@@ -70,7 +71,13 @@ func NewDLQProducer(brokers string, topic string, kafkaCfg kafka.KafkaConfig) (*
 		return nil, fmt.Errorf("creating DLQ sync producer: %w", err)
 	}
 
-	return &DLQProducer{producer: producer, client: client, offsets: client, topic: topic}, nil
+	return &DLQProducer{
+		producer: producer, client: client, offsets: client, perTenant: true,
+		// The depth metric labels its series by topic; per-tenant mode aggregates
+		// every tenant's dead-letter topic into one series, so the label says that
+		// instead of sitting empty.
+		topic: "all-tenants",
+	}, nil
 }
 
 // NewDLQProducerFromSyncProducer creates a DLQ producer from an existing
@@ -104,7 +111,7 @@ func (d *DLQProducer) Send(msg *sarama.ConsumerMessage, reason string, attempts 
 	}
 
 	pm := &sarama.ProducerMessage{
-		Topic:   d.topic,
+		Topic:   d.topicFor(msg.Topic),
 		Value:   sarama.ByteEncoder(msg.Value),
 		Headers: headers,
 	}
@@ -115,38 +122,57 @@ func (d *DLQProducer) Send(msg *sarama.ConsumerMessage, reason string, attempts 
 
 	_, _, err := d.producer.SendMessage(pm)
 	if err != nil {
-		return fmt.Errorf("sending to DLQ topic %s: %w", d.topic, err)
+		return fmt.Errorf("sending to DLQ topic %s: %w", pm.Topic, err)
 	}
 
 	return nil
 }
 
-// Occupancy returns the number of records currently retained in the DLQ topic
-// (sum over partitions of OffsetNewest − OffsetOldest). It does not measure
-// consumer lag. Test-only producers constructed without a Kafka client return
-// an error.
+// topicFor returns the DLQ topic for a failed record from a source topic.
+func (d *DLQProducer) topicFor(source string) string {
+	if d.perTenant {
+		return kafka.DeadLetterTopicOf(source)
+	}
+	return d.topic
+}
+
+// Occupancy returns the number of records currently retained in the DLQ topics
+// (sum over topics and partitions of OffsetNewest − OffsetOldest). In per-tenant
+// mode it covers every dead-letter topic that exists: each tenant's and the
+// shared inference topic's. It does not measure consumer lag. Test-only
+// producers constructed without a Kafka client return an error.
 func (d *DLQProducer) Occupancy() (int64, error) {
 	if d.offsets == nil {
 		return 0, fmt.Errorf("DLQ occupancy requires a Kafka client")
 	}
 
-	partitions, err := d.offsets.Partitions(d.topic)
-	if err != nil {
-		return 0, fmt.Errorf("listing DLQ partitions for %s: %w", d.topic, err)
+	topics := []string{d.topic}
+	if d.perTenant {
+		var err error
+		topics, err = kafka.AllDeadLetterTopics(d.client)
+		if err != nil {
+			return 0, fmt.Errorf("listing DLQ topics: %w", err)
+		}
 	}
 
 	var total int64
-	for _, p := range partitions {
-		newest, err := d.offsets.GetOffset(d.topic, p, sarama.OffsetNewest)
+	for _, topic := range topics {
+		partitions, err := d.offsets.Partitions(topic)
 		if err != nil {
-			return 0, fmt.Errorf("newest offset for %s/%d: %w", d.topic, p, err)
+			return 0, fmt.Errorf("listing DLQ partitions for %s: %w", topic, err)
 		}
-		oldest, err := d.offsets.GetOffset(d.topic, p, sarama.OffsetOldest)
-		if err != nil {
-			return 0, fmt.Errorf("oldest offset for %s/%d: %w", d.topic, p, err)
-		}
-		if newest > oldest {
-			total += newest - oldest
+		for _, p := range partitions {
+			newest, err := d.offsets.GetOffset(topic, p, sarama.OffsetNewest)
+			if err != nil {
+				return 0, fmt.Errorf("newest offset for %s/%d: %w", topic, p, err)
+			}
+			oldest, err := d.offsets.GetOffset(topic, p, sarama.OffsetOldest)
+			if err != nil {
+				return 0, fmt.Errorf("oldest offset for %s/%d: %w", topic, p, err)
+			}
+			if newest > oldest {
+				total += newest - oldest
+			}
 		}
 	}
 	return total, nil
@@ -162,28 +188,4 @@ func (d *DLQProducer) Close() error {
 		errs = append(errs, d.client.Close())
 	}
 	return errors.Join(errs...)
-}
-
-// DLQOptionFromEnv creates a DLQ RunnerOption from environment variables.
-// Returns (nil, noop, nil) unless DLQ_ENABLED is true (case-insensitive).
-// Chart deployments set DLQ_ENABLED=true; requiring opt-in keeps image-before-chart
-// upgrades on the previous drop-and-continue path until matching KafkaUser ACLs exist.
-// The caller must defer the returned close function to release resources.
-func DLQOptionFromEnv(brokers string, kafkaCfg kafka.KafkaConfig) (RunnerOption, func() error, error) {
-	noop := func() error { return nil }
-	if !strings.EqualFold(os.Getenv("DLQ_ENABLED"), "true") {
-		return nil, noop, nil
-	}
-
-	topic := os.Getenv("DLQ_TOPIC")
-	if topic == "" {
-		topic = kafka.TopicDLQ
-	}
-
-	dlq, err := NewDLQProducer(brokers, topic, kafkaCfg)
-	if err != nil {
-		return nil, noop, fmt.Errorf("creating DLQ producer: %w", err)
-	}
-
-	return WithDLQ(dlq), dlq.Close, nil
 }

@@ -546,10 +546,16 @@ var _ = Describe("RoleBinding Reconciler", func() {
 
 			idpClient := idp.NewMockClientInterface(ctrl)
 			idpClient.EXPECT().
-				AssignTenantRolesToUser(ctx, "test-org", "keycloak-user-1", gomock.Any()).
+				AssignTenantRolesToUser(ctx, "test-org", "keycloak-user-1", gomock.Eq([]*idp.Role{{
+					Name:       "custom-role",
+					ClientRole: false,
+				}})).
 				Return(nil)
 			idpClient.EXPECT().
-				AssignTenantRolesToUser(ctx, "test-org", "keycloak-user-2", gomock.Any()).
+				AssignTenantRolesToUser(ctx, "test-org", "keycloak-user-2", gomock.Eq([]*idp.Role{{
+					Name:       "custom-role",
+					ClientRole: false,
+				}})).
 				Return(nil)
 
 			binding := privatev1.RoleBinding_builder{
@@ -597,7 +603,10 @@ var _ = Describe("RoleBinding Reconciler", func() {
 
 			idpClient := idp.NewMockClientInterface(ctrl)
 			idpClient.EXPECT().
-				AssignTenantRolesToUser(ctx, "test-org", "keycloak-user-1", gomock.Any()).
+				AssignTenantRolesToUser(ctx, "test-org", "keycloak-user-1", gomock.Eq([]*idp.Role{{
+					Name:       "tenant-admin",
+					ClientRole: false,
+				}})).
 				Return(nil)
 
 			binding := privatev1.RoleBinding_builder{
@@ -1018,10 +1027,16 @@ var _ = Describe("RoleBinding Reconciler", func() {
 
 			idpClient := idp.NewMockClientInterface(ctrl)
 			idpClient.EXPECT().
-				RemoveTenantRolesFromUser(ctx, "test-org", "keycloak-user-1", gomock.Any()).
+				RemoveTenantRolesFromUser(ctx, "test-org", "keycloak-user-1", gomock.Eq([]*idp.Role{{
+					Name:       "custom-role",
+					ClientRole: false,
+				}})).
 				Return(nil)
 			idpClient.EXPECT().
-				RemoveTenantRolesFromUser(ctx, "test-org", "keycloak-user-2", gomock.Any()).
+				RemoveTenantRolesFromUser(ctx, "test-org", "keycloak-user-2", gomock.Eq([]*idp.Role{{
+					Name:       "custom-role",
+					ClientRole: false,
+				}})).
 				Return(nil)
 
 			binding := privatev1.RoleBinding_builder{

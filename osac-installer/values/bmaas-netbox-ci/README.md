@@ -17,14 +17,40 @@ inventory backend. Inherits `bmaas-ci` and overlays only what differs.
 make install PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac
 ```
 
+## Database
+
+NetBox does not deploy its own database. It uses the shared PostgreSQL
+deployed by `osac-infra`'s `bundledPostgres` (the `postgres` service in
+`osac-infra`):
+
+- `postgresql.enabled: false` keeps the subchart's Bitnami PostgreSQL
+  undeployed; `externalDatabase.*` points NetBox at the `postgres` service.
+- The bundled PostgreSQL accepts certificate-only client authentication,
+  so `osac-infra` issues the `postgres-client-netbox` certificate and its
+  bootstrap script creates the matching `netbox` user and database.
+- The client certificate and CA are mounted into the NetBox, worker, and
+  housekeeping pods at `/secrets/database-client` and wired through
+  `externalDatabase.options` (`sslmode=verify-full`).
+
+Switching an existing deployment to this configuration is not supported:
+the profile targets fresh CI installs. The bootstrap that creates the
+`netbox` role and database only runs when PostgreSQL initializes its
+data directory, so enabling NetBox on a release with existing data does
+not provision them, and inventory data is not migrated. The API token
+needs no manual step — the seed job re-provisions `netbox-api-token`
+once the retained token no longer authenticates against the new
+database.
+
 ## Credentials
 
-The NetBox chart auto-generates all credential secrets on first install.
+The NetBox chart auto-generates the remaining credential secrets on first
+install.
 
 | Secret | Namespace | Contents |
 |--------|-----------|----------|
-| `osac-infra-netbox` | `osac-infra` | `secret_key`, `db_password` |
+| `osac-infra-netbox` | `osac-infra` | `secret_key` |
 | `osac-infra-netbox-superuser` | `osac-infra` | `username`, `password` |
+| `postgres-client-cert-netbox` | `osac-infra` | TLS client certificate for the shared PostgreSQL |
 | `netbox-api-token` | `osac` | `token` — v2 HMAC token for the operator |
 
 `apiTokenPeppers` is set directly in chart values. NetBox 4.7 requires it for
@@ -40,8 +66,9 @@ idempotent — if the Secret already exists it exits immediately.
 
 ## Inventory configuration
 
-The bare-metal-fulfillment-operator reads its inventory backend from a
-mounted `inventory.yaml`:
+`instance.yaml` enables the operator's NetBox inventory backend
+(`bmf.netbox.enabled: true` with `bmf.secrets.netboxToken: netbox-api-token`).
+The operator reads the resulting mounted `inventory.yaml`:
 
 ```yaml
 name: netbox-inventory
@@ -56,6 +83,10 @@ hostClass: metal3
 
 `hostClass: metal3` is a hard requirement of `NewNetBoxClient` — NetBox
 supplies hardware inventory while Metal3 handles BareMetalHost lifecycle.
+
+No token value is set in the profile: the API token is generated at
+install time by the osac-infra seed hook, and the operator chart reuses
+the resulting Secret.
 
 ## OpenShift SCC
 

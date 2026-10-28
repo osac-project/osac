@@ -132,8 +132,9 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
-					NumberOfNodes: 2,
-					BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"},
+					NumberOfNodes:   2,
+					FabricInterface: "data-0",
+					BareMetal:       &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"},
 				}},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{
 					SubnetRef:         "my-subnet",
@@ -324,7 +325,8 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
-					NumberOfNodes: 2,
+					NumberOfNodes:   2,
+					FabricInterface: "data-0",
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
 					},

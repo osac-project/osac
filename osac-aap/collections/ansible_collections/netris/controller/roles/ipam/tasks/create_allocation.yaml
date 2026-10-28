@@ -29,11 +29,54 @@
          | list | first | default(none) }}
   when: _ipam_tree_resp.json is mapping
 
+- name: Validate existing IPAM allocation summary has an ID
+  ansible.builtin.assert:
+    that:
+      - _existing_ipam_alloc.id is defined
+      - _existing_ipam_alloc.id is not none
+      - _existing_ipam_alloc.id | string | length > 0
+    fail_msg: >-
+      Netris IPAM allocation '{{ ipam_name }}' was found but its list response
+      omitted the ID; refusing to continue without a stable provider identifier.
+  when: _existing_ipam_alloc is defined and _existing_ipam_alloc is not none
+
 - name: Set IPAM facts from existing allocation (skip creation)
   ansible.builtin.set_fact:
     ipam_alloc_id: "{{ _existing_ipam_alloc.id }}"
     ipam_already_existed: true
   when: _existing_ipam_alloc is defined and _existing_ipam_alloc is not none
+
+- name: Fail when existing IPAM allocation has immutable field mismatch
+  when:
+    - _existing_ipam_alloc is defined
+    - _existing_ipam_alloc is not none
+    - ipam_cidr is defined
+  block:
+    - name: Build expected IPAM allocation fields
+      ansible.builtin.set_fact:
+        _ipam_alloc_expected_fields:
+          prefix: "{{ ipam_cidr }}"
+          "tenant.id": "{{ ipam_tenant_id }}"
+
+    - name: Add IPAM allocation VPC ownership expectation
+      ansible.builtin.set_fact:
+        _ipam_alloc_expected_fields: >-
+          {{ _ipam_alloc_expected_fields | combine({'vpc.id': ipam_vpc_id}) }}
+      when: ipam_vpc_id is defined
+
+    - name: Compute IPAM allocation immutable mismatches
+      ansible.builtin.set_fact:
+        _ipam_alloc_mismatches: >-
+          {{ _existing_ipam_alloc | netris.controller.netris_immutable_mismatch(
+               _ipam_alloc_expected_fields
+             ) }}
+
+    - name: Fail on IPAM allocation immutable mismatch
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'IPAM allocation' | netris.controller.format_immutable_mismatch_message(
+               ipam_name, _ipam_alloc_mismatches) }}
+      when: (_ipam_alloc_mismatches | default([]) | length) > 0
 
 - name: Create IPAM allocation
   netris.controller.protected_uri:
@@ -63,9 +106,25 @@
   when: _existing_ipam_alloc is not defined or _existing_ipam_alloc is none
   no_log: true
 
+- name: Validate IPAM allocation create response includes an ID
+  ansible.builtin.assert:
+    that:
+      - _ipam_alloc_resp.json is mapping
+      - _ipam_alloc_resp.json.data is defined
+      - not ((_ipam_alloc_resp.json.data.id | default(_ipam_alloc_resp.json.data, true)) is mapping)
+      - (_ipam_alloc_resp.json.data.id | default(_ipam_alloc_resp.json.data, true)) is not none
+      - (_ipam_alloc_resp.json.data.id | default(_ipam_alloc_resp.json.data, true)) | string | length > 0
+    fail_msg: >-
+      Netris accepted IPAM allocation '{{ ipam_name }}' creation but returned
+      no usable ID; retry after checking whether the allocation was created.
+  when:
+    - _existing_ipam_alloc is not defined or _existing_ipam_alloc is none
+    - _ipam_alloc_resp is not skipped
+    - _ipam_alloc_resp is changed or (_ipam_alloc_resp.status | default(0)) in [200, 201]
+
 - name: Set IPAM allocation facts from response
   ansible.builtin.set_fact:
-    ipam_alloc_id: "{{ _ipam_alloc_resp.json.data.id }}"
+    ipam_alloc_id: "{{ _ipam_alloc_resp.json.data.id | default(_ipam_alloc_resp.json.data) }}"
     ipam_already_existed: false
   when:
     - _existing_ipam_alloc is not defined or _existing_ipam_alloc is none

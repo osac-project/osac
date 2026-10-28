@@ -459,7 +459,9 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Eventually(func(g Gomega) {
-			resp, err := client.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolId}.Build())
+			callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			resp, err := client.Get(callCtx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolId}.Build())
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(resp.GetObject().GetStatus().GetState()).To(
 				Equal(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY))

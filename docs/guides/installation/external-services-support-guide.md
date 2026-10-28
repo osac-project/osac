@@ -202,8 +202,8 @@ exist now, so prove the path and each service on its own terms:
 9092 — from a pod, not from the host); PostgreSQL reachable with a
 client certificate over TLS (`psql`); OpenBao health 200/unsealed (§4.3's
 health checks); Keycloak serving the realm and issuing a token (§5.4);
-Kafka accepting an admin-client connection (§6.3's offset query).
-Checks that need the **application** — OSAC's PG sessions,
+Kafka accepting an admin-client connection (A.5 step 7's readiness
+check). Checks that need the **application** — OSAC's PG sessions,
 OpenBao tenant provisioning, metering heartbeats, UI login — belong to
 stage 5; a fresh install cannot pass them here. **Stop if:** a probe
 fails — the chart will not improve it, and stage 5's battery will only
@@ -251,12 +251,12 @@ didn't create (§5.2), and trust failures to the services CAs (§2.2,
    This is where the application-level checks from stage 3's gate
    land: OSAC's database sessions, OpenBao tenant provisioning,
    metering heartbeats, and a UI login.
-2. Run one specific smoke workflow end to end — create a tenant via
-   the API, expect it to reach `Ready`, list it, then delete it and
-   expect it gone (exact commands: §9's battery plus the fulfillment
-   API's tenant endpoints). If your organization defines its own
-   acceptance smoke, run that instead — the requirement is one
-   workflow with expected results and cleanup, not an impression.
+2. Run one specific smoke workflow end to end — the tenant smoke in
+   §9's battery: create a tenant via the API, wait for its break-glass
+   Secret to appear (the reconciler's completion signal), list it,
+   delete it, and confirm it is gone. If your organization defines
+   its own acceptance smoke, run that instead — the requirement is
+   one workflow with expected results and cleanup, not an impression.
 3. Rehearse recovery per §10.4: restore **each service's** data from
    the backups stage 3 started, on a machine that is not the live one
    if you can, and re-run §9. An unrestorable backup is a defect
@@ -720,9 +720,10 @@ curl -s --cacert /root/kc-ca.pem https://<kc-host>:8443/realms/osac \
 
 # token end-to-end (ROPC works for tenant users; the UI client is public
 # PKCE and cannot do it — use the browser for that flow)
-curl -s --cacert /root/kc-ca.pem \
+OSAC_TOKEN=$(curl -s --cacert /root/kc-ca.pem \
   -d "client_id=admin-cli&username=<user>&password=<password>&grant_type=password" \
-  https://<kc-host>:8443/realms/osac/protocol/openid-connect/token
+  https://<kc-host>:8443/realms/osac/protocol/openid-connect/token \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 ```
 
 Then one UI login (full OIDC PKCE) and one API call with the resulting
@@ -869,8 +870,8 @@ metering:
 
 On a clean install these values and objects are in place before the first
 `helm install`. Applying them to an already-running deployment is the
-ordinary upgrade flow of §7/§8: apply the objects, then one surgical
-upgrade — the exact command and its caveats are in §8.
+ordinary upgrade flow of §7/§8: apply the objects, then run the upgrade
+command in §7 and the post-upgrade checks in §8.
 
 ### 6.3 Verify
 
@@ -951,10 +952,11 @@ Two different kinds of keys are mixed below, and the difference matters:
 
 Moving a service off the cluster always takes **both actions
 together** — the flag removes the bundled copy, the endpoint keys make
-the components use yours. Skipping either breaks the deployment: the
-flag alone leaves components pointed at a bundled service that no
-longer exists, and the endpoint alone is ignored while the bundled
-copy still runs. Keycloak's caveat: the chart's credential hooks and
+the components use yours. Skipping either leaves the deployment
+inconsistent: the flag alone leaves components pointed at a bundled
+service that no longer exists, and the endpoint alone leaves both the
+bundled copy and your external instance in play. Keycloak's caveat:
+the chart's credential hooks and
 realm import stop with the flag, so the client Secrets and the realm
 are yours to provision (§5.2).
 
@@ -1123,14 +1125,33 @@ curl -s --cacert <cluster-ca> -o /dev/null -w '%{http_code}\n' \
   -H 'Authorization: Bearer dummy' \
   https://<api-route>/api/fulfillment/v1/compute_instances                             # 401
 # …and positive control: a real token must WORK — a 401 alone proves only
-# that the filter exists. Get a token per §5.4, then:
+# that the filter exists. Get a token per §5.4 (OSAC_TOKEN there), then:
 curl -s --cacert <cluster-ca> -o /dev/null -w '%{http_code}\n' \
-  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Authorization: Bearer ${OSAC_TOKEN}" \
   https://<api-route>/api/fulfillment/v1/compute_instances                             # 200
 # <cluster-ca> is the CA that signed the API route's certificate (from the
 # cluster's trust bundle, §2.2) — the probe then also proves the trust
 # chain, which -k would skip (from a cluster node: add
 # --resolve <api-route>:443:127.0.0.1)
+
+# tenant smoke — the smallest end-to-end workflow (the API's tenant
+# endpoints are POST/GET/DELETE /api/fulfillment/v1/tenants):
+NAME=smoke-$RANDOM
+TENANT_ID=$(curl -s --cacert <cluster-ca> -H "Authorization: Bearer ${OSAC_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -d "{\"metadata\":{\"name\":\"$NAME\"},\"spec\":{\"domains\":[\"$NAME.example.org\"]}}" \
+  https://<api-route>/api/fulfillment/v1/tenants \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['object']['id'])")
+# the reconciler signals completion by creating the tenant's break-glass
+# Secret — poll for it, then list, delete, and confirm it is gone:
+oc -n osac get secret -w &   # wait for the break-glass Secret of $NAME
+curl -s --cacert <cluster-ca> -H "Authorization: Bearer ${OSAC_TOKEN}" \
+  https://<api-route>/api/fulfillment/v1/tenants/$TENANT_ID    # the object
+curl -s --cacert <cluster-ca> -X DELETE -H "Authorization: Bearer ${OSAC_TOKEN}" \
+  https://<api-route>/api/fulfillment/v1/tenants/$TENANT_ID
+curl -s --cacert <cluster-ca> -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer ${OSAC_TOKEN}" \
+  https://<api-route>/api/fulfillment/v1/tenants/$TENANT_ID                             # 404
 
 # Kafka canary (§6.3): a billable workflow on a real tenant —
 # its heartbeat topic's offsets advance, round metrics healthy, lag 0
@@ -1247,8 +1268,25 @@ find "$DIR" -name 'bao-data-*.tar.gz' -mtime +14 -delete
 
 Restore: `systemctl stop`, swap the data dir, `systemctl start` (the unseal
 drop-in re-seals→unseals; the `:z` mounts relabel), health-check. (On a
-Raft-backed instance, prefer `bao operator raft snapshot save`/restore
-over the tar — see the storage note in A.3.)
+Raft-backed instance, prefer snapshots over the data-dir tar — the
+save/restore commands are at the end of this section.)
+
+**Raft snapshots.** On a single-node Raft instance (the A.3 storage
+note), the consistent backup is a snapshot, not a tar of a live data
+dir:
+
+```bash
+# save (root token or a policy granting update on sys/raft):
+BAO_ADDR=https://<host-ip>:8200 BAO_CACERT=/root/bao-ca.pem \
+  bao operator raft snapshot save "$DIR/bao-snap-$STAMP.snap"
+find "$DIR" -name 'bao-snap-*.snap' -mtime +14 -delete
+
+# restore: stop the server, then (data dir can be empty):
+BAO_ADDR=https://<host-ip>:8200 BAO_CACERT=/root/bao-ca.pem \
+  bao operator raft snapshot restore "$DIR/bao-snap-$STAMP.snap" /bao/data
+# then systemctl start and the usual health check; re-seal/unseal state
+# follows the snapshot, and the init-output escrow (§10.4) still applies.
+```
 
 **The archive does not contain the unseal material.** `bao-data` holds the
 encrypted store, but the init output (`/root/openbao-init.json` — unseal
@@ -1310,7 +1348,8 @@ done
 printf '%s\n' "${PAGES[@]}" \
   | python3 -c 'import sys,json; json.dump([u for p in map(json.loads,sys.stdin) for u in p], sys.stdout)' \
   > "$DIR/users-osac-${STAMP}.json"
-# same pattern for organizations, org members, LDAP components
+# (extend with the same pattern for organizations + members; their
+#  replay after a restore is documented below)
 ls -1t "$DIR"/realm-osac-*.json | tail -n +8 | xargs -r rm -f
 ls -1t "$DIR"/users-osac-*.json | tail -n +8 | xargs -r rm -f
 ```
@@ -1320,6 +1359,27 @@ restore the database (or untar `kc-data` on the H2 variant), then
 re-import the newest JSON only for anything the database restore missed;
 realm misconfigured — re-import the partial export over it; total loss —
 database restore plus the §5.3 realm seed.
+
+**Replaying what exports never carry.** `kc.sh export` omits LDAP user
+federations and organization memberships by design, so after any import
+restore, recreate them before users can log in:
+
+1. **LDAP user federation** — re-create the component through the admin
+   REST API (or the console's *User federation* page):
+   `POST /admin/realms/osac/components` with `providerId: ldap`,
+   `providerType: org.keycloak.storage.UserStorageProvider`, and the
+   connection/bind/users-DN config recorded in your worksheet. Then
+   trigger a full sync
+   (`POST /admin/realms/osac/user-storage/{id}/sync?action=triggerFullSync`)
+   and re-apply group memberships — group links live in Keycloak's own
+   database, so if the database itself was restored they survive; if
+   only the JSON import was replayed, they must be re-added
+   (`PUT /admin/realms/osac/users/{id}/groups/{gid}`).
+2. **Organizations and memberships** — extend the export script above
+   with the same paged GET pattern
+   (`/admin/realms/osac/organizations`,
+   `/…/organizations/{id}/members`); replay the POST calls in the
+   same order: organizations first, then memberships.
 
 ### 10.4 Recovery material
 
@@ -1416,8 +1476,13 @@ from the cause. Format: symptom → check → remedy.
     (`osac.events.<tenant>`, `osac.metering.{heartbeat,dlq}.<tenant>`)
     was created by hand or by broker auto-create with non-contract
     settings → the services create these topics themselves and refuse
-    to use one that differs; delete the offending topic and let the
-    service recreate it (A.5 step 9, §6.1).
+    to use one that differs (A.5 step 9, §6.1). Fixing it may mean
+    **deleting the topic and letting the service recreate it — do that
+    only after confirming the topic holds nothing you need**: these
+    topics can carry billing history. If the records must be kept, copy
+    them to a correctly configured scratch topic first, then delete
+    and let the service recreate; a retention-only mismatch can also be
+    fixed in place with `kafka-configs.sh --alter` instead of deleting.
 
 ---
 

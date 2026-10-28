@@ -28,7 +28,6 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -452,7 +451,7 @@ func (l *externalIPLifecycle) deleteAttachment(ctx context.Context, id string) e
 			after.SetStatus(&privatev1.ExternalIPAttachmentStatus{})
 		}
 		after.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_DELETING)
-		after.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
+		after.GetStatus().SetStateTransitionTime(timestamppb.Now())
 		if _, err = l.externalIPAttachmentDao.Update().SetObject(after).Do(ctx); err != nil {
 			return err
 		}
@@ -479,7 +478,7 @@ func (l *externalIPLifecycle) deleteAttachmentAndExternalIP(ctx context.Context,
 			after.SetStatus(&privatev1.ExternalIPAttachmentStatus{})
 		}
 		after.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_DELETING)
-		after.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
+		after.GetStatus().SetStateTransitionTime(timestamppb.Now())
 		if _, err = l.externalIPAttachmentDao.Update().SetObject(after).Do(ctx); err != nil {
 			return err
 		}

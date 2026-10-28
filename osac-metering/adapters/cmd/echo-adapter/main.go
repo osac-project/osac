@@ -45,8 +45,6 @@ import (
 
 	"github.com/go-logr/stdr"
 
-	"github.com/IBM/sarama"
-
 	"github.com/osac-project/osac-metering/adapters/echo"
 	"github.com/osac-project/osac-metering/adapters/internal/envutil"
 	"github.com/osac-project/osac-metering/adapters/internal/kafka"
@@ -82,44 +80,30 @@ func main() {
 
 	kafkaCfg := kafka.KafkaConfigFromEnv()
 
-	// The DLQ is mandatory: the adapter refuses to start without one, so a rejected
-	// heartbeat is never dropped. Each rejection goes to the tenant's dead-letter topic.
-	dlq, err := runner.NewPerTenantDLQProducer(brokers, kafkaCfg)
+	dlqOpt, dlqClose, err := runner.DLQOptionFromEnv(brokers, kafkaCfg)
 	if err != nil {
-		log.Fatalf("creating DLQ producer: %v", err)
+		log.Fatalf("setting up DLQ: %v", err)
 	}
 	defer func() {
-		if err := dlq.Close(); err != nil {
+		if err := dlqClose(); err != nil {
 			log.Printf("DLQ producer close failed: %v", err)
 		}
 	}()
-
-	// Discover every tenant's heartbeat topic, like the provider adapters do. The consumer
-	// group shares this client: the runner closes only the group, so the client stays open
-	// for the defer below to close.
-	sc, err := kafka.NewConsumerConfig(kafkaCfg)
-	if err != nil {
-		log.Fatalf("creating kafka client config: %v", err)
-	}
-	echoClient, err := sarama.NewClient(kafka.SplitAndTrimBrokers(brokers, ","), sc)
-	if err != nil {
-		log.Fatalf("creating kafka client: %v", err)
-	}
-	defer func() { _ = echoClient.Close() }()
-
-	consumerGroup, err := sarama.NewConsumerGroupFromClient(group, echoClient)
-	if err != nil {
-		log.Fatalf("creating consumer group: %v", err)
+	var opts []runner.RunnerOption
+	if dlqOpt != nil {
+		opts = append(opts, dlqOpt)
+		log.Printf("DLQ enabled: topic=%s", envutil.EnvOrDefault("DLQ_TOPIC", kafka.TopicDLQ))
 	}
 
 	store := echo.NewEventStore(bufferSize)
 	adapter := echo.NewAdapter(store)
 	r := runner.NewRunner(adapter, runner.RunnerConfig{
+		Brokers:       brokers,
+		ConsumerGroup: group,
+		Topics:        kafka.AllTopics,
 		FlushInterval: flushInterval,
-		TopicsProvider: func(ctx context.Context) ([]string, error) {
-			return kafka.ConsumeTopics(echoClient)
-		},
-	}, logger, runner.WithDLQ(dlq))
+		Kafka:         kafkaCfg,
+	}, logger, opts...)
 
 	// Serve metrics, health, and event query endpoints.
 	go func() {
@@ -154,10 +138,10 @@ func main() {
 		syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Printf("starting echo adapter: broker_count=%d group=%s flush=%s",
-		len(strings.Split(brokers, ",")), group, flushInterval)
+	log.Printf("starting echo adapter: broker_count=%d topics=%v group=%s flush=%s",
+		len(strings.Split(brokers, ",")), kafka.AllTopics, group, flushInterval)
 
-	if err := r.Run(ctx, consumerGroup); err != nil {
+	if err := r.Run(ctx); err != nil {
 		log.Fatalf("runner error: %v", err)
 	}
 

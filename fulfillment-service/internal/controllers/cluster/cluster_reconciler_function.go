@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -388,7 +389,7 @@ func (t *task) setDefaults() {
 	}
 	if t.cluster.GetStatus().GetState() == privatev1.ClusterState_CLUSTER_STATE_UNSPECIFIED {
 		t.cluster.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING)
-		t.cluster.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
+		t.cluster.GetStatus().SetStateTransitionTime(timestamppb.Now())
 	}
 	for value := range privatev1.ClusterConditionType_name {
 		if value != 0 {
@@ -786,7 +787,7 @@ func (t *task) setFailed(err error) {
 	}
 	if t.cluster.GetStatus().GetState() != privatev1.ClusterState_CLUSTER_STATE_FAILED ||
 		t.cluster.GetStatus().GetStateTransitionTime() == nil {
-		t.cluster.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
+		t.cluster.GetStatus().SetStateTransitionTime(timestamppb.Now())
 	}
 	t.cluster.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_FAILED)
 	t.updateCondition(

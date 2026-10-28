@@ -104,19 +104,6 @@ var _ = Describe("Private events server", Ordered, func() {
 		return client
 	}
 
-	// createTopic creates the topic explicitly and waits until the client sees it. The Kafka configuration used by the
-	// tests disables auto-creation, so producing to a missing topic fails instead of creating it.
-	createTopic := func(client sarama.Client, topic string) {
-		admin, err := sarama.NewClusterAdmin([]string{broker.Brokers()}, newKafkaConfig())
-		ExpectWithOffset(1, err).ToNot(HaveOccurred())
-		DeferCleanup(admin.Close)
-		ExpectWithOffset(1, admin.CreateTopic(topic, &sarama.TopicDetail{
-			NumPartitions:     1,
-			ReplicationFactor: 1,
-		}, false)).To(Succeed())
-		ExpectWithOffset(1, client.RefreshMetadata(topic)).To(Succeed())
-	}
-
 	sendEvent := func(producer sarama.SyncProducer, topic string, event *privatev1.Event) {
 		data, err := proto.Marshal(event)
 		ExpectWithOffset(1, err).ToNot(HaveOccurred())
@@ -142,9 +129,9 @@ var _ = Describe("Private events server", Ordered, func() {
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(producer.Close)
 		topic := servers.DefaultEventTopicPrefix + "private-watch-" + uuid.New()
-		createTopic(client, topic)
 
-		// Existing topics begin at the newest offset, so this seed event must not be replayed to the new subscription.
+		// Create the topic before Watch starts. Existing topics begin at the newest offset, so this seed event must not
+		// be replayed to the new subscription.
 		sendEvent(producer, topic, privatev1.Event_builder{
 			Project: privatev1.Project_builder{Id: "seed"}.Build(),
 		}.Build())
@@ -231,8 +218,14 @@ var _ = Describe("Private events server", Ordered, func() {
 		}()
 
 		topic := servers.DefaultEventTopicPrefix + "private-watch-new-" + uuid.New()
+		admin, err := sarama.NewClusterAdminFromClient(producerAdminClient)
+		Expect(err).ToNot(HaveOccurred())
 		// Keep topic creation and production separate from the server client so its watcher must discover the topic.
-		createTopic(producerAdminClient, topic)
+		Expect(admin.CreateTopic(topic, &sarama.TopicDetail{
+			NumPartitions:     1,
+			ReplicationFactor: 1,
+		}, false)).To(Succeed())
+		Expect(producerAdminClient.RefreshMetadata(topic)).To(Succeed())
 
 		event := privatev1.Event_builder{
 			Cluster: privatev1.Cluster_builder{Id: "new-topic"}.Build(),
@@ -261,8 +254,7 @@ var _ = Describe("Private events server", Ordered, func() {
 		DeferCleanup(producer.Close)
 		topic := servers.DefaultEventTopicPrefix + "private-watch-shared-" + uuid.New()
 
-		// Ensure that the topic and a pre-existing event exist before the subscriptions start.
-		createTopic(client, topic)
+		// Ensure that the topic exists before the subscriptions start.
 		sendEvent(producer, topic, privatev1.Event_builder{
 			Cluster: privatev1.Cluster_builder{Id: "seed"}.Build(),
 		}.Build())

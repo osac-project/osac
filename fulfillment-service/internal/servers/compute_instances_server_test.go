@@ -558,7 +558,7 @@ var _ = Describe("Compute instances server", func() {
 			id := createResponse.GetObject().GetId()
 
 			// Update only restart_requested_at via field mask, explicit fields must survive:
-			restartTime := timestamppb.New(time.Now().Truncate(time.Second))
+			restartTime := timestamppb.Now()
 			updateResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
 					Id: id,
@@ -628,11 +628,9 @@ var _ = Describe("Compute instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			id := createResponse.GetObject().GetId()
 
-			// Store a state with its transition time, as the operator feedback would. The
-			// time must be after creation (the source contract clamps a first time on or
-			// before it) and truncated to whole seconds: the contract stores transition
-			// times at second granularity, so a sub-second seed would not round-trip.
-			storedTime := timestamppb.New(time.Now().Truncate(time.Second))
+			// Store a state with its transition time, as the operator feedback would. The time
+			// must be after creation: the source contract clamps a first time on or before it.
+			storedTime := timestamppb.New(time.Now())
 			ciDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
@@ -656,7 +654,7 @@ var _ = Describe("Compute instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			tampered := getResponse.GetObject()
 			tampered.GetStatus().SetState(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
-			tampered.GetStatus().SetStateTransitionTime(timestamppb.New(time.Now().Truncate(time.Second)))
+			tampered.GetStatus().SetStateTransitionTime(timestamppb.Now())
 			updateResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
 				Object: tampered,
 			}.Build())
@@ -703,11 +701,9 @@ var _ = Describe("Compute instances server", func() {
 				id := createResponse.GetObject().GetId()
 
 				// Store a state with its transition time and attachment feedback, as the
-				// operator feedback would. The time must be after creation (the source
-				// contract clamps a first time on or before it) and truncated to whole
-				// seconds: the contract stores transition times at second granularity,
-				// so a sub-second seed would not round-trip.
-				storedTime := timestamppb.New(time.Now().Truncate(time.Second))
+				// operator feedback would. The time must be after creation: the source
+				// contract clamps a first time on or before it.
+				storedTime := timestamppb.New(time.Now())
 				ciDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
 					SetLogger(logger).
 					SetTenancyLogic(tenancy).
@@ -736,7 +732,7 @@ var _ = Describe("Compute instances server", func() {
 						Id: id,
 						Status: publicv1.ComputeInstanceStatus_builder{
 							State:               publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
-							StateTransitionTime: timestamppb.New(time.Now().Truncate(time.Second)),
+							StateTransitionTime: timestamppb.New(time.Now()),
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{
@@ -799,7 +795,7 @@ var _ = Describe("Compute instances server", func() {
 			id := createResponse.GetObject().GetId()
 
 			// Store a state with its transition time, as the operator feedback would:
-			storedTime := timestamppb.New(time.Now().Truncate(time.Second))
+			storedTime := timestamppb.New(time.Now())
 			ciDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
@@ -822,7 +818,7 @@ var _ = Describe("Compute instances server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			echoed := getResponse.GetObject()
-			restartTime := timestamppb.New(time.Now().Truncate(time.Second))
+			restartTime := timestamppb.New(time.Now())
 			echoed.GetSpec().SetRestartRequestedAt(restartTime)
 			updateResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
 				Object: echoed,
@@ -879,7 +875,7 @@ var _ = Describe("Compute instances server", func() {
 			// Report a state transition and attachment feedback through the private API.
 			// The time must be after creation: the source contract clamps a first time on
 			// or before it.
-			feedbackTime := timestamppb.New(time.Now().Truncate(time.Second))
+			feedbackTime := timestamppb.New(time.Now())
 			updateResponse, err := privateServer.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
 				Object: privatev1.ComputeInstance_builder{
 					Id: id,
@@ -946,7 +942,7 @@ var _ = Describe("Compute instances server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			echoed := getResponse.GetObject()
-			restartTime := timestamppb.New(time.Now().Truncate(time.Second))
+			restartTime := timestamppb.New(time.Now())
 			echoed.GetSpec().SetRestartRequestedAt(restartTime)
 			echoed.GetSpec().NetworkAttachments = nil
 			echoed.GetSpec().ClearRunStrategy()
@@ -990,7 +986,7 @@ var _ = Describe("Compute instances server", func() {
 			id := createResponse.GetObject().GetId()
 
 			// An explicit mask changes only the selected field:
-			restartTime := timestamppb.New(time.Now().Truncate(time.Second))
+			restartTime := timestamppb.New(time.Now())
 			updateResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
 					Id: id,
@@ -1045,7 +1041,7 @@ var _ = Describe("Compute instances server", func() {
 			id := createResponse.GetObject().GetId()
 
 			// Store a state with its transition time, as the operator feedback would:
-			storedTime := timestamppb.New(time.Now().Truncate(time.Second))
+			storedTime := timestamppb.New(time.Now())
 			ciDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
@@ -1100,7 +1096,7 @@ var _ = Describe("Compute instances server", func() {
 				Object: publicv1.ComputeInstance_builder{
 					Id: id,
 					Spec: publicv1.ComputeInstanceSpec_builder{
-						RestartRequestedAt: timestamppb.New(time.Now().Truncate(time.Second)),
+						RestartRequestedAt: timestamppb.New(time.Now()),
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.nonexistent"}},
@@ -1246,7 +1242,7 @@ var _ = Describe("Compute instances server", func() {
 			id := createResponse.GetObject().GetId()
 
 			// Store a state with its transition time, as the operator feedback would:
-			storedTime := timestamppb.New(time.Now().Truncate(time.Second))
+			storedTime := timestamppb.New(time.Now())
 			ciDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
@@ -1269,7 +1265,7 @@ var _ = Describe("Compute instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			stale := getResponse.GetObject()
 			staleVersion := stale.GetMetadata().GetVersion()
-			stale.GetSpec().SetRestartRequestedAt(timestamppb.New(time.Now().Truncate(time.Second)))
+			stale.GetSpec().SetRestartRequestedAt(timestamppb.New(time.Now()))
 			stale.GetMetadata().SetVersion(staleVersion - 1)
 			updateResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
 				Object: stale,
@@ -1318,7 +1314,7 @@ var _ = Describe("Compute instances server", func() {
 			id := createResponse.GetObject().GetId()
 
 			// Report a state transition and attachment feedback through the private API:
-			feedbackTime := timestamppb.New(time.Now().Truncate(time.Second))
+			feedbackTime := timestamppb.New(time.Now())
 			privateServer, err := NewPrivateComputeInstancesServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
@@ -1452,7 +1448,7 @@ var _ = Describe("Compute instances server", func() {
 				// Set a valid initial system status via the private API. The time must
 				// be after creation: the source contract clamps a first time on or
 				// before it.
-				initialTime := timestamppb.New(time.Now().Truncate(time.Second))
+				initialTime := timestamppb.New(time.Now())
 				_, err = privateServer.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
 					Object: privatev1.ComputeInstance_builder{
 						Id: id,
@@ -1516,7 +1512,7 @@ var _ = Describe("Compute instances server", func() {
 
 				// Transition the state without committing, so the public update blocks
 				// on the row lock:
-				writerTime := timestamppb.New(time.Now().Truncate(time.Second))
+				writerTime := timestamppb.New(time.Now())
 				_, err = privateServer.Update(writerCtx, privatev1.ComputeInstancesUpdateRequest_builder{
 					Object: privatev1.ComputeInstance_builder{
 						Id: id,
@@ -1913,7 +1909,7 @@ var _ = Describe("Compute instances server", func() {
 						InstanceType: publicv1.InstanceTypeReference_builder{
 							Id: "standard-4-16", Name: "standard-4-16",
 						}.Build(),
-						InstanceTypeTransitionTime: timestamppb.New(time.Now().Truncate(time.Second)),
+						InstanceTypeTransitionTime: timestamppb.Now(),
 					}.Build(),
 				}.Build(),
 			}.Build())

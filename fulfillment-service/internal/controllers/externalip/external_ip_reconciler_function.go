@@ -24,6 +24,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -252,7 +253,7 @@ func (t *task) setDefaults() {
 	}
 	if t.externalIP.GetStatus().GetState() == privatev1.ExternalIPState_EXTERNAL_IP_STATE_UNSPECIFIED {
 		t.externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
-		t.externalIP.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
+		t.externalIP.GetStatus().SetStateTransitionTime(timestamppb.Now())
 	}
 }
 
@@ -412,7 +413,7 @@ func (t *task) setPending(err error) {
 	}
 	if t.externalIP.GetStatus().GetState() != privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING ||
 		t.externalIP.GetStatus().GetStateTransitionTime() == nil {
-		t.externalIP.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
+		t.externalIP.GetStatus().SetStateTransitionTime(timestamppb.Now())
 	}
 	t.externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
 	t.externalIP.GetStatus().SetMessage(err.Error())
@@ -424,7 +425,7 @@ func (t *task) setFailed(err error) {
 	}
 	if t.externalIP.GetStatus().GetState() != privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED ||
 		t.externalIP.GetStatus().GetStateTransitionTime() == nil {
-		t.externalIP.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
+		t.externalIP.GetStatus().SetStateTransitionTime(timestamppb.Now())
 	}
 	t.externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
 	t.externalIP.GetStatus().SetMessage(err.Error())

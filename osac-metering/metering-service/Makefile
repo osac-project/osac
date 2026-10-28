@@ -10,6 +10,7 @@ IMG ?= ghcr.io/osac-project/metering-service:latest
 CONTAINER_TOOL ?= podman
 GO_VERSION ?= $(shell grep '^go ' go.mod | cut -d' ' -f2)
 GOTOOLCHAIN ?= go$(GO_VERSION)
+GINKGO ?= go run github.com/onsi/ginkgo/v2/ginkgo
 
 include $(shell git rev-parse --show-toplevel)/tools/golangci-lint.mk
 
@@ -19,7 +20,8 @@ build:
 	go build -o bin/$(BINARY_NAME) ./cmd/metering-service
 
 test:
-	go test ./...
+	go test ./cmd/metering-service
+	$(GINKGO) run -r internal
 
 lint: golangci-lint
 	$(GOLANGCI_LINT) run ./...

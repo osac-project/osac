@@ -1,9 +1,6 @@
 {{- /* Strimzi KafkaUser — creates SCRAM-SHA-512 credentials and a Secret
      with the same name as the user. The metering service mounts this Secret
-     for Kafka authentication. Metering reads every tenant's event topic,
-     reads and writes every tenant's heartbeat topic, and creates the
-     heartbeat and dead-letter topics of the tenants it serves, verifying
-     the retention of the topics it finds. */}}
+     for Kafka authentication. ACLs grant producer-only access. */}}
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
@@ -19,29 +16,16 @@ spec:
     acls:
       - resource:
           type: topic
-          name: osac.events.
+          name: osac.metering.
           patternType: prefix
         operations:
-          - Read
-          - Describe
-        host: "*"
-      - resource:
-          type: topic
-          name: osac.metering.heartbeat.
-          patternType: prefix
-        operations:
-          - Create
-          - Read
           - Write
           - Describe
-          - DescribeConfigs
         host: "*"
       - resource:
-          type: topic
-          name: osac.metering.dlq.
-          patternType: prefix
+          type: cluster
+          name: kafka-cluster
+          patternType: literal
         operations:
-          - Create
-          - Describe
-          - DescribeConfigs
+          - IdempotentWrite
         host: "*"

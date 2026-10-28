@@ -24,6 +24,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -232,7 +233,7 @@ func (t *task) setDefaults() {
 	}
 	if t.natGateway.GetStatus().GetState() == privatev1.NATGatewayState_NAT_GATEWAY_STATE_UNSPECIFIED {
 		t.natGateway.GetStatus().SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING)
-		t.natGateway.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
+		t.natGateway.GetStatus().SetStateTransitionTime(timestamppb.Now())
 	}
 }
 
@@ -381,7 +382,7 @@ func (t *task) setPending(err error) {
 	}
 	if t.natGateway.GetStatus().GetState() != privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING ||
 		t.natGateway.GetStatus().GetStateTransitionTime() == nil {
-		t.natGateway.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
+		t.natGateway.GetStatus().SetStateTransitionTime(timestamppb.Now())
 	}
 	t.natGateway.GetStatus().SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING)
 	t.natGateway.GetStatus().SetMessage(err.Error())
@@ -393,7 +394,7 @@ func (t *task) setFailed(err error) {
 	}
 	if t.natGateway.GetStatus().GetState() != privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED ||
 		t.natGateway.GetStatus().GetStateTransitionTime() == nil {
-		t.natGateway.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
+		t.natGateway.GetStatus().SetStateTransitionTime(timestamppb.Now())
 	}
 	t.natGateway.GetStatus().SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED)
 	t.natGateway.GetStatus().SetMessage(err.Error())

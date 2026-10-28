@@ -24,7 +24,6 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -37,7 +36,7 @@ func (s *PrivateClustersServer) prepareClusterVersionChange(ctx context.Context,
 	if err := validateExclusiveVersionUpdate(current, candidate, mask); err != nil {
 		return err
 	}
-	now := controllers.NowTruncated()
+	now := timestamppb.Now()
 	change := findClusterVersionChange(current, candidate, controlPlaneChanged)
 	if change == nil || change.target == nil {
 		return nil

@@ -17,6 +17,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/osac-project/osac-metering/adapters/internal/kafka"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -88,7 +89,7 @@ var _ = Describe("adapterMetrics", func() {
 		})
 
 		It("exposes osac_metering_dlq_depth labeled by topic", func() {
-			m.dlqDepth.WithLabelValues(dlqTestTopic).Set(7)
+			m.dlqDepth.WithLabelValues(kafka.TopicDLQ).Set(7)
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
@@ -97,7 +98,7 @@ var _ = Describe("adapterMetrics", func() {
 			body, err := io.ReadAll(w.Result().Body)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(body)).To(ContainSubstring("osac_metering_dlq_depth"))
-			Expect(string(body)).To(ContainSubstring(`topic="` + dlqTestTopic + `"`))
+			Expect(string(body)).To(ContainSubstring(`topic="osac.metering.dlq"`))
 			Expect(string(body)).NotTo(ContainSubstring("osac_metering_adapter_dlq_depth"))
 		})
 	})

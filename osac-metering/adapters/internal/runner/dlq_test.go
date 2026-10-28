@@ -12,7 +12,6 @@ package runner
 import (
 	"encoding/json"
 	"errors"
-	"sort"
 	"strings"
 	"time"
 
@@ -23,11 +22,6 @@ import (
 	"github.com/osac-project/osac-metering/adapters/internal/kafka"
 )
 
-const (
-	dlqTestTopic    = "osac.metering.dlq.test"
-	sourceTestTopic = "osac.metering.heartbeat.test"
-)
-
 var _ = Describe("DLQProducer", func() {
 	var (
 		mockProducer *mocks.SyncProducer
@@ -36,7 +30,7 @@ var _ = Describe("DLQProducer", func() {
 
 	BeforeEach(func() {
 		mockProducer = mocks.NewSyncProducer(GinkgoT(), nil)
-		dlq = NewDLQProducerFromSyncProducer(mockProducer, dlqTestTopic)
+		dlq = NewDLQProducerFromSyncProducer(mockProducer, kafka.TopicDLQ)
 	})
 
 	AfterEach(func() {
@@ -49,7 +43,7 @@ var _ = Describe("DLQProducer", func() {
 		It("preserves original message value bytes", func() {
 			originalValue := []byte(`{"specversion":"1.0","id":"evt-1","type":"test"}`)
 			msg := &sarama.ConsumerMessage{
-				Topic:     sourceTestTopic,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 2,
 				Offset:    42,
 				Value:     originalValue,
@@ -75,7 +69,7 @@ var _ = Describe("DLQProducer", func() {
 
 		It("includes correct failure metadata headers", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     sourceTestTopic,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 3,
 				Offset:    100,
 				Value:     []byte(`{}`),
@@ -94,10 +88,10 @@ var _ = Describe("DLQProducer", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(sentMsg).NotTo(BeNil())
-			Expect(sentMsg.Topic).To(Equal(dlqTestTopic))
+			Expect(sentMsg.Topic).To(Equal(kafka.TopicDLQ))
 
 			headers := headerMap(sentMsg.Headers)
-			Expect(headers["original-topic"]).To(Equal(sourceTestTopic))
+			Expect(headers["original-topic"]).To(Equal(kafka.TopicLifecycle))
 			Expect(headers["original-offset"]).To(Equal("100"))
 			Expect(headers["original-partition"]).To(Equal("3"))
 			Expect(headers["failure-reason"]).To(Equal("retries exhausted"))
@@ -110,7 +104,7 @@ var _ = Describe("DLQProducer", func() {
 
 		It("preserves original message key", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     sourceTestTopic,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 0,
 				Offset:    0,
 				Value:     []byte(`{}`),
@@ -135,7 +129,7 @@ var _ = Describe("DLQProducer", func() {
 
 		It("handles nil key gracefully", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     sourceTestTopic,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 0,
 				Offset:    0,
 				Value:     []byte(`{}`),
@@ -149,7 +143,7 @@ var _ = Describe("DLQProducer", func() {
 
 		It("truncates long failure-reason header", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     sourceTestTopic,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 0,
 				Offset:    0,
 				Value:     []byte(`{}`),
@@ -174,7 +168,7 @@ var _ = Describe("DLQProducer", func() {
 
 		It("truncates at UTF-8 rune boundary", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     sourceTestTopic,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 0,
 				Offset:    0,
 				Value:     []byte(`{}`),
@@ -201,7 +195,7 @@ var _ = Describe("DLQProducer", func() {
 
 		It("returns error when producer send fails", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     sourceTestTopic,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 0,
 				Offset:    0,
 				Value:     []byte(`{}`),
@@ -215,61 +209,37 @@ var _ = Describe("DLQProducer", func() {
 		})
 	})
 
-	Describe("per-tenant routing", func() {
-		It("routes a rejected inference record to the inference dead-letter topic, not the source", func() {
-			perTenant := &DLQProducer{producer: mockProducer, perTenant: true}
-
-			var sentMsg *sarama.ProducerMessage
-			mockProducer.ExpectSendMessageWithMessageCheckerFunctionAndSucceed(
-				func(pm *sarama.ProducerMessage) error {
-					sentMsg = pm
-					return nil
-				},
-			)
-
-			msg := &sarama.ConsumerMessage{
-				Topic:     kafka.TopicInference,
-				Partition: 1,
-				Offset:    7,
-				Value:     []byte(`{"specversion":"1.0","id":"inf-1","type":"osac.inference.usage.v1"}`),
-			}
-			Expect(perTenant.Send(msg, "provider rejected", 3)).NotTo(HaveOccurred())
-
-			Expect(sentMsg).NotTo(BeNil())
-			Expect(sentMsg.Topic).To(Equal(kafka.InferenceDeadLetter))
-			Expect(sentMsg.Topic).NotTo(Equal(kafka.TopicInference),
-				"a dead letter must never go back to the consumed source topic")
-		})
-
-		It("keeps routing heartbeat records to the tenant's dead-letter topic", func() {
-			perTenant := &DLQProducer{producer: mockProducer, perTenant: true}
-
-			var sentMsg *sarama.ProducerMessage
-			mockProducer.ExpectSendMessageWithMessageCheckerFunctionAndSucceed(
-				func(pm *sarama.ProducerMessage) error {
-					sentMsg = pm
-					return nil
-				},
-			)
-
-			msg := &sarama.ConsumerMessage{
-				Topic:     sourceTestTopic,
-				Partition: 0,
-				Offset:    0,
-				Value:     []byte(`{}`),
-			}
-			Expect(perTenant.Send(msg, "test", 1)).NotTo(HaveOccurred())
-
-			Expect(sentMsg).NotTo(BeNil())
-			Expect(sentMsg.Topic).To(Equal("osac.metering.dlq.test"))
-		})
-	})
-
 	Describe("DLQSender interface", func() {
 		It("is implemented by DLQProducer", func() {
 			var sender DLQSender = dlq
 			Expect(sender).NotTo(BeNil())
 		})
+	})
+})
+
+var _ = Describe("DLQOptionFromEnv", func() {
+	It("returns a no-op when DLQ_ENABLED is unset", func() {
+		GinkgoT().Setenv("DLQ_ENABLED", "")
+		opt, closeFn, err := DLQOptionFromEnv("localhost:9092", kafka.KafkaConfig{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(opt).To(BeNil())
+		Expect(closeFn).NotTo(BeNil())
+		Expect(closeFn()).To(Succeed())
+	})
+
+	It("returns a no-op when DLQ_ENABLED is not true", func() {
+		GinkgoT().Setenv("DLQ_ENABLED", "false")
+		opt, closeFn, err := DLQOptionFromEnv("localhost:9092", kafka.KafkaConfig{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(opt).To(BeNil())
+		Expect(closeFn()).To(Succeed())
+	})
+
+	It("returns a no-op for common falsy values", func() {
+		GinkgoT().Setenv("DLQ_ENABLED", "0")
+		opt, _, err := DLQOptionFromEnv("localhost:9092", kafka.KafkaConfig{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(opt).To(BeNil())
 	})
 })
 
@@ -305,7 +275,7 @@ func (f *fakeOffsets) GetOffset(_ string, partitionID int32, time int64) (int64,
 var _ = Describe("DLQProducer Occupancy", func() {
 	It("sums newest minus oldest across partitions", func() {
 		dlq := &DLQProducer{
-			topic: dlqTestTopic,
+			topic: kafka.TopicDLQ,
 			offsets: &fakeOffsets{
 				partitions: []int32{0, 1, 2},
 				newest:     map[int32]int64{0: 10, 1: 5, 2: 20},
@@ -320,7 +290,7 @@ var _ = Describe("DLQProducer Occupancy", func() {
 
 	It("treats empty partitions as zero", func() {
 		dlq := &DLQProducer{
-			topic: dlqTestTopic,
+			topic: kafka.TopicDLQ,
 			offsets: &fakeOffsets{
 				partitions: []int32{0},
 				newest:     map[int32]int64{0: 0},
@@ -335,7 +305,7 @@ var _ = Describe("DLQProducer Occupancy", func() {
 
 	It("clamps inverted offsets to zero for that partition", func() {
 		dlq := &DLQProducer{
-			topic: dlqTestTopic,
+			topic: kafka.TopicDLQ,
 			offsets: &fakeOffsets{
 				partitions: []int32{0, 1},
 				newest:     map[int32]int64{0: 4, 1: 1},
@@ -349,14 +319,14 @@ var _ = Describe("DLQProducer Occupancy", func() {
 	})
 
 	It("returns an error when no Kafka client is attached", func() {
-		dlq := NewDLQProducerFromSyncProducer(nil, dlqTestTopic)
+		dlq := NewDLQProducerFromSyncProducer(nil, kafka.TopicDLQ)
 		_, err := dlq.Occupancy()
 		Expect(err).To(MatchError(ContainSubstring("Kafka client")))
 	})
 
 	It("returns an error when partition listing fails", func() {
 		dlq := &DLQProducer{
-			topic: dlqTestTopic,
+			topic: kafka.TopicDLQ,
 			offsets: &fakeOffsets{
 				partitionsErr: errors.New("broker down"),
 			},
@@ -368,7 +338,7 @@ var _ = Describe("DLQProducer Occupancy", func() {
 
 	It("returns an error when GetOffset fails and does not report a partial total", func() {
 		dlq := &DLQProducer{
-			topic: dlqTestTopic,
+			topic: kafka.TopicDLQ,
 			offsets: &fakeOffsets{
 				partitions: []int32{0, 1},
 				newest:     map[int32]int64{0: 10},
@@ -381,64 +351,7 @@ var _ = Describe("DLQProducer Occupancy", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(n).To(Equal(int64(0)))
 	})
-
-	It("covers the inference dead-letter topic alongside the tenants' in per-tenant mode", func() {
-		client := &fakeOccupancyClient{
-			partitions: map[string][]int32{
-				"osac.metering.dlq.acme":  {0},
-				kafka.InferenceDeadLetter: {0},
-			},
-			newest: map[string]map[int32]int64{
-				"osac.metering.dlq.acme":  {0: 10},
-				kafka.InferenceDeadLetter: {0: 4},
-			},
-			oldest: map[string]map[int32]int64{
-				"osac.metering.dlq.acme":  {0: 3},
-				kafka.InferenceDeadLetter: {0: 0},
-			},
-		}
-		dlq := &DLQProducer{perTenant: true, client: client, offsets: client}
-
-		n, err := dlq.Occupancy()
-		Expect(err).NotTo(HaveOccurred())
-		Expect(n).To(Equal(int64(11))) // (10-3) on the tenant DLQ + (4-0) on the inference DLQ
-	})
 })
-
-// fakeOccupancyClient stands in for a sarama client that both lists topics and
-// serves per-topic offsets, so a per-tenant occupancy can span several DLQs.
-type fakeOccupancyClient struct {
-	sarama.Client
-	partitions map[string][]int32
-	newest     map[string]map[int32]int64
-	oldest     map[string]map[int32]int64
-}
-
-func (c *fakeOccupancyClient) RefreshMetadata(...string) error { return nil }
-
-func (c *fakeOccupancyClient) Topics() ([]string, error) {
-	names := make([]string, 0, len(c.partitions))
-	for name := range c.partitions {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names, nil
-}
-
-func (c *fakeOccupancyClient) Partitions(topic string) ([]int32, error) {
-	return c.partitions[topic], nil
-}
-
-func (c *fakeOccupancyClient) GetOffset(topic string, partitionID int32, offsetTime int64) (int64, error) {
-	switch offsetTime {
-	case sarama.OffsetNewest:
-		return c.newest[topic][partitionID], nil
-	case sarama.OffsetOldest:
-		return c.oldest[topic][partitionID], nil
-	default:
-		return 0, errors.New("unexpected offset time")
-	}
-}
 
 func headerMap(headers []sarama.RecordHeader) map[string]string {
 	m := make(map[string]string, len(headers))

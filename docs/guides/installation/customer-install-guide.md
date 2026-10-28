@@ -210,6 +210,9 @@ Required for a production deployment:
   `osac-db-metering-client-cert` Secrets when metering is enabled. For more
   information, see
   [`fulfillment-service/docs/INSTALL.md`](https://github.com/osac-project/osac/blob/main/fulfillment-service/docs/INSTALL.md).
+  For end-to-end external-database wiring — identity and certificate
+  requirements, and values — see the
+  [external services support guide](external-services-support-guide.md).
 - **An external secret store.** The bundled OpenBao instance is for testing and
   CI, not production. Before installing the `osac` chart, prepare Vault or
   OpenBao, its Keycloak client, and the Kubernetes Secret and CA bundle used by

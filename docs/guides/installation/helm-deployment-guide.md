@@ -158,6 +158,9 @@ the Keycloak bootstrap passwords, and disable `bundledPostgres` and
 an external database and Vault-compatible secret store; see the [customer
 install guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md)
 and [secrets management configuration guide](secrets-management-configuration.md).
+The full external-PostgreSQL/-OpenBao wiring (connection Secrets, mTLS
+certificates, values) is in the
+[external services support guide](external-services-support-guide.md).
 The customer install guide also explains how to configure `my-values.yaml` for
 the services you plan to deploy. Check the LVMS device configuration and
 MetalLB address range against your cluster, and set `cnv.enabled: true` if

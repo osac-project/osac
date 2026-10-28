@@ -82,6 +82,7 @@ type secretsServer struct {
 	items     []*privatev1.Secret
 	creates   []*privatev1.SecretsCreateRequest
 	createErr error
+	updateErr error
 	deleteErr error
 	nextID    int
 }
@@ -150,6 +151,11 @@ func (s *secretsServer) Get(_ context.Context, request *privatev1.SecretsGetRequ
 }
 
 func (s *secretsServer) Update(_ context.Context, request *privatev1.SecretsUpdateRequest) (*privatev1.SecretsUpdateResponse, error) {
+	if s.updateErr != nil {
+		err := s.updateErr
+		s.updateErr = nil
+		return nil, err
+	}
 	for _, secret := range s.items {
 		if secret.GetId() == request.GetObject().GetId() {
 			secret.SetData(cloneSecretData(request.GetObject().GetData()))
@@ -245,6 +251,10 @@ var _ = Describe("Service-account reconciler", func() {
 		secret := seedSecret(serviceaccounts.ClientSecretName(accountID), "tenant-a", "client-secret-id", map[string][]byte{
 			clientIDDataKey: []byte(clientID), clientSecretDataKey: []byte("client-secret"),
 		})
+		secret.SetType(privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL)
+		secret.GetMetadata().SetAnnotations(map[string]string{
+			tenantAnnotation: "tenant-a", ownerReferenceAnnotation: accountID,
+		})
 		account.GetStatus().SetClientSecret(&privatev1.SecretLocalReference{Id: secret.GetId(), Name: secret.GetMetadata().GetName()})
 	}
 	updates := func() []*privatev1.ServiceAccountsUpdateRequest {
@@ -321,6 +331,56 @@ var _ = Describe("Service-account reconciler", func() {
 		Expect(account.GetStatus().GetClientSecret().GetId()).To(Equal("client-secret-id"))
 		request := <-api.requests
 		Expect(request.GetUpdateMask().GetPaths()).To(Equal([]string{"status.state", "status.message"}))
+	})
+
+	It("retries secret rotation after its staged credential write fails", func() {
+		account.GetMetadata().ClearDeletionTimestamp()
+		account.GetStatus().SetSecretRotationState(
+			privatev1.ServiceAccountSecretRotationState_SERVICE_ACCOUNT_SECRET_ROTATION_STATE_PENDING)
+		account.GetStatus().SetSecretRotationGeneration("c8dded6a-2881-4d25-9f1a-d964fc62272c")
+		seedClientSecret()
+		seedRegistrationSecret()
+		secretAPI.updateErr = status.Error(codes.Unavailable, "temporary Secret-store failure")
+		idpClient.EXPECT().RotateServiceAccountClientSecret(gomock.Any(), clientID, clientUUID, registrationToken).
+			Return("discarded-secret", registrationToken, nil)
+		idpClient.EXPECT().RotateServiceAccountClientSecret(gomock.Any(), clientID, clientUUID, registrationToken).
+			Return("published-secret", registrationToken, nil)
+
+		err := run(context.Background(), account)
+		Expect(controllers.IsRequeueable(err)).To(BeTrue())
+		Expect(account.GetStatus().GetSecretRotationState()).To(Equal(
+			privatev1.ServiceAccountSecretRotationState_SERVICE_ACCOUNT_SECRET_ROTATION_STATE_ERROR))
+
+		Expect(run(context.Background(), account)).To(Succeed())
+		Expect(account.GetStatus().GetSecretRotationState()).To(Equal(
+			privatev1.ServiceAccountSecretRotationState_SERVICE_ACCOUNT_SECRET_ROTATION_STATE_COMPLETED))
+		Expect(secretAPI.items).To(HaveLen(2))
+		Expect(secretAPI.items[0].GetData()[clientSecretDataKey]).To(Equal([]byte("published-secret")))
+		Expect(secretAPI.items[1].GetData()[serviceaccounts.RegistrationAccessTokenKey]).To(Equal([]byte(registrationToken)))
+		Expect(secretAPI.items[1].GetData()[serviceaccounts.RegistrationClientUUIDKey]).To(Equal([]byte(clientUUID)))
+	})
+
+	It("preserves the Keycloak client UUID when clearing provisioning-only credentials", func() {
+		account.GetMetadata().ClearDeletionTimestamp()
+		seedClientSecret()
+		registration := seedSecret("robot", auth.SystemTenant, "registration-secret-id", map[string][]byte{
+			serviceaccounts.RegistrationServiceAccountIDKey: []byte(accountID),
+			serviceaccounts.RegistrationAccessTokenKey:      []byte(registrationToken),
+			serviceaccounts.RegistrationClientUUIDKey:       []byte(clientUUID),
+			serviceaccounts.PendingClientSecretKey:          []byte("pending-secret"),
+			serviceaccounts.PendingClientSecretRefIDKey:     []byte("pending-reference"),
+			serviceaccounts.PendingClientSecretRefNameKey:   []byte("pending-name"),
+		})
+		account.GetStatus().SetRegistrationSecret(&privatev1.SecretLocalReference{
+			Id: registration.GetId(), Name: registration.GetMetadata().GetName(),
+		})
+
+		Expect(run(context.Background(), account)).To(Succeed())
+		Expect(registration.GetData()).To(Equal(map[string][]byte{
+			serviceaccounts.RegistrationServiceAccountIDKey: []byte(accountID),
+			serviceaccounts.RegistrationAccessTokenKey:      []byte(registrationToken),
+			serviceaccounts.RegistrationClientUUIDKey:       []byte(clientUUID),
+		}))
 	})
 
 	It("uses a numeric suffix when the service-account name is already taken", func() {

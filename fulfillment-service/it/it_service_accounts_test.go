@@ -37,6 +37,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/serviceaccounts"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -69,6 +70,7 @@ var _ = Describe("Service-account infrastructure", Serial, func() {
 		}, 2*time.Minute, time.Second).Should(Succeed())
 		credentialSecret, err := secrets.Get(ctx, publicv1.SecretsGetRequest_builder{Id: account.GetStatus().GetClientSecret().GetId()}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		Expect(credentialSecret.GetObject().GetType()).To(Equal(publicv1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL))
 		clientID := string(credentialSecret.GetObject().GetData()["client_id"])
 		Expect(clientID).To(Equal("osac-sa-" + tenant + "-" + id))
 		secret := string(credentialSecret.GetObject().GetData()["client_secret"])
@@ -174,6 +176,94 @@ var _ = Describe("Service-account infrastructure", Serial, func() {
 			_, err := user.Get(ctx, publicv1.ServiceAccountsGetRequest_builder{Id: id}.Build())
 			Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
 		}
+	})
+
+	It("rotates the tenant-scoped credential Secret asynchronously and keeps cleanup working", func(ctx context.Context) {
+		tenant, conn := createCatalogItemTenantAdminFixture(ctx)
+		api := publicv1.NewServiceAccountsClient(conn)
+		secrets := publicv1.NewSecretsClient(conn)
+		created, err := api.Create(ctx, serviceAccountRequest("", "rotate"))
+		Expect(err).ToNot(HaveOccurred())
+		id := created.GetObject().GetId()
+		DeferCleanup(func(ctx context.Context) { deleteServiceAccount(ctx, api, id) })
+
+		var account *publicv1.ServiceAccount
+		Eventually(ctx, func(g Gomega) {
+			current, getErr := api.Get(ctx, publicv1.ServiceAccountsGetRequest_builder{Id: id}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			account = current.GetObject()
+			g.Expect(account.GetStatus().GetClientSecret().GetId()).ToNot(BeEmpty())
+		}, 2*time.Minute, time.Second).Should(Succeed())
+
+		secretID := account.GetStatus().GetClientSecret().GetId()
+		originalResponse, err := secrets.Get(ctx, publicv1.SecretsGetRequest_builder{Id: secretID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(originalResponse.GetObject().GetType()).To(Equal(publicv1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL))
+		clientID := string(originalResponse.GetObject().GetData()["client_id"])
+		originalSecret := string(originalResponse.GetObject().GetData()["client_secret"])
+		Expect(originalSecret).ToNot(BeEmpty())
+		Expect(serviceAccountClaims(ctx, clientID, originalSecret)["osac_tenant"]).To(Equal(tenant))
+		existingTokenSource, err := serviceAccountTokenSource(ctx, clientID, originalSecret)
+		Expect(err).ToNot(HaveOccurred())
+		existingToken, err := existingTokenSource.Token(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		staticTokenSource, err := auth.NewStaticTokenSource().SetLogger(logger).SetToken(existingToken).Build()
+		Expect(err).ToNot(HaveOccurred())
+		existingTokenConn, err := tool.makeGrpcConn(externalServiceAddr, staticTokenSource)
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(existingTokenConn.Close)
+		existingTokenRoles := publicv1.NewRolesClient(existingTokenConn)
+		_, err = existingTokenRoles.List(ctx, publicv1.RolesListRequest_builder{}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		rotationRequest, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			"/api/fulfillment/v1/service_accounts/"+id+"/regenerate_secret", strings.NewReader("{}"))
+		Expect(err).ToNot(HaveOccurred())
+		rotationRequest.Header.Set("Content-Type", "application/json")
+		rotationResponse, err := tool.ExternalView().AdminClient().Do(rotationRequest)
+		Expect(err).ToNot(HaveOccurred())
+		rotationBody, err := io.ReadAll(rotationResponse.Body)
+		Expect(rotationResponse.Body.Close()).To(Succeed())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(rotationResponse.StatusCode).To(Equal(http.StatusOK))
+		queued := &publicv1.ServiceAccountsRegenerateSecretResponse{}
+		Expect(protojson.Unmarshal(rotationBody, queued)).To(Succeed())
+		Expect(queued.GetObject().GetStatus().GetSecretRotationState()).To(Equal(
+			publicv1.ServiceAccountSecretRotationState_SERVICE_ACCOUNT_SECRET_ROTATION_STATE_PENDING))
+		Expect(queued.GetObject().GetStatus().GetClientSecret().GetId()).To(Equal(secretID))
+
+		Eventually(ctx, func(g Gomega) {
+			current, getErr := api.Get(ctx, publicv1.ServiceAccountsGetRequest_builder{Id: id}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			account = current.GetObject()
+			g.Expect(account.GetStatus().GetSecretRotationState()).To(Equal(
+				publicv1.ServiceAccountSecretRotationState_SERVICE_ACCOUNT_SECRET_ROTATION_STATE_COMPLETED))
+		}, 2*time.Minute, time.Second).Should(Succeed())
+		Expect(account.GetStatus().GetClientSecret().GetId()).To(Equal(secretID))
+
+		rotatedResponse, err := secrets.Get(ctx, publicv1.SecretsGetRequest_builder{Id: secretID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		rotatedSecret := string(rotatedResponse.GetObject().GetData()["client_secret"])
+		Expect(rotatedSecret).ToNot(BeEmpty())
+		Expect(bytes.Equal([]byte(rotatedSecret), []byte(originalSecret))).To(BeFalse())
+		Expect(rotatedResponse.GetObject().GetMetadata().GetTenant()).To(Equal(tenant))
+		Expect(rotatedResponse.GetObject().GetMetadata().GetAnnotations()).To(HaveKeyWithValue(
+			"osac.openshift.io/tenant", tenant))
+		Expect(rotatedResponse.GetObject().GetMetadata().GetAnnotations()).To(HaveKeyWithValue(
+			"osac.openshift.io/owner-reference", id))
+		oldCredentialError := serviceAccountTokenError(ctx, clientID, originalSecret)
+		Expect(oldCredentialError).To(HaveOccurred())
+		_, err = existingTokenRoles.List(ctx, publicv1.RolesListRequest_builder{}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(bytes.Equal([]byte(keycloakClientSecret(ctx, clientID)), []byte(rotatedSecret))).To(BeTrue())
+		Expect(serviceAccountClaims(ctx, clientID, rotatedSecret)["osac_tenant"]).To(Equal(tenant))
+		assertServiceAccountStoredWithoutSecret(ctx, id, rotatedSecret)
+
+		clientUUID := keycloakClient(ctx, clientID)["id"].(string)
+		deleteServiceAccount(ctx, api, id)
+		code, _, err := tool.KeycloakAdminRequest(ctx, http.MethodGet, "/clients/"+clientUUID, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(code).To(Equal(http.StatusNotFound), "rotated registration token must allow client cleanup")
 	})
 
 	It("returns a pending REST account and provisions credentials for a maximum-length tenant", func(ctx context.Context) {

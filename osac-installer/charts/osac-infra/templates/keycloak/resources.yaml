@@ -676,6 +676,73 @@ data:
       echo "Ensured authenticated client-registration policies for service accounts"
     }
 
+    ensure_service_account_registration_token_policy() {
+      local token profiles profile_payload policies policy_payload
+      token="$(keycloak_curl -sf -X POST https://keycloak:443/realms/master/protocol/openid-connect/token \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        -d 'grant_type=password' -d 'client_id=admin-cli' \
+        --data-urlencode "username=${ADMIN_USERNAME}" \
+        --data-urlencode "password=${ADMIN_PASSWORD}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")"
+      profiles="$(keycloak_curl -sf 'https://keycloak:443/admin/realms/osac/client-policies/profiles?include-global-profiles=false' \
+        -H "Authorization: Bearer ${token}")"
+      profile_payload="$(python3 -c '
+    import json
+    import sys
+
+    profile_name = "osac-service-account-registration-token-reuse"
+    executor_name = "registration-access-token-rotation-disabled"
+    response = json.loads(sys.argv[1])
+    profiles = response.setdefault("profiles", [])
+    if not isinstance(profiles, list):
+        raise SystemExit("invalid Keycloak client profile response")
+    profile = next((item for item in profiles if item.get("name") == profile_name), None)
+    if profile is None:
+        profile = {"name": profile_name, "executors": []}
+        profiles.append(profile)
+    profile["description"] = "Keep OSAC service-account registration tokens reusable for retries"
+    executors = profile.setdefault("executors", [])
+    executor = next((item for item in executors if item.get("executor") == executor_name), None)
+    if executor is None:
+        executors.append({"executor": executor_name, "configuration": {}})
+    else:
+        executor["configuration"] = {}
+    print(json.dumps({"profiles": profiles}))
+    ' "${profiles}")"
+      keycloak_curl -sf -X PUT 'https://keycloak:443/admin/realms/osac/client-policies/profiles' \
+        -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' -d "${profile_payload}"
+
+      policies="$(keycloak_curl -sf 'https://keycloak:443/admin/realms/osac/client-policies/policies?include-global-policies=false' \
+        -H "Authorization: Bearer ${token}")"
+      policy_payload="$(python3 -c '
+    import json
+    import sys
+
+    policy_name = "osac-service-account-registration-token-reuse"
+    profile_name = "osac-service-account-registration-token-reuse"
+    response = json.loads(sys.argv[1])
+    policies = response.setdefault("policies", [])
+    if not isinstance(policies, list):
+        raise SystemExit("invalid Keycloak client policy response")
+    policy = next((item for item in policies if item.get("name") == policy_name), None)
+    if policy is None:
+        policy = {"name": policy_name}
+        policies.append(policy)
+    policy.update({
+        "description": "Keep OSAC service-account registration tokens reusable for retries",
+        "enabled": True,
+        "conditions": [{
+            "condition": "client-updater-context",
+            "configuration": {"update-client-source": ["ByRegistrationAccessToken"]},
+        }],
+        "profiles": [profile_name],
+    })
+    print(json.dumps({"policies": policies}))
+    ' "${policies}")"
+      keycloak_curl -sf -X PUT 'https://keycloak:443/admin/realms/osac/client-policies/policies' \
+        -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' -d "${policy_payload}"
+      echo "Ensured reusable registration tokens for OSAC service-account clients"
+    }
+
     set_password() {
       local username=$1
       local password=$2
@@ -722,6 +789,7 @@ data:
     ensure_mcp_client
     ensure_controller_idp_roles
     ensure_service_account_registration_policies
+    ensure_service_account_registration_token_policy
 ---
 apiVersion: batch/v1
 kind: Job

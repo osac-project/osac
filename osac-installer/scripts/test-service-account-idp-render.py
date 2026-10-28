@@ -86,6 +86,12 @@ def check():
     assert 'roles/manage-clients' in setup_script
     assert "ensure_service_account_registration_policies" in setup_script
     assert 'admin/realms/osac/components/${component_id}' in setup_script
+    assert "ensure_service_account_registration_token_policy" in setup_script
+    assert "client-policies/profiles" in setup_script
+    assert "registration-access-token-rotation-disabled" in setup_script
+    assert "client-policies/policies" in setup_script
+    assert '"condition": "client-updater-context"' in setup_script
+    assert '"update-client-source": ["ByRegistrationAccessToken"]' in setup_script
     assert 'curl --cacert "${KEYCLOAK_CA_FILE}" "$@"' in setup_script
     assert "curl -k" not in setup_script
     subprocess.run(["bash", "-n"], input=setup_script, check=True, text=True)

@@ -19,6 +19,7 @@ package auth
 import (
 	"context"
 
+	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 )
@@ -67,6 +68,23 @@ var _ = Describe("Subject inside context", func() {
 			Expect(IsControllerServiceAccount(context.Background())).To(BeFalse())
 			ctx := ContextWithSubject(context.Background(), &Subject{User: "service-account-osac-admin"})
 			Expect(IsControllerServiceAccount(ctx)).To(BeFalse())
+		})
+	})
+
+	Describe("tenant admin detection", func() {
+		It("recognizes the tenant-admin realm role", func() {
+			token := &jwt.Token{Claims: jwt.MapClaims{
+				"realm_access": map[string]any{"roles": []any{"tenant-admin"}},
+			}}
+			Expect(IsTenantAdmin(ContextWithToken(context.Background(), token))).To(BeTrue())
+		})
+
+		It("does not grant tenant-admin access to another role or missing token", func() {
+			token := &jwt.Token{Claims: jwt.MapClaims{
+				"realm_access": map[string]any{"roles": []any{"is_client"}},
+			}}
+			Expect(IsTenantAdmin(ContextWithToken(context.Background(), token))).To(BeFalse())
+			Expect(IsTenantAdmin(context.Background())).To(BeFalse())
 		})
 	})
 })

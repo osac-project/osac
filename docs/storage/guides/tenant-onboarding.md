@@ -19,7 +19,7 @@ Tenant is created in OSAC
       │     (hub Secret)                │     target cluster
       │  2. create tenant classes       │  2. match one class per
       │     on the target cluster       │     configured tier
-      │  3. verify classes              │  3. set StorageOnboardingComplete
+      │  3. verify classes              │  3. set StorageReady
       └─────────────────────────────────┘
                 │
                 ▼
@@ -48,7 +48,7 @@ onboarding is in development.
 Readiness is recorded on the Tenant resource in the management cluster:
 
 ```shell
-# Conditions (mode-appropriate: StorageOnboardingComplete for CSP-managed;
+# Conditions (mode-appropriate: StorageReady for CSP-managed;
 # StorageBackendReady and ClusterStorageReady for OSAC-managed)
 kubectl get tenant <tenant-name> -o jsonpath='{.status.conditions}'
 
@@ -72,7 +72,7 @@ New tiers can be configured after a tenant is onboarded:
 
 - OSAC reconciles the new tier on its next pass and records its resolved
   class in the tenant status.
-- The latched `StorageOnboardingComplete` milestone is not reset by tier
+- The latched `StorageReady` milestone is not reset by tier
   additions.
 - A workload requesting the new tier uses its current resolution at
   provisioning time.

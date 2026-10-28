@@ -23,7 +23,7 @@ the platform (Fulfillment API, operator, automation provider).
 | Phase | OSAC-managed | CSP-managed |
 |---|---|---|
 | **Setup** | CSP admin registers backend (endpoint + credentials) and tiers; CSP prepares the array | CSP prepares array, CSI driver, backend config, and labeled classes; CSP admin registers backend (`cspManaged: true`) and tiers |
-| **Tenant onboarding** | OSAC provisions tenant credentials (Secret), creates tenant classes, verifies classes | OSAC lists the shared classes, verifies one per tier, sets `StorageOnboardingComplete` |
+| **Tenant onboarding** | OSAC provisions tenant credentials (Secret), creates tenant classes, verifies classes | OSAC lists the shared classes, verifies one per tier, sets `StorageReady` |
 | **Workload provisioning** | OSAC resolves the requested tier's class; JIT provisioning may run through provider automation | OSAC resolves the requested tier's class from the CSP-provided classes; no provider dispatch |
 | **Credential rotation** | Update the backend or Secret through OSAC; next reconciliation uses the new value | Entirely outside OSAC |
 | **Tenant teardown** | OSAC deletes tenant classes and credentials | OSAC removes its own records only; CSP-owned classes and CSI config are preserved |

@@ -23,7 +23,7 @@ CSP admin (outside OSAC)                    CSP admin (in OSAC)
   (one class per configured tier)
           |
           v
-  StorageOnboardingComplete + resolved classes
+  StorageReady + resolved classes
           |
           v
   Tenant users create ComputeInstances,
@@ -102,7 +102,7 @@ kubectl get tenant <tenant-name> -o jsonpath='{.status.storageClasses}'
 # [{"name":"ontap-gold","tier":"gold"},{"name":"ontap-silver","tier":"silver"}]
 ```
 
-`StorageOnboardingComplete=True` means every configured tier resolved to
+`StorageReady=True` means every configured tier resolved to
 exactly one class. The condition is a latched milestone: it stays `True`
 when tiers are added later. See
 [concepts/readiness.md](../concepts/readiness.md) for the full semantics.
@@ -129,8 +129,8 @@ does **not**:
 
 | Symptom | Cause | Resolution |
 |---|---|---|
-| `StorageOnboardingComplete=False`, reason `NotFound`; message names a tier | The tier has no matching StorageClass on the target cluster | Create the class with both labels (`osac.openshift.io/tenant=csp-managed`, `osac.openshift.io/storage-tier=<tier>`). See the contract above |
-| `StorageOnboardingComplete=False`, reason `MultipleFound`; message lists class names | More than one class matches a tier | Remove or relabel the duplicate so exactly one class matches |
+| `StorageReady=False`, reason `NotFound`; message names a tier | The tier has no matching StorageClass on the target cluster | Create the class with both labels (`osac.openshift.io/tenant=csp-managed`, `osac.openshift.io/storage-tier=<tier>`). See the contract above |
+| `StorageReady=False`, reason `MultipleFound`; message lists class names | More than one class matches a tier | Remove or relabel the duplicate so exactly one class matches |
 | Readiness not evaluated; operator logs show target access errors | The operator cannot reach its configured target cluster | Check the operator's target access configuration; the operator fails closed and never queries the local cluster as a fallback. Remote-target deployment wiring is in development |
 | A class exists but the tier still doesn't resolve | The class is labeled for a different tier, or the tier isn't configured in OSAC | Verify both label values; check `osac get storagetier` |
 | Classes exist for tiers OSAC doesn't know about | Extra classes for unconfigured tiers are ignored by design | No action needed; they don't affect readiness |

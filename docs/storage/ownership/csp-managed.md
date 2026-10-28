@@ -40,7 +40,7 @@ OSAC:
 
 - Reads the CSP-provided StorageClasses on the target cluster.
 - Resolves each configured tier to exactly one matching class.
-- Reports onboarding readiness through the `StorageOnboardingComplete`
+- Reports onboarding readiness through the `StorageReady`
   condition (see [concepts/readiness.md](../concepts/readiness.md)).
 - Passes the resolved tier-to-class mapping to workload provisioning.
 

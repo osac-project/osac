@@ -17,18 +17,16 @@ problems.
 |---|---|---|
 | `StorageBackendReady` | OSAC-managed | The tenant's backend credentials have been provisioned (the hub Secret exists). |
 | `ClusterStorageReady` | OSAC-managed | StorageClasses are installed on the target cluster for this tenant. |
-| `StorageOnboardingComplete` | CSP-managed | All expected CSP-managed classes for the configured tiers exist on the target cluster. |
+| `StorageReady` | CSP-managed | All expected CSP-managed classes for the configured tiers exist on the target cluster. |
 
-> **Status: Dev Preview.** `StorageOnboardingComplete` is the newer,
-> latched onboarding signal introduced with CSP-managed storage. It is
-> being renamed to `StorageReady` in an upcoming change; these documents
-> use the current name until the rename lands. The OSAC-managed
-> conditions above are unchanged, and unifying readiness reporting
-> across modes is planned.
+> **Status: Dev Preview.** `StorageReady` is the newer, latched
+> onboarding signal introduced with CSP-managed storage. The
+> OSAC-managed conditions above are unchanged, and unifying readiness
+> reporting across modes is planned.
 
-## StorageOnboardingComplete semantics
+## StorageReady semantics
 
-`StorageOnboardingComplete` is a **latched initial-onboarding milestone**:
+`StorageReady` is a **latched initial-onboarding milestone**:
 
 ```
  onboarding              every configured tier has

@@ -333,7 +333,25 @@ the validation lab — see the provenance note in the introduction.)
 ### 5.2 Clean install: external issuer
 
 Disable the bundled instance and point every consumer at the external
-issuer. `osac-infra` release:
+issuer. The full list of modification points (the credential entries
+are structures, not scalars — the exact shapes follow in the YAML
+below):
+
+| # | Where | Parameter | Value |
+|---|---|---|---|
+| 1 | `osac-infra` release | `keycloak.enabled` | `false` |
+| 2 | `osac` release | `service.auth.issuerUrl` | `https://<kc-host>:8443/realms/osac` |
+| 3 | `osac` release | `service.auth.controllerCredentials` | Secret `fulfillment-controller-credentials` (client-id / client-secret) |
+| 4 | `osac` release | `service.idp.provider` | `keycloak` |
+| 5 | `osac` release | `service.idp.url` | `https://<kc-host>:8443` |
+| 6 | `osac` release | `service.idp.credentials` | same Secret as row 3 |
+| 7 | `osac` release | `service.vault.keycloakIssuerUrl` | `https://<kc-host>:8443/realms/osac` |
+| 8 | `osac` release | `service.vault.credentials` | Secret `vault-credentials` (client-secret) |
+| 9 | `osac` release | `ui.auth.oidcIssuerURL` | `https://<kc-host>:8443/realms/osac` — full URL, not tpl-expanded |
+| 10 | ns `osac` | Secrets (yours to create) | rows 3/6/8's Secrets + UI-backend / CSI-driver if referenced |
+| 11 | external Keycloak | realm `osac` | seeded per §5.3, clients matching the Secrets' IDs and secrets |
+
+`osac-infra` release:
 
 ```yaml
 keycloak:

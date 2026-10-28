@@ -219,6 +219,7 @@ controller status and feedback.
 | Name missing or empty on create | `InvalidArgument` | Validation error on `metadata.name` (protovalidate) |
 | Name fails RFC 1123 format | `InvalidArgument` | Validation error on `metadata.name` (protovalidate) |
 | Name already taken in scope | `AlreadyExists` | `virtual network 'prod-net' already exists` |
+| User or identity provider created with a non-empty `metadata.project` | `InvalidArgument` | `field 'metadata.project' must be empty` |
 | Update attempts to change name on an update-capable service | `InvalidArgument` | `field 'metadata.name' is immutable` |
 | Update attempt on a public networking service without update support | `Unimplemented` | The public service has no `Update` method |
 | Singleton or single-default invariant (for example a second non-deleted `NetworkClass`) | `FailedPrecondition` | `only one NetworkClass per deployment is allowed (existing NetworkClass id '...')` |

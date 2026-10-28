@@ -72,8 +72,9 @@ var _ = Describe("Private identity providers server", func() {
 			request := privatev1.IdentityProvidersCreateRequest_builder{
 				Object: privatev1.IdentityProvider_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name:   "test-oidc",
-						Tenant: "my-tenant",
+						Name:    "test-oidc",
+						Project: "",
+						Tenant:  "my-tenant",
 					}.Build(),
 					Spec: privatev1.IdentityProviderSpec_builder{
 						Title:   "Test OIDC",
@@ -99,6 +100,30 @@ var _ = Describe("Private identity providers server", func() {
 			Expect(response.Object.Spec.Enabled).To(BeTrue())
 			Expect(response.Object.Spec.GetOidc()).ToNot(BeNil())
 			Expect(response.Object.Spec.GetOidc().Issuer).To(Equal("https://example.com"))
+		})
+
+		It("Rejects creating an identity provider in a named project", func() {
+			_, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+				Object: privatev1.IdentityProvider_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:    "default-project-idp",
+						Project: "my-project",
+						Tenant:  "my-tenant",
+					}.Build(),
+					Spec: privatev1.IdentityProviderSpec_builder{
+						Title:   "Default Project IdP",
+						Enabled: true,
+						Oidc: privatev1.OidcConfig_builder{
+							AuthorizationUrl: "https://example.com/auth",
+							TokenUrl:         "https://example.com/token",
+							ClientId:         "client-id",
+							Issuer:           "https://example.com",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError("rpc error: code = InvalidArgument desc = field 'metadata.project' must be empty"))
 		})
 
 		It("Sets tenant from the request context for identity providers", func() {

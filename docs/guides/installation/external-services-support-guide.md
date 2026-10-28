@@ -416,7 +416,9 @@ the same preprocessing step:
 ```bash
 # resolve placeholders and patch the osac-ui client into a resolved
 # realm file (secret values are yours — they must match the §5.2
-# client-credential Secrets; <ui-origin> is your UI's HTTPS origin)
+# client-credential Secrets). <ui-origin> is the origin the browser
+# loads the UI from — scheme, host and port only, no path, no trailing
+# slash (e.g. https://osac-ui.example.com), same origin every time.
 python3 - realm.json > realm-resolved.json <<'PY'
 import json, sys
 subs = {
@@ -780,9 +782,10 @@ oc get nodes                       # Ready
 oc -n osac get pods                # no CrashLoopBackOff / pending
 oc -n osac rollout status deploy/fulfillment-controller   # …and every deploy
 
-# external health
-curl -sk -o /dev/null -w '%{http_code}\n' https://<host-ip>:8200/v1/sys/health          # 200
-curl -sk https://<kc-host>:8443/realms/osac | python3 -c \
+# external health — verify the servers, don't -k them (CAs from A.3/A.4)
+curl -s --cacert /root/bao-ca.pem -o /dev/null -w '%{http_code}\n' \
+  https://<host-ip>:8200/v1/sys/health                                                   # 200
+curl -s --cacert /root/kc-ca.pem https://<kc-host>:8443/realms/osac | python3 -c \
   "import sys,json; print(json.load(sys.stdin)['realm'])"                                # osac
 podman exec osac-postgres psql -U postgres -Atc \
   "select count(*) from pg_stat_activity where usename in ('osac_service','osac_metering')"   # >0
@@ -892,10 +895,16 @@ trap 'systemctl is-active --quiet container-osac-openbao.service \
 systemctl stop container-osac-openbao.service
 tar -czf "$DIR/bao-data-$STAMP.tar.gz" -C /root bao-data
 systemctl start container-osac-openbao.service
+READY=0
 for i in $(seq 1 30); do
   sleep 2
-  [ "$(curl -s --cacert "$CA" -o /dev/null -w '%{http_code}' https://<host-ip>:8200/v1/sys/health)" = 200 ] && break
+  if [ "$(curl -s --cacert "$CA" -o /dev/null -w '%{http_code}' https://<host-ip>:8200/v1/sys/health)" = 200 ]; then
+    READY=1; break
+  fi
 done
+# 200 means initialized, unsealed AND active — anything else (501 sealed,
+# 503 not-ready, 429 standby) is a failure after the 60 s budget below
+[ "$READY" = 1 ] || { echo "ERROR: OpenBao not healthy 60s after start" >&2; exit 1; }
 curl -s --cacert "$CA" https://<host-ip>:8200/v1/sys/health | grep -q '"sealed":false'
 echo "OK bao-data-$STAMP.tar.gz"
 find "$DIR" -name 'bao-data-*.tar.gz' -mtime +14 -delete
@@ -927,9 +936,10 @@ export PATH=/usr/sbin:/usr/bin:/sbin:/bin:$PATH   # cron PATH lacks iptables etc
 umask 077                     # exports carry realm keys and password hashes
 DIR=/root/kc-backup; STAMP=$(date +%Y%m%d-%H%M%S); mkdir -p "$DIR"
 KC="https://<kc-host>:8443"
+CA=/root/kc-ca.pem            # from A.4 — verify the server, don't -k it
 KC_PASS=$(podman inspect keycloak-external --format \
   '{{range .Config.Env}}{{println .}}{{end}}' | grep '^KEYCLOAK_ADMIN_PASSWORD=' | cut -d= -f2-)
-TOKEN=$(curl -sf -d "client_id=admin-cli&username=admin&password=${KC_PASS}&grant_type=password" \
+TOKEN=$(curl -sf --cacert "$CA" -d "client_id=admin-cli&username=admin&password=${KC_PASS}&grant_type=password" \
   "${KC}/realms/master/protocol/openid-connect/token" \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
 
@@ -937,7 +947,7 @@ TOKEN=$(curl -sf -d "client_id=admin-cli&username=admin&password=${KC_PASS}&gran
 # -f makes curl fail on HTTP errors (an expired token would otherwise
 # save a JSON error object as tonight's "backup"); the python step then
 # validates the payload really is JSON.
-curl -sf -X POST -H "Authorization: Bearer ${TOKEN}" \
+curl -sf --cacert "$CA" -X POST -H "Authorization: Bearer ${TOKEN}" \
   "${KC}/admin/realms/osac/partial-export?exportClients=true&exportGroupsAndRoles=true" \
   | python3 -c 'import sys,json; json.dump(json.load(sys.stdin), sys.stdout)' \
   > "$DIR/realm-osac-${STAMP}.json"
@@ -947,7 +957,7 @@ curl -sf -X POST -H "Authorization: Bearer ${TOKEN}" \
 # past the first page is silently missing)
 FIRST=0; PAGES=()
 while :; do
-  PAGE=$(curl -sf -H "Authorization: Bearer ${TOKEN}" \
+  PAGE=$(curl -sf --cacert "$CA" -H "Authorization: Bearer ${TOKEN}" \
     "${KC}/admin/realms/osac/users?first=${FIRST}&max=100&briefRepresentation=false")
   COUNT=$(printf '%s' "$PAGE" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))')
   [ "$COUNT" -eq 0 ] && break
@@ -1120,13 +1130,13 @@ an external instance should not inherit that; and do not add
 from A.1 the normal labels work.
 
 On identities: the `POSTGRESQL_USER`/`POSTGRESQL_PASSWORD` pair is the
-container image's own bootstrap account — a password-authenticated
-superuser named `service`, local to first-boot initialization — and is
-**not** the OSAC `postgres` administrator, nor what OSAC uses. The
-chart's db-init job logs in as the `postgres` superuser over client-cert
-mTLS (§3.1) and creates the real users — `osac_service`, `osac_metering`
-— and their databases; the workload client certificates' CNs match those
-role names.
+container image's bootstrap login — the account first-boot
+initialization runs as, and the owner of the `POSTGRESQL_DATABASE`
+database — and is **not** the OSAC `postgres` administrator, nor what
+OSAC uses. The chart's db-init job logs in as the `postgres`
+superuser over client-cert mTLS (§3.1) and creates the real users —
+`osac_service`, `osac_metering` — and their databases; the workload
+client certificates' CNs match those role names.
 
 ### A.3 OpenBao
 
@@ -1280,18 +1290,19 @@ ExecStartPost=-/usr/local/sbin/osac-openbao-unseal.sh
 # Reads the unseal key from a root-only file; never prints it.
 set -u
 BASE=https://<host-ip>:8200
+CA=/root/bao-ca.pem           # from A.3 — verify the server, don't -k it
 LOG=/var/log/osac-openbao-unseal.log
 
 KEY=$(python3 -c 'import json;print(json.load(open("/root/openbao-init.json"))["unseal_keys_b64"][0])')
 
 for _ in $(seq 1 30); do
-  HEALTH=$(curl -sk --max-time 3 "$BASE/v1/sys/health" 2>/dev/null) || { sleep 2; continue; }
+  HEALTH=$(curl -s --cacert "$CA" --max-time 3 "$BASE/v1/sys/health" 2>/dev/null) || { sleep 2; continue; }
   SEALED=$(printf "%s" "$HEALTH" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("sealed"))' 2>/dev/null) || { sleep 2; continue; }
   if [ "$SEALED" = "False" ]; then
     exit 0
   fi
   if [ "$SEALED" = "True" ]; then
-    RESP=$(curl -sk --max-time 5 -X PUT -d "{\"key\":\"$KEY\"}" "$BASE/v1/sys/unseal" 2>/dev/null) || RESP=""
+    RESP=$(curl -s --cacert "$CA" --max-time 5 -X PUT -d "{\"key\":\"$KEY\"}" "$BASE/v1/sys/unseal" 2>/dev/null) || RESP=""
     if printf "%s" "$RESP" | grep -q '"sealed":false'; then
       echo "$(date -u +%FT%TZ) unsealed osac-openbao (ExecStartPost)" >> "$LOG"
       exit 0
@@ -1327,6 +1338,10 @@ maintenance) must go through systemctl.
 # The image runs as uid 1000 — it must be able to read the key:
 chown 1000:0 /root/kc-cert.pem /root/kc-key.pem
 chmod 644 /root/kc-cert.pem && chmod 400 /root/kc-key.pem
+# CA that validates the server cert, for host-side clients (backups,
+# §5.3 seeding, §9 probes): with the self-signed pair the cert is its
+# own CA; with a cluster-issued cert copy the issuing CA here instead.
+cp /root/kc-cert.pem /root/kc-ca.pem
 mkdir -p /root/kc-data && chown -R 1000:0 /root/kc-data    # H2 lives here
 
 podman run -d --name keycloak-external \
@@ -1367,11 +1382,21 @@ the bind-mounted `/root/kc-data` is fine for a lab or evaluation instance
 but not for production — single file, no HA, no point-in-time recovery.
 For production, back the container with PostgreSQL (a dedicated database
 on an external instance like §3's) by adding `KC_DB=postgres`,
-`KC_DB_URL=jdbc:postgresql://<host-ip>:5432/keycloak`,
+`KC_DB_URL='jdbc:postgresql://<host-ip>:5432/keycloak?ssl=true&sslmode=verify-full&sslrootcert=/etc/x509/pg/ca.pem'`,
 `KC_DB_USERNAME=<kc-db-user>`, `KC_DB_PASSWORD=<kc-db-password>` to the
 run command (standard Keycloak configuration; not exercised in the
 validation lab), and back it up per §10.3. On a clean install, seed the
-realm per §5.3.
+realm per §5.3. The `sslmode=verify-full` + `sslrootcert` pair makes the
+JDBC connection verify the **server** certificate against the CA that
+signed it (the same `/root/ca-bundle.pem` A.2 uses — mount it into the
+Keycloak container, e.g.
+`-v /root/ca-bundle.pem:/etc/x509/pg/ca.pem:ro,z`) and check the
+hostname, instead of accepting any certificate; without it the
+connection either fails closed or, with `sslmode` relaxed, silently
+skips verification. `verify-ca` is the fallback if the server
+certificate carries no DNS SAN matching `<host-ip>` (an IP-SAN-only
+cert, as in the A.3 lab shortcut, will fail `verify-full` hostname
+checking when reached by IP).
 
 Two setup steps make that work against an A.2-style instance:
 

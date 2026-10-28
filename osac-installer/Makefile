@@ -679,10 +679,13 @@ endif
 .PHONY: sync-charts
 sync-charts: helm-deps ## Rebuild chart dependencies (alias for helm-deps)
 
-.PHONY: helm-deps
-helm-deps: ## Build OSAC and devstack Helm chart dependencies
+.PHONY: helm-osac-deps
+helm-osac-deps: ## Build just charts/osac's own dependencies (no devstack)
 	rm -rf $(OSAC_CHART)/charts
 	helm --repository-config $(LOCAL_HELM_REPOSITORY_CONFIG) dependency build $(OSAC_CHART)
+
+.PHONY: helm-deps
+helm-deps: helm-osac-deps ## Build OSAC and devstack Helm chart dependencies
 	$(MAKE) helm-devstack-deps
 
 .PHONY: helm-infra-deps
@@ -835,9 +838,7 @@ bmf-netbox-render-test: helm-deps ## Check NetBox, Metal3 management, and Secret
 	uv run --project .. python scripts/test-bmf-netbox-render.py
 
 .PHONY: chart-name-independence-render-test
-chart-name-independence-render-test: ## Check cross-chart secret/cert names survive repackaging under a different Chart.yaml name
-	rm -rf $(OSAC_CHART)/charts
-	helm --repository-config $(LOCAL_HELM_REPOSITORY_CONFIG) dependency build $(OSAC_CHART)
+chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/cert names survive repackaging under a different Chart.yaml name
 	uv run --project .. python scripts/test-chart-name-independence-render.py
 
 .PHONY: helm-validate

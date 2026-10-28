@@ -222,7 +222,8 @@ var _ = Describe("OAuth token exchange", func() {
 				return apiToken, err
 			})
 			handler := handleCheckConnection(
-				"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), &mockSelfSubjectAccessReviewsClient{},
+				"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(),
+				&mockTenantsClient{}, &mockSelfSubjectAccessReviewsClient{},
 			)
 			_, _, err = handler(context.Background(), request, CheckConnectionInput{})
 			Expect(err).To(HaveOccurred())

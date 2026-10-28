@@ -1,0 +1,81 @@
+---
+- name: Apply AgentlessNet ExternalIPAttachment provider state
+  block:
+    - name: Read the controller-resolved ExternalIPAttachment context
+      ansible.builtin.set_fact:
+        _agentless_net_attachment_context: >-
+          {{ (osac_job_vars | default({})).get('external_ip_attachment_context', {}) }}
+      no_log: true
+
+    - name: Validate AgentlessNet ExternalIPAttachment v1 inputs
+      ansible.builtin.assert:
+        that:
+          - external_ip_attachment.metadata.uid is string
+          - external_ip_attachment.metadata.uid | length > 0
+          - external_ip_attachment.metadata.generation is number
+          - external_ip_attachment.metadata.labels['osac.openshift.io/externalipattachment-uuid'] is string
+          - external_ip_attachment.metadata.labels['osac.openshift.io/externalipattachment-uuid'] | length > 0
+          - external_ip_attachment.metadata.annotations['osac.openshift.io/tenant'] is string
+          - external_ip_attachment.metadata.annotations['osac.openshift.io/externalipattachment-contract-version'] == 'v1'
+          - external_ip_attachment.metadata.deletionTimestamp is not defined
+          - external_ip_attachment.spec.externalIP == _agentless_net_attachment_context.external_ip.fulfillment_id
+          - external_ip_attachment.spec.baremetalInstance == _agentless_net_attachment_context.target.fulfillment_id
+          - _agentless_net_attachment_context.target.kind == 'BareMetalInstance'
+          - _agentless_net_attachment_context.target.ready | bool
+          - _agentless_net_attachment_context.external_ip.state == 'Allocated'
+          - _agentless_net_attachment_context.external_ip.phase == 'Ready'
+          - _agentless_net_attachment_context.subnet.phase == 'Ready'
+          - _agentless_net_attachment_context.virtual_network.phase == 'Ready'
+          - _agentless_net_attachment_context.external_ip.tenant_id == external_ip_attachment.metadata.annotations['osac.openshift.io/tenant']
+          - _agentless_net_attachment_context.target.tenant_id == external_ip_attachment.metadata.annotations['osac.openshift.io/tenant']
+          - _agentless_net_attachment_context.subnet.tenant_id == external_ip_attachment.metadata.annotations['osac.openshift.io/tenant']
+          - _agentless_net_attachment_context.virtual_network.tenant_id == external_ip_attachment.metadata.annotations['osac.openshift.io/tenant']
+          - _agentless_net_attachment_context.subnet.virtual_network_id == _agentless_net_attachment_context.virtual_network.fulfillment_id
+          - _agentless_net_attachment_context.external_ip.address | ansible.utils.ipv4 != false
+          - _agentless_net_attachment_context.target.ip_address | ansible.utils.ipv4 != false
+          - _agentless_net_attachment_context.subnet.ipv4_cidr is string
+          - _agentless_net_attachment_context.subnet.ipv4_cidr | length > 0
+          - _agentless_net_attachment_context.external_ip.kubernetes_uid is string
+          - _agentless_net_attachment_context.target.kubernetes_uid is string
+          - _agentless_net_attachment_context.subnet.kubernetes_uid is string
+          - _agentless_net_attachment_context.virtual_network.kubernetes_uid is string
+        fail_msg: >-
+          AgentlessNet ExternalIPAttachment requires a current controller-supplied
+          v1 snapshot for an allocated ExternalIP and Ready BareMetalInstance,
+          Subnet, and VirtualNetwork owned by the same tenant.
+      no_log: true
+
+    - name: Load AgentlessNet network-node inventory
+      ansible.builtin.include_tasks: _load_network_node_inventory.yaml
+      vars:
+        agentless_net_require_switches: false
+
+    - name: Ensure AgentlessNet ExternalIPAttachment provider state
+      osac.templates.agentless_net_state:
+        action: "{{ agentless_net_attachment_action }}"
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ external_ip_attachment.metadata.uid }}"
+        fulfillment_id: >-
+          {{ external_ip_attachment.metadata.labels['osac.openshift.io/externalipattachment-uuid'] }}
+        tenant_id: "{{ external_ip_attachment.metadata.annotations['osac.openshift.io/tenant'] }}"
+        attachment_context: "{{ _agentless_net_attachment_context }}"
+        external_interface: "{{ agentless_net_external_interface }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      no_log: true
+
+    - name: Report successful AgentlessNet ExternalIPAttachment attach
+      ansible.builtin.set_stats:
+        data:
+          osac_result:
+            schemaVersion: v1
+            operation: "{{ agentless_net_attachment_operation }}"
+            resourceUID: "{{ external_ip_attachment.metadata.uid }}"
+            observedGeneration: "{{ external_ip_attachment.metadata.generation | int }}"
+            data: {}
+        per_host: false
+        aggregate: false
+      when: not ansible_check_mode
+  always:
+    - name: Remove the temporary AgentlessNet SSH key file
+      ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

@@ -37,7 +37,7 @@ var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", f
 				SetLogger(logger).
 				SetEvaluator(evaluator).
 				SetMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
-					return &ObjectMetadata{Tenant: "authoritative-tenant", Name: "authoritative-project"}
+					return &ObjectMetadata{Tenant: "authoritative-tenant", Name: "parent.child"}
 				}).
 				SetInputCallback(func(ctx context.Context, input map[string]any) error {
 					Expect(input).To(HaveKey("context"))
@@ -48,7 +48,7 @@ var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", f
 					Expect(ok).To(BeTrue())
 					Expect(extensions).To(HaveKeyWithValue("id", "project-123"))
 					Expect(extensions).To(HaveKeyWithValue("tenant", "authoritative-tenant"))
-					Expect(extensions).To(HaveKeyWithValue("name", "authoritative-project"))
+					Expect(extensions).To(HaveKeyWithValue("name", "parent/child"))
 					return nil
 				}).
 				Build()
@@ -82,7 +82,7 @@ var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", f
 				SetLogger(logger).
 				SetEvaluator(evaluator).
 				SetMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
-					return &ObjectMetadata{Tenant: "authoritative-tenant", Name: "authoritative-project"}
+					return &ObjectMetadata{Tenant: "authoritative-tenant", Name: "parent.child"}
 				}).
 				SetInputCallback(func(ctx context.Context, input map[string]any) error {
 					Expect(input).To(HaveKey("context"))
@@ -93,7 +93,7 @@ var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", f
 					Expect(ok).To(BeTrue())
 					Expect(extensions).To(HaveKeyWithValue("id", "project-456"))
 					Expect(extensions).To(HaveKeyWithValue("tenant", "authoritative-tenant"))
-					Expect(extensions).To(HaveKeyWithValue("name", "authoritative-project"))
+					Expect(extensions).To(HaveKeyWithValue("name", "parent/child"))
 					return nil
 				}).
 				Build()
@@ -127,7 +127,7 @@ var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", f
 				SetLogger(logger).
 				SetEvaluator(evaluator).
 				SetMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
-					return &ObjectMetadata{Tenant: "authoritative-tenant", Name: "authoritative-project"}
+					return &ObjectMetadata{Tenant: "authoritative-tenant", Name: "parent.child"}
 				}).
 				SetInputCallback(func(ctx context.Context, input map[string]any) error {
 					Expect(input).To(HaveKey("context"))
@@ -138,7 +138,7 @@ var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", f
 					Expect(ok).To(BeTrue())
 					Expect(extensions).To(HaveKeyWithValue("id", "project-789"))
 					Expect(extensions).To(HaveKeyWithValue("tenant", "authoritative-tenant"))
-					Expect(extensions).To(HaveKeyWithValue("name", "authoritative-project"))
+					Expect(extensions).To(HaveKeyWithValue("name", "parent/child"))
 					return nil
 				}).
 				Build()

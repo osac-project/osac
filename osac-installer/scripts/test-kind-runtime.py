@@ -597,6 +597,45 @@ create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
         self.assertIn('KIND_PROFILE="dev-full"', result.stdout)
         self.assertNotIn("kind load docker-image", result.stdout)
 
+    def test_fulfillment_reports_are_opt_in_and_use_the_configured_directory(self):
+        checkout = self.directory / "checkout"
+        installer = checkout / "osac-installer"
+        module = checkout / "fulfillment-service"
+        installer.mkdir(parents=True)
+        (module / "it").mkdir(parents=True)
+        shutil.copy(INSTALLER / "Makefile", installer / "Makefile")
+        env = {key: value for key, value in self.env.items() if key != "FULFILLMENT_IT_REPORT_DIR"}
+        phases = ["service-only", "manager-capability", "manager-readiness", "bmaas-disabled"]
+        cases = [("default", None), ("disabled", ""), ("relative", "../local-reports"),
+                 ("absolute", str(module / "logs/timings"))]
+        for name, directory in cases:
+            with self.subTest(name=name):
+                args = ["make", "--no-print-directory", "-n", "-C", str(installer), "test",
+                        "PLATFORM=kind", "PROFILE=dev", "NS=osac", "SUITE=fulfillment", "MAKE=true"]
+                case_env = env.copy()
+                if name == "absolute":
+                    case_env["FULFILLMENT_IT_REPORT_DIR"] = directory
+                elif directory is not None:
+                    args.append(f"FULFILLMENT_IT_REPORT_DIR={directory}")
+                result = subprocess.run(args, env=case_env, text=True, capture_output=True, timeout=15)
+                self.assert_success(result)
+                commands = [shlex.split(line) for line in result.stdout.splitlines() if "ginkgo run " in line]
+                self.assertEqual(len(commands), 4)
+                reports = [[word.split("=", 1)[1] for word in command
+                            if word.startswith("--json-report=")] for command in commands]
+                cleanup = [word for line in result.stdout.splitlines() if line.startswith("rm -f ")
+                           for word in shlex.split(line)[2:] if word.endswith(".json")]
+                if not directory:
+                    self.assertEqual(reports, [[], [], [], []])
+                    self.assertEqual(cleanup, [])
+                    continue
+                report_dir = (installer / directory).resolve()
+                expected = [report_dir / f"{phase}.json" for phase in phases]
+                self.assertTrue(all(Path(path).is_absolute() for paths in reports for path in paths))
+                self.assertEqual([[Path(path).resolve() for path in paths] for paths in reports],
+                                 [[path] for path in expected])
+                self.assertEqual([Path(path).resolve() for path in cleanup], expected)
+
     def prepare_helm_dependencies(self):
         installer = self.directory / "installer"
         infra = installer / "charts/osac-infra"

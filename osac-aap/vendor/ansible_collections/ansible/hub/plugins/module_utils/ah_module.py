@@ -2,9 +2,7 @@
 
 # Copyright: (c) 2020, Sean Sullivan <@sean-m-sullivan>
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
-from __future__ import absolute_import, division, print_function
 
-__metaclass__ = type
 
 import base64
 import email.mime.application
@@ -15,12 +13,12 @@ import time
 from json import dumps, loads
 from socket import gethostbyname
 
+from http.cookiejar import CookieJar
+from urllib.error import HTTPError
+from urllib.parse import urlencode, urlparse
+
 from ansible.module_utils._text import to_bytes, to_native, to_text
 from ansible.module_utils.basic import AnsibleModule, env_fallback
-from ansible.module_utils.six import PY2, PY3, string_types
-from ansible.module_utils.six.moves.http_cookiejar import CookieJar
-from ansible.module_utils.six.moves.urllib.error import HTTPError
-from ansible.module_utils.six.moves.urllib.parse import urlencode, urlparse
 from ansible.module_utils.urls import (ConnectionError, Request,
                                        SSLValidationError, fetch_file)
 
@@ -35,11 +33,18 @@ class AHModule(AnsibleModule):
     AUTH_ARGSPEC = dict(
         ah_host=dict(
             required=False,
-            aliases=["ah_hostname"],
-            fallback=(env_fallback, ["AH_HOST"]),
+            aliases=["ah_hostname", "aap_hostname"],
+            fallback=(env_fallback, ["AH_HOST", "AAP_HOSTNAME"]),
         ),
-        ah_username=dict(required=False, fallback=(env_fallback, ["AH_USERNAME"])),
-        ah_password=dict(no_log=True, required=False, fallback=(env_fallback, ["AH_PASSWORD"])),
+        ah_username=dict(
+            required=False,
+            aliases=["aap_username"],
+            fallback=(env_fallback, ["AH_USERNAME", "AAP_USERNAME"])),
+        ah_password=dict(
+            no_log=True,
+            required=False,
+            aliases=["aap_password"],
+            fallback=(env_fallback, ["AH_PASSWORD", "AAP_PASSWORD"])),
         ah_path_prefix=dict(
             required=False,
             default="galaxy",
@@ -47,20 +52,22 @@ class AHModule(AnsibleModule):
         ),
         validate_certs=dict(
             type="bool",
-            aliases=["ah_verify_ssl"],
+            aliases=["ah_verify_ssl", "aap_validate_certs"],
             required=False,
-            fallback=(env_fallback, ["AH_VERIFY_SSL"]),
+            fallback=(env_fallback, ["AH_VERIFY_SSL", "AAP_VALIDATE_CERTS"]),
         ),
         ah_token=dict(
             type="raw",
             no_log=True,
+            aliases=["aap_token"],
             required=False,
-            fallback=(env_fallback, ["AH_API_TOKEN"]),
+            fallback=(env_fallback, ["AH_API_TOKEN", "AAP_TOKEN"]),
         ),
         request_timeout=dict(
             type="float",
+            aliases=["aap_request_timeout"],
             required=False,
-            fallback=(env_fallback, ["AH_REQUEST_TIMEOUT"])
+            fallback=(env_fallback, ["AH_REQUEST_TIMEOUT", "AAP_REQUEST_TIMEOUT"])
         ),
     )
     ENCRYPTED_STRING = "$encrypted$"
@@ -118,7 +125,7 @@ class AHModule(AnsibleModule):
                     self.oauth_token = self.params.get("ah_token")["token"]
                 else:
                     self.fail_json(msg="The provided dict in ah_token did not properly contain the token entry")
-            elif isinstance(token_param, string_types):
+            elif isinstance(token_param, str):
                 self.oauth_token = self.params.get("ah_token")
             else:
                 error_msg = "The provided ah_token type was not valid ({0}). Valid options are str or dict.".format(type(token_param).__name__)
@@ -298,11 +305,7 @@ class AHModule(AnsibleModule):
             except (Exception) as e:
                 self.fail_json(msg="Failed to parse the response json: {0}".format(e))
 
-        if PY2:
-            status_code = response.getcode()
-        else:
-            status_code = response.status
-        return {"status_code": status_code, "json": response_json}
+        return {"status_code": response.status, "json": response_json}
 
     def get_one(self, endpoint, name_or_id=None, allow_none=True, **kwargs):
         new_kwargs = kwargs.copy()
@@ -678,36 +681,16 @@ class AHModule(AnsibleModule):
 
         m.attach(part)
 
-        if PY3:
-            # Ensure headers are not split over multiple lines
-            # The HTTP policy also uses CRLF by default
-            b_data = m.as_bytes(policy=email.policy.HTTP)
-        else:
-            # Py2
-            # We cannot just call ``as_string`` since it provides no way
-            # to specify ``maxheaderlen``
-            # cStringIO seems to be required here
-            fp = cStringIO()  # noqa: F821 # pylint: disable=undefined-variable
-            # Ensure headers are not split over multiple lines
-            g = email.generator.Generator(fp, maxheaderlen=0)
-            g.flatten(m)
-            # ``fix_eols`` switches from ``\n`` to ``\r\n``
-            b_data = email.utils.fix_eols(fp.getvalue())
+        b_data = m.as_bytes(policy=email.policy.HTTP)
         del m
 
         headers, dummy, b_content = b_data.partition(b"\r\n\r\n")
         del b_data
 
-        if PY3:
-            parser = email.parser.BytesHeaderParser().parsebytes
-        else:
-            # Py2
-            parser = email.parser.HeaderParser().parsestr
-
         return (
-            parser(headers)["content-type"],
+            email.parser.BytesHeaderParser().parsebytes(headers)["content-type"],
             b_content,
-        )  # Message converts to native strings
+        )
 
     def get_file_contents(self, path):
         try:

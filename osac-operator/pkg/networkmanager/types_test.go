@@ -317,3 +317,42 @@ var _ = Describe("ExternalIPContractVersion", func() {
 		Expect(err.Error()).To(ContainSubstring("unsupported ExternalIP contract version"))
 	})
 })
+
+var _ = Describe("ExternalIPAttachmentContractVersion", func() {
+	It("accepts v1 independently of the ExternalIP allocation contract", func() {
+		manager, err := networkmanager.ParseConfigMap(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "agentless", Namespace: "osac"},
+			Data: map[string]string{
+				"name": "agentless_net", "capabilities": "ipv4",
+				networkmanager.DataKeyExternalIPAttachmentContractVersion: networkmanager.ExternalIPAttachmentContractVersionV1,
+			},
+		}, networkmanager.FabricManager)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(manager.ExternalIPAttachmentContractVersion).To(Equal(networkmanager.ExternalIPAttachmentContractVersionV1))
+		Expect(manager.ExternalIPContractVersion).To(BeEmpty())
+	})
+
+	It("keeps an empty version on the legacy path", func() {
+		manager, err := networkmanager.ParseConfigMap(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "netris", Namespace: "osac"},
+			Data:       map[string]string{"name": "netris", "capabilities": "ipv4"},
+		}, networkmanager.FabricManager)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(manager.ExternalIPAttachmentContractVersion).To(BeEmpty())
+	})
+
+	It("rejects unsupported versions", func() {
+		_, err := networkmanager.ParseConfigMap(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "agentless", Namespace: "osac"},
+			Data: map[string]string{
+				"name": "agentless_net", "capabilities": "ipv4",
+				networkmanager.DataKeyExternalIPAttachmentContractVersion: "v2",
+			},
+		}, networkmanager.FabricManager)
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("unsupported ExternalIPAttachment contract version"))
+	})
+})

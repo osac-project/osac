@@ -1,0 +1,73 @@
+---
+- name: collection_remote integration tests with token auth
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+    - name: Create a token for testing
+      ansible.hub.ah_token:
+        ah_username: "{{ ah_username }}"
+        ah_password: "{{ ah_password }}"
+        state: present
+      no_log: true
+
+    - name: Define variables (token auth)
+      set_fact:
+        collection_repo_name_token: "sample_token_{{ test_id }}"
+        distribution_token: "sample_token_{{ test_id }}"
+
+    - name: Create a collection repository (token auth)
+      ansible.hub.collection_repository:
+        name: "{{ collection_repo_name_token }}"
+        description: "description of the repository"
+        pulp_labels:
+          pipeline: "approved"
+        distribution:
+          name: "{{ distribution_token }}"
+          state: present
+        remote: community
+        wait: true
+        ah_token: "{{ ah_token.token }}"
+      register: r_token_repo
+
+    - name: Check if the collection repository is created (token auth)
+      assert:
+        that:
+          - r_token_repo.changed
+
+    - name: Configure collection (token auth)
+      collection_remote:
+        name: "{{ collection_repo_name_token }}"
+        url: https://galaxy.ansible.com/api/
+        requirements:
+          - galaxy.galaxy
+          - infra.controller_configuration
+        ah_token: "{{ ah_token.token }}"
+      register: r_token
+
+    - name: Check if the collection_remote works (token auth)
+      assert:
+        that:
+          - r_token.changed
+
+  always:
+    - name: Cleanup - Delete collection repository (token auth)
+      ansible.hub.collection_repository:
+        name: "{{ collection_repo_name_token | default('') }}"
+        state: absent
+        ah_token: "{{ ah_token.token | default('') }}"
+      ignore_errors: true
+
+    - name: Remove test token
+      ansible.hub.ah_token:
+        ah_username: "{{ ah_username }}"
+        ah_password: "{{ ah_password }}"
+        token: "{{ ah_token.token | default('') }}"
+        state: absent
+      ignore_errors: true
+      no_log: true

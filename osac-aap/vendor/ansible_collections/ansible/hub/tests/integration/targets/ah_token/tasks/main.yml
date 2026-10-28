@@ -11,9 +11,40 @@
       ansible.hub.ah_token:
         state: present
       register: r
+      ignore_errors: true
       no_log: true
 
-    - name: Check if the token is created
+    # Standalone or Gateway with Hub < 4.10: token creation should succeed.
+    - name: Check if the token is created (standalone)
       assert:
         that:
+          - r is success
           - r.changed
+      when: not (ah_behind_gateway | default(false) | bool)
+
+    # Gateway with Hub 4.10-4.11: token creation succeeds but a deprecation
+    # warning is emitted.
+    - name: Check deprecation warning is emitted when behind gateway (Hub 4.10-4.11)
+      assert:
+        that:
+          - r is success
+          - r.changed
+          - r.warnings is defined
+          - r.warnings | length > 0
+          - "'ah_token module is deprecated' in r.warnings[0]"
+          - "'ansible.platform' in r.warnings[0]"
+      when:
+        - ah_behind_gateway | default(false) | bool
+        - r is success
+
+    # Gateway with Hub >= 4.12: module is blocked entirely with a clear
+    # error message directing users to ansible.platform.
+    - name: Check ah_token is blocked on Hub 4.12+ behind gateway
+      assert:
+        that:
+          - r is failed
+          - "'not supported' in r.msg"
+          - "'ansible.platform' in r.msg"
+      when:
+        - ah_behind_gateway | default(false) | bool
+        - r is failed

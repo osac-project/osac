@@ -815,6 +815,11 @@ reference fields. For each field it handles, the interceptor:
 3. If both `id` and `name` are provided, verifies they refer to the same object.
 4. Fills in whichever of `id` or `name` the caller omitted.
 
+For an `Update` with a non-empty mask containing only `status` or `status.*`
+paths, the interceptor does not revalidate references in the unchanged
+`object.spec`. References in `object.status` are still validated. `Create`,
+spec or mixed updates, and updates with an empty mask validate spec references.
+
 Some references are validated by the object's handler after the complete object to be saved is
 known.
 

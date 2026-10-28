@@ -17,7 +17,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -27,6 +26,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/version"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -34,6 +34,17 @@ import (
 type mockSelfSubjectAccessReviewsClient struct {
 	publicv1.SelfSubjectAccessReviewsClient
 	createFunc func(context.Context, *publicv1.SelfSubjectAccessReviewsCreateRequest, ...grpc.CallOption) (*publicv1.SelfSubjectAccessReviewsCreateResponse, error)
+}
+
+type mockTenantsClient struct {
+	publicv1.TenantsClient
+	listFunc func(context.Context, *publicv1.TenantsListRequest, ...grpc.CallOption) (*publicv1.TenantsListResponse, error)
+}
+
+func (m *mockTenantsClient) List(
+	ctx context.Context, request *publicv1.TenantsListRequest, options ...grpc.CallOption,
+) (*publicv1.TenantsListResponse, error) {
+	return m.listFunc(ctx, request, options...)
 }
 
 func (m *mockSelfSubjectAccessReviewsClient) Create(
@@ -54,6 +65,24 @@ func decodeToolError(err error) toolError {
 	return envelope
 }
 
+func tenantListResponse(total int32, names ...string) *publicv1.TenantsListResponse {
+	items := make([]*publicv1.Tenant, 0, len(names))
+	for _, name := range names {
+		items = append(items, publicv1.Tenant_builder{
+			Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+		}.Build())
+	}
+	return publicv1.TenantsListResponse_builder{Total: total, Items: items}.Build()
+}
+
+func checkConnectionToolRegistry(names ...string) typedToolRegistry {
+	registered := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		registered[name] = struct{}{}
+	}
+	return typedToolRegistry{registered: registered}
+}
+
 var _ = Describe("handleCheckConnection", func() {
 	It("Returns a safe caller, capability, and permission summary without mutating a resource", func() {
 		var capturedToken string
@@ -61,6 +90,17 @@ var _ = Describe("handleCheckConnection", func() {
 		var capturedMethods []string
 		var capturedTenants []string
 		var capturedNames []string
+		var tenantListToken string
+		var tenantListLimit int32
+		tenantClient := &mockTenantsClient{
+			listFunc: func(
+				ctx context.Context, request *publicv1.TenantsListRequest, _ ...grpc.CallOption,
+			) (*publicv1.TenantsListResponse, error) {
+				tenantListToken = forwardedToken(ctx)
+				tenantListLimit = request.GetLimit()
+				return tenantListResponse(2, "shared", "tenant-1"), nil
+			},
+		}
 		reviews := &mockSelfSubjectAccessReviewsClient{
 			createFunc: func(
 				ctx context.Context, request *publicv1.SelfSubjectAccessReviewsCreateRequest, _ ...grpc.CallOption,
@@ -80,9 +120,15 @@ var _ = Describe("handleCheckConnection", func() {
 			},
 		}
 
-		handler := handleCheckConnection("https://mcp.example.com/", newResourceRegistry(ServerDeps{}), reviews)
+		handler := handleCheckConnection(
+			"https://mcp.example.com/",
+			newResourceRegistry(ServerDeps{}),
+			checkConnectionToolRegistry("zeta_tool", "alpha_tool"),
+			tenantClient,
+			reviews,
+		)
 		_, output, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
-			Subject: "user-1", Username: "alice", Tenants: []string{"tenant-1"},
+			Subject: "user-1", Username: "alice", Tenants: []string{"token-claim-tenant"},
 		}), CheckConnectionInput{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(output.Endpoint).To(Equal("https://mcp.example.com/"))
@@ -90,6 +136,8 @@ var _ = Describe("handleCheckConnection", func() {
 		Expect(output.Caller).To(Equal(safeCallerContext{
 			Subject: "user-1", Username: "alice", Tenants: []string{"tenant-1"},
 		}))
+		Expect(tenantListToken).To(Equal("Bearer api-for-raw-bearer-value"))
+		Expect(tenantListLimit).To(Equal(int32(maxCheckConnectionTenants + 1)))
 		Expect(output.ResourceFamilies).To(ConsistOf(
 			ResourceTypeComputeInstanceCatalogItem,
 			ResourceTypeComputeInstanceTemplate,
@@ -103,14 +151,14 @@ var _ = Describe("handleCheckConnection", func() {
 			ResourceTypeProject,
 			ResourceTypeSecretReference,
 		))
-		Expect(output.Tools).To(ConsistOf(
-			"check_connection", "list_resources", "get_resource", "create_compute_instance", "delete_compute_instance",
-		))
+		Expect(output.Tools).To(Equal([]string{"alpha_tool", "zeta_tool"}))
+		Expect(output.PermissionsTruncated).To(BeFalse())
 		Expect(output.Permissions).To(Equal([]CheckConnectionPermission{
 			{Tenant: "tenant-1", Service: "osac.public.v1.ComputeInstances", Method: "List", Allowed: true},
 			{Tenant: "tenant-1", Service: "osac.public.v1.ComputeInstances", Method: "Create", Allowed: false},
 		}))
 		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
+		Expect(tenantListToken).To(Equal(capturedToken))
 		Expect(capturedServices).To(Equal([]string{"osac.public.v1.ComputeInstances", "osac.public.v1.ComputeInstances"}))
 		Expect(capturedMethods).To(Equal([]string{"List", "Create"}))
 		Expect(capturedTenants).To(Equal([]string{"tenant-1", "tenant-1"}))
@@ -119,6 +167,13 @@ var _ = Describe("handleCheckConnection", func() {
 
 	It("Uses an unscoped permission review for a caller without a tenant", func() {
 		var capturedTenant string
+		tenantClient := &mockTenantsClient{
+			listFunc: func(
+				context.Context, *publicv1.TenantsListRequest, ...grpc.CallOption,
+			) (*publicv1.TenantsListResponse, error) {
+				return tenantListResponse(0), nil
+			},
+		}
 		reviews := &mockSelfSubjectAccessReviewsClient{
 			createFunc: func(
 				_ context.Context, request *publicv1.SelfSubjectAccessReviewsCreateRequest, _ ...grpc.CallOption,
@@ -132,11 +187,14 @@ var _ = Describe("handleCheckConnection", func() {
 			},
 		}
 
-		handler := handleCheckConnection("https://mcp.example.com/", newResourceRegistry(ServerDeps{}), reviews)
+		handler := handleCheckConnection(
+			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(), tenantClient, reviews,
+		)
 		_, output, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
-			Subject: "user-1",
+			Subject: "user-1", Tenants: []string{"untrusted-claim-tenant"},
 		}), CheckConnectionInput{})
 		Expect(err).ToNot(HaveOccurred())
+		Expect(output.Caller.Tenants).To(BeEmpty())
 		Expect(capturedTenant).To(BeEmpty())
 		Expect(output.Permissions).To(Equal([]CheckConnectionPermission{
 			{Service: "osac.public.v1.ComputeInstances", Method: "List", Allowed: true},
@@ -145,65 +203,14 @@ var _ = Describe("handleCheckConnection", func() {
 		Expect(output.PermissionsTruncated).To(BeFalse())
 	})
 
-	It("Bounds permission reviews and reports when tenant results are truncated", func() {
-		const permissionTenantLimit = 10
-		tenants := make([]string, permissionTenantLimit+1)
-		for i := range tenants {
-			tenants[i] = fmt.Sprintf("tenant-%d", i)
-		}
-		var reviewedTenants []string
-		reviews := &mockSelfSubjectAccessReviewsClient{
-			createFunc: func(
-				_ context.Context, request *publicv1.SelfSubjectAccessReviewsCreateRequest, _ ...grpc.CallOption,
-			) (*publicv1.SelfSubjectAccessReviewsCreateResponse, error) {
-				reviewedTenants = append(reviewedTenants, request.GetObject().GetMetadata().GetTenant())
-				return publicv1.SelfSubjectAccessReviewsCreateResponse_builder{
-					Object: publicv1.SelfSubjectAccessReview_builder{
-						Status: publicv1.SelfSubjectAccessReviewStatus_builder{Allowed: true}.Build(),
-					}.Build(),
-				}.Build(), nil
-			},
-		}
-
-		handler := handleCheckConnection("https://mcp.example.com/", newResourceRegistry(ServerDeps{}), reviews)
-		_, output, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
-			Subject: "user-1", Tenants: tenants,
-		}), CheckConnectionInput{})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(output.Caller.Tenants).To(Equal(tenants))
-		Expect(output.Permissions).To(HaveLen(permissionTenantLimit * 2))
-		Expect(output.PermissionsTruncated).To(BeTrue())
-
-		wantReviewedTenants := make([]string, 0, permissionTenantLimit*2)
-		for _, tenant := range tenants[:permissionTenantLimit] {
-			wantReviewedTenants = append(wantReviewedTenants, tenant, tenant)
-		}
-		Expect(reviewedTenants).To(Equal(wantReviewedTenants))
-	})
-
 	It("Preserves a retryable token exchange error", func() {
 		request := requestWithCaller("raw-bearer-value", safeCallerContext{Subject: "user-1"})
 		request.Extra.TokenInfo.Extra[exchangeTokenExtraKey] = apiTokenSource(func(context.Context) (string, error) {
 			return "", errOAuthTokenExchangeUnavailable
 		})
 		handler := handleCheckConnection(
-			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), &mockSelfSubjectAccessReviewsClient{},
-		)
-		_, _, err := handler(context.Background(), request, CheckConnectionInput{})
-		Expect(err).To(HaveOccurred())
-		envelope := decodeToolError(err)
-		Expect(envelope.Category).To(Equal("service_unavailable"))
-		Expect(envelope.GRPCCode).To(Equal("Unavailable"))
-		Expect(envelope.Retryable).To(BeTrue())
-	})
-
-	It("Preserves a retryable token exchange error", func() {
-		request := requestWithCaller("raw-bearer-value", safeCallerContext{Subject: "user-1"})
-		request.Extra.TokenInfo.Extra[exchangeTokenExtraKey] = apiTokenSource(func(context.Context) (string, error) {
-			return "", errOAuthTokenExchangeUnavailable
-		})
-		handler := handleCheckConnection(
-			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), &mockSelfSubjectAccessReviewsClient{},
+			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(),
+			&mockTenantsClient{}, &mockSelfSubjectAccessReviewsClient{},
 		)
 		_, _, err := handler(context.Background(), request, CheckConnectionInput{})
 		Expect(err).To(HaveOccurred())
@@ -214,6 +221,13 @@ var _ = Describe("handleCheckConnection", func() {
 	})
 
 	It("Returns a stable safe error envelope for a service failure", func() {
+		tenantClient := &mockTenantsClient{
+			listFunc: func(
+				context.Context, *publicv1.TenantsListRequest, ...grpc.CallOption,
+			) (*publicv1.TenantsListResponse, error) {
+				return tenantListResponse(0), nil
+			},
+		}
 		reviews := &mockSelfSubjectAccessReviewsClient{
 			createFunc: func(
 				context.Context, *publicv1.SelfSubjectAccessReviewsCreateRequest, ...grpc.CallOption,
@@ -222,7 +236,9 @@ var _ = Describe("handleCheckConnection", func() {
 			},
 		}
 
-		handler := handleCheckConnection("https://mcp.example.com/", newResourceRegistry(ServerDeps{}), reviews)
+		handler := handleCheckConnection(
+			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(), tenantClient, reviews,
+		)
 		_, _, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
 			Subject: "user-1",
 		}), CheckConnectionInput{})
@@ -237,6 +253,137 @@ var _ = Describe("handleCheckConnection", func() {
 		Expect(uuid.Validate(envelope.RequestID)).To(Succeed())
 		Expect(err.Error()).ToNot(ContainSubstring("internal-fulfillment"))
 		Expect(err.Error()).ToNot(ContainSubstring("secret-token"))
+	})
+
+	It("Does not count the reserved shared tenant toward the summary limit", func() {
+		tenantClient := &mockTenantsClient{
+			listFunc: func(
+				context.Context, *publicv1.TenantsListRequest, ...grpc.CallOption,
+			) (*publicv1.TenantsListResponse, error) {
+				return tenantListResponse(maxCheckConnectionTenants+1,
+					"shared", "tenant-00", "tenant-01", "tenant-02", "tenant-03", "tenant-04",
+					"tenant-05", "tenant-06", "tenant-07", "tenant-08", "tenant-09",
+				), nil
+			},
+		}
+		handler := handleCheckConnection(
+			"https://mcp.example.com/",
+			newResourceRegistry(ServerDeps{}),
+			checkConnectionToolRegistry(),
+			tenantClient,
+			&mockSelfSubjectAccessReviewsClient{
+				createFunc: func(
+					_ context.Context, _ *publicv1.SelfSubjectAccessReviewsCreateRequest, _ ...grpc.CallOption,
+				) (*publicv1.SelfSubjectAccessReviewsCreateResponse, error) {
+					return publicv1.SelfSubjectAccessReviewsCreateResponse_builder{}.Build(), nil
+				},
+			},
+		)
+		_, output, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
+			Subject: "user-1",
+		}), CheckConnectionInput{})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output.PermissionsTruncated).To(BeFalse())
+		Expect(output.Caller.Tenants).To(HaveLen(maxCheckConnectionTenants))
+		Expect(output.Caller.Tenants).ToNot(ContainElement(auth.SharedTenant))
+		Expect(output.Permissions).To(HaveLen(maxCheckConnectionTenants * 2))
+	})
+
+	It("Marks a summary truncated when the total exceeds returned tenants", func() {
+		tenantClient := &mockTenantsClient{
+			listFunc: func(
+				context.Context, *publicv1.TenantsListRequest, ...grpc.CallOption,
+			) (*publicv1.TenantsListResponse, error) {
+				return tenantListResponse(25,
+					"shared", "tenant-00", "tenant-01", "tenant-02", "tenant-03", "tenant-04",
+					"tenant-05", "tenant-06", "tenant-07", "tenant-08", "tenant-09",
+				), nil
+			},
+		}
+		handler := handleCheckConnection(
+			"https://mcp.example.com/",
+			newResourceRegistry(ServerDeps{}),
+			checkConnectionToolRegistry(),
+			tenantClient,
+			&mockSelfSubjectAccessReviewsClient{
+				createFunc: func(
+					_ context.Context, _ *publicv1.SelfSubjectAccessReviewsCreateRequest, _ ...grpc.CallOption,
+				) (*publicv1.SelfSubjectAccessReviewsCreateResponse, error) {
+					return publicv1.SelfSubjectAccessReviewsCreateResponse_builder{}.Build(), nil
+				},
+			},
+		)
+		_, output, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
+			Subject: "user-1",
+		}), CheckConnectionInput{})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output.PermissionsTruncated).To(BeTrue())
+		Expect(output.Caller.Tenants).To(HaveLen(maxCheckConnectionTenants))
+		Expect(output.Caller.Tenants).ToNot(ContainElement(auth.SharedTenant))
+		Expect(output.Permissions).To(HaveLen(maxCheckConnectionTenants * 2))
+	})
+
+	It("Uses only the bounded public tenant list for permission checks", func() {
+		names := []string{
+			"tenant-10", "tenant-09", "tenant-08", "tenant-07", "tenant-06", "tenant-05",
+			"tenant-04", "tenant-03", "tenant-02", "tenant-01", "tenant-00",
+		}
+		tenantClient := &mockTenantsClient{
+			listFunc: func(
+				context.Context, *publicv1.TenantsListRequest, ...grpc.CallOption,
+			) (*publicv1.TenantsListResponse, error) {
+				return tenantListResponse(13, names...), nil
+			},
+		}
+		var reviewedTenants []string
+		reviews := &mockSelfSubjectAccessReviewsClient{
+			createFunc: func(
+				_ context.Context, request *publicv1.SelfSubjectAccessReviewsCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.SelfSubjectAccessReviewsCreateResponse, error) {
+				reviewedTenants = append(reviewedTenants, request.GetObject().GetMetadata().GetTenant())
+				return publicv1.SelfSubjectAccessReviewsCreateResponse_builder{
+					Object: publicv1.SelfSubjectAccessReview_builder{}.Build(),
+				}.Build(), nil
+			},
+		}
+		handler := handleCheckConnection(
+			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(), tenantClient, reviews,
+		)
+		_, output, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
+			Subject: "user-1",
+		}), CheckConnectionInput{})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output.PermissionsTruncated).To(BeTrue())
+		encodedOutput, err := json.Marshal(output)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(string(encodedOutput)).To(ContainSubstring(`"permission_summary_truncated":true`))
+		Expect(output.Caller.Tenants).To(HaveLen(maxCheckConnectionTenants))
+		Expect(output.Caller.Tenants).To(Equal([]string{
+			"tenant-00", "tenant-01", "tenant-02", "tenant-03", "tenant-04",
+			"tenant-05", "tenant-06", "tenant-07", "tenant-08", "tenant-09",
+		}))
+		Expect(output.Permissions).To(HaveLen(maxCheckConnectionTenants * 2))
+		Expect(reviewedTenants).To(HaveLen(maxCheckConnectionTenants * 2))
+		Expect(reviewedTenants).ToNot(ContainElement("tenant-10"))
+	})
+
+	It("Returns a safe error when the public tenant list fails", func() {
+		tenantClient := &mockTenantsClient{
+			listFunc: func(
+				context.Context, *publicv1.TenantsListRequest, ...grpc.CallOption,
+			) (*publicv1.TenantsListResponse, error) {
+				return nil, status.Error(codes.PermissionDenied, "private tenant policy detail")
+			},
+		}
+		handler := handleCheckConnection(
+			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(), tenantClient,
+			&mockSelfSubjectAccessReviewsClient{},
+		)
+		_, _, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{Subject: "user-1"}), CheckConnectionInput{})
+		Expect(err).To(HaveOccurred())
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("authorization"))
+		Expect(err.Error()).ToNot(ContainSubstring("private tenant policy"))
 	})
 })
 
@@ -259,6 +406,7 @@ var _ = Describe("safePublicAPIError", func() {
 		Entry("permission denied", codes.PermissionDenied, "authorization", "PermissionDenied", false),
 		Entry("not found", codes.NotFound, "not_found", "NotFound", false),
 		Entry("already exists", codes.AlreadyExists, "conflict", "AlreadyExists", false),
+		Entry("failed precondition", codes.FailedPrecondition, "protocol_incompatible", "FailedPrecondition", false),
 		Entry("canceled", codes.Canceled, "service_unavailable", "Canceled", false),
 		Entry("deadline exceeded", codes.DeadlineExceeded, "service_unavailable", "DeadlineExceeded", true),
 		Entry("resource exhausted", codes.ResourceExhausted, "rate_limited", "ResourceExhausted", true),
@@ -275,10 +423,9 @@ var _ = Describe("safePublicAPIError", func() {
 		Expect(firstEnvelope.RequestID).ToNot(Equal(secondEnvelope.RequestID))
 	})
 
-	It("Reports a wrapped context deadline as DeadlineExceeded", func() {
-		err := safePublicAPIError(fmt.Errorf("public API request: %w", context.DeadlineExceeded))
-		var envelope toolError
-		Expect(json.Unmarshal([]byte(err.Error()), &envelope)).To(Succeed())
+	It("Reports wrapped context deadline errors as DeadlineExceeded", func() {
+		err := safePublicAPIError(errors.Join(context.DeadlineExceeded, errors.New("local timeout")))
+		envelope := decodeToolError(err)
 		Expect(envelope.Category).To(Equal("service_unavailable"))
 		Expect(envelope.GRPCCode).To(Equal("DeadlineExceeded"))
 		Expect(envelope.Retryable).To(BeTrue())

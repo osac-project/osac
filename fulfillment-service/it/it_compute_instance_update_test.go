@@ -64,6 +64,82 @@ func setComputeInstanceTestFinalizer(ctx context.Context, client privatev1.Compu
 }
 
 var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
+	It("persists deletion feedback after a referenced Secret disappears", func(ctx context.Context) {
+		templateID := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
+		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		secretID := createCatalogItemUserDataSecretFixture(ctx, usersGroup)
+		instance, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
+			UserDataSource: publicv1.UserDataSource_builder{
+				Secret: publicv1.SecretLocalReference_builder{Id: secretID}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+
+		client := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
+		By("waiting for the reconciler to persist its finalizer")
+		// The initial controller update can overwrite a concurrently added test finalizer.
+		Eventually(func(g Gomega) {
+			response, err := client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: instance.GetId()}.Build())
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(response.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+		}, time.Minute, 100*time.Millisecond).Should(Succeed())
+
+		setComputeInstanceTestFinalizer(ctx, client, instance.GetId(), true)
+		DeferCleanup(func(ctx context.Context) {
+			setComputeInstanceTestFinalizer(ctx, client, instance.GetId(), false)
+		})
+		beforeDeletion, err := client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: instance.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(beforeDeletion.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(computeInstanceTestFinalizer))
+
+		_, err = client.Delete(ctx, privatev1.ComputeInstancesDeleteRequest_builder{Id: instance.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		stored, err := client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: instance.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(stored.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+		Expect(stored.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(computeInstanceTestFinalizer))
+		Expect(stored.GetObject().GetSpec().GetUserDataSource().GetSecret().GetId()).To(Equal(secretID))
+
+		secrets := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
+		_, err = secrets.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: secretID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func() codes.Code {
+			_, getErr := secrets.Get(ctx, privatev1.SecretsGetRequest_builder{Id: secretID}.Build())
+			return status.Code(getErr)
+		}, 10*time.Second, 100*time.Millisecond).Should(Equal(codes.NotFound))
+
+		for _, update := range []struct{ mask, address string }{
+			{mask: "status", address: "192.0.2.42"},
+			{mask: "status.internal_ip_address", address: "192.0.2.43"},
+		} {
+			By("writing private status feedback with mask " + update.mask)
+			candidate := proto.Clone(stored.GetObject()).(*privatev1.ComputeInstance)
+			if !candidate.HasStatus() {
+				candidate.SetStatus(&privatev1.ComputeInstanceStatus{})
+			}
+			candidate.GetStatus().SetInternalIpAddress(update.address)
+			_, err = client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: candidate, UpdateMask: catalogItemUpdateMask(update.mask),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			stored, err = client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: instance.GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(stored.GetObject().GetStatus().GetInternalIpAddress()).To(Equal(update.address))
+			Expect(stored.GetObject().GetSpec().GetUserDataSource().GetSecret().GetId()).To(Equal(secretID))
+		}
+
+		for _, paths := range [][]string{{"spec.run_strategy"}, {"status.internal_ip_address", "spec.run_strategy"}, {}} {
+			candidate := proto.Clone(stored.GetObject()).(*privatev1.ComputeInstance)
+			_, err = client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: candidate, UpdateMask: catalogItemUpdateMask(paths...),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument), "mask %v: %v", paths, err)
+			Expect(err.Error()).To(ContainSubstring("object.spec.user_data_source.secret"))
+		}
+	})
+
 	It("rejects public updates that change network attachments", func(ctx context.Context) {
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)

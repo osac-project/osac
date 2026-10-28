@@ -578,6 +578,17 @@ func extractExtraVars(ctx context.Context, resource client.Object) (map[string]a
 			"phase":          pool.Phase,
 		}
 	}
+	if attachment := ExternalIPAttachmentContextFromContext(ctx); attachment != (ExternalIPAttachmentContext{}) {
+		encoded, err := json.Marshal(attachment)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize ExternalIPAttachment context: %w", err)
+		}
+		var attachmentContext map[string]any
+		if err := json.Unmarshal(encoded, &attachmentContext); err != nil {
+			return nil, fmt.Errorf("failed to serialize ExternalIPAttachment context: %w", err)
+		}
+		vars["external_ip_attachment_context"] = attachmentContext
+	}
 
 	return map[string]any{
 		"osac_job_vars": vars,

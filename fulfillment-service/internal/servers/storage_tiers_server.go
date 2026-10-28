@@ -44,10 +44,6 @@ type StorageTiersServer struct {
 	logger    *slog.Logger
 	delegate  privatev1.StorageTiersServer
 	outMapper *GenericMapper[*privatev1.StorageTier, *publicv1.StorageTier]
-
-	// filterValidator only validates against the PUBLIC schema to close a CEL-filter oracle (its
-	// Translate() result is unused) -- do not remove this as apparently-dead code.
-	filterValidator *dao.FilterTranslator
 }
 
 func NewStorageTiersServer() *StorageTiersServerBuilder {
@@ -115,22 +111,15 @@ func (b *StorageTiersServerBuilder) Build() (result *StorageTiersServer, err err
 		return
 	}
 
-	// Create the filter validator (see the field comment on StorageTiersServer for why):
-	filterValidator, err := dao.NewFilterTranslator().
-		SetLogger(b.logger).
-		SetDescriptor((*publicv1.StorageTier)(nil).ProtoReflect().Descriptor()).
-		Build()
-	if err != nil {
-		return
-	}
-
 	// Create the private server to delegate to:
+	// The DAO validates filters against the public schema at this boundary.
 	delegate, err := NewPrivateStorageTiersServer().
 		SetLogger(b.logger).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetStorageBackendsDAO(b.storageBackendsDAO).
+		SetFilterDesc((*publicv1.StorageTier)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return
@@ -138,10 +127,9 @@ func (b *StorageTiersServerBuilder) Build() (result *StorageTiersServer, err err
 
 	// Create and populate the object:
 	result = &StorageTiersServer{
-		logger:          b.logger,
-		delegate:        delegate,
-		outMapper:       outMapper,
-		filterValidator: filterValidator,
+		logger:    b.logger,
+		delegate:  delegate,
+		outMapper: outMapper,
 	}
 	return
 }
@@ -149,15 +137,6 @@ func (b *StorageTiersServerBuilder) Build() (result *StorageTiersServer, err err
 func (s *StorageTiersServer) List(ctx context.Context,
 	request *publicv1.StorageTiersListRequest) (response *publicv1.StorageTiersListResponse, err error) {
 	filter := request.GetFilter()
-	if filter != "" {
-		// Reject filters that don't compile against the public schema. This
-		// is the fix for the CEL-filter oracle described on the filterValidator field.
-		_, err = s.filterValidator.Translate(ctx, filter)
-		if err != nil {
-			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %v", err)
-			return
-		}
-	}
 
 	// Create private request with same parameters:
 	privateRequest := &privatev1.StorageTiersListRequest{}

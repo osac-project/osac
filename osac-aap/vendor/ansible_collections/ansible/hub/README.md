@@ -1,31 +1,97 @@
-#  Ansible Collection for Automation Hub Configuration
+# Ansible Collection for Automation Hub Configuration
 
-This Ansible collection allows for easy interaction with an Ansible Automation Hub server via Ansible playbooks.
+## Description
 
-## Code of Conduct
+This Ansible collection allows for easy interaction with an Ansible Automation Hub server via Ansible playbooks. It provides modules and plugins to manage collections, users, groups, and other Automation Hub resources, enabling automation administrators to configure and maintain their Hub instances efficiently.
 
-We follow the [Ansible Code of Conduct](https://docs.ansible.com/ansible/devel/community/code_of_conduct.html) in all our interactions within this project.
 
-If you encounter abusive behavior, please refer to the [policy violations](https://docs.ansible.com/ansible/devel/community/code_of_conduct.html#policy-violations) section of the Code for information on how to raise a complaint.
+## Installation
 
-## Communication
 
-<!--
-If your collection is not present on the Ansible forum yet, please check out the existing [tags](https://forum.ansible.com/tags) and [groups](https://forum.ansible.com/g) - use what suits your collection. If there is no appropritate tag and group yet, please [request one](https://forum.ansible.com/t/requesting-a-forum-group/503/17).
--->
+Before using this collection, install it from Automation Hub with the `ansible-galaxy` command-line tool:
 
-* Join the Ansible forum:
-  * [Get Help](https://forum.ansible.com/c/help/6): get help or help others. Please add appropriate tags if you start new discussions, for example the `YOUR TAG` tag.
-  * [Posts tagged with 'your tag'](https://forum.ansible.com/tag/YOUR_TAG): subscribe to participate in collection/technology-related conversations.
-  * [Refer to your forum group here if exists](https://forum.ansible.com/g/): by joining the team you will automatically get subscribed to the posts tagged with [your group forum tag here](https://forum.ansible.com/tags).
-  * [Social Spaces](https://forum.ansible.com/c/chat/4): gather and interact with fellow enthusiasts.
-  * [News & Announcements](https://forum.ansible.com/c/news/5): track project-wide announcements including social events. The [Bullhorn newsletter](https://docs.ansible.com/ansible/devel/community/communication.html#the-bullhorn), which is used to announce releases and important changes, can also be found here.
+```bash
+ansible-galaxy collection install ansible.hub
+```
 
-For more information about communication, see the [Ansible communication guide](https://docs.ansible.com/ansible/devel/community/communication.html).
+You can also include it in a `requirements.yml` file and install it with `ansible-galaxy collection install -r requirements.yml`:
 
-## Contributing to this collection
+```yaml
+---
+collections:
+  - name: ansible.hub
+```
 
-<!--Describe how the community can contribute to your collection. At a minimum, fill up and include the CONTRIBUTING.md file containing how and where users can create issues to report problems or request features for this collection. List contribution requirements, including preferred workflows and necessary testing, so you can benefit from community PRs. If you are following general Ansible contributor guidelines, you can link to - [Ansible Community Guide](https://docs.ansible.com/ansible/devel/community/index.html). List the current maintainers (contributors with write or higher access to the repository). The following can be included:-->
+To upgrade to the latest available version:
+
+```bash
+ansible-galaxy collection install ansible.hub --upgrade
+```
+
+To install a specific version:
+
+```bash
+ansible-galaxy collection install ansible.hub:==1.0.1
+```
+
+See [Managing automation content](https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.5/html/managing_automation_content/index) for more details.
+
+## Use Cases
+
+### 1. Collection Management
+Automate the upload, approval, and management of collections in your Automation Hub:
+
+```yaml
+- name: Create namespace
+  ansible.hub.ah_namespace:
+    name: "organization"
+    description: "Collections for my organization"
+    state: present
+
+- name: Upload collection to Hub
+  ansible.hub.ah_collection:
+    namespace: "organization"
+    name: "collection"
+    path: "/path/to/organization-collection.tar.gz"
+    state: present
+```
+
+### 2. User and Group Administration
+Manage users and groups across your Automation Hub instance:
+
+```yaml
+- name: Create group
+  ansible.hub.ah_group:
+    name: "developers"
+    state: present
+```
+
+
+### 3. Namespace Configuration
+Configure and manage namespaces for collection organization:
+
+```yaml
+- name: Create namespace
+  ansible.hub.ah_namespace:
+    name: "my_organization"
+    description: "Collections for my organization"
+    state: present
+```
+
+### 4. Token Management
+Manage API tokens for automation workflows:
+
+```yaml
+- name: Create API token
+  ansible.hub.ah_token:
+    ah_username: "admin"
+    ah_password: "admin"
+    state: present
+  register: ah_token
+  no_log: false
+```
+
+## Contributing
 
 The content of this collection is made by people like you, a community of individuals collaborating on making the world better through developing automation software.
 
@@ -41,85 +107,23 @@ We also use the following guidelines:
 * [Ansible development guide](https://docs.ansible.com/ansible/devel/dev_guide/index.html)
 * [Ansible collection development guide](https://docs.ansible.com/ansible/devel/dev_guide/developing_collections.html#contributing-to-collections)
 
-## Collection maintenance
+The current maintainers are listed in the [MAINTAINERS](https://github.com/ansible-collections/ansible_hub/blob/main/MAINTAINERS) file. If you have questions or need help, feel free to mention them in the proposals.
 
-The current maintainers are listed in the [MAINTAINERS](MAINTAINERS) file. If you have questions or need help, feel free to mention them in the proposals.
+## Support
 
-To learn how to maintain/become a maintainer of this collection, refer to the [Maintainer guidelines](https://docs.ansible.com/ansible/devel/community/maintainers.html).
+This collection is maintained by the Red Hat Ansible team.
 
-It is necessary for maintainers of this collection to be subscribed to:
+As Red Hat Ansible Certified Content, this collection is entitled to support through the Ansible Automation Platform (AAP) using the **Create issue** button on the top right corner. If a support case cannot be opened with Red Hat and the collection has been obtained either from Galaxy or GitHub, there may community help available on the [Ansible Forum](https://forum.ansible.com/).
 
-* The collection itself (the `Watch` button -> `All Activity` in the upper right corner of the repository's homepage).
-* The [news-for-maintainers repository](https://github.com/ansible-collections/news-for-maintainers).
 
-They also should be subscribed to Ansible's [The Bullhorn newsletter](https://docs.ansible.com/ansible/devel/community/communication.html#the-bullhorn).
+## Release Notes
 
-## Governance
+See the [changelog](https://github.com/ansible-collections/ansible_hub/blob/main/CHANGELOG.rst) for release notes and version history.
 
-<!--Describe how the collection is governed. Here can be the following text:-->
 
-The process of decision making in this collection is based on discussing and finding consensus among participants.
+## Related Information
 
-Every voice is important. If you have something on your mind, create an issue or dedicated discussion and let's discuss it!
-
-## Tested with Ansible
-
-<!-- List the versions of Ansible the collection has been tested with. Must match what is in galaxy.yml. -->
-
-## External requirements
-
-<!-- List any external resources the collection depends on, for example minimum versions of an OS, libraries, or utilities. Do not list other Ansible collections here. -->
-
-### Supported connections
-<!-- Optional. If your collection supports only specific connection types (such as HTTPAPI, netconf, or others), list them here. -->
-
-## Included content
-
-<!-- Galaxy will eventually list the module docs within the UI, but until that is ready, you may need to either describe your plugins etc here, or point to an external docsite to cover that information. -->
-
-## Using this collection
-
-<!-- TODO: Akasurde Fill this -->
-
-### Installing the Collection from Ansible Galaxy
-
-Before using this collection, you need to install it with the Ansible Galaxy command-line tool:
-```bash
-ansible-galaxy collection install ansible.hub
-```
-
-You can also include it in a `requirements.yml` file and install it with `ansible-galaxy collection install -r requirements.yml`, using the format:
-```yaml
----
-collections:
-  - name: ansible.hub
-```
-
-Note that if you install the collection from Ansible Galaxy, it will not be upgraded automatically when you upgrade the `ansible` package. To upgrade the collection to the latest available version, run the following command:
-```bash
-ansible-galaxy collection install ansible.hub --upgrade
-```
-
-You can also install a specific version of the collection, for example, if you need to downgrade when something is broken in the latest version (please report an issue in this repository). Use the following syntax to install version `1.0.0`:
-
-```bash
-ansible-galaxy collection install ansible.hub:==1.0.0
-```
-
-See [using Ansible collections](https://docs.ansible.com/ansible/devel/user_guide/collections_using.html) for more details.
-
-## Release notes
-
-See the [changelog](https://github.com/ansible-collections/ansible_hub/tree/main/CHANGELOG.rst).
-
-## Roadmap
-
-<!-- Optional. Include the roadmap for this collection, and the proposed release/versioning strategy so users can anticipate the upgrade/update cycle. -->
-
-## More information
-
-<!-- List out where the user can find additional information, such as working group meeting times, slack/IRC channels, or documentation for the product this collection automates. At a minimum, link to: -->
-
+- [Ansible Automation Hub Documentation](https://docs.ansible.com/ansible/latest/galaxy/user_guide.html)
 - [Ansible user guide](https://docs.ansible.com/ansible/devel/user_guide/index.html)
 - [Ansible developer guide](https://docs.ansible.com/ansible/devel/dev_guide/index.html)
 - [Ansible collections requirements](https://docs.ansible.com/ansible/devel/community/collection_contributors/collection_requirements.html)
@@ -127,9 +131,7 @@ See the [changelog](https://github.com/ansible-collections/ansible_hub/tree/main
 - [The Bullhorn (the Ansible contributor newsletter)](https://docs.ansible.com/ansible/devel/community/communication.html#the-bullhorn)
 - [Important announcements for maintainers](https://github.com/ansible-collections/news-for-maintainers)
 
-## Licensing
-
-<!-- Include the appropriate license information here and a pointer to the full licensing details. If the collection contains modules migrated from the ansible/ansible repo, you must use the same license that existed in the ansible/ansible repo. See the GNU license example below. -->
+## License Information
 
 GNU General Public License v3.0 or later.
 

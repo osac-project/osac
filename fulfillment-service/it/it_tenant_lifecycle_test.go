@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
@@ -243,6 +244,30 @@ func waitForTenantSynced(ctx context.Context, client privatev1.TenantsClient, id
 	).Should(Succeed())
 }
 
+func waitForTenantDefaultNetworkingReady(ctx context.Context, client privatev1.TenantsClient, id string) {
+	Eventually(
+		func(g Gomega) {
+			getResponse, err := client.Get(ctx, privatev1.TenantsGetRequest_builder{
+				Id: id,
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+
+			readyConditionFound := false
+			for _, condition := range getResponse.GetObject().GetStatus().GetConditions() {
+				if condition.GetType() != privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY {
+					continue
+				}
+				readyConditionFound = true
+				g.Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+				break
+			}
+			g.Expect(readyConditionFound).To(BeTrue(), "default networking readiness condition should be present")
+		},
+		2*time.Minute,
+		time.Second,
+	).Should(Succeed())
+}
+
 func verifyTenantInKeycloak(ctx context.Context, name string) {
 	code, body, err := tool.KeycloakAdminRequest(ctx, http.MethodGet,
 		fmt.Sprintf("/organizations?exact=true&search=%s", name), nil)
@@ -402,6 +427,103 @@ var _ = Describe("Tenant lifecycle", func() {
 
 		By("Verifying tenant removed from Keycloak")
 		verifyTenantRemovedFromKeycloak(ctx, name)
+	})
+
+	It("deletes a tenant with domains configured", func(ctx context.Context) {
+		name := fmt.Sprintf("test-%s", uuid.New())
+		id := createTenant(ctx, tenantsClient, name)
+
+		By("Waiting for the tenant and its default networking to become ready")
+		waitForTenantSynced(ctx, tenantsClient, id)
+		waitForTenantDefaultNetworkingReady(ctx, tenantsClient, id)
+
+		By("Recording the automatically created root project")
+		rootProjectFilter := fmt.Sprintf("this.metadata.tenant == %q && this.metadata.name == ''", name)
+		var rootProjectID string
+		Eventually(func(g Gomega) {
+			response, err := projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
+				Filter: &rootProjectFilter,
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(response.GetItems()).To(HaveLen(1))
+			rootProjectID = response.GetItems()[0].GetId()
+		}, time.Minute, time.Second).Should(Succeed())
+
+		DeferCleanup(func(cleanupCtx context.Context) {
+			getResponse, err := tenantsClient.Get(cleanupCtx, privatev1.TenantsGetRequest_builder{
+				Id: id,
+			}.Build())
+			if grpcstatus.Code(err) == grpccodes.NotFound {
+				return
+			}
+			Expect(err).ToNot(HaveOccurred())
+			tenant := getResponse.GetObject()
+			if len(tenant.GetSpec().GetDomains()) > 0 {
+				tenant.GetSpec().SetDomains(nil)
+				_, err = tenantsClient.Update(cleanupCtx, privatev1.TenantsUpdateRequest_builder{
+					Object: tenant,
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.domains"},
+					},
+					Lock: true,
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			}
+			projects, err := projectsClient.List(cleanupCtx, privatev1.ProjectsListRequest_builder{
+				Filter: &rootProjectFilter,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			for _, project := range projects.GetItems() {
+				if project.GetMetadata().HasDeletionTimestamp() {
+					_, err = projectsClient.Signal(cleanupCtx, privatev1.ProjectsSignalRequest_builder{
+						Id: project.GetId(),
+					}.Build())
+					if grpcstatus.Code(err) != grpccodes.NotFound {
+						Expect(err).ToNot(HaveOccurred())
+					}
+				}
+			}
+			deleteTenant(cleanupCtx, tenantsClient, projectsClient, id, name)
+		})
+
+		By("Setting a unique tenant domain")
+		domain := fmt.Sprintf("domain-%s.example.com", uuid.New())
+		getResponse, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		tenant := getResponse.GetObject()
+		tenant.GetSpec().SetDomains([]string{domain})
+		updateResponse, err := tenantsClient.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+			Object: tenant,
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"spec.domains"},
+			},
+			Lock: true,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(updateResponse.GetObject().GetSpec().GetDomains()).To(Equal([]string{domain}))
+
+		By("Deleting the tenant while its domain is attached")
+		_, err = tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		_, err = tenantsClient.Signal(ctx, privatev1.TenantsSignalRequest_builder{Id: id}.Build())
+		if grpcstatus.Code(err) != grpccodes.NotFound {
+			Expect(err).ToNot(HaveOccurred())
+		}
+
+		By("Waiting for the root project and tenant to be fully removed")
+		Eventually(func(g Gomega) {
+			_, tenantErr := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+			g.Expect(tenantErr).To(HaveOccurred())
+			tenantStatus, tenantNotFound := grpcstatus.FromError(tenantErr)
+			g.Expect(tenantNotFound).To(BeTrue())
+			g.Expect(tenantStatus.Code()).To(Equal(grpccodes.NotFound))
+
+			_, projectErr := projectsClient.Get(ctx, privatev1.ProjectsGetRequest_builder{Id: rootProjectID}.Build())
+			g.Expect(projectErr).To(HaveOccurred())
+			projectStatus, projectNotFound := grpcstatus.FromError(projectErr)
+			g.Expect(projectNotFound).To(BeTrue())
+			g.Expect(projectStatus.Code()).To(Equal(grpccodes.NotFound))
+		}, 2*time.Minute, time.Second).Should(Succeed())
 	})
 
 	It("Break-glass auth and RBAC", func(ctx context.Context) {

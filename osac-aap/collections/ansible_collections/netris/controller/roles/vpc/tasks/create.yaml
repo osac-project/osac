@@ -18,14 +18,33 @@
   register: _vpc_list_resp
   no_log: true
 
-- name: Find VPCs by name and admin tenant
+- name: Find VPCs by name
   ansible.builtin.set_fact:
-    _existing_vpcs: >-
+    _vpcs_by_name: >-
       {{ (_vpc_list_resp.json.data | default([]))
          | selectattr('name', 'equalto', vpc_name)
-         | selectattr('adminTenant.id', 'equalto', vpc_tenant_id | int)
          | list }}
   when: _vpc_list_resp.json is mapping
+
+- name: Initialize VPC candidates
+  ansible.builtin.set_fact:
+    _existing_vpcs: "{{ _vpcs_by_name }}"
+
+- name: Filter VPCs by admin tenant
+  ansible.builtin.set_fact:
+    _existing_vpcs: >-
+      {{ _vpcs_by_name
+         | selectattr('adminTenant.id', 'defined')
+         | selectattr('adminTenant.id', 'equalto', vpc_tenant_id | int)
+         | list }}
+  when: vpc_tenant_id is defined
+
+- name: Keep same-name VPC candidates when tenant filtering found no match
+  ansible.builtin.set_fact:
+    _existing_vpcs: "{{ _vpcs_by_name }}"
+  when:
+    - _existing_vpcs | default([]) | length == 0
+    - _vpcs_by_name | length > 0
 
 - name: Fail if the VPC identity is ambiguous
   ansible.builtin.assert:
@@ -39,11 +58,79 @@
   ansible.builtin.set_fact:
     _existing_vpc: "{{ _existing_vpcs | first | default(none) }}"
 
+- name: Detect VPC fields omitted from the list response
+  ansible.builtin.set_fact:
+    _vpc_missing_fields: >-
+      {{ _existing_vpc | netris.controller.netris_immutable_missing_fields({
+           'adminTenant.id': vpc_tenant_id
+         }) }}
+  when:
+    - _existing_vpc is defined
+    - _existing_vpc is not none
+    - vpc_tenant_id is defined
+
+- name: Validate existing VPC summary has an ID
+  ansible.builtin.assert:
+    that:
+      - _existing_vpc.id is defined
+      - _existing_vpc.id is not none
+      - _existing_vpc.id | string | length > 0
+    fail_msg: >-
+      Netris VPC '{{ vpc_name }}' was found but its list response omitted the ID;
+      refusing to continue without a stable provider identifier.
+  when: _existing_vpc is defined and _existing_vpc is not none
+
+- name: Read VPC details when its list response omits an immutable field
+  netris.controller.protected_uri:
+    force: true
+    url: "{{ netris_controller_url }}/api/v2/vpc/{{ _existing_vpc.id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: "no-cache"
+      Pragma: "no-cache"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
+  register: _vpc_detail_resp
+  no_log: true
+  when: _vpc_missing_fields | default([]) | length > 0
+
+- name: Use detailed VPC response for immutable field comparison
+  ansible.builtin.set_fact:
+    _existing_vpc: "{{ _vpc_detail_resp.json.data | default(_vpc_detail_resp.json) }}"
+  when:
+    - _vpc_detail_resp is defined
+    - _vpc_detail_resp is not skipped
+    - _vpc_detail_resp.json is defined
+
 - name: Set VPC facts from existing VPC (skip creation)
   ansible.builtin.set_fact:
     vpc_id: "{{ _existing_vpc.id }}"
     vpc_already_existed: true
   when: _existing_vpc is defined and _existing_vpc is not none
+
+- name: Fail when existing VPC has immutable field mismatch
+  when:
+    - _existing_vpc is defined
+    - _existing_vpc is not none
+    - vpc_tenant_id is defined
+  block:
+    - name: Compute VPC immutable mismatches
+      ansible.builtin.set_fact:
+        _vpc_mismatches: >-
+          {{ _existing_vpc | netris.controller.netris_immutable_mismatch({
+               'adminTenant.id': vpc_tenant_id
+             }) }}
+
+    - name: Fail on VPC immutable mismatch
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'VPC' | netris.controller.format_immutable_mismatch_message(
+               vpc_name, _vpc_mismatches) }}
+      when: (_vpc_mismatches | default([]) | length) > 0
 
 - name: Create VPC
   netris.controller.protected_uri:
@@ -65,6 +152,22 @@
   register: _vpc_create_resp
   when: _existing_vpc is not defined or _existing_vpc is none
   no_log: true
+
+- name: Validate VPC create response includes an ID
+  ansible.builtin.assert:
+    that:
+      - _vpc_create_resp.json is mapping
+      - _vpc_create_resp.json.data is defined
+      - not ((_vpc_create_resp.json.data.id | default(_vpc_create_resp.json.data, true)) is mapping)
+      - (_vpc_create_resp.json.data.id | default(_vpc_create_resp.json.data, true)) is not none
+      - (_vpc_create_resp.json.data.id | default(_vpc_create_resp.json.data, true)) | string | length > 0
+    fail_msg: >-
+      Netris accepted VPC '{{ vpc_name }}' creation but returned no usable ID;
+      retry after checking whether the VPC was created.
+  when:
+    - _existing_vpc is not defined or _existing_vpc is none
+    - _vpc_create_resp is not skipped
+    - _vpc_create_resp is changed or (_vpc_create_resp.status | default(0)) in [200, 201]
 
 - name: Set VPC facts from create response
   ansible.builtin.set_fact:

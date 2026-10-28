@@ -177,6 +177,40 @@ var _ = Describe("Add-on operators server", func() {
 				Expect(item.GetPublished()).To(BeTrue())
 			}
 		})
+
+		It("List filters whole metadata maps using the public view, including counts", func() {
+			_, err := privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("public-map-filter-%s", uuid.New()[24:32]),
+						Labels: map[string]string{
+							"ordinary":                        "visible",
+							"admin.osac.openshift.io/managed": "system",
+						},
+						Annotations: map[string]string{"ordinary": "visible"},
+					}.Build(),
+					Title:     "Public Map Filter Operator",
+					Published: new(true),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			filter := "this.metadata.labels == this.metadata.annotations"
+			response, err := publicServer.List(ctx, publicv1.AddOnOperatorsListRequest_builder{
+				Filter: new(filter),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetTotal()).To(Equal(int32(1)))
+			Expect(response.GetItems()).To(HaveLen(1))
+
+			countOnly, err := publicServer.List(ctx, publicv1.AddOnOperatorsListRequest_builder{
+				Filter: new(filter),
+				Limit:  new(int32(0)),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(countOnly.GetTotal()).To(Equal(int32(1)))
+			Expect(countOnly.GetItems()).To(BeEmpty())
+		})
 	})
 
 	Describe("Dependency lifecycle", func() {

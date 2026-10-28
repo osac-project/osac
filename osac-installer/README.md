@@ -88,7 +88,7 @@ target Hub cluster.
 | **Container Registry Access** | `registry.redhat.io` and `quay.io` | Verify credentials and pull secrets are valid in the target cluster namespace. |
 | **Network / DNS** | Ingress route configured for OSAC services | Required for external access to fulfillment API and AAP UI. |
 | **Authentication / IDM** | Organization Identity Provider (e.g., Keycloak, LDAP, RH-SSO) | Used for tenant and user identity mapping. |
-| **Kafka** | Broker access for fulfillment events, even when metering is disabled | See [external Kafka configuration](../docs/guides/installation/kafka-configuration.md) for connection settings, credentials, ACLs, TLS trust, and a Strimzi example. |
+| **Kafka** | Broker access for fulfillment and metering events | See [external Kafka configuration](../docs/guides/installation/kafka-configuration.md) for connection settings, credentials, ACLs, TLS trust, and a Strimzi example. |
 | **Storage** | Dynamic storage class available (e.g., `ocs-storagecluster-cephfs`, `lvms-storage`) | Required for persistence of operator and AAP components. |
 | **Permissions** | Cluster-admin access to deploy operators and create CRDs | Limited access users can only deploy into namespaces configured by the admin. |
 | **License Files** | `license.zip` (AAP subscription) | Must be placed in your values directory (e.g., `values/<env>/license.zip`). |
@@ -163,12 +163,10 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 | `DRY_RUN_CLUSTER_DOMAIN` | Cluster ingress domain required for an OpenShift dry run |
 | `DRY_RUN_OCP_VERSION` | OpenShift major.minor version required for an OpenShift dry run, e.g. `4.20` |
 
-To preview the full Kind install and enable the CSI driver without making cluster
-changes:
+To preview the full Kind install without making cluster changes:
 
 ```bash
-make install PLATFORM=kind PROFILE=dev NS=osac DRY_RUN=1 \
-  EXTRA_HELM_ARGS='--set csiDriver.enabled=true'
+make install PLATFORM=kind PROFILE=dev NS=osac DRY_RUN=1
 ```
 
 For OpenShift, provide the cluster-specific values explicitly because dry-run
@@ -176,8 +174,7 @@ mode does not query the cluster:
 
 ```bash
 make install PLATFORM=openshift PROFILE=vmaas-ci NS=osac DRY_RUN=1 \
-  DRY_RUN_CLUSTER_DOMAIN=apps.example.com DRY_RUN_OCP_VERSION=4.20 \
-  EXTRA_HELM_ARGS='--set csiDriver.enabled=true'
+  DRY_RUN_CLUSTER_DOMAIN=apps.example.com DRY_RUN_OCP_VERSION=4.20
 ```
 
 `DRY_RUN=1` routes the composite target through `helm template` for every
@@ -186,6 +183,74 @@ dev-full host setup script. Since `helm template` does not connect to a cluster,
 no Kubernetes resources are changed. The generated manifests are printed to
 the terminal; `EXTRA_HELM_ARGS` still applies to the OSAC chart. Do not include a
 Helm `--dry-run` flag in `EXTRA_HELM_ARGS`; rendering is intrinsic to this mode.
+
+#### Two-cluster VMaaS installation (OpenShift)
+
+Use `install-multicluster` when OSAC management services run on one cluster and
+VM workloads run on another. The target prepares LVMS, OpenShift Virtualization,
+and remote access on the workload cluster, then installs OSAC on management.
+During `install-osac`, the installer uses the supplied workload kubeconfig to
+create the remote-access Secret after the management namespace exists, then
+mounts it into the operator and configures AAP with its name and key.
+The `vmaas-ci` profile is required because remote mode cannot run the CaaS
+cluster controller in the same operator instance.
+
+```bash
+make install-multicluster \
+  PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+  KUBECONFIG=/path/to/management.kubeconfig \
+  REMOTE_KUBECONFIG=/path/to/workload.kubeconfig
+```
+
+`KUBECONFIG` selects the management cluster and is forwarded to the regular
+installer targets; if it is already exported in your shell, omit that Make
+argument. `REMOTE_KUBECONFIG` selects the workload cluster. Both clusters must
+be distinct OpenShift clusters with cluster-admin access. The target requires
+the AAP license at
+`values/vmaas-ci/license.zip`. `REMOTE_STORAGE_CLASS` defaults to `lvms-vg1`;
+`REMOTE_KUBECONFIG_SECRET_NAME` and `REMOTE_KUBECONFIG_SECRET_KEY` default to
+`osac-remote-kubeconfig` and `kubeconfig`. The management cluster keeps its
+LVMS configuration for OSAC Hub needs. The workload cluster gets its own LVMS
+and CNV setup for VM workloads. The staged kubeconfig uses the API server from
+`REMOTE_KUBECONFIG` by default.
+Set `REMOTE_API_ADDRESS` only when management-cluster workloads need a different
+reachable endpoint; the installer verifies the generated kubeconfig can
+authenticate before staging it.
+
+Prepare the workload cluster independently when you want to separate that work
+from the management installation:
+
+```bash
+make prepare-remote-cluster NS=osac \
+  REMOTE_KUBECONFIG=/path/to/workload.kubeconfig
+
+make install-infra PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+  KUBECONFIG=/path/to/management.kubeconfig \
+  INFRA_VALUES_EXTRA="-f values/vmaas-ci/multicluster-infra.yaml"
+
+make install-osac PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+  KUBECONFIG=/path/to/management.kubeconfig \
+  REMOTE_KUBECONFIG=/path/to/workload.kubeconfig
+```
+
+`prepare-remote-cluster` only changes the workload cluster and needs no
+management kubeconfig. `install-osac` creates the management Secret after
+confirming the target namespace exists; it also sets the operator and AAP chart
+values for remote-cluster mode. The combined `install-multicluster` target runs
+these steps in order.
+
+The staged `osac-remote-access` service-account token requests a 365-day
+lifetime (`--duration=8760h`); the workload API server may cap the issued
+lifetime. The token is not renewed automatically. Before it expires, rerun the
+`make install-osac` command above with the current workload kubeconfig. This
+mints a replacement token and updates the management-cluster Secret. The
+operator watches the mounted kubeconfig and restarts when it changes;
+subsequent AAP jobs use the updated Secret.
+
+The existing `make install ...` command continues to install a single-cluster
+OSAC deployment. `scripts/setup-remote-cluster.sh prepare` prepares only the
+workload cluster. Without arguments, the script retains the existing
+post-install configuration flow.
 
 #### Full local dev environment (`PROFILE=dev-full`, kind only)
 

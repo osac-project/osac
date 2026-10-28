@@ -1422,6 +1422,77 @@ var _ = Describe("Clusters server", func() {
 			Expect(err.Error()).To(ContainSubstring("status.version_transition_time is output-only"))
 		})
 
+		DescribeTable("rejects masks targeting private attempt IDs", func(path string) {
+			_, err := server.ClustersServer.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+				Object: publicv1.Cluster_builder{Id: "cluster-id",
+					Spec: publicv1.ClusterSpec_builder{}.Build()}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{path}},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring("server-owned")))
+		},
+			Entry("control plane", "spec.control_plane_attempt_id"),
+			Entry("node-set map", "spec.node_set_attempt_ids"),
+			Entry("named node set", "spec.node_set_attempt_ids.compute"),
+		)
+
+		It("preserves component attempt IDs through a public full-object edit", func() {
+			created, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{Name: "test-cluster"}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			id := created.GetObject().GetId()
+			seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
+				Id:       "full-object-target",
+				Metadata: privatev1.Metadata_builder{Name: "4-18-full-object", Tenant: testTenant}.Build(),
+				Spec: privatev1.ClusterVersionSpec_builder{
+					Image:   "quay.io/openshift-release-dev/ocp-release:4.18.7-multi",
+					Enabled: proto.Bool(true), Version: "4.18.7",
+				}.Build(),
+			}.Build())
+			_, err = server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+				Object: publicv1.Cluster_builder{Id: id, Spec: publicv1.ClusterSpec_builder{
+					Version: publicv1.ClusterVersionReference_builder{Name: "4-18-full-object"}.Build(),
+				}.Build()}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.version"}},
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			updated, err := server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+				Object: publicv1.Cluster_builder{Id: id, Spec: publicv1.ClusterSpec_builder{
+					NodeSets: map[string]*publicv1.ClusterNodeSet{
+						"compute": publicv1.ClusterNodeSet_builder{Version: publicv1.ClusterVersionReference_builder{Name: "4-18-full-object"}.Build()}.Build(),
+					},
+				}.Build()}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.node_sets.compute.version"}},
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			before, err := server.private.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			cpID := before.GetObject().GetSpec().GetControlPlaneAttemptId()
+			computeID := before.GetObject().GetSpec().GetNodeSetAttemptIds()["compute"]
+			Expect(cpID).NotTo(BeEmpty())
+			Expect(computeID).NotTo(BeEmpty())
+			Expect(before.GetObject().GetStatus().GetUpgradeHistory()).To(HaveLen(2))
+
+			full := proto.Clone(updated.GetObject()).(*publicv1.Cluster)
+			full.GetMetadata().SetLabels(map[string]string{"example.com/review": "updated"})
+			_, err = server.Update(ctx, publicv1.ClustersUpdateRequest_builder{Object: full}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			after, err := server.private.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after.GetObject().GetMetadata().GetLabels()["example.com/review"]).To(Equal("updated"))
+			Expect(after.GetObject().GetSpec().GetControlPlaneAttemptId()).To(Equal(cpID))
+			Expect(after.GetObject().GetSpec().GetNodeSetAttemptIds()["compute"]).To(Equal(computeID))
+			Expect(after.GetObject().GetStatus().GetUpgradeHistory()).To(HaveLen(2))
+			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[0].GetAttemptId()).To(Equal(computeID))
+			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[1].GetAttemptId()).To(Equal(cpID))
+		})
+
 		It("updates node-set size then version in separate masked requests", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{

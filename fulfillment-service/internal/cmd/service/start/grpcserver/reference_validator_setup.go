@@ -39,6 +39,7 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 		SetExcludedReferencePaths(catalogProvenanceUpdateMethods(), "object.spec.catalog_item").
 		SetExcludedReferencePaths(catalogAuthoringMethods(), "object.template", "object.fields").
 		SetExcludedReferencePaths(catalogCreationSourceMethods(), "object.spec.catalog_item", "object.spec.template").
+		SetExcludedReferencePaths(computeInstanceSSHKeyMethods(), "object.spec.ssh_key").
 		SetExcludedReferencePaths(clusterAddOnOperatorMethods(), "object.spec.add_on_operators").
 		SetExcludedReferencePaths(bareMetalInstanceCreationMethods(), "object.spec.network_attachments").
 		Build()
@@ -103,5 +104,14 @@ func catalogCreationSourceMethods() []string {
 		privatev1.Clusters_Create_FullMethodName,
 		publicv1.BareMetalInstances_Create_FullMethodName,
 		privatev1.BareMetalInstances_Create_FullMethodName,
+	}
+}
+
+func computeInstanceSSHKeyMethods() []string {
+	return []string{
+		publicv1.ComputeInstances_Create_FullMethodName,
+		privatev1.ComputeInstances_Create_FullMethodName,
+		publicv1.ComputeInstances_Update_FullMethodName,
+		privatev1.ComputeInstances_Update_FullMethodName,
 	}
 }

@@ -214,6 +214,14 @@ func (s *PrivateSelfSubjectAccessReviewsServer) Create(ctx context.Context, requ
 		}
 	}
 	authContext.Tenant = determinedTenant
+	if metadata := review.GetMetadata(); metadata != nil {
+		switch methodPath {
+		case "/osac.public.v1.Projects/Get",
+			"/osac.public.v1.Projects/Update",
+			"/osac.public.v1.Projects/Delete":
+			authContext.Name = auth.NormalizeProjectNameForAuthorization(metadata.GetName())
+		}
+	}
 
 	// Evaluate authorization using the shared evaluator with the determined tenant
 	decision, err := s.evaluator.Evaluate(ctx, authContext, methodPath)

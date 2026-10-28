@@ -1,0 +1,6 @@
+---
+- name: Attach an ExternalIP through AgentlessNet
+  ansible.builtin.include_tasks: _external_ip_attachment.yaml
+  vars:
+    agentless_net_attachment_action: ensure_external_ip_attachment
+    agentless_net_attachment_operation: external_ip_attachment.attach

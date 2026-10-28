@@ -231,6 +231,67 @@ var _ = Describe("SecurityGroups server", func() {
 			Expect(object.GetSpec().GetEgress()[0].GetPortFrom()).To(Equal(int32(443)))
 		})
 
+		It("rejects reserved metadata on update without changing the stored security group", func() {
+			created, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
+				Object: publicv1.SecurityGroup_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("reserved-metadata-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: publicv1.SecurityGroupSpec_builder{
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
+						Ingress: []*publicv1.SecurityRule{{
+							Protocol: publicv1.Protocol_PROTOCOL_TCP,
+							PortFrom: new(int32(80)),
+							PortTo:   new(int32(80)),
+							Ipv4Cidr: new("10.0.0.0/8"),
+						}},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			securityGroupsDAO, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			storedResponse, err := securityGroupsDAO.Get().SetId(created.GetObject().GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			before := proto.Clone(storedResponse.GetObject()).(*privatev1.SecurityGroup)
+
+			for _, testCase := range []struct {
+				key    string
+				labels bool
+			}{
+				{key: "admin.osac.openshift.io/managed", labels: true},
+				{key: "provider.admin.osac.openshift.io/id"},
+			} {
+				labels := map[string]string{}
+				annotations := map[string]string{}
+				if testCase.labels {
+					labels[testCase.key] = "system"
+				} else {
+					annotations[testCase.key] = "provider"
+				}
+
+				response, err := server.Update(ctx, publicv1.SecurityGroupsUpdateRequest_builder{
+					Object: publicv1.SecurityGroup_builder{
+						Id:       created.GetObject().GetId(),
+						Metadata: publicv1.Metadata_builder{Labels: labels, Annotations: annotations}.Build(),
+						Spec:     created.GetObject().GetSpec(),
+					}.Build(),
+				}.Build())
+				Expect(response).To(BeNil())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(Equal(reservedMetadataError))
+
+				updated, err := securityGroupsDAO.Get().SetId(created.GetObject().GetId()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(proto.Equal(updated.GetObject(), before)).To(BeTrue())
+			}
+		})
+
 		It("List objects", func() {
 			// Create a few objects:
 			const count = 10

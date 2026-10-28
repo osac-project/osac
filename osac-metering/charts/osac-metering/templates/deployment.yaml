@@ -20,7 +20,6 @@ spec:
     spec:
       serviceAccountName: {{ include "osac-metering.fullname" . }}
       securityContext:
-        runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
       volumes:
@@ -59,67 +58,8 @@ spec:
             items:
               - key: bundle.pem
                 path: bundle.pem
-        # These references match the existing service.auth configuration used
-        # by supported installer profiles. Secret data stays out of manifests.
-        - name: fulfillment-credentials
-          secret:
-            secretName: fulfillment-controller-credentials
-            items:
-              - key: client-id
-                path: client-id
-              - key: client-secret
-                path: client-secret
       initContainers:
-        - name: fetch-kafka-secrets
-          image: {{ .Values.cliImage | default "quay.io/openshift/origin-cli:4.20.0" }}
-          env:
-            - name: HOME
-              value: /tmp
-            - name: SOURCE_NS
-              value: {{ include "osac-metering.kafkaClusterNamespace" . }}
-            - name: SASL_SECRET
-              value: {{ include "osac-metering.kafkaSaslSecretName" . }}
-          volumeMounts:
-            - name: kafka-secrets
-              mountPath: /etc/kafka-secrets
-            - name: tmp
-              mountPath: /tmp
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop:
-                - ALL
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 100m
-              memory: 128Mi
-          command:
-            - /bin/bash
-            - -euo
-            - pipefail
-            - -c
-            - |
-              DEADLINE=$((SECONDS + 300))
-              wait_for_secret() {
-                local name=$1 ns=$2
-                echo "Waiting for secret ${name} in ${ns} (timeout 5m)..."
-                until oc get secret "${name}" -n "${ns}" > /dev/null 2>&1; do
-                  if [ $SECONDS -ge $DEADLINE ]; then
-                    echo "Timed out waiting for secret ${name} in ${ns}"
-                    exit 1
-                  fi
-                  sleep 5
-                done
-              }
-
-              wait_for_secret "${SASL_SECRET}" "${SOURCE_NS}"
-
-              oc get secret "${SASL_SECRET}" -n "${SOURCE_NS}" -o jsonpath='{.data.password}' | base64 -d > /etc/kafka-secrets/password
-              echo "Kafka SASL secret fetched."
+        {{- include "osac-metering.kafkaSecretsInitContainer" (list . (include "osac-metering.kafkaSaslSecretName" .)) | nindent 8 }}
       containers:
         - name: {{ include "osac-metering.name" . }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -127,27 +67,12 @@ spec:
           env:
             - name: METERING_DEPLOYMENT_ID
               value: {{ include "osac-metering.osacDeploymentId" . | quote }}
-            - name: FULFILLMENT_SERVER_ADDRESS
-              value: {{ ((.Values.fulfillment).address) | default (printf "fulfillment-internal-api.%s.svc.cluster.local:8001" .Release.Namespace) | quote }}
-            - name: FULFILLMENT_ISSUER_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ .Values.global.meteringFulfillmentIssuerConfigMapName }}
-                  key: FULFILLMENT_ISSUER_URL
-            - name: FULFILLMENT_CLIENT_ID_FILE
-              value: /etc/fulfillment-credentials/client-id
-            - name: FULFILLMENT_CLIENT_SECRET_FILE
-              value: /etc/fulfillment-credentials/client-secret
-            - name: TLS_CA_CERT
-              value: /etc/ca-bundle/bundle.pem
-            - name: FULFILLMENT_TRUST_ENABLED
-              value: {{ .Values.global.fulfillmentTrust.enabled | default false | quote }}
             - name: DB_URL_FILE
-              value: /etc/metering/db
+              value: /etc/metering/db/url
             - name: HEARTBEAT_INTERVAL
               value: {{ .Values.heartbeat.interval | default "60s" | quote }}
-            - name: RECONCILIATION_INTERVAL
-              value: {{ .Values.reconciliation.interval | default "60m" | quote }}
+            - name: METERING_TOPIC_RETENTION_MS
+              value: {{ .Values.topics.retentionMs | default "-1" | quote }}
             - name: KAFKA_BROKERS
               value: {{ include "osac-metering.kafkaBrokers" . | quote }}
             - name: KAFKA_TLS_CA_CERT
@@ -156,22 +81,6 @@ spec:
               value: {{ include "osac-metering.kafkaSaslUsername" . | quote }}
             - name: KAFKA_SASL_PASSWORD_FILE
               value: /etc/kafka-secrets/password
-            {{- if include "osac-metering.serviceEnabled" (list . "caas") }}
-            - name: ENABLE_CAAS
-              value: "true"
-            {{- end }}
-            {{- if include "osac-metering.serviceEnabled" (list . "vmaas") }}
-            - name: ENABLE_VMAAS
-              value: "true"
-            {{- end }}
-            {{- if include "osac-metering.serviceEnabled" (list . "bmaas") }}
-            - name: ENABLE_BMAAS
-              value: "true"
-            {{- end }}
-            {{- if include "osac-metering.serviceEnabled" (list . "maas") }}
-            - name: ENABLE_MAAS
-              value: "true"
-            {{- end }}
           volumeMounts:
             - name: kafka-secrets
               mountPath: /etc/kafka-secrets
@@ -181,9 +90,6 @@ spec:
               readOnly: true
             - name: ca-bundle
               mountPath: /etc/ca-bundle
-              readOnly: true
-            - name: fulfillment-credentials
-              mountPath: /etc/fulfillment-credentials
               readOnly: true
           ports:
             - name: health
@@ -202,6 +108,7 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           securityContext:
+            runAsNonRoot: true
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:

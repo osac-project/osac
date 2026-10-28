@@ -3,6 +3,14 @@ hosted_cluster_base_domain: box.massopen.cloud
 hosted_cluster_default_agent_namespace: "hardware-inventory"
 hosted_cluster_default_cluster_order_label: "{{ {cluster_order_label: hosted_cluster_name} }}"
 hosted_cluster_node_requests: []
+hosted_cluster_order_annotations: >-
+  {{ (cluster_order | default({})).get('metadata', {}).get('annotations', {}) }}
+hosted_cluster_upgrade_attempt_ids: >-
+  {{ hosted_cluster_order_annotations.get('osac.openshift.io/upgrade-attempt-ids', '{}') | from_json }}
+hosted_cluster_control_plane_attempt_id: >-
+  {{ hosted_cluster_upgrade_attempt_ids.get('controlPlane', '') }}
+hosted_cluster_node_set_attempt_ids: >-
+  {{ hosted_cluster_upgrade_attempt_ids.get('nodeSets', {}) }}
 hosted_cluster_controller_availability_policy: HighlyAvailable
 hosted_cluster_infrastructure_availability_policy: HighlyAvailable
 # Default networking CIDRs - can be overridden via cluster_settings_pod_cidr / cluster_settings_service_cidr

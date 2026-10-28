@@ -26,7 +26,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/security_groups_service.proto.
  */
 export const file_osac_public_v1_security_groups_service: GenFile = /*@__PURE__*/
-  fileDesc("Cixvc2FjL3B1YmxpYy92MS9zZWN1cml0eV9ncm91cHNfc2VydmljZS5wcm90bxIOb3NhYy5wdWJsaWMudjEilwEKGVNlY3VyaXR5R3JvdXBzTGlzdFJlcXVlc3QSEwoGb2Zmc2V0GAEgASgFSACIAQESEgoFbGltaXQYAiABKAVIAYgBARITCgZmaWx0ZXIYAyABKAlIAogBARISCgVvcmRlchgEIAEoCUgDiAEBQgkKB19vZmZzZXRCCAoGX2xpbWl0QgkKB19maWx0ZXJCCAoGX29yZGVyImcKGlNlY3VyaXR5R3JvdXBzTGlzdFJlc3BvbnNlEgwKBHNpemUYASABKAUSDQoFdG90YWwYAiABKAUSLAoFaXRlbXMYAyADKAsyHS5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3VwIiYKGFNlY3VyaXR5R3JvdXBzR2V0UmVxdWVzdBIKCgJpZBgBIAEoCSJKChlTZWN1cml0eUdyb3Vwc0dldFJlc3BvbnNlEi0KBm9iamVjdBgBIAEoCzIdLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXAiTAobU2VjdXJpdHlHcm91cHNDcmVhdGVSZXF1ZXN0Ei0KBm9iamVjdBgBIAEoCzIdLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXAiTQocU2VjdXJpdHlHcm91cHNDcmVhdGVSZXNwb25zZRItCgZvYmplY3QYASABKAsyHS5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3VwIikKG1NlY3VyaXR5R3JvdXBzRGVsZXRlUmVxdWVzdBIKCgJpZBgBIAEoCSIeChxTZWN1cml0eUdyb3Vwc0RlbGV0ZVJlc3BvbnNlMu8ECg5TZWN1cml0eUdyb3VwcxKKAQoETGlzdBIpLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXBzTGlzdFJlcXVlc3QaKi5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3Vwc0xpc3RSZXNwb25zZSIrgtPkkwIlEiMvYXBpL2Z1bGZpbGxtZW50L3YxL3NlY3VyaXR5X2dyb3VwcxKUAQoDR2V0Eigub3NhYy5wdWJsaWMudjEuU2VjdXJpdHlHcm91cHNHZXRSZXF1ZXN0Gikub3NhYy5wdWJsaWMudjEuU2VjdXJpdHlHcm91cHNHZXRSZXNwb25zZSI4gtPkkwIyYgZvYmplY3QSKC9hcGkvZnVsZmlsbG1lbnQvdjEvc2VjdXJpdHlfZ3JvdXBzL3tpZH0SoAEKBkNyZWF0ZRIrLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXBzQ3JlYXRlUmVxdWVzdBosLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXBzQ3JlYXRlUmVzcG9uc2UiO4LT5JMCNToGb2JqZWN0YgZvYmplY3QiIy9hcGkvZnVsZmlsbG1lbnQvdjEvc2VjdXJpdHlfZ3JvdXBzEpUBCgZEZWxldGUSKy5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3Vwc0RlbGV0ZVJlcXVlc3QaLC5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3Vwc0RlbGV0ZVJlc3BvbnNlIjCC0+STAioqKC9hcGkvZnVsZmlsbG1lbnQvdjEvc2VjdXJpdHlfZ3JvdXBzL3tpZH1iBnByb3RvMw", [file_google_api_annotations, file_osac_public_v1_security_group_type]);
+  fileDesc("Cixvc2FjL3B1YmxpYy92MS9zZWN1cml0eV9ncm91cHNfc2VydmljZS5wcm90bxIOb3NhYy5wdWJsaWMudjEilwEKGVNlY3VyaXR5R3JvdXBzTGlzdFJlcXVlc3QSEwoGb2Zmc2V0GAEgASgFSACIAQESEgoFbGltaXQYAiABKAVIAYgBARITCgZmaWx0ZXIYAyABKAlIAogBARISCgVvcmRlchgEIAEoCUgDiAEBQgkKB19vZmZzZXRCCAoGX2xpbWl0QgkKB19maWx0ZXJCCAoGX29yZGVyImcKGlNlY3VyaXR5R3JvdXBzTGlzdFJlc3BvbnNlEgwKBHNpemUYASABKAUSDQoFdG90YWwYAiABKAUSLAoFaXRlbXMYAyADKAsyHS5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3VwIiYKGFNlY3VyaXR5R3JvdXBzR2V0UmVxdWVzdBIKCgJpZBgBIAEoCSJKChlTZWN1cml0eUdyb3Vwc0dldFJlc3BvbnNlEi0KBm9iamVjdBgBIAEoCzIdLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXAiTAobU2VjdXJpdHlHcm91cHNDcmVhdGVSZXF1ZXN0Ei0KBm9iamVjdBgBIAEoCzIdLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXAiTQocU2VjdXJpdHlHcm91cHNDcmVhdGVSZXNwb25zZRItCgZvYmplY3QYASABKAsyHS5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3VwIkwKG1NlY3VyaXR5R3JvdXBzVXBkYXRlUmVxdWVzdBItCgZvYmplY3QYASABKAsyHS5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3VwIk0KHFNlY3VyaXR5R3JvdXBzVXBkYXRlUmVzcG9uc2USLQoGb2JqZWN0GAEgASgLMh0ub3NhYy5wdWJsaWMudjEuU2VjdXJpdHlHcm91cCIpChtTZWN1cml0eUdyb3Vwc0RlbGV0ZVJlcXVlc3QSCgoCaWQYASABKAkiHgocU2VjdXJpdHlHcm91cHNEZWxldGVSZXNwb25zZTKeBgoOU2VjdXJpdHlHcm91cHMSigEKBExpc3QSKS5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3Vwc0xpc3RSZXF1ZXN0Gioub3NhYy5wdWJsaWMudjEuU2VjdXJpdHlHcm91cHNMaXN0UmVzcG9uc2UiK4LT5JMCJRIjL2FwaS9mdWxmaWxsbWVudC92MS9zZWN1cml0eV9ncm91cHMSlAEKA0dldBIoLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXBzR2V0UmVxdWVzdBopLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXBzR2V0UmVzcG9uc2UiOILT5JMCMmIGb2JqZWN0EigvYXBpL2Z1bGZpbGxtZW50L3YxL3NlY3VyaXR5X2dyb3Vwcy97aWR9EqABCgZDcmVhdGUSKy5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3Vwc0NyZWF0ZVJlcXVlc3QaLC5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3Vwc0NyZWF0ZVJlc3BvbnNlIjuC0+STAjU6Bm9iamVjdGIGb2JqZWN0IiMvYXBpL2Z1bGZpbGxtZW50L3YxL3NlY3VyaXR5X2dyb3VwcxKsAQoGVXBkYXRlEisub3NhYy5wdWJsaWMudjEuU2VjdXJpdHlHcm91cHNVcGRhdGVSZXF1ZXN0Giwub3NhYy5wdWJsaWMudjEuU2VjdXJpdHlHcm91cHNVcGRhdGVSZXNwb25zZSJHgtPkkwJBOgZvYmplY3RiBm9iamVjdDIvL2FwaS9mdWxmaWxsbWVudC92MS9zZWN1cml0eV9ncm91cHMve29iamVjdC5pZH0SlQEKBkRlbGV0ZRIrLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXBzRGVsZXRlUmVxdWVzdBosLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXBzRGVsZXRlUmVzcG9uc2UiMILT5JMCKiooL2FwaS9mdWxmaWxsbWVudC92MS9zZWN1cml0eV9ncm91cHMve2lkfWIGcHJvdG8z", [file_google_api_annotations, file_osac_public_v1_security_group_type]);
 
 /**
  * @generated from message osac.public.v1.SecurityGroupsListRequest
@@ -194,6 +194,44 @@ export const SecurityGroupsCreateResponseSchema: GenMessage<SecurityGroupsCreate
   messageDesc(file_osac_public_v1_security_groups_service, 5);
 
 /**
+ * @generated from message osac.public.v1.SecurityGroupsUpdateRequest
+ */
+export type SecurityGroupsUpdateRequest = Message<"osac.public.v1.SecurityGroupsUpdateRequest"> & {
+  /**
+   * SecurityGroup to update. The complete ingress and egress rule lists are
+   * applied as supplied. The ID identifies the existing group; its name and
+   * parent VirtualNetwork are not changed by this operation.
+   *
+   * @generated from field: osac.public.v1.SecurityGroup object = 1;
+   */
+  object?: SecurityGroup | undefined;
+};
+
+/**
+ * Describes the message osac.public.v1.SecurityGroupsUpdateRequest.
+ * Use `create(SecurityGroupsUpdateRequestSchema)` to create a new message.
+ */
+export const SecurityGroupsUpdateRequestSchema: GenMessage<SecurityGroupsUpdateRequest> = /*@__PURE__*/
+  messageDesc(file_osac_public_v1_security_groups_service, 6);
+
+/**
+ * @generated from message osac.public.v1.SecurityGroupsUpdateResponse
+ */
+export type SecurityGroupsUpdateResponse = Message<"osac.public.v1.SecurityGroupsUpdateResponse"> & {
+  /**
+   * @generated from field: osac.public.v1.SecurityGroup object = 1;
+   */
+  object?: SecurityGroup | undefined;
+};
+
+/**
+ * Describes the message osac.public.v1.SecurityGroupsUpdateResponse.
+ * Use `create(SecurityGroupsUpdateResponseSchema)` to create a new message.
+ */
+export const SecurityGroupsUpdateResponseSchema: GenMessage<SecurityGroupsUpdateResponse> = /*@__PURE__*/
+  messageDesc(file_osac_public_v1_security_groups_service, 7);
+
+/**
  * @generated from message osac.public.v1.SecurityGroupsDeleteRequest
  */
 export type SecurityGroupsDeleteRequest = Message<"osac.public.v1.SecurityGroupsDeleteRequest"> & {
@@ -208,7 +246,7 @@ export type SecurityGroupsDeleteRequest = Message<"osac.public.v1.SecurityGroups
  * Use `create(SecurityGroupsDeleteRequestSchema)` to create a new message.
  */
 export const SecurityGroupsDeleteRequestSchema: GenMessage<SecurityGroupsDeleteRequest> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_security_groups_service, 6);
+  messageDesc(file_osac_public_v1_security_groups_service, 8);
 
 /**
  * @generated from message osac.public.v1.SecurityGroupsDeleteResponse
@@ -221,7 +259,7 @@ export type SecurityGroupsDeleteResponse = Message<"osac.public.v1.SecurityGroup
  * Use `create(SecurityGroupsDeleteResponseSchema)` to create a new message.
  */
 export const SecurityGroupsDeleteResponseSchema: GenMessage<SecurityGroupsDeleteResponse> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_security_groups_service, 7);
+  messageDesc(file_osac_public_v1_security_groups_service, 9);
 
 /**
  * @generated from service osac.public.v1.SecurityGroups
@@ -256,6 +294,17 @@ export const SecurityGroups: GenService<{
     methodKind: "unary";
     input: typeof SecurityGroupsCreateRequestSchema;
     output: typeof SecurityGroupsCreateResponseSchema;
+  },
+  /**
+   * Updates the ingress and egress rules of an existing security group.
+   * Callers must provide the complete rule lists for both directions.
+   *
+   * @generated from rpc osac.public.v1.SecurityGroups.Update
+   */
+  update: {
+    methodKind: "unary";
+    input: typeof SecurityGroupsUpdateRequestSchema;
+    output: typeof SecurityGroupsUpdateResponseSchema;
   },
   /**
    * Deletes a security group.

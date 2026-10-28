@@ -23,6 +23,7 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
@@ -131,10 +132,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	client := publicv1.NewSecurityGroupsClient(conn)
 
 	sg := publicv1.SecurityGroup_builder{
-		Metadata: publicv1.Metadata_builder{
-			Name:   c.args.name,
-			Tenant: c.settings.Tenant(),
-		}.Build(),
+		Metadata: metautil.ForCreate(ctx, c.args.name).Build(),
 		Spec: publicv1.SecurityGroupSpec_builder{
 			VirtualNetwork: &publicv1.VirtualNetworkLocalReference{Id: vn.GetId()},
 			Ingress:        ingress,

@@ -121,6 +121,9 @@ func (b *VolumesServerBuilder) Build() (result *VolumesServer, err error) {
 	inMapper, err := NewGenericMapper[*publicv1.Volume, *privatev1.Volume]().
 		SetLogger(b.logger).
 		SetStrict(true).
+		// The status is output-only, and the metering trigger guards only its tracked
+		// fields: a caller-supplied status.message must never reach the database.
+		AddIgnoredFields("osac.public.v1.Volume.status").
 		Build()
 	if err != nil {
 		return

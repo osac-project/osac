@@ -11,12 +11,7 @@ export interface SecretValues {
     description: string;
   };
   type: SecretType;
-  kubeconfig: SecretDataEntry;
-  pullsecret: SecretDataEntry;
-  userData: SecretDataEntry;
-  opaque: SecretDataEntry[];
-  value: SecretDataEntry;
-  sshPublicKey: SecretDataEntry;
+  data: SecretDataEntry[];
 }
 
 export interface SecretDataEntry {
@@ -47,10 +42,24 @@ export const encodeSecretValue = (value: string): Uint8Array => new TextEncoder(
 export const getDataEntries = (data: Secret['data']): SecretDataEntry[] =>
   Object.entries(data).map(([key, value]) => createSecretDataEntry(key, new Uint8Array(value)));
 
-const getEntry = (data: SecretDataEntry[], key: string): SecretDataEntry => {
-  const entry = data.find((d) => d.key === key);
-
-  return entry || createSecretDataEntry(key, emptyValue());
+export const defaultDataForType = (type: SecretType): SecretDataEntry[] => {
+  switch (type) {
+    case SecretType.OPAQUE:
+    case SecretType.UNSPECIFIED:
+      return [createSecretDataEntry('', emptyValue())];
+    case SecretType.KUBECONFIG:
+      return [createSecretDataEntry('kubeconfig', emptyValue())];
+    case SecretType.PULL_SECRET:
+      return [createSecretDataEntry('.dockerconfigjson', emptyValue())];
+    case SecretType.USER_DATA:
+      return [createSecretDataEntry('userdata', emptyValue())];
+    case SecretType.VALUE:
+      return [createSecretDataEntry('value', emptyValue())];
+    case SecretType.SSH_PUBLIC_KEY:
+      return [createSecretDataEntry('public_key', emptyValue())];
+    default:
+      return [];
+  }
 };
 
 const getDefaultValues = (type: SecretType): SecretValues => ({
@@ -60,13 +69,44 @@ const getDefaultValues = (type: SecretType): SecretValues => ({
     description: '',
   },
   type,
-  kubeconfig: createSecretDataEntry('kubeconfig', emptyValue()),
-  pullsecret: createSecretDataEntry('.dockerconfigjson', emptyValue()),
-  userData: createSecretDataEntry('userdata', emptyValue()),
-  opaque: [createSecretDataEntry('', emptyValue())],
-  value: createSecretDataEntry('value', emptyValue()),
-  sshPublicKey: createSecretDataEntry('public_key', emptyValue()),
+  data: defaultDataForType(type),
 });
+
+const sortRequiredKeyFirst = (
+  requiredKey: string,
+  dataEntries: SecretDataEntry[],
+): SecretDataEntry[] => {
+  const requiredEntry =
+    dataEntries.find((entry) => entry.key === requiredKey) ||
+    createSecretDataEntry(requiredKey, emptyValue());
+
+  const additionalEntries = dataEntries.filter((entry) => entry.key !== requiredKey);
+
+  return [requiredEntry, ...additionalEntries];
+};
+
+const hydrateDataFromApi = (
+  type: SecretType,
+  dataEntries: SecretDataEntry[],
+): SecretDataEntry[] => {
+  switch (type) {
+    case SecretType.OPAQUE:
+    case SecretType.UNSPECIFIED:
+      return dataEntries.length > 0 ? dataEntries : [createSecretDataEntry('', emptyValue())];
+    case SecretType.KUBECONFIG:
+      return sortRequiredKeyFirst('kubeconfig', dataEntries);
+    case SecretType.PULL_SECRET:
+      return sortRequiredKeyFirst('.dockerconfigjson', dataEntries);
+    case SecretType.USER_DATA:
+      return sortRequiredKeyFirst('userdata', dataEntries);
+    case SecretType.VALUE:
+      return sortRequiredKeyFirst('value', dataEntries);
+    case SecretType.SSH_PUBLIC_KEY:
+      return sortRequiredKeyFirst('public_key', dataEntries);
+    default:
+      return [createSecretDataEntry('', emptyValue())];
+  }
+};
 
 export const getSecretValues = (
   initType: TypeFilterValue | null,
@@ -77,7 +117,6 @@ export const getSecretValues = (
   }
 
   const type = secret.type === SecretType.UNSPECIFIED ? SecretType.OPAQUE : secret.type;
-
   const dataEntries = getDataEntries(secret.data);
 
   return {
@@ -87,11 +126,6 @@ export const getSecretValues = (
       description: secret.metadata?.description || '',
     },
     type,
-    kubeconfig: getEntry(dataEntries, 'kubeconfig'),
-    pullsecret: getEntry(dataEntries, '.dockerconfigjson'),
-    userData: getEntry(dataEntries, 'userdata'),
-    opaque: dataEntries,
-    value: getEntry(dataEntries, 'value'),
-    sshPublicKey: getEntry(dataEntries, 'public_key'),
+    data: hydrateDataFromApi(type, dataEntries),
   };
 };

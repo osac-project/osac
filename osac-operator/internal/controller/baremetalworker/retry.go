@@ -150,13 +150,13 @@ func hasFailedIncarnations(workers []v1alpha1.WorkerStatus) bool {
 func (r *Reconciler) retryFailedWorker(
 	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 	nr *v1alpha1.NodeRequest, prev *v1alpha1.WorkerStatus,
-	image *privatev1.DiskImageReference, ignitionRaw, filter, fabricInterface string,
+	image *privatev1.DiskImageReference, ignitionRaw, filter string,
 ) (ctrl.Result, error) {
 	if prev.Phase != workerPhaseFailed || prev.BareMetalInstance.ID != "" || prev.NextRetryTime == nil || !isRetryDue(*prev, time.Now()) {
 		return ctrl.Result{}, nil
 	}
 	log := ctrllog.FromContext(ctx)
-	bmi, res, err := r.ensureBMI(ctx, co, cluster, *nr, prev.BareMetalInstance.Name, image, ignitionRaw, filter, fabricInterface)
+	bmi, res, err := r.ensureBMI(ctx, co, cluster, *nr, prev.BareMetalInstance.Name, image, ignitionRaw, filter)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

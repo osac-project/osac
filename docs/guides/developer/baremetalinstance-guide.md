@@ -97,9 +97,9 @@ default:
 | Situation | Result |
 |---|---|
 | Reference is missing or empty after CatalogItem defaults | `InvalidArgument` |
-| Reference cannot be resolved in the instance or shared tenant | `NotFound` |
-| DiskImage is `AVAILABLE` | Create succeeds |
-| DiskImage is `DEPRECATED` | Create succeeds with a warning |
+| Reference cannot be resolved in the instance or shared tenant | Existing reference error: `InvalidArgument` with a reference-validation field error, or `NotFound` from scoped resolution |
+| DiskImage is `AVAILABLE` and architecture-compatible | Create succeeds |
+| DiskImage is `DEPRECATED` and architecture-compatible | Create succeeds with a warning |
 | DiskImage is `OBSOLETE` | `FailedPrecondition` |
 | Delete is requested for a DiskImage still referenced by a BMI or CatalogItem | `FailedPrecondition`; the deletion is blocked |
 
@@ -112,6 +112,22 @@ retrieve the artifact behind `source_ref`.
 A DiskImage cannot be deleted while a BareMetalInstance or BareMetalInstance
 CatalogItem still references it. The deletion request returns
 `FailedPrecondition`; remove or replace dependent objects before retrying it.
+
+## Architecture compatibility
+
+Create requires the effective instance type's CPU architecture to appear in the
+selected DiskImage's `spec.architecture`, after CatalogItem and template
+defaults. This applies to ID and name references. Mismatches return
+`InvalidArgument` with `INCOMPATIBLE_DISK_IMAGE_ARCHITECTURE`; select a compatible
+image or instance type.
+
+DiskImage updates reject removal of an architecture required by an active
+BareMetalInstance or a concrete CatalogItem type/image combination.
+
+Template instance-type updates return `FailedPrecondition` with
+`INCOMPATIBLE_DISK_IMAGE_ARCHITECTURE` if an active CatalogItem inherits that
+type and its locked or default DiskImage does not support the new architecture.
+Compatible type changes and descriptive template edits remain supported.
 
 ## CatalogItem defaults
 

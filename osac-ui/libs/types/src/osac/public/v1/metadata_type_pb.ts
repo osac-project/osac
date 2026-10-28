@@ -31,6 +31,9 @@ export const file_osac_public_v1_metadata_type: GenFile = /*@__PURE__*/
 /**
  * Metadata common to all kinds of objects.
  *
+ * On public Create and Update, reserved keys in labels or annotations are rejected with InvalidArgument and the message
+ * `Label or annotation is reserved for use by the system.`
+ *
  * @generated from message osac.public.v1.Metadata
  */
 export type Metadata = Message<"osac.public.v1.Metadata"> & {
@@ -78,6 +81,11 @@ export type Metadata = Message<"osac.public.v1.Metadata"> & {
   /**
    * Labels contains key-value pairs for organizing and selecting objects.
    *
+   * Keys whose prefix before '/' is `admin.osac.openshift.io` or a dot-delimited subdomain of it are reserved for
+   * system use. Matching is case-sensitive. The public API rejects reserved keys on Create and Update and preserves
+   * stored reserved keys during Update. When selected by an update_mask, the map is replaced as a whole; an empty map
+   * clears user-controlled entries. An unmasked Update follows that method's existing map behavior.
+   *
    * Keys consist of an optional prefix and a name separated by '/':
    *
    * - Prefix is a DNS subdomain (RFC 1035) and must be between 1 and 253 characters long.
@@ -96,6 +104,12 @@ export type Metadata = Message<"osac.public.v1.Metadata"> & {
   /**
    * Annotations contains arbitrary metadata for objects.
    *
+   * Keys use the same reserved namespace and public API behavior as labels: `admin.osac.openshift.io` and its
+   * dot-delimited subdomains, matched case-sensitively, are reserved for system use. The public API rejects these keys
+   * on Create and Update and preserves stored reserved keys during Update. When selected by an update_mask, the map is
+   * replaced as a whole; an empty map clears user-controlled entries. An unmasked Update follows that method's
+   * existing map behavior.
+   *
    * Keys follow the same rules as label keys, including the optional DNS subdomain prefix and the 1-63 character name
    * restrictions. Values can be any string.
    *
@@ -104,7 +118,9 @@ export type Metadata = Message<"osac.public.v1.Metadata"> & {
   annotations: { [key: string]: string };
 
   /**
-   * Version is a numeric field that is automatically incremented with every change to the object.
+   * Version is a numeric field that is automatically incremented with every change to the object. Set `lock` to true
+   * on an Update request to require this version to match the stored version; a stale version is rejected with
+   * Aborted. If `lock` is omitted or false, the Update proceeds without an optimistic version check.
    *
    * @generated from field: int32 version = 8;
    */

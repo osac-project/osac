@@ -1,0 +1,284 @@
+# Cachi2/Hermeto pip build-requirements for the EE's generated Containerfile's
+# own tooling installs -- NOT this component's own python dependencies (see
+# execution-environment/requirements.txt for those). Pinned so Cachi2 can
+# prefetch them for the hermetic build; update these pins if
+# execution-environment.yaml's ansible_core/ansible_runner versions change,
+# or if ansible-builder's own template (base/builder/final stage pip
+# installs) changes in a future ansible-builder upgrade.
+#
+# Every entry carries its real sdist sha256, fetched directly from PyPI's
+# own JSON API for that exact package/version (never guessed) -- hardens
+# Hermeto's own PyPI fetch step against a compromised/substituted
+# download, on top of (not a replacement for) Hermeto's own hermetic
+# prefetch-then-freeze guarantee, which is what actually prevents the real
+# build from ever reaching back out to PyPI. Only an sdist hash is needed
+# per entry: Hermeto's pip prefetch is sdist-only for this component (no
+# "binary" wheels at all -- see the Containerfile/EC-fix history for why),
+# so no wheel candidate is ever fetched or selected for anything here.
+# Once any entry below has a --hash, pip's own hash-checking mode requires
+# every entry in this file to have one -- keep all of them hashed.
+ansible-core==2.20.10 --hash=sha256:577b8d3c18e4228310a4e5180c3e133bb3955b378367077bfc643f3c21ebee5c
+ansible-runner==2.4.3 --hash=sha256:5f3025529bb968fdc3b627457dd8d418dbf9d53bc73735d50e69c28544d53031
+bindep==2.14.0 --hash=sha256:0c804c7e48dd17db24cb39121ade7171f684fb463c8aa01d0338cd11d254364a
+PyYAML==6.0.3 --hash=sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f
+packaging==26.3 --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79
+dumb-init==1.2.5 --hash=sha256:2881d15410cc9f175e20a252c2f24331f5ba05c6a8340954d152ff58435e4ca9
+# bindep's own transitive dependencies -- Cachi2 didn't auto-resolve these
+# for a build-requirements entry the way it did for ansible-core/
+# ansible-runner's own transitive deps (confirmed live: distro>=1.7 missing
+# from the prefetch, even though bindep==2.14.0 itself was present), so
+# list them explicitly. Resolved via `pip install bindep==2.14.0 --dry-run
+# --report` against a clean environment.
+distro==1.9.0 --hash=sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed
+pbr==7.1.3 --hash=sha256:9a4a85b84e906337708009af0b5f5cdabeeb72d4dc213c9e97974da54fd9acc5
+Parsley==1.3 --hash=sha256:9444278d47161d5f2be76a767809a3cbe6db4db822f46a4fd7481d4057208d41
+# ansible-core ships no wheel, only an sdist, so pip must build it -- which
+# needs its own build-system requirement (setuptools<=82.0.0,>=66.1.0, per
+# ansible-core's own pyproject.toml) prefetched too. Without this explicit
+# entry, Cachi2 only prefetches whatever version happened to resolve for
+# some OTHER package's transitive dependency (82.0.1 here), which doesn't
+# satisfy ansible-core's own upper bound -- confirmed live: "Could not find
+# a version that satisfies the requirement setuptools<=82.0.0,>=66.1.0".
+# ansible-runner's own build-system.requires is a much older, narrower
+# range (setuptools<=70.0.0,>=45, confirmed live: "Could not find a
+# version that satisfies the requirement setuptools<=70.0.0,>=45") --
+# 70.0.0 is the single version satisfying both packages' constraints at
+# once, so one pin covers both rather than needing two coexisting
+# versions.
+setuptools==70.0.0 --hash=sha256:f211a66637b8fa059bb28183da127d4e86396c991a942b028c6650d4319c3fd0
+# ansible-core's build-system.requires also hard-pins wheel == 0.45.1
+# exactly (confirmed via its real sdist pyproject.toml), a different
+# exact version than python-esiclient's own wheel need below -- both
+# coexist fine in the shared prefetch cache since pip resolves each
+# package's isolated build environment independently. Confirmed live:
+# "Could not find a version that satisfies the requirement
+# wheel==0.45.1 (from versions: 0.48.0)".
+wheel==0.45.1 --hash=sha256:661e1abd9198507b1409a20c02106d9670b2576e916d58f520316666abca6729
+# execution-environment/requirements.txt's python-esiclient dependency is
+# fetched from git (no pyproject.toml, legacy setup.py-only project), so
+# pip builds its wheel using the default legacy build backend, whose
+# implicit build-system.requires is ["setuptools", "wheel"] -- "wheel"
+# itself is never otherwise pulled into the hermetic prefetch, confirmed
+# live: "Could not find a version that satisfies the requirement wheel
+# (from versions: none)".
+wheel==0.48.0 --hash=sha256:94800765601e9171bf5d58d066e640662842bcedcbab982b2c90787a2c987322
+# ansible-builder's introspect step merges every vendored collection's own
+# bindep.txt/requirements.txt into the final combined pip requirements
+# file at BUILD TIME (inside the Containerfile's builder stage, after
+# collections are copied in) -- these entries never appear anywhere in
+# osac-aap's own execution-environment/requirements.txt, so Cachi2 has no
+# visibility into them from that file alone. Confirmed via a local
+# `ansible-builder create` + introspect.py run against this component's
+# actual collections/vendor tree (same merge the real build performs):
+# pytz/python-dateutil/awxkit come from ansible.controller's own
+# bindep.txt/requirements.txt; textfsm/ttp/xmltodict come from
+# ansible.utils's -- all real, requested collections, not stale vendor
+# (unlike the now-removed orphaned ansible.eda, which contributed a much
+# bigger and genuinely unneeded set of these -- see its vendor removal
+# commit).
+pytz==2026.5 --hash=sha256:fa23724b9c486543b9ff54a327ee7569ac83ade54bb9afd0fc18676620401c86
+awxkit==24.6.1 --hash=sha256:015421c2c525c5c5dd13890624f453ac3fc7ca2bc3e301b82db871bc4b8da23c
+textfsm==2.1.0 --hash=sha256:45c18ff2b7c90163dfdff7e20d3f482514cc7aac26bc2547744e79dfa761e458
+ttp==0.10.1 --hash=sha256:9c928aeb1f2dade05419c7ecc756d62cb45857deb5cc6b1b9f2058e70f25ae59
+xmltodict==1.0.4 --hash=sha256:6d94c9f834dd9e44514162799d344d815a3a4faec913717a9ecbfa5be1bb8e61
+# cryptography/pydantic-core/rpds-py are maturin (Rust/PyO3) build-
+# backend packages -- no pure-Python or prebuilt-wheel fallback, so
+# building them from source hermetically (instead of fetching a wheel,
+# which trips sbom_spdx.disallowed_package_attributes since it's
+# sourced from public PyPI) needs maturin itself prefetched as a
+# build-system requirement. Confirmed via each package's real sdist
+# pyproject.toml: all three declare `build-backend = "maturin"`. rust/
+# cargo RPMs are prefetched in rpms.in.yaml/rpms.lock.yaml for the
+# actual compilation.
+maturin==1.15.0 --hash=sha256:94b26cc8e8aba61a5f2099715fe640e18c5f678e9a500408b38761263954228a
+# maturin's OWN build-system.requires (confirmed via its real sdist
+# pyproject.toml) needs setuptools>=77.0.0 -- a range that doesn't
+# overlap ansible-runner's own <=70.0.0 upper bound above, so this
+# coexists as a second setuptools version rather than replacing it
+# (same pattern as the two wheel== pins). 82.0.0 satisfies both this
+# and ansible-core's own <=82.0.0 upper bound, so one extra pin covers
+# both. Also needs setuptools-rust>=1.11.0 (confirmed live: "Could not
+# find a version that satisfies the requirement setuptools-rust>=
+# 1.11.0"), whose own runtime need (semantic_version, confirmed via its
+# real PyPI metadata) has no pyproject.toml (legacy setuptools backend,
+# same bootstrap as Cython/python-esiclient) and whose own build-system
+# needs only setuptools>=62.4 + setuptools_scm (already prefetched).
+setuptools==82.0.0 --hash=sha256:22e0a2d69474c6ae4feb01951cb69d515ed23728cf96d05513d36e42b62b37cb
+setuptools-rust==1.13.0 --hash=sha256:f2afcf4baeee689910ce49cfa8aad4e08cce72f417449bcc32891b8664fdc726
+semantic_version==2.10.0 --hash=sha256:bdabb6d336998cbb378d4b9db3a4b56a1e3235701dc05ea2690d9a997ed5041c
+# cryptography's own sdist build-system.requires also lists cffi
+# (>=2.0.0 for python>=3.9, which this EE's python3.12 satisfies) --
+# used by its own build.rs for the rust/cffi bridge, per its
+# pyproject.toml's own comment.
+cffi==2.1.1 --hash=sha256:dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be
+# Both wheel pins above are themselves sdist-only in this fully-source
+# build (no exception to the "no binary wheels" rule, including for
+# pip's own bootstrap packages) and both use flit_core as their build
+# backend -- wheel==0.45.1 needs flit_core>=3.8,<4, wheel==0.48.0 needs
+# flit_core>=3.11,<5; 3.12.0 satisfies both so one pin covers both.
+# Confirmed live: "Could not find a version that satisfies the
+# requirement flit_core<4,>=3.8 (from versions: none)". flit_core's own
+# build-system.requires is empty (self-hosting), confirmed via its real
+# sdist pyproject.toml, so no further transitive need here.
+flit_core==3.12.0 --hash=sha256:18f63100d6f94385c6ed57a72073443e1a71a4acb4339491615d0f16d6ff01b2
+# ansible-runner's build-system.requires also lists
+# setuptools-scm[toml]>=6.2,<=8.1.0 (confirmed via its real sdist
+# pyproject.toml) alongside setuptools -- 8.1.0 is the exact upper
+# bound. Confirmed live: "Could not find a version that satisfies the
+# requirement setuptools-scm<=8.1.0,>=6.2". setuptools-scm's own
+# build-system.requires self-references (setuptools_scm>=8, a known
+# bootstrap quirk of that package); its runtime requires_dist reduces
+# to packaging+setuptools (already prefetched above) for python3.12 --
+# the tomli/typing-extensions entries are gated to python_version<3.11.
+setuptools-scm==8.1.0 --hash=sha256:42dea1b65771cba93b7a515d65a65d8246e560768a66b9106a592c8e7f26c8a7
+# PyYAML's build-system.requires includes a bare Cython (python_version
+# < "3.13", which this EE's python3.12 matches) alongside setuptools --
+# confirmed via its real sdist pyproject.toml. Confirmed live: "Could
+# not find a version that satisfies the requirement Cython (from
+# versions: none)". Cython itself ships no pyproject.toml (legacy
+# setuptools.build_meta backend, same as python-esiclient), so it needs
+# only the setuptools/wheel already prefetched above, nothing further.
+Cython==3.3.0 --hash=sha256:eed0d93fbca7087f143b42c34b05a825849bdf17f101572c2105acfa49aa88b8
+# maturin's build-system.requires also lists puccinialin>=0.1,<0.2
+# (confirmed live: "Could not find a version that satisfies the
+# requirement puccinialin>=0.1,<0.2") -- a helper that bootstraps a
+# Rust toolchain into a temp dir if none is found at build time. We
+# already have a real system Rust toolchain via rpms.lock.yaml, so its
+# actual bootstrap logic should never run, but pip still needs the
+# package installed to satisfy maturin's declared requirement. This
+# pulled in a real, multi-layer cascade of further build/runtime deps,
+# traced one real "Could not find"/`pip download --dry-run` style
+# check at a time rather than guessed, each confirmed via its own real
+# sdist pyproject.toml:
+#
+#   puccinialin (flit_core, already have) needs at runtime:
+#     filelock, httpx, platformdirs, tqdm
+#   filelock (hatchling+hatch-vcs) -- NEW build backend family
+#   httpx (hatchling+hatch-fancy-pypi-readme) needs at runtime:
+#     anyio, certifi, httpcore, idna
+#   anyio (setuptools+setuptools_scm, already have) needs:
+#     typing_extensions>=4.16.0 (our existing 4.15.0 pin doesn't
+#     satisfy this -- a second, newer, coexisting version)
+#   httpcore (hatchling+hatch-fancy-pypi-readme) needs at runtime: h11
+#   h11, platformdirs, tqdm, certifi: no pyproject.toml/no extra
+#     runtime deps, legacy setuptools bootstrap already covered
+#   hatchling itself: self-hosting (requires = [], build-backend
+#     "hatchling.ouroboros"), no further need
+#   hatch-vcs needs: hatchling (above) + setuptools-scm>=8.2.0 -- a
+#     THIRD setuptools-scm version (doesn't overlap ansible-runner's
+#     own <=8.1.0 upper bound), same coexisting-pin pattern as
+#     setuptools/wheel above
+#   hatch-fancy-pypi-readme needs: hatchling (above)
+#
+# Resolved via each package's real PyPI metadata/sdist pyproject.toml,
+# same methodology as everything else in this file -- not guessed.
+puccinialin==0.1.14 --hash=sha256:c186d3ab26ceceae709f7edb7a620ea51e46fbeeb4f58d2de717c485e507914b
+filelock==3.32.7 --hash=sha256:37b8a3d9811b0f9aef7e5ec5c71bb320de52df51e6ca9bcd6f5ad81187660da7
+httpx==0.28.1 --hash=sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc
+anyio==4.15.1 --hash=sha256:9f28306018cbd6d329e64a36d58256edff76dd996fe423bc957326e578b82a94
+certifi==2026.10.19 --hash=sha256:035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae
+httpcore==1.0.9 --hash=sha256:6e34463af53fd2ab5d807f399a9b45ea31c3dfa2276f15a2c3f00afff6e176e8
+idna==3.20 --hash=sha256:a7db850025b95ded1eae8a46181a1a6c56c92c96f0e2b005d9ff8dc0210cab44
+h11==0.16.0 --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1
+typing_extensions==4.16.0 --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
+platformdirs==4.13.5 --hash=sha256:05831adf87d392760f4b5c3a0a95579ab5a10b18b9b9bd43680dcb47544788a0
+tqdm==4.70.1 --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4
+hatchling==1.32.4 --hash=sha256:c4468f73144c054d2aab4ef0f0378c43b9878bf07f8ffd6b79690e970d375f07
+hatch-vcs==0.5.0 --hash=sha256:0395fa126940340215090c344a2bf4e2a77bcbe7daab16f41b37b98c95809ff9
+hatch-fancy-pypi-readme==25.1.0 --hash=sha256:9c58ed3dff90d51f43414ce37009ad1d5b0f08ffc9fc216998a06380f01c0045
+setuptools-scm==8.3.1 --hash=sha256:3d555e92b75dacd037d32bafdf94f97af51ea29ae8c7b234cf94b7a5bd242a63
+# hatchling's own runtime deps (packaging already prefetched above):
+pathspec==1.1.1 --hash=sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a
+pluggy==1.7.0 --hash=sha256:d1eaa46ebb595891b860ab086b4d09c8588af65ebd4361b8e8f4bb8920b90ba8
+tomlkit==0.15.2 --hash=sha256:83e32755ba1d20d9340bd069ee97e9f6232ba2346b63ffcba425de01f7e327a6
+trove-classifiers==2026.9.21.13 --hash=sha256:0a9ebc8d4e2f3e8a22848c5258033035bec17a3012ac3fea16dbaa764489eb71
+# tomlkit's build backend is poetry-core (a THIRD build-backend
+# ecosystem, alongside setuptools/flit_core/hatchling) -- self-hosting
+# (requires = []), confirmed via its real sdist pyproject.toml, no
+# further need.
+poetry-core==2.5.0 --hash=sha256:81d04c9253b19d0604718268d781867c8f7b2128e5b25bbf1e84141eec6b89c4
+# trove-classifiers' build-system.requires also lists calver
+# (setuptools>=77.0.1, already satisfied by setuptools==82.0.0 above),
+# confirmed via its real sdist pyproject.toml.
+calver==2025.10.20 --hash=sha256:c98b376c2424642224d456b2f70c51402343e008c63d204634665e1a2a2835f5
+# python-daemon (an ansible-runner dependency)'s build-system.requires
+# also lists docutils and changelog-chug (bare, confirmed via its real
+# sdist pyproject.toml), alongside wheel/setuptools (already have).
+# changelog-chug's own build-system.requires needs semver>=3.0.0 and
+# docutils>=0.21.0 (satisfied by our own docutils pin) in addition to
+# setuptools. docutils' own build backend is flit_core (already have,
+# >=3.11,<4 satisfied by 3.12.0). semver's own runtime need
+# (fast-semver-rs-backend) is gated behind an unused "native" extra, so
+# nothing further.
+docutils==0.23 --hash=sha256:746f5060322511280a1e50eb76846ed6bf2342984b2ac04dc42caa1a8d78799e
+changelog-chug==0.0.3 --hash=sha256:98ee1e8be75b6e9d512c35292c3c293a124541a4ec2014a6ec3cf33a3d265d2d
+semver==3.1.0 --hash=sha256:14bc073439513d7773662a338f4db9829cf16c12b74b9568e2d2689975fbd7fc
+# aiohttp (from osac-aap's own execution-environment/requirements.txt,
+# the main 99-package file, not just the build-tools one) needs
+# pkgconfig (bare) alongside setuptools>=67.0 (already have), confirmed
+# via its real sdist pyproject.toml. pkgconfig's own build backend is
+# poetry-core (already have, >=1.0.0 satisfied by 2.5.0).
+pkgconfig==1.6.0 --hash=sha256:4a5a6631ce937fafac457104a40d558785a658bbdca5c49b6295bc3fd651907f
+# cmd2 needs build>=1.2.2, setuptools>=80.7.1 (satisfied by 82.0.0),
+# and setuptools-scm>=9.2 -- a FOURTH coexisting setuptools-scm
+# version (none of the existing 8.x pins satisfy >=9.2), confirmed via
+# its real sdist pyproject.toml. build's own backend is flit_core
+# (already have); its own runtime need is packaging (have) +
+# pyproject_hooks (new, bare, also flit_core-backed, no further
+# cascade).
+setuptools-scm==9.2.2 --hash=sha256:1c674ab4665686a0887d7e24c03ab25f24201c213e82ea689d2f3e169ef7ef57
+pyproject_hooks==1.3.3 --hash=sha256:defda19b854fa0d3bd4f76ea4ddcba8abd7dcfcdd585a6690ade050744fc5f43
+build==1.6.1 --hash=sha256:51cc11666391ab6f092070437ac747002ff46f3e4113a3622177ee6b488bfc53
+# frozenlist's own build-system.requires also lists a bare "expandvars"
+# alongside setuptools>=47 (already have), confirmed via its real sdist
+# pyproject.toml. Confirmed live: "Could not find a version that
+# satisfies the requirement expandvars (from versions: none)".
+# expandvars' own build backend is hatchling (already have, self-hosting
+# -- requires = ["hatchling"]), no further cascade.
+expandvars==1.1.2 --hash=sha256:6c5822b7b756a99a356b915dd1267f52ab8a4efaa135963bd7f4bd5d368f71d7
+# propcache (an aiohttp/aiosignal transitive dep) uses the same aio-libs
+# in-tree pep517_backend as frozenlist, but its own _backend.py hardcodes
+# a narrower dynamic build requirement -- `c_ext_build_deps = ['Cython
+# ~= 3.1.0']` (confirmed by reading its real sdist's
+# packaging/pep517_backend/_backend.py directly) -- that our existing
+# Cython==3.3.0 pin (for PyYAML, which has no such narrow constraint)
+# doesn't satisfy. Confirmed live: "Could not find a version that
+# satisfies the requirement Cython~=3.1.0 (from versions: 3.3.0)". A
+# SECOND coexisting Cython version, same pattern as setuptools/wheel/
+# setuptools-scm above.
+Cython==3.1.8 --hash=sha256:518475fbe633ba30c1577669f417440f41e1a23ad6b6e2dbb20703cd457f04ef
+# ansible-builder's own build-time introspection (introspect.py, vendored
+# under execution-environment/ansible-builder-scripts/) independently
+# scans every vendored collection's own requirements.txt and merges them
+# into the final pip install, separately from and not fully covered by
+# this file or execution-environment/requirements.txt -- confirmed live,
+# a real release build failed on "Could not find a version that
+# satisfies the requirement datetime (from versions: none)". Traced to
+# vendor/ansible_collections/purestorage/flashblade/requirements.txt,
+# which declares 6 unpinned deps (netaddr, datetime, pycountry, pytz,
+# urllib3, py-pure-client) -- netaddr/pytz/urllib3/py-pure-client are
+# already covered by existing pins in this file or
+# execution-environment/requirements.txt; only these two were missing.
+datetime==6.0 --hash=sha256:c1514936d2f901e10c8e08d83bf04e6c9dbd7ca4f244da94fec980980a3bc4d5
+pycountry==26.2.16 --hash=sha256:5b6027d453fcd6060112b951dd010f01f168b51b4bf8a1f1fc8c95c8d94a0801
+# datetime's own build-system.requires is setuptools>=78.1.1,<81 (plus
+# an unconstrained wheel, already satisfied by wheel==0.48.0 above) --
+# confirmed via its real sdist pyproject.toml -- which neither existing
+# setuptools pin (70.0.0, 82.0.0) satisfies. A THIRD coexisting
+# setuptools version, same pattern as above; its own build-system.
+# requires is commented out in its real sdist (self-hosting, no further
+# cascade).
+setuptools==80.10.2 --hash=sha256:8b0e9d10c784bf7d262c4e5ec5d4ec94127ce206e8738f29a437945fbc219b70
+# pycountry's own build backend is poetry-core (unconstrained),
+# confirmed via its real sdist pyproject.toml -- already satisfied by
+# poetry-core==2.5.0 above, no further need.
+# datetime's own runtime requires_dist also lists zope.interface (bare)
+# alongside pytz (already have) -- confirmed via its real PyPI metadata.
+# Confirmed live: a later build got past the earlier "datetime" gap
+# cleanly, then failed on "Could not find a version that satisfies the
+# requirement zope.interface (from datetime) (from versions: none)".
+# zope.interface's own build-system.requires is unconstrained setuptools
+# + wheel (already have); its own runtime requires_dist entries are all
+# gated behind docs/test/testing extras, never requested here, so no
+# further cascade -- confirmed via its real sdist pyproject.toml.
+zope.interface==8.7 --hash=sha256:0b47b62e8d0d99b24bcdd32f4f2120425e5019c3bee2ad69a0e1d75737487a96

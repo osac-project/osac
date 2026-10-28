@@ -8,7 +8,7 @@ permissions:
   pull-requests: read
 
 # Started by hand (Actions, Run workflow, with the pull request's number, repository, branch and commit). On a pull request
-# use the comment `/test netris` instead: it runs the suite through e2e-pr.yml and gives it its line on the pull request.
+# use the comment `/test bmaas-netris` instead: it runs the suite through e2e-pr.yml and gives it its line on the pull request.
 # It used to start on the label e2e-bmaas-netris, which put a skipped run on every pull request for every label change.
 on:
   workflow_dispatch:

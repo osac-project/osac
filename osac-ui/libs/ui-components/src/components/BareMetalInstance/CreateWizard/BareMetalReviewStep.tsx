@@ -87,7 +87,7 @@ export const BareMetalReviewStep = () => {
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('User data')}</DescriptionListTerm>
+            <DescriptionListTerm>{t('Cloud-init')}</DescriptionListTerm>
             <DescriptionListDescription>
               {formatReviewScalar(selectedUserData, !isSecretSource)}
             </DescriptionListDescription>

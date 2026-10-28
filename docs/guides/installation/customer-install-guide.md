@@ -1,6 +1,6 @@
 # Installing OSAC on OpenShift Container Platform (WIP)
 
-**Last Updated**: 2026-09-16
+**Last Updated**: 2026-10-23
 **Audience**: Cloud administrators
 **Status**: WIP — see the TBD notes in [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend)
 and [Section 8.3](#83-registering-the-hub) for what's still open
@@ -254,6 +254,8 @@ Required for BMaaS with the Metal3 backend:
 - **CaaS** (`global.services.caas.enabled`) requires multicluster engine
   (standalone, or provided by RHACM if it's installed), a DNS backend, a
   network backend, and `aap.instanceGroups.clusterFulfillment` configuration.
+  Hosted control planes provision etcd persistent volume claims from the
+  hub's default storage class (see [Section 2.1](#21-cluster-and-access)).
   For more information,
   see
   [`aap-configuration.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/aap-configuration.md).
@@ -471,7 +473,7 @@ subchart's own `values.yaml` file.
 | Parameter | Source | Description | Default |
 |---|---|---|---|
 | `global.clusterDomain` | schema | Apps domain. All route host names and the default issuer, IdP, and Vault URLs derive from it. Set at installation. | `""` |
-| `global.osacDeploymentId` | schema | Required when `metering.enabled` is `true`. A stable identity for this deployment, stored in a retained `ConfigMap`. The chart fails to render without it when metering is on, and fails on upgrade if the value changes — never change it after the first successful install. | Not set |
+| `global.osacDeploymentId` | schema | Required. A stable identity for this deployment, stored in a retained `ConfigMap`. The chart fails to render without it, and fails on upgrade if the value changes — never change it after the first successful install. | Not set |
 | `global.services.vmaas.enabled` | schema | Enables the VMaaS tier. | `true` |
 | `global.services.caas.enabled` | schema | Enables the CaaS tier. | `true` |
 | `global.services.bmaas.enabled` | schema | Enables the BMaaS tier and gates the `bmf` subchart. | `true` |
@@ -559,8 +561,8 @@ subchart's own `values.yaml` file.
 | `operatorCrds.install` | schema | Install the OSAC CRDs. Set it to `false` if a cluster administrator manages them. | `true` |
 | `kafka.enabled` | schema | Creates the Fulfillment Service's Strimzi user and copies its credentials. Set to `false` for an external Kafka connection; this does not disable Kafka use or metering's Strimzi resources. See [Kafka configuration](kafka-configuration.md). | `true` |
 | `service.kafka.connection` | schema | ConfigMap/Secret mappings for the required `brokers`, `user`, and `password` parameters. Supply resources in the OSAC namespace. | `fulfillment-service-kafka` Secret |
-| `metering.enabled` | schema | Deploys the metering service. Requires Strimzi-managed Kafka, a database connection, and `global.osacDeploymentId` (see [Table 5.1](#table-51-service-enablement-my-valuesyaml) and [Kafka configuration](kafka-configuration.md#optional-metering)). | `false` |
-| `metering.reconciliation.interval`, `metering.m360Adapter.enabled`, `metering.m360Adapter.m360.apiUrl`, `metering.m360Adapter.apiKeySecret` | subchart | Reconcile period and the Monetize360 billing adapter. | Not applicable |
+| `metering.database.connection` | schema | Metering service database connection. The metering service is always deployed: billing is not optional, and the event publisher writes usage events unconditionally. Requires Strimzi-managed Kafka, a database connection, and `global.osacDeploymentId` (see [Table 5.1](#table-51-service-enablement-my-valuesyaml) and [Kafka configuration](kafka-configuration.md#metering)). | Secret-based default |
+| `metering.heartbeat.interval`, `metering.m360Adapter.enabled`, `metering.m360Adapter.m360.apiUrl`, `metering.m360Adapter.apiKeySecret` | subchart | Heartbeat round interval and the Monetize360 billing adapter. | Not applicable |
 | `validation.enabled` | schema | Runs the pre-installation validation hook. | `true` |
 | `metallb.enabled`, `metallb.addressCIDR` | schema | In the `osac` chart, creates an `IPAddressPool` and an `L2Advertisement`. Edit the pool after installation to match your network. | `false` and `192.168.40.0/24` |
 | `bundledVault.enabled`, `bundledVault.image` | schema | In-cluster OpenBao for testing and CI. Not intended for production. | `true` and `openbao:2.6.2` |
@@ -664,12 +666,17 @@ backend. For the full variable reference, see
 **Prerequisites**
 
 - multicluster engine is installed (standalone, or provided by RHACM).
-- MetalLB (or another `LoadBalancer`-class implementation) and LVM Storage
-  (or another dynamic storage class) are installed.
+- MetalLB (or another `LoadBalancer`-class implementation) is installed.
+- The hub cluster has a default storage class (see
+  [Section 2.1](#21-cluster-and-access)). Hosted control planes provision
+  etcd persistent volume claims from it.
 - You have AWS Route 53 credentials for the target hosted zone.
 - Access to the Netris controller: URL, user name, password, site and tenant
   IDs, and management VPC details.
 - SSH private keys for the servers and the bastion host.
+
+> **Note**: OSAC-managed storage tiers are not yet available for CaaS tenant
+> clusters. The tenant-cluster CSI storage provider is under development.
 
 **Procedure**
 
@@ -893,7 +900,7 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
      `fulfillment-controller`, `fulfillment-ingress-proxy`, `osac-operator`,
      `osac-operator-console-proxy`, and the `osac-aap-*` pods.
    - With `ui.enabled`: `osac-ui`.
-   - With `metering.enabled`: the `osac-metering` pods.
+   - Always: the `osac-metering` pods.
    - With `bundledVault.enabled`: `openbao-0`.
    - VMaaS: `fulfillment-console-proxy`.
    - BMaaS: the Bare Metal Fulfillment Operator pod.
@@ -1196,7 +1203,8 @@ $ oc logs job/osac-pre-install-validate -n <namespace>
 
   Or set `bmf.metal3.enabled` to `false`.
 - `No default StorageClass found`: this is a warning, not a failure. Keycloak
-  and PostgreSQL persistent volume claims remain `Pending`. Set a default
+  and PostgreSQL persistent volume claims remain `Pending`, and CaaS hosted
+  control planes cannot provision etcd persistent volume claims. Set a default
   storage class. See [Section 2.1](#21-cluster-and-access).
 
 ### 11.2 A Helm release is stuck in `pending-install` or `pending-upgrade`

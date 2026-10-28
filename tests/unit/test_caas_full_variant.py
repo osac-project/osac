@@ -139,12 +139,17 @@ def test_the_policy_loads_with_the_shared_rules_and_the_decision_never_chooses_t
     assert [s.name for s in e2e_start.automatic(suites.values())] == ["vmaas", "caas", "bmaas"]
 
 
-def test_the_caas_job_passes_the_tier_the_decision_gives_and_nothing_else_does() -> None:
+def test_the_caas_suite_passes_the_tier_the_decision_gives_and_nothing_else_does() -> None:
     jobs = _load(".github/workflows/e2e-pr.yml")["jobs"]
-    assert jobs["caas"]["with"]["tier"] == "${{ fromJSON(needs.decide.outputs.tiers).caas || '' }}"
-    assert "caas-full" not in jobs and "caas-regression" not in jobs, "a variant has no job of its own"
-    for other in ("vmaas", "bmaas"):
-        assert "tier" not in jobs[other]["with"]
+    assert set(jobs) == {"decide", "track", "finish"}, "every suite runs as a run of its own (e2e-pr-<suite>.yml)"
+    caas = _load(".github/workflows/e2e-pr-caas.yml")
+    tier = caas[True]["workflow_dispatch"]["inputs"]["tier"]
+    assert tier["required"] is False and tier["default"] == "" and tier["type"] == "string"
+    assert caas["jobs"]["caas"]["with"]["tier"] == "${{ inputs.tier }}"
+    for other in ("vmaas", "bmaas", "netris"):
+        wrapper = _load(f".github/workflows/e2e-pr-{other}.yml")
+        assert "tier" not in wrapper[True]["workflow_dispatch"]["inputs"], "only the caas suite has a variant"
+        assert "tier" not in wrapper["jobs"][other]["with"]
     queue = _load(".github/workflows/e2e-queue.yml")["jobs"]
     assert not any("tier" in (job.get("with") or {}) for job in queue.values()), "the queue gets the sanity tests alone"
     assert "caas-full" not in queue, "a variant has no job in the queue either"

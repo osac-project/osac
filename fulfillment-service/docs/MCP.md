@@ -42,3 +42,11 @@ Registry entries must not add arbitrary method names, reflection, arbitrary
 request messages, in-place edits, or unbounded pagination. If a family lacks
 a public List path, keep it out of the registry and document the missing
 contract.
+
+`check_connection` gets `caller.tenants` from the public `Tenants.List` API with
+the caller's forwarded API token. It includes up to ten assignable tenant names
+and excludes the reserved shared tenant; `permission_summary_truncated` is true
+when the list or its method checks are incomplete. The method-specific
+`permission_summary` comes from public SelfSubjectAccessReviews for each
+included tenant. Tenant visibility does not grant those methods, and the summary
+is a point-in-time check rather than a guarantee for later requests.

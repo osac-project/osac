@@ -107,6 +107,8 @@ def test_attachment_and_natgateway_playbooks_resolve_allocated_address_from_the_
 
 
 def test_delete_playbooks_release_through_the_expected_provider_operations() -> None:
+    # delete_external_ip's provider write now lives behind the versioned
+    # dispatch wrapper in _delete_external_ip_legacy.yaml.
     for delete_file, expected_inclusions in [
         (
             "delete_virtual_network",
@@ -114,7 +116,7 @@ def test_delete_playbooks_release_through_the_expected_provider_operations() -> 
         ),
         ("delete_subnet", [("netris.controller.vnet", "delete"), ("netris.controller.ipam", "delete_subnet")]),
         ("delete_security_group", [("netris.controller.acl", "delete")]),
-        ("delete_external_ip", [("netris.controller.ipam", "delete_subnet")]),
+        ("_delete_external_ip_legacy", [("netris.controller.ipam", "delete_subnet")]),
         ("detach_external_ip", [("netris.controller.nat", "delete")]),
         ("delete_nat_gateway", [("netris.controller.nat", "delete")]),
     ]:

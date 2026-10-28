@@ -1,0 +1,237 @@
+---
+- name: Verify AgentlessNet ExternalIPAttachment v1 inputs, artifacts, and cleanup
+  hosts: localhost
+  gather_facts: false
+  vars:
+    tenant_id: agentless-eia-test
+    attachment_id: "10000000-0000-4000-8000-000000000010"
+    attachment_uid: "10000000-0000-4000-8000-000000000011"
+    target_id: "10000000-0000-4000-8000-000000000012"
+    target_uid: "10000000-0000-4000-8000-000000000013"
+    subnet_id: "10000000-0000-4000-8000-000000000014"
+    subnet_uid: "10000000-0000-4000-8000-000000000004"
+    virtual_network_id: "10000000-0000-4000-8000-000000000015"
+    virtual_network_uid: "10000000-0000-4000-8000-000000000003"
+    external_ip_id: "10000000-0000-4000-8000-000000000006"
+    external_ip_uid: "10000000-0000-4000-8000-000000000005"
+    pool_id: "10000000-0000-4000-8000-000000000002"
+    pool_uid: "10000000-0000-4000-8000-000000000001"
+    agentless_eia_inventory:
+      all:
+        children:
+          net_nodes:
+            hosts:
+              network-node:
+                ansible_host: 127.0.0.1
+                ansible_user: attachment-test
+  tasks:
+    - name: Run attachment lifecycle scenarios
+      block:
+        - name: Create isolated state storage
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: osac-agentless-eia-
+          register: agentless_eia_tempdir
+
+        - name: Save the fixture state path
+          ansible.builtin.set_fact:
+            agentless_eia_state_file: "{{ agentless_eia_tempdir.path }}/network.sqlite3"
+
+        - name: Prepare current schema-v1 provider prerequisites
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - python
+              - "{{ playbook_dir }}/../files/prepare_state.py"
+              - "{{ agentless_eia_state_file }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          changed_when: true
+
+        - name: Build the controller-shaped ExternalIPAttachment resource and context
+          ansible.builtin.set_fact:
+            agentless_eia_attachment:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIPAttachment
+              metadata:
+                name: agentless-eia-attachment
+                namespace: agentless-eia-test
+                uid: "{{ attachment_uid }}"
+                generation: 3
+                labels:
+                  osac.openshift.io/externalipattachment-uuid: "{{ attachment_id }}"
+                annotations:
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+                  osac.openshift.io/implementation-strategy: agentless_net
+                  osac.openshift.io/externalipattachment-contract-version: v1
+              spec:
+                externalIP: "{{ external_ip_id }}"
+                baremetalInstance: "{{ target_id }}"
+            agentless_eia_context:
+              external_ip:
+                name: agentless-eia-ip
+                namespace: agentless-eia-test
+                fulfillment_id: "{{ external_ip_id }}"
+                kubernetes_uid: "{{ external_ip_uid }}"
+                tenant_id: "{{ tenant_id }}"
+                address: 198.51.100.1
+                state: Allocated
+                phase: Ready
+              target:
+                kind: BareMetalInstance
+                name: agentless-eia-machine
+                namespace: agentless-eia-bmaas
+                fulfillment_id: "{{ target_id }}"
+                kubernetes_uid: "{{ target_uid }}"
+                tenant_id: "{{ tenant_id }}"
+                ip_address: 10.20.1.10
+                ready: true
+              subnet:
+                name: agentless-eia-subnet
+                namespace: agentless-eia-test
+                fulfillment_id: "{{ subnet_id }}"
+                kubernetes_uid: "{{ subnet_uid }}"
+                tenant_id: "{{ tenant_id }}"
+                ipv4_cidr: 10.20.1.0/24
+                virtual_network_id: "{{ virtual_network_id }}"
+                phase: Ready
+              virtual_network:
+                name: agentless-eia-network
+                namespace: agentless-eia-test
+                fulfillment_id: "{{ virtual_network_id }}"
+                kubernetes_uid: "{{ virtual_network_uid }}"
+                tenant_id: "{{ tenant_id }}"
+                phase: Ready
+
+        - name: Set attach operation inputs
+          ansible.builtin.set_fact:
+            agentless_eia_playbook: attach_external_ip
+            agentless_eia_operation: external_ip_attachment.attach
+            agentless_eia_job_vars:
+              resource: "{{ agentless_eia_attachment }}"
+              external_ip_attachment_context: "{{ agentless_eia_context }}"
+            agentless_eia_should_succeed: true
+
+        - name: Run the production attach playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Inspect saved provider state after attach
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - python
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_eia_state_file }}"
+              - "{{ attachment_uid }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_eia_attached_state
+          changed_when: false
+
+        - name: Confirm attach created one Ready provider reservation
+          ansible.builtin.assert:
+            that:
+              - (agentless_eia_attached_state.stdout | from_json).present
+              - (agentless_eia_attached_state.stdout | from_json).phase == 'ready'
+              - (agentless_eia_attached_state.stdout | from_json).attachment.context == agentless_eia_context
+
+        - name: Retry the production attach playbook with the same snapshot
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Inspect saved provider state after attach retry
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - python
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_eia_state_file }}"
+              - "{{ attachment_uid }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_eia_retried_state
+          changed_when: false
+
+        - name: Confirm the attachment retry kept its saved state
+          ansible.builtin.assert:
+            that:
+              - (agentless_eia_retried_state.stdout | from_json).present
+              - (agentless_eia_retried_state.stdout | from_json).phase == 'ready'
+              - (agentless_eia_retried_state.stdout | from_json).attachment.context == agentless_eia_context
+
+        - name: Build the deleting ExternalIPAttachment resource
+          ansible.builtin.set_fact:
+            agentless_eia_attachment_deleting: >-
+              {{ agentless_eia_attachment | combine({'metadata':
+                 agentless_eia_attachment.metadata | combine({'deletionTimestamp': '2026-10-21T00:00:00Z'})}, recursive=true) }}
+
+        - name: Set a failed detach attempt
+          ansible.builtin.set_fact:
+            agentless_eia_playbook: detach_external_ip
+            agentless_eia_operation: external_ip_attachment.detach
+            agentless_eia_fail_detach: true
+            agentless_eia_should_succeed: false
+            agentless_eia_job_vars:
+              resource: "{{ agentless_eia_attachment_deleting }}"
+
+        - name: Confirm failed provider cleanup keeps its saved reservation
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Inspect state after failed detach
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - python
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_eia_state_file }}"
+              - "{{ attachment_uid }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_eia_failed_detach_state
+          changed_when: false
+
+        - name: Confirm failed detach retains deleting cleanup data
+          ansible.builtin.assert:
+            that:
+              - (agentless_eia_failed_detach_state.stdout | from_json).present
+              - (agentless_eia_failed_detach_state.stdout | from_json).phase == 'deleting'
+              - (agentless_eia_failed_detach_state.stdout | from_json).attachment.context == agentless_eia_context
+
+        - name: Retry detach after provider cleanup recovers
+          ansible.builtin.set_fact:
+            agentless_eia_fail_detach: false
+            agentless_eia_should_succeed: true
+
+        - name: Run the successful production detach playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Confirm provider state is removed after successful detach
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - python
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_eia_state_file }}"
+              - "{{ attachment_uid }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_eia_deleted_state
+          changed_when: false
+
+        - name: Assert attachment provider state is absent
+          ansible.builtin.assert:
+            that:
+              - not (agentless_eia_deleted_state.stdout | from_json).present
+
+        - name: Retry detach after saved provider state is absent
+          ansible.builtin.include_tasks: run_playbook.yaml
+      always:
+        - name: Remove attachment test state
+          ansible.builtin.file:
+            path: "{{ agentless_eia_tempdir.path }}"
+            state: absent
+          when: agentless_eia_tempdir is defined

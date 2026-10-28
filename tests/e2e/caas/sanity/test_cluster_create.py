@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import itertools
 import logging
 import os
 import subprocess
@@ -8,6 +9,8 @@ import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +32,7 @@ from tests.e2e.core.helpers import (
     wait_for_hosted_cluster_kubeconfig,
 )
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.metering import MeteringCollector
+from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env, poll_until, run
 
@@ -171,6 +174,7 @@ class _AvailableCluster(_ClusterResources):
 
     node_sets: dict[str, Any]
     worker_node_set: str
+    worker_instance_type: str
     original_size: int
 
 
@@ -414,9 +418,16 @@ def assert_cluster_available(
     assert uuid in grpc.list_cluster_ids()
     cluster_tenant, candidate_bmis = _assert_worker_provisioning(grpc=grpc, k8s=k8s, uuid=uuid, co_name=co_name)
 
-    metering.expect("osac.resource.started.v1", resource_id=uuid)
-    metering.verify()
     wait_for_cluster_order_condition(k8s=k8s, name=co_name, condition_type="ClusterAvailable")
+
+    # The cluster was created without a project, so its heartbeats must carry
+    # no project dimension: the engine emits only the facts a resource carries.
+    metering.expect_no_project()
+    # The control-plane meter has once: [READY] semantics: a cluster bills its
+    # installation time only when it reaches READY, so the heartbeat expectation can
+    # start only after the cluster is available.
+    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
+    metering.verify()
 
     cluster = grpc.get_cluster(cluster_id=uuid)
     cluster_order_spec = k8s.get_cluster_order_spec(name=co_name)
@@ -448,52 +459,111 @@ def assert_cluster_available(
         co_name=co_name,
         node_sets=node_sets,
         worker_node_set=worker_node_set,
+        worker_instance_type=worker_instance_type,
         original_size=original_size,
         owned_bmi_ids=owned_bmi_ids,
         infra_env_name=infra_env_name,
     )
 
 
-def _assert_cluster_metering(
-    *, metering: MeteringCollector, uuid: str, node_sets: dict[str, Any], cluster_template: str
-) -> None:
-    """Verify N+1 heartbeat decomposition and the started event's billing dimensions."""
-    expected_components = 1 + len(node_sets)
-    metering.expect("osac.resource.heartbeat.v1", resource_id=uuid, timeout=180)
-    metering.verify()
+def _assert_cluster_metering(*, metering: MeteringCollector, uuid: str, cluster_template: str) -> None:
+    """Verify the cluster's control plane bills and carries its template dimension.
 
-    heartbeats = metering.get_all_events("osac.resource.heartbeat.v1", resource_id=uuid)
-    hb_components = [ev.get("data", {}).get("billing_dimensions", {}).get("component") for ev in heartbeats]
-    cp_count = sum(1 for c in hb_components if c == "control_plane")
-    worker_count = sum(1 for c in hb_components if c == "worker")
-    assert cp_count >= 1, f"Expected at least 1 control_plane heartbeat, got {cp_count}"
-    assert worker_count >= len(node_sets), f"Expected at least {len(node_sets)} worker heartbeat(s), got {worker_count}"
-    assert len(heartbeats) >= expected_components, (
-        f"Expected at least {expected_components} heartbeat events (1 cp + {len(node_sets)} workers), "
-        f"got {len(heartbeats)}"
-    )
-
-    started = metering.get_event("osac.resource.started.v1", resource_id=uuid)
-    assert started.get("osacresourcetype") == "cluster_order"
-    started_bd = started.get("data", {}).get("billing_dimensions", {})
-    assert started_bd.get("cluster_template") == cluster_template, (
-        f"cluster_template mismatch: {started_bd.get('cluster_template')!r} != {cluster_template!r}"
+    Worker nodes no longer bill through the cluster: they bill as the bare-metal
+    instances they are, so the cluster sends only its control_plane meter.
+    """
+    heartbeat = metering.get_event(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
+    assert heartbeat.get("osacresourcetype") == "cluster_order"
+    data = heartbeat.get("data", {})
+    assert data.get("meter") == "control_plane", f"Wrong cluster meter: {data.get('meter')!r}"
+    heartbeat_bd = data.get("billing_dimensions", {})
+    assert heartbeat_bd.get("template") == cluster_template, (
+        f"template mismatch: {heartbeat_bd.get('template')!r} != {cluster_template!r}"
     )
 
 
-def _assert_worker_scale_metering(
-    *, metering: MeteringCollector, uuid: str, worker_node_set: str, scaled_size: int
-) -> None:
-    metering.expect("osac.resource.updated.v1", resource_id=uuid, timeout=120)
-    metering.verify()
-    updated = metering.get_event("osac.resource.updated.v1", resource_id=uuid)
-    updated_bd = updated.get("data", {}).get("billing_dimensions", {})
-    assert updated_bd.get("node_set") == worker_node_set, (
-        f"updated.v1 node_set mismatch: {updated_bd.get('node_set')!r} != {worker_node_set!r}"
-    )
-    assert updated_bd.get("node_count") == scaled_size, (
-        f"updated.v1 node_count should be {scaled_size}, got {updated_bd.get('node_count')}"
-    )
+def _assert_worker_metering(*, metering: MeteringCollector, uuid: str, cluster: _AvailableCluster) -> None:
+    """Verify the cluster's workers bill as bare metal instances, attributed to the cluster.
+
+    Every worker heartbeat carries the cluster reference and the node set it
+    belongs to, so the bill names what the hardware ran for. Each worker's
+    billed life is contiguous per meter with exact quantities, so no second of
+    a worker bills twice.
+    """
+    assert cluster.owned_bmi_ids, "the available cluster has no workers to assert billing on"
+    for bmi_id in sorted(cluster.owned_bmi_ids):
+        heartbeat = metering.heartbeat_with_dimensions(
+            bmi_id, {"cluster": uuid, "node_set": cluster.worker_node_set}, timeout=180
+        )
+        dimensions = heartbeat["data"]["billing_dimensions"]
+        assert dimensions.get("instance_type") == cluster.worker_instance_type, (
+            f"worker {bmi_id} bills with instance type {dimensions.get('instance_type')!r}, "
+            f"want {cluster.worker_instance_type!r}"
+        )
+        assert heartbeat["data"]["usage"]["unit"] == "second"
+
+        by_meter: dict[str, list[dict[str, Any]]] = {}
+        for event in metering.get_all_events(HEARTBEAT_TYPE, bmi_id):
+            by_meter.setdefault(event["data"]["meter"], []).append(event)
+        assert set(by_meter) <= {"allocation", "consumption"}, f"worker {bmi_id} bills under meters {sorted(by_meter)}"
+        assert "allocation" in by_meter, f"worker {bmi_id} never billed its host reservation"
+        for meter, events in by_meter.items():
+            net = _net_intervals(events)
+            assert net, f"worker {bmi_id} has {meter} heartbeats but no net intervals"
+            for start, end, quantity in net:
+                assert quantity == _interval_seconds(start, end), (
+                    f"worker {bmi_id}: net {meter} interval {start}..{end} bills {quantity}, "
+                    "not its exact length: a second billed twice or lost"
+                )
+            for (_, previous_end, _), (start, _, _) in itertools.pairwise(net):
+                assert start == previous_end, (
+                    f"worker {bmi_id}: {meter} intervals are not contiguous: {previous_end} then {start}"
+                )
+
+
+def _assert_worker_billing_stops(*, metering: MeteringCollector, cluster: _ClusterResources, since: str) -> None:
+    """The cluster's deletion clamps its workers' billing: nothing arrives after it."""
+    for bmi_id in sorted(cluster.owned_bmi_ids):
+        metering.assert_no_events(HEARTBEAT_TYPE, resource_id=bmi_id, since=since, within=120)
+
+
+def _heartbeat_interval(event: dict[str, Any]) -> tuple[datetime, datetime, Decimal]:
+    usage = event["data"]["usage"]
+    return (datetime.fromisoformat(usage["from"]), datetime.fromisoformat(usage["to"]), Decimal(usage["quantity"]))
+
+
+def _interval_seconds(start: datetime, end: datetime) -> Decimal:
+    """The exact interval length in seconds, kept in decimal: heartbeat
+    quantities carry six decimals and a float total loses the tail."""
+    delta = end - start
+    micros = (delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds
+    return Decimal(micros) / Decimal(1_000_000)
+
+
+def _net_intervals(events: list[dict[str, Any]]) -> list[tuple[datetime, datetime, Decimal]]:
+    """Collapse signed heartbeats into the intervals the meter actually bills.
+
+    Each heartbeat bills its quantity over its usage interval and a negative
+    correction cancels the overlap, so a canceled tail disappears from the net
+    instead of showing up as a gap or an overlap between raw intervals.
+    """
+    rates = [
+        (start, end, quantity / _interval_seconds(start, end))
+        for start, end, quantity in (_heartbeat_interval(event) for event in events)
+    ]
+    boundaries = sorted({moment for start, end, _ in rates for moment in (start, end)})
+    intervals: list[tuple[datetime, datetime, Decimal]] = []
+    for start, end in itertools.pairwise(boundaries):
+        rate = sum(r for r_start, r_end, r in rates if r_start <= start and r_end >= end)
+        if rate <= 0:
+            continue
+        quantity = rate * _interval_seconds(start, end)
+        if intervals and intervals[-1][1] == start:
+            previous_start, _, previous_quantity = intervals[-1]
+            intervals[-1] = (previous_start, end, previous_quantity + quantity)
+        else:
+            intervals.append((start, end, quantity))
+    return intervals
 
 
 def _assert_cluster_deleted(
@@ -501,7 +571,6 @@ def _assert_cluster_deleted(
 ) -> None:
     """Observe natural worker/parent teardown and dependent GC without forced cleanup."""
     co_name = cluster.co_name
-    metering.expect("osac.resource.deleted.v1", resource_id=uuid)
     wait_for_cluster_deleting(k8s=k8s, name=co_name)
     wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid)
     bmi_filter = f'this.metadata.labels["osac.openshift.io/cluster-order"] == "{co_name}"'
@@ -543,7 +612,12 @@ def _assert_cluster_deleted(
     )
     assert not k8s.is_present(resource="clusterorder", name=co_name)
     wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
-    metering.verify()
+    # The cluster's control plane stopped billing with its deletion: net usage
+    # past the moment the record was removed is zero, and nothing arrives after.
+    deleted_after = datetime.now(UTC).isoformat()
+    metering.assert_no_events(HEARTBEAT_TYPE, resource_id=uuid, since=deleted_after, within=120)
+    # The deletion also clamps the workers' billing, whatever their own state.
+    _assert_worker_billing_stops(metering=metering, cluster=cluster, since=deleted_after)
 
 
 def _assert_catalog_created_cluster(
@@ -573,8 +647,8 @@ def test_cluster_create(
 ) -> None:
     """Verify the full CaaS cluster lifecycle through a catalog item: author a published
     ClusterCatalogItem, create a cluster from it, provision to Ready, version and
-    releaseImage propagation to the HostedCluster, N+1 metering heartbeat decomposition,
-    worker scale-up reflected in updated.v1 metering, and deletion."""
+    releaseImage propagation to the HostedCluster, control-plane metering
+    heartbeats, worker scale-up, and deletion."""
 
     worker_instance_type_id = private_grpc.ensure_bare_metal_instance_type(
         name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
@@ -614,7 +688,6 @@ def test_cluster_create(
             catalog_item=catalog_item_id, name=name, pull_secret=pull_secret_name
         )
         logger.info("CaaS: cluster created")
-        metering.expect("osac.resource.created.v1", resource_id=uuid)
 
         _assert_catalog_created_cluster(
             grpc=grpc,
@@ -629,15 +702,11 @@ def test_cluster_create(
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
             assert_management_tls(k8s_hub_client, require_metering=True)
             assert_cluster_trust(k8s_hub_client, cluster.co_name)
-        _assert_cluster_metering(
-            metering=metering, uuid=uuid, node_sets=cluster.node_sets, cluster_template=cluster_template
-        )
+        _assert_cluster_metering(metering=metering, uuid=uuid, cluster_template=cluster_template)
+        _assert_worker_metering(metering=metering, uuid=uuid, cluster=cluster)
 
         scaled_size = cluster.original_size + 1
         cli.scale_cluster(uuid=uuid, node_set=cluster.worker_node_set, size=scaled_size)
-        _assert_worker_scale_metering(
-            metering=metering, uuid=uuid, worker_node_set=cluster.worker_node_set, scaled_size=scaled_size
-        )
 
         # Scale back before deletion.
         cli.scale_cluster(uuid=uuid, node_set=cluster.worker_node_set, size=cluster.original_size)
@@ -792,8 +861,6 @@ def assert_cluster_with_two_node_sets_available(
     co_name = wait_for_cluster_order_cr(k8s=k8s, uuid=uuid)
     assert uuid in grpc.list_cluster_ids()
     wait_for_cluster_progressing(k8s=k8s, name=co_name)
-    metering.expect("osac.resource.started.v1", resource_id=uuid)
-    metering.verify()
 
     cluster_order = k8s.get_json(resource="clusterorder", name=co_name)
     cluster = grpc.get_cluster(cluster_id=uuid)["object"]
@@ -812,6 +879,15 @@ def assert_cluster_with_two_node_sets_available(
         expected_replicas=expected_replicas,
         instance_types=instance_types,
     )
+
+    # The cluster was created without a project, so its heartbeats must carry
+    # no project dimension: the engine emits only the facts a resource carries.
+    metering.expect_no_project()
+    # The control-plane meter has once: [READY] semantics: a cluster bills its
+    # installation time only when it reaches READY, so the heartbeat expectation can
+    # start only after the worker and agent readiness checks above.
+    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
+    metering.verify()
 
     cluster_tenant = cluster["metadata"]["tenant"]
     assert cluster_order["metadata"]["annotations"]["osac.openshift.io/tenant"] == cluster_tenant

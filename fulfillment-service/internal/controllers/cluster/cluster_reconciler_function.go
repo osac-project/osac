@@ -19,6 +19,7 @@ package cluster
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -29,7 +30,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -304,6 +304,9 @@ func (t *task) update(ctx context.Context) error {
 		orderAnnotations := map[string]string{
 			annotations.Tenant: t.cluster.GetMetadata().GetTenant(),
 		}
+		if err := setUpgradeAttemptAnnotations(orderAnnotations, t.cluster.GetSpec()); err != nil {
+			return err
+		}
 		object := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace:    t.hubNamespace,
@@ -333,6 +336,12 @@ func (t *task) update(ctx context.Context) error {
 		spec.NetworkAttachment = object.Spec.NetworkAttachment
 		update := object.DeepCopy()
 		update.Spec = spec
+		if update.Annotations == nil {
+			update.Annotations = map[string]string{}
+		}
+		if err := setUpgradeAttemptAnnotations(update.Annotations, t.cluster.GetSpec()); err != nil {
+			return err
+		}
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
 		if err != nil {
 			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
@@ -357,13 +366,29 @@ func (t *task) update(ctx context.Context) error {
 	return err
 }
 
+func setUpgradeAttemptAnnotations(values map[string]string, spec *privatev1.ClusterSpec) error {
+	delete(values, osacv1alpha1.UpgradeAttemptIDsAnnotation)
+	ids := osacv1alpha1.ClusterOrderUpgradeAttemptIDs{
+		ControlPlane: spec.GetControlPlaneAttemptId(),
+		NodeSets:     spec.GetNodeSetAttemptIds(),
+	}
+	if ids.ControlPlane != "" || len(ids.NodeSets) > 0 {
+		encoded, err := json.Marshal(ids)
+		if err != nil {
+			return err
+		}
+		values[osacv1alpha1.UpgradeAttemptIDsAnnotation] = string(encoded)
+	}
+	return nil
+}
+
 func (t *task) setDefaults() {
 	if !t.cluster.HasStatus() {
 		t.cluster.SetStatus(&privatev1.ClusterStatus{})
 	}
 	if t.cluster.GetStatus().GetState() == privatev1.ClusterState_CLUSTER_STATE_UNSPECIFIED {
 		t.cluster.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING)
-		t.cluster.GetStatus().SetStateTransitionTime(timestamppb.Now())
+		t.cluster.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
 	}
 	for value := range privatev1.ClusterConditionType_name {
 		if value != 0 {
@@ -761,7 +786,7 @@ func (t *task) setFailed(err error) {
 	}
 	if t.cluster.GetStatus().GetState() != privatev1.ClusterState_CLUSTER_STATE_FAILED ||
 		t.cluster.GetStatus().GetStateTransitionTime() == nil {
-		t.cluster.GetStatus().SetStateTransitionTime(timestamppb.Now())
+		t.cluster.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
 	}
 	t.cluster.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_FAILED)
 	t.updateCondition(

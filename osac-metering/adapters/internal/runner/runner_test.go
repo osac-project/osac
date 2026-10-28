@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/IBM/sarama/mocks"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
@@ -25,6 +26,9 @@ import (
 	"github.com/osac-project/osac-metering/adapters/internal/kafka"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
+
+// testTopic stands in for a tenant heartbeat topic.
+const testTopic = "osac.metering.heartbeat.test"
 
 // --- Mock types ---
 
@@ -149,7 +153,7 @@ func (m *mockDLQOccupier) Occupancy() (int64, error) {
 
 func (m *mockDLQOccupier) Topic() string {
 	if m.topic == "" {
-		return kafka.TopicDLQ
+		return testTopic
 	}
 	return m.topic
 }
@@ -173,7 +177,7 @@ func newTestMessageWithTime(id, resourceID string, offset int64, tt time.Time) *
 
 	ceJSON, _ := json.Marshal(ce)
 	return &sarama.ConsumerMessage{
-		Topic:     kafka.TopicLifecycle,
+		Topic:     testTopic,
 		Partition: 0,
 		Offset:    offset,
 		Value:     ceJSON,
@@ -190,7 +194,7 @@ func newTestMessageWithoutTransitionTime(id, resourceID string, offset int64) *s
 
 	ceJSON, _ := json.Marshal(ce)
 	return &sarama.ConsumerMessage{
-		Topic:     kafka.TopicLifecycle,
+		Topic:     testTopic,
 		Partition: 0,
 		Offset:    offset,
 		Value:     ceJSON,
@@ -199,9 +203,9 @@ func newTestMessageWithoutTransitionTime(id, resourceID string, offset int64) *s
 
 func newRunner(adapter adapters.ProviderAdapter) *Runner {
 	return NewRunner(adapter, RunnerConfig{
-		Brokers:       "localhost:9092",
-		ConsumerGroup: "test-group",
-		Topics:        []string{kafka.TopicLifecycle},
+		TopicsProvider: func(context.Context) ([]string, error) {
+			return []string{testTopic}, nil
+		},
 		FlushInterval: 10 * time.Second,
 		DedupTTL:      10 * time.Minute,
 		MaxRetries:    3,
@@ -210,9 +214,9 @@ func newRunner(adapter adapters.ProviderAdapter) *Runner {
 
 func newRunnerWithDLQ(adapter adapters.ProviderAdapter, dlq DLQSender) *Runner {
 	return NewRunner(adapter, RunnerConfig{
-		Brokers:       "localhost:9092",
-		ConsumerGroup: "test-group",
-		Topics:        []string{kafka.TopicLifecycle},
+		TopicsProvider: func(context.Context) ([]string, error) {
+			return []string{testTopic}, nil
+		},
 		FlushInterval: 10 * time.Second,
 		DedupTTL:      10 * time.Minute,
 		MaxRetries:    3,
@@ -243,7 +247,7 @@ var _ = Describe("Runner", func() {
 		runner = newRunner(adapter)
 		session = &mockSession{ctx: context.Background()}
 		claim = &mockClaim{
-			topic:     kafka.TopicLifecycle,
+			topic:     testTopic,
 			partition: 0,
 			messages:  make(chan *sarama.ConsumerMessage, 10),
 		}
@@ -276,7 +280,7 @@ var _ = Describe("Runner", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: testTopic, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(5)))
 		})
 
@@ -287,7 +291,7 @@ var _ = Describe("Runner", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			val := testutil.ToFloat64(
-				runner.metrics.eventsSubmitted.WithLabelValues("test-provider", kafka.TopicLifecycle),
+				runner.metrics.eventsSubmitted.WithLabelValues("test-provider", testTopic),
 			)
 			Expect(val).To(Equal(float64(1)))
 		})
@@ -322,7 +326,7 @@ var _ = Describe("Runner", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: testTopic, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(3)))
 		})
 	})
@@ -369,7 +373,7 @@ var _ = Describe("Runner", func() {
 	Describe("ConsumeClaim — error handling", func() {
 		It("skips messages with invalid JSON", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     kafka.TopicLifecycle,
+				Topic:     testTopic,
 				Partition: 0,
 				Offset:    0,
 				Value:     []byte("not valid json{{{"),
@@ -390,7 +394,7 @@ var _ = Describe("Runner", func() {
 			Expect(dropped).To(Equal(float64(1)))
 
 			runner.mu.Lock()
-			offset, ok := runner.offsets[topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}]
+			offset, ok := runner.offsets[topicPartition{Topic: testTopic, Partition: 0}]
 			runner.mu.Unlock()
 			Expect(ok).To(BeTrue())
 			Expect(offset).To(Equal(int64(0)))
@@ -427,7 +431,7 @@ var _ = Describe("Runner", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: testTopic, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(7)))
 		})
 
@@ -440,7 +444,7 @@ var _ = Describe("Runner", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: testTopic, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(12)))
 		})
 
@@ -463,9 +467,60 @@ var _ = Describe("Runner", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: testTopic, Partition: 0}
 			_, tracked := runner.offsets[tp]
 			Expect(tracked).To(BeFalse(), "offset should not be tracked when context is cancelled")
+		})
+	})
+
+	Describe("ConsumeClaim — inference dead letters", func() {
+		It("dead-letters a rejected inference record and keeps consuming the partition", func() {
+			// The DLQ send routes through the per-tenant producer's topicFor, so a
+			// rejected inference record must land on the inference dead-letter topic
+			// instead of failing and stopping the partition claim.
+			dlqProducer := mocks.NewSyncProducer(GinkgoT(), nil)
+			dlqProducer.ExpectSendMessageWithMessageCheckerFunctionAndSucceed(
+				func(pm *sarama.ProducerMessage) error {
+					Expect(pm.Topic).To(Equal(kafka.InferenceDeadLetter),
+						"a rejected inference record must land on the inference DLQ")
+					return nil
+				},
+			)
+			dlq := &DLQProducer{producer: dlqProducer, perTenant: true}
+			inferenceRunner := newRunnerWithDLQ(adapter, dlq)
+			_ = inferenceRunner.Setup(session)
+
+			// The first record is rejected non-retryably; the second is accepted.
+			adapter.submitFn = func(event adapters.MeteringEvent) error {
+				if event.CloudEvent.ID() == "inf-bad" {
+					return &adapters.NonRetryableError{Err: errors.New("bad schema")}
+				}
+				return nil
+			}
+			bad := newTestMessageWithoutTransitionTime("inf-bad", "res-1", 0)
+			bad.Topic = kafka.TopicInference
+			good := newTestMessageWithoutTransitionTime("inf-good", "res-2", 1)
+			good.Topic = kafka.TopicInference
+
+			claim := &mockClaim{
+				topic:     kafka.TopicInference,
+				partition: 0,
+				messages:  make(chan *sarama.ConsumerMessage, 2),
+			}
+			feedMessages(claim, bad, good)
+
+			err := inferenceRunner.ConsumeClaim(session, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			adapter.mu.Lock()
+			defer adapter.mu.Unlock()
+			Expect(adapter.submitCalls).To(HaveLen(2),
+				"the partition must keep consuming after a dead-lettered inference record")
+
+			inferenceRunner.mu.Lock()
+			defer inferenceRunner.mu.Unlock()
+			offset := inferenceRunner.offsets[topicPartition{Topic: kafka.TopicInference, Partition: 0}]
+			Expect(offset).To(Equal(int64(1)), "the dead-lettered record must be acknowledged")
 		})
 	})
 
@@ -473,7 +528,7 @@ var _ = Describe("Runner", func() {
 		It("commits offsets on successful flush", func() {
 			// Simulate processed messages by setting tracked offsets
 			runner.mu.Lock()
-			runner.offsets[topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}] = 5
+			runner.offsets[topicPartition{Topic: testTopic, Partition: 0}] = 5
 			runner.mu.Unlock()
 
 			err := runner.flush(context.Background())
@@ -483,7 +538,7 @@ var _ = Describe("Runner", func() {
 			defer session.mu.Unlock()
 			Expect(session.marks).To(HaveLen(1))
 			Expect(session.marks[0]).To(Equal(markEntry{
-				topic: kafka.TopicLifecycle, partition: 0, offset: 6, // offset+1
+				topic: testTopic, partition: 0, offset: 6, // offset+1
 			}))
 			Expect(session.committed).To(Equal(1))
 		})
@@ -491,7 +546,7 @@ var _ = Describe("Runner", func() {
 		It("does not commit offsets when flush fails", func() {
 			adapter.flushErr = errors.New("provider unavailable")
 			runner.mu.Lock()
-			runner.offsets[topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}] = 5
+			runner.offsets[topicPartition{Topic: testTopic, Partition: 0}] = 5
 			runner.mu.Unlock()
 
 			err := runner.flush(context.Background())
@@ -508,7 +563,7 @@ var _ = Describe("Runner", func() {
 
 		It("clears tracked offsets after successful flush", func() {
 			runner.mu.Lock()
-			runner.offsets[topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}] = 5
+			runner.offsets[topicPartition{Topic: testTopic, Partition: 0}] = 5
 			runner.mu.Unlock()
 
 			err := runner.flush(context.Background())
@@ -532,7 +587,7 @@ var _ = Describe("Runner", func() {
 			_ = runner.Cleanup(session)
 
 			runner.mu.Lock()
-			runner.offsets[topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}] = 5
+			runner.offsets[topicPartition{Topic: testTopic, Partition: 0}] = 5
 			runner.mu.Unlock()
 
 			err := runner.flush(context.Background())
@@ -541,7 +596,7 @@ var _ = Describe("Runner", func() {
 			// Offsets should be retained for the next session
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: testTopic, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(5)))
 		})
 	})
@@ -615,7 +670,7 @@ var _ = Describe("Runner DLQ integration", func() {
 		runner = newRunnerWithDLQ(adapter, dlqSender)
 		session = &mockSession{ctx: context.Background()}
 		claim = &mockClaim{
-			topic:     kafka.TopicLifecycle,
+			topic:     testTopic,
 			partition: 0,
 			messages:  make(chan *sarama.ConsumerMessage, 10),
 		}
@@ -646,7 +701,7 @@ var _ = Describe("Runner DLQ integration", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: testTopic, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(7)))
 		})
 
@@ -659,8 +714,41 @@ var _ = Describe("Runner DLQ integration", func() {
 
 			val := testutil.ToFloat64(runner.metrics.dlqEventsTotal.WithLabelValues("test-provider"))
 			Expect(val).To(Equal(float64(1)))
-			depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(kafka.TopicDLQ))
+			depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(testTopic))
 			Expect(depth).To(Equal(float64(0)))
+		})
+	})
+
+	Describe("empty CloudEvent id", func() {
+		It("dead-letters the event with a reason and keeps consuming", func() {
+			feedMessages(claim,
+				newTestMessage("", "res-1", 0), // empty CloudEvent ID
+				newTestMessage("evt-2", "res-2", 1),
+			)
+
+			err := runner.ConsumeClaim(session, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			dlqSender.mu.Lock()
+			defer dlqSender.mu.Unlock()
+			Expect(dlqSender.sends).To(HaveLen(1))
+			Expect(dlqSender.sends[0].reason).To(ContainSubstring("empty event id"))
+			Expect(dlqSender.sends[0].attempts).To(Equal(1))
+
+			// The well-formed event after the empty-ID one is submitted, not
+			// suppressed as a duplicate of it.
+			adapter.mu.Lock()
+			defer adapter.mu.Unlock()
+			Expect(adapter.submitCalls).To(HaveLen(1))
+			Expect(adapter.submitCalls[0].CloudEvent.ID()).To(Equal("evt-2"))
+
+			runner.mu.Lock()
+			defer runner.mu.Unlock()
+			tp := topicPartition{Topic: testTopic, Partition: 0}
+			Expect(runner.offsets[tp]).To(Equal(int64(1)), "the dead-lettered offset must be tracked")
+
+			val := testutil.ToFloat64(runner.metrics.eventsFailed.WithLabelValues("test-provider", "non_retryable"))
+			Expect(val).To(Equal(float64(1)))
 		})
 	})
 
@@ -683,7 +771,7 @@ var _ = Describe("Runner DLQ integration", func() {
 	Describe("deserialization errors", func() {
 		It("routes raw bytes to DLQ", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     kafka.TopicLifecycle,
+				Topic:     testTopic,
 				Partition: 0,
 				Offset:    42,
 				Value:     []byte("not valid json{{{"),
@@ -704,7 +792,7 @@ var _ = Describe("Runner DLQ integration", func() {
 		It("stops partition claim when DLQ send fails for deserialization errors", func() {
 			dlqSender.sendErr = errors.New("DLQ broker down")
 			msg := &sarama.ConsumerMessage{
-				Topic:     kafka.TopicLifecycle,
+				Topic:     testTopic,
 				Partition: 0,
 				Offset:    42,
 				Value:     []byte("not valid json{{{"),
@@ -716,14 +804,14 @@ var _ = Describe("Runner DLQ integration", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: testTopic, Partition: 0}
 			_, tracked := runner.offsets[tp]
 			Expect(tracked).To(BeFalse(), "offset must not be tracked when DLQ send fails")
 		})
 
 		It("tracks offset after DLQ send for deserialization errors", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     kafka.TopicLifecycle,
+				Topic:     testTopic,
 				Partition: 0,
 				Offset:    99,
 				Value:     []byte("bad"),
@@ -735,7 +823,7 @@ var _ = Describe("Runner DLQ integration", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: testTopic, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(99)))
 		})
 	})
@@ -755,7 +843,7 @@ var _ = Describe("Runner DLQ integration", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: testTopic, Partition: 0}
 			_, tracked := runner.offsets[tp]
 			Expect(tracked).To(BeFalse(), "offset must not be tracked when DLQ send fails")
 		})
@@ -796,7 +884,7 @@ var _ = Describe("Runner DLQ integration", func() {
 			noDLQRunner := newRunner(adapter)
 			_ = noDLQRunner.Setup(session)
 			noDLQClaim := &mockClaim{
-				topic:     kafka.TopicLifecycle,
+				topic:     testTopic,
 				partition: 0,
 				messages:  make(chan *sarama.ConsumerMessage, 10),
 			}
@@ -827,15 +915,15 @@ var _ = Describe("Runner DLQ occupancy metrics", func() {
 		adapter = &mockAdapter{name: "test-provider"}
 		occ = &mockDLQOccupier{occupancy: 42}
 		runner = NewRunner(adapter, RunnerConfig{
-			Brokers:       "localhost:9092",
-			ConsumerGroup: "test-group",
-			Topics:        []string{kafka.TopicLifecycle},
+			TopicsProvider: func(context.Context) ([]string, error) {
+				return []string{testTopic}, nil
+			},
 		}, logr.Discard(), WithDLQ(occ))
 	})
 
 	It("sets dlq_depth from topic occupancy", func() {
 		runner.updateDLQDepthMetrics(occ)
-		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(kafka.TopicDLQ))
+		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(testTopic))
 		Expect(depth).To(Equal(float64(42)))
 	})
 
@@ -854,7 +942,7 @@ var _ = Describe("Runner DLQ occupancy metrics", func() {
 
 		runner.updateDLQDepthMetrics(occ)
 
-		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(kafka.TopicDLQ))
+		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(testTopic))
 		Expect(depth).To(Equal(float64(42)))
 	})
 
@@ -863,7 +951,127 @@ var _ = Describe("Runner DLQ occupancy metrics", func() {
 		cancel()
 		runner.dlqDepthMetricsLoop(ctx, occ)
 
-		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(kafka.TopicDLQ))
+		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(testTopic))
 		Expect(depth).To(Equal(float64(42)))
+	})
+})
+
+// mockConsumerGroup records the topics of every consume session and ends each session when
+// its context does, like a real group with no rebalances.
+type mockConsumerGroup struct {
+	mu       sync.Mutex
+	sessions [][]string
+}
+
+func (g *mockConsumerGroup) Consume(
+	ctx context.Context, topics []string, _ sarama.ConsumerGroupHandler,
+) error {
+	g.mu.Lock()
+	g.sessions = append(g.sessions, append([]string(nil), topics...))
+	g.mu.Unlock()
+	<-ctx.Done()
+	return nil
+}
+
+func (g *mockConsumerGroup) Errors() <-chan error      { return make(chan error) }
+func (g *mockConsumerGroup) Close() error              { return nil }
+func (g *mockConsumerGroup) Pause(map[string][]int32)  {}
+func (g *mockConsumerGroup) Resume(map[string][]int32) {}
+func (g *mockConsumerGroup) PauseAll()                 {}
+func (g *mockConsumerGroup) ResumeAll()                {}
+
+func (g *mockConsumerGroup) sessionTopics() [][]string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([][]string(nil), g.sessions...)
+}
+
+var _ = Describe("Runner session restart", func() {
+	It("restarts the consume session so a topic created after it started is consumed", func() {
+		discoverCalls := 0
+		provider := func(context.Context) ([]string, error) {
+			discoverCalls++
+			if discoverCalls == 1 {
+				return []string{"osac.metering.heartbeat.tenant-a"}, nil
+			}
+			return []string{
+				"osac.metering.heartbeat.tenant-a", "osac.metering.heartbeat.tenant-b",
+			}, nil
+		}
+		group := &mockConsumerGroup{}
+		adapter := &mockAdapter{name: "test-provider"}
+		r := NewRunner(adapter, RunnerConfig{
+			TopicsProvider:  provider,
+			SessionInterval: 50 * time.Millisecond,
+			FlushInterval:   time.Hour,
+			DedupTTL:        time.Hour,
+			MaxRetries:      1,
+		}, logr.Discard())
+
+		ctx, cancel := context.WithCancel(context.Background())
+		runDone := make(chan error, 1)
+		go func() { runDone <- r.Run(ctx, group) }()
+
+		Eventually(func() int {
+			return len(group.sessionTopics())
+		}, "5s", "10ms").Should(BeNumerically(">=", 2))
+
+		sessions := group.sessionTopics()
+		Expect(sessions[0]).To(ConsistOf("osac.metering.heartbeat.tenant-a"))
+		Expect(sessions[1]).To(ConsistOf(
+			"osac.metering.heartbeat.tenant-a", "osac.metering.heartbeat.tenant-b",
+		), "a session that started before the topic existed must not pick it up; the next one must")
+
+		cancel()
+		Eventually(runDone, "5s").Should(Receive(BeNil()))
+		Expect(adapter.closed).To(BeTrue())
+	})
+})
+
+var _ = Describe("Runner interrupt safety", func() {
+	It("stops the claim and keeps the offset when a submit is interrupted", func() {
+		adapter := &mockAdapter{name: "test-provider"}
+		runner := newRunner(adapter)
+		sessionCtx, cancel := context.WithCancel(context.Background())
+		session := &mockSession{ctx: sessionCtx}
+		claim := &mockClaim{
+			topic:     testTopic,
+			partition: 0,
+			messages:  make(chan *sarama.ConsumerMessage, 10),
+		}
+		_ = runner.Setup(session)
+
+		// The provider is down and the session ends mid-backoff: the first submit
+		// fails retryably and cancels the session the way a timeout would.
+		adapter.submitFn = func(_ adapters.MeteringEvent) error {
+			cancel()
+			return errors.New("provider unavailable")
+		}
+		feedMessages(claim,
+			newTestMessage("evt-1", "res-1", 0),
+			newTestMessage("evt-2", "res-2", 1),
+		)
+
+		err := runner.ConsumeClaim(session, claim)
+		Expect(err).NotTo(HaveOccurred())
+
+		// The failed message's offset is not tracked, so the commit cannot skip it
+		// and the next session redelivers it.
+		runner.mu.Lock()
+		tp := topicPartition{Topic: testTopic, Partition: 0}
+		_, tracked := runner.offsets[tp]
+		runner.mu.Unlock()
+		Expect(tracked).To(BeFalse())
+
+		// The message after the failure was never consumed.
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		Expect(adapter.submitCalls).To(HaveLen(1))
+
+		// The interruption is visible, not silent.
+		val := testutil.ToFloat64(
+			runner.metrics.eventsFailed.WithLabelValues("test-provider", "retries_interrupted"),
+		)
+		Expect(val).To(Equal(float64(1)))
 	})
 })

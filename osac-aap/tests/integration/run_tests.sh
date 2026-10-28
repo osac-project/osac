@@ -65,12 +65,16 @@ ROLE_TESTS=(
   "agentless_net_stub"
   "agentless_net_external_ip_pool"
   "agentless_net_external_ip"
+  "agentless_net_external_ip_attachment"
   "agentless_net_subnet"
   "agentless_net_attachment"
+  "compute_instance_delete_vmi_recovery"
   "metallb_l2_detach_annotation"
   "netris_subnet_delete"
   "netris_parent_delete"
   "netris_protected_launch"
+  "netris_external_ip"
+  "netris_idempotency"
 )
 
 ROLE_SCENARIO_TESTS=(

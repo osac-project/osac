@@ -1,0 +1,303 @@
+---
+- name: group_roles integration tests with basic auth
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      ah_username: "{{ ah_username }}"
+      ah_password: "{{ ah_password }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+
+    - name: Define variables (basic auth)
+      set_fact:
+        group_basic: "test_group_{{ test_id }}"
+        namespace_basic: "test_ns_{{ test_id }}"
+        registry_basic: "test_reg_{{ test_id }}"
+        ee_basic: "test_ee_{{ test_id }}"
+        base_url: "{{ ah_host | regex_replace('/$', '') }}"
+
+    # On 4.10+ (AAP 2.5+), Pulp group creation is forbidden.
+    # Creating a team via the gateway auto-creates the Pulp group.
+    - name: Get default organization ID (basic auth)
+      ansible.builtin.uri:
+        url: "{{ base_url }}/api/gateway/v1/organizations/?name=Default"
+        user: "{{ ah_username }}"
+        password: "{{ ah_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ ah_verify_ssl }}"
+        method: GET
+      register: r_org
+
+    - name: Create test group via gateway API (basic auth)
+      ansible.builtin.uri:
+        url: "{{ base_url }}/api/gateway/v1/teams/"
+        user: "{{ ah_username }}"
+        password: "{{ ah_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ ah_verify_ssl }}"
+        method: POST
+        body_format: json
+        body:
+          name: "{{ group_basic }}"
+          organization: "{{ r_org.json.results[0].id }}"
+        status_code: [201]
+      register: r_team
+
+    - name: Assign global role to group (basic auth)
+      ansible.hub.group_roles:
+        groups:
+          - "{{ group_basic }}"
+        role_list:
+          - roles:
+              - galaxy.collection_admin
+        state: present
+      register: r_global_assign
+
+    - name: Check if global role was assigned (basic auth)
+      assert:
+        that:
+          - r_global_assign.changed
+
+    - name: Assign global role to group again (basic auth)
+      ansible.hub.group_roles:
+        groups:
+          - "{{ group_basic }}"
+        role_list:
+          - roles:
+              - galaxy.collection_admin
+        state: present
+      register: r_global_idempotent
+
+    - name: Check global role idempotency (basic auth)
+      assert:
+        that:
+          - not r_global_idempotent.changed
+
+    - name: Remove global role from group (basic auth)
+      ansible.hub.group_roles:
+        groups:
+          - "{{ group_basic }}"
+        role_list:
+          - roles:
+              - galaxy.collection_admin
+        state: absent
+      register: r_global_remove
+
+    - name: Check if global role was removed (basic auth)
+      assert:
+        that:
+          - r_global_remove.changed
+
+    - name: Remove global role from group again (basic auth)
+      ansible.hub.group_roles:
+        groups:
+          - "{{ group_basic }}"
+        role_list:
+          - roles:
+              - galaxy.collection_admin
+        state: absent
+      register: r_global_remove_idempotent
+
+    - name: Check global role removal idempotency (basic auth)
+      assert:
+        that:
+          - not r_global_remove_idempotent.changed
+
+    - name: Create test namespace (basic auth)
+      ansible.hub.ah_namespace:
+        name: "{{ namespace_basic }}"
+        state: present
+
+    - name: Assign namespace-scoped role to group (basic auth)
+      ansible.hub.group_roles:
+        groups:
+          - "{{ group_basic }}"
+        role_list:
+          - roles:
+              - galaxy.collection_namespace_owner
+            targets:
+              collection_namespaces:
+                - "{{ namespace_basic }}"
+        state: present
+      register: r_ns_assign
+
+    - name: Check if namespace-scoped role was assigned (basic auth)
+      assert:
+        that:
+          - r_ns_assign.changed
+
+    - name: Remove namespace-scoped role from group (basic auth)
+      ansible.hub.group_roles:
+        groups:
+          - "{{ group_basic }}"
+        role_list:
+          - roles:
+              - galaxy.collection_namespace_owner
+            targets:
+              collection_namespaces:
+                - "{{ namespace_basic }}"
+        state: absent
+      register: r_ns_remove
+
+    - name: Check if namespace-scoped role was removed (basic auth)
+      assert:
+        that:
+          - r_ns_remove.changed
+
+    - name: Create test EE registry (basic auth)
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_basic }}"
+        url: https://quay.io/my/registry
+        state: present
+
+    - name: Create test EE repository (basic auth)
+      ansible.hub.ah_ee_repository:
+        name: "{{ ee_basic }}"
+        upstream_name: "upstream_{{ ee_basic }}"
+        registry: "{{ registry_basic }}"
+        include_tags:
+          - latest
+        state: present
+
+    - name: Assign EE collaborator role to group (basic auth)
+      ansible.hub.group_roles:
+        groups:
+          - "{{ group_basic }}"
+        role_list:
+          - roles:
+              - galaxy.execution_environment_collaborator
+            targets:
+              execution_environments:
+                - "{{ ee_basic }}"
+        state: present
+      register: r_ee_collab_assign
+
+    - name: Check if EE collaborator role was assigned (basic auth)
+      assert:
+        that:
+          - r_ee_collab_assign.changed
+
+    - name: Assign EE collaborator role to group again (basic auth)
+      ansible.hub.group_roles:
+        groups:
+          - "{{ group_basic }}"
+        role_list:
+          - roles:
+              - galaxy.execution_environment_collaborator
+            targets:
+              execution_environments:
+                - "{{ ee_basic }}"
+        state: present
+      register: r_ee_collab_idempotent
+
+    - name: Check EE collaborator role idempotency (basic auth)
+      assert:
+        that:
+          - not r_ee_collab_idempotent.changed
+
+    - name: Assign EE publisher role to group (basic auth)
+      ansible.hub.group_roles:
+        groups:
+          - "{{ group_basic }}"
+        role_list:
+          - roles:
+              - galaxy.execution_environment_publisher
+            targets:
+              execution_environments:
+                - "{{ ee_basic }}"
+        state: present
+      register: r_ee_pub_assign
+
+    - name: Check if EE publisher role was assigned (basic auth)
+      assert:
+        that:
+          - r_ee_pub_assign.changed
+
+    - name: Assign EE namespace_owner role to group (basic auth)
+      ansible.hub.group_roles:
+        groups:
+          - "{{ group_basic }}"
+        role_list:
+          - roles:
+              - galaxy.execution_environment_namespace_owner
+            targets:
+              execution_environments:
+                - "{{ ee_basic }}"
+        state: present
+      register: r_ee_nsowner_assign
+
+    - name: Check if EE namespace_owner role was assigned (basic auth)
+      assert:
+        that:
+          - r_ee_nsowner_assign.changed
+
+    - name: Remove EE collaborator role from group (basic auth)
+      ansible.hub.group_roles:
+        groups:
+          - "{{ group_basic }}"
+        role_list:
+          - roles:
+              - galaxy.execution_environment_collaborator
+            targets:
+              execution_environments:
+                - "{{ ee_basic }}"
+        state: absent
+      register: r_ee_collab_remove
+
+    - name: Check if EE collaborator role was removed (basic auth)
+      assert:
+        that:
+          - r_ee_collab_remove.changed
+
+    - name: Remove EE collaborator role from group again (basic auth)
+      ansible.hub.group_roles:
+        groups:
+          - "{{ group_basic }}"
+        role_list:
+          - roles:
+              - galaxy.execution_environment_collaborator
+            targets:
+              execution_environments:
+                - "{{ ee_basic }}"
+        state: absent
+      register: r_ee_collab_remove_idempotent
+
+    - name: Check EE collaborator removal idempotency (basic auth)
+      assert:
+        that:
+          - not r_ee_collab_remove_idempotent.changed
+
+  always:
+    - name: Delete test EE repository (basic auth)
+      ansible.hub.ah_ee_repository:
+        name: "{{ ee_basic | default('') }}"
+        state: absent
+      ignore_errors: true
+
+    - name: Delete test EE registry (basic auth)
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_basic | default('') }}"
+        state: absent
+      ignore_errors: true
+
+    - name: Delete test namespace (basic auth)
+      ansible.hub.ah_namespace:
+        name: "{{ namespace_basic | default('') }}"
+        state: absent
+      ignore_errors: true
+
+    - name: Delete test group via gateway API (basic auth)
+      ansible.builtin.uri:
+        url: "{{ base_url }}/api/gateway/v1/teams/{{ r_team.json.id }}/"
+        user: "{{ ah_username }}"
+        password: "{{ ah_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ ah_verify_ssl }}"
+        method: DELETE
+        status_code: [204, 404]
+      ignore_errors: true
+      when: r_team is defined and r_team.json is defined

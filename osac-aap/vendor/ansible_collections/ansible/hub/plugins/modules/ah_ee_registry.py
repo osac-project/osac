@@ -8,11 +8,6 @@
 # automation hub at https://hub.example.com/pulp/api/v3/docs/
 
 
-from __future__ import absolute_import, division, print_function
-
-__metaclass__ = type
-
-
 DOCUMENTATION = r"""
 ---
 module: ah_ee_registry
@@ -104,8 +99,7 @@ options:
     type: str
     default: present
     choices: [absent, present]
-extends_documentation_fragment:
-  - ansible.hub.auth_ui
+extends_documentation_fragment: ansible.hub.auth_ui
 """
 
 EXAMPLES = r"""
@@ -117,7 +111,7 @@ EXAMPLES = r"""
     ah_host: hub.example.com
     ah_username: admin
     ah_password: Sup3r53cr3t
-  no_log: True
+  no_log: true
 
 - name: Add a remote registry which requires auth to AH
   ansible.hub.ah_ee_registry:
@@ -129,7 +123,7 @@ EXAMPLES = r"""
     ah_host: hub.example.com
     ah_username: admin
     ah_password: Sup3r53cr3t
-  no_log: True
+  no_log: true
 
 - name: Remove a remote registry from AH
   ansible.hub.ah_ee_registry:
@@ -138,7 +132,7 @@ EXAMPLES = r"""
     ah_host: hub.example.com
     ah_username: admin
     ah_password: Sup3r53cr3t
-  no_log: True
+  no_log: true
 """
 
 RETURN = r""" # """

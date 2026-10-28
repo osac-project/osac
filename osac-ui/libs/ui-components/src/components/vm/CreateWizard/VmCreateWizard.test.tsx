@@ -82,12 +82,14 @@ const selectCatalogItemAndFillName = async (
 };
 
 const advanceThroughRemainingSteps = async (user: ReturnType<typeof renderWizard>['user']) => {
-  // Configuration, Storage, and Networking: every governed field is locked
-  // with a catalog default, so Next can be clicked without further input.
-  await user.click(screen.getByRole('button', { name: 'Next' }));
-  await user.click(screen.getByRole('button', { name: 'Next' }));
-  await user.click(screen.getByRole('button', { name: 'Next' }));
-  await user.click(screen.getByRole('button', { name: 'Next' }));
+  // Configuration through Access: governed fields are locked with catalog defaults,
+  // so Next can be clicked without further input.
+  for (let step = 0; step < 5; step += 1) {
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+  }
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
+  });
 };
 
 describe('VmCreateWizard', () => {

@@ -268,7 +268,11 @@ def test_cudn_template_separates_infrastructure_ips_from_netris_dhcp_range() -> 
         for cidr in network["layer2"]["infrastructureSubnets"]
         for address in ipaddress.ip_network(cidr)
     }
-    assert network["evpn"] == {"vtep": "tenant-vtep", "macVRF": {"vni": 10007}, "ipVRF": {"vni": 20007}}
+    assert network["evpn"] == {
+        "vtep": "tenant-vtep",
+        "macVRF": {"vni": 10007, "routeTarget": "0:10007"},
+        "ipVRF": {"vni": 20007, "routeTarget": "0:20007"},
+    }
 
 
 @pytest.mark.parametrize(

@@ -34,6 +34,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
@@ -198,6 +199,7 @@ type runnerContext struct {
 		externalIPAttachment    bool
 	}
 	logger                 *slog.Logger
+	parsedSSHKeyRef        *publicv1.SecretReference
 	console                *terminal.Console
 	settings               *config.Settings
 	templatesClient        publicv1.ComputeInstanceTemplatesClient
@@ -299,12 +301,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		}
 
 		computeInstance := publicv1.ComputeInstance_builder{
-			Metadata: publicv1.Metadata_builder{
-				Name:    c.args.name,
-				Tenant:  c.settings.Tenant(),
-				Project: config.ProjectFromContext(ctx),
-			}.Build(),
-			Spec: specResult,
+			Metadata: metautil.ForCreate(ctx, c.args.name).Build(),
+			Spec:     specResult,
 		}.Build()
 
 		response, err := c.computeInstancesClient.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
@@ -357,11 +355,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	// Prepare the compute instance:
 	computeInstance := publicv1.ComputeInstance_builder{
-		Metadata: publicv1.Metadata_builder{
-			Name:    c.args.name,
-			Project: config.ProjectFromContext(ctx),
-		}.Build(),
-		Spec: spec,
+		Metadata: metautil.ForCreate(ctx, c.args.name).Build(),
+		Spec:     spec,
 	}.Build()
 
 	// Create the compute instance:
@@ -382,6 +377,21 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	c.console.Infof(ctx, "Created compute instance '%s'.\n", computeInstance.Id)
 
 	return nil
+}
+
+func (c *runnerContext) sshKeyReference() (*publicv1.SecretReference, error) {
+	if c.args.sshKey == "" {
+		return nil, nil
+	}
+	if c.parsedSSHKeyRef != nil {
+		return c.parsedSSHKeyRef, nil
+	}
+	ref, err := parseSSHKeyFlag(c.args.sshKey)
+	if err != nil {
+		return nil, err
+	}
+	c.parsedSSHKeyRef = ref
+	return ref, nil
 }
 
 // findTemplate finds a compute instance template by identifier or name. It tries to find by identifier or name using a
@@ -764,8 +774,10 @@ func (c *runnerContext) buildSpec(templateID string,
 	if c.args.instanceType != "" {
 		spec.InstanceType = &publicv1.InstanceTypeReference{Id: c.args.instanceType}
 	}
-	if c.args.sshKey != "" {
-		spec.SshKey = publicv1.SecretLocalReference_builder{Name: c.args.sshKey}.Build()
+	if sshKey, err := c.sshKeyReference(); err != nil {
+		return nil, err
+	} else if sshKey != nil {
+		spec.SshKey = sshKey
 	}
 	disk, err := c.buildBootDisk()
 	if err != nil {
@@ -914,8 +926,10 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 	if c.args.instanceType != "" {
 		spec.InstanceType = &publicv1.InstanceTypeReference{Id: c.args.instanceType}
 	}
-	if c.args.sshKey != "" {
-		spec.SshKey = publicv1.SecretLocalReference_builder{Name: c.args.sshKey}.Build()
+	if sshKey, err := c.sshKeyReference(); err != nil {
+		return nil, err
+	} else if sshKey != nil {
+		spec.SshKey = sshKey
 	}
 	disk, err := c.buildBootDisk()
 	if err != nil {
@@ -948,6 +962,58 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 		return nil, err
 	}
 	return spec.Build(), nil
+}
+
+func parseSSHKeyFlag(value string) (*publicv1.SecretReference, error) {
+	invalid := func(msg string, args ...any) (*publicv1.SecretReference, error) {
+		return nil, fmt.Errorf("invalid --ssh-key value %q: %s", value, fmt.Sprintf(msg, args...))
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return invalid("value is empty")
+	}
+	if !strings.Contains(value, "=") {
+		if strings.Contains(value, ",") {
+			return invalid("expected a bare name or name=<name>[,project=<project>]")
+		}
+		return publicv1.SecretReference_builder{Name: value}.Build(), nil
+	}
+
+	var name, project string
+	var hasName, hasProject bool
+	for _, fragment := range strings.Split(value, ",") {
+		fragment = strings.TrimSpace(fragment)
+		if fragment == "" {
+			return invalid("empty key/value fragment")
+		}
+		key, item, ok := strings.Cut(fragment, "=")
+		if !ok || strings.Contains(item, "=") {
+			return invalid("fragment %q must use key=value syntax", fragment)
+		}
+		key = strings.TrimSpace(key)
+		item = strings.TrimSpace(item)
+		switch key {
+		case "name":
+			if hasName {
+				return invalid("name appears more than once")
+			}
+			if item == "" {
+				return invalid("name is empty")
+			}
+			name, hasName = item, true
+		case "project":
+			if hasProject {
+				return invalid("project appears more than once")
+			}
+			project, hasProject = item, true
+		default:
+			return invalid("unknown key %q", key)
+		}
+	}
+	if !hasName {
+		return invalid("name is required")
+	}
+	return publicv1.SecretReference_builder{Name: name, Project: project}.Build(), nil
 }
 
 // parseAdditionalDisks parses disk specifications in key=value format:
@@ -1120,7 +1186,8 @@ _NAME_ - DiskImage resource name to use for this compute instance.
 `
 
 const sshKeyFlagHelp = `
-_NAME_ - Secret name containing an SSH public key.
+_NAME_ or {{ bt }}name=<name>[,project=<project>]{{ bt }} - Secret name containing an SSH public key.
+A bare name is equivalent to {{ bt }}name=<name>,project=""{{ bt }} and selects the tenant's unnamed project.
 `
 
 const bootDiskSizeFlagHelp = `

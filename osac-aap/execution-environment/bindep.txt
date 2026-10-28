@@ -1,0 +1,15 @@
+# System RPMs ansible-builder's own "builder" stage installs via bindep,
+# mechanically derived from execution-environment.yaml's own
+# dependencies.system list -- kept in sync manually (same pattern as
+# rpms.in.yaml's own "dependencies.system (same list, kept in sync
+# manually -- update both if that list changes)" comment). Previously
+# generated fresh on every build by `ansible-builder create`; now
+# committed directly since Containerfile is hand-maintained instead of
+# generated (see osac-aap/Containerfile's own header comment).
+systemd-libs
+systemd-devel
+gcc
+python3.12-devel
+git-core
+bind-utils
+krb5-devel

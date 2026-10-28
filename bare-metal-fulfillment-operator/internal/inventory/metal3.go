@@ -402,7 +402,7 @@ func metal3HostNICs(details *metal3api.HardwareDetails) []HostNIC {
 	return nics
 }
 
-func (m *Metal3Client) UnassignHost(ctx context.Context, inventoryHostID string, labels []string) error {
+func (m *Metal3Client) UnassignHost(ctx context.Context, inventoryHostID, bareMetalInstanceID string, labels []string) error {
 	namespace, name, err := ParseHostID(inventoryHostID)
 	if err != nil {
 		return err
@@ -411,6 +411,10 @@ func (m *Metal3Client) UnassignHost(ctx context.Context, inventoryHostID string,
 	bmh := &metal3api.BareMetalHost{}
 	if err := m.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, bmh); err != nil {
 		return fmt.Errorf("failed to get BareMetalHost %s: %w", inventoryHostID, err)
+	}
+
+	if bmh.Spec.ConsumerRef == nil || bmh.Spec.ConsumerRef.Name != bareMetalInstanceID {
+		return nil
 	}
 
 	for _, label := range labels {

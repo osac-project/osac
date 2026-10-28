@@ -75,6 +75,9 @@ data:
   {{- if $mgr.externalIPContractVersion }}
   externalIPContractVersion: {{ $mgr.externalIPContractVersion | quote }}
   {{- end }}
+  {{- if $mgr.externalIPAttachmentContractVersion }}
+  externalIPAttachmentContractVersion: {{ $mgr.externalIPAttachmentContractVersion | quote }}
+  {{- end }}
 {{- end }}
 {{- end }}
 {{- range $name, $mgr := .Values.networkManagers.k8sManagers }}
@@ -101,6 +104,9 @@ data:
   capabilities: {{ include "osac-operator.networkManagerCapabilities" $mgr.capabilities | quote }}
   {{- if $mgr.externalIPContractVersion }}
   externalIPContractVersion: {{ $mgr.externalIPContractVersion | quote }}
+  {{- end }}
+  {{- if $mgr.externalIPAttachmentContractVersion }}
+  externalIPAttachmentContractVersion: {{ $mgr.externalIPAttachmentContractVersion | quote }}
   {{- end }}
 {{- end }}
 {{- end }}

@@ -45,6 +45,56 @@ var _ = Describe("Filter translator", func() {
 		})
 	})
 
+	Describe("Reserved metadata filtering", func() {
+		var publicTranslator, privateTranslator *FilterTranslator
+
+		BeforeEach(func() {
+			var err error
+			publicTranslator, err = NewFilterTranslator().
+				SetLogger(logger).
+				SetDescriptor((*publicv1.Cluster)(nil).ProtoReflect().Descriptor()).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			privateTranslator, err = NewFilterTranslator().
+				SetLogger(logger).
+				SetDescriptor((*privatev1.Cluster)(nil).ProtoReflect().Descriptor()).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		DescribeTable("Rejects explicit references to reserved metadata keys",
+			func(ctx context.Context, filter string) {
+				_, err := publicTranslator.Translate(ctx, filter)
+				Expect(err).To(MatchError(ContainSubstring("reserved metadata key")))
+			},
+			Entry("reserved label index", `this.metadata.labels['admin.osac.openshift.io/managed'] == 'system'`),
+			Entry("reserved annotation index", `this.metadata.annotations['admin.osac.openshift.io/managed'] == 'system'`),
+			Entry("reserved label membership", `'admin.osac.openshift.io/managed' in this.metadata.labels`),
+			Entry("reserved subdomain membership", `'controller.admin.osac.openshift.io/managed' in this.metadata.annotations`),
+			Entry("mixed nested predicate", `this.id == 'known' || this.metadata.labels['admin.osac.openshift.io/managed'] == 'system'`),
+		)
+
+		It("Keeps private metadata filtering and ordinary public keys available", func(ctx context.Context) {
+			filter := `this.metadata.labels['admin.osac.openshift.io/managed'] == 'system'`
+			translated, err := privateTranslator.Translate(ctx, filter)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(translated).To(Equal(`labels @> '{"admin.osac.openshift.io/managed":"system"}'`))
+
+			for _, key := range []string{
+				`adminXosac.openshift.io/managed`,
+				`admin.osac.openshift.io`,
+				`osac.openshift.io/tenant`,
+				`osac.openshift.io/owner-reference`,
+			} {
+				translated, err = publicTranslator.Translate(ctx, "this.metadata.labels['"+key+"'] == 'value'")
+				Expect(err).ToNot(HaveOccurred(), "key %q should remain filterable", key)
+				Expect(translated).To(ContainSubstring(`labels @>`))
+			}
+		})
+
+	})
+
 	Describe("Object translation", func() {
 		var translator *FilterTranslator
 

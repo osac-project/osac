@@ -58,8 +58,6 @@ def test_cluster_create_with_two_node_sets(
         pull_secret=pull_secret_name,
         ssh_public_key_file=ssh_public_key_path,
     )
-    metering.expect("osac.resource.created.v1", resource_id=uuid)
-
     try:
         cluster = assert_cluster_with_two_node_sets_available(
             grpc=grpc, k8s=k8s_hub_client, metering=metering, uuid=uuid, instance_types=instance_types

@@ -49,6 +49,7 @@ respective areas.
 | Kind runtime selection, sudo authentication, image loading, device-mapper permissions, cluster/storage lifecycle, or devstack Helm apply flags | Unit with command stubs | `make kind-runtime-test` |
 | Deployed dev-full OSAC UI Gateway reachability | Component integration | `./scripts/test-ui-gateway.sh` |
 | TopoLVM chart dependency download, cache reuse, build scoping, or install preparation | Unit with command stubs | `make kind-runtime-test` |
+| Fulfillment integration report opt-in and output paths | Unit with expanded Makefile commands | `make kind-runtime-test` |
 | Fulfillment hook commands, CA mounts, or gate rendering | Helm contract | `make fulfillment-trust-render-test` |
 | Fulfillment token helper or dev-full hook credential wiring | Unit and Helm contract | `make fulfillment-auth-test` and `make dev-full-render-test` |
 | Deployed dev-full hook authentication | Component integration | Coverage gap tracked by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843); local `install-devstack` invokes the hooks but does not assert token acceptance. |

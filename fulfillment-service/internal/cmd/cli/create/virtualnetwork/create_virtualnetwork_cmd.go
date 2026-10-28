@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -103,11 +104,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		spec.Ipv6Cidr = &c.args.ipv6Cidr
 	}
 	vn := publicv1.VirtualNetwork_builder{
-		Metadata: publicv1.Metadata_builder{
-			Name:   c.args.name,
-			Tenant: c.settings.Tenant(),
-		}.Build(),
-		Spec: spec.Build(),
+		Metadata: metautil.ForCreate(ctx, c.args.name).Build(),
+		Spec:     spec.Build(),
 	}.Build()
 
 	response, err := client.Create(ctx, publicv1.VirtualNetworksCreateRequest_builder{Object: vn}.Build())

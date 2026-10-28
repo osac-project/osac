@@ -6,9 +6,6 @@
 #
 # Ansible Automation Hub UI project at https://github.com/ansible/ansible-hub-ui
 
-from __future__ import absolute_import, division, print_function
-
-__metaclass__ = type
 
 import base64
 import json
@@ -16,11 +13,13 @@ import os
 import socket
 import time
 
+from urllib.error import HTTPError
+from urllib.parse import urlencode, urlparse
+
 from ansible.module_utils._text import to_bytes, to_text
 from ansible.module_utils.basic import AnsibleModule, env_fallback
+from ansible.module_utils.common.parameters import remove_values
 from ansible.module_utils.compat.version import LooseVersion as Version
-from ansible.module_utils.six.moves.urllib.error import HTTPError
-from ansible.module_utils.six.moves.urllib.parse import urlencode, urlparse
 from ansible.module_utils.urls import Request, SSLValidationError
 
 
@@ -40,17 +39,47 @@ class AHAPIModuleError(Exception):
         return self.error_message
 
 
+def _raise_http_error(status_code, errors):
+    raise AHAPIModuleError("Errors occurred with request (HTTP {code}). Errors: {errors}".format(
+        code=status_code, errors=errors))
+
+
+def _truncate_error_body(json_body, max_value_len=200):
+    """Truncate per-field so no single value can be split across a boundary.
+
+    Truncating the stringified dict as a whole can split a credential value in
+    half, defeating Ansible's no_log substring matching. Per-field truncation
+    keeps each value intact (up to max_value_len) so no_log can still find and
+    redact it.
+    """
+    if isinstance(json_body, dict):
+        truncated = {k: str(v)[:max_value_len] + ("...(truncated)" if len(str(v)) > max_value_len else "")
+                     for k, v in json_body.items()}
+        return str(truncated)
+    body_str = str(json_body)
+    if len(body_str) > 500:
+        return body_str[:500] + "...(truncated)"
+    return body_str
+
+
 class AHAPIModule(AnsibleModule):
     """Ansible module for managing private automation hub servers."""
 
     AUTH_ARGSPEC = dict(
         ah_host=dict(
             required=False,
-            aliases=["ah_hostname"],
-            fallback=(env_fallback, ["AH_HOST"]),
+            aliases=["ah_hostname", "aap_hostname"],
+            fallback=(env_fallback, ["AH_HOST", "AAP_HOSTNAME"]),
         ),
-        ah_username=dict(required=False, fallback=(env_fallback, ["AH_USERNAME"])),
-        ah_password=dict(no_log=True, required=False, fallback=(env_fallback, ["AH_PASSWORD"])),
+        ah_username=dict(
+            required=False,
+            aliases=["aap_username"],
+            fallback=(env_fallback, ["AH_USERNAME", "AAP_USERNAME"])),
+        ah_password=dict(
+            no_log=True,
+            required=False,
+            aliases=["aap_password"],
+            fallback=(env_fallback, ["AH_PASSWORD", "AAP_PASSWORD"])),
         ah_path_prefix=dict(
             required=False,
             default="galaxy",
@@ -58,14 +87,22 @@ class AHAPIModule(AnsibleModule):
         ),
         validate_certs=dict(
             type="bool",
-            aliases=["ah_verify_ssl"],
+            aliases=["ah_verify_ssl", "aap_validate_certs"],
             required=False,
-            fallback=(env_fallback, ["AH_VERIFY_SSL"]),
+            fallback=(env_fallback, ["AH_VERIFY_SSL", "AAP_VALIDATE_CERTS"]),
+        ),
+        ah_token=dict(
+            type="raw",
+            no_log=True,
+            aliases=["aap_token"],
+            required=False,
+            fallback=(env_fallback, ["AH_API_TOKEN", "AAP_TOKEN"]),
         ),
         request_timeout=dict(
             type="float",
+            aliases=["aap_request_timeout"],
             required=False,
-            fallback=(env_fallback, ["AH_REQUEST_TIMEOUT"])
+            fallback=(env_fallback, ["AH_REQUEST_TIMEOUT", "AAP_REQUEST_TIMEOUT"])
         ),
     )
     short_params = {
@@ -82,8 +119,10 @@ class AHAPIModule(AnsibleModule):
     password = None
     verify_ssl = True
     request_timeout = 10
+    oauth_token = None
     path_prefix = "galaxy"
     authenticated = False
+    behind_resource_server = False
 
     def __init__(self, argument_spec, direct_params=None, **kwargs):
         """Initialize the object."""
@@ -127,9 +166,24 @@ class AHAPIModule(AnsibleModule):
         }
         self.session = Request(validate_certs=self.verify_ssl, headers=self.headers, follow_redirects=True, timeout=self.request_timeout)
 
+        # Perform magic depending on whether ah_token is a string or a dict
+        if self.params.get("ah_token"):
+            token_param = self.params.get("ah_token")
+            if isinstance(token_param, dict):
+                if "token" in token_param:
+                    self.oauth_token = self.params.get("ah_token")["token"]
+                else:
+                    self.fail_json(msg="The provided dict in ah_token did not properly contain the token entry")
+            elif isinstance(token_param, str):
+                self.oauth_token = self.params.get("ah_token")
+            else:
+                error_msg = "The provided ah_token type was not valid ({0}). Valid options are str or dict.".format(type(token_param).__name__)
+                self.fail_json(msg=error_msg)
+
         # Define the API paths
         self.galaxy_path_prefix = self.get_galaxy_path_prefix()
         self.ui_path_prefix = "{galaxy_prefix}/_ui/v1".format(galaxy_prefix=self.galaxy_path_prefix)
+        self.ui_v2_path_prefix = "{galaxy_prefix}/_ui/v2".format(galaxy_prefix=self.galaxy_path_prefix)
         self.plugin_path_prefix = "{galaxy_prefix}/v3/plugin".format(galaxy_prefix=self.galaxy_path_prefix)
         self.ah_logout_path = os.getenv("AH_LOGOUT_PATH", None)
         self.authenticate()
@@ -176,6 +230,18 @@ class AHAPIModule(AnsibleModule):
         :rtype: :py:class:``urllib.parse.ParseResult``
         """
         return self._build_url(self.ui_path_prefix, endpoint, query_params)
+
+    def build_ui_v2_url(self, endpoint, query_params=None):
+        """Return the URL of the given endpoint in the UI v2 API.
+
+        :param endpoint: Usually the API object name ("teams", ...)
+        :type endpoint: str
+        :param query_params: The optional query to append to the URL
+        :type query_params: dict
+        :return: The full URL built from the given endpoint.
+        :rtype: :py:class:``urllib.parse.ParseResult``
+        """
+        return self._build_url(self.ui_v2_path_prefix, endpoint, query_params)
 
     def build_plugin_url(self, endpoint, query_params=None):
         """Return the URL of the given endpoint in the UI API.
@@ -240,7 +306,14 @@ class AHAPIModule(AnsibleModule):
                 raise AHAPIModuleError("Invalid authentication credentials for {path} (HTTP 401).".format(path=url.path))
             # Sanity check: Did we get a forbidden response, which means that the user isn't allowed to do this? Report that.
             if he.code == 403:
-                raise AHAPIModuleError("You do not have permission to {method} {path} (HTTP 403).".format(method=method, path=url.path))
+                raise AHAPIModuleError(
+                    "You do not have permission to {method} {path} (HTTP 403).  gateway: {gateway}".format(
+                        method=method, path=url.path, gateway=self.make_request_raw_reponse(
+                            method="GET",
+                            url=self.host_url,
+                        )
+                    )
+                )
             # Sanity check: Did we get a 404 response?
             # Requests with primary keys will return a 404 if there is no response, and we want to consistently trap these.
             if he.code == 404:
@@ -281,7 +354,15 @@ class AHAPIModule(AnsibleModule):
         :param kwargs: Additional parameter to pass to the API (headers, data
                        for PUT and POST requests, ...)
 
-        :raises AHAPIModuleError: The API request failed.
+        :raises AHAPIModuleError: The API request failed. For error shapes this
+                                  method doesn't specifically recognize, the
+                                  server's response body is included verbatim
+                                  in the exception message. If ``data`` here
+                                  contains a credential, its value MUST come
+                                  from a module option declared
+                                  ``no_log=True`` in ``argument_spec`` -
+                                  that's what keeps it out of the exception
+                                  message if the server ever echoes it back.
 
         :return: A dictionary with two entries: ``status_code`` provides the
                  API call returned code and ``json`` provides the returned data
@@ -293,15 +374,31 @@ class AHAPIModule(AnsibleModule):
         try:
             response_body = response.read()
         except Exception as e:
-            if "non_field_errors" in response["json"]:
-                raise AHAPIModuleError("Errors occurred with request (HTTP 400). Errors: {errors}".format(errors=response["json"]["non_field_errors"]))
-            if "errors" in response["json"]:
-                def get_details(err):
-                    return err["detail"]
-                raise AHAPIModuleError("Errors occurred with request (HTTP 400). Details: {errors}".format(
-                    errors=", ".join(map(get_details, response["json"]["errors"]))))
+            # response is a plain dict here (see make_request_raw_reponse), not
+            # an HTTPResponse, so it may be missing any of these keys
+            # depending on how the server formatted its error. Check for each
+            # key before indexing into it, and fall back to showing whatever
+            # the server actually sent rather than a generic error that hides
+            # the real cause.
+            status_code = response.get("status_code", "unknown")
+            if "json" in response:
+                json_body = response["json"]
+                if isinstance(json_body, dict):
+                    if "non_field_errors" in json_body:
+                        _raise_http_error(status_code, json_body["non_field_errors"])
+                    if "errors" in json_body:
+                        _raise_http_error(status_code, ", ".join(err["detail"] for err in json_body["errors"]))
+                # response["json"] here is whatever the server sent verbatim,
+                # in a shape we don't specifically recognize. Truncate
+                # only after Ansible removes no_log values. Truncating first
+                # can expose part of a long credential that no longer matches
+                # Ansible's complete-secret redaction value.
+                safe_json_body = remove_values(json_body, self.no_log_values)
+                _raise_http_error(status_code, _truncate_error_body(safe_json_body))
             if "text" in response:
-                raise AHAPIModuleError("Errors occurred with request (HTTP 400). Errors: {errors}".format(errors=response["text"]))
+                # Text error bodies can also echo request credentials.
+                safe_text_body = remove_values(response["text"], self.no_log_values)
+                _raise_http_error(status_code, safe_text_body)
             raise AHAPIModuleError("Failed to read response body: {error}".format(error=e))
 
         response_json = {}
@@ -383,16 +480,43 @@ class AHAPIModule(AnsibleModule):
 
     def authenticate(self):
         """Authenticate with the API."""
-        # Use basic auth
-        test_url = self.build_ui_url("me")
-        basic_str = base64.b64encode("{0}:{1}".format(self.username, self.password).encode("ascii"))
-        header = {"Authorization": "Basic {0}".format(basic_str.decode("ascii"))}
+
+        url = self.build_ui_url("auth/login")
         try:
-            self.make_request_raw_reponse("GET", test_url, headers=header)
-            self.headers.update(header)
+            response = self.make_request_raw_reponse("GET", url)
         except AHAPIModuleError as e:
             self.fail_json(msg="Authentication error: {error}".format(error=e))
-        self.authenticated = True
+
+        # Extract CSRF token from Set-Cookie header
+        csrf_token = None
+        for h in response.getheaders():
+            if h[0].lower() == "set-cookie":
+                k, v = h[1].split("=", 1)
+                if k.lower() == "csrftoken":
+                    csrf_token = v.split(";", 1)[0]
+                    break
+
+        header = {}
+        if csrf_token:
+            header = {"X-CSRFToken": csrf_token, "Cookie": f"csrftoken={csrf_token}"}
+
+        if self.oauth_token:
+            try:
+                # For token authentication, use Authorization header with CSRF
+                header.update({"Authorization": "Token {0}".format(self.oauth_token)})
+                self.session.headers.update(header)
+                self.authenticated = True
+            except AHAPIModuleError as e:
+                self.fail_json(msg="Authentication with token error: {error}".format(error=e))
+        elif self.username and self.password:
+            try:
+                basic_str = base64.b64encode("{0}:{1}".format(self.username, self.password).encode("ascii"))
+                header.update({"Authorization": "Basic {0}".format(basic_str.decode("ascii"))})
+                self.session.headers.update(header)
+                self.make_request("GET", url)
+                self.authenticated = True
+            except AHAPIModuleError as e:
+                self.fail_json(msg="Authentication error: {error}".format(error=e))
 
     def getFileContent(self, path):
         try:
@@ -451,6 +575,7 @@ class AHAPIModule(AnsibleModule):
             # No exception this is behind rescource_provider
             try:
                 rs_prefix = response["json"]["apis"]["galaxy"]
+                self.behind_resource_server = True
                 return rs_prefix.strip("/")
             except KeyError as e:
                 self.fail_json(msg="Error while getting Galaxy api path prefix: {error}".format(error=e))

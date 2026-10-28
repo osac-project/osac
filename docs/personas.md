@@ -5,6 +5,21 @@ additional personas can be identified within the solution space, some of which
 will be added to this document over time as the project is ready to address
 their unique use cases.
 
+Personas describe the work people need to do. Roles define what they are allowed
+to do in OSAC. People represented by the same persona may need different levels
+of access.
+
+For example, Cloud Provider Admin responsibilities might be split between
+someone who manages tenant accounts and someone who only reviews audit logs.
+The auditor needs access to the logs, but should not need permission to change
+resources or manage users. The same applies within a tenant: someone reviewing
+audit logs should be able to access their own tenant's records without receiving
+administrative permissions.
+
+A role such as Auditor or Read Only does not automatically require a new
+persona. We add a persona when we need to describe distinct user goals or
+workflows, rather than a different set of permissions.
+
 ## Cloud Provider Admin
 
 * works for the Cloud Provider
@@ -12,7 +27,7 @@ their unique use cases.
 * sets quotas for tenant organizations
 * uses the OSAC interfaces to manage tenant organizations
 * uses the OSAC interfaces to manage resource allocation
-* is a super-user of the system and can see all tenant organizations
+* can work across tenant organizations, with access limited by their assigned permissions
 * manages any global catalogs of templates (VM templates, cluster templates, etc)
 * ensures that all global templates work with the local infrastructure
 * works with internal infrastructure owners (Cloud Infrastructure Admins) as necessary

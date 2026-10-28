@@ -1,0 +1,52 @@
+---
+- name: collection_repository_sync integration tests with token auth
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+    - name: Create a token for testing
+      ansible.hub.ah_token:
+        ah_username: "{{ ah_username }}"
+        ah_password: "{{ ah_password }}"
+        state: present
+      no_log: true
+
+    - name: Sync rh-certified in check mode (token auth)
+      ansible.hub.collection_repository_sync:
+        name: rh-certified
+        wait: false
+        ah_token: "{{ ah_token.token }}"
+      check_mode: true
+      register: r_token_check
+
+    - name: Check if sync is successful (token auth)
+      assert:
+        that:
+          - r_token_check.changed
+
+    - name: Sync rh-certified (token auth)
+      ansible.hub.collection_repository_sync:
+        name: rh-certified
+        wait: false
+        ah_token: "{{ ah_token.token }}"
+      register: r_token
+
+    - name: Check if sync is successful (token auth)
+      assert:
+        that:
+          - r_token.changed
+
+  always:
+    - name: Remove test token
+      ansible.hub.ah_token:
+        ah_username: "{{ ah_username }}"
+        ah_password: "{{ ah_password }}"
+        token: "{{ ah_token.token | default('') }}"
+        state: absent
+      ignore_errors: true
+      no_log: true

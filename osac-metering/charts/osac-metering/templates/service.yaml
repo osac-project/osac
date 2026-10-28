@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "osac-metering.fullname" . }}
+  labels:
+    {{- include "osac-metering.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metering
+spec:
+  type: ClusterIP
+  ports:
+    # The health listener serves /metrics next to /healthz and /readyz.
+    - port: 8080
+      targetPort: health
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "osac-metering.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: metering

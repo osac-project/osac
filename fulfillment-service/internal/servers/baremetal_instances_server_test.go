@@ -280,9 +280,11 @@ var _ = Describe("Bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			id := createResponse.GetObject().GetId()
 
-			// Store a state with its transition time, as the operator feedback would. The time
-			// must be after creation: the source contract clamps a first time on or before it.
-			storedTime := timestamppb.New(time.Now())
+			// Store a state with its transition time, as the operator feedback would. The
+			// time must be after creation (the source contract clamps a first time on or
+			// before it) and truncated to whole seconds: the contract stores transition
+			// times at second granularity, so a sub-second seed would not round-trip.
+			storedTime := timestamppb.New(time.Now().Truncate(time.Second))
 			bmiDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstance]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).

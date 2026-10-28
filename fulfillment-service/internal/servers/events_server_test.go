@@ -90,6 +90,41 @@ var _ = Describe("Events server visibility", Ordered, func() {
 		Expect(broker.Start(startCtx)).To(Succeed())
 		kafkaConfig, err = broker.Config()
 		Expect(err).ToNot(HaveOccurred())
+		// The tenant topics exist and have a leader before any watch starts. A topic
+		// created while a watch is running races the broker's leader election, and a
+		// consumer that starts in that window after its first event can fetch empty
+		// forever. The publisher owns topic creation in production, so watches always
+		// see settled topics. With the topics settled, a watch's consumers start before
+		// the events are sent, and a send wakes their fetch.
+		admin, err := sarama.NewClusterAdmin([]string{broker.Brokers()}, kafkaConfig)
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(admin.Close)
+		retention := "-1"
+		for _, tenant := range []string{"tenant-a", "tenant-b", auth.SharedTenant} {
+			err = admin.CreateTopic(DefaultEventTopicPrefix+tenant, &sarama.TopicDetail{
+				NumPartitions:     1,
+				ReplicationFactor: 1,
+				ConfigEntries: map[string]*string{
+					"retention.ms": &retention,
+				},
+			}, false)
+			if err != nil {
+				Expect(err).To(MatchError(sarama.ErrTopicAlreadyExists))
+			}
+		}
+		settleClient, err := sarama.NewClient([]string{broker.Brokers()}, kafkaConfig)
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(settleClient.Close)
+		for _, tenant := range []string{"tenant-a", "tenant-b", auth.SharedTenant} {
+			topic := DefaultEventTopicPrefix + tenant
+			Eventually(func() error {
+				return settleClient.RefreshMetadata(topic)
+			}, 30*time.Second).Should(Succeed())
+			Eventually(func() error {
+				_, err := settleClient.Leader(topic, 0)
+				return err
+			}, 30*time.Second).Should(Succeed())
+		}
 		DeferCleanup(func() {
 			stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Minute)
 			defer stopCancel()
@@ -128,6 +163,24 @@ var _ = Describe("Events server visibility", Ordered, func() {
 		Expect(server).To(BeNil())
 	})
 
+	// ensureTopic creates the tenant's event topic, matching the publisher's contract.
+	ensureTopic := func(tenant string) {
+		admin, err := sarama.NewClusterAdmin([]string{broker.Brokers()}, kafkaConfig)
+		ExpectWithOffset(1, err).ToNot(HaveOccurred())
+		DeferCleanup(admin.Close)
+		retention := "-1"
+		err = admin.CreateTopic(DefaultEventTopicPrefix+tenant, &sarama.TopicDetail{
+			NumPartitions:     1,
+			ReplicationFactor: 1,
+			ConfigEntries: map[string]*string{
+				"retention.ms": &retention,
+			},
+		}, false)
+		if err != nil {
+			ExpectWithOffset(1, err).To(MatchError(sarama.ErrTopicAlreadyExists))
+		}
+	}
+
 	// sendEvent writes an event to the tenant topic selected from its payload metadata.
 	sendEvent := func(event *privatev1.Event) {
 		payloadOneof := event.ProtoReflect().Descriptor().Oneofs().ByName(eventsServerPayloadOneofField)
@@ -140,8 +193,10 @@ var _ = Describe("Events server visibility", Ordered, func() {
 		ExpectWithOffset(1, ok).To(BeTrue())
 		data, err := proto.Marshal(event)
 		Expect(err).ToNot(HaveOccurred())
+		topic := DefaultEventTopicPrefix + metadataGetter.GetMetadata().GetTenant()
+		ensureTopic(metadataGetter.GetMetadata().GetTenant())
 		_, _, err = producer.SendMessage(&sarama.ProducerMessage{
-			Topic: DefaultEventTopicPrefix + metadataGetter.GetMetadata().GetTenant(),
+			Topic: topic,
 			Value: sarama.ByteEncoder(data),
 		})
 		ExpectWithOffset(1, err).ToNot(HaveOccurred())
@@ -420,7 +475,7 @@ var _ = Describe("Events server visibility", Ordered, func() {
 		watchCtx, cancel := context.WithCancel(context.Background())
 		DeferCleanup(cancel)
 		stream, err := client.Watch(watchCtx, publicv1.EventsWatchRequest_builder{
-			Filter: new("!('admin.osac.openshift.io/managed' in event.cluster.metadata.labels)"),
+			Filter: new("event.cluster.metadata.labels == {'ordinary': 'visible'}"),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		collector := &eventsCollector{}
@@ -442,12 +497,24 @@ var _ = Describe("Events server visibility", Ordered, func() {
 			}.Build(),
 		}.Build()
 		sendEvent(privateEvent)
+		changedPrivateEvent := proto.Clone(privateEvent).(*privatev1.Event)
+		changedPrivateEvent.SetId(uuid.New())
+		changedPrivateEvent.GetCluster().GetMetadata().SetLabels(map[string]string{
+			"admin.osac.openshift.io/managed": "changed",
+			"ordinary":                        "visible",
+		})
+		sendEvent(changedPrivateEvent)
 
-		Eventually(collector.Events, time.Second).Should(HaveLen(1))
-		publicLabels := collector.Events()[0].GetCluster().GetMetadata().GetLabels()
-		Expect(publicLabels).To(Equal(map[string]string{"ordinary": "visible"}))
+		Eventually(collector.Events, 5*time.Second).Should(HaveLen(2))
+		for _, publicEvent := range collector.Events() {
+			publicLabels := publicEvent.GetCluster().GetMetadata().GetLabels()
+			Expect(publicLabels).To(Equal(map[string]string{"ordinary": "visible"}))
+		}
 		Expect(privateEvent.GetCluster().GetMetadata().GetLabels()).To(HaveKeyWithValue(
 			"admin.osac.openshift.io/managed", "system",
+		))
+		Expect(changedPrivateEvent.GetCluster().GetMetadata().GetLabels()).To(HaveKeyWithValue(
+			"admin.osac.openshift.io/managed", "changed",
 		))
 	})
 
@@ -544,5 +611,33 @@ var _ = Describe("Events server visibility", Ordered, func() {
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+	})
+
+	It("rejects reserved metadata references when a public watch is opened", func() {
+		_, client := startServer(makeTenancy("tenant-a"))
+		watchCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		watchStream, err := client.Watch(watchCtx, publicv1.EventsWatchRequest_builder{
+			Filter: new(`event.cluster.metadata.labels['admin.osac.openshift.io/managed'] == 'system'`),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = watchStream.Recv()
+		Expect(err).To(HaveOccurred())
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+	})
+
+	It("rejects reserved label and annotation references throughout watch predicates", func() {
+		server, _ := startServer(makeTenancy("tenant-a"))
+		for _, filter := range []string{
+			`event.cluster.metadata.labels['admin.osac.openshift.io/managed'] == 'system'`,
+			`'controller.admin.osac.openshift.io/managed' in event.cluster.metadata.annotations`,
+			`event.id == 'known' && event.cluster.metadata.annotations['admin.osac.openshift.io/managed'] != 'system'`,
+		} {
+			_, err := server.compileFilter(context.Background(), filter)
+			Expect(err).To(MatchError(ContainSubstring("reserved metadata key")), "filter %q", filter)
+		}
 	})
 })

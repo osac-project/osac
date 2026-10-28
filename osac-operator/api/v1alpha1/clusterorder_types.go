@@ -22,6 +22,19 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	// UpgradeAttemptIDAnnotation identifies the attempt stamped on a HyperShift resource.
+	UpgradeAttemptIDAnnotation = "osac.openshift.io/upgrade-attempt-id"
+	// UpgradeAttemptIDsAnnotation carries current component IDs as JSON on the order.
+	UpgradeAttemptIDsAnnotation = "osac.openshift.io/upgrade-attempt-ids"
+)
+
+// ClusterOrderUpgradeAttemptIDs is the value of UpgradeAttemptIDsAnnotation.
+type ClusterOrderUpgradeAttemptIDs struct {
+	ControlPlane string            `json:"controlPlane,omitempty"`
+	NodeSets     map[string]string `json:"nodeSets,omitempty"`
+}
+
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // ClusterOrderSpec defines the desired state of ClusterOrder
@@ -156,9 +169,19 @@ type NodeRequestStatus struct {
 	BareMetal *BareMetalNodeSpec `json:"bareMetal,omitempty"`
 	// +kubebuilder:validation:Optional
 	FabricInterface string `json:"fabricInterface,omitempty"`
-	// ObservedVersion is the OpenShift version reported by this node pool.
+	// UpgradeObservation reports the version observed on this node set for its current attempt.
 	// +kubebuilder:validation:Optional
-	ObservedVersion string `json:"observedVersion,omitempty"`
+	UpgradeObservation *UpgradeObservation `json:"upgradeObservation,omitempty"`
+}
+
+// UpgradeObservation carries one component's observed OpenShift version from
+// the HyperShift reconciler to Fulfillment feedback.
+type UpgradeObservation struct {
+	// AttemptID links this observation to the current component attempt.
+	// +kubebuilder:validation:Required
+	AttemptID string `json:"attemptID"`
+	// Version is the OpenShift version observed on that component.
+	Version string `json:"version,omitempty"`
 }
 
 // BareMetalNodeSpec holds configuration specific to bare-metal node requests.
@@ -251,9 +274,9 @@ type AddOnOperatorJobStatus struct {
 
 // ClusterOrderStatus defines the observed state of ClusterOrder
 type ClusterOrderStatus struct {
-	// ObservedVersion is the OpenShift version reported by the hosted control plane.
+	// UpgradeObservation reports the version observed on the control plane for its current attempt.
 	// +kubebuilder:validation:Optional
-	ObservedVersion string `json:"observedVersion,omitempty"`
+	UpgradeObservation *UpgradeObservation `json:"upgradeObservation,omitempty"`
 	// Phase provides a single-value overview of the state of the ClusterOrder
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string

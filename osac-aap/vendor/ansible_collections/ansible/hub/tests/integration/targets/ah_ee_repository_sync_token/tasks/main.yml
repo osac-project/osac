@@ -1,0 +1,87 @@
+---
+- name: ah_ee_repository_sync integration tests with token auth
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+    - name: Create a token for testing
+      ansible.hub.ah_token:
+        ah_username: "{{ ah_username }}"
+        ah_password: "{{ ah_password }}"
+        state: present
+      no_log: true
+
+    - name: Define variables (token auth)
+      set_fact:
+        registry_name_token: "ee_token_{{ test_id }}"
+        ee_repo_name_token: "ee_repo_token_{{ test_id }}"
+
+    - name: Create EE remote registry (token auth)
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_name_token }}"
+        url: https://quay.io/my/registry
+        state: present
+        ah_token: "{{ ah_token.token }}"
+      register: r_token_registry
+
+    - name: Check if the remote registry EE is created (token auth)
+      assert:
+        that:
+          - r_token_registry.changed
+
+    - name: Add a remote repository from registry (token auth)
+      ansible.hub.ah_ee_repository:
+        name: "{{ ee_repo_name_token }}"
+        upstream_name: "upstream_{{ ee_repo_name_token }}"
+        registry: "{{ registry_name_token }}"
+        include_tags:
+          - latest
+        state: present
+        ah_token: "{{ ah_token.token }}"
+      register: r_token_repo
+
+    - name: Check if the remote repository EE is created (token auth)
+      assert:
+        that:
+          - r_token_repo.changed
+
+    - name: Sync a remote repository (token auth)
+      ansible.hub.ah_ee_repository_sync:
+        name: "{{ ee_repo_name_token }}"
+        wait: false
+        ah_token: "{{ ah_token.token }}"
+      register: r_token
+
+    - name: Check if the remote repository EE is synced (token auth)
+      assert:
+        that:
+          - r_token.changed
+
+  always:
+    - name: Remove a remote repository (token auth)
+      ansible.hub.ah_ee_repository:
+        name: "{{ ee_repo_name_token | default('') }}"
+        state: absent
+        ah_token: "{{ ah_token.token | default('') }}"
+      ignore_errors: true
+
+    - name: Remove EE remote registry (token auth)
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_name_token | default('') }}"
+        state: absent
+        ah_token: "{{ ah_token.token | default('') }}"
+      ignore_errors: true
+
+    - name: Remove test token
+      ansible.hub.ah_token:
+        ah_username: "{{ ah_username }}"
+        ah_password: "{{ ah_password }}"
+        token: "{{ ah_token.token | default('') }}"
+        state: absent
+      ignore_errors: true
+      no_log: true

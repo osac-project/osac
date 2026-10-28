@@ -27,7 +27,13 @@ def test_ipam_create_and_delete_match_the_complete_requested_identity() -> None:
     find = _named_task(create, "Find IPAM subnets by name and CIDR")
     expression = find["ansible.builtin.set_fact"]["_existing_ipam_subnets"]
     assert "selectattr('name', 'equalto', ipam_name)" in expression
+    assert "selectattr('prefix', 'defined')" in expression
     assert "selectattr('prefix', 'equalto', ipam_cidr)" in expression
+    fallback = _named_task(create, "Keep same-name IPAM subnet candidates when identity filtering found no match")
+    assert fallback["when"] == [
+        "_existing_ipam_subnets | length == 0",
+        "_ipam_subnets_by_name | length > 0",
+    ]
     assert "_existing_ipam_subnets" in _named_task(create, "Filter existing IPAM subnets by VPC")[
         "ansible.builtin.set_fact"
     ]["_existing_ipam_subnets"]
@@ -83,9 +89,16 @@ def test_netris_subnet_flow_supplies_full_identity_to_ipam_roles() -> None:
 
 def test_vnet_create_delete_and_gateway_update_are_identity_scoped() -> None:
     create = _tasks(VNET_ROLE / "create.yaml")
+    find_by_name = _named_task(create, "Find V-Nets by name")["ansible.builtin.set_fact"]["_vnets_by_name"]
+    assert "selectattr('name', 'equalto', vnet_name)" in find_by_name
     find = _named_task(create, "Find V-Nets by name and VPC")["ansible.builtin.set_fact"]["_existing_vnets"]
-    assert "selectattr('name', 'equalto', vnet_name)" in find
+    assert "selectattr('vpc.id', 'defined')" in find
     assert "selectattr('vpc.id', 'equalto', vnet_vpc_id | int)" in find
+    fallback = _named_task(create, "Keep same-name V-Net candidates when identity filtering found no match")
+    assert fallback["when"] == [
+        "_existing_vnets | default([]) | length == 0",
+        "_vnets_by_name | length > 0",
+    ]
     assert "vnet_tenant_id | int" in _named_task(create, "Filter V-Nets by tenant")["ansible.builtin.set_fact"][
         "_existing_vnets"
     ]

@@ -108,7 +108,7 @@ func newClusterOrderFeedbackBridge(hubClient clnt.Client, clustersClient private
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
 					feedbackStatusConditionsPath, feedbackStatusStatePath, "status.api_url", "status.console_url", "status.api_endpoint",
 					"status.ingress_endpoint", feedbackStatusStateTransitionTimePath, "status.kubeconfig_secret", "status.password_secret", "status.hub",
-					"status.node_sets", "status.add_on_operators",
+					"status.node_sets", "status.observed_cp_version", "status.add_on_operators", "status.upgrade_history",
 				}},
 			}.Build())
 			return err
@@ -135,10 +135,114 @@ func newClusterOrderSyncUpdate(hubClient clnt.Client) func(context.Context, *ckv
 			return err
 		}
 		syncClusterOrderNodeRequests(ctx, clusterOrder, remote)
+		syncClusterOrderUpgradeObservations(clusterOrder, remote)
+		if err := syncRemovedNodeSetUpgrades(ctx, hubClient, clusterOrder, remote); err != nil {
+			return err
+		}
 		syncClusterOrderAddOnOperators(clusterOrder, remote)
 		syncClusterOrderVIPEndpoints(clusterOrder, remote)
 		return nil
 	}
+}
+
+func syncClusterOrderUpgradeObservations(order *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
+	syncControlPlaneUpgradeObservation(order.Status.UpgradeObservation, remote)
+	for _, request := range order.Status.NodeRequests {
+		syncNodeSetUpgradeObservation(request, remote)
+	}
+}
+
+func syncControlPlaneUpgradeObservation(observation *ckv1alpha1.UpgradeObservation, remote *privatev1.Cluster) {
+	if observation != nil && observation.Version != "" &&
+		observation.AttemptID != "" && observation.AttemptID == remote.GetSpec().GetControlPlaneAttemptId() &&
+		matchesControlPlaneUpgradeHistory(remote.GetStatus().GetUpgradeHistory(), observation.AttemptID) {
+		remote.GetStatus().SetObservedCpVersion(observation.Version)
+	}
+}
+
+func syncNodeSetUpgradeObservation(request ckv1alpha1.NodeRequestStatus, remote *privatev1.Cluster) {
+	observation := request.UpgradeObservation
+	if observation == nil || observation.Version == "" || observation.AttemptID == "" {
+		return
+	}
+	currentID := remote.GetSpec().GetNodeSetAttemptIds()[request.NodeSet]
+	if (currentID != observation.AttemptID &&
+		(currentID != "" || remote.GetSpec().GetNodeSets()[request.NodeSet] != nil)) ||
+		!matchesNodeSetUpgradeHistory(remote.GetStatus().GetUpgradeHistory(), observation.AttemptID, request.NodeSet) {
+		return
+	}
+	if nodeSet := remote.GetStatus().GetNodeSets()[request.NodeSet]; nodeSet != nil {
+		nodeSet.SetObservedVersion(observation.Version)
+	}
+}
+
+// A successful NodePool list is the evidence that a removed NodeSet has
+// finished deleting. Until then, retain its observed status and attempt.
+func syncRemovedNodeSetUpgrades(ctx context.Context, hubClient clnt.Client,
+	order *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) error {
+	removed := map[string]bool{}
+	for name := range remote.GetStatus().GetNodeSets() {
+		if remote.GetSpec().GetNodeSets()[name] == nil {
+			removed[name] = true
+		}
+	}
+	for _, entry := range remote.GetStatus().GetUpgradeHistory() {
+		name := entry.GetComponent().GetNodeSetId()
+		if name != "" && remote.GetSpec().GetNodeSets()[name] == nil &&
+			(entry.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING ||
+				entry.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING) {
+			removed[name] = true
+		}
+	}
+	if len(removed) == 0 || order.GetClusterReferenceNamespace() == "" {
+		return nil
+	}
+	pools := &hypershiftv1beta1.NodePoolList{}
+	if err := hubClient.List(ctx, pools, clnt.InNamespace(order.GetClusterReferenceNamespace()),
+		labelSelectorFromInstance(order)); err != nil {
+		return err
+	}
+	for i := range pools.Items {
+		if name, ok := nodePoolNodeSet(&pools.Items[i]); ok {
+			delete(removed, name)
+		}
+	}
+	for name := range removed {
+		delete(remote.GetStatus().GetNodeSets(), name)
+		for _, entry := range remote.GetStatus().GetUpgradeHistory() {
+			if entry.GetComponent().GetNodeSetId() != name ||
+				(entry.GetState() != privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING &&
+					entry.GetState() != privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING) {
+				continue
+			}
+			now := time.Now()
+			if last := entry.GetLastStateTime(); last != nil && !now.After(last.AsTime()) {
+				now = last.AsTime().Add(time.Nanosecond)
+			}
+			entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_NODE_SET_REMOVED)
+			entry.SetMessage(fmt.Sprintf("Node set %q was removed before the upgrade completed", name))
+			entry.SetLastStateTime(timestamppb.New(now))
+		}
+	}
+	return nil
+}
+
+func matchesControlPlaneUpgradeHistory(history []*privatev1.ClusterUpgradeHistoryEntry, attemptID string) bool {
+	for _, entry := range history {
+		if entry.GetAttemptId() == attemptID && entry.GetComponent().GetControlPlane() != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesNodeSetUpgradeHistory(history []*privatev1.ClusterUpgradeHistoryEntry, attemptID, nodeSet string) bool {
+	for _, entry := range history {
+		if entry.GetAttemptId() == attemptID && entry.GetComponent().GetNodeSetId() == nodeSet {
+			return true
+		}
+	}
+	return false
 }
 
 // syncClusterOrderVIPEndpoints copies MetalLB VIP addresses from ClusterOrder status

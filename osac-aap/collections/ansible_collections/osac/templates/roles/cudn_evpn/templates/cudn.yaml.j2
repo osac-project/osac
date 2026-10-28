@@ -35,5 +35,7 @@ spec:
       vtep: tenant-vtep
       macVRF:
         vni: {{ l2_vni | int }}
+        routeTarget: "0:{{ l2_vni | int }}"
       ipVRF:
         vni: {{ l3_vni | int }}
+        routeTarget: "0:{{ l3_vni | int }}"

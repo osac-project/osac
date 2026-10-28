@@ -201,6 +201,24 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				Expect(decision.SubjectTenants).To(ContainElement("acme-corp"))
 			})
 
+			It("Allows client tenant listing without granting tenant management", func(ctx context.Context) {
+				authContext := &AuthContext{
+					Username:     "john.doe",
+					AuthMethod:   "jwt",
+					Organization: []any{"acme-corp"},
+					RealmAccess:  map[string]any{"roles": []any{"user"}},
+				}
+
+				listDecision, err := evaluator.Evaluate(ctx, authContext, "/osac.public.v1.Tenants/List")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(listDecision.Allowed).To(BeTrue())
+				Expect(listDecision.SubjectTenants).To(ConsistOf("acme-corp"))
+
+				getDecision, err := evaluator.Evaluate(ctx, authContext, "/osac.public.v1.Tenants/Get")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(getDecision.Allowed).To(BeFalse())
+			})
+
 			It("Makes authorization decision for user accessing different organization", func(ctx context.Context) {
 				authContext := &AuthContext{
 					Username:     "john.doe",
@@ -620,6 +638,7 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				"/osac.public.v1.SecurityGroups/List":                {},
 				"/osac.public.v1.StorageTiers/Get":                   {},
 				"/osac.public.v1.StorageTiers/List":                  {},
+				"/osac.public.v1.Tenants/List":                       {},
 				"/osac.public.v1.Subnets/Get":                        {},
 				"/osac.public.v1.Subnets/List":                       {},
 				"/osac.public.v1.VirtualNetworks/Get":                {},

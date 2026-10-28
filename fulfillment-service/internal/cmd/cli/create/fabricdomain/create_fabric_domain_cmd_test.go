@@ -95,6 +95,7 @@ var _ = Describe("Create fabric domain", func() {
 			// The root pre-run resolves --tenant (including an explicit empty value)
 			// before invoking this command; the saved setting is not authoritative here.
 			ctx = config.TenantIntoContext(ctx, effectiveTenant)
+			ctx = config.ProjectIntoContext(ctx, "project-a")
 			cmd := Cmd()
 			cmd.SetContext(ctx)
 			cmd.SetOut(io.Discard)
@@ -114,6 +115,7 @@ var _ = Describe("Create fabric domain", func() {
 			Expect(fabricDomains.request).NotTo(BeNil())
 			object := fabricDomains.request.GetObject()
 			Expect(object.GetMetadata().GetTenant()).To(Equal(effectiveTenant))
+			Expect(object.GetMetadata().GetProject()).To(Equal("project-a"))
 			Expect(object.GetSpec().GetVirtualNetwork()).To(Equal("resolved-vn-id"))
 		},
 		Entry("flag tenant overrides saved tenant for a name",

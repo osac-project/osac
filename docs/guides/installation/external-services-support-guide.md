@@ -30,10 +30,15 @@ installer chart pin `fc7a09f`; PostgreSQL 18, Keycloak 26.6.4, OpenBao
 those external services. The clean-install values-first flow this guide
 teaches uses the same chart interface and the same services, yet was
 **not** separately exercised end-to-end: prove it on a scratch install
-before relying on it in production. One chart interface change postdates
-that pin: `metering.enabled` was removed upstream — metering is now
-always deployed (§6.2). The lab ran with metering on, so the validated
-behavior matches current pins; only the off-switch is gone. (Migrating an already-bundled
+before relying on it in production. Two chart and service interface
+changes postdate that pin: `metering.enabled` was removed upstream —
+metering is now always deployed (§6.2) — and the Kafka pipeline moved
+from shared metering topics to per-tenant ones created by the services
+themselves (§6.1, A.5 step 9); this guide now describes the current
+contract, which the lab did not run. The lab ran with metering on, so
+the validated behavior matches current pins for everything except the
+per-tenant topic creation, which the greenfield exercise must confirm.
+The off-switch is gone regardless. (Migrating an already-bundled
 deployment is a different procedure — sequencing, data movement, rollback
 points — and is outside this guide's scope.)
 
@@ -174,7 +179,7 @@ Everything here must exist **before phase 2 (`helm install` of the
    Secrets (§5.2) — the part the chart's `keycloak.enabled: false` flag
    does not do for you.
 3. Create the Kafka connection objects if Kafka is external (§6.2), and
-   the metering topics/user (A.5 steps 7–9).
+   the shared inference topics and service users (A.5 steps 7–9).
 4. Load the services CAs into the trust Bundle created in stage 2
    (§2.2) — consumers come with stage 4.
 5. Start the §10 backup cron jobs and escrow the OpenBao init output
@@ -206,6 +211,11 @@ deltas to that guide's bundled defaults:
 
 - `ui.auth.oidcIssuerURL` must be the **full** external issuer URL,
   not the `--set` default that guide shows for the bundled Keycloak.
+- **Apply the Strimzi CRDs first** (`KafkaTopic`, `KafkaUser`,
+  `Kafka`) if Kafka is external and this cluster never ran the bundled
+  stack — the metering subchart renders its `KafkaTopic`/`KafkaUser`
+  objects ungated, so the `osac` release fails on unknown kinds without
+  them (§6.2 prerequisites). They stay inert without the operator.
 - The overlays are the external-services **delta**, not the whole of
   `my-values.yaml` — combine them with the base installation values
   that guide describes (services you deploy, storage, CNV, and so on).
@@ -744,9 +754,9 @@ The broker must satisfy the upstream
 | Protocol | `SASL_SSL` with `SCRAM-SHA-512` (only enabled mechanism) |
 | Address | `host:port` (no scheme), reachable from pods |
 | TLS | CA chain trusted by the cluster, cert matching the broker address, ≥ 1.2 |
-| `fulfillment-service` ACLs | topic prefix `osac.events.`: Create/Write/Read/Describe · group prefix `osac.system.`: Read/Describe · cluster: IdempotentWrite |
-| `osac-metering` ACLs | topic prefix `osac.metering.`: Write/Describe · cluster: IdempotentWrite |
-| Topics | `auto.create.topics.enable: true` (event topics are `osac.events.<tenant>`) |
+| `fulfillment-service` ACLs | topic prefix `osac.events.`: Create/Write/Read/Describe/DescribeConfigs · group prefix `osac.system.`: Read/Describe · cluster: IdempotentWrite |
+| `osac-metering` ACLs | topic prefix `osac.events.`: Read/Describe · topic prefix `osac.metering.heartbeat.`: Create/Read/Write/Describe/DescribeConfigs · topic prefix `osac.metering.dlq.`: Create/Describe/DescribeConfigs · cluster: IdempotentWrite |
+| Topics | created by the services themselves over the admin API — fulfillment creates `osac.events.<tenant>`, metering creates `osac.metering.{heartbeat,dlq}.<tenant>` (one partition, validated retention); broker auto-create is not used |
 | No superuser access | the service users get exactly the grants above |
 
 A complete recipe for a single-node KRaft broker satisfying this contract —
@@ -837,11 +847,14 @@ metering:
 - **The metering subchart renders its CRs ungated.** With `kafka.enabled:
   false` but metering left enabled, the `osac` release still renders the
   `KafkaTopic` and `KafkaUser` objects for the metering topics and user —
-  they are not gated on the Kafka flag — so the Strimzi CRDs must exist
-  before the `osac` release installs or upgrades, or helm fails on
-  unknown kinds. Your options: keep the CRDs applied (inert without the
-  Strimzi operator — you create the topics and users on the external
-  broker yourself, A.5 steps 7–9), or run the broker Strimzi-managed
+  they are not gated on the Kafka flag — so on a **fresh installation**
+  the Strimzi CRDs (`KafkaTopic`, `KafkaUser`, `Kafka`) must be applied
+  to the cluster **before the first `helm install` of the `osac`
+  release**, not merely still present from a previous bundled deployment
+  — a cluster that never ran the bundled stack has none of them, and
+  helm fails on the unknown kinds. Without the Strimzi operator running
+  the CRs stay inert (you create the topics and users on the external
+  broker yourself, A.5 steps 7–9); or run the broker Strimzi-managed
   per the [Kafka configuration guide](kafka-configuration.md) — the
   upstream-supported flow — and externalize only what that guide
   covers. (Older chart pins — through `fc7a09f` — also allowed
@@ -851,11 +864,17 @@ metering:
   convention plus `clusterNamespace` pointing at a plain namespace is a
   lab-validated extension, not an upstream-supported path; re-verify it
   after every chart upgrade. Nothing reconciles this wiring for you —
-  you own, by hand: the metering topics (A.5 `mk_topic`), the
+  you own, by hand: the two shared inference topics
+  (`osac.metering.inference` and `osac.metering.inference.dlq` —
+  chart-managed in the Strimzi flow, A.5 step 9), the
   `osac-metering` Kafka user and its SCRAM credential (including
   rotation — update both the broker and the Secret in
   `clusterNamespace` together), and the billing adapters downstream of
-  the metering consumer. If any of that is unacceptable, run the
+  the metering consumer. The **per-tenant** topics
+  (`osac.events.<tenant>`, `osac.metering.heartbeat.<tenant>`,
+  `osac.metering.dlq.<tenant>`) are *not* yours to create — the
+  services create them over the admin API and validate their
+  configuration (A.5 step 9). If any of that is unacceptable, run the
   broker Strimzi-managed (the option above).
 
 On a clean install these values and objects are in place before the first
@@ -866,20 +885,48 @@ upgrade — the exact command and its caveats are in §8.
 ### 6.3 Verify
 
 Metering is always deployed on current chart pins (§6.2), so the
-heartbeat publisher is always present.
+metering round loop is always present. There is no single shared
+heartbeat topic to watch — each tenant gets its own
+`osac.metering.heartbeat.<tenant>`, created by metering on first use.
+The canary is therefore a **billable workflow on a real tenant**, not a
+topic offset:
+
+1. Exercise a known billable workflow for a tenant that is not one of
+   the built-in ones (`system`, `shared` — their usage is never billed),
+   and let the round loop tick (~1 min).
+2. Inspect that tenant's actual heartbeat topic — offsets must advance
+   between two runs ~100 s apart:
+
+   ```bash
+   kafka-get-offsets.sh --bootstrap-server <host-ip>:9092 \
+     --command-config <admin-props> \
+     --topic osac.metering.heartbeat.<tenant> --time -1
+   ```
+
+3. Check the metering service's own round/outbox/failure metrics
+   (Prometheus, or `oc -n osac exec` into the metering pod's metrics
+   port) for that tenant:
+   `osac_metering_round_last_time_seconds` is recent (billing for the
+   tenant is not progressing while it ages),
+   `osac_metering_round_failures_total` is not climbing, and
+   `osac_metering_outbox_depth` returns to 0.
+
+Alongside the canary, the generic checks still apply — every consumer
+group live and at lag 0:
 
 ```bash
-# the canary: metering publishes one heartbeat event per minute to
-# osac.metering.heartbeat — offsets must advance between two runs ~100 s apart
-kafka-get-offsets.sh --bootstrap-server <host-ip>:9092 \
-  --command-config <admin-props> --topic osac.metering.heartbeat --time -1
-
-# every consumer group live and at lag 0
 kafka-consumer-groups.sh --bootstrap-server <host-ip>:9092 \
   --command-config <admin-props> --list
 kafka-consumer-groups.sh … --describe --group <group>
+```
 
-# in-cluster: the publisher's kafka config comes from the external objects
+But treat them as secondary: deployment readiness and zero lag alone do
+not prove billing works — only the billable-workflow canary does.
+
+In-cluster, confirm the publisher's Kafka config comes from the
+external objects:
+
+```bash
 oc -n osac get deploy fulfillment-event-publisher -o jsonpath='{.spec.template.spec.volumes[0].projected.sources}'
 ```
 
@@ -1091,8 +1138,8 @@ curl -s --cacert <cluster-ca> -o /dev/null -w '%{http_code}\n' \
 # chain, which -k would skip (from a cluster node: add
 # --resolve <api-route>:443:127.0.0.1)
 
-# Kafka canary (§6.3): heartbeat offsets
-# advance, consumer lag 0
+# Kafka canary (§6.3): a billable workflow on a real tenant —
+# its heartbeat topic's offsets advance, round metrics healthy, lag 0
 ```
 
 REST paths are snake_case (`/api/fulfillment/v1/compute_instances/{id}`) —
@@ -1123,7 +1170,8 @@ contract, not silence. Two separate controls, often confused:
 
 - **Replay window (retention).** Consuming a Kafka record does **not**
   delete it — records live until retention (time or size) expires.
-  Longer retention (A.5 `mk_topic`) only widens the window consumers
+  Longer retention on the shared inference topics (A.5 `mk_topic`) only
+  widens the window consumers
   have to re-read history **while the stored records remain available**.
 - **Durability (a second copy).** Retention protects nothing against
   losing the storage itself. This recipe's broker is single-node with
@@ -1137,7 +1185,9 @@ contract, not silence. Two separate controls, often confused:
 The §6.3 canary and consumer-lag checks are the detection alarm for the
 first kind of trouble; nothing detects the second before it happens.
 Decide which tier you are in **before** a failure, and write the choice
-down next to the topic configuration (A.5, `mk_topic` retention).
+down next to the topic configuration (A.5 step 9 for the shared
+inference topics; the per-tenant topics carry the services' own
+configured retention).
 
 **Verify by restoring.** A backup is not verified until it has been
 restored once. After first setup — and after any backup-script change —
@@ -1365,6 +1415,14 @@ from the cause. Format: symptom → check → remedy.
 10. **`curl` to a route from a cluster node fails TLS while working
     elsewhere** → the node resolves the route to itself but SNI still
     needs the hostname → add `--resolve <route>:443:127.0.0.1` (§5.4).
+11. **Fulfillment's event publisher or metering fails at startup with a
+    topic partition/retention error** (`has %d partitions, want 1`, or
+    `retention.ms %s, want %s`) → a per-tenant topic
+    (`osac.events.<tenant>`, `osac.metering.{heartbeat,dlq}.<tenant>`)
+    was created by hand or by broker auto-create with non-contract
+    settings → the services create these topics themselves and refuse
+    to use one that differs; delete the offending topic and let the
+    service recreate it (A.5 step 9, §6.1).
 
 ---
 
@@ -1849,7 +1907,10 @@ offsets.topic.replication.factor=1
 transaction.state.log.replication.factor=1
 transaction.state.log.min.isr=1
 
-auto.create.topics.enable=true
+# topics are created by the services over the admin API with a validated
+# config; broker auto-create would make them with broker defaults
+# (3 partitions) that the services then refuse — keep it off
+auto.create.topics.enable=false
 log.dirs=/var/lib/kafka/data
 log.retention.hours=168
 num.network.threads=3
@@ -1988,6 +2049,7 @@ krun kafka-configs.sh --alter --entity-type users --entity-name osac-metering \
 ```bash
 krun kafka-acls.sh --add --allow-principal User:fulfillment-service \
   --operation Create --operation Write --operation Read --operation Describe \
+  --operation DescribeConfigs \
   --topic osac.events. --resource-pattern-type prefixed
 krun kafka-acls.sh --add --allow-principal User:fulfillment-service \
   --operation Read --operation Describe \
@@ -1995,28 +2057,49 @@ krun kafka-acls.sh --add --allow-principal User:fulfillment-service \
 krun kafka-acls.sh --add --allow-principal User:fulfillment-service \
   --operation IdempotentWrite --cluster
 krun kafka-acls.sh --add --allow-principal User:osac-metering \
-  --operation Write --operation Describe \
-  --topic osac.metering. --resource-pattern-type prefixed
+  --operation Read --operation Describe \
+  --topic osac.events. --resource-pattern-type prefixed
+krun kafka-acls.sh --add --allow-principal User:osac-metering \
+  --operation Create --operation Read --operation Write --operation Describe \
+  --operation DescribeConfigs \
+  --topic osac.metering.heartbeat. --resource-pattern-type prefixed
+krun kafka-acls.sh --add --allow-principal User:osac-metering \
+  --operation Create --operation Describe --operation DescribeConfigs \
+  --topic osac.metering.dlq. --resource-pattern-type prefixed
 krun kafka-acls.sh --add --allow-principal User:osac-metering \
   --operation IdempotentWrite --cluster
 ```
 
-**9. Pre-create the metering topics** (event topics auto-create):
+`DescribeConfigs` is not optional on the topic prefixes: both services
+validate the retention of the topics they find and explicitly fail when
+that permission is denied.
+
+**9. Topics — only the two shared inference topics are yours to create.**
+The per-tenant pipeline creates the rest itself: fulfillment's event
+publisher creates `osac.events.<tenant>`, and metering creates
+`osac.metering.heartbeat.<tenant>` and `osac.metering.dlq.<tenant>` —
+each with **one partition** and a validated configuration
+(`retention.ms` set to the service's configured retention,
+`retention.bytes=-1`, `cleanup.policy=delete`). Do **not** pre-create
+per-tenant topics by hand: a hand-made topic with different settings
+(partition count, retention) makes the service refuse to use it.
 
 ```bash
 mk_topic() { # name partitions retention_ms
   krun kafka-topics.sh --create --topic "$1" --partitions "$2" \
-    --replication-factor 1 --config "retention.ms=$3" --config min.insync.replicas=1
+    --replication-factor 1 --config "retention.ms=$3" \
+    --config "retention.bytes=-1" --config "cleanup.policy=delete" \
+    --config min.insync.replicas=1
 }
-mk_topic osac.metering.lifecycle   3 2592000000    # 30 days
-mk_topic osac.metering.heartbeat   3 2592000000
-mk_topic osac.metering.inference   3 2592000000
-mk_topic osac.metering.corrections 3 2592000000
-mk_topic osac.metering.dlq         6 7776000000    # 90 days
+# the shared MaaS inference topics the metering chart manages in the
+# Strimzi flow (chart config: 3 partitions, 30-day retention)
+mk_topic osac.metering.inference     3 2592000000    # 30 days
+mk_topic osac.metering.inference.dlq 3 2592000000
 ```
 
-A full produce/consume self-test as `fulfillment-service` (auto-created
-topic, consumer group, cleanup) doubles as the §6.3 verification; when
+A full produce/consume self-test as `fulfillment-service` (a scratch
+topic you create with the `mk_topic` helper, consumer group, cleanup)
+doubles as the §6.3 connection-level verification; when
 running it by hand remember the `-i` trap: piping into
 `kafka-console-producer` through `podman run` without `-i` silently
 sends nothing.

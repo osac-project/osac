@@ -166,7 +166,172 @@
           "default": "osac"
         }
       }
+    },
+    "evpn": {
+      "type": "object",
+      "description": "OpenShift host networking for VMaaS with CUDN EVPN.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Configure host networking and fabric BGP for CUDN EVPN.",
+          "default": false
+        },
+        "nmstate": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "install": {
+              "type": "boolean",
+              "description": "Install the NMState operator subscription.",
+              "default": true
+            },
+            "channel": {
+              "type": "string",
+              "minLength": 1,
+              "description": "NMState operator subscription channel.",
+              "default": "stable"
+            }
+          },
+          "required": ["install", "channel"]
+        },
+        "configureClusterNetwork": {
+          "type": "boolean",
+          "description": "Enable FRR and route advertisements in the cluster network operator; this restarts OVN-Kubernetes.",
+          "default": true
+        },
+        "vtepCIDR": {
+          "type": "string",
+          "description": "IPv4 range that contains each configured node VTEP address.",
+          "pattern": "^$|^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])/([0-9]|[12][0-9]|3[0-2])$",
+          "default": ""
+        },
+        "bgp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "asn": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967294,
+              "description": "Default node ASN; individual nodes can override it.",
+              "default": 0
+            },
+            "acceptPrefixes": {
+              "type": "array",
+              "description": "Fabric loopback ranges; only /32 routes inside them are accepted.",
+              "items": {
+                "type": "string",
+                "pattern": "^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])/([0-9]|[12][0-9]|3[0-2])$"
+              },
+              "default": []
+            },
+            "waitForEstablished": {
+              "type": "boolean",
+              "description": "Fail installation unless every configured BGP session is Established.",
+              "default": true
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 60,
+              "description": "Maximum wait for each BGP session to become Established.",
+              "default": 900
+            }
+          },
+          "required": ["asn", "acceptPrefixes", "waitForEstablished", "timeoutSeconds"]
+        },
+        "nodes": {
+          "type": "array",
+          "description": "VMaaS nodes with their VTEP addresses and fabric uplinks.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Kubernetes node name."
+              },
+              "vtepIP": {
+                "type": "string",
+                "format": "ipv4",
+                "description": "Unique node VTEP IPv4 address inside vtepCIDR."
+              },
+              "asn": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4294967294,
+                "description": "Node ASN; defaults to bgp.asn."
+              },
+              "uplinks": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "interface": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_.:-]{1,15}$",
+                      "description": "Node interface connected to a fabric leaf."
+                    },
+                    "address": {
+                      "type": "string",
+                      "pattern": "^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])/([0-9]|[12][0-9]|3[0-2])$",
+                      "description": "Optional static IPv4 address for this uplink."
+                    },
+                    "peerAddress": {
+                      "type": "string",
+                      "format": "ipv4",
+                      "description": "Fabric leaf BGP peer IPv4 address."
+                    },
+                    "peerASN": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 4294967294,
+                      "description": "Fabric leaf BGP ASN."
+                    }
+                  },
+                  "required": ["interface", "peerAddress", "peerASN"]
+                }
+              }
+            },
+            "required": ["name", "vtepIP", "uplinks"]
+          },
+          "default": []
+        }
+      },
+      "required": ["enabled", "nmstate", "configureClusterNetwork", "vtepCIDR", "bgp", "nodes"]
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "evpn": {
+            "properties": {"enabled": {"const": true}},
+            "required": ["enabled"]
+          }
+        },
+        "required": ["evpn"]
+      },
+      "then": {
+        "properties": {
+          "evpn": {
+            "properties": {
+              "vtepCIDR": {"minLength": 1},
+              "bgp": {
+                "properties": {
+                  "asn": {"minimum": 1},
+                  "acceptPrefixes": {"minItems": 1}
+                }
+              },
+              "nodes": {"minItems": 1}
+            }
+          }
+        }
+      }
+    }
+  ],
   "required": []
 }

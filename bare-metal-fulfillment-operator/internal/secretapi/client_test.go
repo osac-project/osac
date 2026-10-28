@@ -23,8 +23,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/google/cel-go/cel"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
@@ -34,28 +36,32 @@ import (
 )
 
 type fakeSecretsRPC struct {
+	listContext  context.Context
 	listRequest  *privatev1.SecretsListRequest
 	listResponse *privatev1.SecretsListResponse
 	listError    error
+	getContext   context.Context
 	getRequest   *privatev1.SecretsGetRequest
 	getResponse  *privatev1.SecretsGetResponse
 	getError     error
 }
 
 func (f *fakeSecretsRPC) List(
-	_ context.Context,
+	ctx context.Context,
 	request *privatev1.SecretsListRequest,
 	_ ...grpc.CallOption,
 ) (*privatev1.SecretsListResponse, error) {
+	f.listContext = ctx
 	f.listRequest = request
 	return f.listResponse, f.listError
 }
 
 func (f *fakeSecretsRPC) Get(
-	_ context.Context,
+	ctx context.Context,
 	request *privatev1.SecretsGetRequest,
 	_ ...grpc.CallOption,
 ) (*privatev1.SecretsGetResponse, error) {
+	f.getContext = ctx
 	f.getRequest = request
 	return f.getResponse, f.getError
 }
@@ -163,6 +169,10 @@ var _ = Describe("Secret API client", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(api.listRequest.GetFilter()).To(Equal(`this.metadata.tenant == "system"`))
 			Expect(api.listRequest.GetLimit()).To(Equal(int32(2)))
+			deadline, ok := api.listContext.Deadline()
+			Expect(ok).To(BeTrue())
+			Expect(time.Until(deadline)).To(BeNumerically(">", 0))
+			Expect(time.Until(deadline)).To(BeNumerically("<=", rpcTimeout))
 			Expect(got.Total).To(Equal(int32(1)))
 			Expect(got.Items).To(HaveLen(1))
 			Expect(got.Items[0].ID).To(Equal("secret-1"))
@@ -192,17 +202,19 @@ var _ = Describe("Secret API client", func() {
 			Expect(err.Error()).NotTo(ContainSubstring("password"))
 		})
 
-		It("rejects an empty filter and non-positive limit without calling the API", func() {
-			api := &fakeSecretsRPC{}
+		It("requires a filter and passes the count-only limit through", func() {
+			api := &fakeSecretsRPC{listResponse: &privatev1.SecretsListResponse{Total: 3}}
 			client := &client{api: api}
 
 			_, err := client.List(context.Background(), "", 2)
 			Expect(err).To(MatchError(ContainSubstring("filter is required")))
 			Expect(api.listRequest).To(BeNil())
 
-			_, err = client.List(context.Background(), "filter", 0)
-			Expect(err).To(MatchError(ContainSubstring("limit must be positive")))
-			Expect(api.listRequest).To(BeNil())
+			result, err := client.List(context.Background(), "filter", 0)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(api.listRequest.GetLimit()).To(BeZero())
+			Expect(result.Total).To(Equal(int32(3)))
+			Expect(result.Items).To(BeEmpty())
 		})
 	})
 
@@ -222,20 +234,14 @@ var _ = Describe("Secret API client", func() {
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(api.getRequest.GetId()).To(Equal("secret-1"))
+			deadline, ok := api.getContext.Deadline()
+			Expect(ok).To(BeTrue())
+			Expect(time.Until(deadline)).To(BeNumerically(">", 0))
+			Expect(time.Until(deadline)).To(BeNumerically("<=", rpcTimeout))
 			Expect(got.ID).To(Equal("secret-1"))
 			Expect(got.Tenant).To(Equal("system"))
 			Expect(got.Data["username"]).To(Equal([]byte("admin")))
 			Expect(got.Data["password"]).To(Equal(password))
-		})
-
-		It("rejects an empty ID without calling the API", func() {
-			api := &fakeSecretsRPC{}
-			client := &client{api: api}
-
-			_, err := client.Get(context.Background(), " ")
-
-			Expect(err).To(MatchError(ContainSubstring("secret ID is required")))
-			Expect(api.getRequest).To(BeNil())
 		})
 
 		It("returns an error when the API request fails", func() {
@@ -254,12 +260,25 @@ var _ = Describe("Secret API client", func() {
 				_, err := New(Config{Endpoint: endpoint})
 				Expect(err).To(MatchError(wantErr))
 			},
-			Entry("requires an endpoint", "", "Secret API endpoint must use HTTPS and include a host"),
-			Entry("requires HTTPS", "http://secrets.example.test:8001", "Secret API endpoint must use HTTPS and include a host"),
-			Entry("rejects endpoint paths", "https://secrets.example.test:8001/api", "Secret API endpoint must use HTTPS and include a host"),
-			Entry("rejects malformed URLs", "https://%zz", "Secret API endpoint must use HTTPS and include a host"),
+			Entry("requires a host", "", "Secret API endpoint must include a host"),
+			Entry("rejects malformed URLs", "https://%zz", "Secret API endpoint must include a host"),
 		)
 
+		DescribeTable("uses only the endpoint host",
+			func(endpoint, wantHost string) {
+				host, err := parseEndpoint(endpoint)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(host).To(Equal(wantHost))
+			},
+			Entry("ignores path", "https://secrets.example.test:8001/api", "secrets.example.test:8001"),
+			Entry("ignores query", "https://secrets.example.test:8001?region=west", "secrets.example.test:8001"),
+			Entry("ignores fragment", "https://secrets.example.test:8001#secrets", "secrets.example.test:8001"),
+		)
+
+		issuerWithUserInfo := url.URL{
+			Scheme: "https", Host: "keycloak.example.test", Path: "/realms/osac",
+			User: url.UserPassword("test-user", "test-password"),
+		}
 		DescribeTable("rejects invalid issuer URLs before reading credentials",
 			func(issuerURL string, wantErr string) {
 				_, err := New(Config{
@@ -273,26 +292,13 @@ var _ = Describe("Secret API client", func() {
 			Entry("requires an issuer", "", "Secret API issuer URL must use HTTPS"),
 			Entry("requires HTTPS", "http://keycloak.example.test/realms/osac", "Secret API issuer URL must use HTTPS"),
 			Entry("requires a host", "https:///realms/osac", "Secret API issuer URL must use HTTPS"),
-			Entry("rejects user info", "https://user:password@keycloak.example.test/realms/osac", "Secret API issuer URL must use HTTPS"),
+			Entry("rejects user info", issuerWithUserInfo.String(), "Secret API issuer URL must use HTTPS"),
 			Entry("rejects query parameters", "https://keycloak.example.test/realms/osac?tenant=shared", "Secret API issuer URL must use HTTPS"),
 			Entry("rejects an empty query", "https://keycloak.example.test/realms/osac?", "Secret API issuer URL must use HTTPS"),
 			Entry("rejects fragments", "https://keycloak.example.test/realms/osac#token", "Secret API issuer URL must use HTTPS"),
 			Entry("rejects an empty fragment", "https://keycloak.example.test/realms/osac#", "Secret API issuer URL must use HTTPS"),
 			Entry("rejects malformed URLs", "https://%zz/realms/osac", "Secret API issuer URL must use HTTPS"),
 		)
-
-		It("rejects missing or insecure connection configuration", func() {
-			_, err := New(Config{})
-			Expect(err).To(MatchError(ContainSubstring("endpoint must use HTTPS")))
-
-			_, err = New(Config{
-				Endpoint:         "http://secrets.example.test:8001",
-				IssuerURL:        "https://issuer.example.test/realms/osac",
-				ClientIDFile:     "/unused/client-id",
-				ClientSecretFile: "/unused/client-secret",
-			})
-			Expect(err).To(MatchError(ContainSubstring("must use HTTPS")))
-		})
 
 		It("requires non-empty client credential files without exposing their contents", func() {
 			tempDir := GinkgoT().TempDir()

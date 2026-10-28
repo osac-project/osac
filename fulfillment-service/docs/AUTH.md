@@ -7,8 +7,8 @@ and configure the necessary mappings and authorization rules.
 > The Keycloak setup requires:
 >
 > - A valid OAuth issuer URL
-> - JWT tokens containing a username claim (`preferred_username` or `username`)
-> - JWT tokens containing an `organization` claim for tenant membership (required to create objects)
+> - User JWTs containing a username claim (`preferred_username` or `username`) and an `organization` claim
+> - Tenant-scoped service-account client-credentials JWTs containing `client_id` and `osac_tenant` claims
 > - The ability to validate tokens using the issuer's public keys
 >
 
@@ -348,14 +348,17 @@ Keycloak, this means the `realm-management` client roles: `manage-realm`, `manag
 `view-realm`, `view-users`). You can reuse the same credentials as `auth.controllerCredentials`
 if the service account has both API access and IDP management permissions.
 
-The same `idp.credentials` principal creates and deletes service-account clients. Grant it the
-`realm-management` client roles `create-client` and `view-clients` in addition to its existing
-roles. `view-clients` is read-only; the controller uses it to check one stored client UUID when a
-registration-token delete returns HTTP 401. Each created client's registration access token is
-stored in a system-scoped Secret through the private Secrets API and authorizes its deletion. The
-client credential is stored in a tenant-scoped Secret referenced by the service account's status.
-The Fulfillment gRPC server reads the IDP credentials from `/etc/fulfillment-grpc-server/idp`; no
-`realm-admin` or `manage-clients` grant is required.
+The same `idp.credentials` principal creates, rotates, and deletes service-account clients. Grant it the
+`realm-management` client roles `create-client` and `view-clients` in addition to its existing roles.
+`view-clients` is read-only; the controller uses it to check one stored client UUID when a
+registration-token delete returns HTTP 401. The installer configures a Keycloak Client Policy to
+disable registration-token rotation for updates authorized by a registration token. This lets the
+controller retry after a failed system-scoped Secret write without granting it `manage-clients`. Each
+created client's registration access token is stored in a system-scoped Secret through the private
+Secrets API and authorizes deletion. The client credential is stored in a tenant-scoped Secret
+referenced by the service account's status.
+The Fulfillment controller reads the IDP credentials from
+`/etc/fulfillment-controller/idp`; no `realm-admin` grant is required.
 
 ### 6. Trusted Token Issuers
 
@@ -394,6 +397,10 @@ to `username` if not present). The `tenants` are resolved from the **`organizati
 Keycloak Organizations when the user belongs to an organization). This claim can be in two formats:
 - Array format: `["org-name"]`
 - Object format: `{"org-name": {"groups": [...]}}`
+
+Tenant-scoped service-account client-credentials tokens use `client_id` as the subject username and
+the single `osac_tenant` claim as the tenant. The controller configures these claims on each
+service-account client. OAuth client tokens without `osac_tenant` do not receive this fallback.
 
 JWT users without an `organization` claim will have an empty tenant list and **cannot create objects**
 (they can only view objects in the `shared` tenant).
@@ -587,7 +594,8 @@ The authorization policy distinguishes between the following subject categories:
    They inherit all client permissions **plus** access to user management methods
    (`Users/Create`, `Users/Get`, `Users/List`, `Users/Update`, `Users/Delete`) and IdP management
    methods (`IdentityProviders/Create`, `Get`, `List`, `Update`, `Delete`) and service-account
-   management methods (`ServiceAccounts/Create`, `Get`, `List`, `Update`, `Delete`).
+   management methods (`ServiceAccounts/Create`, `Get`, `List`, `Update`, `Delete`,
+   `RegenerateSecret`).
 
 3. **Tenant IdP Manager Subjects**: Users with the `tenant-idp-manager` realm role.
    They inherit all client permissions **plus** access to IdP management methods

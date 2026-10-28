@@ -305,3 +305,20 @@ func (s *ServiceAccountsServer) Delete(ctx context.Context,
 	response = &publicv1.ServiceAccountsDeleteResponse{}
 	return
 }
+
+func (s *ServiceAccountsServer) RegenerateSecret(ctx context.Context,
+	request *publicv1.ServiceAccountsRegenerateSecretRequest) (*publicv1.ServiceAccountsRegenerateSecretResponse, error) {
+	privateResponse, err := s.delegate.RegenerateSecret(ctx,
+		privatev1.ServiceAccountsRegenerateSecretRequest_builder{Id: request.GetId()}.Build())
+	if err != nil {
+		return nil, err
+	}
+	publicObject := &publicv1.ServiceAccount{}
+	if err := s.outMapper.Copy(ctx, privateResponse.GetObject(), publicObject); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to map private service account to public", slog.Any("error", err))
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process service account")
+	}
+	response := &publicv1.ServiceAccountsRegenerateSecretResponse{}
+	response.SetObject(publicObject)
+	return response, nil
+}

@@ -659,8 +659,22 @@ Role assignments are managed through RoleBindings; service accounts do not accep
 Support for service-account subjects in RoleBindings is tracked by
 [OSAC-6554](https://redhat.atlassian.net/browse/OSAC-6554).
 
-Secret rotation is tracked separately by
-[OSAC-6555](https://redhat.atlassian.net/browse/OSAC-6555).
+Tenant admins can request secret rotation with `RegenerateSecret`. The action records a pending
+rotation and returns the account status without returning credential bytes. The controller replaces
+the Keycloak secret with the client's registration token, stages the replacement and the returned
+registration token in the system-scoped registration Secret, updates the tenant-scoped credential
+Secret, and marks the rotation complete only after publication. The installer configures a Keycloak
+Client Policy to disable registration-token rotation for updates authorized by a registration token,
+so a Secret-store failure can retry rotation with the same token. Read the replacement through
+`Secrets/Get` after rotation completes. Repeated requests while a rotation is pending or retrying
+return that rotation instead of starting another one. Rotation has no grace period: the old secret
+stops working when the Keycloak update applies, while already-issued tokens retain their normal
+expiry. The controller retries publication from the staged credential so a Secret-update failure
+does not rotate Keycloak again.
+
+`RegenerateSecret` is available to tenant admins for accounts in their tenant. Its REST route is
+`POST /api/fulfillment/v1/service_accounts/{id}/regenerate_secret`; the private route is
+`POST /api/private/v1/service_accounts/{id}/regenerate_secret`.
 
 ## REST transcoding
 

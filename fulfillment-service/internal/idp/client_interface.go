@@ -22,6 +22,9 @@ import "context"
 // Production code uses the concrete *Client type.
 type ClientInterface interface {
 	CreateServiceAccountClient(ctx context.Context, clientID, tenantID string) (clientUUID, clientSecret, registrationAccessToken string, err error)
+	RotateServiceAccountClientSecret(ctx context.Context, clientID, clientUUID, registrationAccessToken string) (
+		clientSecret, newRegistrationAccessToken string, err error,
+	)
 	FindServiceAccountClient(ctx context.Context, clientID, tenantID string) (clientUUID string, found bool, err error)
 	DeleteServiceAccountClient(ctx context.Context, clientID, clientUUID, registrationAccessToken string) error
 	CreateTenant(ctx context.Context, tenant *Tenant) (*Tenant, error)

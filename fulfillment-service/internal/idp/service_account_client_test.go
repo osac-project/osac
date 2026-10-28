@@ -18,6 +18,7 @@ package idp
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,6 +49,9 @@ var _ = Describe("Service-account Keycloak client", func() {
 	var lookupClientFound bool
 	var lookupFailureStatus int
 	var response string
+	var updatedRepresentation map[string]json.RawMessage
+	var rotationClientUUID string
+	var rotationClientID string
 
 	BeforeEach(func() {
 		calls = nil
@@ -59,6 +63,9 @@ var _ = Describe("Service-account Keycloak client", func() {
 		lookupClientFound = false
 		lookupFailureStatus = 0
 		response = ""
+		updatedRepresentation = nil
+		rotationClientUUID = clientUUID
+		rotationClientID = clientID
 		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			call := r.Method + " " + r.URL.Path
 			calls = append(calls, call)
@@ -99,6 +106,20 @@ var _ = Describe("Service-account Keycloak client", func() {
 					return
 				}
 				w.WriteHeader(http.StatusOK)
+			case "GET " + registrationPath + "/" + clientID:
+				Expect(r.Header.Get("Authorization")).To(Equal("Bearer " + registrationToken))
+				w.WriteHeader(http.StatusOK)
+				Expect(json.NewEncoder(w).Encode(map[string]any{
+					"id": rotationClientUUID, "clientId": rotationClientID, "secret": "old-client-secret",
+					"registrationAccessToken": registrationToken, "enabled": true,
+				})).To(Succeed())
+			case "PUT " + registrationPath + "/" + clientID:
+				Expect(r.Header.Get("Authorization")).To(Equal("Bearer " + registrationToken))
+				Expect(json.NewDecoder(r.Body).Decode(&updatedRepresentation)).To(Succeed())
+				w.WriteHeader(http.StatusOK)
+				Expect(json.NewEncoder(w).Encode(map[string]string{
+					"id": clientUUID, "clientId": clientID, "registrationAccessToken": "rotated-registration-token",
+				})).To(Succeed())
 			case "GET /admin/realms/osac/clients":
 				Expect(r.Header.Get("Authorization")).To(Equal("Bearer test-token"))
 				Expect(r.URL.Query().Get("clientId")).To(Equal(clientID))
@@ -234,6 +255,48 @@ var _ = Describe("Service-account Keycloak client", func() {
 	It("deletes only the named client with its registration token", func() {
 		Expect(client.DeleteServiceAccountClient(context.Background(), clientID, clientUUID, registrationToken)).To(Succeed())
 		Expect(calls).To(Equal([]string{"DELETE " + registrationPath + "/" + clientID}))
+	})
+
+	It("rotates the secret with the per-client registration token and preserves client settings", func() {
+		secret, updatedToken, err := client.RotateServiceAccountClientSecret(
+			context.Background(), clientID, clientUUID, registrationToken)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(secret).ToNot(BeEmpty())
+		Expect(sha256.Sum256([]byte(secret))).ToNot(Equal(sha256.Sum256([]byte("old-client-secret"))))
+		Expect(updatedToken).To(Equal("rotated-registration-token"))
+		Expect(calls).To(Equal([]string{
+			"GET " + registrationPath + "/" + clientID,
+			"PUT " + registrationPath + "/" + clientID,
+		}))
+		Expect(updatedRepresentation).To(HaveKey("secret"))
+		Expect(updatedRepresentation).ToNot(HaveKey("registrationAccessToken"))
+		Expect(updatedRepresentation).To(HaveKey("enabled"))
+		var sentSecret string
+		Expect(json.Unmarshal(updatedRepresentation["secret"], &sentSecret)).To(Succeed())
+		Expect(sha256.Sum256([]byte(sentSecret))).To(Equal(sha256.Sum256([]byte(secret))))
+	})
+
+	It("does not update a client when its registration token resolves to another identity", func() {
+		rotationClientUUID = "00000000-0000-0000-0000-000000000000"
+		_, _, err := client.RotateServiceAccountClientSecret(context.Background(), clientID, clientUUID, registrationToken)
+		Expect(err).To(HaveOccurred())
+		Expect(calls).To(Equal([]string{"GET " + registrationPath + "/" + clientID}))
+	})
+
+	It("rejects invalid rotation credentials before calling Keycloak", func() {
+		for _, test := range []struct {
+			clientID   string
+			clientUUID string
+			token      string
+		}{
+			{clientID: "../other", clientUUID: clientUUID, token: registrationToken},
+			{clientID: clientID, clientUUID: "invalid", token: registrationToken},
+			{clientID: clientID, clientUUID: clientUUID},
+		} {
+			_, _, err := client.RotateServiceAccountClientSecret(context.Background(), test.clientID, test.clientUUID, test.token)
+			Expect(err).To(HaveOccurred())
+		}
+		Expect(calls).To(BeEmpty())
 	})
 
 	It("treats an absent client as already cleaned up", func() {

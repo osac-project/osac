@@ -698,6 +698,10 @@ func (m *mockClient) CreateServiceAccountClient(ctx context.Context, clientID, t
 	return "", "", "", fmt.Errorf("not implemented in test mock")
 }
 
+func (m *mockClient) RotateServiceAccountClientSecret(ctx context.Context, clientID, clientUUID, registrationAccessToken string) (string, string, error) {
+	return "", "", fmt.Errorf("not implemented in test mock")
+}
+
 func (m *mockClient) FindServiceAccountClient(ctx context.Context, clientID, tenantID string) (string, bool, error) {
 	return "", false, fmt.Errorf("not implemented in test mock")
 }

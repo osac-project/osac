@@ -47,6 +47,7 @@ const (
 	serviceAccountCompensationTimeout = 10 * time.Second
 	serviceAccountRetryDelay          = time.Second
 	serviceAccountRecoveryRetryDelay  = 30 * time.Second
+	serviceAccountRotationError       = "Client-secret rotation is pending; reconciliation will retry."
 	clientIDDataKey                   = "client_id"
 	clientSecretDataKey               = "client_secret"
 	tenantAnnotation                  = "osac.openshift.io/tenant"
@@ -124,7 +125,7 @@ func (r *function) provision(ctx context.Context, account *privatev1.ServiceAcco
 	}
 	status := account.GetStatus()
 	if status.GetKeycloakClientUuid() != "" && status.GetClientSecret() != nil {
-		return r.finishExistingProvisioning(ctx, account)
+		return r.reconcileProvisioned(ctx, account)
 	}
 	if status.GetKeycloakClientUuid() != "" || status.GetClientSecret() != nil {
 		return errors.New("inconsistent service-account provisioning status")
@@ -174,6 +175,23 @@ func (r *function) finishExistingProvisioning(ctx context.Context, account *priv
 		}
 	}
 	return r.removePendingClientSecret(ctx, account)
+}
+
+func (r *function) reconcileProvisioned(ctx context.Context, account *privatev1.ServiceAccount) error {
+	status := account.GetStatus()
+	switch status.GetSecretRotationState() {
+	case privatev1.ServiceAccountSecretRotationState_SERVICE_ACCOUNT_SECRET_ROTATION_STATE_PENDING,
+		privatev1.ServiceAccountSecretRotationState_SERVICE_ACCOUNT_SECRET_ROTATION_STATE_ERROR:
+		return r.rotateSecret(ctx, account)
+	case privatev1.ServiceAccountSecretRotationState_SERVICE_ACCOUNT_SECRET_ROTATION_STATE_COMPLETED:
+		if err := r.removePendingRotationSecret(ctx, account, status.GetSecretRotationGeneration()); err != nil {
+			return controllers.RequeueAfter(err, serviceAccountRetryDelay)
+		}
+	case privatev1.ServiceAccountSecretRotationState_SERVICE_ACCOUNT_SECRET_ROTATION_STATE_UNSPECIFIED:
+	default:
+		return errors.New("invalid service-account secret-rotation state")
+	}
+	return r.finishExistingProvisioning(ctx, account)
 }
 
 func (r *function) fetchOrCreateRegistrationCredentials(ctx context.Context, clientID string,
@@ -301,7 +319,7 @@ func (r *function) createClientSecret(ctx context.Context, tenant, accountID, cl
 					ownerReferenceAnnotation: accountID,
 				},
 			}.Build(),
-			Type: privatev1.SecretType_SECRET_TYPE_OPAQUE,
+			Type: privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL,
 			Data: map[string][]byte{
 				clientIDDataKey:     []byte(clientID),
 				clientSecretDataKey: []byte(clientSecret),
@@ -325,10 +343,217 @@ func (r *function) createClientSecret(ctx context.Context, tenant, accountID, cl
 		return nil, fmt.Errorf("expected one service-account credential Secret named %q, found %d", name, len(items))
 	}
 	secret := items[0]
-	if err := r.verifyClientSecret(ctx, secret, tenant, clientID, clientSecret); err != nil {
+	if err := r.verifyClientSecret(ctx, secret, tenant, accountID, clientID, clientSecret); err != nil {
 		return nil, err
 	}
 	return &privatev1.SecretLocalReference{Id: secret.GetId(), Name: secret.GetMetadata().GetName()}, nil
+}
+
+func isServiceAccountCredentialSecret(secret *privatev1.Secret, name, tenant, accountID string) bool {
+	metadata := secret.GetMetadata()
+	annotations := metadata.GetAnnotations()
+	return metadata.GetName() == name && metadata.GetTenant() == tenant &&
+		annotations[tenantAnnotation] == tenant && annotations[ownerReferenceAnnotation] == accountID &&
+		secret.GetType() == privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL
+}
+
+func (r *function) rotateSecret(ctx context.Context, account *privatev1.ServiceAccount) error {
+	accountID := account.GetId()
+	tenant := account.GetMetadata().GetTenant()
+	status := account.GetStatus()
+	generation := status.GetSecretRotationGeneration()
+	clientUUID := status.GetKeycloakClientUuid()
+	clientSecretRef := status.GetClientSecret()
+	if _, err := uuid.Parse(generation); err != nil {
+		return r.rotationFailure(ctx, account, errors.New("invalid service-account rotation generation"))
+	}
+	if _, err := uuid.Parse(clientUUID); err != nil || tenant == "" || clientSecretRef == nil || clientSecretRef.GetId() == "" {
+		return r.rotationFailure(ctx, account, errors.New("incomplete service-account identity for secret rotation"))
+	}
+
+	credentials, err := r.fetchRegistrationCredentials(ctx, account)
+	if err != nil {
+		return r.rotationFailure(ctx, account, fmt.Errorf("failed to fetch service-account management credential: %w", err))
+	}
+	if len(credentials[serviceaccounts.RegistrationAccessTokenKey]) == 0 ||
+		string(credentials[serviceaccounts.RegistrationClientUUIDKey]) != clientUUID {
+		return r.rotationFailure(ctx, account, errors.New("service-account management credential is incomplete"))
+	}
+
+	stagedSecret := credentials[serviceaccounts.PendingRotationSecretKey]
+	stagedGeneration := string(credentials[serviceaccounts.PendingRotationGenerationKey])
+	if stagedGeneration == generation && len(stagedSecret) == 0 {
+		return r.rotationFailure(ctx, account, errors.New("staged service-account rotation credential is missing"))
+	}
+	if stagedGeneration == "" && len(stagedSecret) != 0 {
+		return r.rotationFailure(ctx, account, errors.New("staged service-account rotation generation is missing"))
+	}
+	if len(stagedSecret) == 0 || stagedGeneration != generation {
+		if len(stagedSecret) != 0 || stagedGeneration != "" {
+			delete(credentials, serviceaccounts.PendingRotationSecretKey)
+			delete(credentials, serviceaccounts.PendingRotationGenerationKey)
+			if err := r.storeRegistrationCredentials(ctx, account, credentials); err != nil {
+				return r.rotationFailure(ctx, account, fmt.Errorf("failed to clear stale staged rotation credential: %w", err))
+			}
+		}
+		clientID := serviceaccounts.ClientID(tenant, accountID)
+		registrationToken := string(credentials[serviceaccounts.RegistrationAccessTokenKey])
+		rotatedSecret, updatedRegistrationToken, rotateErr := r.idpClient.RotateServiceAccountClientSecret(
+			ctx, clientID, clientUUID, registrationToken)
+		if rotateErr != nil {
+			return r.rotationFailure(ctx, account, rotateErr)
+		}
+		if rotatedSecret == "" || updatedRegistrationToken == "" {
+			return r.rotationFailure(ctx, account, errors.New("keycloak returned incomplete service-account rotation credentials"))
+		}
+		stagedSecret = []byte(rotatedSecret)
+		credentials[serviceaccounts.RegistrationAccessTokenKey] = []byte(updatedRegistrationToken)
+		credentials[serviceaccounts.PendingRotationSecretKey] = stagedSecret
+		credentials[serviceaccounts.PendingRotationGenerationKey] = []byte(generation)
+		if err := r.storeRegistrationCredentials(ctx, account, credentials); err != nil {
+			return r.rotationFailure(ctx, account, fmt.Errorf("failed to stage rotated service-account credential: %w", err))
+		}
+	}
+
+	secretRef, err := r.updateClientSecret(ctx, tenant, accountID, clientSecretRef, stagedSecret)
+	if err != nil {
+		return r.rotationFailure(ctx, account, err)
+	}
+	if err := r.updateRotationStatus(ctx, account, secretRef,
+		privatev1.ServiceAccountSecretRotationState_SERVICE_ACCOUNT_SECRET_ROTATION_STATE_COMPLETED, ""); err != nil {
+		return controllers.RequeueAfter(fmt.Errorf("failed to mark service-account secret rotation complete: %w", err), serviceAccountRetryDelay)
+	}
+	if err := r.removePendingRotationSecret(ctx, account, generation); err != nil {
+		return controllers.RequeueAfter(err, serviceAccountRetryDelay)
+	}
+	return r.removePendingClientSecret(ctx, account)
+}
+
+func (r *function) updateClientSecret(ctx context.Context, tenant, accountID string,
+	ref *privatev1.SecretLocalReference, clientSecret []byte) (*privatev1.SecretLocalReference, error) {
+	name := serviceaccounts.ClientSecretName(accountID)
+	if ref == nil || ref.GetId() == "" || (ref.GetName() != "" && ref.GetName() != name) {
+		return nil, errors.New("service-account credential Secret reference is invalid")
+	}
+	getSecret := func(id string) (*privatev1.Secret, error) {
+		response, err := r.secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{Id: id}.Build())
+		if err != nil {
+			return nil, err
+		}
+		if response.GetObject() == nil {
+			return nil, errors.New("service-account credential Secret response is empty")
+		}
+		return response.GetObject(), nil
+	}
+	secret, err := getSecret(ref.GetId())
+	if grpcstatus.Code(err) == grpccodes.NotFound {
+		filter := fmt.Sprintf("this.metadata.name == %s && this.metadata.tenant == %s", strconv.Quote(name), strconv.Quote(tenant))
+		limit := int32(2)
+		listed, listErr := r.secretsClient.List(ctx,
+			privatev1.SecretsListRequest_builder{Filter: &filter, Limit: &limit}.Build())
+		if listErr != nil {
+			return nil, fmt.Errorf("failed to find service-account credential Secret: %w", listErr)
+		}
+		if len(listed.GetItems()) > 1 {
+			return nil, fmt.Errorf("expected one service-account credential Secret named %q, found %d", name, len(listed.GetItems()))
+		}
+		if len(listed.GetItems()) == 1 {
+			secret, err = getSecret(listed.GetItems()[0].GetId())
+		} else {
+			return r.createClientSecret(ctx, tenant, accountID, serviceaccounts.ClientID(tenant, accountID), string(clientSecret))
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get service-account credential Secret: %w", err)
+	}
+	if !isServiceAccountCredentialSecret(secret, name, tenant, accountID) {
+		return nil, fmt.Errorf("service-account credential Secret %q has a different owner", name)
+	}
+	data := cloneSecretData(secret.GetData())
+	if data == nil {
+		data = make(map[string][]byte)
+	}
+	if bytes.Equal(data[clientSecretDataKey], clientSecret) {
+		return &privatev1.SecretLocalReference{Id: secret.GetId(), Name: name}, nil
+	}
+	data[clientSecretDataKey] = bytes.Clone(clientSecret)
+	updated := proto.Clone(secret).(*privatev1.Secret)
+	updated.SetData(data)
+	_, err = r.secretsClient.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+		Object: updated, Lock: true,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data"}},
+	}.Build())
+	if err != nil {
+		return nil, fmt.Errorf("failed to publish rotated service-account credential: %w", err)
+	}
+	return &privatev1.SecretLocalReference{Id: secret.GetId(), Name: name}, nil
+}
+
+func (r *function) updateRotationStatus(ctx context.Context, account *privatev1.ServiceAccount,
+	secretRef *privatev1.SecretLocalReference, state privatev1.ServiceAccountSecretRotationState, message string) error {
+	updated := proto.Clone(account).(*privatev1.ServiceAccount)
+	status := updated.GetStatus()
+	if status == nil {
+		status = &privatev1.ServiceAccountStatus{}
+		updated.SetStatus(status)
+	}
+	status.SetSecretRotationState(state)
+	status.SetSecretRotationError(message)
+	if secretRef != nil {
+		status.SetClientSecret(secretRef)
+	}
+	paths := []string{"status.secret_rotation_state", "status.secret_rotation_error"}
+	if secretRef != nil {
+		paths = append(paths, "status.client_secret")
+	}
+	response, err := r.client.Update(ctx, privatev1.ServiceAccountsUpdateRequest_builder{
+		Object: updated, Lock: true, UpdateMask: &fieldmaskpb.FieldMask{Paths: paths},
+	}.Build())
+	if err != nil {
+		return err
+	}
+	if response != nil && response.GetObject() != nil {
+		if response.GetObject().GetMetadata() != nil {
+			account.GetMetadata().SetVersion(response.GetObject().GetMetadata().GetVersion())
+		}
+		if account.GetStatus() == nil {
+			account.SetStatus(&privatev1.ServiceAccountStatus{})
+		}
+		account.GetStatus().SetSecretRotationState(state)
+		account.GetStatus().SetSecretRotationError(message)
+		if secretRef != nil {
+			account.GetStatus().SetClientSecret(secretRef)
+		}
+	}
+	return nil
+}
+
+func (r *function) rotationFailure(ctx context.Context, account *privatev1.ServiceAccount, cause error) error {
+	if err := r.updateRotationStatus(ctx, account, nil,
+		privatev1.ServiceAccountSecretRotationState_SERVICE_ACCOUNT_SECRET_ROTATION_STATE_ERROR,
+		serviceAccountRotationError); err != nil {
+		cause = errors.Join(cause, fmt.Errorf("failed to record service-account rotation error: %w", err))
+	}
+	return controllers.RequeueAfter(cause, serviceAccountRetryDelay)
+}
+
+func (r *function) removePendingRotationSecret(ctx context.Context, account *privatev1.ServiceAccount, generation string) error {
+	credentials, err := r.fetchRegistrationCredentials(ctx, account)
+	if grpcstatus.Code(err) == grpccodes.NotFound {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if string(credentials[serviceaccounts.PendingRotationGenerationKey]) != generation {
+		return nil
+	}
+	if len(credentials[serviceaccounts.PendingRotationSecretKey]) == 0 {
+		return errors.New("staged service-account rotation generation has no credential")
+	}
+	delete(credentials, serviceaccounts.PendingRotationSecretKey)
+	delete(credentials, serviceaccounts.PendingRotationGenerationKey)
+	return r.storeRegistrationCredentials(ctx, account, credentials)
 }
 
 func (r *function) updateState(ctx context.Context, account *privatev1.ServiceAccount,
@@ -373,8 +598,8 @@ func (r *function) updateState(ctx context.Context, account *privatev1.ServiceAc
 	return nil
 }
 
-func (r *function) verifyClientSecret(ctx context.Context, listed *privatev1.Secret, tenant, clientID, expectedSecret string) error {
-	if listed.GetMetadata().GetTenant() != tenant {
+func (r *function) verifyClientSecret(ctx context.Context, listed *privatev1.Secret, tenant, accountID, clientID, expectedSecret string) error {
+	if !isServiceAccountCredentialSecret(listed, serviceaccounts.ClientSecretName(accountID), tenant, accountID) {
 		return fmt.Errorf("existing service-account credential Secret %q has a different owner", listed.GetMetadata().GetName())
 	}
 	response, err := r.secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{Id: listed.GetId()}.Build())
@@ -382,7 +607,7 @@ func (r *function) verifyClientSecret(ctx context.Context, listed *privatev1.Sec
 		return fmt.Errorf("failed to verify existing service-account credential Secret: %w", err)
 	}
 	secret := response.GetObject()
-	if secret.GetType() != privatev1.SecretType_SECRET_TYPE_OPAQUE ||
+	if secret.GetType() != privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL ||
 		!bytes.Equal(secret.GetData()[clientIDDataKey], []byte(clientID)) ||
 		!bytes.Equal(secret.GetData()[clientSecretDataKey], []byte(expectedSecret)) {
 		return fmt.Errorf("existing service-account credential Secret %q has different data", listed.GetMetadata().GetName())
@@ -575,18 +800,21 @@ func (r *function) removePendingClientSecret(ctx context.Context, account *priva
 		return controllers.RequeueAfter(err, serviceAccountRetryDelay)
 	}
 	if len(credentials[serviceaccounts.PendingClientSecretKey]) == 0 &&
-		len(credentials[serviceaccounts.PendingClientSecretRefIDKey]) == 0 &&
-		len(credentials[serviceaccounts.RegistrationClientUUIDKey]) == 0 {
+		len(credentials[serviceaccounts.PendingClientSecretRefIDKey]) == 0 {
 		return nil
 	}
 	token := credentials[serviceaccounts.RegistrationAccessTokenKey]
 	if len(token) == 0 {
 		return errors.New("service-account management credential is missing")
 	}
-	if err := r.storeRegistrationCredentials(ctx, account, map[string][]byte{
+	retainedCredentials := map[string][]byte{
 		serviceaccounts.RegistrationServiceAccountIDKey: []byte(account.GetId()),
 		serviceaccounts.RegistrationAccessTokenKey:      token,
-	}); err != nil {
+	}
+	if clientUUID := credentials[serviceaccounts.RegistrationClientUUIDKey]; len(clientUUID) > 0 {
+		retainedCredentials[serviceaccounts.RegistrationClientUUIDKey] = clientUUID
+	}
+	if err := r.storeRegistrationCredentials(ctx, account, retainedCredentials); err != nil {
 		return controllers.RequeueAfter(err, serviceAccountRetryDelay)
 	}
 	return nil
@@ -776,7 +1004,7 @@ func (r *function) deleteClientSecret(ctx context.Context, tenant, accountID str
 		}
 		secret := response.GetObject()
 		clientID := serviceaccounts.ClientID(tenant, accountID)
-		if secret.GetMetadata().GetName() != name || secret.GetMetadata().GetTenant() != tenant ||
+		if !isServiceAccountCredentialSecret(secret, name, tenant, accountID) ||
 			string(secret.GetData()[clientIDDataKey]) != clientID {
 			return fmt.Errorf("service-account credential Secret %q has a different owner", name)
 		}

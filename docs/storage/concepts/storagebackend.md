@@ -33,8 +33,11 @@ Every backend has an ownership mode, set by the `cspManaged` field:
 | StorageClass lifecycle | Created and deleted by OSAC | Created and managed by the CSP |
 
 The field is immutable after creation: to change ownership, create a new
-backend. The mode is provider-neutral in the API; runtime support for
-CSP-managed storage is currently limited to NetApp (see
+backend. The field is provider-neutral in the API, with one exception:
+a NetApp backend must set `cspManaged: true`. The API rejects an
+OSAC-managed NetApp backend, including when the field is omitted, since
+the default is `false`. CSP-managed storage for providers other than
+NetApp can be registered but is untested in this release (see
 [providers/netapp.md](../providers/netapp.md)).
 
 ## Fields

@@ -1,7 +1,10 @@
 # NetApp
 
 > **Status: Dev Preview (CSP-managed).** NetApp is the provider of the
-> CSP-managed Dev Preview profile. OSAC-managed NetApp support is planned.
+> CSP-managed Dev Preview profile, and NetApp backends must be
+> CSP-managed: the API rejects `cspManaged: false`, including when the
+> field is omitted, since the default is `false`. OSAC-managed NetApp
+> support is planned.
 
 NetApp storage is integrated through ONTAP and the Trident CSI driver:
 

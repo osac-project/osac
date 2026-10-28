@@ -1,9 +1,10 @@
 # CSP-managed storage
 
-> **Status: Dev Preview.** Runtime support is currently limited to NetApp on
-> the VMaaS profile; see [providers/netapp.md](../providers/netapp.md). The
-> API field is provider-neutral, but CSP-managed storage for other providers
-> is not implemented and fails closed.
+> **Status: Dev Preview.** Runtime support is currently validated for NetApp
+> on the VMaaS profile; see [providers/netapp.md](../providers/netapp.md).
+> The API field is provider-neutral, and the onboarding check itself is
+> generic. Only NetApp is tested and supported in this release; other
+> providers are untested.
 
 In the CSP-managed model, the Cloud Provider Admin (CSP) operates the storage
 system and prepares everything tenants need before onboarding. OSAC verifies
@@ -59,8 +60,11 @@ validate the transport, the CSI driver's health, or the backing system.
 
 ## Supported boundaries (Dev Preview)
 
-- **Provider:** NetApp only. A CSP-managed backend for any other provider
-  fails closed; storage for it is not dispatched to provider automation.
+- **Provider:** NetApp only. A NetApp backend must be CSP-managed: the API
+  rejects `cspManaged: false`, including when the field is omitted, since
+  the default is `false`. Other providers can be registered as CSP-managed
+  and follow the same generic onboarding check, but are untested and
+  unsupported in this release.
 - **Profile:** VMaaS (virtual machines). CaaS and BMaaS consumption is
   planned.
 - **Tenancy:** shared storage tenant. Dedicated-SVM profiles are planned.

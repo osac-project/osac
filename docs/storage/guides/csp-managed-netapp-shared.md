@@ -78,6 +78,9 @@ osac describe storagebackend netapp-shared   # note the backend ID
 osac get storagetier
 ```
 
+A NetApp backend must be CSP-managed: the API rejects the creation if
+`--csp-managed` is omitted, since the default is `false`.
+
 The exact StorageClass-to-tier contract the operator matches against:
 
 ```yaml

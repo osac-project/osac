@@ -834,8 +834,12 @@ kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster clean
 bmf-netbox-render-test: helm-deps ## Check NetBox, Metal3 management, and Secret API Helm wiring
 	uv run --project .. python scripts/test-bmf-netbox-render.py
 
+.PHONY: chart-name-independence-render-test
+chart-name-independence-render-test: helm-deps ## Check cross-chart secret/cert names survive repackaging under a different Chart.yaml name
+	python3 scripts/test-chart-name-independence-render.py
+
 .PHONY: helm-validate
-helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \

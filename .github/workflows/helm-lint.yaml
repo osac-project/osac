@@ -181,6 +181,10 @@ jobs:
       working-directory: osac-installer
       run: uv run --project .. make bmf-netbox-render-test
 
+    - name: Test chart name independence
+      working-directory: osac-installer
+      run: make chart-name-independence-render-test
+
     - name: Run chart-testing lint
       working-directory: osac-installer
       run: ct lint --all --config ct.yaml

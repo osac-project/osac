@@ -11,19 +11,20 @@ interface NetworkAttachmentReviewFieldsProps {
   virtualNetwork: ResourceSelectValue;
   subnet: ResourceSelectValue;
   securityGroups: ResourceSelectValue[];
+  showSecurityGroups?: boolean;
 }
 
 /**
- * Shared review fields for VN / subnet / security-groups, reused by
- * VM, Cluster, and (in future) bare-metal review steps.
+ * Shared review fields for virtual network, subnet, and optional security groups,
+ * reused by VM, cluster, and bare-metal review steps.
  *
- * Renders three `DescriptionListGroup` items — must be placed inside a
- * PatternFly `DescriptionList`.
+ * Place inside a PatternFly `DescriptionList`.
  */
 export const NetworkAttachmentReviewFields = ({
   virtualNetwork,
   subnet,
   securityGroups,
+  showSecurityGroups = true,
 }: NetworkAttachmentReviewFieldsProps) => {
   const { t } = useTranslation();
 
@@ -39,14 +40,16 @@ export const NetworkAttachmentReviewFields = ({
         <DescriptionListTerm>{t('Subnet')}</DescriptionListTerm>
         <DescriptionListDescription>{subnet.name || subnet.id || '—'}</DescriptionListDescription>
       </DescriptionListGroup>
-      <DescriptionListGroup>
-        <DescriptionListTerm>{t('Security groups')}</DescriptionListTerm>
-        <DescriptionListDescription>
-          {securityGroups.length > 0
-            ? securityGroups.map((sg) => sg.name || sg.id).join(', ')
-            : '—'}
-        </DescriptionListDescription>
-      </DescriptionListGroup>
+      {showSecurityGroups && (
+        <DescriptionListGroup>
+          <DescriptionListTerm>{t('Security groups')}</DescriptionListTerm>
+          <DescriptionListDescription>
+            {securityGroups.length > 0
+              ? securityGroups.map((sg) => sg.name || sg.id).join(', ')
+              : '—'}
+          </DescriptionListDescription>
+        </DescriptionListGroup>
+      )}
     </>
   );
 };

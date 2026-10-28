@@ -9,6 +9,7 @@ import {
   SelectList,
   SelectOption,
 } from '@patternfly/react-core';
+import PlusIcon from '@patternfly/react-icons/dist/esm/icons/plus-icon';
 import { useField } from 'formik';
 
 import type { ListParams } from '@osac/ui-components/api/types';
@@ -27,7 +28,8 @@ export { emptyResourceSelectValue } from './resourceSelectValue';
 
 export interface ResourceListItem {
   id: string;
-  metadata?: { name?: string };
+  metadata?: { name?: string; description?: string };
+  spec?: { ipv4Cidr?: string };
 }
 
 export interface ResourceSelectFieldProps {
@@ -45,6 +47,9 @@ export interface ResourceSelectFieldProps {
   loadErrorTitle?: string;
   emptyTitle?: string;
   emptyDescription?: string;
+  showDescription?: boolean;
+  showIpv4Cidr?: boolean;
+  createOption?: { label: string; onSelect: () => void };
   /** Called after a new resource is selected. Use to trigger cascade resets. */
   onSelectResource?: (value: ResourceSelectValue) => void;
 }
@@ -69,6 +74,9 @@ export const ResourceSelectField = ({
   loadErrorTitle,
   emptyTitle,
   emptyDescription,
+  showDescription = false,
+  showIpv4Cidr = false,
+  createOption,
   onSelectResource,
 }: ResourceSelectFieldProps) => {
   const [field, meta, helpers] = useField<ResourceSelectValue>(name);
@@ -84,12 +92,22 @@ export const ResourceSelectField = ({
 
   const listFailed = Boolean(loadError);
   const listEmpty = !isLoading && !listFailed && items.length === 0;
-  const controlDisabled = isDisabled || isLoading || listFailed || listEmpty;
+  const controlDisabled = isDisabled || isLoading || listFailed || (listEmpty && !createOption);
   const effectivePlaceholder = isLoading ? loadingPlaceholder : placeholder;
   const selectedId = field.value?.id ?? '';
   const selectedItem = items.find((item) => item.id === selectedId);
-  const toggleLabel =
-    (selectedItem ? selectedItem.metadata?.name : field.value?.name) || effectivePlaceholder;
+  const itemLabel = (item: ResourceListItem) => {
+    const name = item.metadata?.name || item.id;
+    const detail = showDescription
+      ? item.metadata?.description?.trim()
+      : showIpv4Cidr
+        ? item.spec?.ipv4Cidr?.trim()
+        : '';
+    return detail ? `${name} · ${detail}` : name;
+  };
+  const toggleLabel = selectedItem
+    ? itemLabel(selectedItem)
+    : field.value?.name || effectivePlaceholder;
   const validated = error ? 'error' : 'default';
 
   useEffect(() => {
@@ -106,6 +124,11 @@ export const ResourceSelectField = ({
   }, [autoSelectSingleOption, controlDisabled, helpers, isLoading, items, selectedId]);
 
   const onSelect = (_event: MouseEvent<Element> | undefined, value: string | number) => {
+    if (value === 0 && createOption) {
+      setIsOpen(false);
+      createOption.onSelect();
+      return;
+    }
     const item = items.find((resource) => resource.id === value);
     if (!item) {
       return;
@@ -159,9 +182,14 @@ export const ResourceSelectField = ({
           <SelectList>
             {items.map((item) => (
               <SelectOption key={item.id} value={item.id}>
-                {item.metadata?.name}
+                {itemLabel(item)}
               </SelectOption>
             ))}
+            {createOption && (
+              <SelectOption value={0} icon={<PlusIcon />}>
+                {createOption.label}
+              </SelectOption>
+            )}
           </SelectList>
         </Select>
         <FormFieldHelper error={error} fieldId={fieldId} />

@@ -11,15 +11,15 @@ import { securityGroupFilterForVirtualNetworkList } from '../../../api/v1/networ
 import { useTranslation } from '../../../hooks/useTranslation';
 import type { ResourceSelectValue } from '../../Form/resourceSelectValue';
 
-interface SecurityGroupsFieldProps extends ProvisioningFieldControlProps {
+interface SecurityGroupsMultiSelectFieldProps extends ProvisioningFieldControlProps {
   virtualNetworkName: string;
 }
 
-const SecurityGroupsField = ({
+const SecurityGroupsMultiSelectField = ({
   name,
   virtualNetworkName,
   isDisabled = false,
-}: SecurityGroupsFieldProps) => {
+}: SecurityGroupsMultiSelectFieldProps) => {
   const { t } = useTranslation();
   const [virtualNetwork] = useField<ResourceSelectValue>(virtualNetworkName);
   const [sgField, , sgHelpers] = useField<ResourceSelectValue[]>(name);
@@ -105,4 +105,4 @@ const SecurityGroupsField = ({
   );
 };
 
-export default SecurityGroupsField;
+export default SecurityGroupsMultiSelectField;

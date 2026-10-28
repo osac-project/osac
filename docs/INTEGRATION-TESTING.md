@@ -869,8 +869,7 @@ Touched-area requirements: [component guide](../tests/e2e/AGENTS.md#touched-area
 | E2E (Netris BMaaS connectivity) | Manual bmaas-netris suite; locally: `uv run pytest -n 0 -m 'requires_netris and requires_netris_bmaas' tests/e2e/networking/bmaas` | Numbered BMI networking lifecycle, including same-subnet ARP/ICMP, cross-subnet routing/isolation, and cross-tenant cases | Requires Netris BMaaS services, BMH SSH endpoints, and `OSAC_BMI_NETWORK_INTERFACE`. The PR job excludes the slower cross-tenant class. |
 | E2E (stretched BMI/ComputeInstance connectivity) | Backend-agnostic test: `uv run pytest -n 0 -m requires_stretched_networking tests/e2e/networking/stretched`; test-infra standalone selector: `SUITE=stretched_networking` | Creates a BMI and ComputeInstance on one OSAC Subnet and verifies unique addresses plus bidirectional ARP/ICMP | The Netris `/test stretched-netris` workflow provisions `full-ci`, BMaaS SSH access, `OSAC_BMI_NETWORK_INTERFACE`, the VM template, and CUDN EVPN VTEP/underlay. `SUITE=full` also includes this test. It is not part of standard VMaaS or BMaaS runs. |
 | Unit ([DEV], CaaS teardown) | From the repository root: `uv run pytest -n 0 tests/unit/test_caas_teardown_order.py tests/unit/test_cluster_deletion_polling.py tests/unit/test_caas_deletion_diagnostics.py tests/unit/test_caas_worker_bmi_visibility.py tests/unit/test_caas_two_node_sets.py tests/unit/test_caas_selector_contracts.py` | Read-only wait logic, exact-resource NotFound, ordered worker/parent/dependent waits, shared single/two-node-set budgets, stage-specific safe failures, snapshot throttling and sanitization, worker ownership checks, NodeSet selectors with shared BMITs, and shared-only BMIT reference expectations | API/client responses and time are mocked. No deployed controllers, fulfillment, AAP, provider, or metering is exercised. |
-| E2E ([QE], focused single-node CaaS installation and teardown) | From the repository root: `uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py::test_cluster_create --junitxml=/tmp/test-output/caas-bm-teardown-junit.xml` | CLI/API/database, Kubernetes, OSAC operators, AAP, HyperShift/CAPI/CAP-Agent, Assisted Service, provider-backed virtual BMHs, and Kafka/metering; catalog-item-authored creation (published ClusterCatalogItem locking version, node sets, and SSH key), guest readiness, scale events, natural worker/parent teardown, independent InfraEnv GC, fulfillment removal, and heartbeat billing stop after deletion | This sanity test remains an install-only lifecycle. It requires the compatible deployed CaaS profile; no mocked completion or workaround-enabled deletion wait. Virtual BMHs do not prove physical-hardware coverage. Guest LVMS device readiness, PVC/CSI mount, and application I/O are not established by this lifecycle test. |
-| E2E ([QE], two-node-set CaaS installation with optional sequential upgrade) | From the repository root: `uv run pytest -n 0 tests/e2e/caas/regression/test_cluster_node_sets.py::test_cluster_create_with_two_node_sets`; prefix with `OSAC_CAAS_RUN_UPGRADE=false` for install-only | One test-owned cluster verifies two-node-set installation, control-plane heartbeat metering, and natural teardown with billing stop after deletion. The default full mode also checks public control-plane and named NodeSet updates, ClusterOrder/AAP projection, HyperShift completion, and the unchanged sibling pool. | Requires deployed Fulfillment, operator, AAP, HyperShift, provider-backed bare metal, metering, a cluster template, pull secret, SSH key, and enough hosts for two worker sets. Full mode uses `OSAC_TEST_UPGRADE_RELEASE_IMAGE` when creating a missing target catalog version; source and target images must be compatible. Regression periodics and explicit full-CaaS selection run full mode by default; local collection does not prove deployed success. |
+| E2E ([QE], focused bare-metal CaaS lifecycle) | From the repository root: `uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py::test_cluster_create --junitxml=/tmp/test-output/caas-bm-teardown-junit.xml`; two-node regression: `uv run pytest -n 0 tests/e2e/caas/regression/test_cluster_node_sets.py::test_cluster_create_with_two_node_sets` | CLI/API/database, Kubernetes, OSAC operators, AAP, HyperShift/CAPI/CAP-Agent, Assisted Service, provider-backed virtual BMHs, and Kafka/metering; catalog-item-authored creation (published ClusterCatalogItem locking version, node sets, and SSH key), guest readiness, scale events, natural worker/parent teardown, independent InfraEnv GC, fulfillment removal, and heartbeat billing stop after deletion. The two-node regression adds version and worker heartbeat assertions before an optional sequential upgrade. | Requires the compatible deployed CaaS profile; no mocked completion or workaround-enabled deletion wait. The regression also needs two worker sets and a compatible upgrade image. Virtual BMHs do not prove physical-hardware coverage. Guest LVMS device readiness, PVC/CSI mount, and application I/O are not established by this lifecycle test. |
 
 Resize lifecycle tests expect `RestartRequired`. Multi-node live hot-plug
 coverage is tracked under
@@ -906,31 +905,23 @@ ClusterVersion deletion protection belong to the Fulfillment integration suite
 in `fulfillment-service/it/it_public_clusters_test.go`.
 
 Both `test_cluster_create` and `test_cluster_create_with_two_node_sets` use the
-same natural teardown assertions. The existing table entry for
-`test_cluster_create` covers the single-node sanity installation from a published
-ClusterCatalogItem; that test does not run an upgrade. The two-node-set
-regression creates its cluster directly and checks ready worker aggregates,
-installed Agents, and per-NodeSet NodePool isolation. Full mode then waits for
-a ready Cluster and two ready NodePools, upgrades the control plane and one
-NodePool, and checks the sibling remains at its original image and version.
-Install-only mode retains the installation, metering, and natural teardown
-checks without creating a target ClusterVersion or requesting an upgrade:
-
-```bash
-# Full installation followed by both upgrade stages (also the default).
-OSAC_CAAS_RUN_UPGRADE=true uv run pytest -n 0 \
-  tests/e2e/caas/regression/test_cluster_node_sets.py::test_cluster_create_with_two_node_sets
-
-# Two-node-set installation and teardown only.
-OSAC_CAAS_RUN_UPGRADE=false uv run pytest -n 0 \
-  tests/e2e/caas/regression/test_cluster_node_sets.py::test_cluster_create_with_two_node_sets
-```
-
-`OSAC_CAAS_RUN_UPGRADE` accepts `true` or `false`; the default is `true`.
-Unit regressions additionally cover distinct NodeSets sharing one BMIT; that
-same-profile case is not exercised by this deployed scenario. Both modes
-require the source-pinned environment described below and enough available
-BMHs for both worker sets.
+same natural teardown assertions. `test_cluster_create` creates its cluster from a
+published ClusterCatalogItem; the two-node-set scenario still creates its cluster
+directly and additionally
+checks ready worker aggregates, installed Agents, and per-NodeSet
+NodePool isolation. Unit regressions additionally cover distinct NodeSets
+sharing one BMIT; that same-profile case is not exercised by this deployed
+scenario. Run that [QE] E2E with
+`uv run pytest -n 0 tests/e2e/caas/regression/test_cluster_node_sets.py::test_cluster_create_with_two_node_sets`;
+it requires the same source-pinned environment described below and enough
+available BMHs for both worker sets.
+The regression now also checks source-version propagation, control-plane
+metering, and worker BMI heartbeat billing. By default it waits for a ready
+Cluster and both NodePools, upgrades the control plane and one named pool
+through ClusterOrder/AAP and HyperShift, and checks the sibling is unchanged.
+Prefix the command above with `OSAC_CAAS_RUN_UPGRADE=false` for installation
+and teardown only; this skips target ClusterVersion creation. Set
+`OSAC_TEST_UPGRADE_RELEASE_IMAGE` for a compatible target image (default 4.22.1).
 
 The deletion request triggers the test-owned worker BMI wait (480 attempts at
 five-second intervals). Worker ownership is verified through the fulfillment

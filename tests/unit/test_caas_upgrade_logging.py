@@ -10,7 +10,7 @@ from unittest.mock import Mock
 import pytest
 
 from tests.e2e.caas.regression import cluster_upgrade as scenario
-from tests.e2e.caas.regression import test_cluster_node_sets as journey
+from tests.e2e.caas.sanity.test_cluster_create import INSTALL_VERSION
 
 
 @pytest.mark.parametrize("cleanup_fails", [False, True])
@@ -51,7 +51,7 @@ def test_cleanup_logs_only_allowlisted_upgrade_evidence(
             co_name="secret-cluster-order",
             created_version_ids=["secret-catalog-id"],
             evidence=evidence,
-            source_version=journey.INSTALL_VERSION,
+            source_version=INSTALL_VERSION,
         )
 
     messages = [record.getMessage() for record in caplog.records if record.name == scenario.logger.name]
@@ -61,7 +61,7 @@ def test_cleanup_logs_only_allowlisted_upgrade_evidence(
         "phase": "node-pool-completed",
         "outcome": "failed" if cleanup_fails else "succeeded",
         "cleanup": "failed" if cleanup_fails else "completed",
-        "source_release_version": journey.INSTALL_VERSION,
+        "source_release_version": INSTALL_VERSION,
         "target_release_version": scenario.TARGET_VERSION,
         "cp_elapsed_seconds": 12.5,
     }
@@ -101,7 +101,7 @@ def test_cleanup_waits_without_repeating_a_requested_cluster_delete(monkeypatch:
         co_name="order-name",
         created_version_ids=[],
         evidence={"phase": "node-pool-completed", "outcome": "failed"},
-        source_version=journey.INSTALL_VERSION,
+        source_version=INSTALL_VERSION,
         delete_cluster_requested=True,
     )
 

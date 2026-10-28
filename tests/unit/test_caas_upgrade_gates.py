@@ -16,20 +16,21 @@ from tests.e2e.caas.regression import test_cluster_node_sets as journey
 
 def test_baseline_waits_for_both_node_pool_readiness_conditions(monkeypatch: pytest.MonkeyPatch) -> None:
     """A ready Cluster does not make an unready NodePool a steady baseline."""
+    first, second = "alpha", "beta"
     ready_pool = {
         "status": {"conditions": [{"type": "Ready", "status": "True"}, {"type": "AllMachinesReady", "status": "True"}]}
     }
     ready = {
         "hosted": {"metadata": {"name": "hosted"}},
         "cluster": {"status": {"state": "CLUSTER_STATE_READY"}},
-        "pools": {"compute": deepcopy(ready_pool), "gpu": deepcopy(ready_pool)},
+        "pools": {first: deepcopy(ready_pool), second: deepcopy(ready_pool)},
     }
     absent = deepcopy(ready)
-    absent["pools"]["compute"] = {}
+    absent["pools"][first] = {}
     not_ready = deepcopy(ready)
-    not_ready["pools"]["compute"]["status"]["conditions"][0]["status"] = "False"
+    not_ready["pools"][first]["status"]["conditions"][0]["status"] = "False"
     machines_not_ready = deepcopy(ready)
-    machines_not_ready["pools"]["gpu"]["status"]["conditions"][1]["status"] = "False"
+    machines_not_ready["pools"][second]["status"]["conditions"][1]["status"] = "False"
     no_hosted = deepcopy(ready)
     no_hosted["hosted"] = {}
     cluster_not_ready = deepcopy(ready)
@@ -50,7 +51,7 @@ def test_baseline_waits_for_both_node_pool_readiness_conditions(monkeypatch: pyt
         raise AssertionError("baseline never became ready")
 
     monkeypatch.setattr(scenario, "poll_until", poll_without_sleep)
-    refs = scenario._ClusterRefs("cluster-id", "order", "namespace", "hosted", {"compute": "a", "gpu": "b"})
+    refs = scenario._ClusterRefs("cluster-id", "order", "namespace", "hosted", {first: "a", second: "b"})
 
     assert scenario._ready_baseline(k8s=Mock(), grpc=Mock(), refs=refs) == ready
     assert accepted == [False, False, False, False, False, True]
@@ -58,14 +59,16 @@ def test_baseline_waits_for_both_node_pool_readiness_conditions(monkeypatch: pyt
 
 def test_node_pool_poll_rejects_later_control_plane_degradation(monkeypatch: pytest.MonkeyPatch) -> None:
     """Control-plane health must hold during the NodePool completion wait."""
+    regular = journey.REGULAR_NODE_SET
+    gpu = journey.GPU_NODE_SET
     target_image = "target-image"
     unchanged_pool = {"spec": {"release": {"image": "source-image"}}, "status": {"version": "4.22.0"}}
-    baseline = {"cluster": {"status": {"state": "CLUSTER_STATE_READY"}}, "pools": {"gpu": unchanged_pool}}
-    cp_snapshot = {"pools": {"compute": {"spec": {"replicas": 1}}}, "order": {"status": {}}}
+    baseline = {"cluster": {"status": {"state": "CLUSTER_STATE_READY"}}, "pools": {gpu: unchanged_pool}}
+    cp_snapshot = {"pools": {regular: {"spec": {"replicas": 1}}}, "order": {"status": {}}}
     healthy = {
         "cluster": {
             "status": {"state": "CLUSTER_STATE_READY"},
-            "spec": {"nodeSets": {"compute": {"version": {"name": "target-name"}}}},
+            "spec": {"nodeSets": {regular: {"version": {"name": "target-name"}}}},
         },
         "order": {"spec": {"releaseImage": target_image}},
         "hosted": {
@@ -80,7 +83,7 @@ def test_node_pool_poll_rejects_later_control_plane_degradation(monkeypatch: pyt
                 "conditions": [{"type": "Available", "status": "True"}, {"type": "Degraded", "status": "False"}],
             },
         },
-        "pools": {"gpu": unchanged_pool, "compute": {}},
+        "pools": {gpu: unchanged_pool, regular: {}},
     }
     degraded = deepcopy(healthy)
     degraded["hosted"]["status"]["conditions"][1]["status"] = "True"
@@ -94,7 +97,7 @@ def test_node_pool_poll_rejects_later_control_plane_degradation(monkeypatch: pyt
         return observe()
 
     monkeypatch.setattr(scenario, "_wait_elapsed", observe_once)
-    refs = scenario._ClusterRefs("cluster-id", "order", "namespace", "hosted", {"compute": "a", "gpu": "b"})
+    refs = scenario._ClusterRefs("cluster-id", "order", "namespace", "hosted", {regular: "a", gpu: "b"})
     evidence: dict[str, Any] = {}
 
     with pytest.raises(AssertionError, match="Control plane is not completed and healthy"):
@@ -107,8 +110,8 @@ def test_node_pool_poll_rejects_later_control_plane_degradation(monkeypatch: pyt
             grpc=Mock(),
             k8s=Mock(),
             evidence=evidence,
-            upgraded_node_set=journey.REGULAR_NODE_SET,
-            unchanged_node_set=journey.GPU_NODE_SET,
+            upgraded_node_set=regular,
+            unchanged_node_set=gpu,
         )
 
     assert snapshot.call_count == 2
@@ -123,14 +126,22 @@ def test_install_only_skips_upgrade_and_tenant_user_fixture(monkeypatch: pytest.
     cli.create_cluster.return_value = "cluster-id"
     private_grpc.ensure_disk_image.return_value = "disk-image"
     private_grpc.ensure_cluster_version.return_value = {"name": "source-version"}
-    cluster = SimpleNamespace(co_name="order-name")
+    cluster = SimpleNamespace(co_name="order-name", owned_bmi_ids={"cpu-id", "gpu-id"})
     installed = Mock(return_value=cluster)
     deleted = Mock()
     references = Mock()
     baseline = Mock()
     catalog = Mock()
+    available = Mock()
+    version_propagated = Mock()
+    cluster_metering = Mock()
+    worker_metering = Mock()
     monkeypatch.setattr(journey, "assert_cluster_with_two_node_sets_available", installed)
     monkeypatch.setattr(journey, "_assert_cluster_deleted", deleted)
+    monkeypatch.setattr(journey, "wait_for_cluster_order_condition", available)
+    monkeypatch.setattr(journey, "_assert_cluster_version_propagated", version_propagated)
+    monkeypatch.setattr(journey, "_assert_cluster_metering", cluster_metering)
+    monkeypatch.setattr(journey, "_assert_two_node_set_worker_metering", worker_metering)
     monkeypatch.setattr(scenario, "_cluster_references", references)
     monkeypatch.setattr(scenario, "_ready_baseline", baseline)
     monkeypatch.setattr(scenario, "_catalog_version", catalog)
@@ -148,6 +159,12 @@ def test_install_only_skips_upgrade_and_tenant_user_fixture(monkeypatch: pytest.
     )
 
     installed.assert_called_once()
+    available.assert_called_once_with(k8s=k8s, name="order-name", condition_type="ClusterAvailable")
+    version_propagated.assert_called_once()
+    cluster_metering.assert_called_once_with(metering=metering, uuid="cluster-id", cluster_template="template")
+    worker_metering.assert_called_once_with(
+        grpc=grpc, metering=metering, uuid="cluster-id", owned_bmi_ids=cluster.owned_bmi_ids
+    )
     metering.expect.assert_not_called()
     cli.delete_cluster.assert_called_once_with(uuid="cluster-id")
     deleted.assert_called_once_with(grpc=grpc, k8s=k8s, metering=metering, uuid="cluster-id", cluster=cluster)

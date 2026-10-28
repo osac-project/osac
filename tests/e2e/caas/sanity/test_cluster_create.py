@@ -45,6 +45,9 @@ pytestmark = pytest.mark.sanity
 # duplicates on the shared cluster.
 TEST_RELEASE_IMAGE = env("OSAC_TEST_RELEASE_IMAGE", "quay.io/openshift-release-dev/ocp-release:4.22.0-multi")
 RHCOS_IMAGE = env("OSAC_RHCOS_BMI_IMAGE", "oci://quay.io/osac-project/rhcos:4.22.0")
+INSTALL_VERSION = "4.22.0-rhcos"
+INSTALL_DISK_IMAGE_NAME = "rhcos-4-22"
+WORKER_INSTANCE_TYPE = "ci-worker-bm"
 _WORKER_METRICS = ("osac_caas_worker_desired", "osac_caas_worker_ready", "osac_caas_worker_provisioning_failures_total")
 _WORKER_LEVEL_METRICS = _WORKER_METRICS[:2]
 _WORKER_FAILURE_METRIC = _WORKER_METRICS[2]
@@ -293,7 +296,7 @@ def _assert_worker_node_request(
     assert len(node_requests) == 1, "Expected one node request for the CaaS sanity scenario"
     assert all("resourceClass" not in request for request in node_requests)
     worker_instance_type = node_requests[0]["bareMetal"]["instanceType"]
-    assert worker_instance_type == node_sets[worker_node_set]["baremetalInstanceType"]["name"] == "ci-worker-bm"
+    assert worker_instance_type == node_sets[worker_node_set]["baremetalInstanceType"]["name"] == WORKER_INSTANCE_TYPE
     assert int(node_requests[0]["numberOfNodes"]) == original_size
     return worker_node_set, original_size, worker_instance_type
 
@@ -492,43 +495,51 @@ def _assert_cluster_metering(*, metering: MeteringCollector, uuid: str, cluster_
     )
 
 
-def _assert_worker_metering(*, metering: MeteringCollector, uuid: str, cluster: _AvailableCluster) -> None:
-    """Verify the cluster's workers bill as bare metal instances, attributed to the cluster.
+def _assert_worker_bmi_metering(
+    *, metering: MeteringCollector, uuid: str, bmi_id: str, node_set: str, instance_type: str
+) -> None:
+    """Verify one worker's cluster attribution and exact heartbeat billing."""
+    heartbeat = metering.heartbeat_with_dimensions(bmi_id, {"cluster": uuid, "node_set": node_set}, timeout=180)
+    dimensions = heartbeat["data"]["billing_dimensions"]
+    assert dimensions.get("instance_type") == instance_type, (
+        f"worker {bmi_id} bills with instance type {dimensions.get('instance_type')!r}, want {instance_type!r}"
+    )
+    assert heartbeat["data"]["usage"]["unit"] == "second"
 
-    Every worker heartbeat carries the cluster reference and the node set it
-    belongs to, so the bill names what the hardware ran for. Each worker's
-    billed life is contiguous per meter with exact quantities, so no second of
-    a worker bills twice.
+    by_meter: dict[str, list[dict[str, Any]]] = {}
+    for event in metering.get_all_events(HEARTBEAT_TYPE, bmi_id):
+        by_meter.setdefault(event["data"]["meter"], []).append(event)
+    assert set(by_meter) <= {"allocation", "consumption"}, f"worker {bmi_id} bills under meters {sorted(by_meter)}"
+    assert "allocation" in by_meter, f"worker {bmi_id} never billed its host reservation"
+    for meter, events in by_meter.items():
+        net = _net_intervals(events)
+        assert net, f"worker {bmi_id} has {meter} heartbeats but no net intervals"
+        for start, end, quantity in net:
+            assert quantity == _interval_seconds(start, end), (
+                f"worker {bmi_id}: net {meter} interval {start}..{end} bills {quantity}, "
+                "not its exact length: a second billed twice or lost"
+            )
+        for (_, previous_end, _), (start, _, _) in itertools.pairwise(net):
+            assert start == previous_end, (
+                f"worker {bmi_id}: {meter} intervals are not contiguous: {previous_end} then {start}"
+            )
+
+
+def _assert_worker_metering(*, metering: MeteringCollector, uuid: str, cluster: _AvailableCluster) -> None:
+    """Verify every worker bills as a BMI under its cluster and node set.
+
+    Each worker's billed life is contiguous per meter with exact quantities,
+    so no second of a worker bills twice.
     """
     assert cluster.owned_bmi_ids, "the available cluster has no workers to assert billing on"
     for bmi_id in sorted(cluster.owned_bmi_ids):
-        heartbeat = metering.heartbeat_with_dimensions(
-            bmi_id, {"cluster": uuid, "node_set": cluster.worker_node_set}, timeout=180
+        _assert_worker_bmi_metering(
+            metering=metering,
+            uuid=uuid,
+            bmi_id=bmi_id,
+            node_set=cluster.worker_node_set,
+            instance_type=cluster.worker_instance_type,
         )
-        dimensions = heartbeat["data"]["billing_dimensions"]
-        assert dimensions.get("instance_type") == cluster.worker_instance_type, (
-            f"worker {bmi_id} bills with instance type {dimensions.get('instance_type')!r}, "
-            f"want {cluster.worker_instance_type!r}"
-        )
-        assert heartbeat["data"]["usage"]["unit"] == "second"
-
-        by_meter: dict[str, list[dict[str, Any]]] = {}
-        for event in metering.get_all_events(HEARTBEAT_TYPE, bmi_id):
-            by_meter.setdefault(event["data"]["meter"], []).append(event)
-        assert set(by_meter) <= {"allocation", "consumption"}, f"worker {bmi_id} bills under meters {sorted(by_meter)}"
-        assert "allocation" in by_meter, f"worker {bmi_id} never billed its host reservation"
-        for meter, events in by_meter.items():
-            net = _net_intervals(events)
-            assert net, f"worker {bmi_id} has {meter} heartbeats but no net intervals"
-            for start, end, quantity in net:
-                assert quantity == _interval_seconds(start, end), (
-                    f"worker {bmi_id}: net {meter} interval {start}..{end} bills {quantity}, "
-                    "not its exact length: a second billed twice or lost"
-                )
-            for (_, previous_end, _), (start, _, _) in itertools.pairwise(net):
-                assert start == previous_end, (
-                    f"worker {bmi_id}: {meter} intervals are not contiguous: {previous_end} then {start}"
-                )
 
 
 def _assert_worker_billing_stops(*, metering: MeteringCollector, cluster: _ClusterResources, since: str) -> None:
@@ -661,12 +672,12 @@ def test_cluster_create(
     heartbeats, worker scale-up, and deletion."""
 
     worker_instance_type_id = private_grpc.ensure_bare_metal_instance_type(
-        name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
+        name=WORKER_INSTANCE_TYPE, host_label_selector={"osac.openshift.io/host-type": "default"}
     )
     logger.info("CaaS: ensuring DiskImage and ClusterVersion")
-    disk_image_id = private_grpc.ensure_disk_image(name="rhcos-4-22", source_ref=RHCOS_IMAGE)
+    disk_image_id = private_grpc.ensure_disk_image(name=INSTALL_DISK_IMAGE_NAME, source_ref=RHCOS_IMAGE)
     version = private_grpc.ensure_cluster_version(
-        version="4.22.0-rhcos", image=TEST_RELEASE_IMAGE, disk_image=disk_image_id
+        version=INSTALL_VERSION, image=TEST_RELEASE_IMAGE, disk_image=disk_image_id
     )
     logger.info("CaaS: ClusterVersion available")
     ssh_public_key = Path(ssh_public_key_path).read_text().strip()

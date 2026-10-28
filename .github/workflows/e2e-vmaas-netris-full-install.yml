@@ -39,7 +39,7 @@ jobs:
       id-token: write
       checks: write
       pull-requests: read
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-netris-full-install.yml@1bfaa44e7b4b3e5bd865c94197e3afbd4ce2f7e0
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-netris-full-install.yml@8ef9d36d3c817bf57f63f340609493aca105aadb
     with:
       suite: vmaas
       osac-repo: https://github.com/${{ inputs.repo }}.git

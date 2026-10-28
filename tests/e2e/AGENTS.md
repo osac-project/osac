@@ -11,7 +11,7 @@ effects, and follow the instructions for every affected component.
 ## Invariants
 
 - E2E suites live only under `tests/e2e/`, not in the external `osac-test-infra` checkout; that repository owns infrastructure backends, not suites.
-- Put service-owned tests in their service-tier directory. Cross-service Netris networking E2E tests live in `tests/e2e/networking/{vmaas,bmaas,stretched}/` and use profile-specific markers so standard service runs skip them.
+- Put service-owned tests in their service-tier directory. Cross-service networking E2E tests live in `tests/e2e/networking/{vmaas,bmaas,stretched}/`. Test-infra selects them by directory through `TEST_SUITE`; do not add backend-specific pytest markers to the tests. Standard service runs skip them because they select different directories.
 - Avoid fixed sleeps; wait for observable resource conditions with bounded timeouts.
 - Tests clean up resources they create and never assume the caller's shared-cluster namespace or context.
 - Shared fixture changes require collecting all affected suites.

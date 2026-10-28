@@ -6,6 +6,8 @@
 # Usage:
 # Every deployment target requires PLATFORM, PROFILE, and NS. No exceptions.
 #   make install         PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make install-multicluster PLATFORM=openshift PROFILE=vmaas-ci NS=osac KUBECONFIG=... REMOTE_KUBECONFIG=...
+#   make prepare-remote-cluster NS=osac REMOTE_KUBECONFIG=...
 #   make uninstall       PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
 #   make install-infra   PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
 #   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
@@ -30,6 +32,8 @@ SHELL := /usr/bin/env bash -o pipefail
 # Extra helm --set/--set-string args appended to the OSAC chart command.
 EXTRA_HELM_ARGS ?=
 FULFILLMENT_GINKGO_ARGS ?=
+FULFILLMENT_IT_REPORT_DIR ?=
+fulfillment-json-report = $(if $(strip $(FULFILLMENT_IT_REPORT_DIR)),--json-report="$(abspath $(FULFILLMENT_IT_REPORT_DIR)/$(1).json)")
 MCP_TEST_ENABLED ?= false
 
 ifeq ($(MCP_TEST_ENABLED),true)
@@ -40,6 +44,16 @@ DRY_RUN ?= 0
 DRY_RUN_HELM_FLAGS := $(filter --%,$(EXTRA_HELM_ARGS))
 DRY_RUN_INVALID_HELM_FLAGS := $(filter-out --set --set-string --set=% --set-string=%,$(DRY_RUN_HELM_FLAGS))
 
+REMOTE_STORAGE_CLASS ?= lvms-vg1
+REMOTE_KUBECONFIG_SECRET_NAME ?= osac-remote-kubeconfig
+REMOTE_KUBECONFIG_SECRET_KEY ?= kubeconfig
+# Freeze command-line values without expanding Make expressions in them. The
+# shell scripts validate them before using them, and the Helm args below are
+# built as a quoted Bash array.
+override REMOTE_KUBECONFIG_SECRET_NAME := $(value REMOTE_KUBECONFIG_SECRET_NAME)
+override REMOTE_KUBECONFIG_SECRET_KEY := $(value REMOTE_KUBECONFIG_SECRET_KEY)
+export REMOTE_KUBECONFIG_SECRET_NAME REMOTE_KUBECONFIG_SECRET_KEY
+
 # Work around HTTP/2 stream resets from proxy.golang.org during container
 # builds (see osac-test-infra#543).  Override with `make test GODEBUG=` to
 # disable, or set a different value to experiment.
@@ -49,7 +63,7 @@ TOPOLVM_BACKING_SIZE ?= 20G
 # -- Fail-fast parameter validation ------------------------------------
 # Guards fire at parse time, gated by MAKECMDGOALS so `make help` works.
 
-ALL_TARGETS := install uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-load-images test
+ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-load-images test
 
 ifneq ($(filter $(ALL_TARGETS),$(MAKECMDGOALS)),)
 ifndef PLATFORM
@@ -91,6 +105,45 @@ endif
 endif
 endif
 
+ifneq ($(filter install-multicluster,$(MAKECMDGOALS)),)
+ifneq ($(PLATFORM),openshift)
+$(error install-multicluster requires PLATFORM=openshift)
+endif
+ifneq ($(PROFILE),vmaas-ci)
+$(error install-multicluster requires PROFILE=vmaas-ci)
+endif
+ifndef REMOTE_KUBECONFIG
+$(error REMOTE_KUBECONFIG is required (workload cluster kubeconfig))
+endif
+endif
+ifneq ($(filter install-osac,$(MAKECMDGOALS)),)
+ifneq ($(strip $(REMOTE_KUBECONFIG)$(REMOTE_API_ADDRESS)),)
+ifneq ($(PLATFORM),openshift)
+$(error remote-cluster installation requires PLATFORM=openshift)
+endif
+ifneq ($(PROFILE),vmaas-ci)
+$(error remote-cluster installation requires PROFILE=vmaas-ci)
+endif
+ifeq ($(strip $(REMOTE_KUBECONFIG)),)
+$(error REMOTE_KUBECONFIG is required when REMOTE_API_ADDRESS is set)
+endif
+endif
+endif
+ifneq ($(filter install,$(MAKECMDGOALS)),)
+ifneq ($(strip $(REMOTE_KUBECONFIG)$(REMOTE_API_ADDRESS)),)
+$(error install does not configure the multicluster infrastructure overlay; use install-multicluster or run install-infra and install-osac separately)
+endif
+endif
+
+ifneq ($(filter prepare-remote-cluster,$(MAKECMDGOALS)),)
+ifndef NS
+$(error NS is required (namespace for remote workload access, e.g. NS=osac))
+endif
+ifeq ($(strip $(REMOTE_KUBECONFIG)),)
+$(error REMOTE_KUBECONFIG is required (workload cluster kubeconfig))
+endif
+endif
+
 SUITE_TARGETS := test
 ifneq ($(filter $(SUITE_TARGETS),$(MAKECMDGOALS)),)
 ifndef SUITE
@@ -112,6 +165,12 @@ CHARTS         := charts
 DEPS_CHART     := $(CHARTS)/osac-deps
 INFRA_CHART    := $(CHARTS)/osac-infra
 OSAC_CHART     := $(CHARTS)/osac
+# Override both to install-osac from a published OCI chart artifact (e.g.
+# oci://registry.stage.redhat.io/cloud-extensions/osac-chart) instead of
+# building the chart from this checkout -- for validating a real staged
+# release rather than the current commit. Leave unset for normal use.
+OSAC_CHART_OCI_REF ?=
+OSAC_CHART_OCI_VERSION ?=
 # Runtime supplies hostnames and credentials; use the minimal CI fixture for
 # local chart checks without loosening the required-values schema.
 HELM_VALIDATION_VALUES := $(OSAC_CHART)/ci/default-values.yaml
@@ -336,8 +395,9 @@ else
 		done'
 	helm upgrade --install osac-deps $(DEPS_CHART) \
 		--namespace osac-deps --create-namespace \
-		--values $(INFRA_VALUES) \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set lvms.channel=stable-$(OCP_VERSION) \
+		$(INFRA_HELM_ARGS) \
 		--timeout 30m --wait
 	@bash -c 'source scripts/lib.sh && wait_for_namespace_cleanup keycloak'
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))
@@ -351,7 +411,20 @@ else
 		--set keycloak.route.hostname=keycloak-keycloak.$(DOMAIN) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
 		--timeout 30m --wait-for-jobs \
-	|| { echo "=== osac-infra hook jobs ==="; oc get jobs,pods,cm -n osac-infra || true; oc logs -n osac-infra -l job-name=osac-infra-apply-ca-bundle --tail=200 || true; oc get deploy,endpoints,certificate -n cert-manager || true; exit 1; }
+	|| { \
+		echo "=== osac-infra release status ==="; \
+		helm status osac-infra -n osac-infra --show-desc || true; \
+		echo "=== osac-infra hook jobs ==="; \
+		oc get jobs,pods,cm -n osac-infra || true; \
+		oc logs -n osac-infra -l job-name=osac-infra-apply-ca-bundle --tail=200 || true; \
+		echo "=== ca-bundle resources ==="; \
+		oc get bundle.trust.cert-manager.io ca-bundle -o yaml || true; \
+		oc get configmap ca-bundle -n osac-infra -o yaml || true; \
+		echo "=== cert-manager and trust-manager ==="; \
+		oc get deploy,endpoints,certificate -n cert-manager || true; \
+		oc logs deploy/trust-manager -n cert-manager --tail=100 || true; \
+		exit 1; \
+	}
 endif
 
 .PHONY: uninstall-infra
@@ -377,15 +450,28 @@ endif
 ##@ Entity: Osac
 
 AAP_LICENSE_FILE ?= values/$(PROFILE)/license.zip
-
 .PHONY: install-osac
 install-osac: ## Install OSAC instance (PLATFORM= PROFILE= NS= required)
+ifdef OSAC_CHART_OCI_REF
+	@[ -n "$(OSAC_CHART_OCI_VERSION)" ] || { echo "ERROR: OSAC_CHART_OCI_VERSION is required when OSAC_CHART_OCI_REF is set" >&2; exit 1; }
+else
+	@[ -z "$(OSAC_CHART_OCI_VERSION)" ] || { echo "ERROR: OSAC_CHART_OCI_VERSION is set without OSAC_CHART_OCI_REF -- this would silently install the local checkout's chart, ignoring the version" >&2; exit 1; }
 	rm -rf $(OSAC_CHART)/charts
 	helm --repository-config $(LOCAL_HELM_REPOSITORY_CONFIG) dependency build $(OSAC_CHART)
+endif
 ifneq ($(PLATFORM),kind)
 	@[ -n "$(AAP_LICENSE_FILE)" ] || { echo "ERROR: AAP_LICENSE_FILE is required for PLATFORM=openshift" >&2; exit 1; }
 	@[ -f "$(AAP_LICENSE_FILE)" ] || { echo "ERROR: AAP_LICENSE_FILE not found at $(AAP_LICENSE_FILE)" >&2; exit 1; }
 	oc create namespace $(NS) --dry-run=client -o yaml | oc apply -f -
+	if [ -n "$(REMOTE_KUBECONFIG)" ]; then \
+		test -r "$(REMOTE_KUBECONFIG)" || { echo "ERROR: REMOTE_KUBECONFIG is not readable: $(REMOTE_KUBECONFIG)" >&2; exit 1; }; \
+		if [ -n "$(REMOTE_API_ADDRESS)" ]; then case "$(REMOTE_API_ADDRESS)" in https://*) ;; *) echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2; exit 1 ;; esac; fi; \
+		HUB_KUBECONFIG="$(KUBECONFIG)" \
+		REMOTE_KUBECONFIG="$(REMOTE_KUBECONFIG)" \
+		REMOTE_API_ADDRESS="$(REMOTE_API_ADDRESS)" \
+		INSTALLER_NAMESPACE="$(NS)" \
+		bash scripts/stage-remote-cluster-secret.sh; \
+	fi
 	oc create secret generic config-as-code-manifest-ig \
 		--from-file=license.zip="$(AAP_LICENSE_FILE)" \
 		-n $(NS) --dry-run=client -o yaml | oc apply --server-side -f -
@@ -396,13 +482,25 @@ ifneq ($(PLATFORM),kind)
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: Could not determine cluster domain. Is oc logged in?" >&2; exit 1; }
 endif
-	@helm upgrade --install osac $(OSAC_CHART) \
+	@remote_cluster_helm_args=(); \
+	if [[ -n "$${REMOTE_KUBECONFIG:-}" ]]; then \
+		source scripts/lib.sh; \
+		validate_remote_kubeconfig_secret "$${REMOTE_KUBECONFIG_SECRET_NAME}" "$${REMOTE_KUBECONFIG_SECRET_KEY}"; \
+		remote_cluster_helm_args=( \
+			--set-string "operator.remoteClusterKubeconfig=/var/run/secrets/remote/$${REMOTE_KUBECONFIG_SECRET_KEY}" \
+			--set-string "operator.remoteClusterKubeconfigSecretName=$${REMOTE_KUBECONFIG_SECRET_NAME}" \
+			--set-string "operator.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY}" \
+			--set-string "aap.configAsCode.remoteClusterKubeconfigSecretName=$${REMOTE_KUBECONFIG_SECRET_NAME}" \
+			--set-string "aap.configAsCode.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY}" \
+		); \
+	fi; \
+	helm upgrade --install osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF) --version $(OSAC_CHART_OCI_VERSION),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) --create-namespace \
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac) \
 		$(INSTANCE_HELM_ARGS) \
-		$(EXTRA_HELM_ARGS) $(OSAC_HELM_FORCE_CONFLICTS) \
+		$(EXTRA_HELM_ARGS) $(OSAC_HELM_FORCE_CONFLICTS) "$${remote_cluster_helm_args[@]}" \
 		--wait --timeout 40m
 
 .PHONY: uninstall-osac
@@ -495,10 +593,56 @@ ifeq ($(PROFILE),dev-full)
 		--set ui.enabled=true
 endif
 
+.PHONY: install-multicluster
+install-multicluster: ## Prepare a VMaaS workload cluster, then install OSAC on management in remote mode
+	@test -r "$(KUBECONFIG)" || { echo "ERROR: KUBECONFIG is not readable: $(KUBECONFIG)" >&2; exit 1; }
+	@test -r "$(REMOTE_KUBECONFIG)" || { echo "ERROR: REMOTE_KUBECONFIG is not readable: $(REMOTE_KUBECONFIG)" >&2; exit 1; }
+	@test -f "$(AAP_LICENSE_FILE)" || { echo "ERROR: AAP_LICENSE_FILE not found at $(AAP_LICENSE_FILE)" >&2; exit 1; }
+	@if [ -n "$(REMOTE_API_ADDRESS)" ]; then case "$(REMOTE_API_ADDRESS)" in https://*) ;; *) echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2; exit 1 ;; esac; fi
+	@oc --kubeconfig "$(KUBECONFIG)" get clusterversion version >/dev/null
+	@oc --kubeconfig "$(REMOTE_KUBECONFIG)" get clusterversion version >/dev/null
+	@for kubeconfig in "$(KUBECONFIG)" "$(REMOTE_KUBECONFIG)"; do \
+		if [ "$$(oc --kubeconfig "$$kubeconfig" auth can-i '*' '*')" != yes ]; then \
+			echo "ERROR: cluster-admin access is required for $$kubeconfig" >&2; exit 1; \
+		fi; \
+	done
+	@hub_api="$$(oc --kubeconfig "$(KUBECONFIG)" config view --minify -o jsonpath='{.clusters[0].cluster.server}')"; \
+	remote_api="$$(oc --kubeconfig "$(REMOTE_KUBECONFIG)" config view --minify -o jsonpath='{.clusters[0].cluster.server}')"; \
+	if [ -z "$$hub_api" ] || [ -z "$$remote_api" ] || [ "$$hub_api" = "$$remote_api" ]; then \
+		echo "ERROR: KUBECONFIG and REMOTE_KUBECONFIG must specify different API server endpoints" >&2; exit 1; \
+	fi
+	$(MAKE) prepare-remote-cluster NS=$(NS) \
+		REMOTE_KUBECONFIG="$(REMOTE_KUBECONFIG)" \
+		REMOTE_STORAGE_CLASS="$(REMOTE_STORAGE_CLASS)"
+	$(MAKE) install-infra PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
+		KUBECONFIG="$(KUBECONFIG)" \
+		INFRA_VALUES_EXTRA="-f values/vmaas-ci/multicluster-infra.yaml"
+	$(MAKE) install-osac PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
+		KUBECONFIG="$(KUBECONFIG)" \
+		REMOTE_KUBECONFIG="$(REMOTE_KUBECONFIG)" \
+		REMOTE_API_ADDRESS="$(REMOTE_API_ADDRESS)" \
+		EXTRA_HELM_ARGS="$(EXTRA_HELM_ARGS)"
+
+.PHONY: prepare-remote-cluster
+prepare-remote-cluster: ## Prepare the remote VMaaS workload cluster without changing management
+	@test -r "$(REMOTE_KUBECONFIG)" || { echo "ERROR: REMOTE_KUBECONFIG is not readable: $(REMOTE_KUBECONFIG)" >&2; exit 1; }
+	@oc --kubeconfig "$(REMOTE_KUBECONFIG)" get clusterversion version >/dev/null
+	REMOTE_KUBECONFIG="$(REMOTE_KUBECONFIG)" \
+	REMOTE_STORAGE_CLASS="$(REMOTE_STORAGE_CLASS)" \
+	INSTALLER_NAMESPACE="$(NS)" \
+	bash scripts/setup-remote-cluster.sh prepare
+
 .PHONY: uninstall
 uninstall: uninstall-osac uninstall-infra ## Full uninstall: osac + infra (PLATFORM= PROFILE= required)
 
 ##@ Entity: Test
+
+# The integration installs must run the PR's metering-service image: the
+# released one still requires the FULFILLMENT_* environment variables this
+# chart no longer sets, so it crash-loops before the tests can run. Metering
+# is not under test in these suites; it only has to start.
+METERING_IT_IMAGE := localhost/metering-service:it
+METERING_IT_IMAGE_ARGS := --set metering.image.repository=localhost/metering-service --set metering.image.tag=it --set metering.image.pullPolicy=Never
 
 .PHONY: test
 test: ## Run integration tests (SUITE= required: all|fulfillment|operator|bmf)
@@ -508,39 +652,49 @@ ifeq ($(SUITE),all)
 	$(MAKE) test SUITE=bmf
 endif
 ifeq ($(SUITE),fulfillment)
+ifneq ($(strip $(FULFILLMENT_IT_REPORT_DIR)),)
+# A reused local output directory must not retain old reports for phases a failed run never reaches.
+	rm -f $(foreach phase,service-only manager-capability manager-readiness bmaas-disabled,"$(abspath $(FULFILLMENT_IT_REPORT_DIR)/$(phase).json)")
+endif
 # Exercise event-driven reconciliation without full synchronization in every test phase.
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
 	$(call kind-load-image,localhost/fulfillment-service:it)
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
+	$(call kind-load-image,$(METERING_IT_IMAGE))
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
 	$(call kind-load-image,localhost/osac-operator:it)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=false --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false $(MCP_TEST_HELM_ARGS)"
+		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=false --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false $(MCP_TEST_HELM_ARGS) $(METERING_IT_IMAGE_ARGS)"
 	@for f in ../fulfillment-service/it/crds/*.yaml; do kubectl apply --server-side --field-manager=helm --force-conflicts -f "$$f"; done
 # Manager capability discovery and readiness both require the operator, so keep them isolated from the service-only suite.
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_MCP_DEPLOYED_URL="$(MCP_TEST_URL)" ginkgo run --timeout 1h15m -v --skip 'NetworkClass manager (capability discovery|readiness)' $(FULFILLMENT_GINKGO_ARGS) it
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_MCP_DEPLOYED_URL="$(MCP_TEST_URL)" ginkgo run $(call fulfillment-json-report,service-only) --timeout 1h15m -v --skip 'NetworkClass manager (capability discovery|readiness)' $(FULFILLMENT_GINKGO_ARGS) it
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false"
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run --timeout 1h -v --focus 'NetworkClass manager capability discovery' it
+		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false $(METERING_IT_IMAGE_ARGS)"
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run $(call fulfillment-json-report,manager-capability) --timeout 1h -v --focus 'NetworkClass manager capability discovery' it
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.controllers.tenant=false --set operator.controllers.storage=false --set operator.controllers.volume=false --set operator.controllers.networking=true --set operator.controllers.networkingProvisioning=false --set operator.networkManagers.enabled=true --set operator.networkManagers.fabricManagers.netris.enabled=true --set global.services.caas.enabled=false --set global.services.vmaas.enabled=false --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false --set global.networking.networkClass.enabled=false --set aap.instanceGroups.publishTemplates.enabled=false"
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run --timeout 15m -v --focus 'NetworkClass manager readiness' it
+		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.controllers.tenant=false --set operator.controllers.storage=false --set operator.controllers.volume=false --set operator.controllers.networking=true --set operator.controllers.networkingProvisioning=false --set operator.networkManagers.enabled=true --set operator.networkManagers.fabricManagers.netris.enabled=true --set global.services.caas.enabled=false --set global.services.vmaas.enabled=false --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false --set global.networking.networkClass.enabled=false --set aap.instanceGroups.publishTemplates.enabled=false $(METERING_IT_IMAGE_ARGS)"
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run $(call fulfillment-json-report,manager-readiness) --timeout 15m -v --focus 'NetworkClass manager readiness' it
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set global.services.bmaas.enabled=false --set operator.enabled=false --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false"
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=bmaas-disabled ginkgo run --timeout 1h -v --focus 'Service enablement' it
+		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set global.services.bmaas.enabled=false --set operator.enabled=false --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false $(METERING_IT_IMAGE_ARGS)"
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=bmaas-disabled ginkgo run $(call fulfillment-json-report,bmaas-disabled) --timeout 1h -v --focus 'Service enablement' it
 endif
 ifeq ($(SUITE),operator)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
 	$(call kind-load-image,localhost/osac-operator:it)
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
+	$(call kind-load-image,$(METERING_IT_IMAGE))
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.fulfillment.serverAddress= --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.networkClass.enabled=false"
+		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.fulfillment.serverAddress= --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.networkClass.enabled=false $(METERING_IT_IMAGE_ARGS)"
 	cd ../osac-operator && ginkgo run --timeout 30m -v test/integration
 endif
 ifeq ($(SUITE),bmf)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..)
 	$(call kind-load-image,localhost/bmf-operator:it)
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
+	$(call kind-load-image,$(METERING_IT_IMAGE))
 	kubectl apply --server-side --force-conflicts -f ../bare-metal-fulfillment-operator/test/crds/
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set global.services.bmaas.enabled=true --set bmf.replicaCount=1 --set bmf.image.repository=localhost/bmf-operator --set bmf.image.tag=it --set bmf.image.pullPolicy=Never --set operator.enabled=false --set operator.networkManagers.enabled=true --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.networking.networkClass.enabled=false"
+		EXTRA_HELM_ARGS="--set global.services.bmaas.enabled=true --set bmf.replicaCount=1 --set bmf.image.repository=localhost/bmf-operator --set bmf.image.tag=it --set bmf.image.pullPolicy=Never --set operator.enabled=false --set operator.networkManagers.enabled=true --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.networking.networkClass.enabled=false $(METERING_IT_IMAGE_ARGS)"
 	cd ../bare-metal-fulfillment-operator && ginkgo run --timeout 30m -v test/integration
 endif
 
@@ -549,10 +703,13 @@ endif
 .PHONY: sync-charts
 sync-charts: helm-deps ## Rebuild chart dependencies (alias for helm-deps)
 
-.PHONY: helm-deps
-helm-deps: ## Build OSAC and devstack Helm chart dependencies
+.PHONY: helm-osac-deps
+helm-osac-deps: ## Build just charts/osac's own dependencies (no devstack)
 	rm -rf $(OSAC_CHART)/charts
 	helm --repository-config $(LOCAL_HELM_REPOSITORY_CONFIG) dependency build $(OSAC_CHART)
+
+.PHONY: helm-deps
+helm-deps: helm-osac-deps ## Build OSAC and devstack Helm chart dependencies
 	$(MAKE) helm-devstack-deps
 
 .PHONY: helm-infra-deps
@@ -620,6 +777,7 @@ csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider ch
 			--set service.externalHostname=fulfillment-api.example.com \
 			--set service.internalHostname=fulfillment-internal-api.example.com \
 			--set global.clusterDomain=example.com \
+			--set-string global.osacDeploymentId=ci/osac \
 			--set ui.auth.oidcIssuerURL=https://keycloak-keycloak.example.com/realms/osac > "$$caas_render"; \
 		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$caas_render")" -eq 1; \
 		helm template osac $(OSAC_CHART) \
@@ -628,6 +786,7 @@ csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider ch
 			--set service.externalHostname=fulfillment-api.example.com \
 			--set service.internalHostname=fulfillment-internal-api.example.com \
 			--set global.clusterDomain=example.com \
+			--set-string global.osacDeploymentId=ci/osac \
 			--set ui.auth.oidcIssuerURL=https://keycloak-keycloak.example.com/realms/osac > "$$vmaas_render"; \
 		rg -Uq 'name: OSAC_VENDOR_CONTROLLERS\n[[:blank:]]+value: "lvms=none"' "$$vmaas_render"; \
 		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$vmaas_render")" -eq 1; \
@@ -680,6 +839,10 @@ fulfillment-trust-render-test: helm-deps ## Check verified fulfillment transport
 metering-auth-render-test: helm-deps ## Check metering service-account auth renders in supported profiles
 	python3 scripts/test-metering-auth-render.py
 
+.PHONY: event-publisher-render-test
+event-publisher-render-test: helm-deps ## Check the event publisher and metering topic wiring renders
+	python3 scripts/test-event-publisher-render.py
+
 .PHONY: mce-render-test
 mce-render-test: helm-infra-deps ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance
 	uv run --project .. python scripts/test-mce-render.py
@@ -704,8 +867,12 @@ kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster clean
 bmf-netbox-render-test: helm-deps ## Check NetBox, Metal3 management, and Secret API Helm wiring
 	uv run --project .. python scripts/test-bmf-netbox-render.py
 
+.PHONY: chart-name-independence-render-test
+chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/cert names survive repackaging under a different Chart.yaml name
+	uv run --project .. python scripts/test-chart-name-independence-render.py
+
 .PHONY: helm-validate
-helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test mce-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \

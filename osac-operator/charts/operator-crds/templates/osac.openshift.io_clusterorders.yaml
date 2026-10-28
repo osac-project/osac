@@ -481,20 +481,27 @@ spec:
                     numberOfNodes:
                       minimum: 0
                       type: integer
-                    observedVersion:
-                      description: ObservedVersion is the OpenShift version reported
-                        by this node pool.
-                      type: string
+                    upgradeObservation:
+                      description: UpgradeObservation reports the version observed
+                        on this node set for its current attempt.
+                      properties:
+                        attemptID:
+                          description: AttemptID links this observation to the current
+                            component attempt.
+                          type: string
+                        version:
+                          description: Version is the OpenShift version observed on
+                            that component.
+                          type: string
+                      required:
+                      - attemptID
+                      type: object
                   required:
                   - bareMetal
                   - nodeSet
                   - numberOfNodes
                   type: object
                 type: array
-              observedVersion:
-                description: ObservedVersion is the OpenShift version reported by
-                  the hosted control plane.
-                type: string
               phase:
                 description: Phase provides a single-value overview of the state of
                   the ClusterOrder
@@ -584,6 +591,21 @@ spec:
                   Populated by the BareMetalWorkerReconciler.
                 format: int32
                 type: integer
+              upgradeObservation:
+                description: UpgradeObservation reports the version observed on the
+                  control plane for its current attempt.
+                properties:
+                  attemptID:
+                    description: AttemptID links this observation to the current component
+                      attempt.
+                    type: string
+                  version:
+                    description: Version is the OpenShift version observed on that
+                      component.
+                    type: string
+                required:
+                - attemptID
+                type: object
               workers:
                 description: |-
                   Workers holds per-worker lifecycle state for CaaS-managed worker resources.

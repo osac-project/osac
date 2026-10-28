@@ -36,6 +36,7 @@ spec:
         {{- with .Values.consoleProxy.vmClusterMode }}
         - --vm-cluster-mode={{ . }}
         {{- end }}
+        - --remote-kubeconfig-secret-key={{ .Values.remoteClusterKubeconfigSecretKey | default "kubeconfig" }}
         ports:
         - name: https
           containerPort: 8443

@@ -34,6 +34,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
@@ -400,12 +401,8 @@ func (c *runnerContext) applyOptionalSpecFields(
 // createCluster creates a cluster with the given spec and prints the result.
 func (c *runnerContext) createCluster(ctx context.Context, spec *publicv1.ClusterSpec) error {
 	cluster := publicv1.Cluster_builder{
-		Metadata: publicv1.Metadata_builder{
-			Name:    c.args.name,
-			Tenant:  c.settings.Tenant(),
-			Project: config.ProjectFromContext(ctx),
-		}.Build(),
-		Spec: spec,
+		Metadata: metautil.ForCreate(ctx, c.args.name).Build(),
+		Spec:     spec,
 	}.Build()
 	response, err := c.clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 		Object: cluster,

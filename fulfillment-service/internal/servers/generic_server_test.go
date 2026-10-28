@@ -936,4 +936,280 @@ var _ = Describe("Generic server dry run", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(listResponse.GetTotal()).To(Equal(int32(1)))
 	})
+
+	Describe("Status field protection", func() {
+		It("clears status on public API Create but preserves it on private API Create", func() {
+			server, err := NewGenericServer[*privatev1.Subnet]().
+				SetLogger(logger).
+				SetService(privatev1.Subnets_ServiceDesc.ServiceName).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Public API Create with status - should be cleared
+			publicObject := privatev1.Subnet_builder{
+				Id: "public_create_status_cleared",
+				Metadata: privatev1.Metadata_builder{
+					Name: "public-create-status-cleared",
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vnet-1"}.Build(),
+				}.Build(),
+				Status: privatev1.SubnetStatus_builder{
+					State: privatev1.SubnetState_SUBNET_STATE_READY,
+					Hub:   "malicious-hub",
+				}.Build(),
+			}.Build()
+			publicObject.GetSpec().SetIpv4Cidr("10.0.0.0/24")
+
+			publicCreateResponse := &privatev1.SubnetsCreateResponse{}
+			err = server.Create(withPublicAPIView(ctx), privatev1.SubnetsCreateRequest_builder{
+				Object: publicObject,
+			}.Build(), &publicCreateResponse)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(publicCreateResponse.GetObject().GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_UNSPECIFIED))
+			Expect(publicCreateResponse.GetObject().GetStatus().GetHub()).To(BeEmpty())
+
+			// Private API Create with status - should be preserved (controllers can set status)
+			privateObject := privatev1.Subnet_builder{
+				Id: "private_create_status_preserved",
+				Metadata: privatev1.Metadata_builder{
+					Name: "private-create-status-preserved",
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vnet-2"}.Build(),
+				}.Build(),
+				Status: privatev1.SubnetStatus_builder{
+					State: privatev1.SubnetState_SUBNET_STATE_PENDING,
+					Hub:   "controller-hub",
+				}.Build(),
+			}.Build()
+			privateObject.GetSpec().SetIpv4Cidr("10.0.1.0/24")
+
+			privateCreateResponse := &privatev1.SubnetsCreateResponse{}
+			err = server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
+				Object: privateObject,
+			}.Build(), &privateCreateResponse)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(privateCreateResponse.GetObject().GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
+			Expect(privateCreateResponse.GetObject().GetStatus().GetHub()).To(Equal("controller-hub"))
+		})
+
+		It("restores status on public API Update when status not in mask", func() {
+			server, err := NewGenericServer[*privatev1.Subnet]().
+				SetLogger(logger).
+				SetService(privatev1.Subnets_ServiceDesc.ServiceName).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create subnet
+			createObject := privatev1.Subnet_builder{
+				Id: "status_restore_test",
+				Metadata: privatev1.Metadata_builder{
+					Name: "status-restore-test",
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vnet-1"}.Build(),
+				}.Build(),
+			}.Build()
+			createObject.GetSpec().SetIpv4Cidr("10.0.0.0/24")
+
+			createResponse := &privatev1.SubnetsCreateResponse{}
+			err = server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
+				Object: createObject,
+			}.Build(), &createResponse)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Controller sets status via private API
+			controllerUpdateResponse := &privatev1.SubnetsUpdateResponse{}
+			err = server.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+				Object: privatev1.Subnet_builder{
+					Id: createResponse.GetObject().GetId(),
+					Status: privatev1.SubnetStatus_builder{
+						State: privatev1.SubnetState_SUBNET_STATE_READY,
+						Hub:   "hub-123",
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.hub"}},
+			}.Build(), &controllerUpdateResponse)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(controllerUpdateResponse.GetObject().GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_READY))
+			Expect(controllerUpdateResponse.GetObject().GetStatus().GetHub()).To(Equal("hub-123"))
+
+			// User tries to modify spec via public API with spoofed status - status should be restored from DB
+			userUpdateObject := privatev1.Subnet_builder{
+				Id: createResponse.GetObject().GetId(),
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vnet-1"}.Build(),
+				}.Build(),
+				Status: privatev1.SubnetStatus_builder{
+					State: privatev1.SubnetState_SUBNET_STATE_FAILED,
+					Hub:   "malicious-hub",
+				}.Build(),
+			}.Build()
+			userUpdateObject.GetSpec().SetIpv4Cidr("10.0.2.0/24")
+
+			userUpdateResponse := &privatev1.SubnetsUpdateResponse{}
+			err = server.Update(withPublicAPIView(ctx), privatev1.SubnetsUpdateRequest_builder{
+				Object:     userUpdateObject,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.ipv4_cidr"}},
+			}.Build(), &userUpdateResponse)
+			Expect(err).ToNot(HaveOccurred())
+			// Status should be restored from DB, not spoofed value
+			Expect(userUpdateResponse.GetObject().GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_READY))
+			Expect(userUpdateResponse.GetObject().GetStatus().GetHub()).To(Equal("hub-123"))
+		})
+
+		It("rejects public API Update with status in mask", func() {
+			server, err := NewGenericServer[*privatev1.Subnet]().
+				SetLogger(logger).
+				SetService(privatev1.Subnets_ServiceDesc.ServiceName).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create subnet
+			createObject := privatev1.Subnet_builder{
+				Id: "status_mask_reject_test",
+				Metadata: privatev1.Metadata_builder{
+					Name: "status-mask-reject-test",
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vnet-1"}.Build(),
+				}.Build(),
+			}.Build()
+			createObject.GetSpec().SetIpv4Cidr("10.0.0.0/24")
+
+			createResponse := &privatev1.SubnetsCreateResponse{}
+			err = server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
+				Object: createObject,
+			}.Build(), &createResponse)
+			Expect(err).ToNot(HaveOccurred())
+
+			// User tries to update status via public API with explicit mask
+			var updateResponse privatev1.SubnetsUpdateResponse
+			err = server.Update(withPublicAPIView(ctx), privatev1.SubnetsUpdateRequest_builder{
+				Object: privatev1.Subnet_builder{
+					Id: createResponse.GetObject().GetId(),
+					Status: privatev1.SubnetStatus_builder{
+						State: privatev1.SubnetState_SUBNET_STATE_READY,
+						Hub:   "user-hub",
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+			}.Build(), &updateResponse)
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("OUTPUT_ONLY"))
+		})
+
+		It("rejects public API Update with malformed status paths in mask", func() {
+			server, err := NewGenericServer[*privatev1.Subnet]().
+				SetLogger(logger).
+				SetService(privatev1.Subnets_ServiceDesc.ServiceName).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create subnet
+			createObject := privatev1.Subnet_builder{
+				Id: "malformed_path_test",
+				Metadata: privatev1.Metadata_builder{
+					Name: "malformed-path-test",
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vnet-1"}.Build(),
+				}.Build(),
+			}.Build()
+			createObject.GetSpec().SetIpv4Cidr("10.0.0.0/24")
+
+			createResponse := &privatev1.SubnetsCreateResponse{}
+			err = server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
+				Object: createObject,
+			}.Build(), &createResponse)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Test various malformed paths that should all be rejected
+			malformedPaths := []string{
+				"status. state",  // space after dot
+				"status..state",  // double dots
+				" status.state ", // leading/trailing spaces
+				"status. hub",    // space after dot
+				"status",         // just "status"
+				" status ",       // status with spaces
+			}
+
+			for _, path := range malformedPaths {
+				var updateResponse privatev1.SubnetsUpdateResponse
+				err = server.Update(withPublicAPIView(ctx), privatev1.SubnetsUpdateRequest_builder{
+					Object: privatev1.Subnet_builder{
+						Id: createResponse.GetObject().GetId(),
+						Status: privatev1.SubnetStatus_builder{
+							State: privatev1.SubnetState_SUBNET_STATE_READY,
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{path}},
+				}.Build(), &updateResponse)
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument), "path: %q", path)
+				Expect(err.Error()).To(ContainSubstring("OUTPUT_ONLY"), "path: %q", path)
+			}
+		})
+
+		It("allows private API Update with status in mask", func() {
+			server, err := NewGenericServer[*privatev1.Subnet]().
+				SetLogger(logger).
+				SetService(privatev1.Subnets_ServiceDesc.ServiceName).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create subnet
+			createObject := privatev1.Subnet_builder{
+				Id: "private_status_update",
+				Metadata: privatev1.Metadata_builder{
+					Name: "private-status-update",
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vnet-1"}.Build(),
+				}.Build(),
+			}.Build()
+			createObject.GetSpec().SetIpv4Cidr("10.0.0.0/24")
+
+			createResponse := &privatev1.SubnetsCreateResponse{}
+			err = server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
+				Object: createObject,
+			}.Build(), &createResponse)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Controller updates status via private API - should succeed
+			updateResponse := &privatev1.SubnetsUpdateResponse{}
+			err = server.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+				Object: privatev1.Subnet_builder{
+					Id: createResponse.GetObject().GetId(),
+					Status: privatev1.SubnetStatus_builder{
+						State: privatev1.SubnetState_SUBNET_STATE_READY,
+						Hub:   "hub-456",
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.hub"}},
+			}.Build(), &updateResponse)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_READY))
+			Expect(updateResponse.GetObject().GetStatus().GetHub()).To(Equal("hub-456"))
+
+			// Verify the status persisted
+			getResponse := &privatev1.SubnetsGetResponse{}
+			err = server.Get(ctx, privatev1.SubnetsGetRequest_builder{
+				Id: createResponse.GetObject().GetId(),
+			}.Build(), &getResponse)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_READY))
+			Expect(getResponse.GetObject().GetStatus().GetHub()).To(Equal("hub-456"))
+		})
+	})
 })

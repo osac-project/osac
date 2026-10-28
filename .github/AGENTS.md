@@ -21,32 +21,31 @@ plus a native approval on the head commit, and the merge queue.
   suites for a merge queue entry. `workflows/e2e-review-relay.yml` only finishes, so a review wakes `e2e-pr.yml`. `workflows/e2e-comment.yml` posts the placeholder of the control comment when a pull request opens (its finished run is deleted by `e2e-pr.yml`). The same run turns on auto-merge for a pull request that has an approval that counts, so it adds no check.
 - The `e2e-<suite>-full-install.yml` workflows hold one job each, no gating; they run on a schedule (every 5 hours), by hand
   and when called.
-- `workflow_run` lists workflows by exact name (`CI`, `E2E review relay`, `E2E comment` in `e2e-pr.yml`): keep the list in step when one is
-  renamed.
+- `workflow_run` lists workflows by exact name (`CI`, `E2E review relay`, `E2E comment` and the six `E2E <Suite> PR suite` workflows in `e2e-pr.yml`): keep the
+  list in step when one is renamed.
+- Every suite's policy job names a `workflow:` (`workflows/e2e-pr-<suite>.yml`): on a pull request it runs as a run of its own,
+  started by the decision with `workflow_dispatch`, and has no job in `e2e-pr.yml` (the merge queue still runs it as a job). See `.github/CI.md`.
 - Path filters: `tests/e2e/**` is the full-install suite and must still make the E2E apply (`e2e-suite` filter). Do not fold
   `tests/e2e` back into an ignore list.
 - No Prow labels (`/lgtm`, `/approve`, `/hold`, `/e2e-ready`, `/ok-to-test`) are read. Prow still sets `jira/valid-reference`
   (the `jira-reference` check reads it) and runs the cherry-pick plugin.
 - The one comment command is `/test` (alone: the suites the change needs; `/test vmaas caas`: those suites), read by
   `e2e-pr.yml` through the shared decision for members of the organization. The old slash-command workflow (`/test <workflow>`,
-  `/retest`, `/cancel`, `optional-workflows.yml`) is gone: re-run a check from its page, and start Netris with `/test netris`.
+  `/retest`, `/cancel`, `optional-workflows.yml`) is gone: re-run a check from its page, and start BMaaS Netris with `/test bmaas-netris`.
   A pull request from someone outside the organization needs the `ok-to-test` label added by a person with triage access.
 - Flake detection: run `python3 -m unittest discover -s .github/scripts -p test_flake_report.py` and applicable pre-commit and actionlint checks.
 
 ## Dependency updates and who may change the pipeline
 
-- `workflows/bot-approve.yml` approves Dependabot and Konflux pull requests as the OSAC CI app (`osac-ci[bot]`) when no
-  person needs to read them (every commit the bot's own, plain and signed; only dependency files changed). It runs every
-  15 minutes and looks at every open dependency update, so an approval comes within about a quarter of an hour. It is a
-  scheduled run on purpose: a run started by a Dependabot pull request only sees Dependabot's secrets, so the app's key
-  would have to be handed to Dependabot too. It is a thin caller of the shared `bot-sweep` workflow of osac-project/osac-ci
-  (`osac-ci bot-decide`), pinned to a full commit SHA of a release. The approval is made with a token minted from the
-  organization secret `OSAC_CI_APP_PRIVATE_KEY` with the pull-request permission only. For a Konflux pull request the
-  sweep also prepares it as the same app, with a token minted for that step (pull-requests, issues and actions write): the
-  title prefix, the `jira/valid-reference` label the Jira reference check needs, and the approval of its held workflow
-  runs once the bot policy approves the commit (an edit by the workflow's own token starts no workflow; one by the app
-  does). It used the secret `MERGE_QUEUE_TOKEN` for this before; the shared sweep still accepts that secret, but this
-  workflow no longer passes it.
+- Dependabot and Konflux pull requests are approved as the OSAC CI app (`osac-ci[bot]`) when no person needs to read them
+  (every commit the bot's own, plain and signed; only dependency files changed; a change to a workflow file never). The
+  sweep runs every 15 minutes from the osac-ci repository (its `sweep-bots.yml`, pinned to nothing: it runs from the
+  default branch of osac-ci), not from a workflow here, so this repository's Actions tab does not fill with a run every 15
+  minutes. The rules (which bots, which files, which commits) are osac-ci's (`docs/RULES.md` there). For a Konflux pull
+  request the sweep also prepares it as the same app: the title prefix, the `jira/valid-reference` label the Jira reference
+  check needs, and the approval of its held workflow runs once the bot policy approves the commit. To run it by hand, use
+  the workflow `sweep-bots.yml` of osac-project/osac-ci (`workflow_dispatch`, repository `osac`, optionally a pull request
+  number).
 - Changes to the files that define the checks (`.github/workflows`, `actions`, `scripts`, `filters`, `e2e-policy.yml`,
   `CODEOWNERS`, `.pre-commit-config.yaml`; Markdown in them excepted) need an approval from `@osac-project/wg-infra`
   (see `CODEOWNERS`). Only the osac-ui lint and typecheck workflows are also approvable by the osac-ui maintainers

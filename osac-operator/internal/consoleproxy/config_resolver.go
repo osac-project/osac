@@ -23,7 +23,8 @@ const (
 	VMClusterModeAuto   = "auto"
 
 	RemoteKubeconfigLabel = "osac.openshift.io/remote-cluster-kubeconfig"
-	remoteKubeconfigKey   = "kubeconfig"
+	// DefaultRemoteKubeconfigSecretKey is the conventional data key for remote kubeconfigs.
+	DefaultRemoteKubeconfigSecretKey = "kubeconfig"
 )
 
 // ConfigResolver resolves the rest.Config used to connect to the cluster
@@ -44,12 +45,16 @@ func NewHubClient(hubConfig *rest.Config) (client.Client, error) {
 // osac.openshift.io/remote-cluster-kubeconfig in the given namespace
 // and parses the kubeconfig from it.
 type RemoteConfigResolver struct {
-	client client.Client
-	logger *slog.Logger
+	client    client.Client
+	secretKey string
+	logger    *slog.Logger
 }
 
-func NewRemoteConfigResolver(c client.Client, logger *slog.Logger) *RemoteConfigResolver {
-	return &RemoteConfigResolver{client: c, logger: logger}
+func NewRemoteConfigResolver(c client.Client, secretKey string, logger *slog.Logger) *RemoteConfigResolver {
+	if secretKey == "" {
+		secretKey = DefaultRemoteKubeconfigSecretKey
+	}
+	return &RemoteConfigResolver{client: c, secretKey: secretKey, logger: logger}
 }
 
 func (r *RemoteConfigResolver) ResolveConfig(ctx context.Context, namespace string) (*rest.Config, string, error) {
@@ -76,9 +81,9 @@ func (r *RemoteConfigResolver) ResolveConfig(ctx context.Context, namespace stri
 		)
 	}
 	secret := secretList.Items[0]
-	kubeconfigData, ok := secret.Data[remoteKubeconfigKey]
+	kubeconfigData, ok := secret.Data[r.secretKey]
 	if !ok || len(kubeconfigData) == 0 {
-		return nil, "", fmt.Errorf("secret %q in namespace %q has no %q key", secret.Name, namespace, remoteKubeconfigKey)
+		return nil, "", fmt.Errorf("secret %q in namespace %q has no %q key", secret.Name, namespace, r.secretKey)
 	}
 	config, err := clientcmd.RESTConfigFromKubeConfig(kubeconfigData)
 	if err != nil {

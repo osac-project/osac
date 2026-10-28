@@ -5,6 +5,7 @@ import {
   expectRowNotToExist,
   getTableRowByCellText,
 } from './general/row_assertions';
+import type { LifecycleAction } from './lifecycle';
 import {
   InstanceTypesActionsMenu,
   InstanceTypesCreatePage,
@@ -23,7 +24,7 @@ export interface InstanceTypeGpu {
   pciDeviceSelector: string;
 }
 
-export type InstanceTypeLifecycleAction = 'Deprecate' | 'Obsolete' | 'Reactivate';
+export type InstanceTypeLifecycleAction = LifecycleAction;
 
 type InstanceTypeLifecycleState = 'Active' | 'Deprecated' | 'Obsolete';
 type InstanceTypeMenuAction = InstanceTypeLifecycleAction | 'Delete';

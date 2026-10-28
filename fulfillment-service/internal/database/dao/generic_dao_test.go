@@ -31,6 +31,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 	testsv1 "github.com/osac-project/osac/proto/gen/osac/tests/v1"
 )
 
@@ -2280,6 +2281,124 @@ var _ = Describe("Generic DAO", func() {
 			items := response.GetItems()
 			Expect(items).To(HaveLen(1))
 			Expect(items[0].GetMetadata().GetName()).To(Equal("with-label"))
+		})
+
+		It("Uses public metadata maps for whole-map filters and rejects reserved keys", func() {
+			publicObjectsDao, err := NewGenericDAO[*testsv1.Object]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				SetFilterDesc((*publicv1.Cluster)(nil).ProtoReflect().Descriptor()).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			objects := []struct {
+				name        string
+				labels      map[string]string
+				annotations map[string]string
+			}{
+				{
+					name: "reserved-label",
+					labels: map[string]string{
+						"ordinary":                        "visible",
+						"probe":                           "admin.osac.openshift.io/managed",
+						"admin.osac.openshift.io/managed": "system",
+					},
+					annotations: map[string]string{
+						"ordinary": "visible",
+						"probe":    "admin.osac.openshift.io/managed",
+					},
+				},
+				{
+					name:   "reserved-annotation",
+					labels: map[string]string{"ordinary": "visible"},
+					annotations: map[string]string{
+						"ordinary": "visible",
+						"controller.admin.osac.openshift.io/managed": "system",
+					},
+				},
+				{
+					name:        "ordinary-only",
+					labels:      map[string]string{"ordinary": "visible"},
+					annotations: map[string]string{"ordinary": "visible"},
+				},
+			}
+			for _, object := range objects {
+				_, err = objectsDao.Create().SetObject(testsv1.Object_builder{
+					Metadata: testsv1.Metadata_builder{
+						Name:        object.name,
+						Tenant:      "my-tenant",
+						Labels:      object.labels,
+						Annotations: object.annotations,
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+
+			filter := "this.metadata.labels == this.metadata.annotations"
+			response, err := publicObjectsDao.List().SetFilter(filter).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetTotal()).To(Equal(int32(3)))
+			Expect(response.GetItems()).To(HaveLen(3))
+
+			countOnly, err := publicObjectsDao.List().SetFilter(filter).SetLimit(0).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(countOnly.GetTotal()).To(Equal(int32(3)))
+			Expect(countOnly.GetItems()).To(BeEmpty())
+
+			privateResponse, err := objectsDao.List().SetFilter(filter).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(privateResponse.GetTotal()).To(Equal(int32(1)))
+			Expect(privateResponse.GetItems()).To(HaveLen(1))
+
+			ordinaryResponse, err := publicObjectsDao.List().
+				SetFilter(`this.metadata.labels['ordinary'] == 'visible'`).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(ordinaryResponse.GetTotal()).To(Equal(int32(3)))
+
+			// A public filter must not use an ordinary label's value to probe
+			// whether that value also appears as a reserved metadata key.
+			probeResponse, err := publicObjectsDao.List().
+				SetFilter(`this.metadata.labels['probe'] in this.metadata.labels`).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(probeResponse.GetTotal()).To(Equal(int32(0)))
+
+			clusterDao, err := NewGenericDAO[*privatev1.Cluster]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				SetFilterDesc((*publicv1.Cluster)(nil).ProtoReflect().Descriptor()).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = clusterDao.Create().SetObject(privatev1.Cluster_builder{
+				Metadata: privatev1.Metadata_builder{
+					Tenant: "my-tenant",
+					Labels: map[string]string{"ordinary": "visible"},
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			filterSQL, err := clusterDao.filterTranslator.Translate(ctx, `this.metadata.labels['ordinary'] == 'visible'`)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = tx.Exec(ctx, `set local enable_seqscan = off`)
+			Expect(err).ToNot(HaveOccurred())
+			rows, err := tx.Query(ctx, `explain select id from clusters where `+filterSQL)
+			Expect(err).ToNot(HaveOccurred())
+			defer rows.Close()
+			var queryPlan strings.Builder
+			for rows.Next() {
+				var line string
+				Expect(rows.Scan(&line)).To(Succeed())
+				queryPlan.WriteString(line)
+			}
+			Expect(rows.Err()).ToNot(HaveOccurred())
+			Expect(queryPlan.String()).To(ContainSubstring("clusters_by_label"))
+
+			for _, forbiddenFilter := range []string{
+				`this.metadata.labels['admin.osac.openshift.io/managed'] == 'system'`,
+				`'controller.admin.osac.openshift.io/managed' in this.metadata.annotations`,
+			} {
+				_, err = publicObjectsDao.List().SetFilter(forbiddenFilter).Do(ctx)
+				var invalidFilterErr *ErrInvalidFilter
+				Expect(errors.As(err, &invalidFilterErr)).To(BeTrue(), "filter %q: %v", forbiddenFilter, err)
+			}
 		})
 
 		It("Filters by absence of label key", func() {

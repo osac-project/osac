@@ -1,0 +1,51 @@
+---
+- name: Detach an ExternalIP through AgentlessNet
+  block:
+    - name: Validate the AgentlessNet ExternalIPAttachment v1 identity
+      ansible.builtin.assert:
+        that:
+          - external_ip_attachment.metadata.uid is string
+          - external_ip_attachment.metadata.uid | length > 0
+          - external_ip_attachment.metadata.generation is number
+          - external_ip_attachment.metadata.labels['osac.openshift.io/externalipattachment-uuid'] is string
+          - external_ip_attachment.metadata.labels['osac.openshift.io/externalipattachment-uuid'] | length > 0
+          - external_ip_attachment.metadata.annotations['osac.openshift.io/tenant'] is string
+          - external_ip_attachment.metadata.annotations['osac.openshift.io/externalipattachment-contract-version'] == 'v1'
+          - external_ip_attachment.metadata.deletionTimestamp is defined
+        fail_msg: >-
+          AgentlessNet ExternalIPAttachment detach requires a deleting v1
+          resource with stable UID, Fulfillment ID, and tenant identity.
+      no_log: true
+
+    - name: Load AgentlessNet network-node inventory for attachment cleanup
+      ansible.builtin.include_tasks: _load_network_node_inventory.yaml
+      vars:
+        agentless_net_require_switches: false
+
+    - name: Remove saved AgentlessNet ExternalIPAttachment provider state
+      osac.templates.agentless_net_state:
+        action: delete_external_ip_attachment
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ external_ip_attachment.metadata.uid }}"
+        fulfillment_id: >-
+          {{ external_ip_attachment.metadata.labels['osac.openshift.io/externalipattachment-uuid'] }}
+        tenant_id: "{{ external_ip_attachment.metadata.annotations['osac.openshift.io/tenant'] }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      no_log: true
+
+    - name: Report successful AgentlessNet ExternalIPAttachment detach
+      ansible.builtin.set_stats:
+        data:
+          osac_result:
+            schemaVersion: v1
+            operation: external_ip_attachment.detach
+            resourceUID: "{{ external_ip_attachment.metadata.uid }}"
+            observedGeneration: "{{ external_ip_attachment.metadata.generation | int }}"
+            data: {}
+        per_host: false
+        aggregate: false
+      when: not ansible_check_mode
+  always:
+    - name: Remove the temporary AgentlessNet SSH key file
+      ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

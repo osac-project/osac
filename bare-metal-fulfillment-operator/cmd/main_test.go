@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -212,6 +213,14 @@ var _ = Describe("createInventoryClient", func() {
 	It("constructs a NetBox backend with Metal3 startup configuration", func() {
 		tokenFile := filepath.Join(GinkgoT().TempDir(), "netbox-token")
 		Expect(os.WriteFile(tokenFile, []byte("test-token\n"), 0o600)).To(Succeed())
+		clientIDFile := filepath.Join(GinkgoT().TempDir(), "secret-api-client-id")
+		Expect(os.WriteFile(clientIDFile, []byte("osac-controller\n"), 0o600)).To(Succeed())
+		clientSecretFile := filepath.Join(GinkgoT().TempDir(), "secret-api-client-secret")
+		Expect(os.WriteFile(clientSecretFile, []byte("test-client-secret\n"), 0o600)).To(Succeed())
+		GinkgoT().Setenv(envSecretAPIURL, "https://fulfillment.example.test:8001")
+		GinkgoT().Setenv(envSecretAPIIssuerURL, "https://keycloak.example.test/realms/osac")
+		GinkgoT().Setenv(envSecretAPIClientIDFile, clientIDFile)
+		GinkgoT().Setenv(envSecretAPIClientSecretFile, clientSecretFile)
 
 		mgr := newStartupTestManager()
 		inventoryCfg := &inventory.Config{
@@ -234,5 +243,8 @@ var _ = Describe("createInventoryClient", func() {
 		inventoryClient, err := createInventoryClient(context.Background(), inventoryCfg, managementCfg, mgr)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(inventoryClient).To(BeAssignableToTypeOf(&inventory.NetBoxClient{}))
+		closer, ok := inventoryClient.(io.Closer)
+		Expect(ok).To(BeTrue())
+		Expect(closer.Close()).To(Succeed())
 	})
 })

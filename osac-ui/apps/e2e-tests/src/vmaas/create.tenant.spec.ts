@@ -1,5 +1,6 @@
 import { test } from '@playwright/test';
 
+import { tenantNameOrSkip } from './test_data';
 import { openAndLoginWithEnvironment } from '../../../../libs/test-utils/src/general/open_and_login';
 import { openTenantsPage } from '../../../../libs/test-utils/src/main.page';
 import {
@@ -12,10 +13,8 @@ import {
 test('creates a tenant from the Administration tenants page', async ({ page }) => {
   // Allow backend reconciliation and tenant creation waits to complete.
   test.setTimeout(120_000);
-
-  const tenantName = process.env.OSAC_TENANT_NAME;
-  if (!tenantName) {
-    test.skip(true, 'OSAC_TENANT_NAME is not set.');
+  const configuredTenantName = tenantNameOrSkip();
+  if (!configuredTenantName) {
     return;
   }
 
@@ -29,10 +28,10 @@ test('creates a tenant from the Administration tenants page', async ({ page }) =
   await expectDefaultTenants(page);
 
   // 4. Verify that the requested tenant does not already exist.
-  await expectTenantNotToExist(page, tenantName);
+  await expectTenantNotToExist(page, configuredTenantName);
 
   // 5. Open the tenant creation page and create the requested tenant.
   await openCreateTenantPage(page);
-  const credentialsFile = await createTenant(page, tenantName);
+  const credentialsFile = await createTenant(page, configuredTenantName);
   process.env.OSAC_TENANT_CREDENTIALS_FILE = credentialsFile;
 });

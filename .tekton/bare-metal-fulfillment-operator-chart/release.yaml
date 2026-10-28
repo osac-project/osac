@@ -7,7 +7,7 @@ metadata:
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch.startsWith("refs/tags/osac-release/")
+    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch.startsWith("refs/tags/osac-charts-release/")
   labels:
     appstudio.openshift.io/application: osac
     appstudio.openshift.io/component: bare-metal-fulfillment-operator-chart
@@ -35,41 +35,12 @@ spec:
   # history (per-release stamping commits are never merged into main),
   # so git describe falls back to a nonsense, non-semver version like
   # "0.1.7392_5f8626895" -- confirmed live, a real release dispatch
-  # with nothing bumped produced exactly that, and either silently
-  # published it (charts with no rewrite-registry-image-refs task) or
-  # hard-failed downstream (helm pull --version rejecting it as invalid
-  # semver, in charts that do). tag-prefix is still the dedicated,
-  # slash-free tag (not the per-component "<component>/vX.Y.Z" one --
+  # with nothing bumped produced exactly that and silently published
+  # it. tag-prefix is still the dedicated, slash-free tag (not the
+  # per-component "<component>/vX.Y.Z" one --
   # see resolve-chart-version's own comment for why slash-free matters).
   - name: tag-prefix
     value: bare-metal-fulfillment-operator-chart-v
-  # Patches this chart's own image reference field(s) in its SOURCE
-  # values.yaml -- which commits a GHCR dev placeholder (e.g.
-  # "ghcr.io/osac-project/<component>:sha-<short>") -- to point at
-  # the real registry.stage.redhat.io image, before build-helm-chart-
-  # oci-ta packages and pushes it (see patch-chart-image-refs task
-  # below). NOT a separate re-pull/re-push to registry.stage.redhat.io
-  # after the fact: that approach needed its own push credentials for
-  # that registry inside the BUILD pipeline, which this component's
-  # build-time service account deliberately doesn't have (confirmed
-  # live: a real push attempt failed immediately, auths scoped only
-  # to this component's own quay.io/redhat-user-workloads repo) --
-  # registry.stage.redhat.io write access is reserved for the
-  # managed release pipeline, which already promotes this exact
-  # chart there via the existing osac-charts-stage RPA.
-  # owning-component-tag-prefix reuses the EXISTING bare-metal-fulfillment-operator/vX.Y.Z
-  # tag (not the dedicated chart tag above) since that's what
-  # identifies the real released *image* version.
-  - name: owning-component-tag-prefix
-    value: bare-metal-fulfillment-operator/v
-  - name: registry-image
-    value: registry.stage.redhat.io/cloud-extensions/bare-metal-fulfillment-operator-rhel10
-  # Operates directly on the source tree's own "values.yaml" inside
-  # chart-context, before build-helm-chart-oci-ta packages it -- not
-  # the post-package flat layout (that only exists after packaging
-  # renames the chart root to the Konflux component name).
-  - name: image-rewrite-yq
-    value: TARGET_IMAGE="${TARGET_IMAGE}" TARGET_REPO="${TARGET_IMAGE%:*}" TARGET_TAG="${TARGET_IMAGE##*:}" yq -i '.image.repository = strenv(TARGET_REPO) | .image.tag = strenv(TARGET_TAG)' "values.yaml"
   pipelineSpec:
     description: |
       Packages and pushes a Helm chart to an OCI repository using trusted artifacts,
@@ -114,15 +85,6 @@ spec:
     - default: "true"
       description: Use the package registry proxy when prefetching dependencies
       name: enable-package-registry-proxy
-      type: string
-    - description: Existing per-component tag prefix identifying the real released image version
-      name: owning-component-tag-prefix
-      type: string
-    - description: Fully qualified registry.stage.redhat.io image (no tag) this chart should reference
-      name: registry-image
-      type: string
-    - description: Full yq command rewriting this chart's own image value field(s), given $TARGET_IMAGE
-      name: image-rewrite-yq
       type: string
     results:
     - description: ""
@@ -223,122 +185,12 @@ spec:
       workspaces:
       - name: basic-auth
         workspace: git-auth
-    - name: patch-chart-image-refs
-      params:
-      - name: SOURCE_ARTIFACT
-        value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
-      - name: ociStorage
-        value: $(params.output-image).patched
-      - name: ociArtifactExpiresAfter
-        value: $(params.image-expires-after)
-      - name: git-url
-        value: $(params.git-url)
-      - name: chart-context
-        value: $(params.chart-context)
-      - name: owning-component-tag-prefix
-        value: $(params.owning-component-tag-prefix)
-      - name: registry-image
-        value: $(params.registry-image)
-      - name: image-rewrite-yq
-        value: $(params.image-rewrite-yq)
-      runAfter:
-      - clone-repository
-      taskSpec:
-        params:
-        - name: SOURCE_ARTIFACT
-          type: string
-        - name: ociStorage
-          type: string
-        - name: ociArtifactExpiresAfter
-          type: string
-        - name: git-url
-          type: string
-        - name: chart-context
-          type: string
-        - name: owning-component-tag-prefix
-          type: string
-        - name: registry-image
-          type: string
-        - name: image-rewrite-yq
-          type: string
-        results:
-        - name: SOURCE_ARTIFACT
-          description: The Trusted Artifact URI pointing to the source tree, now
-            with this chart's own image reference(s) pointed at the real
-            registry.stage.redhat.io image
-        stepTemplate:
-          volumeMounts:
-          - mountPath: /var/workdir
-            name: workdir
-        steps:
-        - name: use-trusted-artifact
-          image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:6fdd8890c52acb20ffc5f2d2a6cab2a11b7a2e431bf175bf5577ae4b9849a434
-          args:
-          - use
-          - $(params.SOURCE_ARTIFACT)=/var/workdir/source
-        - name: patch-values
-          # Same image build-helm-chart-oci-ta's own "package-and-push" step
-          # uses -- already has git and yq. Runs as root: use-trusted-artifact
-          # (the preceding step) extracts the source tree as build-trusted-
-          # artifacts' own non-root user, a different uid than this image's
-          # default (1001) -- the extracted files' plain git-clone modes
-          # (644/755) grant no cross-uid write, so `yq -i` on values.yaml
-          # fails "permission denied" otherwise. Confirmed live on a real
-          # release. Same cross-image uid mismatch already solved once
-          # before for generate-ee-context (see its own securityContext).
-          securityContext:
-            runAsUser: 0
-          image: quay.io/konflux-ci/tools@sha256:2112b51ba80d1041c120c32b67b871d371fde4e5775b32a3c7bf01a2f9ec0964
-          script: |
-            #!/bin/bash
-            set -euo pipefail
-
-            # Resolve the real per-component image version by tag NAME, not
-            # git ancestry/revision: this release's own stamping commit
-            # (and the owning image component's own stamping commit, if
-            # that component wasn't rebuilt this release) each live on
-            # their own throwaway per-release branch that's never merged
-            # into main, so neither --exact-match nor an ancestor-walking
-            # git describe can find a component's tag unless that exact
-            # component was bumped in this exact release. Tags are
-            # monotonically increasing per component, so the highest
-            # version by semver sort is always the real, currently-
-            # released one, bumped this release or not.
-            echo "Resolving real image version from $(params.owning-component-tag-prefix)*..."
-            git clone --filter=blob:none --no-checkout "$(params.git-url)" /tmp/repo
-            cd /tmp/repo
-            git fetch --tags origin
-            REAL_VERSION=$(git tag -l "$(params.owning-component-tag-prefix)*" \
-              | sed "s#^$(params.owning-component-tag-prefix)##" \
-              | sort -V | tail -1)
-            if [ -z "${REAL_VERSION}" ]; then
-              echo "ERROR: no tag matching $(params.owning-component-tag-prefix)* found" >&2
-              exit 1
-            fi
-            TARGET_IMAGE="$(params.registry-image):${REAL_VERSION}"
-            echo "Real image version: ${REAL_VERSION} -> ${TARGET_IMAGE}"
-
-            cd /var/workdir/source/$(params.chart-context)
-            $(params.image-rewrite-yq)
-        - name: create-trusted-artifact
-          image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:6fdd8890c52acb20ffc5f2d2a6cab2a11b7a2e431bf175bf5577ae4b9849a434
-          args:
-          - create
-          - --store
-          - $(params.ociStorage)
-          - $(results.SOURCE_ARTIFACT.path)=/var/workdir/source
-          env:
-          - name: IMAGE_EXPIRES_AFTER
-            value: $(params.ociArtifactExpiresAfter)
-        volumes:
-        - name: workdir
-          emptyDir: {}
     - name: prefetch-dependencies
       params:
       - name: input
         value: $(params.prefetch-input)
       - name: SOURCE_ARTIFACT
-        value: $(tasks.patch-chart-image-refs.results.SOURCE_ARTIFACT)
+        value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
       - name: ociStorage
         value: $(params.output-image).prefetch
       - name: ociArtifactExpiresAfter
@@ -346,7 +198,7 @@ spec:
       - name: enable-package-registry-proxy
         value: $(params.enable-package-registry-proxy)
       runAfter:
-      - patch-chart-image-refs
+      - clone-repository
       taskRef:
         params:
         - name: name

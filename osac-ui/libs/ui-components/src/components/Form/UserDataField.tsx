@@ -56,7 +56,7 @@ const UserDataField = ({
         />
       ) : (
         <InputField
-          label={t('User data')}
+          label={t('Cloud-init')}
           name={inlineName}
           fieldId="inline-user-data"
           multiline

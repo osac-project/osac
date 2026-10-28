@@ -6,12 +6,9 @@
 #
 # Ansible Automation Hub UI project at https://github.com/ansible/ansible-hub-ui
 
-from __future__ import absolute_import, division, print_function
 import time
 
 from .ah_api_module import AHAPIModuleError
-
-__metaclass__ = type
 
 
 class AHPulpObject(object):
@@ -286,8 +283,8 @@ class AHPulpObject(object):
                  if the object do not need updating.
         :rtype: bool
         """
-        # The "key" field ("name", "username", ...) is required for PUT
-        # requests. Making sure that it is present.
+        # The "key" field ("name", "username", ...) is required to identify
+        # the object being updated. Making sure that it is present.
         if self.name_field not in new_item:
             new_item[self.name_field] = self.name
 
@@ -320,9 +317,13 @@ class AHPulpObject(object):
                 self.api.exit_json(**self.api.json_output)
             return True
 
+        # new_item only ever carries the fields the caller wants changed, not
+        # a full object representation, so PATCH (partial update) is used
+        # instead of PUT. PUT would make the server re-validate every field
+        # on the object, including ones the caller never touched.
         url = self.api.host_url._replace(path=self.href)
         try:
-            response = self.api.make_request("PUT", url, data=new_item)
+            response = self.api.make_request("PATCH", url, data=new_item)
         except AHAPIModuleError as e:
             self.api.fail_json(msg="Update error: {error}".format(error=e))
 

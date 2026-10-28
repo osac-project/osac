@@ -242,9 +242,6 @@ hubAccess:
 
 # --- Metering ---
 metering:
-  enabled: true
-  reconciliation:
-    interval: "5m"
   echoAdapter:
     enabled: true
     image:

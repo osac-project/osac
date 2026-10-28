@@ -112,6 +112,10 @@ argument_specs:
             type: str
             required: true
             description: Server port / logical interface name (e.g. eth9).
+          subnet_ref:
+            type: str
+            required: false
+            description: Subnet UUID from the shared attachment payload; unused for Netris port moves.
           from_vnet_name:
             type: str
             required: false

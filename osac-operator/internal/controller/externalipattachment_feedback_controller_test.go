@@ -30,6 +30,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -697,6 +699,70 @@ var _ = Describe("ExternalIPAttachmentFeedbackController", func() {
 			err = k8sClient.Get(ctx, types.NamespacedName{Name: attachmentName, Namespace: attachmentNamespace}, updated)
 			Expect(err).To(HaveOccurred())
 		})
+	})
+})
+
+var _ = Describe("syncExternalIPAttachmentDelete", func() {
+	It("dates a failed attachment's report at the CR's recorded transition time", func() {
+		remote := &privatev1.ExternalIPAttachment{Id: "attachment-del-failed", Status: &privatev1.ExternalIPAttachmentStatus{}}
+		recorded := metav1.NewTime(time.Unix(1000, 0))
+		deletedAt := metav1.NewTime(time.Unix(2000, 0))
+		cr := &v1alpha1.ExternalIPAttachment{
+			ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &deletedAt},
+			Status:     v1alpha1.ExternalIPAttachmentStatus{Phase: v1alpha1.ExternalIPAttachmentPhaseFailed, StateTransitionTime: &recorded},
+		}
+
+		Expect(syncExternalIPAttachmentDelete(context.Background(), cr, remote)).To(Succeed())
+
+		Expect(remote.GetStatus().GetStateTransitionTime().AsTime().Equal(recorded.Time)).To(BeTrue())
+	})
+
+	It("dates the forced DELETING of a pre-deletion phase at the deletion timestamp", func() {
+		// The recorded time dates the Ready phase, not the deletion: reporting
+		// DELETING at it would end billing at the Ready time and erase the span
+		// up to the deletion.
+		remote := &privatev1.ExternalIPAttachment{Id: "attachment-del-ready", Status: &privatev1.ExternalIPAttachmentStatus{}}
+		recorded := metav1.NewTime(time.Unix(1000, 0))
+		deletedAt := metav1.NewTime(time.Unix(2000, 0))
+		cr := &v1alpha1.ExternalIPAttachment{
+			ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &deletedAt},
+			Status:     v1alpha1.ExternalIPAttachmentStatus{Phase: v1alpha1.ExternalIPAttachmentPhaseReady, StateTransitionTime: &recorded},
+		}
+
+		Expect(syncExternalIPAttachmentDelete(context.Background(), cr, remote)).To(Succeed())
+
+		Expect(remote.GetStatus().GetStateTransitionTime().AsTime().Equal(deletedAt.Time)).To(BeTrue())
+	})
+
+	It("dates the change at the deletion timestamp when the CR status carries no time", func() {
+		remote := &privatev1.ExternalIPAttachment{Id: "attachment-del-fallback", Status: &privatev1.ExternalIPAttachmentStatus{}}
+		deletedAt := metav1.NewTime(time.Unix(2000, 0))
+		cr := &v1alpha1.ExternalIPAttachment{
+			ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &deletedAt},
+			Status:     v1alpha1.ExternalIPAttachmentStatus{Phase: v1alpha1.ExternalIPAttachmentPhaseReady},
+		}
+
+		Expect(syncExternalIPAttachmentDelete(context.Background(), cr, remote)).To(Succeed())
+
+		Expect(remote.GetStatus().GetStateTransitionTime().AsTime().Equal(deletedAt.Time)).To(BeTrue())
+	})
+
+	It("keeps the remote's stored time when neither the CR nor its deletion carries one", func() {
+		remote := &privatev1.ExternalIPAttachment{Id: "attachment-del-remote", Status: &privatev1.ExternalIPAttachmentStatus{}}
+		original := timestamppb.Now()
+		remote.GetStatus().SetStateTransitionTime(original)
+
+		Expect(syncExternalIPAttachmentDelete(context.Background(), &v1alpha1.ExternalIPAttachment{}, remote)).To(Succeed())
+
+		Expect(proto.Equal(remote.GetStatus().GetStateTransitionTime(), original)).To(BeTrue())
+	})
+
+	It("rejects an attachment with no time anywhere", func() {
+		remote := &privatev1.ExternalIPAttachment{Id: "attachment-del-none", Status: &privatev1.ExternalIPAttachmentStatus{}}
+
+		Expect(syncExternalIPAttachmentDelete(context.Background(), &v1alpha1.ExternalIPAttachment{}, remote)).To(
+			MatchError(ContainSubstring("no state transition time")),
+		)
 	})
 })
 

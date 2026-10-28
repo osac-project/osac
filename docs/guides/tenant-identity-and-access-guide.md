@@ -1,6 +1,6 @@
 # Tenant Identity and Access Guide (Fulfillment API / CLI)
 
-**Last Updated**: 2026-07-28
+**Last Updated**: 2026-10-26
 **Audience**: Cloud provider administrators, tenant administrators, developers validating fulfillment-service
 **Status**: Draft
 
@@ -19,6 +19,7 @@
 - [Flow 4 — Configure IdP (OIDC)](#flow-4--configure-idp-oidc)
 - [Flow 5 — IdP users auto-join the tenant](#flow-5--idp-users-auto-join-the-tenant)
 - [Flow 6 — RoleBinding tenant-admin](#flow-6--rolebinding-tenant-admin)
+- [Read-only API access](#read-only-api-access)
 - [Flow 7 — Tenant admin SSO proof](#flow-7--tenant-admin-sso-proof)
 - [Flow 8 — Tenant admin creates a project](#flow-8--tenant-admin-creates-a-project)
 - [Flow 9 — Add a project viewer](#flow-9--add-a-project-viewer)
@@ -119,6 +120,7 @@ This prints the identity from the **local CLI token** (username, tenant, roles).
 | 4 | Register tenant OIDC identity provider |
 | 5 | Two IdP users auto-join (`alice`, `bob`) and JIT OSAC Users |
 | 6 | RoleBinding grants `tenant-admin` to alice |
+| Reader access | Assign a reader role and review API permissions |
 | 7 | Alice logs in again — SSO proves `tenant-admin` in the token |
 | 8 | Alice creates a project |
 | 9 | Alice adds bob as project viewer (ProjectMembership) |
@@ -504,6 +506,52 @@ osac get rolebinding -o yaml | grep -E 'name:|role:|state:|message:'
 ```
 
 **Expected:** RoleBinding **READY**, role `tenant-admin`, users = alice’s UUID.
+
+---
+
+## Read-only API access
+
+OSAC provides the `tenant-reader` and `cloud-provider-reader` roles for
+authorized users who need to inspect resources without changing them. A Tenant
+Admin or Cloud Provider Admin assigns either role through the existing
+RoleBindings API; no new API or role-seeding step is required.
+
+### Assign a reader role through the API
+
+Use the RoleBinding request and create/get workflow shown in [Flow 6](#flow-6--rolebinding-tenant-admin).
+For the reader assignment, set `spec.role` to `tenant-reader` or
+`cloud-provider-reader`, and set `spec.users` to the assigned OSAC user IDs.
+The RoleBinding's status reports synchronization progress. `READY` means the
+role has been synchronized to Keycloak.
+
+### What a reader role allows
+
+A reader role allows only reviewed public resource methods named exactly
+`Get`, `List`, or `Watch`. This is an explicit set of reviewed API methods, not
+a grant to every method whose name happens to match one of those verbs. The
+user's existing authorization checks still apply: `tenant-reader` stays
+within the user's existing tenant scope, and `cloud-provider-reader` stays
+within the user's existing provider scope. Neither role adds visibility to
+other tenants or providers.
+
+`SelfSubjectAccessReviews/Create` is a separate permission-check operation. An
+authenticated user can use it to ask whether they themselves would be allowed
+to perform a hypothetical operation. Despite `Create` in the method name, the
+request does not run or store the checked operation and does not grant that
+permission.
+
+A user with only a reader role is denied direct resource `Create`, `Update`,
+and `Delete` requests with `PERMISSION_DENIED`; denied requests do not change
+persisted resources. A reader role also does not grant the implicit
+general-client fallback. Other explicitly assigned roles or admin grants
+remain additive, so they may allow operations beyond the reader role's grants.
+
+### When a reader-role assignment takes effect
+
+Wait for the RoleBinding to reach `READY`, then refresh the user's token before
+checking the role claims. `READY` confirms Keycloak synchronization; it does
+not change claims in a token that was issued earlier. The existing session can
+continue to use its original claims until the token is refreshed.
 
 ---
 

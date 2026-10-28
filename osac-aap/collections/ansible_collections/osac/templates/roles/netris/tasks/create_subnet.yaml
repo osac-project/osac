@@ -313,8 +313,8 @@
       metadata:
         name: "subnet-{{ subnet_name }}-fabric-output"
         namespace: "{{ subnet.metadata.namespace }}"
-      data:
-        l2_vni: "{{ netris_vnet_detail.vxlanID | string | trim }}"
-        l3_vni: "{{ subnet_l3_vni | string }}"
-        fabric_reserved_range: >-
-          {{ _fabric_reserved_range | string | trim }}
+      data: "{{ {
+        'l2_vni': netris_vnet_detail.vxlanID | string | trim,
+        'l3_vni': subnet_l3_vni | string,
+        'fabric_reserved_range': _fabric_reserved_range | string | trim
+      } }}"

@@ -15,7 +15,9 @@ import tempfile
 import traceback
 
 from ansible.module_utils.basic import AnsibleModule, missing_required_lib
-from ansible.module_utils.six import string_types
+from ansible_collections.kubernetes.core.plugins.module_utils.args_common import (
+    extract_sensitive_values_from_kubeconfig,
+)
 from ansible_collections.kubernetes.core.plugins.module_utils.version import (
     LooseVersion,
 )
@@ -113,11 +115,18 @@ class AnsibleHelmModule(object):
         kubeconfig_content = None
         kubeconfig = self.params.get("kubeconfig")
         if kubeconfig:
-            if isinstance(kubeconfig, string_types):
+            if isinstance(kubeconfig, str):
                 with open(os.path.expanduser(kubeconfig)) as fd:
                     kubeconfig_content = yaml.safe_load(fd)
             elif isinstance(kubeconfig, dict):
                 kubeconfig_content = kubeconfig
+
+            # Redact sensitive fields from kubeconfig for logging purposes
+            if kubeconfig_content:
+                # Add original sensitive values to no_log_values to prevent them from appearing in logs
+                self._module.no_log_values.update(
+                    extract_sensitive_values_from_kubeconfig(kubeconfig_content)
+                )
 
         if self.params.get("ca_cert"):
             ca_cert = self.params.get("ca_cert")
@@ -192,6 +201,24 @@ class AnsibleHelmModule(object):
         if m:
             return m.group(1)
         return None
+
+    def validate_helm_version(self):
+        """
+        Validate that Helm version is >=3.0.0 and <4.0.0.
+        Helm 4 is not yet supported.
+        """
+        helm_version = self.get_helm_version()
+        if helm_version is None:
+            self.fail_json(msg="Unable to determine Helm version")
+
+        if (LooseVersion(helm_version) < LooseVersion("3.0.0")) or (
+            LooseVersion(helm_version) >= LooseVersion("4.0.0")
+        ):
+            self.fail_json(
+                msg="Helm version must be >=3.0.0,<4.0.0, current version is {0}".format(
+                    helm_version
+                )
+            )
 
     def get_values(self, release_name, get_all=False):
         """

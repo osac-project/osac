@@ -113,7 +113,7 @@ var _ = Describe("RemoteConfigResolver", func() {
 				WithRuntimeObjects(objects...).
 				Build()
 
-			resolver := NewRemoteConfigResolver(c, discardLogger)
+			resolver := NewRemoteConfigResolver(c, DefaultRemoteKubeconfigSecretKey, discardLogger)
 			config, _, err := resolver.ResolveConfig(context.Background(), namespace)
 
 			if wantErr != "" {
@@ -130,7 +130,7 @@ var _ = Describe("RemoteConfigResolver", func() {
 			"osac-dev",
 			[]runtime.Object{
 				labeledSecret("osac-dev", "remote-kubeconfig", map[string][]byte{
-					remoteKubeconfigKey: validKubeconfig(),
+					DefaultRemoteKubeconfigSecretKey: validKubeconfig(),
 				}),
 			},
 			"https://remote-cluster:6443", ""),
@@ -150,7 +150,7 @@ var _ = Describe("RemoteConfigResolver", func() {
 			"osac-dev",
 			[]runtime.Object{
 				labeledSecret("osac-dev", "bad-kubeconfig", map[string][]byte{
-					remoteKubeconfigKey: []byte("not valid yaml {{{"),
+					DefaultRemoteKubeconfigSecretKey: []byte("not valid yaml {{{"),
 				}),
 			},
 			"", "parsing kubeconfig"),
@@ -158,10 +158,10 @@ var _ = Describe("RemoteConfigResolver", func() {
 			"osac-dev",
 			[]runtime.Object{
 				labeledSecret("osac-dev", "first", map[string][]byte{
-					remoteKubeconfigKey: validKubeconfig(),
+					DefaultRemoteKubeconfigSecretKey: validKubeconfig(),
 				}),
 				labeledSecret("osac-dev", "second", map[string][]byte{
-					remoteKubeconfigKey: validKubeconfig(),
+					DefaultRemoteKubeconfigSecretKey: validKubeconfig(),
 				}),
 			},
 			"https://remote-cluster:6443", ""),
@@ -169,7 +169,7 @@ var _ = Describe("RemoteConfigResolver", func() {
 			"osac-dev",
 			[]runtime.Object{
 				labeledSecret("other-namespace", "remote-kubeconfig", map[string][]byte{
-					remoteKubeconfigKey: validKubeconfig(),
+					DefaultRemoteKubeconfigSecretKey: validKubeconfig(),
 				}),
 			},
 			"", "no remote kubeconfig secret found"),
@@ -177,7 +177,7 @@ var _ = Describe("RemoteConfigResolver", func() {
 			"osac-dev",
 			[]runtime.Object{
 				labeledSecret("osac-dev", "exec-kubeconfig", map[string][]byte{
-					remoteKubeconfigKey: kubeconfigWithExec(),
+					DefaultRemoteKubeconfigSecretKey: kubeconfigWithExec(),
 				}),
 			},
 			"https://remote-cluster:6443", ""),
@@ -185,7 +185,7 @@ var _ = Describe("RemoteConfigResolver", func() {
 			"osac-dev",
 			[]runtime.Object{
 				labeledSecret("osac-dev", "oidc-kubeconfig", map[string][]byte{
-					remoteKubeconfigKey: kubeconfigWithAuthProvider(),
+					DefaultRemoteKubeconfigSecretKey: kubeconfigWithAuthProvider(),
 				}),
 			},
 			"https://remote-cluster:6443", ""),
@@ -195,11 +195,11 @@ var _ = Describe("RemoteConfigResolver", func() {
 		c := fake.NewClientBuilder().
 			WithScheme(scheme).
 			WithRuntimeObjects(labeledSecret("ns", "my-remote-kc", map[string][]byte{
-				remoteKubeconfigKey: validKubeconfig(),
+				DefaultRemoteKubeconfigSecretKey: validKubeconfig(),
 			})).
 			Build()
 
-		resolver := NewRemoteConfigResolver(c, discardLogger)
+		resolver := NewRemoteConfigResolver(c, DefaultRemoteKubeconfigSecretKey, discardLogger)
 		_, source, err := resolver.ResolveConfig(context.Background(), "ns")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(source).To(ContainSubstring("my-remote-kc"))
@@ -232,11 +232,11 @@ var _ = Describe("AutoConfigResolver", func() {
 			c := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithRuntimeObjects(labeledSecret("ns", "remote-kc", map[string][]byte{
-					remoteKubeconfigKey: validKubeconfig(),
+					DefaultRemoteKubeconfigSecretKey: validKubeconfig(),
 				})).
 				Build()
 
-			remote := NewRemoteConfigResolver(c, discardLogger)
+			remote := NewRemoteConfigResolver(c, DefaultRemoteKubeconfigSecretKey, discardLogger)
 			local := NewLocalConfigResolver(&rest.Config{Host: "https://local:6443"}, discardLogger)
 			resolver := NewAutoConfigResolver(remote, local, discardLogger)
 
@@ -253,7 +253,7 @@ var _ = Describe("AutoConfigResolver", func() {
 				WithScheme(scheme).
 				Build()
 
-			remote := NewRemoteConfigResolver(c, discardLogger)
+			remote := NewRemoteConfigResolver(c, DefaultRemoteKubeconfigSecretKey, discardLogger)
 			local := NewLocalConfigResolver(&rest.Config{Host: "https://local:6443"}, discardLogger)
 			resolver := NewAutoConfigResolver(remote, local, discardLogger)
 
@@ -269,11 +269,11 @@ var _ = Describe("AutoConfigResolver", func() {
 			c := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithRuntimeObjects(labeledSecret("ns", "bad", map[string][]byte{
-					remoteKubeconfigKey: []byte("not valid {{{"),
+					DefaultRemoteKubeconfigSecretKey: []byte("not valid {{{"),
 				})).
 				Build()
 
-			remote := NewRemoteConfigResolver(c, discardLogger)
+			remote := NewRemoteConfigResolver(c, DefaultRemoteKubeconfigSecretKey, discardLogger)
 			local := NewLocalConfigResolver(&rest.Config{Host: "https://local:6443"}, discardLogger)
 			resolver := NewAutoConfigResolver(remote, local, discardLogger)
 
@@ -291,7 +291,7 @@ var _ = Describe("AutoConfigResolver", func() {
 				})).
 				Build()
 
-			remote := NewRemoteConfigResolver(c, discardLogger)
+			remote := NewRemoteConfigResolver(c, DefaultRemoteKubeconfigSecretKey, discardLogger)
 			local := NewLocalConfigResolver(&rest.Config{Host: "https://local:6443"}, discardLogger)
 			resolver := NewAutoConfigResolver(remote, local, discardLogger)
 

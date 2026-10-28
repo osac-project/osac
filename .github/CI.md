@@ -20,9 +20,9 @@ convert it to a draft. The queue runs `CI` and
 
 The BMaaS Netris end-to-end test (a real Netris lab on an AWS box) is not part of `E2E` and is not
 required: the policy marks it `manual_only`, so the decision never chooses it and the `E2E` check does not wait for it.
-Start it on a pull request with the comment `/test netris` (any member of the organization, any approval state), or by
+Start it on a pull request with the comment `/test bmaas-netris` (any member of the organization, any approval state), or by
 checking its box in the E2E comment of the pull request; the suite has its own line, `E2E / BMaaS Netris Full Install`, and
-`e2e-pr.yml` runs it through `workflows/e2e-bmaas-netris-full-install.yml`. It can also be started from the Actions page
+the decision runs it through `workflows/e2e-pr-bmaas-netris.yml`, which calls `workflows/e2e-bmaas-netris-full-install.yml`. It can also be started from the Actions page
 ("E2E BMaaS Netris Full Install", Run workflow, with the pull request's number, repository, branch and commit). A label no longer
 starts it. A new commit does not cancel a run that is already going.
 
@@ -54,8 +54,28 @@ regression, with the CaaS references).
 - A suite asked for by name runs again whatever it ended with; the bare `/test` only starts what has not passed.
 - The decision never chooses it, so a pull request still gets the CaaS sanity tests alone by default, and the merge queue
   does not run it. VMaaS and BMaaS already run their regression tests on every pull request that needs their suite.
-- In the policy it is `e2e-caas-full` (`variant_of: caas`, `tier: full`); the `caas` job of `e2e-pr.yml` passes the tier to
-  the wrapper (`e2e-caas-full-install.yml`, input `tier`).
+- In the policy it is `e2e-caas-full` (`variant_of: caas`, `tier: full`); the decision starts `e2e-pr-caas.yml` with the input
+  `tier` (`full`), and that workflow passes it to the wrapper (`e2e-caas-full-install.yml`, input `tier`).
+
+## Optional: VMaaS Netris
+
+The VMaaS Netris suite uses the `cudn-evpn-netris-test` profile and the
+VMaaS setup in osac-test-infra PR [#622](https://github.com/osac-project/osac-test-infra/pull/622).
+It is manual-only: start it with `/test vmaas-netris` or its checkbox in the
+pull request comment, or use the Actions page entry “E2E VMaaS Netris Full
+Install”. Its ExternalIP ingress and NAT egress cases skip until the lab's
+Netris route and return policy is configured and
+ `OSAC_NETRIS_VM_EXTERNAL_PATH_ENABLED=true` is set.
+
+## Optional: Stretched VMaaS/BMaaS Netris
+
+The stretched networking suite checks shared-subnet connectivity between a
+ComputeInstance and a BareMetalInstance. Start it with `/test stretched-netris`
+or its checkbox in the pull request's E2E comment. It has a separate
+`E2E / Stretched Networking Netris Full Install` line and uses the `full-ci`
+profile. The workflow provisions the Netris/EVPN infrastructure; the test
+itself checks OSAC networking behavior and is not backend-specific. The broad
+Netris `full` suite also includes this test.
 
 ## Approvals after a rebase, and pull requests from forks
 
@@ -110,7 +130,7 @@ because a push drops the approval, and then runs the E2E once.
 ## Dependency updates
 
 Dependabot and Konflux pull requests are approved by the `osac-ci` bot account when every commit is the bot's own (plain,
-signed) and only dependency files changed (`workflows/bot-approve.yml`, which looks every 15 minutes, so the approval
+signed) and only dependency files changed (a sweep every 15 minutes, run from the osac-ci repository, so the approval
 comes within about a quarter of an hour). Anything else gets a person.
 
 ## Changing the pipeline
@@ -124,19 +144,33 @@ comes within about a quarter of an hour). Anything else gets a person.
   netris) costs the other pull requests nothing.
 - **Add an E2E suite:** (1) an entry in `e2e-policy.yml` with its `suite` id, a `check` name (`E2E / <Suite> Full Install`)
   and its `filters` / `filters_any`; (2) its workflow `e2e-<suite>-full-install.yml`; (3) one job named after the suite id in
-  `e2e-pr.yml` and in `e2e-queue.yml` (copy the `vmaas` job). The line on the pull request follows the job of that name
-  (waiting for a runner, running, then passed or failed, with a link to its log); a suite the policy did not pick does not
-  run and has no line.
-- **The decision and the `E2E` check** (approval, CI result, the wording above), the queue plan and the bot sweep are the
-  shared workflows of [osac-project/osac-ci](https://github.com/osac-project/osac-ci); `e2e-pr.yml`, `e2e-queue.yml` and
-  `bot-approve.yml` here are thin callers that keep the triggers and the suite jobs. A member of the organization can start suites by hand with the comment `/test` (the suites the change needs) or
+  `e2e-queue.yml` (copy the `vmaas` job) and, for pull requests, a run-of-its-own workflow `e2e-pr-<suite>.yml` (copy
+  `e2e-pr-vmaas.yml`, see below). The line on the pull request follows that run (waiting for a runner, running, then passed
+  or failed, with a link to its log); a suite the policy did not pick does not run and has no line.
+- **A suite as a run of its own:** every suite (its policy job names a `workflow:`: `e2e-pr-vmaas.yml`, `e2e-pr-caas.yml`, `e2e-pr-bmaas.yml`,
+  `e2e-pr-bmaas-netris.yml`, `e2e-pr-vmaas-netris.yml`, `e2e-pr-stretched-netris.yml`) is not a job of `e2e-pr.yml`: the decision starts that workflow with `workflow_dispatch` for the approved commit, so a failed suite can be
+  run again at once (GitHub's Re-run of its run, or `/test vmaas`) without waiting for the others, and the `E2E` check is
+  still the sum of the suites' lines. The workflow takes the inputs `repo`, `sha`, `pr-number` (and ignores `fork-pr-author`
+  and `fork-pr-author-association`, which the decision also sends), names its run
+  `"E2E suite · <suite id> · #<pr> · <sha>"` (the format is how its end is recognised), starts with the shared `verify` job
+  of osac-ci (`suite-inputs.yml`: the commit must be the head of the pull request; the fork author and association come
+  from the pull request) and calls the suite's `e2e-<suite>-full-install.yml` with `needs: verify`. Its name goes into the
+  `workflow_run` list of `e2e-pr.yml`. The merge queue still runs the suite as a job of `e2e-queue.yml`. To add a suite, copy
+  `e2e-pr-vmaas.yml` (CaaS has the `tier` input to copy), add `workflow:` to its policy job, list the workflow's name in
+  `e2e-pr.yml` and give `e2e-queue.yml` its job. Step (3) of "Add an E2E suite" above then means the queue job only.
+- **The decision and the `E2E` check** (approval, CI result, the wording above) and the queue plan are the shared
+  workflows of [osac-project/osac-ci](https://github.com/osac-project/osac-ci); `e2e-pr.yml` and `e2e-queue.yml` here are
+  thin callers that keep the triggers and the suite jobs. The bot sweep runs from osac-ci itself (no file here). A member of the organization can start suites by hand with the comment `/test` (the suites the change needs) or
   `/test vmaas caas` (those suites), or from the comment the decision keeps on a pull request written by a member
   (a checkbox per suite; any approval state, a draft and a fork of a member included; a pull
-  request by someone outside the organization gets no comment). The rules they apply are one page:
+  request by someone outside the organization gets no comment). `/test bmaas-netris` starts the BMaaS Netris suite;
+  `/test vmaas-netris` starts the separate VMaaS Netris suite; `/test stretched-netris` starts the shared-subnet
+  connectivity test. Each requires a dedicated Netris lab. The rules they apply
+  are one page:
   osac-ci `docs/RULES.md`. The callers pin a full commit of an osac-ci release (the tag in a comment); the Dependabot group
   `osac-ci` opens one pull request per release, reviewed by wg-infra.
 - **Emergency:** setting the repository variable `CI_GATING_ENABLED` to `false` makes `CI` run every part.
-- `workflow_run` lists workflows by exact name. `e2e-pr.yml` lists `CI`, `E2E review relay` and `E2E comment`; renaming any of them
-  needs the list changed.
+- `workflow_run` lists workflows by exact name. `e2e-pr.yml` lists `CI`, `E2E review relay`, `E2E comment` and the six `E2E <Suite> PR suite` workflows;
+  renaming any of them needs the list changed.
 - Changes to `.github/workflows`, `.github/actions`, `.github/scripts`, `.github/filters` and `CODEOWNERS` need a code
   owner's approval.

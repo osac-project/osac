@@ -14,13 +14,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/go-logr/logr"
 	"github.com/osac-project/osac-metering/adapters"
-	"github.com/osac-project/osac-metering/adapters/internal/kafka"
 )
 
 const (
@@ -31,17 +31,26 @@ const (
 	shutdownCloseTimeout = 10 * time.Second
 	consumeErrorBackoff  = 5 * time.Second
 	dlqMetricsInterval   = 30 * time.Second
+	// defaultSessionInterval bounds one consume session. A session only subscribes to
+	// the topics it started with; sarama watches partition changes only for subscribed
+	// topics, so a topic created later never triggers the rebalance that would pick it
+	// up. Restarting the session periodically does.
+	defaultSessionInterval = time.Minute
 )
 
 // RunnerConfig configures the adapter Runner.
 type RunnerConfig struct {
-	Brokers       string
-	ConsumerGroup string
-	Topics        []string
-	FlushInterval time.Duration // default 10s
-	DedupTTL      time.Duration // default 10m
-	MaxRetries    int           // default 10
-	Kafka         kafka.KafkaConfig
+	// TopicsProvider discovers the topics to consume on every subscription, so the runner
+	// follows tenants as they come and go. Both adapter mains always set it; without it
+	// the runner has no topics and consumes nothing.
+	TopicsProvider func(ctx context.Context) ([]string, error)
+	// SessionInterval bounds one consume session, so topics created after the session
+	// started are picked up on the next one. Defaults to one minute; zero means the
+	// default. Tests shrink it; production uses the default.
+	SessionInterval time.Duration
+	FlushInterval   time.Duration // default 10s
+	DedupTTL        time.Duration // default 10m
+	MaxRetries      int           // default 10
 }
 
 type topicPartition struct {
@@ -65,6 +74,7 @@ type Runner struct {
 	metrics *adapterMetrics
 	dedup   *dedupCache
 	order   *orderTracker
+	retries *retryCache
 	dlq     DLQSender
 
 	mu      sync.Mutex
@@ -83,6 +93,9 @@ func NewRunner(adapter adapters.ProviderAdapter, cfg RunnerConfig, logger logr.L
 	if cfg.MaxRetries == 0 {
 		cfg.MaxRetries = defaultMaxRetries
 	}
+	if cfg.SessionInterval == 0 {
+		cfg.SessionInterval = defaultSessionInterval
+	}
 
 	r := &Runner{
 		adapter: adapter,
@@ -91,6 +104,7 @@ func NewRunner(adapter adapters.ProviderAdapter, cfg RunnerConfig, logger logr.L
 		metrics: newAdapterMetrics(),
 		dedup:   newDedupCache(cfg.DedupTTL),
 		order:   newOrderTracker(cfg.DedupTTL),
+		retries: newRetryCache(cfg.DedupTTL),
 		offsets: make(map[topicPartition]int64),
 	}
 	for _, opt := range opts {
@@ -104,22 +118,19 @@ func (r *Runner) MetricsHandler() http.Handler {
 	return r.metrics.handler()
 }
 
-// Run starts the Kafka consumer group and blocks until ctx is cancelled.
-func (r *Runner) Run(ctx context.Context) error {
-	sc, err := kafka.NewConsumerConfig(r.cfg.Kafka)
-	if err != nil {
-		return fmt.Errorf("creating consumer config: %w", err)
-	}
-
-	brokers := kafka.SplitAndTrimBrokers(r.cfg.Brokers, ",")
-	group, err := sarama.NewConsumerGroup(brokers, r.cfg.ConsumerGroup, sc)
-	if err != nil {
-		return fmt.Errorf("creating consumer group: %w", err)
-	}
+// Run consumes with the group until ctx is cancelled, then closes the group. The caller
+// creates the group with the brokers and credentials of its environment; Run owns the
+// group's shutdown.
+func (r *Runner) Run(ctx context.Context, group sarama.ConsumerGroup) error {
 	defer func() { _ = group.Close() }()
+
+	if r.cfg.TopicsProvider == nil {
+		return errors.New("RunnerConfig.TopicsProvider is required: without it the runner has no topics")
+	}
 
 	go r.dedup.startEviction(ctx)
 	go r.order.startEviction(ctx)
+	go r.retries.startEviction(ctx)
 
 	flushDone := make(chan struct{})
 	go r.flushLoop(ctx, flushDone)
@@ -128,15 +139,41 @@ func (r *Runner) Run(ctx context.Context) error {
 		go r.dlqDepthMetricsLoop(ctx, occ)
 	}
 
-	r.logger.Info("starting consumer group", "topics", r.cfg.Topics)
+	var topics []string
+	r.logger.Info("starting consumer group")
 
 	for {
-		if err := group.Consume(ctx, r.cfg.Topics, r); err != nil {
+		discovered, err := r.cfg.TopicsProvider(ctx)
+		if err != nil {
+			r.logger.Error(err, "discovering topics, retrying with the previous set")
+		} else if !sameTopics(discovered, topics) {
+			r.logger.Info("topic set changed", "topics", discovered)
+			topics = discovered
+		}
+		if len(topics) == 0 {
+			select {
+			case <-ctx.Done():
+			case <-time.After(consumeErrorBackoff):
+			}
+			if ctx.Err() != nil {
+				break
+			}
+			continue
+		}
+		// A consume session only subscribes to the topics it started with, and a
+		// topic created later never triggers the rebalance that would pick it up, so
+		// the session restarts periodically and discovery runs again.
+		sessionCtx, cancelSession := context.WithTimeout(ctx, r.cfg.SessionInterval)
+		err = group.Consume(sessionCtx, topics, r)
+		cancelSession()
+		if err != nil {
 			if errors.Is(err, sarama.ErrClosedConsumerGroup) {
 				r.logger.Info("consumer group closed, exiting")
 				break
 			}
-			r.logger.Error(err, "consumer group error, retrying after backoff")
+			if ctx.Err() == nil {
+				r.logger.Error(err, "consumer group error, retrying after backoff")
+			}
 			select {
 			case <-ctx.Done():
 			case <-time.After(consumeErrorBackoff):
@@ -247,6 +284,15 @@ func (r *Runner) flush(ctx context.Context) error {
 	return nil
 }
 
+// sameTopics reports whether two topic sets are equal, ignoring order.
+func sameTopics(a, b []string) bool {
+	sortedA := slices.Clone(a)
+	sortedB := slices.Clone(b)
+	slices.Sort(sortedA)
+	slices.Sort(sortedB)
+	return slices.Equal(sortedA, sortedB)
+}
+
 // --- sarama.ConsumerGroupHandler ---
 
 // Setup is called when a new consumer group session starts.
@@ -276,7 +322,7 @@ func (r *Runner) ConsumeClaim(
 
 	for msg := range claim.Messages() {
 		if !r.processMessage(session.Context(), msg, provider) {
-			r.logger.Info("stopping partition claim after DLQ failure, will retry after rebalance",
+			r.logger.Info("stopping partition claim after failure; the failed message is redelivered",
 				"topic", claim.Topic(), "partition", claim.Partition(),
 			)
 			return nil

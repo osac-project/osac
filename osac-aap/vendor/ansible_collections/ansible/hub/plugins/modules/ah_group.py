@@ -8,11 +8,6 @@
 # automation hub at https://hub.example.com/pulp/api/v3/docs/
 
 
-from __future__ import absolute_import, division, print_function
-
-__metaclass__ = type
-
-
 DOCUMENTATION = r"""
 ---
 module: ah_group
@@ -49,7 +44,7 @@ EXAMPLES = r"""
     ah_host: hub.example.com
     ah_username: admin
     ah_password: Sup3r53cr3t
-  no_log: True
+  no_log: true
 
 - name: Ensure the group is removed
   ansible.hub.ah_group:
@@ -58,7 +53,7 @@ EXAMPLES = r"""
     ah_host: hub.example.com
     ah_username: admin
     ah_password: Sup3r53cr3t
-  no_log: True
+  no_log: true
 """
 
 RETURN = r""" # """

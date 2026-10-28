@@ -239,6 +239,50 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 		Expect(spec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(securityGroupId))
 	})
 
+	It("Uses tenant defaults when network_attachment is omitted", func() {
+		// Seed READY tenant default networking (default Subnet + SecurityGroup
+		// and backing VirtualNetwork) for the suite tenant:
+		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
+		network := getTenantDefaultNetworkFixture(ctx, usersGroup, "")
+
+		// Create the cluster without any network attachment:
+		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+				}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 3),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		object := createResponse.GetObject()
+		DeferCleanup(func(cleanupCtx context.Context) {
+			Expect(cleanupClusterFixture(cleanupCtx, clustersClient, privateClustersClient, object.GetId())).To(Succeed())
+		})
+
+		// The omitted attachment must resolve to the tenant default Subnet and
+		// SecurityGroup:
+		spec := object.GetSpec()
+		Expect(spec.GetNetworkAttachment()).ToNot(BeNil())
+		Expect(spec.GetNetworkAttachment().GetSubnet().GetId()).To(Equal(network.subnetID))
+		Expect(spec.GetNetworkAttachment().GetSecurityGroups()).To(HaveLen(1))
+		Expect(spec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID))
+
+		// The resolved defaults must survive public Get:
+		getResponse, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{
+			Id: object.GetId(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		spec = getResponse.GetObject().GetSpec()
+		Expect(spec.GetNetworkAttachment()).ToNot(BeNil())
+		Expect(spec.GetNetworkAttachment().GetSubnet().GetId()).To(Equal(network.subnetID))
+		Expect(spec.GetNetworkAttachment().GetSecurityGroups()).To(HaveLen(1))
+		Expect(spec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID))
+	})
+
 	It("Rejects cluster creation when the referenced subnet is not in READY state", func() {
 		// Create a second subnet in the same VirtualNetwork but leave it in PENDING state:
 		pendingSubnetId := fmt.Sprintf("test-pending-subnet-%s", uuid.New())

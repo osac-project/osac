@@ -23,6 +23,85 @@
     _existing_nat: "{{ (_nat_list_resp.json.data | default([])) | selectattr('name', 'equalto', nat_name) | list | first | default(none) }}"
   when: _nat_list_resp.json is mapping
 
+- name: Validate existing NAT summary has an ID before deletion
+  ansible.builtin.assert:
+    that:
+      - _existing_nat.id is defined
+      - _existing_nat.id is not none
+      - _existing_nat.id | string | length > 0
+    fail_msg: >-
+      Netris NAT rule '{{ nat_name }}' was found but its list response omitted
+      the ID; refusing to delete without a stable provider identifier.
+  when: _existing_nat is defined and _existing_nat is mapping
+
+- name: Detect NAT ownership fields omitted from the list response
+  ansible.builtin.set_fact:
+    _nat_delete_missing_fields: >-
+      {{ _existing_nat | netris.controller.netris_immutable_missing_fields(
+           nat_expected_fields
+         ) }}
+  when:
+    - _existing_nat is defined
+    - _existing_nat is mapping
+    - nat_expected_fields is defined
+
+- name: Read NAT details when the list response omits ownership fields
+  netris.controller.protected_uri:
+    force: true
+    url: "{{ netris_controller_url }}/api/v2/nat/{{ _existing_nat.id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: "no-cache"
+      Pragma: "no-cache"
+    return_content: true
+    status_code: [200]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
+  register: _nat_delete_detail_resp
+  no_log: true
+  when: _nat_delete_missing_fields | default([]) | length > 0
+
+- name: Use detailed NAT response for ownership comparison
+  ansible.builtin.set_fact:
+    _existing_nat: "{{ _nat_delete_detail_resp.json.data | default(_nat_delete_detail_resp.json) }}"
+  when:
+    - _nat_delete_detail_resp is defined
+    - _nat_delete_detail_resp is not skipped
+    - _nat_delete_detail_resp.json is defined
+
+- name: Verify NAT ownership before deletion
+  when:
+    - _existing_nat is defined
+    - _existing_nat is mapping
+    - nat_expected_fields is defined
+  block:
+    - name: Compare NAT rule with the OSAC resource
+      ansible.builtin.set_fact:
+        _nat_delete_mismatches: >-
+          {{ _existing_nat | netris.controller.netris_immutable_mismatch(
+               nat_expected_fields
+             ) }}
+
+    - name: Refuse to delete a mismatched or unverifiable NAT rule
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'NAT rule' | netris.controller.format_immutable_mismatch_message(
+               nat_name, _nat_delete_mismatches) }}
+      when: _nat_delete_mismatches | length > 0
+
+- name: Validate detailed NAT response has an ID before deletion
+  ansible.builtin.assert:
+    that:
+      - _existing_nat.id is defined
+      - _existing_nat.id is not none
+      - _existing_nat.id | string | length > 0
+    fail_msg: >-
+      Netris NAT rule '{{ nat_name }}' details omitted the ID; refusing to delete
+      without a stable provider identifier.
+  when: _existing_nat is defined and _existing_nat is mapping
+
 - name: Delete NAT rule
   when: _existing_nat is defined and _existing_nat is mapping
   netris.controller.protected_uri:

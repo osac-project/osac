@@ -5,5 +5,5 @@ export const LoginPage = {
   password: ['input[type="password"]'],
   signIn: ['button', { name: 'Sign In', exact: true }],
   accountMenu: ['button', { name: 'Account menu', exact: true }],
-  osacLogo: ['svg.injected-svg[data-src*="RH-OSAC"]'],
+  osacLogo: ['.pf-v6-c-masthead__brand a[aria-label="Red Hat"]'],
 } as const;

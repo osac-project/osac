@@ -132,22 +132,41 @@ func syncVolumeUpdate(_ context.Context, obj *v1alpha1.Volume, remote *privatev1
 	return nil
 }
 
-// syncVolumeDelete maps Volume CR status during deletion. Failed volumes
-// report FAILED; all other deletion states report DELETING.
+// syncVolumeDelete maps Volume CR status during deletion. Failed volumes report FAILED,
+// volumes whose vendor cleanup completed report DELETED, and everything else reports
+// DELETING: a volume whose deletion timestamp is set is going away whatever phase its
+// status still carries, including the empty phase of a volume deleted before any
+// controller status write. Erroring on those phases would wedge the delete on data the
+// window cannot have.
+//
+// The state and its time come from the same place. A phase the CR records (Failed,
+// Deleted) dates its own transition, an event the controller observed. The DELETING
+// reported for every other phase is forced: the phase predates the deletion, so its
+// time is not the deletion's — the deletion started at the deletion timestamp, and
+// dating the report at the old phase's time would erase the billed span up to the
+// deletion. A volume deleted before any controller status write has no phase time
+// either, and the deletion timestamp covers it.
 func syncVolumeDelete(_ context.Context, obj *v1alpha1.Volume, remote *privatev1.Volume) error {
-	if err := syncVolumeStateTransitionTime(obj, remote); err != nil {
-		return err
-	}
+	var at *timestamppb.Timestamp
 	switch obj.Status.Phase {
 	case v1alpha1.VolumePhaseFailed:
 		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_FAILED)
-	case v1alpha1.VolumePhaseDeleting:
-		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_DELETING)
+		at = stateTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
 	case v1alpha1.VolumePhaseDeleted:
 		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_DELETED)
+		at = stateTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
 	default:
-		return fmt.Errorf("invalid volume phase %q during deletion", obj.Status.Phase)
+		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_DELETING)
+		at = laterTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
 	}
+	if at == nil {
+		if remote.GetStatus().GetStateTransitionTime() != nil {
+			syncVolumeStatusMessage(obj, remote)
+			return nil
+		}
+		return fmt.Errorf("volume %s has no state transition time", remote.GetId())
+	}
+	remote.GetStatus().SetStateTransitionTime(at)
 	syncVolumeStatusMessage(obj, remote)
 	return nil
 }

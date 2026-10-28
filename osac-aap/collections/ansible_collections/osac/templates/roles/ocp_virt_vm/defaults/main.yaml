@@ -35,3 +35,9 @@ _guest_os_windows_default_spec:
     # on the ComputeInstance (or override this role map) to your Windows golden / registry image.
     sourceRef: ""
   runStrategy: "Always"
+
+# Maximum retries when waiting for the VMI to stop gracefully
+# during delete_resources.yaml (each retry sleeps 5 s, so 60 x
+# 5 s = 5 min).  Override in integration tests to avoid the
+# full production wait; do not change in production.
+ocp_virt_vm_graceful_wait_retries: 60

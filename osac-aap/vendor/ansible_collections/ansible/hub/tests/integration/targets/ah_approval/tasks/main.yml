@@ -1,5 +1,5 @@
 ---
-- name: ah_approval integration tests
+- name: ah_approval integration tests using basic auth
   module_defaults:
     group/ansible.hub.hub:
       ah_host: "{{ ah_host }}"
@@ -17,7 +17,7 @@
         namespace: "sample"
         company: "my_company_{{ test_id }}"
         collection_name: "sample"
-        build_path: "/home/runner/collections/ansible_collections/ansible/hub/tests/integration/targets/ah_build/files"
+        build_path: "/home/runner/.ansible/collections/ansible_collections/ansible/hub/tests/integration/targets/ah_build/files"
 
     - name: Create namespace
       ansible.hub.ah_namespace:

@@ -1,0 +1,74 @@
+---
+- name: ah_team integration tests with basic auth
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      ah_username: "{{ ah_username }}"
+      ah_password: "{{ ah_password }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+
+    - name: Define variables for test resources
+      set_fact:
+        test_team: "test_team_{{ test_id }}"
+
+    # Test: Create a team
+    - name: Create team (basic auth)
+      ansible.hub.ah_team:
+        name: "{{ test_team }}"
+        state: present
+      register: r_create
+
+    - name: Check if the team was created
+      assert:
+        that:
+          - r_create.changed
+          - r_create.name == test_team
+          - r_create.id is defined
+
+    # Test: Idempotency - create again should not change
+    - name: Create team again (idempotency)
+      ansible.hub.ah_team:
+        name: "{{ test_team }}"
+        state: present
+      register: r_create_idempotent
+
+    - name: Check idempotency
+      assert:
+        that:
+          - not r_create_idempotent.changed
+
+    # Test: Delete the team
+    - name: Delete team (basic auth)
+      ansible.hub.ah_team:
+        name: "{{ test_team }}"
+        state: absent
+      register: r_delete
+
+    - name: Check if the team was deleted
+      assert:
+        that:
+          - r_delete.changed
+
+    # Test: Idempotency - delete again should not change
+    - name: Delete team again (idempotency)
+      ansible.hub.ah_team:
+        name: "{{ test_team }}"
+        state: absent
+      register: r_delete_idempotent
+
+    - name: Check delete idempotency
+      assert:
+        that:
+          - not r_delete_idempotent.changed
+
+  always:
+    - name: Cleanup - delete test team
+      ansible.hub.ah_team:
+        name: "{{ test_team | default('') }}"
+        state: absent
+      ignore_errors: true

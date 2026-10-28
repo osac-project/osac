@@ -39,7 +39,7 @@ func (s *bareMetalInstancesServer) Create(_ context.Context, request *publicv1.B
 
 var _ = Describe("Creating a baremetalinstance with tenant set", func() {
 	DescribeTable("should give priority to the command line parameter",
-		func(tenantInSetting, tenantInCommandLine, expectedTenant string) {
+		func(tenantInSetting, tenantInCommandLine, expectedTenant, projectInSetting, projectInCommandLine, expectedProject string) {
 			server := srvtesting.NewServer()
 			DeferCleanup(server.Stop)
 			publicv1.RegisterBareMetalInstanceCatalogItemsServer(server.Registrar(), catalogItemsServer{})
@@ -58,6 +58,9 @@ var _ = Describe("Creating a baremetalinstance with tenant set", func() {
 			if tenantInSetting != "" {
 				settings.SetTenant(tenantInSetting)
 			}
+			if projectInSetting != "" {
+				settings.SetProject(projectInSetting)
+			}
 
 			ctx := logging.LoggerIntoContext(context.Background(), logger)
 			Expect(settings.Save(ctx)).To(Succeed())
@@ -72,6 +75,9 @@ var _ = Describe("Creating a baremetalinstance with tenant set", func() {
 			if tenantInCommandLine != "" {
 				args = append(args, "--tenant", tenantInCommandLine)
 			}
+			if projectInCommandLine != "" {
+				args = append(args, "--project", projectInCommandLine)
+			}
 			args = append(args, "create", "baremetalinstance", "--catalog-item", "catalog-123", "--name", "example")
 			rootCmd.SetArgs(args)
 
@@ -80,10 +86,13 @@ var _ = Describe("Creating a baremetalinstance with tenant set", func() {
 			request := instancesServer.latestRequest
 			Expect(request).NotTo(BeNil())
 			Expect(request.GetObject().GetMetadata().GetTenant()).To(Equal(expectedTenant))
+			Expect(request.GetObject().GetMetadata().GetProject()).To(Equal(expectedProject))
 		},
-		Entry("with none", "", "", ""),
-		Entry("with only tenant in settings", "tenant-settings", "", "tenant-settings"),
-		Entry("with only tenant in command line", "", "tenant-command-line", "tenant-command-line"),
-		Entry("with both", "tenant-settings", "tenant-command-line", "tenant-command-line"),
+		Entry("with none", "", "", "", "", "", ""),
+		Entry("with only tenant in settings", "tenant-settings", "", "tenant-settings", "", "", ""),
+		Entry("with only tenant in command line", "", "tenant-command-line", "tenant-command-line", "", "", ""),
+		Entry("with both tenants", "tenant-settings", "tenant-command-line", "tenant-command-line", "", "", ""),
+		Entry("project flag overrides saved project", "", "", "", "project-settings", "project-command-line", "project-command-line"),
+		Entry("project flag works without a saved project", "", "", "", "", "project-command-line", "project-command-line"),
 	)
 })

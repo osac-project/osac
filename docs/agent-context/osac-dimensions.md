@@ -40,9 +40,13 @@ OSAC has four canonical personas (defined in [personas.md](../personas.md)). Fea
 must specify what each affected persona can see and do. Use these exact names
 in user stories and workflow descriptions.
 
-| Persona | Role | Examples |
+For each user story, describe the access the user needs. Do not assume that
+everyone represented by an admin persona needs full administrative permissions.
+See [personas.md](../personas.md) for examples.
+
+| Persona | Responsibilities | Examples |
 |---------|------|----------|
-| **Cloud Provider Admin** | Works for the cloud provider. Handles tenant onboarding, sets quotas, manages global catalogs, is a super-user who can see all tenants. | Tenant onboarding, quota management, global template catalogs, resource allocation |
+| **Cloud Provider Admin** | Works for the cloud provider. Handles tenant onboarding, sets quotas, manages global catalogs, and works across tenant organizations, with access limited by their assigned permissions. | Tenant onboarding, quota management, global template catalogs, resource allocation |
 | **Cloud Infrastructure Admin** | Works for the cloud provider. Manages core infrastructure (network, firewall, compute, storage). Integrates control plane with local infrastructure. | Specify inventory backends, network classes, IP pools, storage tiers, DNS, integrate with Netris/VAST/ESI |
 | **Tenant Admin** | Works for the tenant organization. Manages their org's config, users, IDP, quotas, and org-specific catalogs. Can only see their own organization. | Create networking objects, manage tenant resources, onboard users, control template visibility |
 | **Tenant User** | Works for the tenant organization. Self-service provisions cloud resources, manages full lifecycle. Prefers click-ops but wants API/CLI for automation. | Order machines/clusters/VMs via catalog, manage instance lifecycle, view quota utilization |

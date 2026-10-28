@@ -1537,6 +1537,92 @@ var _ = Describe("Root project deletion during tenant deletion", func() {
 		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
 	})
 
+	It("should clear tenant domains before deleting the root project", func() {
+		tenantsClient := &readinessTenantsClient{}
+		reconciler.tenantsClient = tenantsClient
+		reconciler.maskCalculator = masks.NewCalculator().Build()
+
+		tenant := privatev1.Tenant_builder{
+			Id: "org-domain-root-proj",
+			Metadata: privatev1.Metadata_builder{
+				Name:              "test-org",
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
+				DeletionTimestamp: timestamppb.Now(),
+			}.Build(),
+			Spec: privatev1.TenantSpec_builder{Domains: []string{"example.com"}}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
+				IdpTenantName: "test-org",
+			}.Build(),
+		}.Build()
+
+		rootProject := privatev1.Project_builder{
+			Id: "root-proj-domain-id",
+			Metadata: privatev1.Metadata_builder{
+				Name:   "",
+				Tenant: "test-org",
+			}.Build(),
+		}.Build()
+
+		gomock.InOrder(
+			mockProjectsClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				Return(privatev1.ProjectsListResponse_builder{
+					Items: []*privatev1.Project{rootProject},
+					Total: 1,
+				}.Build(), nil),
+			mockProjectsClient.EXPECT().
+				Delete(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, _ *privatev1.ProjectsDeleteRequest,
+					_ ...grpc.CallOption) (*privatev1.ProjectsDeleteResponse, error) {
+					Expect(tenantsClient.updates).To(HaveLen(1))
+					update := tenantsClient.updates[0]
+					Expect(update.GetObject().GetSpec().GetDomains()).To(BeEmpty())
+					Expect(update.GetUpdateMask().GetPaths()).To(ContainElement("spec.domains"))
+					Expect(update.GetLock()).To(BeTrue())
+					return privatev1.ProjectsDeleteResponse_builder{}.Build(), nil
+				}),
+			mockProjectsClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				Return(privatev1.ProjectsListResponse_builder{Total: 0}.Build(), nil),
+		)
+
+		mockClient.EXPECT().DeleteTenant(gomock.Any(), "test-org").Return(nil)
+
+		t := &task{r: reconciler, tenant: tenant}
+		err := t.delete(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(t.tenant.GetSpec().GetDomains()).To(BeEmpty())
+		Expect(t.tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
+	})
+
+	It("should not delete the root project when clearing tenant domains fails", func() {
+		tenantsClient := &readinessTenantsClient{err: fmt.Errorf("tenant update failed")}
+		reconciler.tenantsClient = tenantsClient
+		reconciler.maskCalculator = masks.NewCalculator().Build()
+
+		tenant := privatev1.Tenant_builder{
+			Id: "org-domain-update-error",
+			Metadata: privatev1.Metadata_builder{
+				Name:              "test-org",
+				Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
+				DeletionTimestamp: timestamppb.Now(),
+			}.Build(),
+			Spec: privatev1.TenantSpec_builder{Domains: []string{"example.com"}}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
+				IdpTenantName: "test-org",
+			}.Build(),
+		}.Build()
+
+		t := &task{r: reconciler, tenant: tenant}
+		err := t.delete(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("failed to clear tenant domains"))
+		Expect(t.tenant.GetSpec().GetDomains()).To(Equal([]string{"example.com"}))
+		Expect(tenantsClient.updates).To(HaveLen(1))
+	})
+
 	It("should skip root project that already has a deletion timestamp", func() {
 		tenant := privatev1.Tenant_builder{
 			Id: "org-root-deleting",

@@ -23,7 +23,7 @@ import {
 import { useTranslation } from '../../../../hooks/useTranslation';
 import { getVisibleFieldError } from '../../../Form/fieldError';
 import { useShowFieldValidationErrors } from '../../../Form/FieldValidationContext';
-import { downloadSecretBytes } from '../../utils';
+import { downloadSecretBytes, getSecretType } from '../../utils';
 import {
   SECRET_FILE_MAX_BYTES,
   type SecretDataEntry,
@@ -37,8 +37,7 @@ type InputMode = 'enter' | 'upload';
 interface SecretValueFieldProps {
   entry: SecretDataEntry;
   name: string;
-  showKey?: boolean;
-  label: string;
+  keyEditable?: boolean;
   onRemove?: () => void;
   canRemove?: boolean;
 }
@@ -46,15 +45,16 @@ interface SecretValueFieldProps {
 const SecretValueField = ({
   entry,
   name,
-  showKey = false,
-  label,
+  keyEditable = false,
   onRemove,
   canRemove = true,
 }: SecretValueFieldProps) => {
   const { t } = useTranslation();
-  const { setFieldError, setFieldValue } = useFormikContext<SecretValues>();
+  const { setFieldError, values } = useFormikContext<SecretValues>();
+  const secretTypes = getSecretType(t);
+  const valueLabel = keyEditable ? t('Value') : secretTypes[values.type];
+  const [keyField, keyMeta, keyHelpers] = useField<string>(`${name}.key`);
   const [field, meta, helpers] = useField<Uint8Array>(`${name}.value`);
-
   const hasBinaryInitial =
     decodeSecretValue(entry.value) === undefined && entry.value.byteLength > 0;
   const [mode, setMode] = useState<InputMode>(hasBinaryInitial ? 'upload' : 'enter');
@@ -62,9 +62,11 @@ const SecretValueField = ({
   const [isUploading, setIsUploading] = useState(false);
 
   const showValidationErrors = useShowFieldValidationErrors();
+  const keyError = getVisibleFieldError(keyMeta, showValidationErrors);
   const valueError = getVisibleFieldError(meta, showValidationErrors);
   const value = field.value ?? new Uint8Array();
   const textValue = decodeSecretValue(value);
+  const keyFieldId = `${name.replaceAll('.', '-')}-key`;
   const fieldId = `${name.replaceAll('.', '-')}-value`;
   const fileFieldId = `${name.replaceAll('.', '-')}-file`;
   const textHelper = t('Type text here or replace this value with a file.');
@@ -103,27 +105,32 @@ const SecretValueField = ({
     <Stack hasGutter>
       <StackItem>
         <FormGroup
-          label={showKey ? t('Key') : t('Required key')}
-          fieldId={`${fieldId}-required-key`}
+          label={keyEditable ? t('Key') : t('Required key')}
+          fieldId={keyFieldId}
           isRequired
         >
           <TextInput
-            id={`${fieldId}-required-key`}
-            value={entry.key}
-            isDisabled={!showKey}
-            aria-label={showKey ? t('Key') : t('Required key')}
+            id={keyFieldId}
+            name={keyField.name}
+            value={keyField.value}
+            isDisabled={!keyEditable}
+            validated={keyError ? 'error' : 'default'}
+            aria-label={keyEditable ? t('Key') : t('Required key')}
+            aria-invalid={!!keyError}
             onChange={
-              showKey
+              keyEditable
                 ? (_event, val) => {
-                    void setFieldValue(`${name}.key`, val);
+                    void keyHelpers.setValue(val);
                   }
                 : undefined
             }
+            onBlur={keyField.onBlur}
           />
+          <FormFieldHelper error={keyError} fieldId={keyFieldId} />
         </FormGroup>
       </StackItem>
       <StackItem>
-        <FormGroup label={t('Value')} fieldId={fieldId} isRequired>
+        <FormGroup label={valueLabel} fieldId={fieldId} isRequired>
           <Radio
             id={`${fieldId}-enter`}
             name={`${fieldId}-mode`}
@@ -154,7 +161,7 @@ const SecretValueField = ({
                   }}
                   onBlur={() => void helpers.setTouched(true)}
                   validated={valueError ? 'error' : 'default'}
-                  aria-label={label}
+                  aria-label={valueLabel}
                   aria-invalid={!!valueError}
                   autoResize
                 />
@@ -191,7 +198,7 @@ const SecretValueField = ({
                   hideDefaultPreview={textValue === undefined}
                   isRequired
                   validated={valueError ? 'error' : 'default'}
-                  aria-label={label}
+                  aria-label={valueLabel}
                   aria-invalid={valueError ? true : undefined}
                   aria-describedby={helperDescribedBy}
                   browseButtonAriaDescribedby={helperDescribedBy}
@@ -208,7 +215,7 @@ const SecretValueField = ({
                     <Button
                       variant="link"
                       icon={<DownloadIcon />}
-                      onClick={() => downloadSecretBytes(value, entry.key)}
+                      onClick={() => downloadSecretBytes(value, keyField.value)}
                     >
                       {t('Download current value')}
                     </Button>

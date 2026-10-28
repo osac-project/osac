@@ -54,6 +54,15 @@ operator:
     networking: true
     networkingProvisioning: false
     storage: true
+  # Keep the unversioned ExternalIP flow in CI: networkingProvisioning is false
+  # and the reference suite depends on the placeholder-allocated path, which
+  # the v1 contract intentionally does not provide (allocation stays pending).
+  # Flip to v1 together with enabling networkingProvisioning; the semantic
+  # decision is tracked under OSAC-6744.
+  networkManagers:
+    fabricManagers:
+      netris:
+        externalIPContractVersion: ""
   hubAccess:
     enabled: true
   tenants:
@@ -212,6 +221,20 @@ bmf:
 # --- Hub Access ---
 hubAccess:
   enabled: true
+
+# --- Metering ---
+# The service itself is always deployed (chart default): the database wiring
+# in charts/osac/values.yaml points at the secrets the chart creates for the
+# bundled PostgreSQL. Only the test adapter is profile-specific.
+metering:
+  # Echo adapter -- test/development tool only. Consumes metering events from
+  # Kafka and exposes them via HTTP for E2E test assertions.
+  echoAdapter:
+    enabled: true
+    image:
+      repository: ghcr.io/osac-project/metering-echo-adapter
+      tag: latest
+      pullPolicy: Always
 
 # --- LVMS StorageBackend registration ---
 lvms:

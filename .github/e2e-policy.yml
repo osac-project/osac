@@ -18,12 +18,14 @@ jobs:
     kind: e2e
     check: "E2E / VMaaS Full Install"
     suite: vmaas
+    workflow: e2e-pr-vmaas.yml  # a run of its own, started by the decision (see CI.md)
     filters: [vmaas-outside-known-safe]
     filters_any: [e2e-code, e2e-suite]
   e2e-caas:
     kind: e2e
     check: "E2E / CaaS Full Install"
     suite: caas
+    workflow: e2e-pr-caas.yml  # a run of its own, started by the decision (see CI.md)
     filters: [caas-outside-known-safe]
     filters_any: [e2e-code, e2e-suite]
   # A second box for the CaaS suite, for someone adding or changing a regression test: it starts the same suite, on the same
@@ -41,12 +43,25 @@ jobs:
     kind: e2e
     check: "E2E / BMaaS Full Install"
     suite: bmaas
+    workflow: e2e-pr-bmaas.yml  # a run of its own, started by the decision (see CI.md)
     filters: [bmaas-outside-known-safe]
     filters_any: [e2e-code, e2e-suite]
-  # A suite that is only started by hand (the checkbox in the comment of the pull request): a real Netris lab, slow and
-  # expensive. It is listed there, never chosen by the decision, and not part of what the E2E check waits for.
-  e2e-netris:
+  # Netris suites use a real lab, so they are started only by hand and do not block the E2E check.
+  e2e-bmaas-netris:
     kind: e2e
     check: "E2E / BMaaS Netris Full Install"
-    suite: netris
+    suite: bmaas-netris
+    workflow: e2e-pr-bmaas-netris.yml
+    manual_only: true
+  e2e-vmaas-netris:
+    kind: e2e
+    check: "E2E / VMaaS Netris Full Install"
+    suite: vmaas-netris
+    workflow: e2e-pr-vmaas-netris.yml
+    manual_only: true
+  e2e-stretched-netris:
+    kind: e2e
+    check: "E2E / Stretched Networking Netris Full Install"
+    suite: stretched-netris
+    workflow: e2e-pr-stretched-netris.yml
     manual_only: true

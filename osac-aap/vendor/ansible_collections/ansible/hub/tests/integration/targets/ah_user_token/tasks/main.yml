@@ -1,0 +1,89 @@
+---
+- name: ah_user integration tests with token auth
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+    - name: Create a token for testing
+      ansible.hub.ah_token:
+        ah_username: "{{ ah_username }}"
+        ah_password: "{{ ah_password }}"
+        state: present
+      register: token_result
+      ignore_errors: true
+      no_log: true
+
+    - name: Ensure the user exists (token auth)
+      ansible.hub.ah_user:
+        username: "user_token_{{ test_id }}"
+        first_name: "first_token_{{ test_id }}"
+        last_name: "last_token_{{ test_id }}"
+        email: "user_token_{{ test_id }}@example.com"
+        password: vs9mrD55NP
+        state: present
+        ah_token: "{{ ah_token.token }}"
+      register: r_token
+      ignore_errors: true
+      when: token_result is success
+
+    - name: Check if the user is created (standalone or pre-4.12 gateway)
+      assert:
+        that:
+          - r_token.changed
+      when:
+        - token_result is success
+        - r_token is success
+
+    - name: Check deprecation warning is emitted when behind gateway (token auth)
+      assert:
+        that:
+          - r_token.warnings is defined
+          - r_token.warnings | length > 0
+          - "'ah_user module is deprecated' in r_token.warnings[0]"
+          - "'ansible.platform' in r_token.warnings[0]"
+      when:
+        - token_result is success
+        - ah_behind_gateway | default(false) | bool
+        - r_token is success
+
+    - name: Check ah_user failed due to gateway permissions (Hub 4.10-4.11, token auth)
+      assert:
+        that:
+          - r_token is failed
+          - "'403' in r_token.msg"
+      when:
+        - token_result is success
+        - ah_behind_gateway | default(false) | bool
+        - r_token is failed
+
+    - name: Fail on unexpected standalone error
+      assert:
+        that:
+          - r_token is success
+        fail_msg: "Unexpected error on standalone: {{ r_token.msg | default('unknown') }}"
+      when:
+        - token_result is success
+        - not (ah_behind_gateway | default(false) | bool)
+        - r_token is failed
+
+  always:
+    - name: Remove user (token auth)
+      ansible.hub.ah_user:
+        username: "user_token_{{ test_id }}"
+        state: absent
+        ah_token: "{{ ah_token.token | default('') }}"
+      ignore_errors: true
+
+    - name: Remove test token
+      ansible.hub.ah_token:
+        ah_username: "{{ ah_username }}"
+        ah_password: "{{ ah_password }}"
+        token: "{{ ah_token.token | default('') }}"
+        state: absent
+      ignore_errors: true
+      no_log: true

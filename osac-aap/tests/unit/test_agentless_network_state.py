@@ -41,6 +41,13 @@ TENANT_TWO = "tenant-two"
 POOL_UID = "44444444-4444-4444-8444-444444444444"
 POOL_FULFILLMENT_ID = "55555555-5555-4555-8555-555555555555"
 POOL_CIDR = "198.51.100.0/24"
+ATTACHMENT_UID = "66666666-6666-4666-8666-666666666666"
+ATTACHMENT_FULFILLMENT_ID = "77777777-7777-4777-8777-777777777777"
+EXTERNAL_IP_FULFILLMENT_ID = "88888888-8888-4888-8888-888888888888"
+SUBNET_FULFILLMENT_ID = "99999999-9999-4999-8999-999999999999"
+VIRTUAL_NETWORK_FULFILLMENT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+BARE_METAL_INSTANCE_UID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+BARE_METAL_INSTANCE_FULFILLMENT_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 
 
 def store_for(tmp_path):
@@ -96,6 +103,71 @@ def reserve_external_address(
         pool_cidr,
         check_mode=check_mode,
     )
+
+
+def external_ip_attachment_context(store, *, target_ip="10.0.1.10"):
+    subnet = store.get_subnet(UID_TWO, TENANT_ONE)
+    with sqlite3.connect(store.path) as connection:
+        address = connection.execute(
+            "SELECT address FROM external_ips WHERE uid = ?", (UID_THREE,)
+        ).fetchone()[0]
+    parent = store.get_virtual_network(UID_ONE, TENANT_ONE)
+    return {
+        "external_ip": {
+            "name": "test-eip",
+            "namespace": "test-networking",
+            "fulfillment_id": EXTERNAL_IP_FULFILLMENT_ID,
+            "kubernetes_uid": UID_THREE,
+            "tenant_id": TENANT_ONE,
+            "address": address,
+            "state": "Allocated",
+            "phase": "Ready",
+        },
+        "target": {
+            "kind": "BareMetalInstance",
+            "name": "test-bmi",
+            "namespace": "bmaas",
+            "fulfillment_id": BARE_METAL_INSTANCE_FULFILLMENT_ID,
+            "kubernetes_uid": BARE_METAL_INSTANCE_UID,
+            "tenant_id": TENANT_ONE,
+            "ip_address": target_ip,
+            "ready": True,
+        },
+        "subnet": {
+            "name": "test-subnet",
+            "namespace": "test-networking",
+            "fulfillment_id": SUBNET_FULFILLMENT_ID,
+            "kubernetes_uid": UID_TWO,
+            "tenant_id": TENANT_ONE,
+            "ipv4_cidr": subnet["ipv4_cidr"],
+            "virtual_network_id": VIRTUAL_NETWORK_FULFILLMENT_ID,
+            "phase": "Ready",
+        },
+        "virtual_network": {
+            "name": "test-network",
+            "namespace": "test-networking",
+            "fulfillment_id": VIRTUAL_NETWORK_FULFILLMENT_ID,
+            "kubernetes_uid": UID_ONE,
+            "tenant_id": TENANT_ONE,
+            "phase": "Ready",
+        },
+    }
+
+
+def prepare_attachment_state(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    subnet, _ = reserve_subnet(store, uid=UID_TWO, parent_uid=UID_ONE, cidr="10.0.1.0/24")
+    mark_subnet_ready(store, subnet)
+    register_external_ip_pool(store)
+    reserve_external_address(store, UID_THREE, EXTERNAL_IP_FULFILLMENT_ID)
+    monkeypatch.setattr(agentless_net_state, "reconcile_virtual_network", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        agentless_net_state.agentless_net_external_ip,
+        "reconcile_external_ip_attachment",
+        lambda *args, **kwargs: False,
+    )
+    return store
 
 
 def available_subnet_cidr(parent, *, prefix=24, exclude=()):
@@ -869,6 +941,7 @@ def test_state_database_uses_current_schema_v1_and_preserves_uid_and_transit_ind
             "subnets",
             "external_ip_pools",
             "external_ips",
+            "attachments",
         }
         assert connection.execute("SELECT count(*) FROM virtual_networks").fetchone()[0] == 2
         with pytest.raises(sqlite3.IntegrityError):
@@ -889,6 +962,7 @@ def test_incomplete_schema_v1_fails_closed_without_modification(tmp_path):
     with sqlite3.connect(store.path) as connection:
         connection.execute("DROP TABLE IF EXISTS external_ips")
         connection.execute("DROP TABLE IF EXISTS external_ip_pools")
+        connection.execute("DROP TABLE IF EXISTS attachments")
         connection.execute("DROP TABLE subnets")
         connection.execute("PRAGMA user_version = 1")
 
@@ -904,6 +978,77 @@ def test_incomplete_schema_v1_fails_closed_without_modification(tmp_path):
         ).fetchall() == [("virtual_networks",)]
         assert connection.execute("SELECT count(*) FROM virtual_networks").fetchone()[0] == 1
     assert original["uid"] == UID_ONE
+
+
+@pytest.mark.parametrize("check_mode", [False, True], ids=["normal", "check-mode"])
+def test_previous_v1_schema_adds_attachment_table_without_losing_state(
+    tmp_path, check_mode
+):
+    store = store_for(tmp_path)
+    original, _ = store.ensure_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    )
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TABLE attachments")
+        connection.execute("PRAGMA user_version = 1")
+        assert {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        } == agentless_net_state.PREVIOUS_V1_SCHEMA_TABLES
+
+    migrated, changed = store.ensure_external_ip_pool(
+        POOL_UID,
+        POOL_FULFILLMENT_ID,
+        TENANT_ONE,
+        "IPv4",
+        [POOL_CIDR],
+        check_mode=check_mode,
+    )
+
+    assert migrated == original
+    assert changed is False
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        } == agentless_net_state.SCHEMA_TABLES
+        attachment_indexes = {
+            row[1] for row in connection.execute("PRAGMA index_list(attachments)")
+        }
+        assert {"attachments_by_vn", "attachments_by_subnet"}.issubset(
+            attachment_indexes
+        )
+        assert connection.execute("SELECT count(*) FROM attachments").fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM external_ip_pools").fetchone() == (1,)
+
+
+def test_invalid_previous_v1_schema_is_rejected_without_modification(tmp_path):
+    store = store_for(tmp_path)
+    store.ensure_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    )
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TABLE attachments")
+        connection.execute("ALTER TABLE external_ip_pools ADD COLUMN unexpected TEXT")
+        connection.execute("PRAGMA user_version = 1")
+    original_database = store.path.read_bytes()
+
+    with pytest.raises(StateCorrupt, match="external_ip_pools table has an invalid schema"):
+        store.ensure_external_ip_pool(
+            POOL_UID,
+            POOL_FULFILLMENT_ID,
+            TENANT_ONE,
+            "IPv4",
+            [POOL_CIDR],
+            check_mode=True,
+        )
+
+    assert store.path.read_bytes() == original_database
 
 
 def test_schema_v2_fails_closed_without_downgrade_or_modification(tmp_path):
@@ -959,6 +1104,7 @@ def test_external_ip_pool_registers_identity_in_current_schema_v1(tmp_path):
             "subnets",
             "external_ip_pools",
             "external_ips",
+            "attachments",
         }
 
 
@@ -1842,6 +1988,260 @@ def test_tenant_identity_is_checked_on_retry_read_and_delete(tmp_path, monkeypat
     with pytest.raises(StateError, match="tenant does not match"):
         delete_virtual_network(store, UID_ONE, tenant_id=TENANT_TWO)
 
+
+
+def test_external_ip_attachment_creates_schema_v1_state_and_is_idempotent(tmp_path, monkeypatch):
+    store = prepare_attachment_state(tmp_path, monkeypatch)
+    context = external_ip_attachment_context(store)
+
+    attachment, changed = store.ensure_external_ip_attachment(
+        ATTACHMENT_UID,
+        ATTACHMENT_FULFILLMENT_ID,
+        TENANT_ONE,
+        context,
+        "eth0",
+    )
+
+    assert changed is True
+    assert attachment["phase"] == "ready"
+    assert attachment["external_ip_uid"] == UID_THREE
+    assert attachment["subnet_uid"] == UID_TWO
+    assert attachment["virtual_network_uid"] == UID_ONE
+    assert attachment["provider"]["next_hop"] == get_virtual_network(store, UID_ONE)["transit"]["namespace_ip"]
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("SELECT count(*) FROM attachments").fetchone()[0] == 1
+
+    retried, changed = store.ensure_external_ip_attachment(
+        ATTACHMENT_UID,
+        ATTACHMENT_FULFILLMENT_ID,
+        TENANT_ONE,
+        context,
+        "eth0",
+    )
+    assert changed is False
+    assert retried == attachment
+
+
+def test_external_ip_attachment_rejects_duplicate_fulfillment_id(tmp_path, monkeypatch):
+    store = prepare_attachment_state(tmp_path, monkeypatch)
+    context = external_ip_attachment_context(store)
+    store.ensure_external_ip_attachment(
+        ATTACHMENT_UID,
+        ATTACHMENT_FULFILLMENT_ID,
+        TENANT_ONE,
+        context,
+        "eth0",
+    )
+
+    with pytest.raises(StateError, match="Fulfillment identity is already reserved"):
+        store.ensure_external_ip_attachment(
+            "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            ATTACHMENT_FULFILLMENT_ID,
+            TENANT_ONE,
+            context,
+            "eth0",
+        )
+
+
+def test_external_ip_attachment_changed_target_cleans_old_path_first(tmp_path, monkeypatch):
+    store = prepare_attachment_state(tmp_path, monkeypatch)
+    context = external_ip_attachment_context(store)
+    events = []
+
+    def record_delete(entry):
+        events.append(("delete", entry["context"]["target"]["ip_address"]))
+        return True
+
+    def record_reconcile(parent, subnet, entry):
+        events.append(("ensure", entry["context"]["target"]["ip_address"]))
+        return True
+
+    monkeypatch.setattr(
+        agentless_net_state.agentless_net_external_ip,
+        "delete_external_ip_attachment",
+        record_delete,
+    )
+    monkeypatch.setattr(
+        agentless_net_state.agentless_net_external_ip,
+        "reconcile_external_ip_attachment",
+        record_reconcile,
+    )
+    store.ensure_external_ip_attachment(
+        ATTACHMENT_UID, ATTACHMENT_FULFILLMENT_ID, TENANT_ONE, context, "eth0"
+    )
+
+    replacement_context = external_ip_attachment_context(store, target_ip="10.0.1.11")
+    store.ensure_external_ip_attachment(
+        ATTACHMENT_UID,
+        ATTACHMENT_FULFILLMENT_ID,
+        TENANT_ONE,
+        replacement_context,
+        "eth0",
+    )
+    assert events == [
+        ("ensure", "10.0.1.10"),
+        ("delete", "10.0.1.10"),
+        ("ensure", "10.0.1.11"),
+    ]
+
+
+def test_external_ip_attachment_failure_retains_saved_cleanup_state(tmp_path, monkeypatch):
+    store = prepare_attachment_state(tmp_path, monkeypatch)
+    context = external_ip_attachment_context(store)
+
+    def fail_reconcile(*_args, **_kwargs):
+        raise agentless_net_state.NetworkCommandError("iptables failed")
+
+    monkeypatch.setattr(
+        agentless_net_state.agentless_net_external_ip,
+        "reconcile_external_ip_attachment",
+        fail_reconcile,
+    )
+    with pytest.raises(StateError, match="iptables failed"):
+        store.ensure_external_ip_attachment(
+            ATTACHMENT_UID, ATTACHMENT_FULFILLMENT_ID, TENANT_ONE, context, "eth0"
+        )
+
+    with sqlite3.connect(store.path) as connection:
+        payload = json.loads(connection.execute(
+            "SELECT payload FROM attachments WHERE uid = ?", (ATTACHMENT_UID,)
+        ).fetchone()[0])
+    assert payload["phase"] == "provisioning"
+    assert payload["context"] == context
+
+
+def test_external_ip_attachment_blocks_dependency_release_until_cleanup(tmp_path, monkeypatch):
+    store = prepare_attachment_state(tmp_path, monkeypatch)
+    context = external_ip_attachment_context(store)
+    store.ensure_external_ip_attachment(
+        ATTACHMENT_UID, ATTACHMENT_FULFILLMENT_ID, TENANT_ONE, context, "eth0"
+    )
+
+    with pytest.raises(StateError, match="ExternalIPAttachment"):
+        store.release_external_ip(UID_THREE, EXTERNAL_IP_FULFILLMENT_ID, TENANT_ONE, POOL_UID)
+    with pytest.raises(StateError, match="ExternalIPAttachment"):
+        store.prepare_delete_subnet(UID_TWO, TENANT_ONE)
+    with pytest.raises(StateError, match="ExternalIPAttachments"):
+        store.delete_and_remove_virtual_network(UID_ONE, TENANT_ONE)
+
+    monkeypatch.setattr(
+        agentless_net_state.agentless_net_external_ip,
+        "delete_external_ip_attachment",
+        lambda *_args, **_kwargs: True,
+    )
+    removed, changed = store.delete_external_ip_attachment(
+        ATTACHMENT_UID, ATTACHMENT_FULFILLMENT_ID, TENANT_ONE
+    )
+    assert changed is True
+    assert removed["phase"] == "deleting"
+    assert store.delete_external_ip_attachment(
+        ATTACHMENT_UID, ATTACHMENT_FULFILLMENT_ID, TENANT_ONE
+    ) == (None, False)
+    assert store.release_external_ip(
+        UID_THREE, EXTERNAL_IP_FULFILLMENT_ID, TENANT_ONE, POOL_UID
+    )[1] is True
+
+
+def test_external_ip_attachment_rejects_target_outside_subnet(tmp_path, monkeypatch):
+    store = prepare_attachment_state(tmp_path, monkeypatch)
+    context = external_ip_attachment_context(store, target_ip="10.0.2.10")
+    with pytest.raises(StateError, match="outside its canonical IPv4 Subnet"):
+        store.ensure_external_ip_attachment(
+            ATTACHMENT_UID, ATTACHMENT_FULFILLMENT_ID, TENANT_ONE, context, "eth0"
+        )
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("SELECT count(*) FROM attachments").fetchone()[0] == 0
+
+
+def test_external_ip_attachment_delete_failure_retains_saved_state(tmp_path, monkeypatch):
+    store = prepare_attachment_state(tmp_path, monkeypatch)
+    context = external_ip_attachment_context(store)
+    store.ensure_external_ip_attachment(
+        ATTACHMENT_UID, ATTACHMENT_FULFILLMENT_ID, TENANT_ONE, context, "eth0"
+    )
+
+    def fail_delete(_entry):
+        raise agentless_net_state.NetworkCommandError("route withdrawal failed")
+
+    monkeypatch.setattr(
+        agentless_net_state.agentless_net_external_ip,
+        "delete_external_ip_attachment",
+        fail_delete,
+    )
+    with pytest.raises(StateError, match="route withdrawal failed"):
+        store.delete_external_ip_attachment(
+            ATTACHMENT_UID, ATTACHMENT_FULFILLMENT_ID, TENANT_ONE
+        )
+    with sqlite3.connect(store.path) as connection:
+        row = connection.execute(
+            "SELECT phase, payload FROM attachments WHERE uid = ?", (ATTACHMENT_UID,)
+        ).fetchone()
+    assert row[0] == "deleting"
+    assert json.loads(row[1])["context"] == context
+
+
+@pytest.mark.parametrize(
+    ("action", "method"),
+    [
+        ("ensure_external_ip_attachment", "ensure_external_ip_attachment"),
+        ("delete_external_ip_attachment", "delete_external_ip_attachment"),
+    ],
+)
+def test_external_ip_attachment_module_dispatches_identity_and_context(
+    monkeypatch, action, method
+):
+    module = importlib.import_module(
+        "ansible_collections.osac.templates.plugins.modules.agentless_net_state"
+    )
+    context = {
+        "external_ip": {"name": "public-ip"},
+        "target": {"kind": "BareMetalInstance"},
+        "subnet": {"name": "subnet"},
+        "virtual_network": {"name": "network"},
+    }
+    params = {
+        "action": action,
+        "state_file": "/unused/state.sqlite3",
+        "uid": ATTACHMENT_UID,
+        "fulfillment_id": ATTACHMENT_FULFILLMENT_ID,
+        "tenant_id": TENANT_ONE,
+        "attachment_context": context,
+        "external_interface": "eth0",
+    }
+    ansible_module = SimpleNamespace(
+        params=params,
+        check_mode=True,
+        exit_json=Mock(),
+        fail_json=Mock(),
+    )
+    monkeypatch.setattr(module, "AnsibleModule", lambda **_kwargs: ansible_module)
+    store = Mock()
+    getattr(store, method).return_value = ({"uid": ATTACHMENT_UID}, True)
+    monkeypatch.setattr(module, "StateStore", lambda _path: store)
+
+    module.main()
+
+    if action == "ensure_external_ip_attachment":
+        store.ensure_external_ip_attachment.assert_called_once_with(
+            ATTACHMENT_UID,
+            ATTACHMENT_FULFILLMENT_ID,
+            TENANT_ONE,
+            context,
+            "eth0",
+            check_mode=True,
+        )
+    else:
+        store.delete_external_ip_attachment.assert_called_once_with(
+            ATTACHMENT_UID,
+            ATTACHMENT_FULFILLMENT_ID,
+            TENANT_ONE,
+            check_mode=True,
+        )
+    ansible_module.exit_json.assert_called_once_with(
+        changed=True, backend_network_id=ATTACHMENT_UID
+    )
+    ansible_module.fail_json.assert_not_called()
 
 
 def test_external_ip_reservation_reuses_uid_and_allocates_unique_addresses(tmp_path):

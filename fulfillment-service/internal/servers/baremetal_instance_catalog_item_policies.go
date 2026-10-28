@@ -22,6 +22,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/validation"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -59,7 +60,7 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 		return nil, err
 	}
 
-	_, warnings, err := validateCatalogItemDiskImagePolicy(ctx, scope, fields.GetDiskImage(), diskImagesDao)
+	warnings, err := validateBareMetalInstanceCatalogItemDiskImagePolicy(ctx, scope, fields, template, bareMetalInstanceTypesDao, diskImagesDao)
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +71,51 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 	if err := validateBareMetalInstanceCatalogItemNetworkPolicy(ctx, logger, item.GetMetadata(), scope, fields.GetNetworkAttachments(), template, fields.GetInstanceType(),
 		bareMetalInstanceTypesDao, subnetsDao, virtualNetworksDao, networkClassesDao, securityGroupsDao); err != nil {
 		return nil, err
+	}
+	return warnings, nil
+}
+
+// validateBareMetalInstanceCatalogItemDiskImagePolicy checks the image's lifecycle and
+// compatibility with the offering's type. Lock the type before the image, including when
+// inherited from the template, to preserve the lock order used by instance admission.
+func validateBareMetalInstanceCatalogItemDiskImagePolicy(
+	ctx context.Context,
+	scope referenceScope,
+	fields *privatev1.BareMetalInstanceCatalogItemFields,
+	template *privatev1.BareMetalInstanceTemplate,
+	instanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType],
+	diskImagesDao *dao.GenericDAO[*privatev1.DiskImage],
+) ([]string, error) {
+	imagePolicy, err := decodeDiskImageReferencePolicy(fields.GetDiskImage())
+	if err != nil {
+		return nil, catalogItemPolicyError("fields.disk_image", err.Error())
+	}
+	typeRef, typeSource, err := effectiveBareMetalInstanceTypeReference(template, fields.GetInstanceType())
+	if err != nil {
+		return nil, catalogItemPolicyError("fields.instance_type", err.Error())
+	}
+	// A caller-selected type or image is checked when the BareMetalInstance is created.
+	if typeRef == nil || (!imagePolicy.hasLocked && !imagePolicy.hasDefault) {
+		_, warnings, err := validateCatalogItemDiskImagePolicy(ctx, scope, fields.GetDiskImage(), diskImagesDao)
+		return warnings, err
+	}
+	if err := validatePlatformReference(typeRef, "bare metal instance type", typeSource); err != nil {
+		return nil, err
+	}
+	instanceType, err := resolveLockedPlatformResource(ctx, instanceTypesDao, typeRef.GetId(), typeRef.GetName(),
+		"bare metal instance type", typeSource, grpccodes.NotFound)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateResourceNotDeleted("bare metal instance type", refKey(typeRef), typeSource, instanceType.GetMetadata()); err != nil {
+		return nil, err
+	}
+	diskImage, warnings, err := validateCatalogItemDiskImagePolicy(ctx, scope, fields.GetDiskImage(), diskImagesDao)
+	if err != nil {
+		return nil, err
+	}
+	if err := validation.ValidateBareMetalDiskImageArchitecture(instanceType, diskImage); err != nil {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, err.Error())
 	}
 	return warnings, nil
 }
@@ -268,7 +314,7 @@ func validateBareMetalInstanceCatalogItemNetworkPolicy(
 	return nil
 }
 
-// effectiveBareMetalInstanceTypeReference returns the instance type that governs network attachment
+// effectiveBareMetalInstanceTypeReference returns the instance type that governs compatibility
 // validation. A catalog item's locked or editable default overrides the template's default. An
 // editable policy without a default defers type selection to BMI creation.
 func effectiveBareMetalInstanceTypeReference(

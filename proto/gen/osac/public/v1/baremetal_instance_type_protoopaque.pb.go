@@ -626,9 +626,12 @@ type BareMetalInstanceSpec_builder struct {
 	//
 	// These parameters can't be modified after the bare metal instance is created.
 	TemplateParameters map[string]*anypb.Any
-	// Network attachments for the bare metal instance. One entry per physical NIC.
-	// The complete attachment list, including subnet and security group references,
-	// physical interface, and primary designation, is immutable after creation.
+	// Optional: clients may omit this field or send an empty list to request the
+	// tenant's default Subnet and SecurityGroup; the default physical interface
+	// is selected from the first fabric port. At most one network attachment is
+	// accepted. The complete attachment list, including subnet and security group
+	// references, physical interface, and primary designation, is immutable after
+	// creation.
 	NetworkAttachments []*BareMetalNetworkAttachment
 	// When true, the system auto-selects an ExternalIPPool and creates an ExternalIP
 	// with an ExternalIPAttachment for this instance atomically during creation.

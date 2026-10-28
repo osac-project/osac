@@ -100,6 +100,8 @@ class ParentDeletePlaybookTests(unittest.TestCase):
             "netris_controller_url": f"http://127.0.0.1:{self.server.server_port}",
             "netris_session_cookie": secrets.token_hex(16),
             "netris_validate_certs": False,
+            "netris_tenant_id": 77,
+            "netris_site_id": 1,
             "ansible_connection": "local",
             "ansible_become": False,
             "ansible_python_interpreter": sys.executable,
@@ -173,8 +175,8 @@ class ParentDeletePlaybookTests(unittest.TestCase):
     def test_virtual_network_allocation_404_continues_to_vpc(self):
         """A removed allocation does not prevent the parent VPC deletion."""
         scenario = {
-            "vpcs": [{"id": 101, "name": VIRTUAL_NETWORK_NAME}],
-            "allocations": [{"id": 202, "name": VIRTUAL_NETWORK_NAME}],
+            "vpcs": [{"id": 101, "name": VIRTUAL_NETWORK_NAME, "adminTenant": {"id": 77}}],
+            "allocations": [{"id": 202, "name": VIRTUAL_NETWORK_NAME, "tenant": {"id": 77}}],
             "allocation_status": 404,
         }
         self._run_playbook(
@@ -188,8 +190,8 @@ class ParentDeletePlaybookTests(unittest.TestCase):
     def test_virtual_network_vpc_404_succeeds_after_allocation(self):
         """A removed VPC completes cleanup after allocation deletion."""
         scenario = {
-            "vpcs": [{"id": 101, "name": VIRTUAL_NETWORK_NAME}],
-            "allocations": [{"id": 202, "name": VIRTUAL_NETWORK_NAME}],
+            "vpcs": [{"id": 101, "name": VIRTUAL_NETWORK_NAME, "adminTenant": {"id": 77}}],
+            "allocations": [{"id": 202, "name": VIRTUAL_NETWORK_NAME, "tenant": {"id": 77}}],
             "vpc_status": 404,
         }
         self._run_playbook(
@@ -203,8 +205,8 @@ class ParentDeletePlaybookTests(unittest.TestCase):
     def test_virtual_network_allocation_400_stops_before_vpc(self):
         """An allocation dependency error keeps the parent VPC intact."""
         scenario = {
-            "vpcs": [{"id": 101, "name": VIRTUAL_NETWORK_NAME}],
-            "allocations": [{"id": 202, "name": VIRTUAL_NETWORK_NAME}],
+            "vpcs": [{"id": 101, "name": VIRTUAL_NETWORK_NAME, "adminTenant": {"id": 77}}],
+            "allocations": [{"id": 202, "name": VIRTUAL_NETWORK_NAME, "tenant": {"id": 77}}],
             "allocation_status": 400,
         }
         self._run_playbook(
@@ -218,8 +220,8 @@ class ParentDeletePlaybookTests(unittest.TestCase):
     def test_virtual_network_vpc_400_fails(self):
         """A VPC dependency error fails the playbook."""
         scenario = {
-            "vpcs": [{"id": 101, "name": VIRTUAL_NETWORK_NAME}],
-            "allocations": [{"id": 202, "name": VIRTUAL_NETWORK_NAME}],
+            "vpcs": [{"id": 101, "name": VIRTUAL_NETWORK_NAME, "adminTenant": {"id": 77}}],
+            "allocations": [{"id": 202, "name": VIRTUAL_NETWORK_NAME, "tenant": {"id": 77}}],
             "vpc_status": 400,
         }
         self._run_playbook(
@@ -233,8 +235,8 @@ class ParentDeletePlaybookTests(unittest.TestCase):
     def test_virtual_network_allocation_500_stops_before_vpc(self):
         """An allocation provider failure keeps the parent VPC intact."""
         scenario = {
-            "vpcs": [{"id": 101, "name": VIRTUAL_NETWORK_NAME}],
-            "allocations": [{"id": 202, "name": VIRTUAL_NETWORK_NAME}],
+            "vpcs": [{"id": 101, "name": VIRTUAL_NETWORK_NAME, "adminTenant": {"id": 77}}],
+            "allocations": [{"id": 202, "name": VIRTUAL_NETWORK_NAME, "tenant": {"id": 77}}],
             "allocation_status": 500,
         }
         self._run_playbook(
@@ -248,8 +250,8 @@ class ParentDeletePlaybookTests(unittest.TestCase):
     def test_virtual_network_vpc_500_fails(self):
         """A VPC provider failure fails the playbook."""
         scenario = {
-            "vpcs": [{"id": 101, "name": VIRTUAL_NETWORK_NAME}],
-            "allocations": [{"id": 202, "name": VIRTUAL_NETWORK_NAME}],
+            "vpcs": [{"id": 101, "name": VIRTUAL_NETWORK_NAME, "adminTenant": {"id": 77}}],
+            "allocations": [{"id": 202, "name": VIRTUAL_NETWORK_NAME, "tenant": {"id": 77}}],
             "vpc_status": 500,
         }
         self._run_playbook(
@@ -266,15 +268,43 @@ class ParentDeletePlaybookTests(unittest.TestCase):
             "playbook_osac_delete_virtual_network.yml",
             self._virtual_network(),
             {},
-            [("GET", "/api/v2/vpc"), ("GET", "/api/v2/vpc")],
+            [
+                ("GET", "/api/v2/vpc"),
+                ("GET", "/api/v2/ipam"),
+                ("GET", "/api/v2/vpc"),
+            ],
+            True,
+        )
+
+    def test_virtual_network_absent_still_removes_owned_orphan_allocation(self):
+        """An orphaned owned allocation is removed after its VPC disappeared."""
+        scenario = {
+            "allocations": [
+                {
+                    "id": 202,
+                    "name": VIRTUAL_NETWORK_NAME,
+                    "tenant": {"id": 77},
+                }
+            ]
+        }
+        self._run_playbook(
+            "playbook_osac_delete_virtual_network.yml",
+            self._virtual_network(),
+            scenario,
+            [
+                ("GET", "/api/v2/vpc"),
+                ("GET", "/api/v2/ipam"),
+                ("DELETE", "/api/v2/ipam/allocation/202"),
+                ("GET", "/api/v2/vpc"),
+            ],
             True,
         )
 
     def test_external_ip_pool_allocation_404_succeeds_after_common_subnet(self):
         """An absent allocation completes cleanup after its common subnet."""
         scenario = {
-            "subnets": [{"id": 303, "name": f"{EXTERNAL_IP_POOL_NAME}-common"}],
-            "allocations": [{"id": 202, "name": EXTERNAL_IP_POOL_NAME}],
+            "subnets": [{"id": 303, "name": f"{EXTERNAL_IP_POOL_NAME}-common", "prefix": "192.0.2.0/24", "purpose": "common", "tenant": {"id": 77}, "sites": [{"id": 1}]}],
+            "allocations": [{"id": 202, "name": EXTERNAL_IP_POOL_NAME, "prefix": "192.0.2.0/24", "tenant": {"id": 77}}],
             "allocation_status": 404,
         }
         self._run_playbook(
@@ -293,8 +323,8 @@ class ParentDeletePlaybookTests(unittest.TestCase):
     def test_external_ip_pool_allocation_400_fails(self):
         """An allocation dependency error fails pool deletion."""
         scenario = {
-            "subnets": [{"id": 303, "name": f"{EXTERNAL_IP_POOL_NAME}-common"}],
-            "allocations": [{"id": 202, "name": EXTERNAL_IP_POOL_NAME}],
+            "subnets": [{"id": 303, "name": f"{EXTERNAL_IP_POOL_NAME}-common", "prefix": "192.0.2.0/24", "purpose": "common", "tenant": {"id": 77}, "sites": [{"id": 1}]}],
+            "allocations": [{"id": 202, "name": EXTERNAL_IP_POOL_NAME, "prefix": "192.0.2.0/24", "tenant": {"id": 77}}],
             "allocation_status": 400,
         }
         self._run_playbook(
@@ -313,8 +343,8 @@ class ParentDeletePlaybookTests(unittest.TestCase):
     def test_external_ip_pool_allocation_500_fails(self):
         """An allocation provider failure fails pool deletion."""
         scenario = {
-            "subnets": [{"id": 303, "name": f"{EXTERNAL_IP_POOL_NAME}-common"}],
-            "allocations": [{"id": 202, "name": EXTERNAL_IP_POOL_NAME}],
+            "subnets": [{"id": 303, "name": f"{EXTERNAL_IP_POOL_NAME}-common", "prefix": "192.0.2.0/24", "purpose": "common", "tenant": {"id": 77}, "sites": [{"id": 1}]}],
+            "allocations": [{"id": 202, "name": EXTERNAL_IP_POOL_NAME, "prefix": "192.0.2.0/24", "tenant": {"id": 77}}],
             "allocation_status": 500,
         }
         self._run_playbook(

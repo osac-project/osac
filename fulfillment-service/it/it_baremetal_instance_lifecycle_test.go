@@ -187,7 +187,11 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 
 	})
 
-	It("Creates a BareMetalInstance and verifies fields", func(ctx context.Context) {
+	It("Creates a BareMetalInstance with omitted networking and verifies fields", func(ctx context.Context) {
+		// Omitted network_attachments request the tenant default Subnet and
+		// SecurityGroup; the BeforeEach ensured a ready default fixture.
+		network := getTenantDefaultNetworkFixture(ctx, usersGroup, "")
+
 		// Create BareMetalInstance via public API
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
@@ -222,6 +226,20 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			}, 2*time.Minute, time.Second).Should(Succeed())
 		})
 
+		// Omitted network_attachments should resolve to one attachment with the
+		// tenant default Subnet/SecurityGroup and the first fabric interface.
+		Expect(object.GetSpec().GetNetworkAttachments()).To(HaveLen(1),
+			"omitted network_attachments should resolve to one default attachment")
+		createAttachment := object.GetSpec().GetNetworkAttachments()[0]
+		Expect(createAttachment.GetSubnet().GetId()).To(Equal(network.subnetID),
+			"default attachment should reference the tenant default Subnet")
+		Expect(createAttachment.GetSecurityGroups()).To(HaveLen(1),
+			"default attachment should apply exactly one default SecurityGroup")
+		Expect(createAttachment.GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID),
+			"default attachment should reference the tenant default SecurityGroup")
+		Expect(createAttachment.GetInterface()).To(Equal("data-0"),
+			"default attachment should select the first fabric-role interface")
+
 		// Verify the BareMetalInstance fields via public Get
 		getResp, err := bareMetalInstancesClient.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{
 			Id: bareMetalInstanceId,
@@ -240,6 +258,18 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			"materialized template should reference the template from the catalog item")
 		Expect(object.GetSpec().GetDiskImage().GetId()).To(Equal(defaultDiskImageId),
 			"BareMetalInstance should persist the requested disk image")
+		// Resolved default networking should survive public persistence.
+		Expect(object.GetSpec().GetNetworkAttachments()).To(HaveLen(1),
+			"public Get should expose one default network attachment")
+		persistedAttachment := object.GetSpec().GetNetworkAttachments()[0]
+		Expect(persistedAttachment.GetSubnet().GetId()).To(Equal(network.subnetID),
+			"persisted attachment should reference the tenant default Subnet")
+		Expect(persistedAttachment.GetSecurityGroups()).To(HaveLen(1),
+			"persisted attachment should apply exactly one default SecurityGroup")
+		Expect(persistedAttachment.GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID),
+			"persisted attachment should reference the tenant default SecurityGroup")
+		Expect(persistedAttachment.GetInterface()).To(Equal("data-0"),
+			"persisted attachment should select the first fabric-role interface")
 	})
 
 	It("waits for automatic ExternalIP cleanup before deleting the BMFO CR", func(ctx context.Context) {

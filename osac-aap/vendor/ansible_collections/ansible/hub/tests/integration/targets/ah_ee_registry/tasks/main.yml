@@ -1,5 +1,5 @@
 ---
-- name: ah_ee_registry integration tests
+- name: ah_ee_registry integration tests with basic auth
   module_defaults:
     group/ansible.hub.hub:
       ah_host: "{{ ah_host }}"
@@ -11,75 +11,74 @@
       set_fact:
         test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
       when: test_id is not defined
-
-    - name: Define variables for registry name
+    - name: Define variables for registry name (basic auth)
       set_fact:
-        registry_name: "ee_{{ test_id }}"
+        registry_name_basic: "ee_basic_{{ test_id }}"
 
-    - name: Create EE remote registry in check_mode
+    - name: Create EE remote registry in check_mode (basic auth)
       ansible.hub.ah_ee_registry:
-        name: "{{ registry_name }}"
+        name: "{{ registry_name_basic }}"
         url: https://quay.io/my/registry
         state: present
-      register: r
-      check_mode: yes
+      register: r_basic_check
+      check_mode: true
 
-    - name: Check if the remote registry EE is created in check_mode
+    - name: Check if the remote registry EE is created in check_mode (basic auth)
       assert:
         that:
-          - r.changed
+          - r_basic_check.changed
 
-    - name: Create EE remote registry
+    - name: Create EE remote registry (basic auth)
       ansible.hub.ah_ee_registry:
-        name: "{{ registry_name }}"
+        name: "{{ registry_name_basic }}"
         url: https://quay.io/my/registry
         state: present
-      register: r
+      register: r_basic
 
-    - name: Check if the remote registry EE is created
+    - name: Check if the remote registry EE is created (basic auth)
       assert:
         that:
-          - r.changed
+          - r_basic.changed
 
-    - name: Create EE remote registry again
+    - name: Create EE remote registry again (basic auth)
       ansible.hub.ah_ee_registry:
-        name: "{{ registry_name }}"
+        name: "{{ registry_name_basic }}"
         url: https://quay.io/my/registry
         state: present
-      register: r
+      register: r_basic_again
 
-    - name: Check if the remote registry EE is not created again
+    - name: Check if the remote registry EE is not created again (basic auth)
       assert:
         that:
-          - not r.changed
+          - not r_basic_again.changed
 
-    - name: Delete EE remote registry
+    - name: Delete EE remote registry (basic auth)
       ansible.hub.ah_ee_registry:
-        name: "{{ registry_name }}"
+        name: "{{ registry_name_basic }}"
         url: https://quay.io/my/registry
         state: absent
-      register: r
+      register: r_basic_delete
 
-    - name: Check if the remote registry EE is deleted
+    - name: Check if the remote registry EE is deleted (basic auth)
       assert:
         that:
-          - r.changed
+          - r_basic_delete.changed
 
-    - name: Delete EE remote registry again
+    - name: Delete EE remote registry again (basic auth)
       ansible.hub.ah_ee_registry:
-        name: "{{ registry_name }}"
+        name: "{{ registry_name_basic }}"
         url: https://quay.io/my/registry
         state: absent
-      register: r
+      register: r_basic_delete_again
 
-    - name: Check if the remote registry EE is not deleted
+    - name: Check if the remote registry EE is not deleted (basic auth)
       assert:
         that:
-          - not r.changed
+          - not r_basic_delete_again.changed
 
   always:
-    - name: Delete EE remote registry
+    - name: Delete EE remote registry (basic auth)
       ansible.hub.ah_ee_registry:
-        name: "{{ registry_name }}"
+        name: "{{ registry_name_basic | default('') }}"
         state: absent
       ignore_errors: true

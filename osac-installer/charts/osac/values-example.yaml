@@ -142,6 +142,12 @@ operator:
     # When true, the operator starts even if the secret doesn't exist yet.
     optional: true
 
+  # Remote VMaaS cluster configuration. Set the kubeconfig path and Secret
+  # name together; the Secret key defaults to kubeconfig.
+  remoteClusterKubeconfig: ""
+  remoteClusterKubeconfigSecretName: ""
+  remoteClusterKubeconfigSecretKey: kubeconfig
+
 # ---------------------
 # Fulfillment Service
 # ---------------------
@@ -175,8 +181,12 @@ service:
 
   # The Kafka-backed event publisher is enabled by default. Disable it only
   # for API-only environments that do not provision or connect to Kafka.
+  # topicRetention: how long a tenant's event topic keeps records: a
+  # negative duration such as '-1s' keeps them indefinitely, or a positive
+  # one such as '168h' for one week.
   eventPublisher:
     enabled: true
+    topicRetention: "-1s"
 
   # TLS certificate configuration. All service components use cert-manager
   # to generate certificates signed by this issuer.
@@ -333,6 +343,9 @@ aap:
     # Helm mode; see docs/helm-deployment-guide.md for manual creation.
     manifestSecret: "config-as-code-manifest-ig"
     secret: "config-as-code-ig"
+    remoteClusterKubeconfigSecretName: ""
+    remoteClusterKubeconfigSecretKey: kubeconfig
+
   # AAP instance groups. The global.networking facade supplies the network
   # fields; use these blocks for enablement and expert-only overrides.
   instanceGroups:

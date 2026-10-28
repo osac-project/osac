@@ -19,6 +19,7 @@ import * as Yup from 'yup';
 import type { StorageTier } from '@osac/types/private';
 import { StorageProtocol } from '@osac/types/private';
 
+import { storageTierFieldIds } from './fieldIds';
 import {
   STORAGE_BACKEND_READY_LIST_FILTER,
   usePrivateStorageBackend,
@@ -165,16 +166,16 @@ const StorageTierForm = ({ tier, backendOptions, backendsLoading }: StorageTierF
                 <LeaveFormConfirmation />
                 <StackItem>
                   <OsacForm>
-                    <NameField isDisabled={isEdit} />
+                    <NameField fieldId={storageTierFieldIds.name} isDisabled={isEdit} />
                     <InputField
                       name="description"
                       label={t('Description')}
-                      fieldId="tier-description"
+                      fieldId={storageTierFieldIds.description}
                     />
                     <SelectField
                       name="backendId"
                       label={t('Backend')}
-                      fieldId="tier-backend"
+                      fieldId={storageTierFieldIds.backend}
                       isRequired
                       isLoading={backendsLoading}
                       placeholder={t('Select a backend')}
@@ -183,7 +184,7 @@ const StorageTierForm = ({ tier, backendOptions, backendsLoading }: StorageTierF
                     <RadioButtonField
                       name="protocol"
                       label={t('Protocol')}
-                      fieldId="tier-protocol"
+                      fieldId={storageTierFieldIds.protocol}
                       isRequired
                       isInline
                       options={[

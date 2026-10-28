@@ -2,7 +2,7 @@
  "collection_info": {
   "namespace": "ansible",
   "name": "hub",
-  "version": "1.0.0",
+  "version": "1.1.2",
   "authors": [
    "Sean Sullivan (github.com/sean-m-sullivan)",
    "Tom Page (github.com/Tompage1994)",
@@ -31,7 +31,7 @@
   "name": "FILES.json",
   "ftype": "file",
   "chksum_type": "sha256",
-  "chksum_sha256": "c34b8bc720292a241c368199631f2d8037b8dbf3f4bde7994744db65820f4738",
+  "chksum_sha256": "abd4bf23107923802559b7c3756a0400f783744a976a7028f7466f9340e5bd02",
   "format": 1
  },
  "format": 1

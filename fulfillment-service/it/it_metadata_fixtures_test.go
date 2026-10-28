@@ -23,9 +23,12 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"k8s.io/client-go/util/retry"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -199,33 +202,50 @@ func (f *computeInstanceMetadataFixture) privateSnapshot(ctx context.Context) (*
 
 // updateMetadata overlays both metadata maps on a complete private snapshot. The explicit mask
 // replaces only those maps; all existing entries and unrelated object fields are retained.
+// Version conflicts trigger a fresh snapshot and merge on each bounded retry.
 func (f *computeInstanceMetadataFixture) updateMetadata(
 	ctx context.Context,
 	labels, annotations map[string]string,
 ) (*privatev1.ComputeInstance, error) {
-	object, err := f.privateSnapshot(ctx)
+	var updated *privatev1.ComputeInstance
+	err := retry.OnError(retry.DefaultBackoff, func(err error) bool {
+		return status.Code(err) == codes.Aborted
+	}, func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		object, err := f.privateSnapshot(ctx)
+		if err != nil {
+			return err
+		}
+		if object.GetMetadata() == nil {
+			return fmt.Errorf("private ComputeInstance %q has no metadata", f.id)
+		}
+		metadata := proto.Clone(object.GetMetadata()).(*privatev1.Metadata)
+		metadata.SetLabels(mergeMetadataValues(metadata.GetLabels(), labels))
+		metadata.SetAnnotations(mergeMetadataValues(metadata.GetAnnotations(), annotations))
+		object.SetMetadata(metadata)
+		response, err := f.client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+			Object:     object,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels", "metadata.annotations"}},
+			Lock:       true,
+		}.Build())
+		if err != nil {
+			return fmt.Errorf("update private ComputeInstance %q metadata: %w", f.id, err)
+		}
+		if response == nil || response.GetObject() == nil {
+			return fmt.Errorf("private Update returned no ComputeInstance for %q", f.id)
+		}
+		updated = proto.Clone(response.GetObject()).(*privatev1.ComputeInstance)
+		return nil
+	})
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, err
 	}
-	if object.GetMetadata() == nil {
-		return nil, fmt.Errorf("private ComputeInstance %q has no metadata", f.id)
-	}
-	metadata := proto.Clone(object.GetMetadata()).(*privatev1.Metadata)
-	metadata.SetLabels(mergeMetadataValues(metadata.GetLabels(), labels))
-	metadata.SetAnnotations(mergeMetadataValues(metadata.GetAnnotations(), annotations))
-	object.SetMetadata(metadata)
-	response, err := f.client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
-		Object:     object,
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels", "metadata.annotations"}},
-		Lock:       true,
-	}.Build())
-	if err != nil {
-		return nil, fmt.Errorf("update private ComputeInstance %q metadata: %w", f.id, err)
-	}
-	if response == nil || response.GetObject() == nil {
-		return nil, fmt.Errorf("private Update returned no ComputeInstance for %q", f.id)
-	}
-	return proto.Clone(response.GetObject()).(*privatev1.ComputeInstance), nil
+	return updated, nil
 }
 
 func mergeMetadataValues(existing, updates map[string]string) map[string]string {

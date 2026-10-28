@@ -62,6 +62,29 @@ spec:
   secretName: postgres-client-cert-metering
   privateKey:
     rotationPolicy: Always
+{{- if .Values.netbox.enabled }}
+---
+# NetBox connects to the shared PostgreSQL with the same certificate-only
+# client authentication as the other bundled consumers; the matching user
+# and database are created by the postgres-init script below.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: postgres-client-netbox
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  issuerRef:
+    kind: {{ .Values.certs.issuerRef.kind }}
+    name: {{ .Values.certs.issuerRef.name }}
+  commonName: "netbox"
+  usages:
+  - client auth
+  secretName: postgres-client-cert-netbox
+  privateKey:
+    rotationPolicy: Always
+{{- end }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -121,6 +144,10 @@ stringData:
     create database {{ .Values.bundledPostgres.database.name }} owner {{ .Values.bundledPostgres.database.user }};
     create user metering;
     create database metering owner metering;
+    {{- if .Values.netbox.enabled }}
+    create user netbox;
+    create database netbox owner netbox;
+    {{- end }}
     .
 ---
 apiVersion: v1

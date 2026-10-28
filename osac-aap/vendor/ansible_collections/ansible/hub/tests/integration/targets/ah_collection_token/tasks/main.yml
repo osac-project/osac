@@ -1,0 +1,120 @@
+---
+# Test with Token Authentication
+- name: ah_collection integration tests with token auth
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+    - name: Create a token for testing
+      ansible.hub.ah_token:
+        ah_username: "{{ ah_username }}"
+        ah_password: "{{ ah_password }}"
+        state: present
+      no_log: true
+
+    - name: Define variables (token auth)
+      set_fact:
+        namespace: "sample"
+        company: "my_company_{{ test_id }}"
+        collection_name: "sample"
+        build_path: "/home/runner/.ansible/collections/ansible_collections/ansible/hub/tests/integration/targets/ah_build/files"
+
+    - name: Create namespace (token auth)
+      ansible.hub.ah_namespace:
+        name: "{{ namespace }}"
+        company: "{{ company }}"
+        email: "{{ test_id }}@example.com"
+        avatar_url: https://pnt.redhat.com/pnt/d-11633955/LogoRedHatHatColorRGB.png
+        description: This is the Redhat Namespace
+        links:
+          - name: "homepage"
+            url: "https://www.redhat.com"
+        ah_token: "{{ ah_token.token }}"
+      register: r_token_namespace
+
+    - name: Check if the namespace is created (token auth)
+      assert:
+        that:
+          - r_token_namespace.changed
+
+    - name: Build Ansible Collection from the directory (token auth)
+      ansible.hub.ah_build:
+        path: "{{ build_path }}/sample/sample"
+        output_path: "{{ build_path }}/"
+      register: r_token_build
+
+    - name: Check if the file exists (token auth)
+      ansible.builtin.stat:
+        path: "{{ build_path }}/sample-sample-1.0.0.tar.gz"
+      register: build_stat_token
+
+    - name: Check if the build is successful (token auth)
+      assert:
+        that:
+          - r_token_build.changed
+          - build_stat_token.stat.exists
+
+    - name: Upload a collection to the given collection (token auth)
+      ansible.hub.ah_collection:
+        namespace: "{{ namespace }}"
+        name: "{{ collection_name }}"
+        path: "{{ build_path }}/sample-sample-1.0.0.tar.gz"
+        ah_token: "{{ ah_token.token }}"
+      register: r_token_upload
+
+    - name: Check if the collection is uploaded successfully (token auth)
+      assert:
+        that:
+          - r_token_upload.changed
+
+    - name: Delete a collection to the given collection (token auth)
+      ansible.hub.ah_collection:
+        namespace: "{{ namespace }}"
+        name: "{{ collection_name }}"
+        version: 1.0.0
+        state: absent
+        ah_token: "{{ ah_token.token }}"
+      register: r_token_delete
+
+    - name: Check if the collection is deleted successfully (token auth)
+      assert:
+        that:
+          - r_token_delete.changed
+          - r_token_delete.deleted
+
+  always:
+    - name: Delete a collection to the given collection (token auth)
+      ansible.hub.ah_collection:
+        namespace: "{{ namespace | default('') }}"
+        name: "{{ collection_name }}"
+        version: 1.0.0
+        state: absent
+        ah_token: "{{ ah_token.token | default('') }}"
+      ignore_errors: true
+
+    - name: Delete namespace (token auth)
+      ansible.hub.ah_namespace:
+        name: "{{ namespace | default('') }}"
+        state: absent
+        ah_token: "{{ ah_token.token | default('') }}"
+      ignore_errors: true
+
+    - name: Remove built collection (token auth)
+      ansible.builtin.file:
+        path: "{{ build_path }}/sample-sample-1.0.0.tar.gz"
+        state: absent
+      ignore_errors: true
+
+    - name: Remove test token
+      ansible.hub.ah_token:
+        ah_username: "{{ ah_username }}"
+        ah_password: "{{ ah_password }}"
+        token: "{{ ah_token.token | default('') }}"
+        state: absent
+      ignore_errors: true
+      no_log: true

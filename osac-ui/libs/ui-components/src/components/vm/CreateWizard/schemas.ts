@@ -11,6 +11,7 @@ export type VmWizardStepId =
   | 'configuration'
   | 'storage'
   | 'networking'
+  | 'access'
   | 'review';
 
 const lockedField = (valueSchema: yup.AnySchema) =>
@@ -123,7 +124,6 @@ export const buildComputeInstanceStepSchema = (
           name: fields.metadataName,
         }),
         spec: yup.object({
-          sshKey: lockedField(yup.string()),
           diskImage: lockedField(
             yup.object({
               id: yup.string().required(t('Disk image is required')),
@@ -135,9 +135,6 @@ export const buildComputeInstanceStepSchema = (
       return yup.object({
         spec: yup.object({
           instanceType: fields.specInstanceType,
-          userDataSource: lockedField(yup.string()),
-          userData: fields.specUserData,
-          userDataSecret: lockedField(yup.string()),
         }),
       });
     case 'storage':
@@ -151,6 +148,15 @@ export const buildComputeInstanceStepSchema = (
       return yup.object({
         spec: yup.object({
           networking: fields.specNetworking,
+        }),
+      });
+    case 'access':
+      return yup.object({
+        spec: yup.object({
+          sshKey: lockedField(yup.string()),
+          userDataSource: lockedField(yup.string()),
+          userData: fields.specUserData,
+          userDataSecret: lockedField(yup.string()),
         }),
       });
     default:

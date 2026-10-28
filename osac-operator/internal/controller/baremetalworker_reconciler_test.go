@@ -126,7 +126,8 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
-					NumberOfNodes: 1,
+					NumberOfNodes:   1,
+					FabricInterface: "data-0",
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
 					},
@@ -568,7 +569,8 @@ var _ = Describe("BareMetalWorkerReconciler resolveDiskImage", Label("baremetalw
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
-					NumberOfNodes: 1,
+					NumberOfNodes:   1,
+					FabricInterface: "data-0",
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
 					},
@@ -824,7 +826,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
-					NumberOfNodes: numWorkers,
+					NumberOfNodes:   numWorkers,
+					FabricInterface: "data-0",
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
 					},
@@ -1211,7 +1214,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 		co := newBareMetalClusterOrder("bmw-reference-membership", 1)
 		co.Spec.NodeRequests[0].NodeSet = "compute"
 		co.Spec.NodeRequests = append(co.Spec.NodeRequests, osacv1alpha1.NodeRequest{NodeSet: "batch",
-			NumberOfNodes: 1, BareMetal: &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"},
+			NumberOfNodes: 1, FabricInterface: "data-0",
+			BareMetal: &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"},
 		})
 		create(co)
 		makeInfraEnvReady(co.Name)
@@ -1281,11 +1285,12 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 		Expect(co.Status.Workers[0].Name).ToNot(Equal(co.Status.Workers[1].Name))
 	})
 
-	It("enriches BMI network attachment with interface from first fabric port and primary=true", func() {
+	It("uses the stored interface after the BMIT fabric port changes", func() {
 		preloadDiskImageChain()
 		co := newBareMetalClusterOrder("bmw-enrich", 1)
 		create(co)
 		makeInfraEnvReady("bmw-enrich")
+		addInstanceType("bm-standard", "data-1")
 
 		_, err := runReconcile("bmw-enrich")
 		Expect(err).ToNot(HaveOccurred())
@@ -1298,11 +1303,26 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 		Expect(netAttachments[0].GetSubnet().GetName()).To(Equal("my-subnet"))
 		Expect(netAttachments[0].GetSecurityGroups()).To(HaveLen(1))
 		Expect(netAttachments[0].GetSecurityGroups()[0].GetName()).To(Equal("sg-default"))
-		Expect(netAttachments[0].GetInterface()).To(Equal("data-0"))
+		Expect(netAttachments[0].GetInterface()).To(Equal("data-0"), "BMI must use the Create-time NodeRequest interface")
 		Expect(netAttachments[0].GetPrimary()).To(BeTrue())
 	})
 
-	It("resolves different interfaces for different instance types across node sets", func() {
+	It("does not create a BMI when the stored fabric interface is missing", func() {
+		preloadDiskImageChain()
+		co := newBareMetalClusterOrder("bmw-missing-fabric-interface", 1)
+		co.Spec.NodeRequests[0].FabricInterface = ""
+		create(co)
+		_, err := runReconcile("bmw-missing-fabric-interface")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(setWorkerIgnitionURL(ctx, "bmw-missing-fabric-interface-infraenv", testNamespace, ign.URL())).To(Succeed())
+
+		_, err = runReconcile("bmw-missing-fabric-interface")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("no stored fabric interface"))
+		Expect(fc.CreateCalls()).To(BeEmpty())
+	})
+
+	It("uses each node set's stored interface", func() {
 		preloadDiskImageChain()
 		addInstanceType("bm-gpu", "gpu-data-0")
 
@@ -1319,12 +1339,14 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{
 					{NodeSet: "bm-standard",
-						NumberOfNodes: 1,
-						BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"},
+						NumberOfNodes:   1,
+						FabricInterface: "data-0",
+						BareMetal:       &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"},
 					},
 					{NodeSet: "bm-gpu",
-						NumberOfNodes: 1,
-						BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-gpu"},
+						NumberOfNodes:   1,
+						FabricInterface: "gpu-data-0",
+						BareMetal:       &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-gpu"},
 					},
 				},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{
@@ -1335,6 +1357,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 		}
 		create(co)
 		makeInfraEnvReady("bmw-multi-type")
+		addInstanceType("bm-standard", "changed-data-0")
+		addInstanceType("bm-gpu", "changed-gpu-data-0")
 
 		_, err := runReconcile("bmw-multi-type")
 		Expect(err).ToNot(HaveOccurred())
@@ -1444,7 +1468,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileAgent", Label("baremetalwor
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
-					NumberOfNodes: numWorkers,
+					NumberOfNodes:   numWorkers,
+					FabricInterface: "data-0",
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
 					},
@@ -2133,7 +2158,8 @@ var _ = Describe("BareMetalWorkerReconciler workerRetry", Label("baremetalworker
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
-					NumberOfNodes: 1,
+					NumberOfNodes:   1,
+					FabricInterface: "data-0",
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
 					},
@@ -2423,7 +2449,8 @@ var _ = Describe("BareMetalWorkerReconciler scale-up", Label("baremetalworker"),
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
-					NumberOfNodes: numWorkers,
+					NumberOfNodes:   numWorkers,
+					FabricInterface: "data-0",
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
 					},
@@ -2733,7 +2760,8 @@ var _ = Describe("BareMetalWorkerReconciler stale ignition", Label("baremetalwor
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
-					NumberOfNodes: 1,
+					NumberOfNodes:   1,
+					FabricInterface: "data-0",
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
 					},
@@ -3029,7 +3057,8 @@ var _ = Describe("BareMetalWorkerReconciler scale-down", Label("baremetalworker"
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
-					NumberOfNodes: numWorkers,
+					NumberOfNodes:   numWorkers,
+					FabricInterface: "data-0",
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
 					},
@@ -3459,7 +3488,8 @@ var _ = Describe("BareMetalWorkerReconciler cluster deletion", Label("baremetalw
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
-					NumberOfNodes: numWorkers,
+					NumberOfNodes:   numWorkers,
+					FabricInterface: "data-0",
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
 					},

@@ -56,7 +56,7 @@ func validateAndCanonicalizeComputeInstanceCatalogItemPolicies(
 		return nil, err
 	}
 	warnings = append(warnings, imageWarnings...)
-	if err := validateComputeInstanceCatalogItemSSHKeyPolicy(ctx, scope, fields.GetSshKey(), secretsDao); err != nil {
+	if err := validateCatalogItemSSHKeyPolicy(ctx, scope, fields.GetSshKey(), secretsDao); err != nil {
 		return nil, err
 	}
 	var validateInline func([]byte) error
@@ -82,57 +82,6 @@ func validateAndCanonicalizeComputeInstanceCatalogItemPolicies(
 	return warnings, validateComputeInstanceCatalogItemScalarPolicies(fields)
 }
 
-// validateComputeInstanceCatalogItemSSHKeyPolicy checks a locked SSH key or editable default
-// in the Catalog Item's exact tenant/project, verifies its type, and stores its ID and name.
-// Shared offerings may leave the key editable but cannot choose a tenant-local key.
-func validateComputeInstanceCatalogItemSSHKeyPolicy(
-	ctx context.Context,
-	scope referenceScope,
-	policy *privatev1.SecretReferenceFieldPolicy,
-	secretsDao *dao.GenericDAO[*privatev1.Secret],
-) error {
-	if policy == nil {
-		return nil
-	}
-	state, err := decodeSecretReferencePolicy(policy)
-	if err != nil {
-		return catalogItemPolicyError("fields.ssh_key", err.Error())
-	}
-	if err := validateSharedCatalogItemLocalReferencePolicy(scope, "fields.ssh_key", state.hasLocked, state.hasDefault); err != nil {
-		return err
-	}
-	resolve := func(ref *privatev1.SecretLocalReference) (*privatev1.SecretLocalReference, error) {
-		if ref == nil {
-			return nil, nil
-		}
-		resolved, resolveErr := resolveLockedResourceInScope(ctx, secretsDao, scope, ref.GetId(), ref.GetName(),
-			"secret", " in fields.ssh_key", grpccodes.InvalidArgument)
-		if resolveErr != nil {
-			return nil, resolveErr
-		}
-		if err := validateResolvedSecretLifecycleAndType(resolved, refKey(ref), "fields.ssh_key",
-			privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY); err != nil {
-			return nil, err
-		}
-		return canonicalSecretLocalReference(resolved), nil
-	}
-	if state.hasLocked {
-		canonical, resolveErr := resolve(state.lockedValue)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		policy.SetLocked(canonical)
-	}
-	if state.hasDefault {
-		canonical, resolveErr := resolve(state.defaultValue)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		policy.GetEditable().SetDefaultValue(canonical)
-	}
-	return nil
-}
-
 // applyComputeInstanceCatalogItemPolicies merges the offering's field rules into a new VM spec.
 // It rejects caller values for locked fields, keeps caller values for editable fields, and copies
 // locked/default values into omitted fields. Explicit zero, false, and empty strings count as
@@ -145,7 +94,7 @@ func applyComputeInstanceCatalogItemPolicies(spec *privatev1.ComputeInstanceSpec
 	if err := applyPolicy(fields.GetDiskImage(), spec.HasDiskImage(), spec.SetDiskImage, decodeDiskImageReferencePolicy, cloneMessage[*privatev1.DiskImageReference]); err != nil {
 		return fmt.Errorf("disk_image: %w", err)
 	}
-	if err := applyPolicy(fields.GetSshKey(), spec.GetSshKey() != nil, spec.SetSshKey, decodeSecretReferencePolicy, cloneMessage[*privatev1.SecretLocalReference]); err != nil {
+	if err := applyPolicy(fields.GetSshKey(), spec.GetSshKey() != nil, spec.SetSshKey, decodeFullSecretReferencePolicy, cloneMessage[*privatev1.SecretReference]); err != nil {
 		return fmt.Errorf("ssh_key: %w", err)
 	}
 	if err := applyPolicy(fields.GetInstanceType(), spec.HasInstanceType(), spec.SetInstanceType, decodeInstanceTypeReferencePolicy, cloneMessage[*privatev1.InstanceTypeReference]); err != nil {

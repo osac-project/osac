@@ -160,6 +160,185 @@ var _ = Describe("Reference validator", func() {
 		Expect(localLookups).To(Equal(3))
 	})
 
+	Describe("Status-only updates", func() {
+		var request *privatev1.ComputeInstancesUpdateRequest
+		var handler grpc.UnaryHandler
+		var handlerCalled bool
+		var info *grpc.UnaryServerInfo
+		var lookedUpNames []string
+
+		registerLookups := func(v *ReferenceValidator) {
+			GinkgoHelper()
+			for _, referenceType := range []protoreflect.FullName{
+				"osac.private.v1.DiskImageReference",
+				"osac.private.v1.InstanceTypeReference",
+				"osac.private.v1.SecretLocalReference",
+			} {
+				v.Register(referenceType, func(ctx context.Context, tenant, project, id, name string) (*ResolvedRef, error) {
+					lookedUpNames = append(lookedUpNames, name)
+					if name == "running-type" {
+						Expect(tenant).To(Equal("tenant-a"))
+						Expect(project).To(Equal("catalog"))
+						return &ResolvedRef{ID: "running-type-id", Name: name}, nil
+					}
+					return nil, &errRefNotFound{identifier: name}
+				})
+			}
+		}
+
+		BeforeEach(func() {
+			var err error
+			validator, err = NewReferenceValidator().SetLogger(logger).Build()
+			Expect(err).ToNot(HaveOccurred())
+			lookedUpNames = nil
+			registerLookups(validator)
+			request = privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Id:       "instance-1",
+					Metadata: privatev1.Metadata_builder{Tenant: "tenant-a", Project: "project-a"}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						DiskImage:    privatev1.DiskImageReference_builder{Name: "removed-image"}.Build(),
+						InstanceType: privatev1.InstanceTypeReference_builder{Name: "removed-type"}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{
+							Secret: privatev1.SecretLocalReference_builder{Name: "removed-secret"}.Build(),
+						}.Build(),
+					}.Build(),
+					Status: privatev1.ComputeInstanceStatus_builder{
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING,
+						InstanceType: privatev1.InstanceTypeReference_builder{
+							Name: "running-type", Project: "catalog",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status"}},
+			}.Build()
+			info = &grpc.UnaryServerInfo{FullMethod: privatev1.ComputeInstances_Update_FullMethodName}
+			handlerCalled = false
+			handler = func(ctx context.Context, received any) (any, error) {
+				handlerCalled = true
+				Expect(received).To(BeIdenticalTo(request))
+				return "accepted", nil
+			}
+		})
+
+		DescribeTable("accepts stale spec references and resolves status references",
+			func(paths []string, deleting bool) {
+				request.SetUpdateMask(&fieldmaskpb.FieldMask{Paths: paths})
+				if deleting {
+					request.GetObject().GetMetadata().SetDeletionTimestamp(timestamppb.Now())
+				}
+				response, err := validator.UnaryServer(context.Background(), request, info, handler)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).To(Equal("accepted"))
+				Expect(handlerCalled).To(BeTrue())
+				Expect(lookedUpNames).To(ConsistOf("running-type"))
+				Expect(request.GetObject().GetStatus().GetInstanceType().GetId()).To(Equal("running-type-id"))
+				Expect(request.GetObject().GetSpec().GetDiskImage().GetId()).To(BeEmpty())
+			},
+			Entry("whole status", []string{"status"}, false),
+			Entry("one status field", []string{"status.state"}, false),
+			Entry("multiple status fields during deletion", []string{"status.state", "status.instance_type"}, true),
+		)
+
+		It("rejects missing status references with their full field path", func() {
+			request.GetObject().GetStatus().GetInstanceType().SetName("removed-status-type")
+			_, err := validator.UnaryServer(context.Background(), request, info, handler)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring("object.status.instance_type")))
+			Expect(err).ToNot(MatchError(ContainSubstring("object.spec")))
+			Expect(handlerCalled).To(BeFalse())
+		})
+
+		It("rejects malformed status masks before looking up references", func() {
+			request.SetUpdateMask(&fieldmaskpb.FieldMask{Paths: []string{"status..state"}})
+			_, err := validator.UnaryServer(context.Background(), request, info, handler)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(lookedUpNames).To(BeEmpty())
+			Expect(handlerCalled).To(BeFalse())
+		})
+
+		DescribeTable("keeps spec validation for other masks, even during deletion",
+			func(mask *fieldmaskpb.FieldMask) {
+				request.SetUpdateMask(mask)
+				request.GetObject().GetMetadata().SetDeletionTimestamp(timestamppb.Now())
+				_, err := validator.UnaryServer(context.Background(), request, info, handler)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err).To(MatchError(ContainSubstring("object.spec.disk_image")))
+				Expect(err).To(MatchError(ContainSubstring("object.spec.instance_type")))
+				Expect(err).To(MatchError(ContainSubstring("object.spec.user_data_source.secret")))
+				Expect(handlerCalled).To(BeFalse())
+			},
+			Entry("absent mask", (*fieldmaskpb.FieldMask)(nil)),
+			Entry("empty mask", &fieldmaskpb.FieldMask{}),
+			Entry("spec only", &fieldmaskpb.FieldMask{Paths: []string{"spec"}}),
+			Entry("status and spec", &fieldmaskpb.FieldMask{Paths: []string{"status", "spec"}}),
+			Entry("status and metadata", &fieldmaskpb.FieldMask{Paths: []string{"status", "metadata"}}),
+		)
+
+		It("preserves configured exclusions without leaking the status-only exclusion", func() {
+			configured, err := NewReferenceValidator().SetLogger(logger).
+				SetExcludedReferencePaths([]string{info.FullMethod}, "object.status.instance_type").Build()
+			Expect(err).ToNot(HaveOccurred())
+			registerLookups(configured)
+			request.GetObject().GetStatus().GetInstanceType().SetName("removed-status-type")
+			_, err = configured.UnaryServer(context.Background(), request, info, handler)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(handlerCalled).To(BeTrue())
+			Expect(lookedUpNames).To(BeEmpty())
+
+			handlerCalled = false
+			request.SetUpdateMask(&fieldmaskpb.FieldMask{Paths: []string{"spec"}})
+			_, err = configured.UnaryServer(context.Background(), request, info, handler)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring("object.spec.disk_image")))
+			Expect(err).ToNot(MatchError(ContainSubstring("object.status")))
+			Expect(handlerCalled).To(BeFalse())
+		})
+	})
+
+	It("skips spec references and resolves local status references for cluster status-only updates", func() {
+		var err error
+		validator, err = NewReferenceValidator().SetLogger(logger).Build()
+		Expect(err).ToNot(HaveOccurred())
+		var lookedUpNames []string
+		validator.Register("osac.private.v1.SecretLocalReference", func(ctx context.Context, tenant, project, id, name string) (*ResolvedRef, error) {
+			lookedUpNames = append(lookedUpNames, name)
+			Expect(tenant).To(Equal("tenant-a"))
+			Expect(project).To(Equal("project-a"))
+			if name == "kubeconfig" {
+				return &ResolvedRef{ID: "kubeconfig-id", Name: name}, nil
+			}
+			return nil, &errRefNotFound{identifier: name}
+		})
+		request := privatev1.ClustersUpdateRequest_builder{
+			Object: privatev1.Cluster_builder{
+				Id:       "cluster-1",
+				Metadata: privatev1.Metadata_builder{Tenant: "tenant-a", Project: "project-a"}.Build(),
+				Spec: privatev1.ClusterSpec_builder{
+					PullSecretSecret: privatev1.SecretLocalReference_builder{Name: "removed-pull-secret"}.Build(),
+				}.Build(),
+				Status: privatev1.ClusterStatus_builder{
+					KubeconfigSecret: privatev1.SecretLocalReference_builder{Name: "kubeconfig"}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.kubeconfig_secret"}},
+		}.Build()
+		handlerCalled := false
+		handler := func(ctx context.Context, received any) (any, error) {
+			handlerCalled = true
+			Expect(received).To(BeIdenticalTo(request))
+			return "accepted", nil
+		}
+		info := &grpc.UnaryServerInfo{FullMethod: privatev1.Clusters_Update_FullMethodName}
+		response, err := validator.UnaryServer(context.Background(), request, info, handler)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response).To(Equal("accepted"))
+		Expect(handlerCalled).To(BeTrue())
+		Expect(lookedUpNames).To(ConsistOf("kubeconfig"))
+		Expect(request.GetObject().GetStatus().GetKubeconfigSecret().GetId()).To(Equal("kubeconfig-id"))
+		Expect(request.GetObject().GetSpec().GetPullSecretSecret().GetId()).To(BeEmpty())
+	})
+
 	Describe("Method filtering", func() {
 		BeforeEach(func() {
 			var err error

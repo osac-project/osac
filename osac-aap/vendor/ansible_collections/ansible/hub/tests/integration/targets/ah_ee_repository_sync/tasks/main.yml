@@ -1,5 +1,6 @@
 ---
-- name: ah_ee_repository_sync integration tests
+# Test with Basic Authentication
+- name: ah_ee_repository_sync integration tests with basic auth
   module_defaults:
     group/ansible.hub.hub:
       ah_host: "{{ ah_host }}"
@@ -11,58 +12,58 @@
       set_fact:
         test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
       when: test_id is not defined
-
-    - name: Define variables
+    - name: Define variables (basic auth)
       set_fact:
-        registry_name: "ee_{{ test_id }}"
-        ee_repo_name: "ee_repo_{{ test_id }}"
+        registry_name_basic: "ee_basic_{{ test_id }}"
+        ee_repo_name_basic: "ee_repo_basic_{{ test_id }}"
 
-    - name: Create EE remote registry
+    - name: Create EE remote registry (basic auth)
       ansible.hub.ah_ee_registry:
-        name: "{{ registry_name }}"
+        name: "{{ registry_name_basic }}"
         url: https://quay.io/my/registry
         state: present
-      register: r
+      register: r_basic_registry
 
-    - name: Check if the remote registry EE is created
+    - name: Check if the remote registry EE is created (basic auth)
       assert:
         that:
-          - r.changed
+          - r_basic_registry.changed
 
-    - name: Add a remote repository from registry
+    - name: Add a remote repository from registry (basic auth)
       ansible.hub.ah_ee_repository:
-        name: "{{ ee_repo_name }}"
-        upstream_name: "upstream_{{ ee_repo_name }}"
-        registry: "{{ registry_name }}"
+        name: "{{ ee_repo_name_basic }}"
+        upstream_name: "upstream_{{ ee_repo_name_basic }}"
+        registry: "{{ registry_name_basic }}"
         include_tags:
           - latest
         state: present
-      register: r
+      register: r_basic_repo
 
-    - name: Check if the remote registry EE is created
+    - name: Check if the remote repository EE is created (basic auth)
       assert:
         that:
-          - r.changed
+          - r_basic_repo.changed
 
-    - name: Sync a remote repository
+    - name: Sync a remote repository (basic auth)
       ansible.hub.ah_ee_repository_sync:
-        name: "{{ ee_repo_name }}"
+        name: "{{ ee_repo_name_basic }}"
         wait: false
-      register: r
+      register: r_basic
 
-    - name: Check if the remote registry EE is sync
+    - name: Check if the remote repository EE is synced (basic auth)
       assert:
         that:
-          - r.changed
+          - r_basic.changed
+
   always:
-    - name: Remove a remote repository
+    - name: Remove a remote repository (basic auth)
       ansible.hub.ah_ee_repository:
-        name: "{{ ee_repo_name }}"
+        name: "{{ ee_repo_name_basic | default('') }}"
         state: absent
       ignore_errors: true
 
-    - name: Remove EE remote registry
+    - name: Remove EE remote registry (basic auth)
       ansible.hub.ah_ee_registry:
-        name: "{{ registry_name }}"
+        name: "{{ registry_name_basic | default('') }}"
         state: absent
       ignore_errors: true

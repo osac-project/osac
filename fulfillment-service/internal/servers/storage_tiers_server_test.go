@@ -177,12 +177,17 @@ var _ = Describe("Storage tiers server", func() {
 			}.Build()
 		}
 
-		// createTier creates a StorageTier via the private server (which enforces exactly one backend
-		// association) so tests exercise the public server's delegation and tier-level projection.
-		createTier := func(name string, backend *privatev1.BackendAssociation) *privatev1.StorageTier {
+		// createTierWithMetadata creates a StorageTier via the private server so tests exercise the
+		// public server's delegation and tier-level projection.
+		createTierWithMetadata := func(name string, backend *privatev1.BackendAssociation,
+			labels, annotations map[string]string) *privatev1.StorageTier {
 			response, err := privateServer.Create(ctx, privatev1.StorageTiersCreateRequest_builder{
 				Object: privatev1.StorageTier_builder{
-					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+					Metadata: privatev1.Metadata_builder{
+						Name:        name,
+						Labels:      labels,
+						Annotations: annotations,
+					}.Build(),
 					Spec: privatev1.StorageTierSpec_builder{
 						Description: "A test storage tier",
 						Protocol:    privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
@@ -192,6 +197,11 @@ var _ = Describe("Storage tiers server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			return response.GetObject()
+		}
+
+		// createTier creates a StorageTier with default metadata.
+		createTier := func(name string, backend *privatev1.BackendAssociation) *privatev1.StorageTier {
+			return createTierWithMetadata(name, backend, nil, nil)
 		}
 
 		// createMalformedTier bypasses the private server's Create validation to insert a StorageTier
@@ -295,6 +305,29 @@ var _ = Describe("Storage tiers server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetItems()).To(HaveLen(1))
 			Expect(response.GetItems()[0].GetId()).To(Equal(created.GetId()))
+		})
+
+		It("List filters whole metadata maps using the public view, including counts", func() {
+			createTierWithMetadata("public-map-filter-tier", defaultBackend(), map[string]string{
+				"ordinary":                        "visible",
+				"admin.osac.openshift.io/managed": "system",
+			}, map[string]string{"ordinary": "visible"})
+
+			filter := "this.metadata.labels == this.metadata.annotations"
+			response, err := publicServer.List(ctx, publicv1.StorageTiersListRequest_builder{
+				Filter: new(filter),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetTotal()).To(Equal(int32(1)))
+			Expect(response.GetItems()).To(HaveLen(1))
+
+			countOnly, err := publicServer.List(ctx, publicv1.StorageTiersListRequest_builder{
+				Filter: new(filter),
+				Limit:  new(int32(0)),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(countOnly.GetTotal()).To(Equal(int32(1)))
+			Expect(countOnly.GetItems()).To(BeEmpty())
 		})
 
 		It("List rejects a filter referencing a field that doesn't exist in the public schema at all", func() {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the BMF NetBox and umbrella Helm render contracts."""
+"""Check the BMF NetBox, osac-infra, and umbrella Helm render contracts."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ INSTALLER_DIR = SCRIPT_DIR.parent
 REPO_ROOT = INSTALLER_DIR.parent
 BMF_CHART = REPO_ROOT / "bare-metal-fulfillment-operator/charts/operator"
 OSAC_CHART = INSTALLER_DIR / "charts/osac"
+INFRA_CHART = INSTALLER_DIR / "charts/osac-infra"
 
 BMF_NETBOX_VALUES = """\
 secrets:
@@ -148,6 +149,75 @@ def command_script(resource_doc: dict[str, Any], container_name: str) -> str:
 
 def bmf_render(*args: str) -> list[dict[str, Any]]:
     return render("bmf", BMF_CHART, "--namespace", "osac", *args)
+
+
+def infra_render(*values: str) -> list[dict[str, Any]]:
+    return render(
+        "osac-infra",
+        INFRA_CHART,
+        "--namespace",
+        "osac-infra",
+        "--set",
+        "osacNamespace=osac",
+        *[flag for value in values for flag in ("--values", value)],
+    )
+
+
+def check_infra_netbox_shared_postgres() -> None:
+    """NetBox must use the shared bundled PostgreSQL, not its own database."""
+    docs = infra_render("values/bmaas-ci/infra.yaml", "values/bmaas-netbox-ci/infra.yaml")
+
+    cert = resource(docs, "Certificate", "postgres-client-netbox")
+    assert cert["spec"]["commonName"] == "netbox"
+    assert cert["spec"]["usages"] == ["client auth"]
+    assert cert["spec"]["secretName"] == "postgres-client-cert-netbox"
+
+    init = resource(docs, "Secret", "postgres-init")["stringData"]["init.sh"]
+    assert "create user netbox;" in init
+    assert "create database netbox owner netbox;" in init
+
+    # The subchart's Bitnami PostgreSQL stays undeployed; the shared one remains.
+    assert_resource_absent(docs, "StatefulSet", "osac-infra-postgresql")
+    assert_resource_absent(docs, "Secret", "osac-infra-postgresql")
+    resource(docs, "Deployment", "postgres")
+    resource(docs, "Service", "postgres")
+
+    config = yaml.safe_load(resource(docs, "ConfigMap", "osac-infra-netbox")["data"]["netbox.yaml"])
+    database = config["DATABASES"]["default"]
+    assert database["HOST"] == "postgres"
+    assert database["PORT"] == 5432
+    assert database["USER"] == "netbox"
+    assert database["NAME"] == "netbox"
+    options = database["OPTIONS"]
+    assert options["sslmode"] == "verify-full"
+    assert options["sslcert"] == "/secrets/database-client/tls.crt"
+    assert options["sslkey"] == "/secrets/database-client/tls.key"
+    assert options["sslrootcert"] == "/secrets/database-client/ca.crt"
+
+    db_password = resource(docs, "Secret", "osac-infra-netbox-postgresql")["data"]["db_password"]
+    assert db_password == ""
+
+    for name in ("osac-infra-netbox", "osac-infra-netbox-worker"):
+        spec = resource(docs, "Deployment", name)["spec"]["template"]["spec"]
+        volume = next(v for v in spec["volumes"] if v["name"] == "database-client-cert")
+        assert volume["secret"]["secretName"] == "postgres-client-cert-netbox"
+        assert volume["secret"]["defaultMode"] == 0o440
+        mount = next(m for m in spec["containers"][0]["volumeMounts"] if m["name"] == "database-client-cert")
+        assert mount["mountPath"] == "/secrets/database-client"
+        assert mount["readOnly"] is True
+
+    # The Valkey cache never talks to PostgreSQL and must not carry its credentials.
+    for doc in docs:
+        if doc.get("kind") in ("StatefulSet", "Deployment") and "valkey" in doc["metadata"]["name"]:
+            assert "postgres-client-cert-netbox" not in str(doc), doc["metadata"]["name"]
+
+
+def check_infra_netbox_disabled() -> None:
+    """Without the NetBox overlay the shared PostgreSQL gains no NetBox artifacts."""
+    docs = infra_render("values/bmaas-ci/infra.yaml")
+    assert_resource_absent(docs, "Certificate", "postgres-client-netbox")
+    init = resource(docs, "Secret", "postgres-init")["stringData"]["init.sh"]
+    assert "netbox" not in init
 
 
 def check_bmf_netbox(docs: list[dict[str, Any]]) -> None:
@@ -578,6 +648,8 @@ def main() -> None:
         check_bmf_metal3()
         check_bmf_bcm()
         check_bmf_invalid_values(netbox_values)
+        check_infra_netbox_shared_postgres()
+        check_infra_netbox_disabled()
         osac_docs, _ = check_osac_wiring(temp_dir)
         check_validation_scripts(osac_docs, temp_dir)
 

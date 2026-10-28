@@ -870,59 +870,22 @@ func (s *PrivateComputeInstancesServer) validateSshPublicKey(
 		return grpcstatus.Error(grpccodes.InvalidArgument, "cannot resolve ssh key reference without instance metadata")
 	}
 
-	secret, err := resolveResourceInScope(
+	resolved, err := resolveTenantScopedSSHKey(
 		ctx,
+		s.logger,
 		s.secretsDao,
-		referenceScope{tenant: metadata.GetTenant()},
-		ref.GetId(),
-		ref.GetName(),
-		"secret",
-		"",
-		grpccodes.NotFound,
+		s.secretStore,
+		metadata.GetTenant(),
+		ref,
+		"ssh_key",
 	)
 	if err != nil {
+		if grpcstatus.Code(err) == grpccodes.NotFound {
+			return grpcstatus.Error(grpccodes.NotFound, sshKeyReferenceNotFoundMessage)
+		}
 		return err
 	}
-
-	if secret.GetType() != privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY {
-		return grpcstatus.Errorf(
-			grpccodes.InvalidArgument,
-			"secret '%s' referenced by ssh_key has type %s; expected %s",
-			refKey(ref),
-			secret.GetType(),
-			privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
-		)
-	}
-	data := secret.GetData()
-	if len(data) == 0 && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
-		if s.secretStore == nil {
-			s.logger.ErrorContext(ctx, "Failed to load SSH key Secret: secret store isn't configured")
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to resolve ssh key reference")
-		}
-		secretMetadata := secret.GetMetadata()
-		data, err = s.secretStore.Fetch(
-			ctx,
-			secretMetadata.GetTenant(),
-			secretMetadata.GetProject(),
-			secretMetadata.GetName(),
-		)
-		if err != nil {
-			s.logger.ErrorContext(ctx, "Failed to load SSH key Secret from store", "error", err)
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to resolve ssh key reference")
-		}
-	}
-	if len(data["public_key"]) == 0 {
-		return grpcstatus.Errorf(
-			grpccodes.InvalidArgument,
-			"secret '%s' referenced by ssh_key must contain a non-empty 'public_key' entry",
-			refKey(ref),
-		)
-	}
-
-	spec.SetSshKey(privatev1.SecretLocalReference_builder{
-		Id:   secret.GetId(),
-		Name: secret.GetMetadata().GetName(),
-	}.Build())
+	spec.SetSshKey(resolved.reference)
 
 	if diskImage != nil && diskImage.GetSpec().GetGuestOsFamily() == privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "SSH key injection is not supported for Windows instances")
@@ -1005,15 +968,12 @@ func validateComputeTemplateImmutability(
 	if updatingSshKey {
 		existingKey := existingSpec.GetSshKey()
 		newKey := newSpec.GetSshKey()
-		if !sameSecretReference(existingKey, newKey) {
+		if !sameImmutableSSHKeyReference(existingKey, newKey) {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"cannot change spec.ssh_key: ssh_key is immutable after creation")
 		}
 		if existingKey != nil {
-			newSpec.SetSshKey(privatev1.SecretLocalReference_builder{
-				Id:   existingKey.GetId(),
-				Name: existingKey.GetName(),
-			}.Build())
+			newSpec.SetSshKey(proto.Clone(existingKey).(*privatev1.SecretReference))
 		}
 	}
 
@@ -1030,6 +990,25 @@ func validateComputeTemplateImmutability(
 	}
 
 	return nil
+}
+
+func sameImmutableSSHKeyReference(
+	existing, candidate *privatev1.SecretReference,
+) bool {
+	if proto.Equal(existing, candidate) {
+		return true
+	}
+	if existing == nil || candidate == nil || candidate.GetShared() {
+		return false
+	}
+	if existing.GetProject() != candidate.GetProject() {
+		return false
+	}
+	if candidate.GetId() != "" {
+		return existing.GetId() == candidate.GetId() &&
+			(candidate.GetName() == "" || existing.GetName() == candidate.GetName())
+	}
+	return candidate.GetName() != "" && existing.GetName() == candidate.GetName()
 }
 
 // validateComputeNetworkAttachmentsImmutability rejects changes to the complete

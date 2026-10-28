@@ -5,6 +5,26 @@
 
 tenant_name: 'tenant1'
 
+catalog:
+  name: 'catalog-item-e2e'
+  template: 'osac.templates.ocp_virt_vm'
+  title: 'CLI catalog item'
+  description: 'CLI-created catalog item for E2E testing.'
+  type: 'Virtual Machine'
+  status: 'Live'
+  usage: 'Global public'
+  fields:
+    instance_type:
+      name: 'u1-medium'
+      shared: true
+      vcpus: 4
+      memory_gib: 8
+    boot_disk:
+      size_gib: 80
+    disk_image:
+      name: 'fedora'
+      shared: true
+
 instance_type:
   name: 'instance-type-e2e'
   description: 'Instance type created by e2e test'
@@ -14,7 +34,24 @@ instance_type:
     count: 1
     resource_name: 'nvidia.com/A100'
     pci_device_selector: '10DE:20B0'
-  lifecycle_actions:
-    - 'Deprecate'
-    - 'Obsolete'
-    - 'Reactivate'
+
+disk_image:
+  # Playwright appends a per-run suffix so teardown only targets this run's image.
+  name: 'disk-image-e2e'
+  source_type: 'Registry'
+  source_ref: 'quay.io/containerdisks/fedora:41'
+  guest_os_family: 'Linux'
+  architectures:
+    - 'amd64'
+  scope: 'Global'
+
+storage_tier:
+  name: 'storage-tier-e2e'
+  description: 'Storage tier created by e2e test'
+  backend: 'local'
+  protocol: 'Block'
+
+lifecycle_actions:
+  - 'Deprecate'
+  - 'Obsolete'
+  - 'Reactivate'

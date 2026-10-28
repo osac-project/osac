@@ -339,6 +339,69 @@ var _ = Describe("VolumeFeedbackController", func() {
 			Expect(mockServer.updates[0].GetStatus().GetMessage()).To(Equal("volume provisioning failed"))
 		})
 
+		It("should report DELETING dated at the deletion timestamp for a volume deleted before any status write", func() {
+			mockServer.addVolume(newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_AVAILABLE))
+
+			cr := newVolumeFeedbackCR(volName, volNamespace, volID, "",
+				[]string{osacVolumeFeedbackFinalizer, osacVolumeFinalizer})
+			Expect(fakeK8s.Create(ctx, cr)).To(Succeed())
+			Expect(fakeK8s.Delete(ctx, cr)).To(Succeed())
+
+			deleted := &v1alpha1.Volume{}
+			Expect(fakeK8s.Get(ctx, types.NamespacedName{Name: volName, Namespace: volNamespace}, deleted)).To(Succeed())
+			Expect(deleted.GetDeletionTimestamp()).NotTo(BeNil())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: volName, Namespace: volNamespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_DELETING))
+			Expect(mockServer.updates[0].GetStatus().GetStateTransitionTime().AsTime().Equal(deleted.GetDeletionTimestamp().Time)).To(BeTrue())
+		})
+
+		It("should report DELETING without a stored remote time for a volume deleted before any status write", func() {
+			remote := newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_CREATING)
+			remote.GetStatus().StateTransitionTime = nil
+			mockServer.addVolume(remote)
+
+			cr := newVolumeFeedbackCR(volName, volNamespace, volID, "",
+				[]string{osacVolumeFeedbackFinalizer, osacVolumeFinalizer})
+			Expect(fakeK8s.Create(ctx, cr)).To(Succeed())
+			Expect(fakeK8s.Delete(ctx, cr)).To(Succeed())
+
+			deleted := &v1alpha1.Volume{}
+			Expect(fakeK8s.Get(ctx, types.NamespacedName{Name: volName, Namespace: volNamespace}, deleted)).To(Succeed())
+			Expect(deleted.GetDeletionTimestamp()).NotTo(BeNil())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: volName, Namespace: volNamespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_DELETING))
+			Expect(mockServer.updates[0].GetStatus().GetStateTransitionTime().AsTime().Equal(deleted.GetDeletionTimestamp().Time)).To(BeTrue())
+		})
+
+		It("should report DELETING for a phase the resource controller has not moved to Deleting yet", func() {
+			mockServer.addVolume(newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_AVAILABLE))
+
+			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseReady,
+				[]string{osacVolumeFeedbackFinalizer, osacVolumeFinalizer})
+			Expect(fakeK8s.Create(ctx, cr)).To(Succeed())
+			Expect(fakeK8s.Delete(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: volName, Namespace: volNamespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_DELETING))
+		})
+
 		It("should remove finalizer and signal when feedback finalizer is the last one", func() {
 			mockServer.addVolume(newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_AVAILABLE))
 
@@ -503,6 +566,71 @@ var _ = Describe("syncVolumeStateTransitionTime", func() {
 		remote.GetStatus().StateTransitionTime = nil
 
 		Expect(syncVolumeStateTransitionTime(&v1alpha1.Volume{}, remote)).To(MatchError(ContainSubstring("no state transition time")))
+	})
+})
+
+var _ = Describe("syncVolumeDelete", func() {
+	It("dates a failed volume's report at the CR's recorded transition time", func() {
+		remote := newRemoteVolume("vol-del-failed", privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
+		recorded := metav1.NewTime(time.Unix(1000, 0))
+		deletedAt := metav1.NewTime(time.Unix(2000, 0))
+		cr := &v1alpha1.Volume{
+			ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &deletedAt},
+			Status:     v1alpha1.VolumeStatus{Phase: v1alpha1.VolumePhaseFailed, StateTransitionTime: &recorded},
+		}
+
+		Expect(syncVolumeDelete(context.Background(), cr, remote)).To(Succeed())
+
+		Expect(remote.GetStatus().GetStateTransitionTime().AsTime().Equal(recorded.Time)).To(BeTrue())
+	})
+
+	It("dates the forced DELETING of a pre-deletion phase at the deletion timestamp", func() {
+		// The recorded time dates the Ready phase, not the deletion: reporting
+		// DELETING at it would end billing at the Ready time and erase the span
+		// up to the deletion.
+		remote := newRemoteVolume("vol-del-ready", privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
+		recorded := metav1.NewTime(time.Unix(1000, 0))
+		deletedAt := metav1.NewTime(time.Unix(2000, 0))
+		cr := &v1alpha1.Volume{
+			ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &deletedAt},
+			Status:     v1alpha1.VolumeStatus{Phase: v1alpha1.VolumePhaseReady, StateTransitionTime: &recorded},
+		}
+
+		Expect(syncVolumeDelete(context.Background(), cr, remote)).To(Succeed())
+
+		Expect(remote.GetStatus().GetStateTransitionTime().AsTime().Equal(deletedAt.Time)).To(BeTrue())
+	})
+
+	It("dates the change at the deletion timestamp when the CR status carries no time", func() {
+		remote := newRemoteVolume("vol-del-fallback", privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
+		deletedAt := metav1.NewTime(time.Unix(2000, 0))
+		cr := &v1alpha1.Volume{
+			ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &deletedAt},
+			Status:     v1alpha1.VolumeStatus{Phase: v1alpha1.VolumePhaseReady},
+		}
+
+		Expect(syncVolumeDelete(context.Background(), cr, remote)).To(Succeed())
+
+		Expect(remote.GetStatus().GetStateTransitionTime().AsTime().Equal(deletedAt.Time)).To(BeTrue())
+	})
+
+	It("keeps the remote's stored time when neither the CR nor its deletion carries one", func() {
+		remote := newRemoteVolume("vol-del-remote", privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
+		original := timestamppb.Now()
+		remote.GetStatus().SetStateTransitionTime(original)
+
+		Expect(syncVolumeDelete(context.Background(), &v1alpha1.Volume{}, remote)).To(Succeed())
+
+		Expect(proto.Equal(remote.GetStatus().GetStateTransitionTime(), original)).To(BeTrue())
+	})
+
+	It("rejects a volume with no time anywhere", func() {
+		remote := newRemoteVolume("vol-del-none", privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
+		remote.GetStatus().StateTransitionTime = nil
+
+		Expect(syncVolumeDelete(context.Background(), &v1alpha1.Volume{}, remote)).To(
+			MatchError(ContainSubstring("no state transition time")),
+		)
 	})
 })
 

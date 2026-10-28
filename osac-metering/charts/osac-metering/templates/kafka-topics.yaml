@@ -1,27 +1,48 @@
+{{- /*
+The shared MaaS inference topic and its dead-letter topic. The metering
+design keeps MaaS metered separately from the per-tenant heartbeat
+pipeline: inference usage events land on this one shared topic and the
+provider adapters read it alongside every tenant's heartbeat topic.
+Records the provider rejects land on the inference dead-letter topic;
+like the per-tenant dead-letter topics, it is never consumed back. The
+per-tenant event topics are created by fulfillment's event publisher, and
+the per-tenant heartbeat and dead-letter topics by metering itself, not
+here.
+*/}}
 {{- $ns := include "osac-metering.kafkaClusterNamespace" . -}}
 {{- $cluster := include "osac-metering.kafkaClusterName" . -}}
-{{- $replicas := include "osac-metering.kafkaReplicas" . | int -}}
-{{- $minIsr := min $replicas 2 -}}
-{{- range list
-  (dict "name" "osac.metering.lifecycle"    "partitions" 3 "retentionDays" 30)
-  (dict "name" "osac.metering.heartbeat"    "partitions" 3 "retentionDays" 30)
-  (dict "name" "osac.metering.inference"    "partitions" 3 "retentionDays" 30)
-  (dict "name" "osac.metering.corrections"  "partitions" 3 "retentionDays" 30)
-  (dict "name" "osac.metering.dlq"          "partitions" 6 "retentionDays" 90)
-}}
+{{- /*
+Single replica on every cluster size, per the metering design.
+min.insync.replicas must be stated explicitly, because a multi-broker
+cluster's broker-level default of 2 would leave a single-replica topic
+unwritable with acks=all.
+*/}}
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
-  name: {{ .name }}
+  name: osac.metering.inference
   namespace: {{ $ns }}
   labels:
     strimzi.io/cluster: {{ $cluster }}
 spec:
-  partitions: {{ .partitions }}
-  replicas: {{ $replicas }}
+  partitions: 3
+  replicas: 1
   config:
-    retention.ms: "{{ mul .retentionDays 86400000 }}"
-    min.insync.replicas: "{{ $minIsr }}"
+    retention.ms: "{{ mul 30 86400000 }}"
+    min.insync.replicas: "1"
     cleanup.policy: delete
 ---
-{{- end }}
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: osac.metering.inference.dlq
+  namespace: {{ $ns }}
+  labels:
+    strimzi.io/cluster: {{ $cluster }}
+spec:
+  partitions: 3
+  replicas: 1
+  config:
+    retention.ms: "{{ mul 30 86400000 }}"
+    min.insync.replicas: "1"
+    cleanup.policy: delete

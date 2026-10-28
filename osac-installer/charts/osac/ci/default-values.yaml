@@ -1,6 +1,9 @@
 # Default scenario: validates that the chart renders with minimal overrides.
 # Only sets values that subcharts mark as required.
 
+global:
+  osacDeploymentId: "ci/osac"
+
 ui:
   enabled: true
   api:

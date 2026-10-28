@@ -1,11 +1,23 @@
 # BMaaS-NetBox CI overlay — applied on top of bmaas-ci/instance.yaml.
 # Contains only the values that differ from the bmaas-ci base profile.
 #
-# Disables Metal3. The operator's NetBox inventory wiring (bmf.netbox)
-# lands with OSAC-6198 (T3), which adds the schema and template support;
-# until then this overlay only turns Metal3 off. See README.md for the
-# inventory.yaml shape the operator will consume once T3 lands.
+# Disables the Metal3 inventory backend and points the bare-metal-
+# fulfillment-operator at the NetBox instance deployed by osac-infra
+# (bmaas-netbox-ci/infra.yaml). NetBox supplies hardware inventory while
+# Metal3 still handles BareMetalHost lifecycle, so BMHs and their BMC
+# Secrets continue to live in host-inventory.
 
 bmf:
   metal3:
     enabled: false
+  netbox:
+    enabled: true
+    bmhNamespace: host-inventory
+    url: http://osac-infra-netbox.osac-infra.svc.cluster.local
+    # NetBox is served over plain HTTP inside the cluster.
+    allowInsecureHTTP: true
+  secrets:
+    # osac-infra's netbox-token-seed hook writes the API token into the
+    # osac namespace as netbox-api-token; the chart default
+    # (osac-netbox-token) is not what this profile seeds.
+    netboxToken: netbox-api-token

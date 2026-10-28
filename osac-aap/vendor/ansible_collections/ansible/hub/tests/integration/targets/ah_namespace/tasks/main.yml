@@ -1,5 +1,5 @@
 ---
-- name: ah_namespace integration tests
+- name: ah_namespace integration tests with basic auth
   module_defaults:
     group/ansible.hub.hub:
       ah_host: "{{ ah_host }}"
@@ -11,43 +11,42 @@
       set_fact:
         test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
       when: test_id is not defined
-
-    - name: Define variables for credential and project
+    - name: Define variables for credential and project (basic auth)
       set_fact:
-        namespace: "my_namespace_{{ test_id }}"
-        company: "my_company_{{ test_id }}"
+        namespace_basic: "my_namespace_basic_{{ test_id }}"
+        company_basic: "my_company_basic_{{ test_id }}"
 
-    - name: Create namespace
+    - name: Create namespace (basic auth)
       ansible.hub.ah_namespace:
-        name: "{{ namespace }}"
-        company: "{{ company }}"
+        name: "{{ namespace_basic }}"
+        company: "{{ company_basic }}"
         email: "{{ test_id }}@example.com"
         avatar_url: https://pnt.redhat.com/pnt/d-11633955/LogoRedHatHatColorRGB.png
         description: This is the Redhat Namespace
         links:
           - name: "homepage"
             url: "https://www.redhat.com"
-      register: r
+      register: r_basic
 
-    - name: Check if the namespace is created
+    - name: Check if the namespace is created (basic auth)
       assert:
         that:
-          - r.changed
+          - r_basic.changed
 
-    - name: Delete namespace
+    - name: Delete namespace (basic auth)
       ansible.hub.ah_namespace:
-        name: "{{ namespace }}"
+        name: "{{ namespace_basic }}"
         state: absent
-      register: r
+      register: r_basic_delete
 
-    - name: Check if the namespace is deleted
+    - name: Check if the namespace is deleted (basic auth)
       assert:
         that:
-          - r.changed
+          - r_basic_delete.changed
 
   always:
-    - name: Delete namespace
+    - name: Delete namespace (basic auth)
       ansible.hub.ah_namespace:
-        name: "{{ namespace }}"
+        name: "{{ namespace_basic | default('') }}"
         state: absent
       ignore_errors: true

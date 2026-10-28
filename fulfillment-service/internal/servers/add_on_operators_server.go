@@ -101,7 +101,7 @@ func (b *AddOnOperatorsServerBuilder) Build() (result *AddOnOperatorsServer, err
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
-		SetFilterDesc((*privatev1.AddOnOperator)(nil).ProtoReflect().Descriptor()).
+		SetFilterDesc((*publicv1.AddOnOperator)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

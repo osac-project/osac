@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -124,10 +125,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) (runErr error) {
 	}
 
 	object := publicv1.FabricDomain_builder{
-		Metadata: publicv1.Metadata_builder{
-			Name:   c.args.name,
-			Tenant: tenant,
-		}.Build(),
+		Metadata: metautil.ForCreate(ctx, c.args.name).Build(),
 		Spec: publicv1.FabricDomainSpec_builder{
 			Type:           domainType,
 			Servers:        servers,

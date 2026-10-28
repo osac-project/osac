@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -880,6 +882,184 @@ var _ = Describe("Private disk images server", func() {
 			err := validator.Validate(spec)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("architecture"))
+		})
+	})
+	Describe("Architecture updates", func() {
+		var (
+			service *PrivateDiskImagesServer
+			tx      database.Tx
+			image   *privatev1.DiskImage
+		)
+		exec := func(query string, args ...any) {
+			GinkgoHelper()
+			_, err := tx.Exec(ctx, query, args...)
+			Expect(err).NotTo(HaveOccurred())
+		}
+		BeforeEach(func() {
+			var err error
+			tx, err = database.TxFromContext(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			service = &PrivateDiskImagesServer{logger: logger}
+			image = privatev1.DiskImage_builder{Id: "update-image", Spec: privatev1.DiskImageSpec_builder{
+				Architecture: []privatev1.Architecture{privatev1.Architecture_ARCHITECTURE_AMD64, privatev1.Architecture_ARCHITECTURE_ARM64, privatev1.Architecture_ARCHITECTURE_S390X},
+			}.Build()}.Build()
+			exec(`insert into disk_images (id, name, tenant, creator, data)
+				values ('update-image', 'update-image', 'shared', 'system', '{"spec": {
+					"source_type": "SOURCE_TYPE_REGISTRY", "source_ref": "quay.io/example/image:latest",
+					"guest_os_family": "GUEST_OS_FAMILY_LINUX", "lifecycle": "DISK_IMAGE_LIFECYCLE_AVAILABLE",
+					"architecture": ["ARCHITECTURE_AMD64", "ARCHITECTURE_ARM64", "ARCHITECTURE_S390X"]
+				}}')`)
+			exec(`insert into bare_metal_instance_types (id, name, tenant, data)
+				select 'update-type-' || cpu, 'update-type-' || cpu, 'shared',
+					jsonb_build_object('spec', jsonb_build_object('hardware',
+						jsonb_build_object('cpu', jsonb_build_object('architecture', cpu))))
+				from unnest(array['amd64', 'arm64', 's390x']) as cpu`)
+			exec(`insert into bare_metal_instance_templates (id, name, tenant, data)
+				values ('update-template', 'update-template', $1,
+					'{"instance_type":{"id":"update-type-amd64"}}')`, testTenant)
+		})
+		insertInstance := func(cpu, imageID, tenant string) {
+			GinkgoHelper()
+			exec(`insert into bare_metal_instances (id, name, tenant, data)
+				values ('dependent-' || $1, 'dependent-' || $1, $3,
+					jsonb_build_object('spec', jsonb_build_object(
+						'instance_type', jsonb_build_object('id', 'update-type-' || $1),
+						'disk_image', jsonb_build_object('id', $2::text))))`, cpu, imageID, tenant)
+		}
+		insertCatalog := func(typePolicy, cpu string, lockedImage, published bool) {
+			GinkgoHelper()
+			var typeField string
+			switch typePolicy {
+			case "locked":
+				typeField = fmt.Sprintf(`"instance_type":{"locked":{"id":"update-type-%s"}},`, cpu)
+			case "default":
+				typeField = fmt.Sprintf(`"instance_type":{"editable":{"default_value":{"id":"update-type-%s"}}},`, cpu)
+			case "open":
+				typeField = `"instance_type":{"editable":{}},`
+			}
+			imageField := `{"locked":{"id":"update-image"}}`
+			if !lockedImage {
+				imageField = `{"editable":{"default_value":{"id":"update-image"}}}`
+			}
+			fields := fmt.Sprintf(`{%s"disk_image":%s}`, typeField, imageField)
+			exec(`insert into bare_metal_instance_catalog_items (id, name, tenant, data)
+				values ('update-catalog', 'update-catalog', $1, jsonb_build_object(
+					'template', jsonb_build_object('id', 'update-template'), 'fields', $2::jsonb, 'published', $3::boolean))`,
+				testTenant, fields, published)
+		}
+		candidate := func(architectures ...privatev1.Architecture) *privatev1.DiskImage {
+			result := proto.Clone(image).(*privatev1.DiskImage)
+			result.GetSpec().SetArchitecture(architectures)
+			return result
+		}
+
+		Describe("validateArchitectureUpdate", func() {
+			DescribeTable("preserves architectures required by instances", func(cpu string, architectures []privatev1.Architecture, rejected bool) {
+				insertInstance(cpu, image.GetId(), testTenant)
+				err := service.validateArchitectureUpdate(ctx, image, candidate(architectures...))
+				if rejected {
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				} else {
+					Expect(err).NotTo(HaveOccurred())
+				}
+			},
+				Entry("amd64 removal", "amd64", []privatev1.Architecture{privatev1.Architecture_ARCHITECTURE_ARM64}, true),
+				Entry("arm64 removal", "arm64", []privatev1.Architecture{privatev1.Architecture_ARCHITECTURE_AMD64}, true),
+				Entry("s390x removal", "s390x", []privatev1.Architecture{privatev1.Architecture_ARCHITECTURE_AMD64}, true),
+				Entry("unused architectures removed", "amd64", []privatev1.Architecture{privatev1.Architecture_ARCHITECTURE_AMD64}, false),
+				Entry("arm64 retained", "arm64", []privatev1.Architecture{privatev1.Architecture_ARCHITECTURE_ARM64}, false),
+				Entry("s390x retained", "s390x", []privatev1.Architecture{privatev1.Architecture_ARCHITECTURE_S390X}, false),
+				Entry("unchanged", "amd64", []privatev1.Architecture{privatev1.Architecture_ARCHITECTURE_AMD64, privatev1.Architecture_ARCHITECTURE_ARM64, privatev1.Architecture_ARCHITECTURE_S390X}, false),
+				Entry("reordered", "amd64", []privatev1.Architecture{privatev1.Architecture_ARCHITECTURE_S390X, privatev1.Architecture_ARCHITECTURE_ARM64, privatev1.Architecture_ARCHITECTURE_AMD64}, false))
+
+			It("allows adding architectures without a dependency query", func() {
+				current := candidate(privatev1.Architecture_ARCHITECTURE_AMD64)
+				Expect(service.validateArchitectureUpdate(context.Background(), current,
+					candidate(privatev1.Architecture_ARCHITECTURE_AMD64, privatev1.Architecture_ARCHITECTURE_ARM64))).To(Succeed())
+			})
+			It("allows unreferenced images to change architectures", func() {
+				Expect(service.validateArchitectureUpdate(ctx, image, candidate(privatev1.Architecture_ARCHITECTURE_ARM64))).To(Succeed())
+			})
+			DescribeTable("protects concrete catalog combinations", func(typePolicy, cpu string, lockedImage, published, rejected bool) {
+				insertCatalog(typePolicy, cpu, lockedImage, published)
+				err := service.validateArchitectureUpdate(ctx, image, candidate(privatev1.Architecture_ARCHITECTURE_ARM64))
+				if rejected {
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				} else {
+					Expect(err).NotTo(HaveOccurred())
+				}
+			}, Entry("locked type and image", "locked", "amd64", true, true, true),
+				Entry("default type and image", "default", "amd64", false, true, true),
+				Entry("template type and locked image", "template", "", true, true, true),
+				Entry("template type and default image", "template", "", false, true, true),
+				Entry("locked type overrides template", "locked", "arm64", true, true, false),
+				Entry("default type overrides template", "default", "arm64", false, true, false),
+				Entry("unpublished catalog", "locked", "amd64", true, false, true),
+				Entry("open type choice", "open", "", true, true, false))
+
+			It("checks shared-image dependencies across tenants without exposing their identities", func() {
+				exec(`insert into tenants (id, name, tenant, data) values ('hidden-tenant', 'hidden-tenant', 'hidden-tenant', '{}')`)
+				insertInstance("amd64", image.GetId(), "hidden-tenant")
+				err := service.validateArchitectureUpdate(ctx, image, candidate(privatev1.Architecture_ARCHITECTURE_ARM64))
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(grpcstatus.Convert(err).Message()).To(And(HavePrefix("DISK_IMAGE_ARCHITECTURE_IN_USE:"),
+					Not(ContainSubstring("hidden-tenant")), Not(ContainSubstring("dependent-amd64")), Not(ContainSubstring("quay.io"))))
+			})
+			It("matches image IDs rather than names shared by different tenants", func() {
+				exec(`insert into disk_images (id, name, tenant, data) values ('other-image', 'update-image', $1, '{}')`, testTenant)
+				insertInstance("amd64", "other-image", testTenant)
+				Expect(service.validateArchitectureUpdate(ctx, image, candidate(privatev1.Architecture_ARCHITECTURE_ARM64))).To(Succeed())
+			})
+			DescribeTable("ignores deleted dependents", func(catalog bool) {
+				if catalog {
+					insertCatalog("locked", "amd64", true, true)
+					exec(`update bare_metal_instance_catalog_items set deletion_timestamp = now() where id = 'update-catalog'`)
+				} else {
+					insertInstance("amd64", image.GetId(), testTenant)
+					exec(`update bare_metal_instances set deletion_timestamp = now() where id = 'dependent-amd64'`)
+				}
+				Expect(service.validateArchitectureUpdate(ctx, image, candidate(privatev1.Architecture_ARCHITECTURE_ARM64))).To(Succeed())
+			}, Entry("instance", false), Entry("catalog", true))
+			It("allows repairing a previously incompatible catalog combination", func() {
+				insertCatalog("locked", "amd64", true, true)
+				Expect(service.validateArchitectureUpdate(ctx, candidate(privatev1.Architecture_ARCHITECTURE_ARM64),
+					candidate(privatev1.Architecture_ARCHITECTURE_AMD64))).To(Succeed())
+			})
+		})
+
+		Describe("Update architecture validation", func() {
+			BeforeEach(func() {
+				var err error
+				service, err = NewPrivateDiskImagesServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+				Expect(err).NotTo(HaveOccurred())
+				stored, err := service.Get(ctx, privatev1.DiskImagesGetRequest_builder{Id: image.GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				image = stored.GetObject()
+				insertInstance("amd64", image.GetId(), testTenant)
+			})
+			It("saves an update that passes architecture validation", func() {
+				response, err := service.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+					Object:     candidate(privatev1.Architecture_ARCHITECTURE_AMD64),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.architecture"}},
+				}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				stored, err := service.Get(ctx, privatev1.DiskImagesGetRequest_builder{Id: image.GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(stored.GetObject().GetSpec().GetArchitecture()).To(Equal([]privatev1.Architecture{privatev1.Architecture_ARCHITECTURE_AMD64}))
+				Expect(proto.Equal(stored.GetObject(), response.GetObject())).To(BeTrue())
+			})
+			It("rejects a failing validation without changing stored data", func() {
+				proposed := candidate(privatev1.Architecture_ARCHITECTURE_ARM64)
+				proposed.GetSpec().SetLifecycle(privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED)
+				proposed.GetMetadata().SetLabels(map[string]string{"purpose": "rejected"})
+				_, err := service.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+					Object: proposed, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec", "metadata.labels"}},
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				stored, err := service.Get(ctx, privatev1.DiskImagesGetRequest_builder{Id: image.GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(proto.Equal(stored.GetObject(), image)).To(BeTrue(), "the image, metadata, lifecycle timestamps, and version must be unchanged")
+			})
 		})
 	})
 })

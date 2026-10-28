@@ -2,7 +2,7 @@
  "collection_info": {
   "namespace": "kubernetes",
   "name": "core",
-  "version": "5.2.0",
+  "version": "5.5.0",
   "authors": [
    "chouseknecht (https://github.com/chouseknecht)",
    "geerlingguy (https://www.jeffgeerling.com/)",
@@ -36,7 +36,7 @@
   "name": "FILES.json",
   "ftype": "file",
   "chksum_type": "sha256",
-  "chksum_sha256": "c718a61384e7ab2e2374e14151963b50462d231d1381d7e6d962e2effa231c1b",
+  "chksum_sha256": "546df95819d0581a409d621f5871012a92beeef5a9151972bf4c03dc52a89276",
   "format": 1
  },
  "format": 1

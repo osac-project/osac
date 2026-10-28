@@ -60,7 +60,10 @@ func bareMetalInstanceTypeFixture(id string, ports ...*privatev1.BareMetalNetwor
 			Tenant: auth.SharedTenant,
 		}.Build(),
 		Spec: privatev1.BareMetalInstanceTypeSpec_builder{
-			Hardware: privatev1.BareMetalHardwareSpec_builder{NetworkPorts: ports}.Build(),
+			Hardware: privatev1.BareMetalHardwareSpec_builder{
+				Cpu:          privatev1.BareMetalCPUSpec_builder{Cores: 4, ThreadsPerCore: 2, Architecture: "amd64"}.Build(),
+				NetworkPorts: ports,
+			}.Build(),
 			HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 				MatchLabels: map[string]string{"resourceClass": id},
 			}.Build(),

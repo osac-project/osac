@@ -34,6 +34,42 @@ var _ = Describe("Storage backend ownership API", func() {
 		client = privatev1.NewStorageBackendsClient(tool.InternalView().AdminConn())
 	})
 
+	DescribeTable("rejects OSAC-managed NetApp without storing a backend",
+		func(ctx context.Context, provider string) {
+			name := "it-osac-netapp-" + uuid.New()
+			response, err := client.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{
+				Object: privatev1.StorageBackend_builder{
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+					Spec: privatev1.StorageBackendSpec_builder{
+						Provider: provider,
+						Endpoint: "https://storage.example.com",
+						Credentials: privatev1.StorageBackendCredentials_builder{
+							Username: "admin", Password: testBackendPassword,
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			if response.GetObject().GetId() != "" {
+				DeferCleanup(func(ctx context.Context) {
+					_, err := client.Delete(ctx, privatev1.StorageBackendsDeleteRequest_builder{
+						Id: response.GetObject().GetId(),
+					}.Build())
+					Expect(err).NotTo(HaveOccurred())
+				})
+			}
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(status.Convert(err).Message()).To(ContainSubstring(
+				"OSAC-managed NetApp storage is not supported; set cspManaged to true"))
+			Expect(response).To(BeNil())
+			listed, err := client.List(ctx, privatev1.StorageBackendsListRequest_builder{
+				Filter: new(`this.metadata.name == "` + name + `"`),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(listed.GetItems()).To(BeEmpty())
+		},
+		Entry("NetApp", "netapp"),
+	)
+
 	It("creates a credential-free CSP-managed backend through the private CLI", func(ctx context.Context) {
 		homeDir, err := tool.NewCLIHomeDir()
 		Expect(err).NotTo(HaveOccurred())

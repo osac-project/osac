@@ -84,8 +84,9 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 		reconciler = &BareMetalInstanceReconciler{
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
-			InventoryClient: &mockInventoryClient{unassignHostFunc: func(_ context.Context, hostID string, _ []string) error {
+			InventoryClient: &mockInventoryClient{unassignHostFunc: func(_ context.Context, hostID, bareMetalInstanceID string, _ []string) error {
 				Expect(hostID).To(Equal("host-ownership"))
+				Expect(bareMetalInstanceID).NotTo(BeEmpty())
 				unassigned = true
 				return nil
 			}},

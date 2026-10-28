@@ -1,6 +1,6 @@
 import { test } from '@playwright/test';
 
-import { instanceTypeTestData } from './test_data';
+import { instanceTypeNameOrSkip, instanceTypeTestData } from './test_data';
 import { openAndLoginWithEnvironment } from '../../../../libs/test-utils/src/general/open_and_login';
 import {
   deleteInstanceType,
@@ -10,6 +10,10 @@ import { openInstanceTypesPage } from '../../../../libs/test-utils/src/main.page
 
 test('deletes the requested instance type', async ({ page }) => {
   test.setTimeout(120_000);
+  const instanceTypeName = instanceTypeNameOrSkip();
+  if (!instanceTypeName) {
+    return;
+  }
 
   // 1. Open the browser and log in.
   await openAndLoginWithEnvironment(page, '/');
@@ -18,11 +22,11 @@ test('deletes the requested instance type', async ({ page }) => {
   await openInstanceTypesPage(page);
   await ensureInstanceTypeExists(
     page,
-    instanceTypeTestData.name,
+    instanceTypeName,
     instanceTypeTestData.description,
     instanceTypeTestData.vcpus,
     instanceTypeTestData.memoryGib,
     instanceTypeTestData.gpu,
   );
-  await deleteInstanceType(page, instanceTypeTestData.name);
+  await deleteInstanceType(page, instanceTypeName);
 });

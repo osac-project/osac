@@ -35,6 +35,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -518,6 +519,9 @@ func (t *task) delete(ctx context.Context) error {
 		return err
 	}
 	t.clearBreakGlassSecretRef()
+	if err := t.clearTenantDomains(ctx); err != nil {
+		return err
+	}
 
 	// Default networking is tenant-owned. Remove it before projects so their
 	// deletion is not blocked by resources in the tenant's default project.
@@ -604,6 +608,35 @@ func (t *task) clearBreakGlassSecretRef() {
 	if t.tenant.HasSpec() {
 		t.tenant.GetSpec().ClearBreakGlassCredentialsSecret()
 	}
+}
+
+func (t *task) clearTenantDomains(ctx context.Context) error {
+	if len(t.tenant.GetSpec().GetDomains()) == 0 {
+		return nil
+	}
+	if t.r.tenantsClient == nil {
+		return errors.New("tenant client is mandatory to clear tenant domains")
+	}
+
+	updateTenant := proto.Clone(t.tenant).(*privatev1.Tenant)
+	updateTenant.GetSpec().SetDomains(nil)
+	response, err := t.r.tenantsClient.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+		Object: updateTenant,
+		UpdateMask: &fieldmaskpb.FieldMask{
+			Paths: []string{"spec.domains"},
+		},
+		Lock: true,
+	}.Build())
+	if err != nil {
+		return fmt.Errorf("failed to clear tenant domains: %w", err)
+	}
+	if response == nil || response.GetObject() == nil || !response.GetObject().HasMetadata() {
+		return errors.New("tenant update returned no metadata while clearing tenant domains")
+	}
+
+	t.tenant.GetSpec().SetDomains(nil)
+	t.tenant.GetMetadata().SetVersion(response.GetObject().GetMetadata().GetVersion())
+	return nil
 }
 
 func (t *task) breakGlassSecretIDs(ctx context.Context) ([]string, error) {

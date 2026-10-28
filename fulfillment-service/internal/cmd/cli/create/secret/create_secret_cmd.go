@@ -24,6 +24,7 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
@@ -120,14 +121,12 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	client := publicv1.NewSecretsClient(conn)
 
+	metadata := metautil.ForCreate(ctx, c.args.name)
+	metadata.Labels = labels
 	secret := publicv1.Secret_builder{
-		Metadata: publicv1.Metadata_builder{
-			Name:   c.args.name,
-			Tenant: c.settings.Tenant(),
-			Labels: labels,
-		}.Build(),
-		Data: data,
-		Type: secretType,
+		Metadata: metadata.Build(),
+		Data:     data,
+		Type:     secretType,
 	}.Build()
 
 	response, err := client.Create(ctx, publicv1.SecretsCreateRequest_builder{Object: secret}.Build())

@@ -81,6 +81,7 @@ jobs:
       pull-requests: read
       security-events: write
       actions: read
+      checks: read
     uses: ./.github/workflows/osac-build-and-publish.yaml
     # Reusable workflows never inherit the caller's secrets automatically --
     # without this, secrets.OSAC_CI_APP_PRIVATE_KEY resolves to empty inside

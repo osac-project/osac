@@ -19,6 +19,9 @@ otherwise do by hand in a browser.
 
 ## Setup
 
+Run these commands from the `osac-ui/` workspace root. In this monorepo, that
+is the `osac-ui/` directory.
+
 ```bash
 pnpm install
 pnpm --filter @osac/playwright exec playwright install chromium
@@ -40,12 +43,13 @@ read -rs OSAC_PASSWORD && export OSAC_PASSWORD   # avoids leaving the password i
 pnpm playwright
 ```
 
-(`pnpm playwright` is a root-level shortcut for `pnpm --filter @osac/playwright
+(`pnpm playwright` is a workspace-root shortcut for `pnpm --filter @osac/playwright
 run playwright`.) None of these have defaults — each is required, so a missing
 value fails immediately with a clear error instead of silently pointing at the
 wrong environment. `pnpm playwright` logs in, runs the [smoke
 test](#smoke-test), and runs every spec under `scratch/` — see [Writing a
-test](#writing-a-test).
+test](#writing-a-test). Tracked UI flows are excluded from this default
+command; select a project explicitly in the [flow instructions](#tenant-flow-tests).
 
 For iterating on a `scratch/` spec, logging in on every run is slow and adds a
 real Keycloak request each time. Log in once, then re-run just the spec as
@@ -59,33 +63,34 @@ pnpm playwright:run     # ...repeat as many times as you're iterating
 
 `pnpm playwright:run` never re-authenticates — if `.auth/user.json` is missing
 or the session has expired, re-run `pnpm playwright:setup` first.
+It needs at least one spec under `apps/playwright/scratch/`; if that directory
+has no specs, Playwright reports that no tests were found.
 
 ### Tenant flow tests
 
-The tenant create and delete specs require these additional environment
-variables:
+The tenant specs read `tenant_name` from `apps/e2e-tests/extravars.yaml`.
+Before running, set it to a tenant that does not already exist. The tenant
+create flow requires that the configured tenant does not already exist; the
+delete flow requires that it exists. All VMaaS specs skip before browser
+actions when `tenant_name` is unset or empty.
 
-| Variable           | Description                                                                                                                                        |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OSAC_TENANT_NAME` | Tenant name used by the create and delete flows. The create flow requires that it does not already exist; the delete flow requires that it exists. |
-
-Set all variables before running the tenant tests:
+Set the deployment and login variables from the [Running](#running) section,
+then run the flows:
 
 ```bash
 export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
 export OSAC_USERNAME=<keycloak-user>
 read -rs OSAC_PASSWORD && export OSAC_PASSWORD
-export OSAC_TENANT_NAME=tenant1
 ```
 
-Run the create and delete flow together. The `vmaas-delete` project depends on
-`vmaas`, so creation runs before deletion:
+Run the tenant create and delete flows together. The `vmaas-delete` project
+depends on `vmaas`, so creation runs before deletion:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test --project=vmaas-delete
 ```
 
-Run the flows separately:
+Run the tenant create and delete flows separately:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
@@ -95,45 +100,103 @@ pnpm --filter @osac/playwright exec playwright test \
   delete.tenant.spec.ts --project=vmaas-delete --no-deps
 ```
 
-Use `--headed` when a graphical display is available. Run these commands from
-the repository root; pass only the spec filename because the Playwright
-configuration already defines the tenant spec directory.
+### Storage tier flow tests
 
-Optional:
+The Storage tier specs read `storage_tier.name`, `description`, `backend`, and
+`protocol` from `apps/e2e-tests/extravars.yaml`. The configured backend must
+already exist. The create test checks that it is Ready and uses the `lvms`
+provider on Storage Backends, then verifies that it is selectable in the create
+form. Each run appends a unique suffix to `storage_tier.name`. Set
+`OSAC_STORAGE_TIER_TEST_RUN_ID` to a stable 1–32 character alphanumeric value
+when you need the same suffix across separate commands.
 
-| Variable              | Description                                                                                                                                                                                                                                                                                       |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `IGNORE_HTTPS_ERRORS` | Set to `true` to trust self-signed/cluster-internal CA certs, common on dev and lab clusters. Off by default because this flow submits a real Keycloak password — it disables TLS verification for the whole browser context, not just `localhost`, so only enable it against clusters you trust. |
+The project run has two steps:
 
-Testing against a local `pnpm dev` instance instead of a remote deployment:
-requires `pnpm dev` running in another terminal, and still needs
-`OSAC_USERNAME`/`OSAC_PASSWORD`.
+1. `vmaas-storage-tier` creates the Storage tier and verifies its configuration.
+2. `vmaas-storage-tier-delete` deletes the configured Storage tier after the
+   create flow completes.
 
-```bash
-export OSAC_UI_BASE_URL=http://localhost:5173 OSAC_USERNAME=...
-read -rs OSAC_PASSWORD && export OSAC_PASSWORD
-pnpm playwright
-```
-
-The backing `fulfillment-service`/Keycloak for a local dev server is often a
-dev/lab cluster with a self-signed or cluster-internal CA cert — the real
-login redirect goes there even though the UI itself is on `localhost`, so if
-you hit a TLS error, explicitly opt in with `IGNORE_HTTPS_ERRORS=true` rather
-than trusting it by default:
+Set the common variables from the [Running](#running) section, then run the
+complete flow from the repository root:
 
 ```bash
-export OSAC_UI_BASE_URL=http://localhost:5173 OSAC_USERNAME=... IGNORE_HTTPS_ERRORS=true
-read -rs OSAC_PASSWORD && export OSAC_PASSWORD
-pnpm playwright
+pnpm --filter @osac/playwright exec playwright test --project=vmaas-storage-tier
 ```
+
+Playwright runs the create project followed by its teardown. Add `--headed` if
+a graphical display is available:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-storage-tier --headed
+```
+
+To run Storage tier create and delete separately, export the same run ID before
+both commands. The specs check `storage_tier.name` and skip if it is unset;
+they do not use `tenant_name` or create or delete a tenant:
+
+```bash
+export OSAC_STORAGE_TIER_TEST_RUN_ID=mytest123
+
+pnpm --filter @osac/playwright exec playwright test \
+  create.storage_tier.spec.ts --project=vmaas-storage-tier --no-deps
+
+pnpm --filter @osac/playwright exec playwright test \
+  delete.storage_tier.spec.ts --project=vmaas-storage-tier-delete --no-deps
+```
+
+The `--no-deps` option skips the create project's automatic teardown, so the
+explicit delete project runs after the separate create command. The delete
+test creates the configured tier from `extravars.yaml` if it is absent, then
+deletes the tier identified by that run ID. Use the same
+`OSAC_STORAGE_TIER_TEST_RUN_ID` to target a tier from an interrupted run.
+
+### Disk image flow tests
+
+The disk image specs read their non-sensitive seed values from
+`apps/e2e-tests/extravars.yaml`. Set `disk_image.name` to a unique name for
+the target cluster. The specs skip if `disk_image.name` is unset. The create,
+lifecycle, and delete flows use the configured disk image values and lifecycle
+actions.
+
+The disk image and instance type create projects own their delete projects as
+teardown, so cleanup runs after their lifecycle projects even if a lifecycle
+assertion fails.
+
+Set the deployment and login variables from the [Running](#running) section,
+then run the flow:
+
+```bash
+export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
+export OSAC_USERNAME=<keycloak-user>
+read -rs OSAC_PASSWORD && export OSAC_PASSWORD
+```
+
+Run the disk image lifecycle flow:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-disk-image-lifecycle
+```
+
+The `vmaas-disk-image-lifecycle` project depends on `vmaas-disk-image`. The
+create project's teardown deletes the image after the lifecycle project
+finishes, including when the lifecycle test fails. To run only the delete
+project, use `--project=vmaas-disk-image-delete --no-deps`. If the configured
+image is absent, the delete test creates it from `extravars.yaml` and then
+deletes it.
+Each run appends a unique suffix to `disk_image.name`, and the full name appears
+in the test title. To clean up an interrupted run, set
+`OSAC_DISK_IMAGE_TEST_RUN_ID` to that run's suffix when invoking the delete
+project.
 
 ### Instance type flow tests
 
 The instance type tests read their hard-coded test data from
 `apps/e2e-tests/extravars.yaml`. Change the `instance_type` values there before
 running the flow if you need a different name, description, vCPU/memory values,
-or GPU configuration. The create test fails clearly if that instance type
-already exists.
+or GPU configuration. The specs skip if `instance_type.name` is unset. The
+create test fails clearly if that instance type already exists.
 
 The tests run in this dependency order:
 
@@ -144,7 +207,7 @@ The tests run in this dependency order:
    to disappear.
 
 Set the common variables from the [Running](#running) section, then run the
-complete instance type flow from the repository root:
+complete instance type flow from the `osac-ui/` workspace root:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
@@ -180,12 +243,95 @@ requested instance type is absent, the standalone delete test creates it from
 `extravars.yaml` first; unrelated instance types already listed in the table
 are not modified.
 
-To run the tenant and instance type flows together, include both terminal
-projects; each terminal project runs its own dependency chain:
+To run the Storage tier and instance type flows together, include both terminal
+projects; each project runs its own resource lifecycle:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-delete --project=vmaas-instance-type-lifecycle
+  --project=vmaas-storage-tier --project=vmaas-instance-type-lifecycle
+```
+
+### Catalog CLI flow tests
+
+The catalog flow runs the `osac` CLI from Playwright, then opens the live UI,
+logs in, and verifies the created item on the Catalog page. Authenticate the
+CLI against the target environment before starting the test, for example with
+`osac login`. Set `OSAC_UI_BASE_URL`, `OSAC_USERNAME`, and `OSAC_PASSWORD` for
+the browser verification.
+
+The catalog configuration is in `apps/e2e-tests/extravars.yaml`:
+
+| Parameter                                 | Description                                                       |
+| ----------------------------------------- | ----------------------------------------------------------------- |
+| `catalog.name`                            | Unique catalog item name to create and delete                     |
+| `catalog.template`                        | Existing compute instance template referenced by the catalog item |
+| `catalog.title`                           | Catalog title                                                     |
+| `catalog.description`                     | Catalog description                                               |
+| `catalog.fields.instance_type.name`       | Existing instance type referenced by the catalog item             |
+| `catalog.fields.instance_type.vcpus`      | Expected vCPU value displayed for the referenced instance type    |
+| `catalog.fields.instance_type.memory_gib` | Expected memory value displayed for the referenced instance type  |
+| `catalog.fields.boot_disk.size_gib`       | Boot-disk storage value displayed for the catalog item            |
+| `catalog.fields.disk_image.name`          | Existing disk image referenced by the catalog item                |
+
+Optional variables:
+
+| Variable          | Description                                                                             |
+| ----------------- | --------------------------------------------------------------------------------------- |
+| `OSAC_CLI_PATH`   | Path to the `osac` executable; defaults to `osac` from `PATH`                           |
+| `OSAC_CLI_CONFIG` | CLI configuration directory; when unset, the CLI uses its normal configuration location |
+
+Run creation and deletion together. The delete project depends on the create
+project, and each CLI operation is followed by a JSON lookup and a browser
+check of the Catalog page:
+
+```bash
+export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
+export OSAC_CLI_CONFIG="$HOME/.config/osac"
+
+pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-catalog-delete
+```
+
+Run the flows separately:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  create.catalog.spec.ts --project=vmaas-catalog
+
+pnpm --filter @osac/playwright exec playwright test \
+  delete.catalog.spec.ts --project=vmaas-catalog-delete --no-deps
+```
+
+Use `--headed` when a graphical display is available. Run these commands from
+the `osac-ui/` workspace root; pass only the spec filename because the
+Playwright configuration already defines the VMaaS spec directory.
+
+Optional:
+
+| Variable              | Description                                                                                                                                                                                                                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IGNORE_HTTPS_ERRORS` | Set to `true` to trust self-signed/cluster-internal CA certs, common on dev and lab clusters. Off by default because this flow submits a real Keycloak password — it disables TLS verification for the whole browser context, not just `localhost`, so only enable it against clusters you trust. |
+
+Testing against a local `pnpm dev` instance instead of a remote deployment:
+requires `pnpm dev` running in another terminal, and still needs
+`OSAC_USERNAME`/`OSAC_PASSWORD`.
+
+```bash
+export OSAC_UI_BASE_URL=http://localhost:5173 OSAC_USERNAME=...
+read -rs OSAC_PASSWORD && export OSAC_PASSWORD
+pnpm playwright
+```
+
+The backing `fulfillment-service`/Keycloak for a local dev server is often a
+dev/lab cluster with a self-signed or cluster-internal CA cert — the real
+login redirect goes there even though the UI itself is on `localhost`, so if
+you hit a TLS error, explicitly opt in with `IGNORE_HTTPS_ERRORS=true` rather
+than trusting it by default:
+
+```bash
+export OSAC_UI_BASE_URL=http://localhost:5173 OSAC_USERNAME=... IGNORE_HTTPS_ERRORS=true
+read -rs OSAC_PASSWORD && export OSAC_PASSWORD
+pnpm playwright
 ```
 
 ## How authentication works

@@ -22,6 +22,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
@@ -177,11 +178,8 @@ func (c *runnerContext) run(cmd *cobra.Command, _ []string) error {
 	}
 
 	bmi := publicv1.BareMetalInstance_builder{
-		Metadata: publicv1.Metadata_builder{
-			Name:   c.args.name,
-			Tenant: config.TenantFromContext(ctx),
-		}.Build(),
-		Spec: builtSpec,
+		Metadata: metautil.ForCreate(ctx, c.args.name).Build(),
+		Spec:     builtSpec,
 	}.Build()
 
 	client := publicv1.NewBareMetalInstancesClient(conn)

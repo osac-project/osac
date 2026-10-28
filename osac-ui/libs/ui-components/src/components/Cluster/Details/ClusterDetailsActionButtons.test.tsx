@@ -58,6 +58,8 @@ const mockCluster = (state: ClusterState): Cluster => ({
       id: 'password-secret-123',
       name: 'my-cluster-password',
     },
+    observedCpVersion: '',
+    upgradeHistory: [],
   },
   spec: {
     $typeName: 'osac.public.v1.ClusterSpec',

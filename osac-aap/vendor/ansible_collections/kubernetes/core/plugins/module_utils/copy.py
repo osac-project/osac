@@ -96,7 +96,7 @@ class K8SCopy(metaclass=ABCMeta):
             return error, stdout, stderr
         except Exception as e:
             self.module.fail_json(
-                msg="Error while running/parsing from pod {1}/{2} command='{0}' : {3}".format(
+                msg="Error while running/parsing from pod {0}/{1} command='{2}' : {3}".format(
                     self.namespace, self.name, cmd, to_native(e)
                 )
             )
@@ -278,11 +278,15 @@ class K8SCopyFromPod(K8SCopy):
     def run(self):
         self.files_to_copy = self.list_remote_files()
         if self.files_to_copy == []:
+            # Using warn method instead of passing warnings to exit_json as it is
+            # deprecated in ansible-core>=2.19.0
+            self._module.warn(
+                "No file found from directory '{0}' into remote Pod.".format(
+                    self.remote_path
+                )
+            )
             self.module.exit_json(
                 changed=False,
-                warning="No file found from directory '{0}' into remote Pod.".format(
-                    self.remote_path
-                ),
             )
         self.copy()
 
@@ -435,11 +439,21 @@ def check_pod(svc):
 
     try:
         result = svc.client.get(resource, name=name, namespace=namespace)
-        containers = [
-            c["name"] for c in result.to_dict()["status"]["containerStatuses"]
-        ]
-        if container and container not in containers:
+        containers = dict(
+            {
+                c["name"]: c
+                for cl in ["initContainerStatuses", "containerStatuses"]
+                for c in result.to_dict()["status"].get(cl, [])
+            }
+        )
+        if container and container not in containers.keys():
             module.fail_json(msg="Pod has no container {0}".format(container))
-        return containers
+        if (
+            container
+            and container in containers
+            and not bool(containers[container].get("started", False))
+        ):
+            module.fail_json(msg="Pod container {0} is not started".format(container))
+        return containers.keys()
     except Exception as exc:
         _fail(exc)

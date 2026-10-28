@@ -23,6 +23,8 @@ import (
 	"testing"
 
 	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
+	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
+	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1035,7 +1037,7 @@ func TestUnassignHost(t *testing.T) {
 			Build()
 
 		m := newMetal3ClientForTest(bmh)
-		err := m.UnassignHost(ctx, testNamespace+"/host-1", []string{"profileName"})
+		err := m.UnassignHost(ctx, testNamespace+"/host-1", "instance-123", []string{"profileName"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1062,7 +1064,7 @@ func TestUnassignHost(t *testing.T) {
 			Build()
 
 		m := newMetal3ClientForTest(bmh)
-		err := m.UnassignHost(ctx, testNamespace+"/host-2", nil)
+		err := m.UnassignHost(ctx, testNamespace+"/host-2", "instance-456", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1078,12 +1080,30 @@ func TestUnassignHost(t *testing.T) {
 
 	t.Run("returns error for invalid host ID", func(t *testing.T) {
 		m := newMetal3ClientForTest()
-		err := m.UnassignHost(ctx, "invalid-id", nil)
+		err := m.UnassignHost(ctx, "invalid-id", "instance-123", nil)
 		if err == nil {
 			t.Fatal("expected error for invalid hostID, got nil")
 		}
 	})
 }
+
+var _ = Describe("Metal3 UnassignHost ownership", func() {
+	It("leaves a BMH assigned to another instance untouched", func() {
+		bmh := newBMHBuilder("host-3").
+			WithLabels(map[string]string{metal3LabelPrefix + "profileName": "myProfile"}).
+			WithConsumerRef(&corev1.ObjectReference{Name: "instance-456"}).
+			Build()
+		m := newMetal3ClientForTest(bmh)
+
+		Expect(m.UnassignHost(context.Background(), testNamespace+"/host-3", "instance-123", []string{"profileName"})).To(Succeed())
+
+		updated := &metal3api.BareMetalHost{}
+		Expect(m.client.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: "host-3"}, updated)).To(Succeed())
+		Expect(updated.Spec.ConsumerRef).NotTo(BeNil())
+		Expect(updated.Spec.ConsumerRef.Name).To(Equal("instance-456"))
+		Expect(updated.Labels).To(HaveKeyWithValue(metal3LabelPrefix+"profileName", "myProfile"))
+	})
+})
 
 // --- GetHostNICs ---
 

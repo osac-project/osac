@@ -22,6 +22,8 @@
         annotations:
           osac.openshift.io/tenant: "{{ tenant_id }}"
           osac.openshift.io/implementation-strategy: netris
+      spec:
+        ipv4Cidr: 192.0.2.0/24
     nd01_expected_calls:
       - method: GET
         path: /api/v2/vnet
@@ -106,10 +108,19 @@
               vnets:
                 - id: 101
                   name: "{{ subnet_name }}"
+                  tenantID: 77
+                  sites:
+                    - id: 1
               vnet_delete_status: 404
               ipam_subnets:
                 - id: 202
                   name: "{{ subnet_name }}"
+                  prefix: 192.0.2.0/24
+                  purpose: common
+                  tenant:
+                    id: 77
+                  sites:
+                    - id: 1
               ipam_delete_status: 204
             status_code: 200
           changed_when: false
@@ -169,10 +180,19 @@
               vnets:
                 - id: 101
                   name: "{{ subnet_name }}"
+                  tenantID: 77
+                  sites:
+                    - id: 1
               vnet_delete_status: 500
               ipam_subnets:
                 - id: 202
                   name: "{{ subnet_name }}"
+                  prefix: 192.0.2.0/24
+                  purpose: common
+                  tenant:
+                    id: 77
+                  sites:
+                    - id: 1
               ipam_delete_status: 204
             status_code: 200
           changed_when: false
@@ -233,6 +253,12 @@
               ipam_subnets:
                 - id: 202
                   name: "{{ subnet_name }}"
+                  prefix: 192.0.2.0/24
+                  purpose: common
+                  tenant:
+                    id: 77
+                  sites:
+                    - id: 1
               ipam_delete_status: 204
             status_code: 200
           changed_when: false
@@ -292,10 +318,19 @@
               vnets:
                 - id: 101
                   name: "{{ subnet_name }}"
+                  tenantID: 77
+                  sites:
+                    - id: 1
               vnet_delete_status: 204
               ipam_subnets:
                 - id: 202
                   name: "{{ subnet_name }}"
+                  prefix: 192.0.2.0/24
+                  purpose: common
+                  tenant:
+                    id: 77
+                  sites:
+                    - id: 1
               ipam_delete_status: 404
             status_code: 200
           changed_when: false

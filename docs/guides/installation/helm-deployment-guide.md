@@ -165,22 +165,27 @@ your deployment uses VMaaS.
 
 ### Storage class
 
-OSAC PVCs use the cluster's default `StorageClass`. If the cluster already has
-a storage provisioner, make the intended `StorageClass` the default before
-installing; the charts do not configure a class per PVC. Check the available
-classes and which one is default with:
+OSAC components create PVCs in both install phases, so make the intended
+`StorageClass` the default before Phase 1. `osac-infra` creates a PVC for
+Keycloak by default and for bundled PostgreSQL or OpenBao when enabled; Phase 2
+workloads may also need storage. The charts do not select a class per PVC.
+Check the available classes and which one is default with:
 
 ```bash
 oc get storageclass
 ```
 
-The default class is marked `(default)` in the output.
+The default class is marked `(default)` in the output. The Phase 2 validation
+hook warns when no default class exists, but PVCs created in Phase 1 may
+already be `Pending`.
 
-When using an existing `StorageClass`, leave `lvms.enabled: false` and
-`topolvm.enabled: false` in `my-infra-values.yaml`. Both are disabled by
-default, so OSAC will not install LVMS or the TopoLVM CSI driver. The Phase 2
-validation hook warns when no default class exists, and stateful components
-may fail to provision PVCs.
+`lvms.enabled` and `topolvm.enabled` are both `false` by default, so you do not
+need to set them explicitly when using an existing provisioner. Set
+`lvms.enabled: true` when using LVMS to provide VMaaS storage; LVMS is not a
+CaaS prerequisite because hosted control planes use the hub's default
+`StorageClass` (see the [customer install guide](customer-install-guide.md)).
+Set `topolvm.enabled: true` only for the Kind `dev-full` local CSI setup; its
+TopoLVM storage class is not the cluster default.
 
 ### Phase 1a: install prerequisite Operators
 
@@ -454,65 +459,6 @@ above sets the same public hostname and enables `publicIngress`.
 
 - Production clusters where browser cert warnings are unacceptable.
 - Environments with corporate CA or Let's Encrypt ingress certs.
-
-## Updating Hub CSI Fulfillment Configuration
-
-When hub CSI is enabled, the OSAC chart creates an immutable runtime `ConfigMap`
-in the CSI namespace. Its default name is `osac-csi-fulfillment-config` in
-`osac-csi`. A normal `helm upgrade` cannot change the data of an existing
-immutable `ConfigMap`. Update it using this sequence:
-
-1. Update `global.fulfillment.endpoint` and `service.auth.issuerUrl` in
-   `my-values.yaml` with the new fulfillment endpoint and Keycloak issuer URL
-   (the endpoint can also be derived from `service.externalHostname`).
-
-2. During a maintenance window, delete the current CSI `ConfigMap`:
-
-   ```bash
-   oc delete configmap osac-csi-fulfillment-config -n osac-csi
-   ```
-
-3. Immediately reapply the updated values so Helm recreates the `ConfigMap`.
-   The command below is Helm 4; omit `--force-conflicts` on Helm 3.
-
-   ```bash
-   helm upgrade --install osac ./charts/osac \
-       -n "$NS" \
-       -f my-values.yaml \
-       --set global.clusterDomain="$DOMAIN" \
-       --set service.externalHostname="fulfillment-api-$NS.$DOMAIN" \
-       --set service.internalHostname="fulfillment-internal-api-$NS.$DOMAIN" \
-       --force-conflicts \
-       --wait --timeout 40m
-   ```
-
-   Until the `ConfigMap` is recreated, a newly started CSI controller pod
-   cannot resolve its required `ConfigMap` keys.
-
-4. Restart the CSI controller so its environment variables use the new
-   values, then wait for the rollout:
-
-   ```bash
-   CSI_DEPLOYMENT=$(oc get deployments -n osac-csi \
-     -l app.kubernetes.io/name=csi-driver,app.kubernetes.io/component=controller \
-     -o jsonpath='{.items[0].metadata.name}')
-   test -n "$CSI_DEPLOYMENT"
-   oc rollout restart "deployment/${CSI_DEPLOYMENT}" -n osac-csi
-   oc rollout status "deployment/${CSI_DEPLOYMENT}" -n osac-csi --timeout=5m
-   ```
-
-5. Verify the `ConfigMap` and the controller rollout:
-
-   ```bash
-   oc get configmap osac-csi-fulfillment-config -n osac-csi -o yaml
-   oc get deployments -n osac-csi \
-     -l app.kubernetes.io/name=csi-driver,app.kubernetes.io/component=controller
-   ```
-
-Adjust the `ConfigMap` name and namespace if the installation overrides the
-chart defaults. This procedure applies to updates of the hub CSI endpoint or
-issuer; tenant CSI installs continue to receive those values directly through
-their own Helm configuration.
 
 ## Uninstall
 

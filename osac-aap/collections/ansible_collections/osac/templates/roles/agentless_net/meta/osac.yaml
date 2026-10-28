@@ -8,8 +8,10 @@ description: >-
   UID-owned IPv4 ExternalIP addresses. BareMetalInstance network attachments
   move mapped Cumulus access ports between the configured provisioning VLAN and
   saved Subnet VLANs, and DHCP discovery reports active leases by NIC MAC.
-  ExternalIPAttachment, SecurityGroups, NAT, BGP, and external traffic remain
-  unsupported.
+  The v1 ExternalIPAttachment path installs whole-address DNAT and scoped host
+  forwarding, then announces the saved ExternalIP /32 through local FRR. Netris
+  route peers remain deployment-managed; SecurityGroups and NATGateway SNAT
+  remain unsupported.
 
 template_type: network
 fabric_manager: agentless_net

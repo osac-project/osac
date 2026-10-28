@@ -130,6 +130,8 @@ var _ = Describe("newServer", func() {
 		expectToolAnnotations(tools["create_compute_instance"], "Create OSAC compute instance", false, false, false, true)
 		expectToolAnnotations(tools["delete_compute_instance"], "Delete OSAC compute instance", false, true, false, true)
 		expectComputeInstanceCreateSchema(tools["create_compute_instance"].InputSchema)
+		expectTypedWriteSchema(tools["create_compute_instance"].InputSchema, "name", "catalog_item")
+		expectTypedWriteSchema(tools["delete_compute_instance"].InputSchema, "id")
 		expectNullableArraySchema(tools["list_resources"].OutputSchema, "items")
 		expectResourceTypeSchema(tools["list_resources"].InputSchema, []ResourceType{
 			ResourceTypeComputeInstanceCatalogItem,
@@ -157,6 +159,64 @@ var _ = Describe("newServer", func() {
 			ResourceTypeComputeInstance,
 			ResourceTypeProject,
 			ResourceTypeSecretReference,
+		})
+	})
+
+	Describe("Rejects typed tool registrations with unsafe or inconsistent metadata", func() {
+		newHandler := func() mcp.ToolHandlerFor[DeleteComputeInstanceInput, DeleteComputeInstanceOutput] {
+			return func(
+				_ context.Context, _ *mcp.CallToolRequest, _ DeleteComputeInstanceInput,
+			) (*mcp.CallToolResult, DeleteComputeInstanceOutput, error) {
+				return nil, DeleteComputeInstanceOutput{}, nil
+			}
+		}
+		baseTool := func() *mcp.Tool {
+			return &mcp.Tool{
+				Name:        "delete_compute_instance",
+				Description: "typed delete",
+				Annotations: &mcp.ToolAnnotations{
+					Title:           "Delete",
+					ReadOnlyHint:    false,
+					DestructiveHint: toolAnnotationBool(true),
+					IdempotentHint:  false,
+					OpenWorldHint:   toolAnnotationBool(true),
+				},
+				InputSchema:  compatibleToolSchema[DeleteComputeInstanceInput](),
+				OutputSchema: compatibleToolSchema[DeleteComputeInstanceOutput](),
+			}
+		}
+
+		DescribeTable("Registration metadata failures",
+			func(mutate func(tool *mcp.Tool)) {
+				server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+				registry := newTypedToolRegistry(server)
+				tool := baseTool()
+				mutate(tool)
+				Expect(func() {
+					registerWriteTool(registry, tool, writeToolContract{Destructive: true}, newHandler())
+				}).To(Panic())
+			},
+			Entry("missing open-world hint", func(tool *mcp.Tool) {
+				tool.Annotations.OpenWorldHint = nil
+			}),
+			Entry("write marked read-only", func(tool *mcp.Tool) {
+				tool.Annotations.ReadOnlyHint = true
+			}),
+			Entry("destructive write marked non-destructive", func(tool *mcp.Tool) {
+				tool.Annotations.DestructiveHint = toolAnnotationBool(false)
+			}),
+			Entry("missing input schema", func(tool *mcp.Tool) {
+				tool.InputSchema = nil
+			}),
+		)
+
+		It("Rejects duplicate typed tool registration", func() {
+			server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+			registry := newTypedToolRegistry(server)
+			registerWriteTool(registry, baseTool(), writeToolContract{Destructive: true}, newHandler())
+			Expect(func() {
+				registerWriteTool(registry, baseTool(), writeToolContract{Destructive: true}, newHandler())
+			}).To(Panic())
 		})
 	})
 })
@@ -287,6 +347,18 @@ func expectComputeInstanceCreateSchema(schema any) {
 	Expect(securityGroups["items"]).To(HaveKeyWithValue("type", "string"))
 }
 
+func expectTypedWriteSchema(schema any, required ...string) {
+	document, ok := schema.(map[string]any)
+	Expect(ok).To(BeTrue())
+	properties, ok := document["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(properties).ToNot(HaveKey("service"))
+	Expect(properties).ToNot(HaveKey("method"))
+	Expect(properties).ToNot(HaveKey("payload"))
+	Expect(document["required"]).To(ConsistOf(required))
+	Expect(document["additionalProperties"]).To(BeFalse())
+}
+
 func expectNullableArraySchema(schema any, name string) {
 	document, ok := schema.(map[string]any)
 	Expect(ok).To(BeTrue())
@@ -329,7 +401,7 @@ var _ = Describe("newTokenVerifier", func() {
 		caller, ok := info.Extra[callerContextExtraKey].(safeCallerContext)
 		Expect(ok).To(BeTrue())
 		Expect(caller).To(Equal(safeCallerContext{
-			Subject: "alice", Username: "alice", Tenants: []string{"tenant-1"},
+			Subject: "alice", Username: "alice",
 		}))
 		source, ok := info.Extra[exchangeTokenExtraKey].(apiTokenSource)
 		Expect(ok).To(BeTrue())

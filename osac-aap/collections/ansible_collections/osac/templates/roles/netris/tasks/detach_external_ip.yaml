@@ -1,9 +1,27 @@
 ---
 # ExternalIPAttachment deletion — removes the DNAT rule from Netris
 
+- name: Validate ExternalIPAttachment ownership annotations
+  ansible.builtin.assert:
+    that:
+      - external_ip_attachment.metadata.annotations is defined
+      - "'osac.openshift.io/externalip-name' in external_ip_attachment.metadata.annotations"
+      - "'osac.openshift.io/target-ip' in external_ip_attachment.metadata.annotations"
+    fail_msg: >-
+      Cannot safely delete Netris DNAT rule for ExternalIPAttachment
+      '{{ external_ip_attachment.metadata.name }}': required ownership
+      annotations 'osac.openshift.io/externalip-name' and
+      'osac.openshift.io/target-ip' are missing.
+
 - name: Extract ExternalIPAttachment name
   ansible.builtin.set_fact:
     attachment_name: "{{ external_ip_attachment.metadata.name }}"
+    attachment_externalip_name: >-
+      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-name']
+         | default('', true) }}
+    attachment_target_ip: >-
+      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/target-ip']
+         | default('', true) }}
 
 - name: Display ExternalIPAttachment deletion info
   ansible.builtin.debug:
@@ -14,6 +32,68 @@
     name: netris.controller.auth
   when: netris_session_cookie is not defined
 
+- name: Read the ExternalIP when it is still available
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: ExternalIP
+    name: "{{ attachment_externalip_name }}"
+    namespace: "{{ external_ip_attachment.metadata.namespace }}"
+  register: _attachment_eip_lookup
+  when: attachment_externalip_name | length > 0
+
+- name: Determine tenant VirtualNetwork name for DNAT ownership check
+  ansible.builtin.set_fact:
+    attachment_vn_name: >-
+      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/virtual-network-name']
+         | default('', true) }}
+
+- name: Default DNAT ownership check to management VPC
+  ansible.builtin.set_fact:
+    attachment_nat_vpc_id: "{{ netris_mgmt_vpc_id }}"
+
+- name: Look up tenant VPC for DNAT ownership check
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+    tasks_from: read
+  vars:
+    vpc_name: "{{ attachment_vn_name }}"
+  when: attachment_vn_name | length > 0
+
+- name: Use tenant VPC for DNAT ownership check
+  ansible.builtin.set_fact:
+    attachment_nat_vpc_id: "{{ netris_vpc.id }}"
+  when:
+    - attachment_vn_name | length > 0
+    - netris_vpc is defined
+    - netris_vpc is not none
+
+- name: Build DNAT ownership fields
+  ansible.builtin.set_fact:
+    _attachment_nat_expected_fields:
+      action: DNAT
+      "site.id": "{{ netris_site_id }}"
+      "vpc.id": "{{ attachment_nat_vpc_id }}"
+
+- name: Add DNAT target IP to ownership fields when available
+  ansible.builtin.set_fact:
+    _attachment_nat_expected_fields: >-
+      {{ _attachment_nat_expected_fields | combine({
+           'dnatToIP': attachment_target_ip ~ '/32'
+         }) }}
+  when: attachment_target_ip | length > 0
+
+- name: Add DNAT external IP to ownership fields when ExternalIP remains available
+  ansible.builtin.set_fact:
+    _attachment_nat_expected_fields: >-
+      {{ _attachment_nat_expected_fields | combine({
+           'destinationAddress': _attachment_eip_lookup.resources[0].metadata.annotations['osac.openshift.io/allocated-address'] ~ '/32'
+         }) }}
+  when:
+    - _attachment_eip_lookup is defined
+    - _attachment_eip_lookup.resources | default([]) | length > 0
+    - _attachment_eip_lookup.resources[0].metadata.annotations is defined
+    - _attachment_eip_lookup.resources[0].metadata.annotations['osac.openshift.io/allocated-address'] is defined
+
 - name: Delete DNAT rule for ExternalIPAttachment
   ansible.builtin.include_role:
     name: netris.controller.nat
@@ -21,6 +101,7 @@
   vars:
     nat_name: "{{ attachment_name }}-dnat"
     nat_site_id: "{{ netris_site_id }}"
+    nat_expected_fields: "{{ _attachment_nat_expected_fields }}"
 
 - name: Display deletion result
   ansible.builtin.debug:

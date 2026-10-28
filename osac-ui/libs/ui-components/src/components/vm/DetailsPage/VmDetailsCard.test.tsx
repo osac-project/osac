@@ -48,7 +48,10 @@ const catalogVm: ComputeInstance = {
       storageTier: create(StorageTierReferenceSchema, { name: 'balanced' }),
     },
     userData: '#cloud-config',
-    additionalDisks: [],
+    additionalDisks: {
+      $typeName: 'osac.public.v1.ComputeInstanceDiskList',
+      items: [],
+    },
     networkAttachments: [],
     template: create(ComputeInstanceTemplateReferenceSchema, { id: '' }),
     templateParameters: {},
@@ -95,20 +98,22 @@ describe('VmDetailsCard', () => {
       ...catalogVm,
       spec: {
         ...catalogVm.spec,
-        additionalDisks: [
-          {
-            $typeName: 'osac.public.v1.ComputeInstanceDisk',
-            sizeGib: 100,
-            storageTier: create(StorageTierReferenceSchema, { name: 'fast' }),
-          },
-          {
-            $typeName: 'osac.public.v1.ComputeInstanceDisk',
-            sizeGib: 20,
-            storageTier: create(StorageTierReferenceSchema, { name: 'legacy-tier' }),
-          },
-        ],
+        additionalDisks: {
+          items: [
+            {
+              $typeName: 'osac.public.v1.ComputeInstanceDisk',
+              sizeGib: 100,
+              storageTier: create(StorageTierReferenceSchema, { name: 'fast' }),
+            },
+            {
+              $typeName: 'osac.public.v1.ComputeInstanceDisk',
+              sizeGib: 20,
+              storageTier: create(StorageTierReferenceSchema, { name: 'legacy-tier' }),
+            },
+          ],
+        },
       },
-    } as unknown as ComputeInstance;
+    } as ComputeInstance;
 
     renderCard(vmWithAdditionalDisks);
 

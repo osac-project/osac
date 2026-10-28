@@ -19,6 +19,7 @@ import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2"
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
+import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_private_v1_metadata_type } from "./metadata_type_pb";
 import type { SecretLocalReference } from "./secret_type_pb";
@@ -29,7 +30,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/storage_backend_type.proto.
  */
 export const file_osac_private_v1_storage_backend_type: GenFile = /*@__PURE__*/
-  fileDesc("Cipvc2FjL3ByaXZhdGUvdjEvc3RvcmFnZV9iYWNrZW5kX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSK7AQoOU3RvcmFnZUJhY2tlbmQSCgoCaWQYASABKAkSKwoIbWV0YWRhdGEYAiABKAsyGS5vc2FjLnByaXZhdGUudjEuTWV0YWRhdGESOQoEc3BlYxgDIAEoCzIjLm9zYWMucHJpdmF0ZS52MS5TdG9yYWdlQmFja2VuZFNwZWNCBrpIA8gBARI1CgZzdGF0dXMYBCABKAsyJS5vc2FjLnByaXZhdGUudjEuU3RvcmFnZUJhY2tlbmRTdGF0dXMiqAEKElN0b3JhZ2VCYWNrZW5kU3BlYxIZCghwcm92aWRlchgBIAEoCUIHukgEcgIQARITCgtkZXNjcmlwdGlvbhgCIAEoCRIZCghlbmRwb2ludBgDIAEoCUIHukgEcgIQARJHCgtjcmVkZW50aWFscxgEIAEoCzIqLm9zYWMucHJpdmF0ZS52MS5TdG9yYWdlQmFja2VuZENyZWRlbnRpYWxzQga6SAPIAQEinAIKGVN0b3JhZ2VCYWNrZW5kQ3JlZGVudGlhbHMSGQoIdXNlcm5hbWUYASABKAlCB7pIBHICEAESEAoIcGFzc3dvcmQYAiABKAkSPgoPcGFzc3dvcmRfc2VjcmV0GAMgASgLMiUub3NhYy5wcml2YXRlLnYxLlNlY3JldExvY2FsUmVmZXJlbmNlOpEBukiNARqKAQoccGFzc3dvcmRfeG9yX3Bhc3N3b3JkX3NlY3JldBI2ZXhhY3RseSBvbmUgb2YgcGFzc3dvcmQgb3IgcGFzc3dvcmRfc2VjcmV0IG11c3QgYmUgc2V0GjIodGhpcy5wYXNzd29yZCAhPSAnJykgIT0gaGFzKHRoaXMucGFzc3dvcmRfc2VjcmV0KSJtChRTdG9yYWdlQmFja2VuZFN0YXR1cxIzCgVzdGF0ZRgBIAEoDjIkLm9zYWMucHJpdmF0ZS52MS5TdG9yYWdlQmFja2VuZFN0YXRlEhQKB21lc3NhZ2UYAiABKAlIAIgBAUIKCghfbWVzc2FnZSpdChNTdG9yYWdlQmFja2VuZFN0YXRlEiUKIVNUT1JBR0VfQkFDS0VORF9TVEFURV9VTlNQRUNJRklFRBAAEh8KG1NUT1JBR0VfQkFDS0VORF9TVEFURV9SRUFEWRABQgaKtRgCCAFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_metadata_type, file_osac_private_v1_secret_type]);
+  fileDesc("Cipvc2FjL3ByaXZhdGUvdjEvc3RvcmFnZV9iYWNrZW5kX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSK7AQoOU3RvcmFnZUJhY2tlbmQSCgoCaWQYASABKAkSKwoIbWV0YWRhdGEYAiABKAsyGS5vc2FjLnByaXZhdGUudjEuTWV0YWRhdGESOQoEc3BlYxgDIAEoCzIjLm9zYWMucHJpdmF0ZS52MS5TdG9yYWdlQmFja2VuZFNwZWNCBrpIA8gBARI1CgZzdGF0dXMYBCABKAsyJS5vc2FjLnByaXZhdGUudjEuU3RvcmFnZUJhY2tlbmRTdGF0dXMiygMKElN0b3JhZ2VCYWNrZW5kU3BlYxIZCghwcm92aWRlchgBIAEoCUIHukgEcgIQARITCgtkZXNjcmlwdGlvbhgCIAEoCRIQCghlbmRwb2ludBgDIAEoCRI/CgtjcmVkZW50aWFscxgEIAEoCzIqLm9zYWMucHJpdmF0ZS52MS5TdG9yYWdlQmFja2VuZENyZWRlbnRpYWxzEhkKC2NzcF9tYW5hZ2VkGAUgASgIQgTiQQEFOpUCukiRAhqBAQoeb3NhY19tYW5hZ2VkX2VuZHBvaW50X3JlcXVpcmVkEjZlbmRwb2ludCBpcyByZXF1aXJlZCBmb3IgT1NBQy1tYW5hZ2VkIHN0b3JhZ2UgYmFja2VuZHMaJ3RoaXMuY3NwX21hbmFnZWQgfHwgdGhpcy5lbmRwb2ludCAhPSAnJxqKAQohb3NhY19tYW5hZ2VkX2NyZWRlbnRpYWxzX3JlcXVpcmVkEjpjcmVkZW50aWFscyBhcmUgcmVxdWlyZWQgZm9yIE9TQUMtbWFuYWdlZCBzdG9yYWdlIGJhY2tlbmRzGil0aGlzLmNzcF9tYW5hZ2VkIHx8IGhhcyh0aGlzLmNyZWRlbnRpYWxzKSKcAgoZU3RvcmFnZUJhY2tlbmRDcmVkZW50aWFscxIZCgh1c2VybmFtZRgBIAEoCUIHukgEcgIQARIQCghwYXNzd29yZBgCIAEoCRI+Cg9wYXNzd29yZF9zZWNyZXQYAyABKAsyJS5vc2FjLnByaXZhdGUudjEuU2VjcmV0TG9jYWxSZWZlcmVuY2U6kQG6SI0BGooBChxwYXNzd29yZF94b3JfcGFzc3dvcmRfc2VjcmV0EjZleGFjdGx5IG9uZSBvZiBwYXNzd29yZCBvciBwYXNzd29yZF9zZWNyZXQgbXVzdCBiZSBzZXQaMih0aGlzLnBhc3N3b3JkICE9ICcnKSAhPSBoYXModGhpcy5wYXNzd29yZF9zZWNyZXQpIm0KFFN0b3JhZ2VCYWNrZW5kU3RhdHVzEjMKBXN0YXRlGAEgASgOMiQub3NhYy5wcml2YXRlLnYxLlN0b3JhZ2VCYWNrZW5kU3RhdGUSFAoHbWVzc2FnZRgCIAEoCUgAiAEBQgoKCF9tZXNzYWdlKl0KE1N0b3JhZ2VCYWNrZW5kU3RhdGUSJQohU1RPUkFHRV9CQUNLRU5EX1NUQVRFX1VOU1BFQ0lGSUVEEAASHwobU1RPUkFHRV9CQUNLRU5EX1NUQVRFX1JFQURZEAFCBoq1GAIIAWIGcHJvdG8z", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_metadata_type, file_osac_private_v1_secret_type]);
 
 /**
  * Represents a registered storage backend in the OSAC platform.
@@ -103,6 +104,7 @@ export type StorageBackendSpec = Message<"osac.private.v1.StorageBackendSpec"> &
 
   /**
    * Management endpoint for the storage array. Accepts a URL or host:port format.
+   * Required for OSAC-managed backends; optional for CSP-managed backends.
    *
    * @generated from field: string endpoint = 3;
    */
@@ -110,10 +112,20 @@ export type StorageBackendSpec = Message<"osac.private.v1.StorageBackendSpec"> &
 
   /**
    * Credentials for authenticating with the storage management API.
+   * Required for OSAC-managed backends; optional for CSP-managed backends.
    *
    * @generated from field: osac.private.v1.StorageBackendCredentials credentials = 4;
    */
   credentials?: StorageBackendCredentials | undefined;
+
+  /**
+   * When true, storage resources are managed by the Cloud Provider Admin.
+   * OSAC must not use endpoint or credentials to provision CSP-managed storage.
+   * Defaults to false. Immutable after creation.
+   *
+   * @generated from field: bool csp_managed = 5;
+   */
+  cspManaged: boolean;
 };
 
 /**

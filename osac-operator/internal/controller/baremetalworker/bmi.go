@@ -58,10 +58,13 @@ func isDefinitiveCreateRejection(err error) bool {
 // the caller persists the returned identity and the next invocation re-observes.
 func (r *Reconciler) ensureBMI(
 	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster, nodeSet v1alpha1.NodeRequest,
-	workerName string, image *privatev1.DiskImageReference, ignitionRaw, filter, fabricInterface string,
+	workerName string, image *privatev1.DiskImageReference, ignitionRaw, filter string,
 ) (*privatev1.BareMetalInstance, ctrl.Result, error) {
 	// The worker lives in its cluster's project and records its cluster in status.cluster.
-	req := r.buildBMICreateRequest(co, cluster.GetMetadata().GetTenant(), cluster, nodeSet, workerName, image, ignitionRaw, fabricInterface)
+	req, err := r.buildBMICreateRequest(co, cluster.GetMetadata().GetTenant(), cluster, nodeSet, workerName, image, ignitionRaw)
+	if err != nil {
+		return nil, ctrl.Result{}, err
+	}
 	created, err := r.fulfillment.CreateBareMetalInstance(ctx, req)
 	if err == nil {
 		return created, ctrl.Result{}, nil
@@ -116,13 +119,17 @@ func (r *Reconciler) findBMIByName(ctx context.Context, co *v1alpha1.ClusterOrde
 
 func (r *Reconciler) buildBMICreateRequest(
 	co *v1alpha1.ClusterOrder, tenant string, cluster *privatev1.Cluster, nodeSet v1alpha1.NodeRequest,
-	workerName string, image *privatev1.DiskImageReference, ignitionRaw, fabricInterface string,
-) *privatev1.BareMetalInstance {
+	workerName string, image *privatev1.DiskImageReference, ignitionRaw string,
+) (*privatev1.BareMetalInstance, error) {
 	labels := map[string]string{clusterOrderLabel: co.Name}
 	annotations := map[string]string{ownerReferenceAnnotation: fmt.Sprintf("ClusterOrder/%s", co.Name)}
 
 	var netAttachments []*privatev1.BareMetalNetworkAttachment
 	if na := co.Spec.NetworkAttachment; na != nil && na.SubnetRef != "" {
+		if nodeSet.FabricInterface == "" {
+			return nil, fmt.Errorf("node request %q has no stored fabric interface for network attachment", nodeSet.NodeSet)
+		}
+		fabricInterface := nodeSet.FabricInterface
 		sgRefs := make([]*privatev1.SecurityGroupLocalReference, 0, len(na.SecurityGroupRefs))
 		for _, sg := range na.SecurityGroupRefs {
 			sgRefs = append(sgRefs, privatev1.SecurityGroupLocalReference_builder{Name: sg}.Build())
@@ -173,7 +180,7 @@ func (r *Reconciler) buildBMICreateRequest(
 			}.Build(),
 			NodeSet: &nodeSet.NodeSet,
 		}.Build(),
-	}.Build()
+	}.Build(), nil
 }
 
 func (r *Reconciler) resolveNodeSetInstanceType(
@@ -192,17 +199,6 @@ func (r *Reconciler) resolveNodeSetInstanceType(
 		return nil, ctrl.Result{RequeueAfter: infraEnvRequeueInterval}, nil
 	}
 	return it, ctrl.Result{}, nil
-}
-
-// resolveFabricInterface returns the name of the first network port with role "fabric" from the
-// BareMetalInstanceType. Returns an error if no fabric port is found.
-func resolveFabricInterface(it *privatev1.BareMetalInstanceType) (string, error) {
-	for _, port := range it.GetSpec().GetHardware().GetNetworkPorts() {
-		if port.GetRole() == "fabric" {
-			return port.GetName(), nil
-		}
-	}
-	return "", fmt.Errorf("BareMetalInstanceType %s has no fabric-role network port", it.GetMetadata().GetName())
 }
 
 // checkBMIRecoveryCandidate applies only to creation/name recovery. Existing

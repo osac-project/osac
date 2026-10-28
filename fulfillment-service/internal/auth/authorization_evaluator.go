@@ -89,6 +89,12 @@ func ContextExtensionToMap(authContext *AuthContext) map[string]any {
 	return m
 }
 
+// NormalizeProjectNameForAuthorization converts the dot-separated project
+// name used in object metadata to the slash-separated path used in project authorization groups.
+func NormalizeProjectNameForAuthorization(name string) string {
+	return strings.ReplaceAll(name, ".", "/")
+}
+
 // AuthorizationEvaluator defines the interface for evaluating authorization decisions.
 // Implementations must evaluate whether a given authentication context is authorized
 // to perform a method with the specified context extensions.

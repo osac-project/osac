@@ -25,15 +25,16 @@
             definition:
               apiVersion: coordination.k8s.io/v1
               kind: Lease
-              metadata:
-                name: "{{ vnet_lock_name }}"
-                namespace: "{{ vnet_lock_namespace }}"
-                resourceVersion: "{{ _vnet_lock_release_read.resources[0].metadata.resourceVersion }}"
+              # Keep resourceVersion as a string under native Jinja by
+              # rendering the containing mapping as one value.
+              metadata: "{{ {'name': vnet_lock_name,
+                'namespace': vnet_lock_namespace,
+                'resourceVersion': _vnet_lock_release_read.resources[0].metadata.resourceVersion | string} }}"
               spec:
-                holderIdentity:
+                holderIdentity: null
                 leaseDurationSeconds: "{{ _vnet_lock_release_read.resources[0].spec.leaseDurationSeconds | default(120) | int }}"
-                acquireTime:
-                renewTime:
+                acquireTime: null
+                renewTime: null
           register: _vnet_lock_release_result
           ignore_errors: true
 

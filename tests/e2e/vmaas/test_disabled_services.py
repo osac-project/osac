@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 
 import pytest
@@ -20,9 +21,14 @@ def test_disabled_service_grpc_unavailable(grpc: GRPCClient) -> None:
     assert "bmaas" in combined.lower(), f"Error should mention bmaas service, got: {combined.strip()}"
 
 
-def test_disabled_service_absent_from_reflection(fulfillment_address: str) -> None:
-    output = run("grpcurl", "-insecure", fulfillment_address, "list")
-    services = output.strip().splitlines()
+def test_disabled_service_absent_from_reflection(fulfillment_address: str, grpc: GRPCClient) -> None:
+    env = os.environ.copy()
+    env["REFLECTION_JWT"] = grpc.token
+    result = subprocess.run(
+        ["grpcurl", "-insecure", "-expand-headers", "-H", "Authorization: Bearer ${REFLECTION_JWT}", fulfillment_address, "list"],
+        capture_output=True, text=True, timeout=30, check=True, env=env,
+    )
+    services = result.stdout.strip().splitlines()
     assert f"{PUBLIC_API}.BareMetalInstances" not in services, (
         "Disabled BareMetalInstances should not appear in reflection"
     )

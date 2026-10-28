@@ -365,6 +365,7 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 			setClusterOrderPhase(&latest.Status, computed.Phase)
 		}
 		latest.Status.ClusterReference = computed.ClusterReference
+		latest.Status.UpgradeObservation = computed.UpgradeObservation
 		latest.Status.NodeRequests = computed.NodeRequests
 		latest.Status.ProvisioningJobs = computed.ProvisioningJobs
 		latest.Status.DesiredConfigVersion = computed.DesiredConfigVersion
@@ -615,6 +616,7 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 	if err := r.handleNodePools(ctx, instance, nodePools); err != nil {
 		return err
 	}
+	recordUpgradeObservations(instance, hc, nodePools.Items)
 	// A successful provisioning job only means that the infrastructure request
 	// was accepted. Derive terminal readiness from the live HostedCluster and
 	// NodePool observations in this reconcile.
@@ -825,12 +827,27 @@ func reconcileVIPEndpoints(instance *v1alpha1.ClusterOrder) {
 
 func (r *ClusterOrderReconciler) handleNodePools(ctx context.Context, instance *v1alpha1.ClusterOrder,
 	nodePools *hypershiftv1beta1.NodePoolList) error {
+	present := make(map[string]bool, len(nodePools.Items))
 	for i := range len(nodePools.Items) {
+		if name, ok := nodePoolNodeSet(&nodePools.Items[i]); ok {
+			present[name] = true
+		}
 		err := r.handleNodePool(ctx, instance, &nodePools.Items[i])
 		if err != nil {
 			return fmt.Errorf("failed to handle node pool %d: %w", i, err)
 		}
 	}
+	desired := make(map[string]bool, len(instance.Spec.NodeRequests))
+	for _, request := range instance.Spec.NodeRequests {
+		desired[request.NodeSet] = true
+	}
+	retained := instance.Status.NodeRequests[:0]
+	for _, request := range instance.Status.NodeRequests {
+		if desired[request.NodeSet] || present[request.NodeSet] {
+			retained = append(retained, request)
+		}
+	}
+	instance.Status.NodeRequests = retained
 	return nil
 }
 

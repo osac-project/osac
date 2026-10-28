@@ -1,7 +1,7 @@
 ---
 # The BMaaS Netris full-install test as a suite of the pull request flow: a real Netris lab on an AWS box, so it is slow and
 # expensive and never chosen automatically (the policy marks it manual_only). A member of the organization starts it by
-# commenting `/test netris` on the pull request, or checking its box in the comment the decision keeps there (osac-ci
+# commenting `/test bmaas-netris` on the pull request, or checking its box in the comment the decision keeps there (osac-ci
 # docs/RULES.md, "Starting suites by hand"); e2e-pr.yml calls
 # this workflow for the commit that was asked for, and its line on the pull request is E2E / BMaaS Netris Full Install. It
 # does not hold the E2E check: that check is the sum of the suites the change needs (VMaaS, CaaS, BMaaS).
@@ -48,6 +48,8 @@ jobs:
       pull-requests: read
     uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-netris-full-install.yml@main
     with:
+      suite: bmaas_networking
+      osac-profile: bmaas-ci
       osac-repo: https://github.com/${{ inputs.repo }}.git
       osac-branch: ${{ inputs.sha }}
       components: >-

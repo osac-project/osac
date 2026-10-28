@@ -25,6 +25,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -42,6 +43,7 @@ import (
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
+	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -214,7 +216,7 @@ func (r *ExternalIPAttachmentReconciler) Reconcile(ctx context.Context, req mcre
 		hadFinalizer && !controllerutil.ContainsFinalizer(attachment, osacExternalIPAttachmentFinalizer)
 	if !statusPersistedBeforeFinalizerRemoval && !equality.Semantic.DeepEqual(attachment.Status, *oldstatus) {
 		log.Info("status requires update", "phase", attachment.Status.Phase)
-		if updateErr := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(attachment), attachment.Status); updateErr != nil {
+		if updateErr := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(attachment), attachment.UID, attachment.Generation, attachment.Status); updateErr != nil {
 			return res, updateErr
 		}
 	}
@@ -301,40 +303,17 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 	}
 	pool := &poolList.Items[0]
 
-	networkClassID, err := lookupDefaultNetworkClassID(ctx, r.networkClassesClient)
+	implementationStrategy, contractVersion, targetVNName, attachmentContext, pending, err :=
+		r.resolveExternalIPAttachmentProvisioningContext(ctx, attachment, externalIP, ci, co, bmi)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	implementationStrategy, err := resolveImplementationStrategy(
-		ctx, r.Resolver, "ExternalIPAttachment", networkClassID)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if implementationStrategy == "" {
-		setReadyConditionBlocked(&attachment.Status.Conditions, v1alpha1.ReasonNoManagerConfigured,
-			conditionMessageNoManagerConfigured)
-		log.Info("implementation strategy not resolved", "externalIPAttachment", attachment.Name)
-		return ctrl.Result{}, fmt.Errorf(
-			"cannot reconcile ExternalIPAttachment %q: no fabric manager is configured for NetworkClass %q",
-			attachment.Name, networkClassID)
-	}
-
-	// BMI DNAT precondition: wait for primary IP to be discovered
-	if bmi != nil && bmi.PrimaryIPAddress() == "" {
-		log.Info("BareMetalInstance primary IP not yet discovered, requeueing",
-			"baremetalInstance", bmi.Name)
+	if pending {
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 
-	// Resolve the tenant VirtualNetwork name so the AAP job can create the NAT rule in
-	// the tenant VPC that owns the target IP (VPC name == VirtualNetwork name).
-	targetVNName, result, err := r.resolveTargetVirtualNetworkName(ctx, ci, bmi)
-	if err != nil || result.RequeueAfter > 0 {
-		return result, err
-	}
-
 	needsUpdate := r.syncAnnotations(
-		attachment, pool, externalIP, implementationStrategy, ci, co, bmi, targetVNName,
+		attachment, pool, externalIP, implementationStrategy, contractVersion, ci, co, bmi, targetVNName,
 	)
 	if needsUpdate {
 		if err := r.Update(ctx, attachment); err != nil {
@@ -343,12 +322,13 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
-	// Compute desired config version
-	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(struct {
-		Spec                   v1alpha1.ExternalIPAttachmentSpec
-		ImplementationStrategy string
-		TargetIP               string
-	}{attachment.Spec, implementationStrategy, attachment.Annotations[osacExternalIPTargetIPAnnotation]})
+	desiredVersion, err := externalIPAttachmentDesiredConfigVersion(
+		attachment.Spec,
+		implementationStrategy,
+		contractVersion,
+		attachmentContext,
+		attachment.Annotations[osacExternalIPTargetIPAnnotation],
+	)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to compute desired config version: %w", err)
 	}
@@ -367,7 +347,10 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 		setExternalIPAttachmentPhase(&attachment.Status, v1alpha1.ExternalIPAttachmentPhaseProgressing)
 	}
 
-	return r.handleProvisioning(ctx, attachment, externalIP, ci)
+	if contractVersion == networkmanager.ExternalIPAttachmentContractVersionV1 {
+		ctx = provisioning.WithExternalIPAttachmentContext(ctx, attachmentContext)
+	}
+	return r.handleProvisioning(ctx, attachment, externalIP, ci, attachmentContext)
 }
 
 func (r *ExternalIPAttachmentReconciler) syncAnnotations(
@@ -375,6 +358,7 @@ func (r *ExternalIPAttachmentReconciler) syncAnnotations(
 	pool *v1alpha1.ExternalIPPool,
 	externalIP *v1alpha1.ExternalIP,
 	implementationStrategy string,
+	contractVersion string,
 	ci *v1alpha1.ComputeInstance,
 	co *v1alpha1.ClusterOrder,
 	bmi *bmfov1alpha1.BareMetalInstance,
@@ -388,6 +372,25 @@ func (r *ExternalIPAttachmentReconciler) syncAnnotations(
 	if attachment.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy {
 		attachment.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
 		needsUpdate = true
+	}
+	if contractVersion != "" && attachment.Annotations[osacExternalIPAttachmentContractVersionAnnotation] != contractVersion {
+		attachment.Annotations[osacExternalIPAttachmentContractVersionAnnotation] = contractVersion
+		needsUpdate = true
+	}
+	if contractVersion == networkmanager.ExternalIPAttachmentContractVersionV1 {
+		for _, key := range []string{
+			osacExternalIPNameAnnotation,
+			osacExternalIPPoolNameAnnotation,
+			osacExternalIPTargetNamespaceAnnotation,
+			osacExternalIPTargetIPAnnotation,
+			osacVirtualNetworkNameAnnotation,
+		} {
+			if _, exists := attachment.Annotations[key]; exists {
+				delete(attachment.Annotations, key)
+				needsUpdate = true
+			}
+		}
+		return needsUpdate
 	}
 	if attachment.Annotations[osacExternalIPPoolNameAnnotation] != pool.Name {
 		attachment.Annotations[osacExternalIPPoolNameAnnotation] = pool.Name
@@ -757,32 +760,66 @@ func (r *ExternalIPAttachmentReconciler) handleProvisioning(
 	attachment *v1alpha1.ExternalIPAttachment,
 	externalIP *v1alpha1.ExternalIP,
 	ci *v1alpha1.ComputeInstance,
+	attachmentContext provisioning.ExternalIPAttachmentContext,
 ) (ctrl.Result, error) {
 	if r.ProvisioningProvider == nil {
 		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping provisioning")
 		return ctrl.Result{}, nil
 	}
 
+	contracted := attachment.Annotations[osacExternalIPAttachmentContractVersionAnnotation] ==
+		networkmanager.ExternalIPAttachmentContractVersionV1
+	if contracted {
+		latest := provisioning.FindLatestJobByType(attachment.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
+		if latest != nil && latest.State == v1alpha1.JobStateSucceeded &&
+			attachment.Status.Phase != v1alpha1.ExternalIPAttachmentPhaseReady {
+			outputProvider, ok := r.ProvisioningProvider.(provisioning.ProvisioningProviderWithProvisionOutputs)
+			if !ok {
+				r.failAttachmentProvisionAttempt(attachment, "provisioning provider does not return attachment results")
+				return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+			}
+			status, err := outputProvider.GetProvisionStatusWithExtraVars(ctx, attachment, latest.JobID)
+			if err == nil {
+				err = r.validateAttachmentProvisionResult(ctx, attachment, attachmentContext, status)
+			}
+			if err != nil {
+				r.failAttachmentProvisionAttempt(attachment, err.Error())
+				return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+			}
+			setExternalIPAttachmentPhase(&attachment.Status, v1alpha1.ExternalIPAttachmentPhaseReady)
+			setReadyConditionTrue(&attachment.Status.Conditions)
+			if err := r.onProvisionSuccess(ctx, externalIP, attachment, ci); err != nil {
+				return ctrl.Result{RequeueAfter: r.StatusPollInterval}, err
+			}
+			return ctrl.Result{}, nil
+		}
+	}
+
 	var provisionErr error
+	callbacks := &provisioning.PollCallbacks{
+		OnFailed: func(message string) {
+			setExternalIPAttachmentPhase(&attachment.Status, v1alpha1.ExternalIPAttachmentPhaseFailed)
+			setReadyConditionFailed(&attachment.Status.Conditions, message)
+		},
+		OnSuccess: func(_ provisioning.ProvisionStatus) {
+			setExternalIPAttachmentPhase(&attachment.Status, v1alpha1.ExternalIPAttachmentPhaseReady)
+			provisionErr = r.onProvisionSuccess(ctx, externalIP, attachment, ci)
+			setReadyConditionTrue(&attachment.Status.Conditions)
+		},
+	}
+	if contracted {
+		callbacks.OnSuccessWithExtraVars = func(status provisioning.ProvisionStatusWithExtraVars) error {
+			return r.validateAttachmentProvisionResult(ctx, attachment, attachmentContext, status)
+		}
+		callbacks.OnOutputError = func(message string) {
+			r.failAttachmentProvisionAttempt(attachment, message)
+		}
+	}
 
 	result, err := provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, attachment,
 		&provisioning.State{Jobs: &attachment.Status.ProvisioningJobs, DesiredConfigVersion: attachment.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
-		&provisioning.PollCallbacks{
-			OnFailed: func(message string) {
-				setExternalIPAttachmentPhase(&attachment.Status, v1alpha1.ExternalIPAttachmentPhaseFailed)
-				setReadyConditionFailed(&attachment.Status.Conditions, message)
-			},
-			OnSuccess: func(_ provisioning.ProvisionStatus) {
-				setExternalIPAttachmentPhase(&attachment.Status, v1alpha1.ExternalIPAttachmentPhaseReady)
-				// onProvisionSuccess error causes a requeue via provisionErr, but the
-				// provisioning lifecycle won't re-invoke OnSuccess (job already succeeded).
-				// The retry.RetryOnConflict inside onProvisionSuccess makes this window
-				// very narrow — only persistent non-conflict API errors can reach here.
-				provisionErr = r.onProvisionSuccess(ctx, externalIP, attachment, ci)
-				setReadyConditionTrue(&attachment.Status.Conditions)
-			},
-		},
+		callbacks,
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(
 				ctx, r.APIReader, client.ObjectKeyFromObject(attachment), &v1alpha1.ExternalIPAttachment{}, func(obj client.Object) []v1alpha1.JobStatus {
@@ -790,7 +827,7 @@ func (r *ExternalIPAttachmentReconciler) handleProvisioning(
 				})
 		},
 		func() error {
-			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(attachment), attachment.Status)
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(attachment), attachment.UID, attachment.Generation, attachment.Status)
 		},
 	)
 	if err != nil {
@@ -800,6 +837,19 @@ func (r *ExternalIPAttachmentReconciler) handleProvisioning(
 		return ctrl.Result{}, provisionErr
 	}
 	return result, nil
+}
+
+func (r *ExternalIPAttachmentReconciler) failAttachmentProvisionAttempt(
+	attachment *v1alpha1.ExternalIPAttachment,
+	message string,
+) {
+	job := provisioning.FindLatestJobByType(attachment.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
+	if job != nil {
+		job.State = v1alpha1.JobStateFailed
+		job.Message = message
+	}
+	setExternalIPAttachmentPhase(&attachment.Status, v1alpha1.ExternalIPAttachmentPhaseFailed)
+	setReadyConditionFailed(&attachment.Status.Conditions, message)
 }
 
 // onProvisionSuccess updates the target ComputeInstance status.
@@ -857,12 +907,21 @@ func (r *ExternalIPAttachmentReconciler) handleDelete(ctx context.Context, attac
 		*attachment = *latest
 	}
 
-	if attachment.Annotations[osacImplementationStrategyAnnotation] == "" {
+	contracted := attachment.Annotations[osacExternalIPAttachmentContractVersionAnnotation] ==
+		networkmanager.ExternalIPAttachmentContractVersionV1
+	if attachment.Annotations[osacImplementationStrategyAnnotation] == "" && !contracted {
 		log.Info("skipping deprovisioning — attachment was never provisioned")
 	} else {
 		result, err := r.handleDeprovisioning(ctx, attachment)
 		if err != nil || result.RequeueAfter > 0 {
 			return result, err
+		}
+		if contracted {
+			if err := r.acceptAttachmentDeprovisionResult(ctx, attachment); err != nil {
+				markAttachmentDeprovisionJobFailed(attachment, err.Error())
+				setReadyConditionFailed(&attachment.Status.Conditions, err.Error())
+				return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+			}
 		}
 	}
 
@@ -1142,6 +1201,9 @@ func (r *ExternalIPAttachmentReconciler) mapClusterOrderToExternalIPAttachments(
 
 func (r *ExternalIPAttachmentReconciler) handleDeprovisioning(ctx context.Context, attachment *v1alpha1.ExternalIPAttachment) (ctrl.Result, error) {
 	if r.ProvisioningProvider == nil {
+		if attachment.Annotations[osacExternalIPAttachmentContractVersionAnnotation] == networkmanager.ExternalIPAttachmentContractVersionV1 {
+			return ctrl.Result{}, fmt.Errorf("cannot detach contracted ExternalIPAttachment without a provisioning provider")
+		}
 		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
 		return ctrl.Result{}, nil
 	}
@@ -1167,7 +1229,7 @@ func (r *ExternalIPAttachmentReconciler) handleDeprovisioning(ctx context.Contex
 				return ctrl.Result{}, err
 			}
 			if found {
-				if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(attachment), attachment.Status); err != nil {
+				if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(attachment), attachment.UID, attachment.Generation, attachment.Status); err != nil {
 					return ctrl.Result{}, err
 				}
 				if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, attachment, claim.ID); err != nil {
@@ -1185,7 +1247,7 @@ func (r *ExternalIPAttachmentReconciler) handleDeprovisioning(ctx context.Contex
 		return result, err
 	}
 	if !equality.Semantic.DeepEqual(attachment.Status, *beforeStatus) {
-		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(attachment), attachment.Status); err != nil {
+		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(attachment), attachment.UID, attachment.Generation, attachment.Status); err != nil {
 			return result, err
 		}
 	}
@@ -1200,7 +1262,13 @@ func (r *ExternalIPAttachmentReconciler) handleDeprovisioning(ctx context.Contex
 	return ctrl.Result{}, nil
 }
 
-func (r *ExternalIPAttachmentReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.ExternalIPAttachmentStatus) error {
+func (r *ExternalIPAttachmentReconciler) updateStatusWithRetry(
+	ctx context.Context,
+	key client.ObjectKey,
+	expectedUID types.UID,
+	expectedGeneration int64,
+	newStatus v1alpha1.ExternalIPAttachmentStatus,
+) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		latest := &v1alpha1.ExternalIPAttachment{}
 		reader := r.APIReader
@@ -1209,6 +1277,31 @@ func (r *ExternalIPAttachmentReconciler) updateStatusWithRetry(ctx context.Conte
 		}
 		if err := reader.Get(ctx, key, latest); err != nil {
 			return err
+		}
+		if latest.UID != expectedUID || latest.Generation != expectedGeneration {
+			return fmt.Errorf("ExternalIPAttachment changed while status was being reconciled")
+		}
+		if r.NetworkProvisioningEnabled &&
+			latest.Annotations[osacExternalIPAttachmentContractVersionAnnotation] == networkmanager.ExternalIPAttachmentContractVersionV1 &&
+			newStatus.Phase == v1alpha1.ExternalIPAttachmentPhaseReady {
+			currentContext, err := r.currentAgentlessAttachmentContext(ctx, latest)
+			if err != nil {
+				return fmt.Errorf("cannot mark ExternalIPAttachment Ready: %w", err)
+			}
+			desiredVersion, err := externalIPAttachmentDesiredConfigVersion(
+				latest.Spec,
+				latest.Annotations[osacImplementationStrategyAnnotation],
+				networkmanager.ExternalIPAttachmentContractVersionV1,
+				currentContext,
+				"",
+			)
+			if err != nil || desiredVersion != newStatus.DesiredConfigVersion {
+				return fmt.Errorf("ExternalIPAttachment dependencies changed before Ready status was written")
+			}
+			job := provisioning.FindLatestJobByType(newStatus.ProvisioningJobs, v1alpha1.JobTypeProvision)
+			if job == nil || job.State != v1alpha1.JobStateSucceeded || job.ConfigVersion != desiredVersion {
+				return fmt.Errorf("ExternalIPAttachment has no matching successful provision job")
+			}
 		}
 		latest.Status = newStatus
 		return r.Status().Update(ctx, latest)

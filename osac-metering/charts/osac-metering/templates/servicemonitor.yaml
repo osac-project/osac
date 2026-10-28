@@ -1,0 +1,39 @@
+{{- /*
+Scraping for every metrics endpoint this chart deploys. Opt-in: it requires a
+Prometheus operator or OpenShift user-workload monitoring to select the
+ServiceMonitors. The meters matter because billing can stop while the pod
+stays ready, and the metrics are the only signal that shows it.
+*/}}
+{{- if .Values.serviceMonitor.enabled }}
+{{- $monitors := list (dict "component" "metering" "port" "metrics" "suffix" "") }}
+{{- if .Values.echoAdapter.enabled }}
+{{- $monitors = append $monitors (dict "component" "echo-adapter" "port" "http" "suffix" "-echo-adapter") }}
+{{- end }}
+{{- if .Values.m360Adapter.enabled }}
+{{- $monitors = append $monitors (dict "component" "m360-adapter" "port" "http" "suffix" "-m360-adapter") }}
+{{- end }}
+{{- range $i, $monitor := $monitors }}
+{{- if $i }}
+---
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "osac-metering.fullname" $ }}{{ $monitor.suffix }}
+  labels:
+    {{- include "osac-metering.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $monitor.component }}
+    {{- with $.Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "osac-metering.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $monitor.component }}
+  endpoints:
+    - port: {{ $monitor.port }}
+      path: /metrics
+      interval: 60s
+{{- end }}
+{{- end }}

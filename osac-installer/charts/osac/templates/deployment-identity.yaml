@@ -1,4 +1,3 @@
-{{- if .Values.metering.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10,4 +9,3 @@ metadata:
     helm.sh/resource-policy: keep
 data:
   osacDeploymentId: {{ include "osac.osacDeploymentId" . | quote }}
-{{- end }}

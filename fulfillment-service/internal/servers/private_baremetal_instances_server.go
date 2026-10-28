@@ -34,6 +34,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
+	"github.com/osac-project/osac/fulfillment-service/internal/validation"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -336,7 +337,7 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 	if err = validatePlatformReference(ref, "bare metal instance type", " in spec.instance_type"); err != nil {
 		return
 	}
-	instanceType, err := resolveAndCanonicalizeReference(ctx, s.instanceTypesDao, candidate.GetMetadata(), ref,
+	instanceType, err := resolveAndCanonicalizeLockedReference(ctx, s.instanceTypesDao, candidate.GetMetadata(), ref,
 		"bare metal instance type", grpccodes.NotFound)
 	if err != nil {
 		return
@@ -400,7 +401,14 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 			return nil, err
 		}
 		candidate.GetSpec().SetDiskImage(canonicalDiskImageReference(resolved))
-		return validateResolvedDiskImage(resolved, refKey(ref), "")
+		warnings, err := validateResolvedDiskImage(resolved, refKey(ref), "")
+		if err != nil {
+			return nil, err
+		}
+		if err := validation.ValidateBareMetalDiskImageArchitecture(instanceType, resolved); err != nil {
+			return nil, grpcstatus.Error(grpccodes.InvalidArgument, err.Error())
+		}
+		return warnings, nil
 	}
 
 	return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "disk_image is mandatory")

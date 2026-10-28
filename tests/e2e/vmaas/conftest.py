@@ -11,6 +11,7 @@ import pytest
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     delete_instance_type_if_present,
+    wait_for_grpc_security_group_ready,
     wait_for_grpc_subnet_ready,
     wait_for_security_group_cr,
     wait_for_security_group_ready,
@@ -95,6 +96,10 @@ def default_networking(grpc: GRPCClient, k8s_hub_client: K8sClient, test_run_id:
         )
         security_group_cr_name = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=security_group_id)
         wait_for_security_group_ready(k8s=k8s_hub_client, name=security_group_cr_name)
+        # Close the CR-Ready-versus-database-PENDING race for the first VM
+        # created after this session fixture: the feedback loop can lag the CR
+        # status, and ComputeInstances/Create rejects a PENDING security group.
+        wait_for_grpc_security_group_ready(grpc=grpc, sg_id=security_group_id)
         print("SecurityGroup is Ready")
 
         yield {
@@ -229,7 +234,7 @@ def additional_storage_tiers(private_grpc: GRPCClient, test_run_id: str) -> Iter
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _wait_for_tenant_storage_ready(k8s_hub_client: K8sClient, namespace: str) -> None:
+def _wait_for_tenant_storage_ready(cluster_tenants: None, k8s_hub_client: K8sClient, namespace: str) -> None:
     """Wait for ClusterStorageReady=True before any VMaaS tests if storage is configured.
 
     When storageFulfillment is enabled, the storage controller triggers AAP jobs to

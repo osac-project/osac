@@ -312,10 +312,13 @@ def test_fabric_outputs_are_validated_before_configmap_publication() -> None:
     assert validation_index < publication_index
 
     configmap = tasks[publication_index]["kubernetes.core.k8s"]["definition"]["data"]
-    assert tuple(configmap) == _OUTPUT_KEYS
-    assert configmap["l2_vni"] == "{{ netris_vnet_detail.vxlanID | string | trim }}"
-    assert configmap["l3_vni"] == "{{ subnet_l3_vni | string }}"
-    assert configmap["fabric_reserved_range"] == "{{ _fabric_reserved_range | string | trim }}"
+    assert isinstance(configmap, str)
+    assert [configmap.index(f"'{key}':") for key in _OUTPUT_KEYS] == sorted(
+        configmap.index(f"'{key}':") for key in _OUTPUT_KEYS
+    )
+    assert "'l2_vni': netris_vnet_detail.vxlanID | string | trim" in configmap
+    assert "'l3_vni': subnet_l3_vni | string" in configmap
+    assert "'fabric_reserved_range': _fabric_reserved_range | string | trim" in configmap
 
     create_vnet = tasks[names.index("Create V-Net in Netris controller")]["vars"]
     assert create_vnet["vnet_gateway"] == "{{ _gateway_cidr | default(omit) }}"

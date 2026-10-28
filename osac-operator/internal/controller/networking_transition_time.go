@@ -16,6 +16,7 @@ package controller
 import (
 	"context"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -29,6 +30,36 @@ func setExternalIPState(status *v1alpha1.ExternalIPStatus, state v1alpha1.Extern
 	status.State = state
 	now := metav1.Now()
 	status.StateTransitionTime = &now
+}
+
+// stateTransitionTimeOf returns the time a status change happened. A CR deleted before any
+// controller status write carries no transition time; the deletion started at the deletion
+// timestamp, so that is then the time of the change. Reporting no time would make
+// fulfillment reject the state change as backdated, and the resource could never finish
+// deleting.
+func stateTransitionTimeOf(at, deleted *metav1.Time) *timestamppb.Timestamp {
+	if at == nil {
+		at = deleted
+	}
+	if at == nil {
+		return nil
+	}
+	return timestamppb.New(at.Time)
+}
+
+// laterTransitionTimeOf returns the later of the two times: the deletion
+// started at the deletion timestamp, but a reconciler status write can land
+// after it, and fulfillment rejects a change whose time is not later than the
+// stored one. Reporting the later of the two satisfies both: a stale
+// pre-deletion phase time never dates the report (the deletion timestamp
+// wins), and a post-delete status write never gets rejected (the status time
+// wins).
+func laterTransitionTimeOf(a, b *metav1.Time) *timestamppb.Timestamp {
+	at := stateTransitionTimeOf(a, b)
+	if a != nil && b != nil && b.Time.After(a.Time) {
+		at = timestamppb.New(b.Time)
+	}
+	return at
 }
 
 func setExternalIPDeleting(status *v1alpha1.ExternalIPStatus) bool {

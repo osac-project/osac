@@ -1,0 +1,104 @@
+---
+- name: ah_ee_registry integration tests with token auth
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+    - name: Create a token for testing
+      ansible.hub.ah_token:
+        ah_username: "{{ ah_username }}"
+        ah_password: "{{ ah_password }}"
+        state: present
+      no_log: true
+
+    - name: Define variables for registry name (token auth)
+      set_fact:
+        registry_name_token: "ee_token_{{ test_id }}"
+
+    - name: Create EE remote registry in check_mode (token auth)
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_name_token }}"
+        url: https://quay.io/my/registry
+        state: present
+        ah_token: "{{ ah_token.token }}"
+      register: r_token_check
+      check_mode: true
+
+    - name: Check if the remote registry EE is created in check_mode (token auth)
+      assert:
+        that:
+          - r_token_check.changed
+
+    - name: Create EE remote registry (token auth)
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_name_token }}"
+        url: https://quay.io/my/registry
+        state: present
+        ah_token: "{{ ah_token.token }}"
+      register: r_token
+
+    - name: Check if the remote registry EE is created (token auth)
+      assert:
+        that:
+          - r_token.changed
+
+    - name: Create EE remote registry again (token auth)
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_name_token }}"
+        url: https://quay.io/my/registry
+        state: present
+        ah_token: "{{ ah_token.token }}"
+      register: r_token_again
+
+    - name: Check if the remote registry EE is not created again (token auth)
+      assert:
+        that:
+          - not r_token_again.changed
+
+    - name: Delete EE remote registry (token auth)
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_name_token }}"
+        url: https://quay.io/my/registry
+        state: absent
+        ah_token: "{{ ah_token.token }}"
+      register: r_token_delete
+
+    - name: Check if the remote registry EE is deleted (token auth)
+      assert:
+        that:
+          - r_token_delete.changed
+
+    - name: Delete EE remote registry again (token auth)
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_name_token }}"
+        url: https://quay.io/my/registry
+        state: absent
+        ah_token: "{{ ah_token.token }}"
+      register: r_token_delete_again
+
+    - name: Check if the remote registry EE is not deleted (token auth)
+      assert:
+        that:
+          - not r_token_delete_again.changed
+
+  always:
+    - name: Delete EE remote registry (token auth)
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_name_token | default('') }}"
+        state: absent
+        ah_token: "{{ ah_token.token | default('') }}"
+      ignore_errors: true
+
+    - name: Remove test token
+      ansible.hub.ah_token:
+        ah_username: "{{ ah_username }}"
+        ah_password: "{{ ah_password }}"
+        token: "{{ ah_token.token | default('') }}"
+        state: absent
+      ignore_errors: true
+      no_log: true

@@ -37,7 +37,7 @@ var _ = Describe("CLI Catalog Item descriptions", Label("cli", "catalog-items"),
 			Title:    "Development VM", Published: true,
 			Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
 			Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
-				SshKey: publicv1.SecretReferenceFieldPolicy_builder{Editable: publicv1.EditableSecretReferenceField_builder{}.Build()}.Build(),
+				SshKey: publicv1.FullSecretReferenceFieldPolicy_builder{Editable: publicv1.EditableFullSecretReferenceField_builder{}.Build()}.Build(),
 				BootDisk: publicv1.ComputeInstanceBootDiskFieldPolicies_builder{
 					SizeGib: publicv1.Int32FieldPolicy_builder{Editable: publicv1.EditableInt32Field_builder{DefaultValue: new(int32(80))}.Build()}.Build(),
 				}.Build(),

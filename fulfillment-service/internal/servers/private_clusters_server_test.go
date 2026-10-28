@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -760,7 +761,7 @@ var _ = Describe("Private clusters server", func() {
 						Id: id,
 						Status: privatev1.ClusterStatus_builder{
 							State:               privatev1.ClusterState_CLUSTER_STATE_READY,
-							StateTransitionTime: timestamppb.Now(),
+							StateTransitionTime: timestamppb.New(time.Now().Truncate(time.Second)),
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.state_transition_time"}},
@@ -796,6 +797,9 @@ var _ = Describe("Private clusters server", func() {
 			object := response.GetObject()
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
+			Expect(object.GetStatus().GetObservedCpVersion()).To(Equal("4.17.0"))
+			Expect(object.GetStatus().GetNodeSets()["compute"].GetObservedVersion()).To(Equal("4.17.0"))
+			Expect(object.GetStatus().GetNodeSets()["gpu"].GetObservedVersion()).To(Equal("4.17.0"))
 
 			// Verify that the node sets inherited from the template carry the canonicalized
 			// bare metal instance type references:
@@ -1516,6 +1520,7 @@ var _ = Describe("Private clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updateResponse.GetObject().GetSpec().GetAddOnOperators()).To(HaveLen(1))
 			Expect(updateResponse.GetObject().GetSpec().GetAddOnOperators()[0].GetName()).To(Equal("operator-one"))
+			Expect(proto.Equal(updateResponse.GetObject().GetSpec(), createResponse.GetObject().GetSpec())).To(BeTrue())
 		})
 
 		It("preserves add-on operators when the referenced operator is deleted", func() {
@@ -2687,7 +2692,7 @@ var _ = Describe("Private clusters server", func() {
 						Id: object.GetId(),
 						Status: privatev1.ClusterStatus_builder{
 							State:               state,
-							StateTransitionTime: timestamppb.Now(),
+							StateTransitionTime: timestamppb.New(time.Now().Truncate(time.Second)),
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{
@@ -3127,7 +3132,7 @@ var _ = Describe("Private clusters server", func() {
 						Id: object.GetId(),
 						Status: privatev1.ClusterStatus_builder{
 							State:               privatev1.ClusterState_CLUSTER_STATE_READY,
-							StateTransitionTime: timestamppb.Now(),
+							StateTransitionTime: timestamppb.New(time.Now().Truncate(time.Second)),
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{
@@ -4059,6 +4064,15 @@ var _ = Describe("Private clusters server", func() {
 				updated := response.GetObject()
 				Expect(updated.GetSpec().GetNodeSets()["compute"].GetVersion().GetId()).To(Equal("cv-next"))
 				Expect(updated.GetSpec().GetNodeSets()["gpu"].GetVersion().GetId()).To(Equal("cv-default"))
+				Expect(updated.GetStatus().GetUpgradeHistory()).To(HaveLen(1))
+				attempt := updated.GetStatus().GetUpgradeHistory()[0]
+				Expect(attempt.GetAttemptId()).NotTo(BeEmpty())
+				Expect(attempt.GetComponent().GetNodeSetId()).To(Equal("compute"))
+				Expect(attempt.GetSourceVersion()).To(Equal("4.17.0"))
+				Expect(attempt.GetTargetVersion()).To(Equal("4.18.0"))
+				Expect(attempt.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+				Expect(updated.GetSpec().GetNodeSetAttemptIds()["compute"]).To(Equal(attempt.GetAttemptId()))
+				Expect(updated.GetSpec().GetNodeSetAttemptIds()["gpu"]).To(BeEmpty())
 				scaled, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Id: cluster.GetId(),
@@ -4070,6 +4084,7 @@ var _ = Describe("Private clusters server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(scaled.GetObject().GetSpec().GetNodeSets()["compute"].GetVersion().GetId()).To(Equal("cv-next"))
+				Expect(scaled.GetObject().GetSpec().GetNodeSetAttemptIds()["compute"]).To(Equal(attempt.GetAttemptId()))
 			})
 
 			It("rejects a node-set version change through a node-sets replacement", func() {
@@ -4207,6 +4222,7 @@ var _ = Describe("Private clusters server", func() {
 					Expect(err).ToNot(HaveOccurred())
 					Expect(updated.GetObject().GetSpec().GetNodeSets()["storage"].GetVersion().GetId()).To(Equal("cv-default"))
 					Expect(updated.GetObject().GetSpec().GetNodeSets()["compute"].GetVersion().GetId()).To(Equal("cv-default"))
+					Expect(updated.GetObject().GetStatus().GetNodeSets()["storage"].GetObservedVersion()).To(Equal("4.17.0"))
 				},
 				Entry("fills an omitted version", ""),
 				Entry("preserves the explicit control-plane version", "4-17-0"),
@@ -5270,6 +5286,17 @@ var _ = Describe("Private clusters server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				return response.GetObject()
 			}
+			updateNodeSetVersion := func(id, name string) *privatev1.Cluster {
+				response, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{Id: id,
+						Spec: privatev1.ClusterSpec_builder{NodeSets: map[string]*privatev1.ClusterNodeSet{
+							name: privatev1.ClusterNodeSet_builder{Version: privatev1.ClusterVersionReference_builder{Name: "4-18-0"}.Build()}.Build(),
+						}}.Build()}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.node_sets." + name + ".version"}},
+				}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				return response.GetObject()
+			}
 
 			It("Is unset until the version changes", func() {
 				object := createCluster()
@@ -5284,6 +5311,15 @@ var _ = Describe("Private clusters server", func() {
 
 				Expect(updated.GetSpec().GetVersion().GetName()).To(Equal("4-18-0"))
 				Expect(updated.GetStatus().GetVersionTransitionTime()).ToNot(BeNil())
+				Expect(updated.GetStatus().GetUpgradeHistory()).To(HaveLen(1))
+				attempt := updated.GetStatus().GetUpgradeHistory()[0]
+				Expect(attempt.GetAttemptId()).NotTo(BeEmpty())
+				Expect(attempt.GetComponent().GetControlPlane()).NotTo(BeNil())
+				Expect(attempt.GetSourceVersion()).To(Equal("4.17.0"))
+				Expect(attempt.GetTargetVersion()).To(Equal("4.18.0"))
+				Expect(attempt.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+				Expect(attempt.GetAcceptedTime()).To(Equal(attempt.GetLastStateTime()))
+				Expect(updated.GetSpec().GetControlPlaneAttemptId()).To(Equal(attempt.GetAttemptId()))
 			})
 
 			It("Is not re-stamped when the same version is set again", func() {
@@ -5297,6 +5333,77 @@ var _ = Describe("Private clusters server", func() {
 				again := updateVersion(updated.GetId(), "4-18-0")
 
 				Expect(again.GetStatus().GetVersionTransitionTime().AsTime()).To(Equal(stamp.AsTime()))
+				Expect(again.GetStatus().GetUpgradeHistory()).To(HaveLen(1))
+				Expect(again.GetSpec().GetControlPlaneAttemptId()).To(Equal(updated.GetSpec().GetControlPlaneAttemptId()))
+			})
+
+			It("keeps independent component IDs and newest-first history", func() {
+				cluster := createCluster()
+				seedNextVersion()
+				controlPlane := updateVersion(cluster.GetId(), "4-18-0")
+				cpID := controlPlane.GetSpec().GetControlPlaneAttemptId()
+				compute := updateNodeSetVersion(cluster.GetId(), "compute")
+				computeID := compute.GetSpec().GetNodeSetAttemptIds()["compute"]
+				gpu := updateNodeSetVersion(cluster.GetId(), "gpu")
+				gpuID := gpu.GetSpec().GetNodeSetAttemptIds()["gpu"]
+				Expect(gpuID).NotTo(Equal(computeID))
+				Expect(gpu.GetSpec().GetNodeSetAttemptIds()["compute"]).To(Equal(computeID))
+				Expect(gpu.GetSpec().GetControlPlaneAttemptId()).To(Equal(cpID))
+				history := gpu.GetStatus().GetUpgradeHistory()
+				Expect(history).To(HaveLen(3))
+				Expect(history[0].GetAttemptId()).To(Equal(gpuID))
+				Expect(history[1].GetAttemptId()).To(Equal(computeID))
+				Expect(history[2].GetAttemptId()).To(Equal(cpID))
+			})
+
+			It("updates an earlier component's history entry without reordering it", func() {
+				cluster := createCluster()
+				seedNextVersion()
+				controlPlane := updateVersion(cluster.GetId(), "4-18-0")
+				cpID := controlPlane.GetSpec().GetControlPlaneAttemptId()
+				compute := updateNodeSetVersion(cluster.GetId(), "compute")
+				history := compute.GetStatus().GetUpgradeHistory()
+				Expect(history).To(HaveLen(2))
+				cpTransition := &privatev1.ClusterUpgradeHistoryEntry{}
+				cpTransition.SetAttemptId(cpID)
+				cpTransition.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING)
+				cpTransition.SetLastStateTime(timestamppb.New(history[1].GetLastStateTime().AsTime().Add(time.Second)))
+				cpTransition.SetMessage("Control plane is updating")
+				response, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{Id: cluster.GetId(),
+						Status: privatev1.ClusterStatus_builder{UpgradeHistory: []*privatev1.ClusterUpgradeHistoryEntry{cpTransition}}.Build()}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.upgrade_history"}},
+				}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				merged := response.GetObject().GetStatus().GetUpgradeHistory()
+				Expect(merged).To(HaveLen(2))
+				Expect(merged[0].GetAttemptId()).To(Equal(compute.GetSpec().GetNodeSetAttemptIds()["compute"]))
+				Expect(merged[1].GetAttemptId()).To(Equal(cpID))
+				Expect(merged[1].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
+				Expect(proto.Equal(merged[1].GetComponent(), history[1].GetComponent())).To(BeTrue())
+				Expect(proto.Equal(merged[1].GetAcceptedTime(), history[1].GetAcceptedTime())).To(BeTrue())
+			})
+
+			It("preserves server-owned attempt IDs on full-object and parent-spec edits", func() {
+				cluster := createCluster()
+				seedNextVersion()
+				updated := updateVersion(cluster.GetId(), "4-18-0")
+				id := updated.GetSpec().GetControlPlaneAttemptId()
+				full := proto.Clone(updated).(*privatev1.Cluster)
+				full.GetSpec().SetControlPlaneAttemptId("caller-value")
+				full.GetStatus().SetUpgradeHistory(nil)
+				response, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{Object: full}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetControlPlaneAttemptId()).To(Equal(id))
+				Expect(response.GetObject().GetStatus().GetUpgradeHistory()).To(HaveLen(1))
+				partial := privatev1.Cluster_builder{Id: cluster.GetId(),
+					Spec: proto.Clone(updated.GetSpec()).(*privatev1.ClusterSpec)}.Build()
+				partial.GetSpec().SetControlPlaneAttemptId("other-caller-value")
+				response, err = server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: partial, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec"}},
+				}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetControlPlaneAttemptId()).To(Equal(id))
 			})
 
 			// createClusterWithIdOnlyVersion inserts a cluster whose stored version reference
@@ -5906,6 +6013,61 @@ var _ = Describe("Private clusters server", func() {
 				Expect(nodeSet).ToNot(BeNil())
 				// The first port with role=fabric is "data-0"
 				Expect(nodeSet.GetFabricInterface()).To(Equal("data-0"))
+			})
+
+			It("Keeps fabric_interface when BMIT fabric ports change after Create", func() {
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "fabric-immutable"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets: map[string]*privatev1.ClusterNodeSet{
+								"compute": privatev1.ClusterNodeSet_builder{
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+										Id: "bmit-fabric-id", Shared: true,
+									}.Build(),
+									Size: proto.Int32(3),
+								}.Build(),
+							},
+							NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "default-sg"}.Build()},
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetNodeSets()["compute"].GetFabricInterface()).To(Equal("data-0"))
+
+				// Reorder BMIT ports so the first fabric port would now be data-1.
+				bmitDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceType]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				getResp, err := bmitDao.Get().SetId("bmit-fabric-id").Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				bmit := getResp.GetObject()
+				bmit.GetSpec().GetHardware().SetNetworkPorts([]*privatev1.BareMetalNetworkPortSpec{
+					privatev1.BareMetalNetworkPortSpec_builder{
+						Name: "mgmt-0", Role: "management", Type: "Ethernet", Speed: "1Gbps",
+					}.Build(),
+					privatev1.BareMetalNetworkPortSpec_builder{
+						Name: "data-1", Role: "fabric", Type: "Ethernet", Speed: "100Gbps",
+					}.Build(),
+					privatev1.BareMetalNetworkPortSpec_builder{
+						Name: "data-0", Role: "fabric", Type: "Ethernet", Speed: "100Gbps",
+					}.Build(),
+				})
+				_, err = bmitDao.Update().SetObject(bmit).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				getCluster, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{
+					Id: response.GetObject().GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(getCluster.GetObject().GetSpec().GetNodeSets()["compute"].GetFabricInterface()).
+					To(Equal("data-0"), "stored fabric_interface must not track later BMIT changes")
 			})
 
 			It("Returns FailedPrecondition when BMIT has no fabric port", func() {

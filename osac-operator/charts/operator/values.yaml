@@ -96,7 +96,11 @@ certs:
     kind: ClusterIssuer
     name: default-ca
 
+# Path and Secret used to connect controllers to a remote VMaaS cluster.
+# Set both values to enable remote-cluster mode; leave both empty for local mode.
 remoteClusterKubeconfig: ""
+remoteClusterKubeconfigSecretName: ""
+remoteClusterKubeconfigSecretKey: kubeconfig
 
 hubAccess:
   enabled: false
@@ -129,6 +133,7 @@ networkManagers:
   fabricManagers:
     netris:
       enabled: false
+      externalIPContractVersion: v1
       description: >-
         Netris SDN controller for physical fabric management.
         Manages VLAN/VxLAN segments, ACLs, public IP allocation, and NAT gateways.
@@ -148,12 +153,13 @@ networkManagers:
     agentless_net:
       enabled: false
       externalIPContractVersion: v1
+      externalIPAttachmentContractVersion: v1
       description: >-
         AgentlessNet VirtualNetwork and Subnet baseline. Implements UID-keyed
         namespaces, /31 transit links, Cumulus trunk VLANs, Subnet gateways,
         per-VirtualNetwork DHCP, and UID-owned IPv4 ExternalIP allocation and
-        release. Attachments, SecurityGroups, NAT, BGP, and external traffic
-        remain unsupported.
+        release. Supports BMaaS ExternalIPAttachment DNAT and external route
+        lifecycle. SecurityGroups and NATGateway SNAT remain unsupported.
       capabilities:
       - ipv4
   k8sManagers:

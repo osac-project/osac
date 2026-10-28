@@ -157,9 +157,9 @@ func createTenant(id string) {
 }
 
 // seedTenantDefaultNetworking seeds a READY default Subnet and SecurityGroup (plus backing
-// VirtualNetwork) so BareMetalInstance Create can inject omitted attachments. Reuses the
-// deployment-singleton NetworkClass when one already exists; otherwise creates one with the
-// optional fabricManager.
+// VirtualNetwork) so BareMetalInstance and Cluster Create can inject omitted attachments.
+// Reuses the deployment-singleton NetworkClass when one already exists; otherwise creates
+// one with the optional fabricManager.
 func seedTenantDefaultNetworking(tenant, project string, fabricManager *string) (
 	subnetID, securityGroupID, virtualNetworkID string,
 ) {

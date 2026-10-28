@@ -1066,7 +1066,9 @@ func (s *PrivateClustersServer) resolveTargetTenant(ctx context.Context, cluster
 }
 
 // injectDefaultNetworkAttachment populates spec.network_attachment from the
-// tenant's default subnet and security group when the caller omits it.
+// tenant's default subnet and security group when the caller omits it. It
+// returns InvalidArgument when the tenant has no usable default subnet or
+// security group, so creation fails before persistence.
 func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Context,
 	cluster *privatev1.Cluster) error {
 	tenant, err := s.resolveTargetTenant(ctx, cluster)
@@ -1082,7 +1084,8 @@ func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Conte
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default subnet")
 	}
 	if subnet == nil {
-		return nil
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"spec.network_attachment.subnet: a default subnet is required when no subnet is provided")
 	}
 
 	attachment := privatev1.ClusterNetworkAttachment_builder{
@@ -1095,21 +1098,19 @@ func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Conte
 		s.logger.ErrorContext(ctx, "failed to look up default security group", slog.Any("error", err))
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default security group")
 	}
-	if sg != nil {
-		attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
-			privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),
-		})
+	if sg == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"spec.network_attachment.security_groups: a default security group is required when no security groups are provided")
 	}
+	attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
+		privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),
+	})
 
 	spec.SetNetworkAttachment(attachment)
 
-	attrs := []slog.Attr{
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "auto-injected default network attachment",
 		slog.String("subnet_id", subnet.GetId()),
-	}
-	if sg != nil {
-		attrs = append(attrs, slog.String("security_group_id", sg.GetId()))
-	}
-	s.logger.LogAttrs(ctx, slog.LevelInfo, "auto-injected default network attachment", attrs...)
+		slog.String("security_group_id", sg.GetId()))
 	return nil
 }
 

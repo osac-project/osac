@@ -166,3 +166,23 @@ same-job-result validation. AgentlessNet implements it under OSAC-6308. Netris
 must adopt the attachment v1 contract before advertising it; that work is
 tracked by OSAC-6638. The OSAC-6308 deployed E2E coverage uses a test-only static
 route and does not validate upstream BGP advertisement.
+
+## Shared provisioning configuration (OSAC-5993)
+
+The accepted unified networking design's provider-networking control is
+`global.networking.provisioningEnabled`, default `true`. The umbrella and
+standalone charts propagate `OSAC_ENABLE_NETWORKING_PROVISIONING` to
+Fulfillment API/controller, OSAC Operator, and BMF; processes retain and log
+one startup value. BMF now defaults to `true` independently of AAP credentials.
+Legacy per-component keys are rejected. This configuration work overlaps the
+accepted disabled-mode contract only at its configuration boundary: API gates,
+manager selection, logical readiness and default onboarding runtime changes
+remain separate epic work. Do not infer complete disabled-mode support from a
+successful render or matching startup values. See the
+[rollout and migration guide](../../osac-installer/docs/network-backend.md#shared-provider-networking-provisioning-setting).
+
+The installation lock extends the OSAC-5993 configuration boundary and
+supersedes the accepted unified design's upgrade-time mode switch. Fulfillment
+records the effective mode at first startup; all controllers verify it before
+reconciling. A legacy key rename that keeps the effective mode is permitted,
+while changing modes requires a fresh installation and Fulfillment database.

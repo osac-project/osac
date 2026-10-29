@@ -362,6 +362,18 @@ the certificate. The Kind
 `SUITE=fulfillment` target exercises deployed startup and API behavior, subject
 to the profile's configured CA and enabled services.
 
+The `make helm-networking-test` Helm contract includes GATE-CONFIG-01,
+owned by [DEV] OSAC-5993. It checks each networking consumer Deployment's
+startup environment separately (Fulfillment API/controller, OSAC Operator,
+BMF), default/true/false values, standalone charts, invalid types, removed-key
+migration diagnostics, BMaaS-disabled rendering, and unchanged service/controller
+enablement. These are rendered manifests, without Kubernetes or provider calls.
+The existing Kind `SUITE=fulfillment`, `SUITE=operator`, and `SUITE=bmf`
+targets exercise deployed startup and Kubernetes wiring with current images;
+provider operations remain outside their coverage. Complete runtime disabled
+behavior remains separate work in the networking epic; configuration evidence
+for this task is tracked under [OSAC-5993](https://redhat.atlassian.net/browse/OSAC-5993).
+
 ### OSAC-5343 deployed enablement coverage
 
 The release E2E path adds these assertions to existing user journeys. The
@@ -407,7 +419,7 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
 | Unit ([DEV] OSAC-6308) | `internal/controller/externalipattachment_contract_unit_test.go`, `internal/controller/externalipattachment_contract_test.go`, and `pkg/provisioning/external_ip_attachment_result_test.go`; included by `make test` | Builds the controller-supplied dependency context, validates the attach artifact against the current target, permits Ready only after a matching artifact, and retains the deletion finalizer for an invalid detach artifact | Kubernetes objects and AAP job inputs/results are test fixtures; no deployed AAP server or packet path is exercised. |
 | Envtest | Existing Controller Suite in `internal/controller/`; run by `make test` | Kubernetes API server, etcd, loaded CRDs and public in-process reconciliation | Provider/fulfillment responses and external CR progression are test-controlled; this is not a deployed worker. |
 | Component integration | `test/integration/`; deploy the current operator into Kind, then `make integration-tests` | Installed operator, Kubernetes API, CRDs, controller-manager, console proxy, networking, worker service-account authorization and startup without LVMS/TopoLVM | AAP/provider provisioning and external infrastructure are not real; some existing tests remove finalizers to bypass external-provider boundaries. |
-| Component integration (CI) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator` (repository root) | Thin Kind deployment used by the PR workflow | Same external-provider limitations as the local Kind suite. |
+| Component integration (CI) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator` (repository root) | Thin Kind deployment with a current Fulfillment API for the installation-setting startup check | Same external-provider limitations as the local Kind suite. |
 | Contract | `test/contract/`; included by `make test` | Helm chart RBAC templates against the operator permission contract | No deployed operator or external provider. |
 | E2E | `../tests/e2e/` | Cross-component fulfillment journeys | Depends on the deployed environment and configured providers. |
 
@@ -422,8 +434,10 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
   it does not exercise Fulfillment or PostgreSQL feedback.
 - **Fulfillment client TLS:** `cmd/verified_fulfillment_test.go` probes local TLS
   valid/invalid CA and hostname cases, bundle rotation and last-client retention.
-  The production render contract covers mounts/arguments; Kind runs with the
-  trust gate disabled. Neither proves a deployed fulfillment TLS endpoint.
+  `cmd/installation_setting_test.go` checks the pre-manager startup call through
+  the verified TLS connection for both saved networking values. The production
+  render contract covers mounts/arguments; Kind runs with the trust gate
+  disabled. Neither proves a deployed fulfillment TLS endpoint.
 - **Fulfillment OAuth:** `cmd/verified_fulfillment_test.go` uses local TLS OIDC
   and gRPC endpoints to verify client-credentials token acquisition and
   authenticated calls in both connection modes. The installer render contract
@@ -597,7 +611,7 @@ Touched-area requirements: [component guide](../bare-metal-fulfillment-operator/
 | Unit | Co-located `*_test.go`; `make test` | Allocation, lifecycle, client, and provider logic in isolation | Kubernetes and external provider APIs are mocked or intercepted. |
 | Envtest | Controller tests under `internal/controller/*_envtest_test.go`; run by `make test` | Kubernetes API server, etcd, OSAC CRDs, and static Metal3 CRDs | Metal3 controller, Ironic/BMC, hardware, and some provider clients are faked. |
 | Component integration | `test/integration/`; deploy the current operator into a Kind cluster, then run `make integration-tests` | Deployed operator behavior, CRDs, Kubernetes API, pool/instance flows, and status transitions | The suite creates static `BareMetalHost` state and simulates provider transitions; it does not run a real Metal3 operator, Ironic, BMC, or hardware. |
-| Component integration (CI) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf` (from repository root) | The thin Kind deployment used by the PR workflow | Same static Metal3/provider boundary as the local suite. |
+| Component integration (CI) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf` (from repository root) | Thin Kind deployment with a current Fulfillment API for BMF's installation-setting startup check | Same static Metal3/provider boundary as the local suite. |
 | Contract | No dedicated contract suite; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) for qualifying provider-contract coverage | No real external provider boundary is exercised by the current suite | Static Metal3 CRDs, patched status, and simulated provider transitions do not exercise a real Metal3/Ironic/BMC contract. |
 | E2E | Cross-component OSAC E2E suites | Fulfillment-to-operator user journeys where the environment provides them | Real hardware and provider availability remain environment-dependent. |
 

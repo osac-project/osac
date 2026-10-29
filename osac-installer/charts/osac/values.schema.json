@@ -355,7 +355,8 @@
           "properties": {
             "serverAddress": {
               "type": "string",
-              "description": "Fulfillment service gRPC address; leave empty to disable the operator Fulfillment client",
+              "description": "Required Fulfillment service gRPC address for the operator installation check",
+              "minLength": 1,
               "default": "fulfillment-internal-api:8001"
             },
             "credentials": {
@@ -453,14 +454,14 @@
               "description": "Enable Storage controller",
               "default": true
             },
-            "networkingProvisioning": {
-              "type": "boolean",
-              "description": "Enable networking resource provisioning (VirtualNetwork, Subnet, SecurityGroup, NATGateway). Distinct from controllers.networking, which only reconciles NetworkClass.",
-              "default": true
-            },
             "volume": {
               "type": "boolean",
               "description": "Enable the volume controller"
+            }
+          },
+          "patternProperties": {
+            "^networkingProvisioning$": {
+              "$comment": "Rejected by templates: migrate to global.networking.provisioningEnabled"
             }
           },
           "additionalProperties": false
@@ -2180,11 +2181,6 @@
               "description": "Skip TLS certificate verification for AAP API calls (set to 'true' for self-signed certs)",
               "default": ""
             },
-            "enableNetworkingProvisioning": {
-              "type": "string",
-              "description": "Enable networking resource provisioning in the BMF operator (set to 'true' or 'false')",
-              "default": ""
-            },
             "aapTokenSecretName": {
               "type": "string",
               "description": "Name of the Kubernetes Secret containing the AAP API token"
@@ -2192,6 +2188,11 @@
             "aapTokenSecretKey": {
               "type": "string",
               "description": "Key within the AAP token Secret"
+            }
+          },
+          "patternProperties": {
+            "^enableNetworkingProvisioning$": {
+              "$comment": "Rejected by templates: migrate to global.networking.provisioningEnabled"
             }
           },
           "additionalProperties": false
@@ -2725,6 +2726,11 @@
       "description": "High-level networking profile shared by the umbrella, operator, and AAP charts. Select fabricManager and/or k8sManager; Helm derives AAP backends and NetworkClass defaults.",
       "additionalProperties": false,
       "properties": {
+        "provisioningEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Installation-time provider-networking choice (default true). Choose false before first startup when no provider fabric exists. Fulfillment saves the first effective value; changing it requires reinstalling with a fresh Fulfillment database. Complete disabled-mode behavior requires the remaining networking runtime tasks."
+        },
         "fabricManager": {
           "type": "string",
           "description": "Fabric manager profile. Supported: empty string, netris, agentless_net (stub), or cudn_net for CaaS with ci.steps. vlan is reserved and fails Helm rendering.",

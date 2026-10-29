@@ -67,6 +67,7 @@ import (
 	hubscheme "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/scheme"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
+	"github.com/osac-project/osac/fulfillment-service/internal/networking"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
 	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
 	"github.com/osac-project/osac/fulfillment-service/internal/trust"
@@ -183,9 +184,10 @@ func Cmd() *cobra.Command {
 
 // runnerContext contains the data and logic needed to run the `start controllers` command.
 type runnerContext struct {
-	logger *slog.Logger
-	flags  *pflag.FlagSet
-	args   struct {
+	networkingConfig networking.Config
+	logger           *slog.Logger
+	flags            *pflag.FlagSet
+	args             struct {
 		sync                 bool
 		caFiles              []string
 		authIssuerUrl        string
@@ -218,6 +220,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 
 	// Get the dependencies from the context:
 	r.logger = logging.LoggerFromContext(ctx)
+	r.networkingConfig = networking.LoadConfig(r.logger)
 
 	// Configure the Kubernetes libraries to use the logger:
 	logrLogger := logr.FromSlogHandler(r.logger.Handler())
@@ -333,6 +336,11 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create gRPC client: %w", err)
+	}
+	if err := networking.CheckRemoteInstallationProvisioning(
+		ctx, privatev1.NewInstallationSettingsClient(r.client), r.networkingConfig.ProvisioningEnabled,
+	); err != nil {
+		return err
 	}
 
 	// Create the gRPC server:

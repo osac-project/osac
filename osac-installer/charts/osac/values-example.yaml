@@ -18,6 +18,7 @@
 
 global:
   networking:
+    provisioningEnabled: true
     # Supported facade profiles today:
     #   - fabricManager: netris, k8sManager: ""     → fabricManager netris
     #   - fabricManager: "", k8sManager: k8s_only   → k8sManager k8s_only
@@ -498,6 +499,7 @@ hubAccess:
 #
 # global:
 #   networking:
+#     provisioningEnabled: true
 #     fabricManager: netris
 #     k8sManager: ""
 #     netris:

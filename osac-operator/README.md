@@ -27,6 +27,12 @@ custom resources and reconciles them to their desired state:
 
 ## Configuration
 
+The operator must reach Fulfillment before reconciliation so it can compare
+`global.networking.provisioningEnabled` with the saved installation value.
+Standalone installs must set `fulfillment.serverAddress` to the private gRPC
+endpoint and provide the matching credentials and CA bundle. The chart defaults
+to `fulfillment-internal-api:8001` in the same namespace.
+
 Configuration is supplied via environment variables (e.g. from a Secret mounted
 into the manager deployment). The following are supported:
 
@@ -101,8 +107,8 @@ Networking controllers derive template names from the prefix:
 ### Fulfillment service (gRPC)
 
 - `OSAC_FULFILLMENT_SERVER_ADDRESS` — fulfillment service gRPC address
-  (e.g. `fulfillment-service:50051`). When unset, the operator's fulfillment
-  client is disabled and the client credential Secret is not needed.
+  (e.g. `fulfillment-internal-api:8001`). Required so the operator can verify
+  the saved installation networking setting before reconciliation.
 - `OSAC_FULFILLMENT_ISSUER_URL` — Keycloak realm issuer URL used for OIDC
   discovery and client-credentials token requests.
 - `OSAC_FULFILLMENT_CLIENT_ID` and `OSAC_FULFILLMENT_CLIENT_SECRET` — Keycloak

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "global": {
+      "type": "object",
+      "properties": {
+        "networking": {
+          "type": "object",
+          "properties": {
+            "provisioningEnabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Installation-time provider-networking choice. Must match the value saved by Fulfillment; changing it requires reinstalling with a fresh Fulfillment database."
+            }
+          }
+        }
+      }
+    }
+  }
+}

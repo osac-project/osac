@@ -1,3 +1,8 @@
+global:
+  networking:
+    # Shared provider-networking setting, independent of service/controller enablement.
+    provisioningEnabled: true
+
 #
 # Copyright (c) 2025 Red Hat Inc.
 #

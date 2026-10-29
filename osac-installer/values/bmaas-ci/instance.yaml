@@ -15,6 +15,7 @@ global:
     maas:
       enabled: false
   networking:
+    provisioningEnabled: false
     fabricManager: netris
     k8sManager: ""
     netris:
@@ -52,7 +53,6 @@ operator:
   controllers:
     tenant: true
     networking: true
-    networkingProvisioning: false
     storage: true
   # Keep the unversioned ExternalIP flow in CI: networkingProvisioning is false
   # and the reference suite depends on the placeholder-allocated path, which
@@ -212,7 +212,6 @@ bmf:
   env:
     aapUrl: "http://osac-aap/api/controller"
     aapInsecureSkipVerify: "true"
-    enableNetworkingProvisioning: "false"
   metal3:
     enabled: true
     namespace: host-inventory

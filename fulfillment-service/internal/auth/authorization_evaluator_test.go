@@ -116,6 +116,24 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		It("limits installation settings to administrators", func(ctx context.Context) {
+			method := "/osac.private.v1.InstallationSettings/Get"
+			admin := &AuthContext{Username: fmt.Sprintf("system:serviceaccount:%s:admin", testNamespace), AuthMethod: "serviceaccount"}
+			decision, err := evaluator.Evaluate(ctx, admin, method)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(decision.Allowed).To(BeTrue())
+
+			controller := &AuthContext{Username: "service-account-osac-controller", AuthMethod: "jwt"}
+			decision, err = evaluator.Evaluate(ctx, controller, method)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(decision.Allowed).To(BeTrue())
+
+			client := &AuthContext{Username: "ordinary-user", AuthMethod: "jwt", Groups: []any{}, RealmAccess: map[string]any{"roles": []any{"user"}}}
+			decision, err = evaluator.Evaluate(ctx, client, method)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(decision.Allowed).To(BeFalse())
+		})
+
 		Context("With Kubernetes service account", func() {
 			It("Allows admin service account with all tenants", func(ctx context.Context) {
 				authContext := &AuthContext{

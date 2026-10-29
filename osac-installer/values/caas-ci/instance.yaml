@@ -13,6 +13,7 @@ global:
   expertOverrides:
     aap: true
   networking:
+    provisioningEnabled: false
     fabricManager: cudn_net
     k8sManager: ""
     netris:
@@ -204,7 +205,6 @@ bmf:
   env:
     aapUrl: "http://osac-aap/api/controller"
     aapInsecureSkipVerify: "true"
-    enableNetworkingProvisioning: "false"
   metal3:
     enabled: true
     namespace: host-inventory

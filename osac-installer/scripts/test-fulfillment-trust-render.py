@@ -325,12 +325,14 @@ def check_profile_emergency_service_accounts() -> None:
         assert accounts == expected_accounts, profile
 
 
-def check_operator_fulfillment_can_be_disabled() -> None:
-    docs = render(False, server_address="")
-    operator = select(docs, "osac/charts/operator/templates/deployment.yaml")
-    assert "OSAC_FULFILLMENT_SERVER_ADDRESS" not in operator
-    assert "OSAC_FULFILLMENT_CLIENT_ID" not in operator
-    assert "OSAC_FULFILLMENT_CLIENT_SECRET" not in operator
+def check_operator_requires_fulfillment_address() -> None:
+    for enabled in (False, True):
+        try:
+            render(enabled, server_address="")
+        except subprocess.CalledProcessError as error:
+            assert "serverAddress" in error.stderr and "minLength" in error.stderr
+        else:
+            raise AssertionError("operator accepted an empty Fulfillment address")
 
 
 def check_trust_gate(enabled: bool) -> None:
@@ -366,7 +368,7 @@ if __name__ == "__main__":
     check_production_default()
     check_custom_auth_credentials()
     check_profile_emergency_service_accounts()
-    check_operator_fulfillment_can_be_disabled()
+    check_operator_requires_fulfillment_address()
     check_trust_gate(False)
     check_trust_gate(True)
     check_infra_ca_bundle_targets()

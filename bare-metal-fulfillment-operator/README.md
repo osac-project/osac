@@ -293,3 +293,23 @@ Unless required by applicable law or agreed to in writing, software distributed
 under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
 CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
+
+### Provider-networking startup configuration
+
+BMF reads `OSAC_ENABLE_NETWORKING_PROVISIONING` once at startup, independently
+of AAP credential availability, and logs the loaded value. The default is now
+`true` (previously `false`); empty or invalid input also defaults to `true`,
+with a diagnostic for invalid input. Helm installations use the shared boolean
+`global.networking.provisioningEnabled`. The removed `env.enableNetworkingProvisioning`
+key is rejected. See the [shared configuration and upgrade guide](../osac-installer/docs/network-backend.md#shared-provider-networking-provisioning-setting)
+for coordinated rollout and migration from mixed settings.
+Before starting reconciliation, BMF reads Fulfillment's saved installation
+value through the authenticated private API. It exits if Fulfillment cannot be
+reached or if the value differs. The chart mounts the Fulfillment client
+credentials and CA bundle for this check even when NetBox is disabled.
+For a standalone installation, set `secretAPI.issuerUrl` to the Keycloak
+issuer reachable from the BMF pod and create the
+`fulfillment-controller-credentials` Secret with `client-id` and
+`client-secret` keys before starting BMF. The Secret volume is optional to
+Kubernetes so a missing Secret produces a clear startup error; BMF still
+refuses to reconcile without valid credentials.

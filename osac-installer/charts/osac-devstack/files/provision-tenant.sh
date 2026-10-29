@@ -162,11 +162,11 @@ fi
 
 # ── 1b. Verify Subnet AAP provisioning created its target namespace and CUDN ────
 # Each Subnet gets a namespace named after its CR. ComputeInstance provisioning
-# targets that namespace. networkingProvisioning is enabled in dev-full, and the
-# cudn_net AAP role creates both the namespace and CUDN object. The Kind-only CUDN
-# CRD is an API placeholder: it makes no OVN dataplane or NAD. These checks make
-# the starter-tenant hook fail if Subnet AAP provisioning or CRD installation is
-# missing instead of silently creating a plain namespace.
+# targets that namespace. global.networking.provisioningEnabled is true in
+# dev-full. The cudn_net AAP role creates both the namespace and CUDN object.
+# The Kind-only CUDN CRD is an API placeholder: it makes no OVN dataplane or
+# NAD. The starter-tenant hook fails if Subnet AAP provisioning or CRD
+# installation is missing instead of silently creating a plain namespace.
 subnets_for_tenant() {
   kubectl -n "${NS}" get subnets -o json 2>/dev/null | TENANT="${TENANT}" python3 -c '
 import json,os,sys
@@ -233,7 +233,7 @@ if [[ -z "${onboarded_subnets}" ]]; then
 fi
 if [[ "${subnet_targets_ready}" != true ]]; then
   warn "  timed out waiting for Subnet AAP to create target namespaces and CUDN objects"
-  warn "  check the subnet job, networkingProvisioning, and the Kind CUDN CRD"
+  warn "  check the subnet job, provisioningEnabled, and the Kind CUDN CRD"
   exit 1
 fi
 while IFS=$'\t' read -r subnet_name subnet_id; do

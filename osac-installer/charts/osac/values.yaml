@@ -43,6 +43,8 @@ global:
   # subcharts. Select fabricManager and/or k8sManager; Helm derives AAP
   # backends and NetworkClass defaults from those manager names.
   networking:
+    # Shared by Fulfillment API/controller, OSAC Operator, and BMF at startup.
+    provisioningEnabled: true
     # Supported facade profiles:
     #   - fabricManager: netris, k8sManager: ""     → fabricManager netris
     #   - fabricManager: "", k8sManager: k8s_only   → k8sManager k8s_only (default)
@@ -144,10 +146,6 @@ operator:
   controllers:
     tenant: true
     networking: true
-    # networkingProvisioning dispatches VirtualNetwork/Subnet/SecurityGroup/
-    # NATGateway to AAP. Distinct from controllers.networking, which only
-    # reconciles NetworkClass. Set false for local environments without a fabric.
-    networkingProvisioning: true
     storage: true
   # Provider-to-endpoint map consumed by the Volume controller. Node-local
   # providers such as LVMS use "none" because they do not dial a vendor gRPC endpoint.

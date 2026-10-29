@@ -138,6 +138,8 @@ aap:
 # --- Bare Metal Fulfillment (no Metal3 in Kind — deploy chart but 0 replicas) ---
 bmf:
   replicaCount: 0
+  secretAPI:
+    issuerUrl: https://keycloak.keycloak.svc.cluster.local:8443/realms/osac
   secrets:
     inventoryConfig: osac-inventory-config-metal3-test
     managementConfig: osac-management-config-metal3-test

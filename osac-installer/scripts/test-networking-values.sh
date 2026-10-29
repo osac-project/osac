@@ -134,6 +134,122 @@ render_operator_success() {
   fi
 }
 
+# GATE-CONFIG-01: inspect each consumer separately; a match in another
+# Deployment must never satisfy the contract. Only print non-secret fields.
+assert_provisioning_env() {
+  local output=$1 expected=$2 scope=$3 bmaas=${4:-true}
+  python3 - "${output}" "${expected}" "${scope}" "${bmaas}" <<'PYTHON'
+import sys
+import yaml
+
+path, expected, scope, bmaas = sys.argv[1:]
+docs = [d for d in yaml.safe_load_all(open(path, encoding="utf-8"))
+        if isinstance(d, dict) and d.get("kind") == "Deployment"]
+consumers = {
+    "operator": ("osac-operator", "manager"),
+    "bmf": ("bmf-operator-controller-manager", "manager"),
+    "api": ("fulfillment-grpc-server", "grpc-server"),
+    "controller": ("fulfillment-controller", "controller"),
+}
+selected = list(consumers) if scope == "umbrella" else {
+    "operator": ["operator"], "bmf": ["bmf"], "service": ["api", "controller"]
+}[scope]
+for consumer in selected:
+    name, container = consumers[consumer]
+    matches = [d for d in docs if name == d["metadata"]["name"]]
+    if consumer == "bmf" and bmaas == "false":
+        assert not matches, "BMaaS disabled must omit BMF"
+        continue
+    assert len(matches) == 1, f"expected one {consumer} Deployment"
+    containers = [c for c in matches[0]["spec"]["template"]["spec"]["containers"]
+                  if c["name"] == container]
+    assert len(containers) == 1, f"expected one {consumer} container"
+    env = [e for e in containers[0].get("env", [])
+           if e["name"] == "OSAC_ENABLE_NETWORKING_PROVISIONING"]
+    assert len(env) == 1 and env[0].get("value") == expected, consumer
+    if consumer == "bmf":
+        names = {e["name"] for e in containers[0].get("env", [])}
+        assert {"OSAC_INSTALLATION_API_URL", "OSAC_INSTALLATION_API_ISSUER_URL",
+                "OSAC_INSTALLATION_API_CLIENT_ID_FILE",
+                "OSAC_INSTALLATION_API_CLIENT_SECRET_FILE"} <= names
+        volumes = {v["name"] for v in matches[0]["spec"]["template"]["spec"]["volumes"]}
+        assert "secret-api-client-credentials" in volumes
+        mounts = {v["name"] for v in containers[0].get("volumeMounts", [])}
+        assert "secret-api-client-credentials" in mounts
+PYTHON
+}
+
+for setting in default true false; do
+  overrides=()
+  expected=true
+  if [[ ${setting} != default ]]; then
+    overrides=(--set "global.networking.provisioningEnabled=${setting}")
+    expected=${setting}
+  fi
+  output="${TMP_DIR}/gate-${setting}.yaml"
+  "${HELM_BIN}" "${COMMON_ARGS[@]}" "${overrides[@]}" >"${output}"
+  assert_provisioning_env "${output}" "${expected}" umbrella
+  for scope in operator bmf service; do
+    case "${scope}" in
+      operator) chart=${OPERATOR_CHART_DIR}; args=(--set fullnameOverride=osac-operator) ;;
+      bmf) chart="${SCRIPT_DIR}/../../bare-metal-fulfillment-operator/charts/operator"; args=(--set fullnameOverride=bmf-operator) ;;
+      service) chart="${SCRIPT_DIR}/../../fulfillment-service/charts/service"; args=(-f "${chart}/ci-values.yaml" --set variant=openshift) ;;
+    esac
+    output="${TMP_DIR}/gate-${scope}-${setting}.yaml"
+    "${HELM_BIN}" template osac "${chart}" "${args[@]}" "${overrides[@]}" >"${output}"
+    assert_provisioning_env "${output}" "${expected}" "${scope}"
+    for invalid in string number; do
+      if [[ ${invalid} == string ]]; then
+        invalid_args=(--set-string global.networking.provisioningEnabled=false)
+      else
+        invalid_args=(--set global.networking.provisioningEnabled=1)
+      fi
+      if "${HELM_BIN}" template osac "${chart}" "${args[@]}" "${invalid_args[@]}" >/dev/null 2>&1; then
+        echo "ERROR: ${scope} accepted ${invalid} provisioningEnabled" >&2
+        exit 1
+      fi
+    done
+    if [[ ${scope} != service ]]; then
+      legacy=controllers.networkingProvisioning
+      [[ ${scope} != bmf ]] || legacy=env.enableNetworkingProvisioning
+      if "${HELM_BIN}" template osac "${chart}" "${args[@]}" --set "${legacy}=false" >/dev/null 2>"${TMP_DIR}/legacy.stderr"; then
+        echo "ERROR: ${scope} accepted legacy control" >&2
+        exit 1
+      fi
+      grep -Fq 'global.networking.provisioningEnabled' "${TMP_DIR}/legacy.stderr"
+    fi
+  done
+done
+for setting in true false; do
+  output="${TMP_DIR}/gate-no-bmaas-${setting}.yaml"
+  "${HELM_BIN}" "${COMMON_ARGS[@]}" --set global.services.bmaas.enabled=false \
+    --set "global.networking.provisioningEnabled=${setting}" >"${output}"
+  assert_provisioning_env "${output}" "${setting}" umbrella false
+done
+# Provisioning does not alter the set of Deployments or service/controller flags.
+python3 - "${TMP_DIR}/gate-true.yaml" "${TMP_DIR}/gate-false.yaml" <<'PYTHON'
+import sys
+import yaml
+
+def enablement(path):
+    docs = [d for d in yaml.safe_load_all(open(path, encoding="utf-8"))
+            if isinstance(d, dict) and d.get("kind") == "Deployment"]
+    result = {}
+    for d in docs:
+        for c in d["spec"]["template"]["spec"]["containers"]:
+            result[(d["metadata"]["name"], c["name"])] = (
+                c.get("args", []), [e for e in c.get("env", [])
+                                   if e["name"] != "OSAC_ENABLE_NETWORKING_PROVISIONING"])
+    return result
+assert enablement(sys.argv[1]) == enablement(sys.argv[2]), "service/controller enablement changed"
+PYTHON
+for legacy in operator.controllers.networkingProvisioning bmf.env.enableNetworkingProvisioning; do
+  render_failure "gate-legacy-${legacy}" --set "${legacy}=false"
+  grep -Fq 'global.networking.provisioningEnabled' "${TMP_DIR}/gate-legacy-${legacy}.stderr"
+done
+render_failure gate-invalid-string --set-string global.networking.provisioningEnabled=false
+render_failure gate-invalid-number --set global.networking.provisioningEnabled=1
+
 # Agentless networking derives the Kubernetes-only manager and backend.
 render_success \
   agentless \

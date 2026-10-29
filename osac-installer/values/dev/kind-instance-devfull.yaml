@@ -1,3 +1,9 @@
+global:
+  networking:
+    # The Kind-only CUDN CRD accepts AAP-created objects without an OVN dataplane.
+    # Keep Subnet provisioning on so AAP creates each tenant's target namespace.
+    provisioningEnabled: true
+
 # Kind dev-full overlay -- layered on top of kind-instance.yaml (PROFILE=dev-full).
 #
 # Keep Subnet provisioning enabled so every tenant's cudn_net AAP job creates
@@ -9,7 +15,6 @@ operator:
   image:
     pullPolicy: IfNotPresent
   controllers:
-    networkingProvisioning: true
     storage: true
     volume: true
 
@@ -40,7 +45,12 @@ service:
       pullPolicy: IfNotPresent
   auth:
     issuerUrl: https://keycloak.osac.localhost:8443/realms/osac
+
   idp:
     url: https://keycloak.osac.localhost:8443
   vault:
     keycloakIssuerUrl: "https://keycloak.osac.localhost:8443/realms/osac"
+
+bmf:
+  secretAPI:
+    issuerUrl: https://keycloak.osac.localhost:8443/realms/osac

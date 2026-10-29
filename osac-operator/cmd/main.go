@@ -692,7 +692,7 @@ func setupStorageController(mgr mcmanager.Manager, grpcConn grpc.ClientConnInter
 // setupControllers registers all enabled controllers with the manager.
 func setupControllers(
 	mgr mcmanager.Manager, grpcConn grpc.ClientConnInterface,
-	flags *controllerFlags, maxJobHistory int, fulfillmentTrustSourceName string,
+	flags *controllerFlags, maxJobHistory int, fulfillmentTrustSourceName string, networkingProvisioningEnabled bool,
 ) error {
 	if flags.Cluster || flags.ComputeInstance || flags.BareMetalInstance {
 		if err := controller.RegisterAutoExternalIPAttachmentOwnerIndex(mgr.GetLocalManager().GetFieldIndexer()); err != nil {
@@ -749,7 +749,13 @@ func setupControllers(
 		}
 	}
 	if flags.Networking {
-		if err := setupNetworkingControllers(mgr, grpcConn, maxJobHistory, flags.BareMetalInstance); err != nil {
+		if err := setupNetworkingControllers(
+			mgr,
+			grpcConn,
+			maxJobHistory,
+			flags.BareMetalInstance,
+			networkingProvisioningEnabled,
+		); err != nil {
 			return fmt.Errorf("networking controllers: %w", err)
 		}
 	}
@@ -898,6 +904,7 @@ func setupNetworkingControllers(
 	grpcConn grpc.ClientConnInterface,
 	maxJobHistory int,
 	enableBareMetalInstance bool,
+	networkProvisioningEnabled bool,
 ) error {
 	localMgr := mgr.GetLocalManager()
 	targetCluster := targetClusterFromManager(mgr)
@@ -906,9 +913,6 @@ func setupNetworkingControllers(
 	computeInstanceNamespace := os.Getenv(envComputeInstanceNamespace)
 	clusterOrderNamespace := os.Getenv(envClusterOrderNamespace)
 	bareMetalInstanceNamespace := os.Getenv(envBareMetalInstanceNamespace)
-
-	networkProvisioningEnabled := helpers.GetEnvWithDefault(envEnableNetworkingProvisioning, false)
-	setupLog.Info("networking provisioning feature gate", "enabled", networkProvisioningEnabled)
 
 	aapURL := os.Getenv(envAAPURL)
 	aapToken := os.Getenv(envAAPToken)
@@ -1302,7 +1306,7 @@ func setupBareMetalInstanceControllers(
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:urls=/metrics,verbs=get
 
-func main() {
+func main() { //nolint:gocyclo // Startup orchestrates many optional controllers.
 	var err error
 
 	var metricsAddr string
@@ -1359,6 +1363,8 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	networkingProvisioningEnabled := loadNetworkingProvisioning()
+	setupLog.Info("networking provisioning feature gate", "enabled", networkingProvisioningEnabled)
 
 	ctrlFlags.enableAllIfNoneSet()
 
@@ -1546,13 +1552,30 @@ func main() {
 	} else {
 		setupLog.Info("gRPC connection to fulfillment service is disabled")
 	}
+	if grpcConn == nil {
+		setupLog.Error(fmt.Errorf("fulfillment connection is required"), "unable to verify installation networking setting")
+		os.Exit(1)
+	}
+	if err := checkInstallationProvisioningAtStartup(
+		context.Background(), grpcConn, networkingProvisioningEnabled,
+	); err != nil {
+		setupLog.Error(err, "unable to verify installation networking setting")
+		os.Exit(1)
+	}
 
 	maxJobHistory := helpers.GetEnvWithDefault(envMaxJobHistory, provisioning.DefaultMaxJobHistory, func(v int) bool {
 		return v >= 1
 	})
 	setupLog.Info("job history configuration", "maxJobs", maxJobHistory)
 
-	if err := setupControllers(mgr, grpcConn, ctrlFlags, maxJobHistory, fulfillmentTrustSourceName); err != nil {
+	if err := setupControllers(
+		mgr,
+		grpcConn,
+		ctrlFlags,
+		maxJobHistory,
+		fulfillmentTrustSourceName,
+		networkingProvisioningEnabled,
+	); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
 	}

@@ -140,6 +140,9 @@ spec:
           type: RuntimeDefault
       containers:
       - name: grpc-server
+        env:
+        - name: OSAC_ENABLE_NETWORKING_PROVISIONING
+          value: {{ .Values.global.networking.provisioningEnabled | quote }}
         image: {{ .Values.images.service.repository }}:{{ .Values.images.service.tag }}
         imagePullPolicy: {{ .Values.images.service.pullPolicy }}
         securityContext:

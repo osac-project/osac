@@ -12,6 +12,7 @@ global:
   fulfillmentTrust:
     enabled: false
   networking:
+    provisioningEnabled: true
     # Netris remains the AAP/fabric backend. The profile's expert NetworkClass
     # below additionally selects cudn_evpn as the Kubernetes manager.
     fabricManager: "netris"
@@ -57,7 +58,6 @@ operator:
   controllers:
     tenant: true
     networking: true
-    networkingProvisioning: true
     storage: true
   networkManagers:
     enabled: true
@@ -217,7 +217,6 @@ bmf:
   env:
     aapUrl: "http://osac-aap/api/controller"
     aapInsecureSkipVerify: "true"
-    enableNetworkingProvisioning: "true"
   metal3:
     enabled: true
     namespace: host-inventory

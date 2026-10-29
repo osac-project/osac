@@ -55,7 +55,8 @@ service:
     caBundle:
       configMap: ca-bundle
   auth:
-    issuerUrl: https://keycloak.keycloak.svc.cluster.local/realms/osac
+    issuerUrl: "https://keycloak-keycloak.{{ .Values.global.clusterDomain }}/realms/osac"
+
     emergencyServiceAccounts:
     - admin
     - template-publisher
@@ -113,6 +114,11 @@ service:
         items:
         - key: client-secret
           param: client-secret
+
+# --- BMF installation API issuer (matches service.auth.issuerUrl) ---
+bmf:
+  secretAPI:
+    issuerUrl: "https://keycloak-keycloak.{{ .Values.global.clusterDomain }}/realms/osac"
 
 # --- UI ---
 ui:

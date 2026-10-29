@@ -1,4 +1,7 @@
 global:
+  networking:
+    # Shared provider-networking setting, independent of service/controller enablement.
+    provisioningEnabled: true
   fulfillmentTrust:
     enabled: false
     tenantNamespace: osac-csi
@@ -42,7 +45,7 @@ ignition:
   trustIngressCA: false
 
 fulfillment:
-  serverAddress: ""
+  serverAddress: "fulfillment-internal-api:8001"
   credentials:
     secretName: fulfillment-controller-credentials
     clientIdKey: client-id
@@ -64,7 +67,6 @@ controllers:
   # is empty the controller starts with provisioning disabled (Volumes stay in
   # Progressing) and never fails operator startup.
   volume: true
-  networkingProvisioning: true
 
 # vendorControllers maps provider identifiers to their vendor CSI controller
 # gRPC endpoints, rendered into OSAC_VENDOR_CONTROLLERS for the Volume

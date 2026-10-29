@@ -40,6 +40,38 @@ ifeq ($(MCP_TEST_ENABLED),true)
 MCP_TEST_HELM_ARGS := --set service.mcp.enabled=true --set-string service.mcp.externalHostname=mcp.osac.localhost --set service.mcp.externalPort=8443
 MCP_TEST_URL := https://mcp.osac.localhost:8443
 endif
+# Build the operator from this checkout and install that image instead of the
+# registry image the values files pin. Kind only: a remote cluster cannot pull
+# a localhost image. The flag's --set values win over EXTRA_HELM_ARGS; use
+# OPERATOR_IMAGE_TAG to select another locally loaded tag.
+USE_LOCAL_OPERATOR ?= false
+# Whenever this run builds the operator locally -- with USE_LOCAL_OPERATOR, or
+# through the operator/fulfillment suites, which build and load it themselves --
+# a rebuilt image must change the Deployment so the operator pod rolls. A fixed
+# tag with pullPolicy=Never leaves the previous pod running, so default to a tag
+# unique to this invocation. It is computed once, so build, load and Helm all
+# use the same value.
+OPERATOR_IMAGE_IS_LOCAL := $(if $(filter fulfillment operator all,$(SUITE)),true,$(if $(filter true,$(USE_LOCAL_OPERATOR)),true,))
+ifeq ($(OPERATOR_IMAGE_IS_LOCAL),true)
+LOCAL_BUILD_STAMP := $(shell date -u +%Y%m%d%H%M%S)
+OPERATOR_IMAGE_TAG ?= local-$(LOCAL_BUILD_STAMP)
+else
+OPERATOR_IMAGE_TAG ?= it
+endif
+# The tag is expanded into helm arguments and a shell command, so reject
+# anything that is not a plain image tag. The value reaches the shell through
+# the environment; it is never spliced into shell text.
+export OPERATOR_IMAGE_TAG
+OPERATOR_IMAGE_TAG_VALID := $(shell [ -n "$$OPERATOR_IMAGE_TAG" ] && printf '%s' "$$OPERATOR_IMAGE_TAG" | grep -Eqx '[A-Za-z0-9_][A-Za-z0-9_.-]*' && [ "$$(printf '%s' "$$OPERATOR_IMAGE_TAG" | wc -l)" -eq 0 ] && [ $${#OPERATOR_IMAGE_TAG} -le 128 ] && echo yes || echo no)
+ifneq ($(OPERATOR_IMAGE_TAG_VALID),yes)
+$(error OPERATOR_IMAGE_TAG is not a valid image tag; use letters, digits, dot, dash or underscore)
+endif
+OPERATOR_IMAGE := localhost/osac-operator:$(OPERATOR_IMAGE_TAG)
+OPERATOR_IMAGE_HELM_ARGS := --set operator.image.repository=localhost/osac-operator --set-string operator.image.tag=$(OPERATOR_IMAGE_TAG) --set operator.image.pullPolicy=Never
+ifeq ($(USE_LOCAL_OPERATOR),true)
+LOCAL_OPERATOR_HELM_ARGS := $(OPERATOR_IMAGE_HELM_ARGS)
+endif
+
 DRY_RUN ?= 0
 DRY_RUN_HELM_FLAGS := $(filter --%,$(EXTRA_HELM_ARGS))
 DRY_RUN_INVALID_HELM_FLAGS := $(filter-out --set --set-string --set=% --set-string=%,$(DRY_RUN_HELM_FLAGS))
@@ -63,7 +95,7 @@ TOPOLVM_BACKING_SIZE ?= 20G
 # -- Fail-fast parameter validation ------------------------------------
 # Guards fire at parse time, gated by MAKECMDGOALS so `make help` works.
 
-ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-load-images test
+ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack install-dry-run kind-load-images local-operator-image test
 
 ifneq ($(filter $(ALL_TARGETS),$(MAKECMDGOALS)),)
 ifndef PLATFORM
@@ -86,8 +118,33 @@ ifeq ($(filter $(PROFILE),dev dev-full),)
 $(error PLATFORM=kind only supports PROFILE=dev or PROFILE=dev-full)
 endif
 endif
-ifneq ($(filter install,$(MAKECMDGOALS)),)
-ifeq ($(DRY_RUN),1)
+ifeq ($(filter $(USE_LOCAL_OPERATOR),true false),)
+$(error USE_LOCAL_OPERATOR=$(USE_LOCAL_OPERATOR) is invalid; must be true or false)
+endif
+ifeq ($(USE_LOCAL_OPERATOR),true)
+ifneq ($(PLATFORM),kind)
+$(error USE_LOCAL_OPERATOR=true requires PLATFORM=kind (a remote cluster cannot pull a localhost image))
+endif
+endif
+# The target loads the image into a Kind cluster, so it is Kind-only even when
+# invoked directly with the flag at its default.
+ifneq ($(filter local-operator-image,$(MAKECMDGOALS)),)
+ifneq ($(PLATFORM),kind)
+$(error local-operator-image requires PLATFORM=kind (it loads the image into a Kind cluster))
+endif
+endif
+# install-dry-run is itself a dry run, so the same checks apply to it even
+# though DRY_RUN defaults to 0 for a direct invocation.
+DRY_RUN_TARGET := $(filter install-dry-run,$(MAKECMDGOALS))
+ifneq ($(filter install,$(MAKECMDGOALS))$(DRY_RUN_TARGET),)
+# filter-out splits words, so require exactly one word as well.
+ifneq ($(words $(DRY_RUN)),1)
+$(error DRY_RUN must be 0 or 1)
+endif
+ifneq ($(filter-out 0 1,$(DRY_RUN)),)
+$(error DRY_RUN must be 0 or 1)
+endif
+ifneq ($(filter 1,$(DRY_RUN))$(DRY_RUN_TARGET),)
 ifneq ($(strip $(DRY_RUN_INVALID_HELM_FLAGS)),)
 $(error DRY_RUN=1 only accepts --set/--set-string overrides in EXTRA_HELM_ARGS; unsupported: $(DRY_RUN_INVALID_HELM_FLAGS))
 endif
@@ -99,8 +156,6 @@ ifeq ($(strip $(DRY_RUN_OCP_VERSION)),)
 $(error DRY_RUN_OCP_VERSION is required for PLATFORM=openshift DRY_RUN=1 (major.minor, e.g. 4.20))
 endif
 endif
-else ifneq ($(DRY_RUN),0)
-$(error DRY_RUN must be 0 or 1)
 endif
 endif
 endif
@@ -253,17 +308,59 @@ DEV_FULL_HELM_POST_RENDERER :=
 OSAC_HELM_FORCE_CONFLICTS :=
 endif
 
+# NS reaches shell text through KIND_RUNTIME_ENV and helm arguments, so accept
+# only a valid Kubernetes namespace name. Validate whenever NS is non-empty:
+# gating on $(strip ...) let a whitespace-only value skip the check. Targets
+# that do not take NS leave it unset; the install targets require it above.
+ifdef NS
+export NS
+NS_VALID := $(shell [ -n "$$NS" ] && printf '%s' "$$NS" | grep -Eqx '[a-z0-9]([a-z0-9-]*[a-z0-9])?' && [ "$$(printf '%s' "$$NS" | wc -l)" -eq 0 ] && [ $${#NS} -le 63 ] && echo yes || echo no)
+ifneq ($(NS_VALID),yes)
+$(error NS must be a valid Kubernetes namespace name)
+endif
+endif
+
+# PROFILE is expanded into shell recipes through KIND_RUNTIME_ENV, so accept
+# only the supported profiles even for targets outside the install set.
+ifneq ($(strip $(PROFILE)),)
+export PROFILE
+PROFILE_VALID := $(shell printf '%s' "$$PROFILE" | grep -Eqx 'dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test' && [ "$$(printf '%s' "$$PROFILE" | wc -l)" -eq 0 ] && echo yes || echo no)
+ifneq ($(PROFILE_VALID),yes)
+$(error PROFILE is not a supported profile)
+endif
+endif
+
 # Container tool and Kind cluster config.
 CONTAINER_TOOL ?= $(or $(shell command -v podman 2>/dev/null),$(shell command -v docker 2>/dev/null),$(error neither podman nor docker found in PATH))
-# On Apple Silicon, honor an explicitly selected container tool when the Kind
-# provider has not been set separately. This keeps an existing Docker- or
-# Podman-backed cluster on the same runtime for all installer operations.
+# CONTAINER_TOOL is interpolated into shell recipes and passed to child makes,
+# so accept only a bare executable name or an absolute path to one. The value
+# reaches the shell through the environment; it is never spliced into shell
+# text.
+export CONTAINER_TOOL
+CONTAINER_TOOL_VALID := $(shell [ -n "$$CONTAINER_TOOL" ] && printf '%s' "$$CONTAINER_TOOL" | grep -Eqx '(docker|podman)|(/[A-Za-z0-9_.-]+)*/(docker|podman)' && [ "$$(printf '%s' "$$CONTAINER_TOOL" | wc -l)" -eq 0 ] && echo yes || echo no)
+ifneq ($(CONTAINER_TOOL_VALID),yes)
+$(error CONTAINER_TOOL must be docker or podman, either bare or as an absolute path)
+endif
+# kind defaults to the Docker provider. On Apple Silicon, honor an explicitly
+# selected container tool when the Kind provider has not been set separately;
+# this keeps an existing Docker- or Podman-backed cluster on the same runtime
+# for all installer operations. On other platforms a podman container tool
+# means there is no Docker socket, so use the podman provider.
+# KIND_EXPERIMENTAL_PROVIDER is expanded into shell recipes through
+# KIND_RUNTIME_ENV, so accept only the providers kind supports.
+export KIND_EXPERIMENTAL_PROVIDER
+KIND_EXPERIMENTAL_PROVIDER_VALID := $(shell if [ -z "$$KIND_EXPERIMENTAL_PROVIDER" ]; then echo yes; elif printf '%s' "$$KIND_EXPERIMENTAL_PROVIDER" | grep -Eqx 'docker|podman' && [ "$$(printf '%s' "$$KIND_EXPERIMENTAL_PROVIDER" | wc -l)" -eq 0 ]; then echo yes; else echo no; fi)
+ifneq ($(KIND_EXPERIMENTAL_PROVIDER_VALID),yes)
+$(error KIND_EXPERIMENTAL_PROVIDER must be docker or podman)
+endif
 KIND_RUNTIME_PROVIDER := $(strip $(KIND_EXPERIMENTAL_PROVIDER))
-ifeq ($(HOST_IS_MAC_ARM),true)
 ifeq ($(KIND_RUNTIME_PROVIDER),)
+ifeq ($(HOST_IS_MAC_ARM),true)
 ifneq ($(filter command line environment,$(origin CONTAINER_TOOL)),)
 KIND_RUNTIME_PROVIDER := $(notdir $(CONTAINER_TOOL))
 endif
+else ifeq ($(notdir $(CONTAINER_TOOL)),podman)
+KIND_RUNTIME_PROVIDER := podman
 endif
 endif
 KIND_RUNTIME_ENV := KIND_PROFILE=$(PROFILE) \
@@ -272,6 +369,17 @@ KIND_RUNTIME_ENV := KIND_PROFILE=$(PROFILE) \
 	$(if $(KIND_RUNTIME_PROVIDER),KIND_EXPERIMENTAL_PROVIDER=$(KIND_RUNTIME_PROVIDER))
 KIND_RUNTIME_CMD := $(KIND_RUNTIME_ENV) $(KIND_RUNTIME)
 KIND_CLUSTER_NAME ?= osac-dev
+# The cluster name appears unquoted in kind commands and becomes part of the
+# node hostname <name>-control-plane, so it must follow hostname rules: dot-
+# separated labels of lowercase letters, digits and dashes, each starting with
+# a letter or digit. Inner labels also end with one; the last label may end in
+# a dash because kind appends "-control-plane", and must stay within 49
+# characters so that suffix keeps it under the 63-character label limit.
+export KIND_CLUSTER_NAME
+KIND_CLUSTER_NAME_VALID := $(shell printf '%s' "$$KIND_CLUSTER_NAME" | grep -Eqx '([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?[.])*[a-z0-9][a-z0-9-]{0,48}' && [ "$$(printf '%s' "$$KIND_CLUSTER_NAME" | wc -l)" -eq 0 ] && [ $${#KIND_CLUSTER_NAME} -le 63 ] && echo yes || echo no)
+ifneq ($(KIND_CLUSTER_NAME_VALID),yes)
+$(error KIND_CLUSTER_NAME must be a lowercase hostname-style name: dot-separated labels of lowercase letters, digits and dashes, with the last label at most 49 characters)
+endif
 KIND_CONFIG := kind-config.yaml
 ifeq ($(PROFILE),dev-full)
 KIND_CONFIG := kind-config-dev-full.yaml
@@ -308,9 +416,9 @@ define kind-load-image
 		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
 		trap 'rm -f "$$tmpfile"' EXIT; \
 		$(CONTAINER_TOOL) save $(1) -o "$$tmpfile"; \
-		kind load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
+		$(KIND_RUNTIME_ENV) kind load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
 	else \
-		kind load docker-image $(1) --name $(KIND_CLUSTER_NAME); \
+		$(KIND_RUNTIME_ENV) kind load docker-image $(1) --name $(KIND_CLUSTER_NAME); \
 	fi
 endef
 
@@ -351,13 +459,13 @@ else ifeq ($(PROFILE),dev-full)
 	@$(KIND_RUNTIME_CMD) check
 	@$(KIND_RUNTIME_CMD) create-cluster $(KIND_CLUSTER_NAME) $(KIND_CONFIG) $(KIND_KUBECONFIG)
 else
-	@if kind get nodes --name $(KIND_CLUSTER_NAME) | grep -q .; then \
+	@if $(KIND_RUNTIME_ENV) kind get nodes --name $(KIND_CLUSTER_NAME) | grep -q .; then \
 		echo "Kind cluster '$(KIND_CLUSTER_NAME)' already exists"; \
 	else \
 		echo "Creating Kind cluster '$(KIND_CLUSTER_NAME)'..."; \
-		kind create cluster --name $(KIND_CLUSTER_NAME) --config $(KIND_CONFIG) --wait 60s; \
+		$(KIND_RUNTIME_ENV) kind create cluster --name $(KIND_CLUSTER_NAME) --config $(KIND_CONFIG) --wait 60s; \
 	fi
-	@kind export kubeconfig --name $(KIND_CLUSTER_NAME) --kubeconfig $(KIND_KUBECONFIG)
+	@$(KIND_RUNTIME_ENV) kind export kubeconfig --name $(KIND_CLUSTER_NAME) --kubeconfig $(KIND_KUBECONFIG)
 endif
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_ENV) $(KIND_ARM64_CLI_IMAGE_SCRIPT) $(KIND_CLUSTER_NAME) $(KIND_ARM64_CLI_IMAGE)
@@ -460,7 +568,7 @@ else
 	helm uninstall envoy-gateway --namespace envoy-gateway --ignore-not-found
 	helm uninstall trust-manager --namespace cert-manager --ignore-not-found
 	helm uninstall cert-manager --namespace cert-manager --ignore-not-found
-	kind delete cluster --name $(KIND_CLUSTER_NAME)
+	$(KIND_RUNTIME_ENV) kind delete cluster --name $(KIND_CLUSTER_NAME)
 endif
 else
 	helm uninstall osac-infra --namespace osac-infra --ignore-not-found --wait --timeout 10m
@@ -470,8 +578,18 @@ endif
 ##@ Entity: Osac
 
 AAP_LICENSE_FILE ?= values/$(PROFILE)/license.zip
+
+.PHONY: local-operator-image
+local-operator-image: ## Build the operator from this checkout and load it into Kind
+ifeq ($(KIND_RUNTIME_REQUIRED),true)
+	$(call kind-container-build,-t $(OPERATOR_IMAGE) -f ../osac-operator/Containerfile ..)
+else
+	$(MAKE) -C ../osac-operator image-build IMG='$(OPERATOR_IMAGE)' CONTAINER_TOOL='$(CONTAINER_TOOL)'
+endif
+	$(call kind-load-image,$(OPERATOR_IMAGE))
+
 .PHONY: install-osac
-install-osac: ## Install OSAC instance (PLATFORM= PROFILE= NS= required)
+install-osac: $(if $(filter true,$(USE_LOCAL_OPERATOR)),local-operator-image) ## Install OSAC instance (PLATFORM= PROFILE= NS= required)
 ifdef OSAC_CHART_OCI_REF
 	@[ -n "$(OSAC_CHART_OCI_VERSION)" ] || { echo "ERROR: OSAC_CHART_OCI_VERSION is required when OSAC_CHART_OCI_REF is set" >&2; exit 1; }
 else
@@ -520,7 +638,7 @@ endif
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac) \
 		$(INSTANCE_HELM_ARGS) \
-		$(EXTRA_HELM_ARGS) $(OSAC_HELM_FORCE_CONFLICTS) "$${remote_cluster_helm_args[@]}" \
+		$(EXTRA_HELM_ARGS) $(LOCAL_OPERATOR_HELM_ARGS) $(OSAC_HELM_FORCE_CONFLICTS) "$${remote_cluster_helm_args[@]}" \
 		--wait --timeout 40m
 
 .PHONY: uninstall-osac
@@ -603,7 +721,7 @@ endif
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(if $(filter openshift,$(PLATFORM)),--set service.externalHostname=fulfillment-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) --set global.clusterDomain=$(DRY_RUN_CLUSTER_DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac) \
-		$(EXTRA_HELM_ARGS)
+		$(EXTRA_HELM_ARGS) $(LOCAL_OPERATOR_HELM_ARGS)
 ifeq ($(PROFILE),dev-full)
 	helm dependency build charts/osac-devstack
 	helm template osac-devstack charts/osac-devstack \
@@ -667,7 +785,7 @@ METERING_IT_IMAGE := localhost/metering-service:it
 METERING_IT_IMAGE_ARGS := --set metering.image.repository=localhost/metering-service --set metering.image.tag=it --set metering.image.pullPolicy=Never
 
 .PHONY: test
-test: ## Run integration tests (SUITE= required: all|fulfillment|operator|bmf)
+test: $(if $(filter fulfillment operator,$(SUITE)),local-operator-image) ## Run integration tests (SUITE= required: all|fulfillment|operator|bmf)
 ifeq ($(SUITE),all)
 	$(MAKE) test SUITE=fulfillment
 	$(MAKE) test SUITE=operator
@@ -685,18 +803,18 @@ endif
 	$(call kind-load-image,$(METERING_IT_IMAGE))
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
 	$(call kind-load-image,localhost/osac-operator:it)
-	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
+	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) USE_LOCAL_OPERATOR=false \
 		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=false --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false $(MCP_TEST_HELM_ARGS) $(METERING_IT_IMAGE_ARGS)"
 	@for f in ../fulfillment-service/it/crds/*.yaml; do kubectl apply --server-side --field-manager=helm --force-conflicts -f "$$f"; done
 # Manager capability discovery and readiness both require the operator, so keep them isolated from the service-only suite.
 	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_MCP_DEPLOYED_URL="$(MCP_TEST_URL)" ginkgo run $(call fulfillment-json-report,service-only) --timeout 1h15m -v --skip 'NetworkClass manager (capability discovery|readiness)' $(FULFILLMENT_GINKGO_ARGS) it
-	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false $(METERING_IT_IMAGE_ARGS)"
+	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) USE_LOCAL_OPERATOR=false \
+		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true $(OPERATOR_IMAGE_HELM_ARGS) --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false $(METERING_IT_IMAGE_ARGS)"
 	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run $(call fulfillment-json-report,manager-capability) --timeout 1h -v --focus 'NetworkClass manager capability discovery' it
-	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.controllers.tenant=false --set operator.controllers.storage=false --set operator.controllers.volume=false --set operator.controllers.networking=true --set operator.controllers.networkingProvisioning=false --set operator.networkManagers.enabled=true --set operator.networkManagers.fabricManagers.netris.enabled=true --set global.services.caas.enabled=false --set global.services.vmaas.enabled=false --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false --set global.networking.networkClass.enabled=false --set aap.instanceGroups.publishTemplates.enabled=false $(METERING_IT_IMAGE_ARGS)"
+	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) USE_LOCAL_OPERATOR=false \
+		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true $(OPERATOR_IMAGE_HELM_ARGS) --set operator.controllers.tenant=false --set operator.controllers.storage=false --set operator.controllers.volume=false --set operator.controllers.networking=true --set operator.controllers.networkingProvisioning=false --set operator.networkManagers.enabled=true --set operator.networkManagers.fabricManagers.netris.enabled=true --set global.services.caas.enabled=false --set global.services.vmaas.enabled=false --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false --set global.networking.networkClass.enabled=false --set aap.instanceGroups.publishTemplates.enabled=false $(METERING_IT_IMAGE_ARGS)"
 	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run $(call fulfillment-json-report,manager-readiness) --timeout 15m -v --focus 'NetworkClass manager readiness' it
-	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
+	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) USE_LOCAL_OPERATOR=false \
 		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set global.services.bmaas.enabled=false --set operator.enabled=false --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false $(METERING_IT_IMAGE_ARGS)"
 	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=bmaas-disabled ginkgo run $(call fulfillment-json-report,bmaas-disabled) --timeout 1h -v --focus 'Service enablement' it
 endif
@@ -705,8 +823,8 @@ ifeq ($(SUITE),operator)
 	$(call kind-load-image,localhost/osac-operator:it)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
 	$(call kind-load-image,$(METERING_IT_IMAGE))
-	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.fulfillment.serverAddress= --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.networkClass.enabled=false $(METERING_IT_IMAGE_ARGS)"
+	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) USE_LOCAL_OPERATOR=false \
+		EXTRA_HELM_ARGS="$(OPERATOR_IMAGE_HELM_ARGS) --set operator.fulfillment.serverAddress= --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.networkClass.enabled=false $(METERING_IT_IMAGE_ARGS)"
 	cd ../osac-operator && ginkgo run --timeout 30m -v test/integration
 endif
 ifeq ($(SUITE),bmf)
@@ -715,7 +833,7 @@ ifeq ($(SUITE),bmf)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
 	$(call kind-load-image,$(METERING_IT_IMAGE))
 	kubectl apply --server-side --force-conflicts -f ../bare-metal-fulfillment-operator/test/crds/
-	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
+	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) USE_LOCAL_OPERATOR=false \
 		EXTRA_HELM_ARGS="--set global.services.bmaas.enabled=true --set bmf.replicaCount=1 --set bmf.image.repository=localhost/bmf-operator --set bmf.image.tag=it --set bmf.image.pullPolicy=Never --set operator.enabled=false --set operator.networkManagers.enabled=true --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.networking.networkClass.enabled=false $(METERING_IT_IMAGE_ARGS)"
 	cd ../bare-metal-fulfillment-operator && ginkgo run --timeout 30m -v test/integration
 endif

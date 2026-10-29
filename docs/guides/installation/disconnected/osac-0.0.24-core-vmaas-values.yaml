@@ -1,0 +1,128 @@
+# Stage 4: published osac umbrella 0.0.24, core + VMaaS on the same SNO hub.
+# Replace site domain placeholders; supply credentials, license and mirrors separately.
+global:
+  osacDeploymentId: demo/osac-sno-01
+  clusterDomain: REPLACE_WITH_OPENSHIFT_INGRESS_DOMAIN
+  fulfillmentTrust:
+    enabled: false
+  services:
+    caas:
+      enabled: false
+    vmaas:
+      enabled: true
+    bmaas:
+      enabled: false
+    maas:
+      enabled: false
+  networking:
+    fabricManager: ''
+    k8sManager: k8s_only
+operator:
+  replicaCount: 1
+  hubAccess:
+    enabled: true
+  vendorControllers:
+    lvms: none
+  controllers:
+    tenant: true
+    networking: true
+    storage: true
+    volume: true
+kafka:
+  enabled: true
+  clusterName: osac-kafka
+  clusterNamespace: osac-kafka
+  replicas: 1
+dbInit:
+  host: postgres.osac-infra.svc.cluster.local
+service:
+  variant: openshift
+  externalHostname: fulfillment-api-osac.REPLACE_WITH_OPENSHIFT_INGRESS_DOMAIN
+  internalHostname: fulfillment-internal-api-osac.REPLACE_WITH_OPENSHIFT_INGRESS_DOMAIN
+  auth:
+    controllerCredentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - key: client-id
+          param: client-id
+        - key: client-secret
+          param: client-secret
+  idp:
+    credentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - key: client-id
+          param: client-id
+        - key: client-secret
+          param: client-secret
+  database:
+    connection:
+    - secret:
+        name: osac-db-config
+        items:
+        - key: url
+          param: url
+    - secret:
+        name: osac-db-client-cert
+        items:
+        - key: tls.crt
+          param: sslcert
+        - key: tls.key
+          param: sslkey
+        - key: ca.crt
+          param: sslrootcert
+  vault:
+    namespace: osac
+    kvMountPath: secret
+    lifecycleRole: lifecycle
+    lifecycleMountPath: jwt
+    keycloakClientId: osac-controller
+    keycloakAudience: osac-api
+    caBundle:
+      configMap: ca-bundle
+    credentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - key: client-secret
+          param: client-secret
+ui:
+  auth:
+    oidcIssuerURL: https://keycloak-keycloak.REPLACE_WITH_OPENSHIFT_INGRESS_DOMAIN/realms/osac
+    certs:
+      caBundle:
+        configMap: ca-bundle
+  api:
+    fulfillment:
+      certs:
+        caBundle:
+          configMap: ca-bundle
+aap:
+  configAsCode:
+    eeImage: registry-vm-svc.aap-portal-lab.svc.cluster.local:8443/osac-project/osac-aap:0.0.22
+    eeImagePull: missing
+    projectGitUri: git://192.168.100.2:9418/osac.git
+    projectGitBranch: 01d1adad87b1e1f0b7bad24de6c7c7006ddc6dbe
+    addonOperatorMaxConcurrentJobs: 1
+  instanceGroups:
+    clusterFulfillment:
+      enabled: false
+    networkFulfillment:
+      enabled: false
+    storageFulfillment:
+      enabled: true
+    publishTemplates:
+      enabled: true
+validation:
+  enabled: true
+hubAccess:
+  enabled: true
+lvms:
+  enabled: true  # Registers backend local / block tier local, NOT StorageClass lvms-vg1.
+csiDriver:
+  enabled: true
+  namespace: osac-csi
+  controller:
+    vendorControllers: lvms=none

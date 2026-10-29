@@ -165,7 +165,7 @@ const bareMetalItem = create(BareMetalInstanceCatalogItemSchema, {
 
 describe('CatalogItemDetailContent', () => {
   it('shows VM detail columns with lookups, governance, and safe access summaries', async () => {
-    const { container } = renderWithProviders(<VmCatalogItemDetailContent item={vmItem} />, {
+    const { container, user } = renderWithProviders(<VmCatalogItemDetailContent item={vmItem} />, {
       apiFixtures: catalogApiFixtures,
     });
 
@@ -187,7 +187,15 @@ describe('CatalogItemDetailContent', () => {
     expect(screen.getByText('Disk image')).toBeInTheDocument();
     expect(screen.getByText('Cloud-init')).toBeInTheDocument();
     expect(screen.getByText('Configured')).toBeInTheDocument();
-    expect(screen.queryByText('#cloud-config')).not.toBeInTheDocument();
+    const userDataToggle = screen.getByRole('button', { name: 'Expand user data' });
+    expect(userDataToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByText('#cloud-config')).not.toBeVisible();
+    await user.click(userDataToggle);
+    expect(screen.getByRole('button', { name: 'Collapse user data' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(screen.getByText('#cloud-config')).toBeVisible();
     expect(screen.getByText('Boot disk size')).toBeInTheDocument();
     expect(screen.getByText('Boot storage tier')).toBeInTheDocument();
     const additionalDisksTerm = screen.getByText('Additional disks').closest('dt');
@@ -243,15 +251,18 @@ describe('CatalogItemDetailContent', () => {
     expect(screen.queryByText('Automatic external IP')).not.toBeInTheDocument();
   });
 
-  it('shows configured bare metal fields and excludes run strategy', () => {
-    renderWithProviders(<CatalogItemDetailContent item={bareMetalItem} />, {
+  it('shows configured bare metal fields and excludes run strategy', async () => {
+    const { user } = renderWithProviders(<CatalogItemDetailContent item={bareMetalItem} />, {
       apiFixtures: catalogApiFixtures,
     });
 
     expect(screen.getByText('Instance type')).toBeInTheDocument();
     expect(screen.getByText('bm.large')).toBeInTheDocument();
     expect(screen.getByText('RHEL 10')).toBeInTheDocument();
-    expect(screen.getByText('echo ready')).toBeInTheDocument();
+    const userDataToggle = screen.getByRole('button', { name: 'Expand user data' });
+    expect(screen.getByText('echo ready')).not.toBeVisible();
+    await user.click(userDataToggle);
+    expect(screen.getByText('echo ready')).toBeVisible();
     expect(screen.queryByText('Run strategy')).not.toBeInTheDocument();
   });
 

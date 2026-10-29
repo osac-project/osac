@@ -368,6 +368,33 @@ describe('getComputeInstanceInitialValues — disk image', () => {
   });
 });
 
+describe('getComputeInstanceInitialValues — user data', () => {
+  it('loads an editable catalog user-data default into the wizard', () => {
+    const values = getComputeInstanceInitialValues({
+      ...vmCatalogItem,
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: {
+              defaultValue: {
+                source: { case: 'inline', value: '#cloud-config\nruncmd: []' },
+              },
+            },
+          },
+        },
+      },
+    } as ComputeInstanceCatalogItem);
+
+    expect(values.spec.userDataSource).toEqual({ value: 'inline', locked: false });
+    expect(values.spec.userData).toEqual({
+      value: '#cloud-config\nruncmd: []',
+      locked: false,
+    });
+    expect(values.spec.userDataSecret).toEqual({ value: '', locked: false });
+  });
+});
+
 describe('getComputeInstanceInitialValues — network attachments', () => {
   it('locks the attachment unit without locking nested pickers', () => {
     const values = getComputeInstanceInitialValues({

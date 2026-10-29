@@ -818,7 +818,7 @@ func TestBackupFixturePreservesAllLedgerPiecesAndPendingOutbox(t *testing.T) {
 		t.Fatalf("writing the ledger: %v", err)
 	}
 	event, err := heartbeat.New(tenant, key, pieces[1].StartTime, pieces[1].EndTime,
-		pieces[1].QuantityMicro, "second", pieces[1].EndTime, 3, "0001")
+		pieces[1].QuantityMicro, "second", pieces[1].EndTime, 3, "0001", "")
 	if err != nil {
 		t.Fatalf("building the heartbeat: %v", err)
 	}
@@ -1773,5 +1773,91 @@ func TestRebuildCountsAResentCopyOnceAcrossACrash(t *testing.T) {
 	if got := billedMicro(t, tenant, "vm-web"); got != 180_000_000 {
 		t.Fatalf("a copy resent after a crash mid-replay must count once: vm-web "+
 			"billed %d micro, want 180000000", got)
+	}
+}
+
+func heartbeatDataOf(t *testing.T, row database.OutboxRow) schema.HeartbeatData {
+	t.Helper()
+	event := cloudevents.Event{}
+	if err := event.UnmarshalJSON(row.Payload); err != nil {
+		t.Fatalf("unmarshaling heartbeat: %v", err)
+	}
+	data, err := heartbeat.Data(event)
+	if err != nil {
+		t.Fatalf("decoding heartbeat: %v", err)
+	}
+	return data
+}
+
+func TestRoundCarriesTheLatestExternalBillingAccountID(t *testing.T) {
+	const tenant = "billing-round"
+	p := pipelinetest.NewPipeline(t, tenant)
+	created := testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+		base, base, "web", "RUNNING", base, "small", base)
+	created.SetExternalBillingId("acct-1")
+	total := testenv.ProduceEvents(t, tenant, []*privatev1.Event{created})
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(time.Minute))
+
+	first := pendingHeartbeats(t, p.Store, tenant)
+	if len(first) == 0 {
+		t.Fatal("expected heartbeats for the first round")
+	}
+	firstPayload := map[string]string{}
+	for _, row := range first {
+		data := heartbeatDataOf(t, row)
+		if data.ExternalBillingAccountID == nil || *data.ExternalBillingAccountID != "acct-1" {
+			t.Fatalf("heartbeat %s billing id = %v, want acct-1", row.ID, data.ExternalBillingAccountID)
+		}
+		firstPayload[row.ID] = string(row.Payload)
+	}
+
+	changed := testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+		base.Add(time.Minute), base, "web", "RUNNING", base, "small", base)
+	changed.SetExternalBillingId("acct-2")
+	total += testenv.ProduceEvents(t, tenant, []*privatev1.Event{changed})
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(2*time.Minute))
+
+	var sawNew bool
+	for _, row := range pendingHeartbeats(t, p.Store, tenant) {
+		if payload, ok := firstPayload[row.ID]; ok {
+			if string(row.Payload) != payload {
+				t.Fatalf("heartbeat %s already in the outbox was rewritten", row.ID)
+			}
+			continue
+		}
+		sawNew = true
+		data := heartbeatDataOf(t, row)
+		if data.ExternalBillingAccountID == nil || *data.ExternalBillingAccountID != "acct-2" {
+			t.Fatalf("new heartbeat %s billing id = %v, want acct-2", row.ID, data.ExternalBillingAccountID)
+		}
+	}
+	if !sawNew {
+		t.Fatal("the round after the billing id change wrote no new heartbeat")
+	}
+}
+
+func TestRoundOmitsExternalBillingAccountIDWhenTheTenantHasNone(t *testing.T) {
+	const tenant = "billing-round-empty"
+	p := pipelinetest.NewPipeline(t, tenant)
+	total := testenv.ProduceEvents(t, tenant, []*privatev1.Event{
+		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			base, base, "web", "RUNNING", base, "small", base),
+	})
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(time.Minute))
+	rows := pendingHeartbeats(t, p.Store, tenant)
+	if len(rows) == 0 {
+		t.Fatal("expected heartbeats")
+	}
+	for _, row := range rows {
+		data := heartbeatDataOf(t, row)
+		if data.ExternalBillingAccountID != nil {
+			t.Fatalf("heartbeat %s has billing id %q", row.ID, *data.ExternalBillingAccountID)
+		}
+		if strings.Contains(string(row.Payload), "external_billing_account_id") {
+			t.Fatalf("heartbeat %s payload contains external_billing_account_id", row.ID)
+		}
 	}
 }

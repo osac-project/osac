@@ -166,6 +166,15 @@ func (f *Fold) apply(ctx context.Context, tenant string, messages []*sarama.Cons
 	if err := database.TakeTenantLock(ctx, tx, database.LockFold, tenant); err != nil {
 		return err
 	}
+	// The billing id is a property of the tenant, read from the event envelope, so the
+	// running value is tracked once for the batch. A missing history row is not the same
+	// as an empty value: the first empty envelope still writes one row.
+	latestBillingID, hasBillingID, err := database.LatestFactValue(
+		ctx, tx, tenant, database.BillingResourceType, tenant, database.BillingField,
+	)
+	if err != nil {
+		return err
+	}
 	for _, message := range messages {
 		event := &privatev1.Event{}
 		if err := proto.Unmarshal(message.Value, event); err != nil {
@@ -176,11 +185,21 @@ func (f *Fold) apply(ctx context.Context, tenant string, messages []*sarama.Cons
 			}
 			continue
 		}
+		billing, billingChanged := changedBillingFact(event, tenant, latestBillingID, hasBillingID)
 		facts, err := f.extractor.Facts(tenant, event)
 		if err != nil {
 			reason, skip := skipReason(err)
 			if !skip {
 				return err
+			}
+			// The envelope still records the tenant's billing id, including on a payload
+			// the fold cannot bill. A fatal extraction error returns above so this
+			// transaction rolls back instead of advancing past it.
+			if billingChanged {
+				if err := database.InsertFacts(ctx, tx, tenant, []database.Fact{billing}, message.Offset+1); err != nil {
+					return err
+				}
+				latestBillingID, hasBillingID = billing.Value, true
 			}
 			// Misrouted or undatable data: folding it would bill the wrong customer or
 			// the wrong minutes, so skip it loudly and keep the fold moving.
@@ -188,6 +207,10 @@ func (f *Fold) apply(ctx context.Context, tenant string, messages []*sarama.Cons
 				return err
 			}
 			continue
+		}
+		if billingChanged {
+			facts = append(facts, billing)
+			latestBillingID, hasBillingID = billing.Value, true
 		}
 		if len(facts) == 0 {
 			if err := database.AdvanceEventOffset(ctx, tx, tenant, message.Offset+1); err != nil {
@@ -200,6 +223,29 @@ func (f *Fold) apply(ctx context.Context, tenant string, messages []*sarama.Cons
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// changedBillingFact reports the history fact to write when the envelope's billing id
+// differs from the latest stored value. An event without a timestamp cannot be dated, so
+// it does not change the history. The value is the envelope field, empty when unset.
+func changedBillingFact(
+	event *privatev1.Event, tenant, latest string, hasLatest bool,
+) (database.Fact, bool) {
+	timestamp := event.GetTimestamp()
+	if timestamp == nil || !timestamp.IsValid() || timestamp.AsTime().IsZero() {
+		return database.Fact{}, false
+	}
+	value := event.GetExternalBillingId()
+	if hasLatest && latest == value {
+		return database.Fact{}, false
+	}
+	return database.Fact{
+		ResourceType: database.BillingResourceType,
+		ResourceID:   tenant,
+		Field:        database.BillingField,
+		Since:        timestamp.AsTime().UTC().Truncate(time.Second),
+		Value:        value,
+	}, true
 }
 
 // skipReason maps an extraction error the fold must skip loudly, not fail on, to its metric

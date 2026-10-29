@@ -11,12 +11,20 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// BillingResourceType and BillingField name the history row that records a tenant's
+// external billing identifier. The resource id is the tenant name.
+const (
+	BillingResourceType = "Tenant"
+	BillingField        = "external_billing_id"
 )
 
 // Querier is the part of a connection pool or transaction that queries run against. Loops that
@@ -335,6 +343,31 @@ func (s *Store) LastRoundTime(ctx context.Context) (time.Time, error) {
 		return time.Time{}, nil
 	}
 	return *lastRound, nil
+}
+
+// LatestFactValue returns the history value with the greatest since for this field.
+// ok is false when no row exists.
+func LatestFactValue(
+	ctx context.Context, q Querier, tenant, resourceType, resourceID, field string,
+) (value string, ok bool, err error) {
+	err = q.QueryRow(
+		ctx,
+		`SELECT value
+		 FROM history
+		 WHERE tenant = $1 AND resource_type = $2 AND resource_id = $3 AND field = $4
+		 ORDER BY since DESC
+		 LIMIT 1`,
+		tenant, resourceType, resourceID, field,
+	).Scan(&value)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf(
+			"reading latest %s of %s %s: %w", field, resourceType, resourceID, err,
+		)
+	}
+	return value, true, nil
 }
 
 // ResourceFacts returns one resource's facts ordered by field and time.

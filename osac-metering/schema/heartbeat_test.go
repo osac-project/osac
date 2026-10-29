@@ -27,7 +27,7 @@ var _ = Describe("Heartbeat", func() {
 			for i := range typ.NumField() {
 				tag := typ.Field(i).Tag.Get("json")
 				name := strings.Split(tag, ",")[0]
-				if name == "usage" || name == "billing_dimensions" {
+				if name == "usage" || name == "billing_dimensions" || name == "external_billing_account_id" {
 					continue
 				}
 				structFields = append(structFields, name)

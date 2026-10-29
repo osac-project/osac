@@ -414,6 +414,11 @@ func TestFoldSkipsEventsWithoutAPayload(t *testing.T) {
 		t.Fatalf("healthy event was not folded:\n%s", history)
 	}
 	for _, line := range dumpHistory(t, store, tenant) {
+		// The envelope billing id is recorded for the tenant even when a payload
+		// cannot be read. It is not a fact of the payload-less event's resource.
+		if strings.Contains(line, " "+database.BillingField+" ") {
+			continue
+		}
 		if !strings.Contains(line, "vm-mine") {
 			t.Fatalf("the payload-less event must contribute no facts:\n%s", history)
 		}
@@ -574,7 +579,16 @@ func TestFoldIsDeterministic(t *testing.T) {
 			total := produce(t, tenant, events)
 			store := testenv.Database(t)
 			foldAll(t, store, tenant, total, scenario.restarts)
-			got := dumpHistory(t, store, tenant)
+			// The billing row's since is the timestamp of the first event in log order
+			// that carried the value. A shuffle is a different log, so that row is
+			// compared by the billing test, not here.
+			var got []string
+			for _, line := range dumpHistory(t, store, tenant) {
+				if strings.Contains(line, " "+database.BillingField+" ") {
+					continue
+				}
+				got = append(got, line)
+			}
 			if reference == nil {
 				reference = got
 				return
@@ -626,6 +640,7 @@ func TestFoldRecordsCreationValueWithoutTransitionTime(t *testing.T) {
 		"Cluster c-9 metadata.project " + creation.Format(time.RFC3339Nano) + " web",
 		"Cluster c-9 spec.version " + creation.Format(time.RFC3339Nano) + " 4.18",
 		"Cluster c-9 status.state " + creation.Format(time.RFC3339Nano) + " PROGRESSING",
+		fmt.Sprintf("Tenant %s external_billing_id %s ", tenant, creation.Format(time.RFC3339Nano)),
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("history mismatch:\ngot:\n%s\nwant:\n%s", stringsJoin(got), stringsJoin(want))
@@ -755,8 +770,97 @@ func TestFoldWritesTheDesignExampleHistory(t *testing.T) {
 		"ExternalIP ip-1 status.attached " + base.Add(2*time.Minute).Format(time.RFC3339Nano) + " true",
 		"ExternalIP ip-1 status.state " +
 			base.Add(2*time.Minute).Format(time.RFC3339Nano) + " ALLOCATED",
+		fmt.Sprintf("Tenant %s external_billing_id %s ", tenant, base.Format(time.RFC3339Nano)),
 	}
 	if stringsJoin(got) != stringsJoin(want) {
 		t.Fatalf("history mismatch:\ngot:\n%s\nwant:\n%s", stringsJoin(got), stringsJoin(want))
+	}
+}
+
+func billingEnvelope(id string, timestamp time.Time, billingID string) *privatev1.Event {
+	event := untrackedEvent(id, timestamp)
+	if billingID != "" {
+		event.SetExternalBillingId(billingID)
+	}
+	return event
+}
+
+func billingLines(t *testing.T, store *database.Store, tenant string) []string {
+	t.Helper()
+	var lines []string
+	for _, line := range dumpHistory(t, store, tenant) {
+		if strings.Contains(line, " "+database.BillingField+" ") {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+func billingLine(tenant string, since time.Time, value string) string {
+	return fmt.Sprintf(
+		"Tenant %s external_billing_id %s %s",
+		tenant, since.UTC().Format(time.RFC3339Nano), value,
+	)
+}
+
+// TestFoldRecordsExternalBillingIDWhenItChanges checks the tenant billing history.
+// A missing row is not an empty value, so the first empty envelope writes one row.
+// Later envelopes write a row only when the value changes. Re-reading the log does
+// not add rows. A billable payload records the same field.
+func TestFoldRecordsExternalBillingIDWhenItChanges(t *testing.T) {
+	tenant := "billing-fold"
+	store := testenv.Database(t)
+	ctx := context.Background()
+	value, ok, err := database.LatestFactValue(
+		ctx, store.Pool(), tenant, database.BillingResourceType, tenant, database.BillingField,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok || value != "" {
+		t.Fatalf("missing history returned %q, ok=%v", value, ok)
+	}
+
+	events := []*privatev1.Event{
+		billingEnvelope("b0", base, ""),
+		billingEnvelope("b1", base.Add(time.Minute), ""),
+		billingEnvelope("b2", base.Add(2*time.Minute), "acct-1"),
+		billingEnvelope("b3", base.Add(3*time.Minute), "acct-1"),
+		billingEnvelope("b4", base.Add(4*time.Minute), "acct-2"),
+		billingEnvelope("b5", base.Add(5*time.Minute), ""),
+		billingEnvelope("b6", base.Add(6*time.Minute), ""),
+	}
+	total := produce(t, tenant, events)
+	foldAll(t, store, tenant, total, false)
+	want := []string{
+		billingLine(tenant, base, ""),
+		billingLine(tenant, base.Add(2*time.Minute), "acct-1"),
+		billingLine(tenant, base.Add(4*time.Minute), "acct-2"),
+		billingLine(tenant, base.Add(5*time.Minute), ""),
+	}
+	if got := billingLines(t, store, tenant); stringsJoin(got) != stringsJoin(want) {
+		t.Fatalf("billing history mismatch:\ngot:\n%s\nwant:\n%s", stringsJoin(got), stringsJoin(want))
+	}
+
+	if _, err := store.Pool().Exec(ctx, `UPDATE progress SET event_offset = 0 WHERE tenant = $1`, tenant); err != nil {
+		t.Fatal(err)
+	}
+	foldAll(t, store, tenant, total, false)
+	if got := billingLines(t, store, tenant); stringsJoin(got) != stringsJoin(want) {
+		t.Fatalf("replay changed billing history:\ngot:\n%s\nwant:\n%s", stringsJoin(got), stringsJoin(want))
+	}
+
+	vmTenant := "billing-fold-vm"
+	vm := testenv.VMEvent("vm-e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+		base, base, "web", "RUNNING", base, "small", base)
+	vm.SetExternalBillingId("acct-vm")
+	vmTotal := testenv.ProduceEvents(t, vmTenant, []*privatev1.Event{vm})
+	foldAll(t, store, vmTenant, vmTotal, false)
+	vmBilling := billingLines(t, store, vmTenant)
+	if stringsJoin(vmBilling) != stringsJoin([]string{billingLine(vmTenant, base, "acct-vm")}) {
+		t.Fatalf("billable event billing history:\n%s", stringsJoin(vmBilling))
+	}
+	if !strings.Contains(stringsJoin(dumpHistory(t, store, vmTenant)), "ComputeInstance vm-7") {
+		t.Fatal("billable event did not record the compute instance")
 	}
 }

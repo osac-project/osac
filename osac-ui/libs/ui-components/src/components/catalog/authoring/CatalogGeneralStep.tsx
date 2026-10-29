@@ -77,9 +77,10 @@ export const catalogGeneralValuesFromItem = (
 /**
  * Encodes `CatalogGeneralValues` into the `metadata`/`template` shape shared by every
  * catalog item create payload. `tenant` and `project` are mutually exclusive by
- * construction: an admin populates `scope`/`metadata.tenant` and leaves
- * `metadata.project` empty, while a tenant admin does the opposite, so a single
- * derivation works for both roles.
+ * construction: an admin populates `scope`/`metadata.tenant`, while a
+ * tenant-admin-created item omits `metadata.project` and is scoped to the
+ * authenticated tenant by the API. Existing project metadata is retained when
+ * editing legacy tenant-admin items.
  */
 export const catalogGeneralItemPayload = (
   values: CatalogGeneralValues,
@@ -155,9 +156,9 @@ const CatalogGeneralStep = ({
                 />
               )}
             </>
-          ) : (
+          ) : isEdit ? (
             <ProjectField isDisabled={isEdit} />
-          )}
+          ) : null}
           <InputField
             name="metadata.name"
             label={t('Name')}

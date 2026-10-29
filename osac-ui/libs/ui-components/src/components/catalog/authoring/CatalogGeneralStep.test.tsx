@@ -12,14 +12,18 @@ import CatalogGeneralStep, {
 import type { UserRole } from '../../../shellTypes';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
-vi.mock('../../../hooks/use-session', () => ({
-  useSession: vi.fn(() => ({
-    role: 'tenant-admin',
-    username: 'testuser',
-    tenantId: 'tenant-1',
-    enabledServices: [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
-  })),
-}));
+vi.mock('../../../hooks/use-session', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../hooks/use-session')>();
+  return {
+    ...actual,
+    useSession: vi.fn(() => ({
+      role: 'tenant-admin',
+      username: 'testuser',
+      tenantId: 'tenant-1',
+      enabledServices: [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
+    })),
+  };
+});
 
 const { useSession } = await import('../../../hooks/use-session');
 
@@ -95,10 +99,10 @@ describe('CatalogGeneralStep', () => {
   });
 
   describe('for a tenant-admin session', () => {
-    it('shows the project field and no scope cards or tenant field', () => {
+    it('does not show a project field or scope cards when creating', () => {
       renderStep(false);
 
-      expect(screen.getByRole('button', { name: 'Project' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Project' })).not.toBeInTheDocument();
       expect(screen.queryByRole('radiogroup', { name: 'Scope' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Tenant' })).not.toBeInTheDocument();
     });
@@ -189,7 +193,6 @@ describe('CatalogGeneralStep', () => {
       expect(tenantScopedCard).toHaveClass('pf-m-disabled');
       expect(screen.getByRole('button', { name: 'Tenant' })).toBeInTheDocument();
     });
-
   });
 });
 

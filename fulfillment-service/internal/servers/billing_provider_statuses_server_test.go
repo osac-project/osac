@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -76,6 +77,18 @@ var _ = Describe("Billing provider statuses server", func() {
 			publicv1.BillingUsageDeliveryState_BILLING_USAGE_DELIVERY_STATE_UNKNOWN))
 		Expect(status.HasLastSuccessfulCheck()).To(BeFalse())
 		Expect(adapter.calls).To(BeZero())
+	})
+
+	It("serves the status from an injected billing fake, and a disabled fake receives no call", func() {
+		fake := billingfake.New(billingfake.Scenario{})
+		status := get(build(fake.Provider()))
+		Expect(status.GetState()).To(Equal(publicv1.BillingProviderState_BILLING_PROVIDER_STATE_AVAILABLE))
+		Expect(fake.Count("HealthCheck")).To(Equal(1))
+
+		off := billingfake.New(billingfake.Scenario{})
+		status = get(build(billing.NewProvider("", off, nil)))
+		Expect(status.GetState()).To(Equal(publicv1.BillingProviderState_BILLING_PROVIDER_STATE_NOT_CONFIGURED))
+		Expect(off.Calls()).To(BeEmpty())
 	})
 
 	It("is AVAILABLE after a successful one-account probe", func() {

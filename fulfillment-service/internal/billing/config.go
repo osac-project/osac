@@ -65,7 +65,7 @@ func LoadConfig(getenv func(string) string, readFile func(string) ([]byte, error
 	}
 	file := getenv("OSAC_BILLING_CREDENTIAL_FILE")
 	cfg := Config{BaseURL: getenv("OSAC_BILLING_BASE_URL"), APIVersion: getenv("OSAC_BILLING_API_VERSION")}
-	if provider != "m360" || cfg.BaseURL == "" || cfg.APIVersion == "" || file == "" {
+	if provider != KeyM360 || cfg.BaseURL == "" || cfg.APIVersion == "" || file == "" {
 		return Config{}, &Error{Reason: ReasonNotConfigured, Op: op}
 	}
 	raw, err := readFile(file)

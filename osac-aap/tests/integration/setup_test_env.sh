@@ -195,6 +195,7 @@ OSAC_TEST_API_TOKEN="$(openssl rand -hex 24)"
 cat > "${SCRIPT_DIR}/.storage_env" <<ENVEOF
 export VAST_VIP_POOL_SUPERNET="10.0.0.0/24"
 export VAST_VALIDATE_CERTS="false"
+# Exercise the provider-scoped role default against the self-signed mock VMS.
 export OSAC_TEST_VAST_PASSWORD="${OSAC_TEST_VAST_PASSWORD}"
 export OSAC_TEST_TENANT_PASSWORD="${OSAC_TEST_TENANT_PASSWORD}"
 export OSAC_TEST_OAUTH_CLIENT_ID="${OSAC_TEST_OAUTH_CLIENT_ID}"

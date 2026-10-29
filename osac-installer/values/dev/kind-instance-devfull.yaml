@@ -13,6 +13,12 @@ operator:
     storage: true
     volume: true
 
+# AWX shares the storage workflow's development TLS policy.
+aap:
+  instanceGroups:
+    storageFulfillment:
+      enable_certificate_validation: false
+
 # Reuse the local storage registration hook so tenant onboarding provisions a
 # tenant-labeled TopoLVM StorageClass for the existing "local" storage tier.
 lvms:

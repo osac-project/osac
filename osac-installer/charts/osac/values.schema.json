@@ -1557,6 +1557,11 @@
                   "description": "Create storage-fulfillment ConfigMap and Secret",
                   "default": false
                 },
+                "enable_certificate_validation": {
+                  "type": "boolean",
+                  "description": "Verify TLS certificates for storage-workflow Ansible clients",
+                  "default": true
+                },
                 "config": {
                   "type": "object",
                   "description": "Environment variables for the storage-operations instance group",

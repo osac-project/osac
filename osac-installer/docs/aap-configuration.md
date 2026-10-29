@@ -60,6 +60,12 @@ file and they are applied during `make install-osac`.
 | `DNS_CLASS` | `dns.route53.dns` | DNS backend driver role (see [DNS Backend](dns-backend.md)) |
 | `DNS_ZONE` | `EXTERNAL_ACCESS_BASE_DOMAIN` | DNS zone for record management |
 
+Storage-workflow TLS certificate validation is enabled by default. Configure
+`aap.instanceGroups.storageFulfillment.enable_certificate_validation: false`
+only for development environments using self-signed provider certificates. The
+same value is mapped to the provider-scoped `VAST_VALIDATE_CERTS` worker
+environment variable and injected into AWX jobs in the `dev-full` profile.
+
 ## Secret Variables
 
 Values must be **plaintext** — the script base64-encodes them when patching the

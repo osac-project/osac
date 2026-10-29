@@ -208,8 +208,9 @@ metadata:
     {{- include "osac-aap.labels" . | nindent 4 }}
     osac.openshift.io/project: osac-aap
 data:
+  VAST_VALIDATE_CERTS: {{ printf "%t" .Values.instanceGroups.storageFulfillment.enable_certificate_validation | quote }}
   {{- range $key, $val := .Values.instanceGroups.storageFulfillment.config }}
-  {{- if $val }}
+  {{- if and $val (ne $key "VAST_VALIDATE_CERTS") }}
   {{ $key }}: {{ $val | quote }}
   {{- end }}
   {{- end }}

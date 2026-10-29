@@ -382,6 +382,12 @@ aap:
       secret:
         # Prefer global.networking.netris.credentials.externalSecret.
         NETRIS_PASSWORD: ""
+    storageFulfillment:
+      enabled: false
+      # Applies to TLS validation in storage-workflow Ansible clients only.
+      enable_certificate_validation: true
+      config:
+        STORAGE_SNAPSHOTS_ENABLED: ""
     publishTemplates:
       enabled: true
       config:

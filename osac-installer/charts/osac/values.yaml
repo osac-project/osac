@@ -343,6 +343,8 @@ aap:
       secret: {}
     storageFulfillment:
       enabled: false
+      # Verify TLS certificates for storage-workflow Ansible clients.
+      enable_certificate_validation: true
       config:
         STORAGE_SNAPSHOTS_ENABLED: ""
     publishTemplates:

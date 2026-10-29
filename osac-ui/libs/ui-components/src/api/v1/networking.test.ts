@@ -54,6 +54,12 @@ describe('networking list filters', () => {
     );
   });
 
+  it('requires backend VM capability only for VM choices', () => {
+    expect(virtualNetworkFilterForSubnetList('vn-1', true)).toBe(
+      `this.spec.virtual_network.id == "vn-1" && this.status.state == ${SubnetState.READY} && this.status.compute_instance_supported == true`,
+    );
+  });
+
   it('escapes quotes in virtual network id when building subnet filter', () => {
     expect(virtualNetworkFilterForSubnetList('vn-"evil')).toBe(
       `this.spec.virtual_network.id == "vn-\\"evil" && this.status.state == ${SubnetState.READY}`,

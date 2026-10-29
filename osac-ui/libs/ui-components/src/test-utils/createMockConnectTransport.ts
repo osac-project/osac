@@ -60,6 +60,7 @@ import {
   ServiceTier,
   Subnet,
   SubnetsGetRequest,
+  SubnetsListRequest,
   User,
   VirtualNetwork,
   Volume,
@@ -475,6 +476,7 @@ export type MockTransportOverrides = {
   onDiskImageCreate?: (req: DiskImagesCreateRequest) => DiskImagesCreateResponse;
   onDiskImageUpdate?: (req: DiskImagesUpdateRequest) => DiskImagesUpdateResponse;
   onDiskImageDelete?: (req: DiskImagesDeleteRequest) => DiskImagesDeleteResponse;
+  onSubnetList?: (req: SubnetsListRequest) => void;
   onSubnetGet?: (req: SubnetsGetRequest) => { object?: Subnet };
   onNatGatewayList?: (req: NATGatewaysListRequest) => void;
   onNatGatewayCreate?: (
@@ -639,13 +641,16 @@ export const createMockConnectTransport = (
       });
 
       router.service(Subnets, {
-        list: (req) => ({
-          items: subnets.filter(
-            (item) =>
-              matchesReadyStateFilter(req.filter, item.status?.state) &&
-              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
-          ),
-        }),
+        list: (req) => {
+          overrides.onSubnetList?.(req);
+          return {
+            items: subnets.filter(
+              (item) =>
+                matchesReadyStateFilter(req.filter, item.status?.state) &&
+                matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
+            ),
+          };
+        },
         get: (req) => {
           if (overrides.onSubnetGet) {
             return overrides.onSubnetGet(req);

@@ -66,6 +66,7 @@ var errSubnetNotFound = errors.New("subnet CR not found")
 // ComputeInstanceReconciler reconciles a ComputeInstance object
 type ComputeInstanceReconciler struct {
 	client.Client
+	APIReader                client.Reader
 	Scheme                   *runtime.Scheme
 	Recorder                 events.EventRecorder
 	mgr                      mcmanager.Manager
@@ -118,6 +119,7 @@ func NewComputeInstanceReconciler(
 
 	return &ComputeInstanceReconciler{
 		Client:                   mgr.GetLocalManager().GetClient(),
+		APIReader:                mgr.GetLocalManager().GetAPIReader(),
 		Scheme:                   mgr.GetLocalManager().GetScheme(),
 		Recorder:                 mgr.GetLocalManager().GetEventRecorder(computeInstanceControllerName),
 		mgr:                      mgr,
@@ -505,6 +507,9 @@ func (r *ComputeInstanceReconciler) syncMetadataPreflight(ctx context.Context, i
 func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
+	if result, blocked, err := r.checkSubnetPlacement(ctx, instance); blocked || err != nil {
+		return result, err
+	}
 	subnetTargetNamespace, err := r.syncMetadataPreflight(ctx, instance)
 	if err != nil {
 		if errors.Is(err, errSubnetNotFound) {

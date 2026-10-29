@@ -1,5 +1,54 @@
 # OSAC Ansible Project
 
+## Subnet VM eligibility and EVPN ownership
+
+The fulfillment API's `Subnet.status.compute_instance_supported` is read-only and
+independent of readiness. A READY fabric-only Subnet supports bare metal, not VMs.
+A supported Subnet may serve both; creation provenance does not determine support.
+An absent capability means eligibility has not yet been decided.
+
+For the current `cudn_evpn` manager, exactly one Subnet owns each VirtualNetwork's
+shared network. The first eligible Kubernetes provisioning task claims the existing
+shared `cudn-evpn-<sha1(VirtualNetwork UUID)>` Lease under its CAS mutex. The Lease's
+`osac.openshift.io/cudn-owner-subnet` assignment drives namespace/CUDN creation and
+VM placement. The operator does not independently elect an owner. Backend Subnet
+annotations record the decision; fabric-only decisions survive retries and owner
+removal. No Kubernetes manager means no VM support; the EVPN single-owner limit
+does not constrain other managers.
+
+The fulfillment service still accepts valid VM requests. The actual provisioning
+consumer permanently rejects unsupported placement with `NetworkAttachmentFailed`
+before creating VM, SSH Secret, DataVolume, or VMI resources. Unknown eligibility
+and unready networking wait. Neither UI filtering nor a cached namespace is proof
+of support. The requested Subnet is never silently replaced with the owner.
+
+Ownership belongs to the Subnet, not its VMs. Stop, pause, restart, and deleting the
+last VM retain the namespace, CUDN, and assignment. Subnet deletion is blocked by
+every unarchived dependent reference, including pending, failed-retained, and
+deleting workloads. Parent/default resource deletion protections remain in force.
+
+Once dependencies are gone, owner deletion removes the CUDN, waits for absence,
+then removes its namespace before recording completed cleanup on the same Lease.
+The old owner name remains a fence until its Subnet CR disappears. New candidates
+retry while the owner is deleting, rather than becoming permanently fabric-only.
+Cleanup failures retain the assignment. Existing fabric-only siblings are never
+promoted; a newly created Subnet may claim the cleaned slot.
+
+Upgrade preserves a validated Lease/CUDN owner. An unannotated historical CUDN is
+adopted only when its CIDR and historical target identify one unambiguous Subnet.
+Conflicting ownership fails closed without deleting networking.
+`skip-k8s-manager=true` remains an explicit compatibility opt-out, not an eligibility
+calculation. Its absence does not mean support, and removing it does not promote
+a decided fabric-only Subnet. Historical network state is preserved rather than
+using the opt-out to trigger destructive migration.
+An explicitly skipped historical namespace with ambiguous selector identity blocks
+selector migration for explicit repair, rather than enabling or detaching it.
+
+Local regressions execute real Ansible claim/guard tasks against test-only
+Kubernetes-module fixtures with resource-version conflict checking. They cover
+parallel claimants and pre-resource gating without contacting a live provider;
+they do not establish live EVPN traffic, KubeVirt, or Netris end-to-end behavior.
+
 This repository contains the Ansible automation layer for
 [OSAC (Open Sovereign AI Cloud)](https://github.com/osac-project).
 It provides the playbooks, roles, and collections that provision and manage

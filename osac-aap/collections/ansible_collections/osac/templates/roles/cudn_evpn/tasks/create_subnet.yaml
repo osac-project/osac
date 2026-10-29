@@ -75,42 +75,6 @@
         namespace: "{{ subnet.metadata.namespace }}"
       register: _vnet_subnet_lookup
 
-    - name: Find active Subnets for the parent VirtualNetwork
-      ansible.builtin.set_fact:
-        _cudn_owner_active_subnets: >-
-          {{ _vnet_subnet_lookup.resources | default([])
-             | selectattr('spec.virtualNetwork', 'equalto', vnet_uuid)
-             | rejectattr('metadata.deletionTimestamp', 'defined')
-             | list }}
-
-    - name: Initialize eligible CUDN owner candidates
-      ansible.builtin.set_fact:
-        _cudn_owner_candidates: []
-
-    - name: Add active Subnets that allow Kubernetes provisioning as CUDN owner candidates
-      ansible.builtin.set_fact:
-        _cudn_owner_candidates: "{{ _cudn_owner_candidates + [item] }}"
-      loop: "{{ _cudn_owner_active_subnets }}"
-      loop_control:
-        label: "{{ item.metadata.name }}"
-      when: (item.metadata.annotations | default({})).get('osac.openshift.io/skip-k8s-manager', '') != 'true'
-
-    - name: Select oldest eligible Subnet as initial CUDN owner
-      ansible.builtin.set_fact:
-        _cudn_owner_subnet: >-
-          {{ _cudn_owner_candidates
-             | sort(attribute='metadata.name')
-             | sort(attribute='metadata.creationTimestamp')
-             | first | default({}) }}
-
-    - name: Validate a CUDN owner Subnet was found
-      ansible.builtin.assert:
-        that:
-          - _cudn_owner_subnet.metadata.name is defined
-        fail_msg: >-
-          No active Subnet was found for VirtualNetwork '{{ vnet_name }}'; refusing to
-          report successful CUDN provisioning without an owner.
-
     - name: Read persisted CUDN owner from the shared Lease
       kubernetes.core.k8s_info:
         api_version: coordination.k8s.io/v1
@@ -165,6 +129,60 @@
           owned by tenant '{{ tenant_id }}' and VirtualNetwork '{{ vnet_name }}'. Refusing to
           manage this shared resource.
 
+    - name: Classify the requested Subnet using the shared persisted assignment
+      ansible.builtin.set_fact:
+        _evpn_decision: >-
+          {{ subnet | osac.templates.evpn_owner_decision(
+               _vnet_subnet_lookup.resources,
+               _cudn_owner_lease.resources[0],
+               _existing_cudn.resources | first | default({})) }}
+
+    - name: Report a retryable owner deletion fence
+      ansible.builtin.set_stats:
+        data:
+          osac_error:
+            message: "{{ _evpn_decision.reason }}"
+            retryable: true
+      when: _evpn_decision.retry
+
+    - name: Wait for owner cleanup before classifying a new candidate
+      ansible.builtin.fail:
+        msg: "{{ _evpn_decision.reason }}"
+      when: _evpn_decision.retry
+
+    - name: Set effective persisted CUDN owner
+      ansible.builtin.set_fact:
+        _cudn_owner_subnet_name: "{{ _evpn_decision.owner }}"
+
+    - name: Persist CUDN owner on the shared Lease before Kubernetes writes
+      kubernetes.core.k8s:
+        state: patched
+        definition:
+          apiVersion: coordination.k8s.io/v1
+          kind: Lease
+          metadata: >-
+            {{ {'name': vnet_lock_name, 'namespace': vnet_lock_namespace,
+                'resourceVersion': _cudn_owner_lease.resources[0].metadata.resourceVersion | string,
+                'annotations': {
+                  'osac.openshift.io/cudn-owner-subnet': _evpn_decision.owner,
+                  'osac.openshift.io/cudn-owner-cleaned': none if _evpn_decision.supported else
+                    (_cudn_owner_lease.resources[0].metadata.annotations | default({})).get(
+                      'osac.openshift.io/cudn-owner-cleaned', none)}} }}
+      when: _evpn_decision.owner | length > 0
+
+    - name: Persist immutable Subnet eligibility before creating network resources
+      kubernetes.core.k8s:
+        state: patched
+        definition:
+          apiVersion: osac.openshift.io/v1alpha1
+          kind: Subnet
+          metadata:
+            name: "{{ subnet_name }}"
+            namespace: "{{ subnet.metadata.namespace }}"
+            annotations:
+              osac.openshift.io/compute-instance-supported: "{{ _evpn_decision.supported | ternary('true', 'false') }}"
+              osac.openshift.io/compute-instance-unsupported-reason: "{{ _evpn_decision.reason }}"
+
     - name: Find all Subnets that may already have a workload namespace
       ansible.builtin.set_fact:
         _cudn_namespace_subnets: >-
@@ -210,6 +228,24 @@
       loop_control:
         label: "{{ item.item.metadata.name }}"
 
+    - name: Preserve ambiguous historical explicit opt-out namespaces
+      ansible.builtin.assert:
+        that:
+          - >-
+            item.resources | default([]) | length == 0 or
+            (item.item.metadata.annotations | default({})).get('osac.openshift.io/skip-k8s-manager', '') != 'true' or
+            (item.resources[0].metadata.labels | default({})).get('osac.openshift.io/virtualnetwork-uuid', '') == vnet_uuid
+        fail_msg: >-
+          An explicitly skipped historical Subnet has an existing namespace without the
+          current selector identity. Preserve its network state and resolve the migration
+          explicitly before changing the shared CUDN selector.
+      loop: "{{ _cudn_namespace_lookups.results }}"
+      loop_control:
+        label: "{{ item.item.metadata.name }}"
+      when:
+        - _evpn_decision.supported
+        - _existing_cudn.resources | length > 0
+
     - name: Backfill the VirtualNetwork UUID on existing workload namespaces
       kubernetes.core.k8s:
         kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
@@ -227,33 +263,8 @@
       when:
         - item.resources | default([]) | length > 0
         - (item.resources[0].metadata.labels | default({})).get('osac.openshift.io/virtualnetwork-uuid', '') != vnet_uuid
-
-    - name: Keep the persisted CUDN owner stable
-      ansible.builtin.set_fact:
-        _cudn_owner_from_lease: >-
-          {{ (_cudn_owner_lease.resources[0].metadata.annotations | default({}))
-             .get('osac.openshift.io/cudn-owner-subnet', '') }}
-        _cudn_owner_from_cudn: >-
-          {{ (_existing_cudn.resources | default([]) | first | default({})).get('metadata', {})
-             .get('annotations', {}).get('osac.openshift.io/cudn-owner-subnet', '') }}
-
-    - name: Set effective persisted CUDN owner
-      ansible.builtin.set_fact:
-        _cudn_owner_subnet_name: >-
-          {{ _cudn_owner_from_lease | default(_cudn_owner_from_cudn, true)
-             | default(_cudn_owner_subnet.metadata.name, true) }}
-
-    - name: Persist CUDN owner on the shared Lease before Kubernetes writes
-      kubernetes.core.k8s:
-        state: patched
-        definition:
-          apiVersion: coordination.k8s.io/v1
-          kind: Lease
-          metadata:
-            name: "{{ vnet_lock_name }}"
-            namespace: "{{ vnet_lock_namespace }}"
-            annotations:
-              osac.openshift.io/cudn-owner-subnet: "{{ _cudn_owner_subnet_name }}"
+        - _evpn_decision.supported
+        - (item.item.metadata.annotations | default({})).get('osac.openshift.io/skip-k8s-manager', '') != 'true'
 
     - name: Provision CUDN resources only for its persisted Subnet owner
       block:
@@ -334,7 +345,7 @@
               cudn_namespace: "{{ subnet_name }}"
               vrf_name: "{{ cudn_status.resources[0].status.vrfName | default(omit) }}"
       when:
-        - _cudn_owner_subnet_name == subnet_name
+        - _evpn_decision.supported
         - (subnet.metadata.annotations | default({})).get('osac.openshift.io/skip-k8s-manager', '') != 'true'
   always:
     - name: Release shared CUDN lock

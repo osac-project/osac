@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/utils/ptr"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -3152,6 +3153,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			subnet.Status.Phase = osacv1alpha1.SubnetPhaseReady
+			subnet.Status.ComputeInstanceSupported = ptr.To(true)
+			Expect(k8sClient.Status().Update(ctx, subnet)).To(Succeed())
 			defer func() {
 				_ = k8sClient.Delete(ctx, subnet)
 			}()
@@ -3227,6 +3231,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			subnet.Status.Phase = osacv1alpha1.SubnetPhaseReady
+			subnet.Status.ComputeInstanceSupported = ptr.To(true)
+			Expect(k8sClient.Status().Update(ctx, subnet)).To(Succeed())
 			defer func() {
 				_ = k8sClient.Delete(ctx, subnet)
 			}()
@@ -3324,6 +3331,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			subnet.Status.Phase = osacv1alpha1.SubnetPhaseReady
+			subnet.Status.ComputeInstanceSupported = ptr.To(true)
+			Expect(k8sClient.Status().Update(ctx, subnet)).To(Succeed())
 			defer func() {
 				_ = k8sClient.Delete(ctx, subnet)
 			}()
@@ -3385,6 +3395,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			subnet.Status.Phase = osacv1alpha1.SubnetPhaseReady
+			subnet.Status.ComputeInstanceSupported = ptr.To(true)
+			Expect(k8sClient.Status().Update(ctx, subnet)).To(Succeed())
 			defer func() {
 				_ = k8sClient.Delete(ctx, subnet)
 			}()
@@ -3745,6 +3758,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			subnet.Status.Phase = osacv1alpha1.SubnetPhaseReady
+			subnet.Status.ComputeInstanceSupported = ptr.To(true)
+			Expect(k8sClient.Status().Update(ctx, subnet)).To(Succeed())
 			defer func() {
 				_ = k8sClient.Delete(ctx, subnet)
 			}()

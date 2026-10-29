@@ -10,9 +10,15 @@ import type { ResourceSelectValue } from '../../Form/resourceSelectValue';
 
 interface SubnetFieldProps extends ProvisioningFieldControlProps {
   virtualNetworkName: string;
+  requireVmSupport?: boolean;
 }
 
-const SubnetField = ({ name, virtualNetworkName, isDisabled = false }: SubnetFieldProps) => {
+const SubnetField = ({
+  name,
+  virtualNetworkName,
+  isDisabled = false,
+  requireVmSupport = false,
+}: SubnetFieldProps) => {
   const { t } = useTranslation();
   const [virtualNetwork] = useField<ResourceSelectValue>(virtualNetworkName);
   const virtualNetworkId = virtualNetwork.value?.id ?? '';
@@ -24,11 +30,17 @@ const SubnetField = ({ name, virtualNetworkName, isDisabled = false }: SubnetFie
       fieldId={name}
       service={Subnets}
       request={
-        virtualNetworkId ? { filter: virtualNetworkFilterForSubnetList(virtualNetworkId) } : {}
+        virtualNetworkId
+          ? { filter: virtualNetworkFilterForSubnetList(virtualNetworkId, requireVmSupport) }
+          : {}
       }
       isDisabled={isDisabled || !virtualNetworkId}
       autoSelectSingleOption
       placeholder={t('Select subnet')}
+      emptyTitle={requireVmSupport ? t('No VM-capable subnets available') : undefined}
+      emptyDescription={
+        requireVmSupport ? t('A subnet must be READY and support compute instances.') : undefined
+      }
       loadErrorTitle={t('Could not load subnets')}
     />
   );

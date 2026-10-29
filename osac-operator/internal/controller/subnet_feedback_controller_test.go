@@ -628,7 +628,7 @@ var _ = Describe("SubnetFeedbackController", func() {
 
 			// The update mask covers only the status subresource, so no spec
 			// change can propagate through the feedback path
-			Expect(mockServer.updateMaskPaths[0]).To(ConsistOf(feedbackStatusStatePath, feedbackStatusMessagePath))
+			Expect(mockServer.updateMaskPaths[0]).To(ConsistOf(feedbackStatusStatePath, feedbackStatusMessagePath, "status.compute_instance_supported", "status.compute_instance_unsupported_reason"))
 
 			// The record written back echoes the stored spec, not the diverged CR spec
 			Expect(mockServer.updates[0].GetSpec().GetVirtualNetwork().GetName()).To(Equal("vnet-123"))

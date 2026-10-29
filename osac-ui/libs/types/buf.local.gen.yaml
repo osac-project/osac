@@ -1,0 +1,13 @@
+version: v2
+plugins:
+  - local: protoc-gen-es
+    out: src
+    opt:
+      - target=ts
+inputs:
+  - directory: public
+    paths:
+      - public/osac/public/v1/subnet_type.proto
+  - directory: private
+    paths:
+      - private/osac/private/v1/subnet_type.proto

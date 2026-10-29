@@ -55,6 +55,35 @@ const renderFields = (initialValues?: TestFormValues, isDisabled = false) =>
   );
 
 describe('NetworkAttachmentFields', () => {
+  it.each([false, true])(
+    'requires VM capability only when requested: %s',
+    async (requireVmSupport) => {
+      const initialValues = emptyTestValues(false);
+      initialValues.spec.networkAttachment.value.virtualNetwork = { id: 'vn', name: 'network' };
+      const filters: string[] = [];
+      renderWithProviders(
+        <Formik initialValues={initialValues} onSubmit={() => undefined}>
+          <NetworkFields
+            networkAttachmentName="spec.networkAttachment"
+            externalIpAttachmentName="spec.autoExternalIpAttachment"
+            requireVmSupport={requireVmSupport}
+          />
+        </Formik>,
+        {
+          transportOverrides: {
+            onSubnetList: (request) => {
+              filters.push(request.filter ?? '');
+            },
+          },
+        },
+      );
+      await waitFor(() => expect(filters.length).toBeGreaterThan(0));
+      expect(filters.every((filter) => filter.includes('compute_instance_supported == true'))).toBe(
+        requireVmSupport,
+      );
+    },
+  );
+
   it('renders "use default network" and "auto external IP" checkboxes', () => {
     renderFields();
 

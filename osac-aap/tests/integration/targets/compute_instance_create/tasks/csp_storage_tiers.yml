@@ -116,36 +116,44 @@
           Expected ComputeInstance finalizers to remain empty after pre_tasks failure,
           got: {{ _ci_after_failure.resources[0].metadata.finalizers | default([]) }}
 
-    - name: Set variables for valid CSP + OSAC ComputeInstance creation in Kind
-      ansible.builtin.set_fact:
-        osac_job_vars:
-          resource: "{{ test_csp_compute_instance }}"
-          tenant_storage_classes:
-            - name: "netapp-gold-sc"
-              tier: "gold"
-            - name: "vast-fast-sc"
-              tier: "fast"
-        storage_provider_storage_class_names:
-          - name: "vast-fast-sc"
-            tier: "fast"
-        # Run create_resources.yaml for real against Kind so DataVolumes and VirtualMachine
-        # are created with resolved storageClassNames; stub only wait_annotate.
-        create_step_wait_annotate_override:
-          name: osac.workflows.workflow_helpers
-          tasks_from: noop.yml
-
-- name: Import top-level playbook_osac_create_compute_instance.yml
-  ansible.builtin.import_playbook: ../../../../../playbook_osac_create_compute_instance.yml
-
-- name: "OSAC-6596 Verify — DataVolume storageClassNames and finalizer in Kind"
-  hosts: localhost
-  gather_facts: false
-  vars_files:
-    - ../../../common_vars.yml
-
-  tasks:
     - name: Verify created DataVolumes, VirtualMachine, and ComputeInstance finalizer in Kind
       block:
+        - name: Run playbook_osac_create_compute_instance.yml with valid CSP + OSAC tiers against Kind
+          ansible.builtin.command:
+            argv:
+              - ansible-playbook
+              - --inventory
+              - localhost,
+              - "{{ playbook_dir }}/../../../../../playbook_osac_create_compute_instance.yml"
+              - -e
+              - "@{{ playbook_dir }}/../../../common_vars.yml"
+              - -e
+              - >-
+                {{
+                  {
+                    "ansible_python_interpreter": ansible_python_interpreter,
+                    "osac_job_vars": {
+                      "resource": test_csp_compute_instance,
+                      "tenant_storage_classes": [
+                        {"name": "netapp-gold-sc", "tier": "gold"},
+                        {"name": "vast-fast-sc", "tier": "fast"}
+                      ]
+                    },
+                    "storage_provider_storage_class_names": [
+                      {"name": "vast-fast-sc", "tier": "fast"}
+                    ],
+                    "create_step_wait_annotate_override": {
+                      "name": "osac.workflows.workflow_helpers",
+                      "tasks_from": "noop.yml"
+                    }
+                  } | to_json
+                }}
+            chdir: "{{ playbook_dir }}/../../../../../"
+          environment:
+            ANSIBLE_JINJA2_NATIVE: "true"
+          register: _valid_tier_kind_run
+          changed_when: false
+
         - name: Read ComputeInstance CR from Kind
           kubernetes.core.k8s_info:
             api_version: osac.openshift.io/v1alpha1

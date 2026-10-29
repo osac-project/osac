@@ -3439,6 +3439,88 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(gotTiers[0].Name).To(Equal("fast"))
 			Expect(gotConns).To(HaveKey("be-vast"))
 			Expect(gotConns).NotTo(HaveKey("be-netapp"))
+
+			By("Step 4: A ComputeInstance on the comingled tenant requesting only OSAC tier 'fast' filters out unrequested CSP StorageClasses")
+			const osacOnlyName = "test-ci-storage-handoff-osac-only"
+			DeferCleanup(func() { deleteCI(osacOnlyName) })
+			specOSACOnly := newTestComputeInstanceSpec("test_template")
+			specOSACOnly.BootDisk.StorageTier = "fast"
+			nnOSACOnly := types.NamespacedName{Name: osacOnlyName, Namespace: namespaceName}
+			ciOSACOnly := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        osacOnlyName,
+					Namespace:   namespaceName,
+					Annotations: map[string]string{osacTenantKey: tenantName},
+				},
+				Spec: specOSACOnly,
+			}
+			Expect(k8sClient.Create(ctx, ciOSACOnly)).To(Succeed())
+			Eventually(func() error {
+				return ciReconciler.Client.Get(ctx, nnOSACOnly, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, err = ciReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnOSACOnly}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ciTriggerCount).To(Equal(2))
+			Expect(gotSCs).To(Equal([]osacv1alpha1.ResolvedStorageClass{
+				{Name: osacFastSC, Tier: "fast"},
+			}))
+
+			By("Step 5: Day-2 re-provisioning (kv != nil and EvaluateAction == Trigger) injects filtered tenant_storage_classes while keeping Provisioned=True")
+			vm := &kubevirtv1.VirtualMachine{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Labels: map[string]string{
+						osacComputeInstanceNameLabel: resourceName,
+					},
+				},
+				Status: kubevirtv1.VirtualMachineStatus{
+					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
+				},
+			}
+			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, vm) })
+			Eventually(func(g Gomega) {
+				cachedVM := &kubevirtv1.VirtualMachine{}
+				g.Expect(ciReconciler.Client.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: namespaceName}, cachedVM)).To(Succeed())
+				g.Expect(cachedVM.Status.PrintableStatus).To(Equal(kubevirtv1.VirtualMachineStatusRunning))
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			latestCI := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nnCI, latestCI)).To(Succeed())
+			now := metav1.Now()
+			latestCI.Spec.RestartRequestedAt = &now
+			Expect(k8sClient.Update(ctx, latestCI)).To(Succeed())
+			latestCI.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID:         "handoff-job-1",
+				Type:          osacv1alpha1.JobTypeProvision,
+				State:         osacv1alpha1.JobStateSucceeded,
+				ConfigVersion: latestCI.Status.DesiredConfigVersion,
+				Timestamp:     now,
+			}}
+			Expect(k8sClient.Status().Update(ctx, latestCI)).To(Succeed())
+			Eventually(func(g Gomega) {
+				cachedCI := &osacv1alpha1.ComputeInstance{}
+				g.Expect(ciReconciler.Client.Get(ctx, nnCI, cachedCI)).To(Succeed())
+				g.Expect(cachedCI.Spec.RestartRequestedAt).NotTo(BeNil())
+				g.Expect(cachedCI.Status.ProvisioningJobs).To(HaveLen(1))
+				g.Expect(cachedCI.Status.ProvisioningJobs[0].State).To(Equal(osacv1alpha1.JobStateSucceeded))
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			gotSCs = nil
+			_, err = ciReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnCI}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ciTriggerCount).To(Equal(3))
+			Expect(gotSCs).To(ConsistOf(
+				osacv1alpha1.ResolvedStorageClass{Name: cspGoldSC, Tier: "gold"},
+				osacv1alpha1.ResolvedStorageClass{Name: osacFastSC, Tier: "fast"},
+			))
+			Expect(k8sClient.Get(ctx, nnCI, latestCI)).To(Succeed())
+			provCond := latestCI.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(provCond).NotTo(BeNil())
+			Expect(provCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(provCond.Reason).To(Equal(osacv1alpha1.ReasonInfrastructureReady))
 		})
 	})
 

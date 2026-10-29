@@ -652,6 +652,7 @@ func (r *ComputeInstanceReconciler) prepareStorageContext(
 	reqCSPTiers := requestedCSPTiers(tenant, reqTiers, osacTiers, cspTiers)
 	unresolvedTiers := unresolvedRequestedTiers(reqTiers, osacTiers, cspTiers, skippedTiers)
 	cspRequested := len(reqCSPTiers) > 0 || len(unresolvedTiers) > 0
+	cspStoragePresent := cspRequested || len(cspTiers) > 0 || tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady) != nil
 
 	if r.shouldGateBeforeProvisioning(instance, kv) {
 		ready, msg := checkCSPStorageReadiness(tenant, reqCSPTiers, unresolvedTiers, tierErr)
@@ -669,17 +670,18 @@ func (r *ComputeInstanceReconciler) prepareStorageContext(
 	// Prefer Tenant.status.storageClasses (populated by the storage controller);
 	// fall back to resolving labeled StorageClasses on the target cluster only
 	// when the ClusterStorageReady and StorageReady conditions are absent and no
-	// CSP tiers are requested (storage controller disabled or hasn't reconciled
+	// CSP tiers are present (storage controller disabled or hasn't reconciled
 	// this tenant yet).
 	if len(tenant.Status.StorageClasses) > 0 {
 		scs := tenant.Status.StorageClasses
-		if cspRequested {
+		if cspStoragePresent {
 			scs = filterStorageClassesToRequestedTiers(scs, reqTiers)
 		}
-		ctx = provisioning.WithTenantStorageClasses(ctx, scs)
+		if len(scs) > 0 {
+			ctx = provisioning.WithTenantStorageClasses(ctx, scs)
+		}
 	} else if tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady) == nil &&
-		tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady) == nil &&
-		!cspRequested {
+		!cspStoragePresent {
 		tenantName := tenant.GetName()
 		resolution, err := getTenantStorageClasses(ctx, targetClient, tenantName)
 		if err != nil {
@@ -1443,10 +1445,12 @@ func checkCSPStorageReadiness(
 	for _, tier := range reqCSPTiers {
 		distinctNames := make(map[string]struct{})
 		for _, sc := range tenant.Status.StorageClasses {
-			if sc.Name == "" || strings.ToLower(sc.Tier) != tier {
+			name := strings.TrimSpace(sc.Name)
+			scTier := strings.ToLower(strings.TrimSpace(sc.Tier))
+			if name == "" || scTier != tier {
 				continue
 			}
-			distinctNames[sc.Name] = struct{}{}
+			distinctNames[name] = struct{}{}
 		}
 		switch len(distinctNames) {
 		case 0:
@@ -1484,14 +1488,14 @@ func filterStorageClassesToRequestedTiers(
 	}
 	wanted := make(map[string]struct{}, len(requestedTiers))
 	for _, tier := range requestedTiers {
-		wanted[strings.ToLower(tier)] = struct{}{}
+		wanted[strings.ToLower(strings.TrimSpace(tier))] = struct{}{}
 	}
 	var filtered []v1alpha1.ResolvedStorageClass
 	for _, sc := range scs {
-		if sc.Name == "" {
+		if strings.TrimSpace(sc.Name) == "" {
 			continue
 		}
-		if _, ok := wanted[strings.ToLower(sc.Tier)]; ok {
+		if _, ok := wanted[strings.ToLower(strings.TrimSpace(sc.Tier))]; ok {
 			filtered = append(filtered, sc)
 		}
 	}

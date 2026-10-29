@@ -2417,7 +2417,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 	})
 
-	Context("CSP-managed and comingled storage provisioning (OSAC-6596)", func() {
+	Context("CSP-managed and mixed CSP/OSAC storage provisioning (OSAC-6596)", func() {
 		const namespaceName = "default"
 
 		ctx := context.Background()
@@ -2530,9 +2530,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(gotConns).To(BeEmpty())
 		})
 
-		It("should provision a comingled ComputeInstance with filtered tenant_storage_classes and only OSAC-managed JIT tiers/connections", func() {
-			const resourceName = "test-ci-comingled"
-			const tenantName = "tenant-ci-comingled"
+		It("should provision a mixed CSP/OSAC ComputeInstance with filtered tenant_storage_classes and only OSAC-managed JIT tiers/connections", func() {
+			const resourceName = "test-ci-mixed-storage"
+			const tenantName = "tenant-ci-mixed-storage"
 			DeferCleanup(func() {
 				deleteCI(resourceName)
 				deleteTenantInNamespace(ctx, namespaceName, tenantName)
@@ -2571,7 +2571,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					gotSCs = provisioning.TenantStorageClassesFromContext(ctx)
 					gotTiers = provisioning.StorageTierDefinitionsFromContext(ctx)
 					gotConns = provisioning.StorageBackendConnectionsFromContext(ctx)
-					return &provisioning.ProvisionResult{JobID: "mock-comingled-job", InitialState: osacv1alpha1.JobStatePending}, nil
+					return &provisioning.ProvisionResult{JobID: "mock-mixed-storage-job", InitialState: osacv1alpha1.JobStatePending}, nil
 				},
 			}
 
@@ -3451,7 +3451,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(gotConns).To(HaveKey("be-vast"))
 			Expect(gotConns).NotTo(HaveKey("be-netapp"))
 
-			By("Step 4: A ComputeInstance on the comingled tenant requesting only OSAC tier 'fast' filters out unrequested CSP StorageClasses")
+			By("Step 4: A ComputeInstance on the mixed CSP/OSAC tenant requesting only OSAC tier 'fast' filters out unrequested CSP StorageClasses")
 			const osacOnlyName = "test-ci-storage-handoff-osac-only"
 			DeferCleanup(func() { deleteCI(osacOnlyName) })
 			specOSACOnly := newTestComputeInstanceSpec("test_template")

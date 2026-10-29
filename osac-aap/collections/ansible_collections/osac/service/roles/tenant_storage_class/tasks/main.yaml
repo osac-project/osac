@@ -12,7 +12,7 @@
     msg: >-
       No resolved storage tiers available for tenant
       "{{ tenant_storage_class_tenant_name }}"
-      {{ ('(resolving ' + (tenant_storage_class_disk_label | default('')) + ')') if (tenant_storage_class_disk_label | default('')) | length > 0 else '' }}.
+      {{ ('(resolving ' + tenant_storage_class_disk_label + ')') if (tenant_storage_class_disk_label | default('')) | length > 0 else '' }}.
       The storageClasses list injected by the ComputeInstance controller
       is empty. Check the Tenant StorageReady and ClusterStorageReady conditions.
   when: tenant_storage_class_storage_classes | length == 0
@@ -45,7 +45,7 @@
     msg: >-
       Storage tier "{{ tenant_storage_class_storage_tier }}" is not available
       for tenant "{{ tenant_storage_class_tenant_name }}"
-      {{ ('(resolving ' + (tenant_storage_class_disk_label | default('')) + ')') if (tenant_storage_class_disk_label | default('')) | length > 0 else '' }}.
+      {{ ('(resolving ' + tenant_storage_class_disk_label + ')') if (tenant_storage_class_disk_label | default('')) | length > 0 else '' }}.
       Available tiers: {{ _tenant_sc_available_tiers }}.
   when: _tenant_sc_unique_names | length == 0
 
@@ -54,7 +54,7 @@
     msg: >-
       Storage tier "{{ tenant_storage_class_storage_tier }}" is ambiguous
       for tenant "{{ tenant_storage_class_tenant_name }}"
-      {{ ('(resolving ' + (tenant_storage_class_disk_label | default('')) + ')') if (tenant_storage_class_disk_label | default('')) | length > 0 else '' }}:
+      {{ ('(resolving ' + tenant_storage_class_disk_label + ')') if (tenant_storage_class_disk_label | default('')) | length > 0 else '' }}:
       multiple resolved StorageClasses matched ({{ _tenant_sc_unique_names | sort | join(', ') }}).
       Supply one distinct StorageClass name per requested tier.
   when: _tenant_sc_unique_names | length > 1

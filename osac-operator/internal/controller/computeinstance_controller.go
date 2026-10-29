@@ -1306,17 +1306,14 @@ func requestedStorageTiers(instance *v1alpha1.ComputeInstance) []string {
 		rawTiers = append(rawTiers, disk.StorageTier)
 	}
 
-	seen := make(map[string]struct{}, len(rawTiers))
+	seen := make(map[string]bool, len(rawTiers))
 	var out []string
 	for _, raw := range rawTiers {
 		tier := strings.ToLower(strings.TrimSpace(raw))
-		if tier == "" {
+		if tier == "" || seen[tier] {
 			continue
 		}
-		if _, ok := seen[tier]; ok {
-			continue
-		}
-		seen[tier] = struct{}{}
+		seen[tier] = true
 		out = append(out, tier)
 	}
 	return out
@@ -1486,16 +1483,16 @@ func filterStorageClassesToRequestedTiers(
 	if len(scs) == 0 || len(requestedTiers) == 0 {
 		return nil
 	}
-	wanted := make(map[string]struct{}, len(requestedTiers))
+	wanted := make(map[string]bool, len(requestedTiers))
 	for _, tier := range requestedTiers {
-		wanted[strings.ToLower(strings.TrimSpace(tier))] = struct{}{}
+		wanted[strings.ToLower(strings.TrimSpace(tier))] = true
 	}
 	var filtered []v1alpha1.ResolvedStorageClass
 	for _, sc := range scs {
 		if strings.TrimSpace(sc.Name) == "" {
 			continue
 		}
-		if _, ok := wanted[strings.ToLower(strings.TrimSpace(sc.Tier))]; ok {
+		if wanted[strings.ToLower(strings.TrimSpace(sc.Tier))] {
 			filtered = append(filtered, sc)
 		}
 	}

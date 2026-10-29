@@ -1265,10 +1265,13 @@ func deleteTenantDefaultNetworkingFixture(ctx context.Context, manager defaultne
 	var lastErr error
 	for {
 		err := manager.Delete(ctx, tenant)
+		if err == nil {
+			return nil
+		}
 		// The resource guard rejects deleting a default SecurityGroup while
 		// terminating clusters still reference it; those references finish
 		// asynchronously, so the delete is retried like a finalizer wait.
-		if err != nil && !errors.Is(err, defaultnetworking.ErrResourcesDeleting) &&
+		if !errors.Is(err, defaultnetworking.ErrResourcesDeleting) &&
 			!stillReferencedByActiveResources(err) {
 			return err
 		}

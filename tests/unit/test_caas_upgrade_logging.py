@@ -10,7 +10,8 @@ from unittest.mock import Mock
 import pytest
 
 from tests.e2e.caas.regression import cluster_upgrade as scenario
-from tests.e2e.caas.sanity.test_cluster_create import INSTALL_VERSION
+
+INSTALL_VERSION = "4.22.0-rhcos"
 
 
 @pytest.mark.parametrize("cleanup_fails", [False, True])

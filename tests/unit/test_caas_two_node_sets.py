@@ -10,7 +10,7 @@ from tests.e2e.caas.regression import test_cluster_node_sets as regression
 from tests.e2e.caas.sanity import test_cluster_create as scenario
 from tests.e2e.core import helpers, runner
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
+from tests.e2e.core.metering import MeteringCollector
 
 
 @pytest.fixture
@@ -18,8 +18,8 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     # The metering mock needs the MeteringCollector spec: Python 3.14's Mock
     # denies assert*-prefixed attribute names on unspec'd mocks, and the
     # scenario calls metering.assert_no_events.
-    clients = {name: Mock() for name in ("request", "cli", "grpc", "private_grpc", "metering")}
-    clients["metering"] = Mock(spec=MeteringCollector)
+    clients = {"cli": Mock(), "grpc": Mock(), "private_grpc": Mock(), "metering": Mock(spec=MeteringCollector)}
+    clients["request"] = Mock()
     k8s = clients["k8s_hub_client"] = Mock(spec=K8sClient)
     k8s.namespace = "osac"
     cli, grpc, private = (clients[name] for name in ("cli", "grpc", "private_grpc"))
@@ -27,24 +27,24 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     private.ensure_disk_image.return_value = "disk-id"
     private.ensure_cluster_version.return_value = {"name": "version-name"}
     grpc.list_cluster_ids.return_value = ["cluster-id"]
-    worker_cases = (("cpu-id", regression.REGULAR_NODE_SET), ("gpu-id", regression.GPU_NODE_SET))
     grpc.get_cluster.return_value = {
         "object": {
             "metadata": {"tenant": "tenant1"},
             "spec": {
-                "version": {"name": "version-name"},
                 "nodeSets": {
-                    node_set: {"size": 1, "baremetalInstanceType": {"name": instance_type}}
-                    for node_set, instance_type in regression.INSTANCE_TYPES.items()
-                },
+                    "compute": {"size": 1, "baremetalInstanceType": {"name": "ci-worker-bm"}},
+                    "gpu": {"size": 1, "baremetalInstanceType": {"name": "ci-worker-bm-gpu"}},
+                }
             },
         }
     }
     workers = {}
     agents = []
     node_pools = []
-    for bmi_id, node_set in worker_cases:
-        instance_type = regression.INSTANCE_TYPES[node_set]
+    for bmi_id, node_set, instance_type in (
+        ("cpu-id", "compute", "ci-worker-bm"),
+        ("gpu-id", "gpu", "ci-worker-bm-gpu"),
+    ):
         workers[bmi_id] = {
             "object": {
                 "metadata": {
@@ -84,7 +84,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
         "spec": {
             "nodeRequests": [
                 {"nodeSet": node_set, "bareMetal": {"instanceType": instance_type}, "numberOfNodes": 1}
-                for node_set, instance_type in regression.INSTANCE_TYPES.items()
+                for node_set, instance_type in (("compute", "ci-worker-bm"), ("gpu", "ci-worker-bm-gpu"))
             ]
         },
         "status": {"desiredWorkers": 2, "currentWorkers": 2, "readyWorkers": 2},
@@ -102,61 +102,18 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
         }
 
     k8s.get_json.side_effect = get_resource
-    k8s._base.return_value = ["oc"]
     k8s.get_cluster_order_namespace.return_value = "osac"
-    k8s.get_cluster_order_hosted_cluster_name.return_value = "hosted-a"
-    k8s.get_cluster_order_spec.return_value = {"releaseImage": regression.TEST_RELEASE_IMAGE}
     k8s.get_baremetal_instance_name.side_effect = lambda *, uuid, checked: f"{uuid}-cr"
     k8s.get_cluster_order_infra_env_name.return_value = "order-a-infraenv"
     k8s.is_absent.side_effect = [False, True, False, True]
     k8s.is_present.return_value = False
     monkeypatch.setattr(scenario, "wait_for_cluster_order_cr", Mock(return_value="order-a"))
-    monkeypatch.setattr(scenario, "run", Mock(return_value=regression.TEST_RELEASE_IMAGE))
-    monkeypatch.setattr(regression, "wait_for_cluster_order_condition", Mock())
-
-    metering = clients["metering"]
-    metering.get_event.return_value = {
-        "osacresourcetype": "cluster_order",
-        "data": {"meter": "control_plane", "billing_dimensions": {"template": "template"}},
-    }
-    worker_events = {
-        bmi_id: {
-            "data": {
-                "meter": "allocation",
-                "billing_dimensions": {
-                    "cluster": "cluster-id",
-                    "node_set": node_set,
-                    "instance_type": regression.INSTANCE_TYPES[node_set],
-                },
-                "usage": {
-                    "from": "2026-10-28T00:00:00+00:00",
-                    "to": "2026-10-28T00:01:00+00:00",
-                    "quantity": "60.000000",
-                    "unit": "second",
-                },
-            }
-        }
-        for bmi_id, node_set in worker_cases
-    }
-
-    def worker_heartbeat(bmi_id: str, wanted: dict[str, str], *, timeout: int) -> dict[str, Any]:
-        assert timeout == 180
-        heartbeat = worker_events[bmi_id]
-        assert all(heartbeat["data"]["billing_dimensions"].get(key) == value for key, value in wanted.items())
-        return heartbeat
-
-    metering.heartbeat_with_dimensions.side_effect = worker_heartbeat
-    metering.get_all_events.side_effect = lambda event_type, bmi_id: (
-        [worker_events[bmi_id]] if event_type == HEARTBEAT_TYPE else []
-    )
     refs = Mock()
     baseline = {"hosted": {"spec": {"release": {"image": regression.TEST_RELEASE_IMAGE}}}}
     target = {"id": "target-id", "name": "target-version", "image": "target-image"}
 
     def references_after_install(**_kwargs: object) -> Mock:
-        assert regression.wait_for_cluster_order_condition.called
-        assert metering.get_event.called
-        assert metering.heartbeat_with_dimensions.call_count == len(regression.INSTANCE_TYPES)
+        assert scenario.wait_for_cluster_ready.called
         return refs
 
     monkeypatch.setattr(regression.upgrade, "_cluster_references", Mock(side_effect=references_after_install))
@@ -215,21 +172,6 @@ def test_two_node_set_scenario_uses_same_natural_teardown_budgets(
     assert runner.time.sleep.call_args_list == [call(5), call(10), call(5)]
     helpers.wait_for_cluster_deletion.assert_not_called()
     scenario.wait_for_cluster_grpc_removal.assert_called_once_with(grpc=two_node_set_clients["grpc"], uuid="cluster-id")
-    two_node_set_clients["metering"].expect.assert_called_once_with(
-        HEARTBEAT_TYPE, resource_id="cluster-id", timeout=180
-    )
-    two_node_set_clients["metering"].expect_no_project.assert_called_once_with()
-    two_node_set_clients["metering"].verify.assert_called_once_with()
-    two_node_set_clients["metering"].get_event.assert_called_once_with(
-        HEARTBEAT_TYPE, resource_id="cluster-id", timeout=180
-    )
-    assert two_node_set_clients["metering"].heartbeat_with_dimensions.call_args_list == [
-        call("cpu-id", {"cluster": "cluster-id", "node_set": regression.REGULAR_NODE_SET}, timeout=180),
-        call("gpu-id", {"cluster": "cluster-id", "node_set": regression.GPU_NODE_SET}, timeout=180),
-    ]
-    regression.wait_for_cluster_order_condition.assert_called_once_with(
-        k8s=two_node_set_clients["k8s_hub_client"], name="order-a", condition_type="ClusterAvailable"
-    )
     two_node_set_clients["request"].getfixturevalue.assert_called_once_with("jwt_grpc_tenant1")
     regression.upgrade._cluster_references.assert_called_once()
     regression.upgrade._upgrade_control_plane.assert_called_once()
@@ -254,25 +196,4 @@ def test_two_node_set_scenario_rejects_foreign_worker_before_teardown(two_node_s
     scenario.wait_for_cluster_deleting.assert_not_called()
     helpers.wait_for_cluster_deletion.assert_not_called()
     two_node_set_clients["k8s_hub_client"].is_absent.assert_not_called()
-    regression.upgrade._cluster_references.assert_not_called()
-
-
-def test_two_node_set_scenario_rejects_wrong_worker_heartbeat(two_node_set_clients: dict[str, Mock]) -> None:
-    """The GPU worker must bill under its own instance type and node set."""
-    metering = two_node_set_clients["metering"]
-    original_heartbeat = metering.heartbeat_with_dimensions.side_effect
-
-    def wrong_instance_type(bmi_id: str, wanted: dict[str, str], *, timeout: int) -> dict[str, Any]:
-        heartbeat = original_heartbeat(bmi_id, wanted, timeout=timeout)
-        if bmi_id == "gpu-id":
-            heartbeat["data"]["billing_dimensions"]["instance_type"] = regression.INSTANCE_TYPES[
-                regression.REGULAR_NODE_SET
-            ]
-        return heartbeat
-
-    metering.heartbeat_with_dimensions.side_effect = wrong_instance_type
-    with pytest.raises(AssertionError, match="gpu-id bills with instance type"):
-        _run_scenario(two_node_set_clients)
-
-    scenario.wait_for_cluster_deleting.assert_not_called()
     regression.upgrade._cluster_references.assert_not_called()

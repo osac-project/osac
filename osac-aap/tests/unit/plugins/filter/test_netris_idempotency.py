@@ -295,6 +295,27 @@ class TestFormatImmutableMismatchMessage:
 
 
 class TestNetrisSafeErrorDetail:
+
+    @pytest.mark.parametrize(
+        "key", ["token", "password", "secret", "Cookie", "connect.sid", "Authorization"]
+    )
+    @pytest.mark.parametrize("quote", ['"', "'"])
+    def test_redacts_quoted_keys_and_complete_quoted_values(self, key, quote):
+        marker = (
+            "SYNTHETIC_VALUE with spaces, separators; and escaped \\" + quote + "quote"
+        )
+        message = (
+            f"backend unavailable: {{{quote}{key}{quote}: {quote}{marker}{quote}}}"
+        )
+        detail = idempotency.netris_safe_error_detail(
+            {"status": 503, "json": {"message": message}}
+        )
+        assert "backend unavailable" in detail
+        assert "<redacted>" in detail
+        assert "SYNTHETIC_VALUE" not in detail
+        assert "with spaces" not in detail
+        assert "quote" not in detail
+
     def test_includes_http_status_and_redacts_credentials(self):
         detail = idempotency.netris_safe_error_detail(
             {
@@ -484,26 +505,74 @@ class TestNetrisAttachmentPortPlan:
 
     def test_captures_only_host_ports_on_provisioning(self):
         vnet = {"ports": [{"id": "101"}, {"id": 102}, {"id": 201}], "tags": ["keep"]}
-        plan = idempotency.netris_attachment_port_plan(vnet, self.PORTS, "uid-1", 101)
+        plan = idempotency.netris_attachment_port_plan(
+            vnet, self.PORTS, "target-id", 101
+        )
         assert plan["port_ids"] == [101, 102]
-        assert plan["tags"] == ["keep", "osac-na:uid-1:101,102"]
+        assert plan["tags"] == ["keep", "osac-na-target:target-id:101,102"]
 
     def test_fresh_job_recovers_detached_ports_and_preserves_other_snapshots(self):
-        vnet = {"ports": [], "tags": ["osac-na:uid-1:101,102", "osac-na:other:201"]}
-        plan = idempotency.netris_attachment_port_plan(vnet, self.PORTS, "uid-1", 101, True)
+        vnet = {
+            "ports": [],
+            "tags": ["osac-na-target:target-id:101,102", "osac-na:other:201"],
+        }
+        plan = idempotency.netris_attachment_port_plan(
+            vnet, self.PORTS, "target-id", 101, True
+        )
         assert plan["port_ids"] == [101, 102]
-        assert plan["tags"] == ["osac-na:other:201", "osac-na:uid-1:101,102"]
+        assert plan["tags"] == ["osac-na:other:201", "osac-na-target:target-id:101,102"]
 
-    @pytest.mark.parametrize("tags", [
-        ["osac-na:uid-1:201"],
-        ["osac-na:uid-1:101", "osac-na:uid-1:102"],
-        ["osac-na:uid-1:102"],
-        ["osac-na:uid-1:"],
-    ])
+    @pytest.mark.parametrize(
+        "tags",
+        [
+            ["osac-na-target:target-id:201"],
+            ["osac-na-target:target-id:101", "osac-na-target:target-id:102"],
+            ["osac-na-target:target-id:102"],
+            ["osac-na-target:target-id:"],
+        ],
+    )
     def test_invalid_or_changed_saved_identity_is_refused(self, tags):
         with pytest.raises(ValueError):
             idempotency.netris_attachment_port_plan(
-                {"ports": [], "tags": tags}, self.PORTS, "uid-1", 101
+                {"ports": [], "tags": tags}, self.PORTS, "target-id", 101
+            )
+
+    def test_verified_legacy_snapshot_is_migrated(self):
+        vnet = {
+            "ports": [],
+            "tags": ["keep", "osac-na:uid-1:101,102", "osac-na:other:201"],
+        }
+        plan = idempotency.netris_attachment_port_plan(
+            vnet, self.PORTS, "target-id", 101, legacy_uid="uid-1"
+        )
+        assert plan["port_ids"] == [101, 102]
+        assert plan["tags"] == [
+            "keep",
+            "osac-na:other:201",
+            "osac-na-target:target-id:101,102",
+        ]
+        assert plan["saved_tag"] == "osac-na:uid-1:101,102"
+
+    @pytest.mark.parametrize("deleting", [False, True])
+    def test_unknown_legacy_owner_refuses_incomplete_restoration(self, deleting):
+        with pytest.raises(ValueError, match="legacy"):
+            idempotency.netris_attachment_port_plan(
+                {"ports": [], "tags": ["osac-na:old-uid:101,102"]},
+                self.PORTS,
+                "target-id",
+                101,
+                deleting,
+                legacy_uid="new-uid",
+            )
+
+    def test_stable_and_legacy_snapshots_are_ambiguous(self):
+        with pytest.raises(ValueError, match="Ambiguous"):
+            idempotency.netris_attachment_port_plan(
+                {"tags": ["osac-na-target:target-id:101,102", "osac-na:uid-1:101,102"]},
+                self.PORTS,
+                "target-id",
+                101,
+                legacy_uid="uid-1",
             )
 
     def test_apply_refuses_an_interface_outside_provisioning(self):
@@ -511,3 +580,41 @@ class TestNetrisAttachmentPortPlan:
             idempotency.netris_attachment_port_plan(
                 {"ports": [{"id": 101}]}, self.PORTS, "uid-1", 103
             )
+
+
+class TestNetrisControllerURLValid:
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://localhost:8080",
+            "https://controller.example/",
+            "https://controller.example/netris",
+            "https://[::1]:443",
+        ],
+    )
+    def test_supported_base_url(self, url):
+        assert idempotency.netris_controller_url_valid(url)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            None,
+            "",
+            "not-a-url",
+            "ftp://controller",
+            "https://",
+            "http://host:bad",
+            "https://host:0",
+            "https://host:65536",
+            "http://host:",
+            "https://bad host",
+            "https://host\\path",
+            "https://host?query=value",
+            "https://host#fragment",
+            "https://user:password@host",
+            "https://[broken",
+            " http://host",
+        ],
+    )
+    def test_malformed_or_unsupported_url(self, url):
+        assert not idempotency.netris_controller_url_valid(url)

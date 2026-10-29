@@ -24,7 +24,15 @@ def snapshot(kind, name, spec=None):
 
 
 def run_task(
-    tmp_path, task, extra, url="http://127.0.0.1:1", contract=True, role_overrides=None, configuration_env=None
+    tmp_path,
+    task,
+    extra,
+    url="http://127.0.0.1:1",
+    contract=True,
+    role_overrides=None,
+    configuration_env=None,
+    authenticate=False,
+    top_level=False,
 ):
     variables = {"netris_session_cookie": "fixture-cookie", **extra}
     if contract:
@@ -38,6 +46,8 @@ def run_task(
             },
         }
     variables.update(role_overrides or {})
+    if authenticate:
+        variables.pop("netris_session_cookie", None)
     play = [
         {
             "hosts": "localhost",
@@ -54,9 +64,16 @@ def run_task(
     ]
     path = tmp_path / f"{task}.yaml"
     path.write_text(yaml.safe_dump(play))
+    if top_level:
+        path = ROOT / f"playbook_osac_{task}.yml"
+        variables = {"osac_job_vars": extra, "netris_session_cookie": "fixture-cookie"}
+    variables_path = tmp_path / "vars.json"
+    variables_path.write_text(json.dumps(variables))
     env = {
         **os.environ,
-        "PATH": f"{ROOT}/.venv/bin:" + os.environ["PATH"],
+        "PATH": os.environ.get("NETRIS_TEST_ANSIBLE_BIN", f"{ROOT}/.venv/bin")
+        + ":"
+        + os.environ["PATH"],
         "ANSIBLE_LOCAL_TEMP": str(tmp_path / "ansible-local"),
         "ANSIBLE_STDOUT_CALLBACK": "json",
         "NETRIS_CONTROLLER_URL": url,
@@ -71,7 +88,18 @@ def run_task(
         **(configuration_env or {}),
     }
     result = subprocess.run(
-        ["ansible-playbook", "-i", "localhost,", "-c", "local", str(path)],
+        [
+            "ansible-playbook",
+            "-i",
+            "localhost,",
+            "-c",
+            "local",
+            str(path),
+            "-e",
+            "@" + str(ROOT / "group_vars/all/configuration.yaml"),
+            "-e",
+            "@" + str(variables_path),
+        ],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -100,11 +128,16 @@ def provider():
         "inventory": [],
         "clusters": [],
         "subnet_http_status": 200,
+        "host_http_status": 200,
         "vpcs": [],
         "vnets": [],
         "ports": [],
         "fail_put": None,
         "retain_tags": True,
+        "http_status": 200,
+        "error_message": "synthetic provider rejection",
+        "error_reason": None,
+        "auth_status": 200,
     }
 
     class Handler(BaseHTTPRequestHandler):
@@ -112,19 +145,25 @@ def provider():
             pass
 
         def respond(self, value, status=200):
-            body = json.dumps({"data": value}).encode()
-            self.send_response(status)
+            body = json.dumps(
+                {"data": value} if status < 400 else {"message": state["error_message"]}
+            ).encode()
+            self.send_response(status, state["error_reason"])
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            if self.path == "/api/auth" and status == 200:
+                self.send_header("Set-Cookie", "connect.sid=fixture-cookie; Path=/")
             self.end_headers()
             self.wfile.write(body)
 
         def do_GET(self):
             state["calls"].append(("GET", self.path))
+            if state["http_status"] != 200:
+                return self.respond({}, state["http_status"])
             if self.path == "/api/v2/ipam/subnets":
                 return self.respond(state["subnets"], state["subnet_http_status"])
             if self.path.startswith("/api/v2/ipam/hosts/"):
-                return self.respond(state["hosts"])
+                return self.respond(state["hosts"], state["host_http_status"])
             if self.path == "/api/v2/server-cluster":
                 return self.respond(state["clusters"])
             if self.path == "/api/v2/hw?type=server":
@@ -156,6 +195,9 @@ def provider():
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if self.path == "/api/auth":
+                state["calls"].append(("POST", self.path))
+                return self.respond({}, state["auth_status"])
             state["calls"].append(("POST", self.path, body))
             if self.path == "/api/v2/server-cluster":
                 created = {**body, "id": 23}
@@ -263,13 +305,27 @@ def attachment_fixture(state):
             "ports": [{"id": 301}],
         },
     ]
+    resource = snapshot("NetworkAttachment", "attachment")
+    resource["id"] = "bmi-id"
     return {
-        "resource": snapshot("NetworkAttachment", "attachment"),
-        "target": {"kind": "BareMetalInstance", "id": "bmi-id", "host_name": "server-a"},
-        "virtual_network": snapshot("VirtualNetwork", "vn-a", {"ipv4Cidr": "10.0.0.0/16"}),
+        "resource": resource,
+        "target": {
+            "kind": "BareMetalInstance",
+            "id": "bmi-id",
+            "host_name": "server-a",
+        },
+        "virtual_network": snapshot(
+            "VirtualNetwork", "vn-a", {"ipv4Cidr": "10.0.0.0/16"}
+        ),
         "subnet": snapshot("Subnet", "subnet-a", {"ipv4Cidr": "10.0.1.0/24"}),
         "ipam": {"gateway_ipv4": "10.0.1.1", "physical_ipv4_cidrs": ["10.0.1.128/26"]},
-        "network_attachment": {"interface": {"type": "physical", "name": "eth1", "mac_address": "aa:bb:cc:dd:ee:ff"}},
+        "network_attachment": {
+            "interface": {
+                "type": "physical",
+                "name": "eth1",
+                "mac_address": "aa:bb:cc:dd:ee:ff",
+            }
+        },
     }
 
 
@@ -283,6 +339,8 @@ def test_all_fabric_ports_are_isolated_and_restored_in_fresh_jobs(tmp_path, prov
     extra = attachment_fixture(state)
     env = {"NETRIS_BM_PROVISIONING_VNET": "", "NETRIS_BM_PARKING_VNET": "provisioning"} if legacy_env else {}
     for index, task in enumerate(["apply_network_attachment"] * 2 + ["delete_network_attachment"] * 2):
+        if index == 1:
+            extra["resource"]["metadata"]["uid"] = "replacement-hub-uid"
         writes_before = len([call for call in state["calls"] if call[0] == "PUT"])
         result, _ = run_task(tmp_path, task, extra, url, configuration_env=env)
         assert result.returncode == 0, result.stderr + result.stdout[-5000:]
@@ -291,7 +349,7 @@ def test_all_fabric_ports_are_isolated_and_restored_in_fresh_jobs(tmp_path, prov
         if task == "apply_network_attachment":
             assert port_ids(state["vnets"][0]) == [101]
             assert port_ids(state["vnets"][1]) == [201]
-            assert "osac-na:attachment-uid:101,102" in state["vnets"][1]["tags"]
+            assert "osac-na-target:bmi-id:101,102" in state["vnets"][1]["tags"]
         else:
             assert port_ids(state["vnets"][0]) == []
             assert port_ids(state["vnets"][1]) == [101, 102, 201]
@@ -309,7 +367,8 @@ def test_lost_apply_can_be_retried_or_deleted_from_saved_snapshot(tmp_path, prov
     result, _ = run_task(tmp_path, "apply_network_attachment", extra, url)
     assert result.returncode != 0
     assert port_ids(state["vnets"][1]) == [201]
-    assert "osac-na:attachment-uid:101,102" in state["vnets"][1]["tags"]
+    assert "osac-na-target:bmi-id:101,102" in state["vnets"][1]["tags"]
+    extra["resource"]["metadata"]["uid"] = "replacement-hub-uid"
     state["fail_put"] = None
     result, _ = run_task(tmp_path, recovery_task, extra, url)
     assert result.returncode == 0, result.stderr + result.stdout[-5000:]
@@ -326,7 +385,7 @@ def test_failed_delete_keeps_snapshot_until_full_restoration(tmp_path, provider)
     state["fail_put"] = "/api/v2/vnet/8"
     result, _ = run_task(tmp_path, "delete_network_attachment", extra, url)
     assert result.returncode != 0
-    assert "osac-na:attachment-uid:101,102" in state["vnets"][1]["tags"]
+    assert "osac-na-target:bmi-id:101,102" in state["vnets"][1]["tags"]
     state["fail_put"] = None
     result, _ = run_task(tmp_path, "delete_network_attachment", extra, url)
     assert result.returncode == 0, result.stdout[-5000:]
@@ -342,3 +401,177 @@ def test_missing_durable_snapshot_refuses_to_disconnect_ports(tmp_path, provider
     assert result.returncode != 0
     assert port_ids(state["vnets"][0]) == []
     assert port_ids(state["vnets"][1]) == [101, 102, 201]
+
+
+@pytest.mark.parametrize(
+    "task", ["apply_network_attachment", "delete_network_attachment"]
+)
+@pytest.mark.parametrize(
+    "same_uid", [True, False], ids=["verified-legacy-owner", "unknown-legacy-owner"]
+)
+def test_legacy_attachment_snapshot_requires_verifiable_ownership(
+    tmp_path, provider, task, same_uid
+):
+    url, state = provider
+    extra = attachment_fixture(state)
+    state["vnets"][0]["ports"] = [{"id": 101}]
+    state["vnets"][1]["ports"] = [{"id": 201}]
+    state["vnets"][1]["tags"] += [
+        "osac-na:attachment-uid:101,102",
+        "osac-na:unrelated-uid:201",
+    ]
+    if not same_uid:
+        extra["resource"]["metadata"]["uid"] = "replacement-hub-uid"
+    result, _ = run_task(tmp_path, task, extra, url)
+    if not same_uid:
+        assert result.returncode != 0
+        assert "legacy" in result.stdout.lower()
+        assert not any(call[0] == "PUT" for call in state["calls"])
+        assert port_ids(state["vnets"][0]) == [101]
+        assert port_ids(state["vnets"][1]) == [201]
+        assert "osac-na:attachment-uid:101,102" in state["vnets"][1]["tags"]
+        return
+    assert result.returncode == 0, result.stderr + result.stdout[-5000:]
+    expected_tags = ["operator-owned-tag", "osac-na:unrelated-uid:201"]
+    if task == "apply_network_attachment":
+        expected_tags += ["osac-na-target:bmi-id:101,102"]
+        assert port_ids(state["vnets"][1]) == [201]
+    else:
+        assert port_ids(state["vnets"][1]) == [101, 102, 201]
+    assert state["vnets"][1]["tags"] == expected_tags
+    assert port_ids(state["vnets"][2]) == [103]
+    assert port_ids(state["vnets"][3]) == [301]
+
+
+def dhcp_input():
+    resource = snapshot("NetworkAttachment", "attachment")
+    resource["id"] = "bmi-id"
+    return {
+        "resource": resource,
+        "target": {
+            "kind": "BareMetalInstance",
+            "id": "bmi-id",
+            "host_name": "server-a",
+        },
+        "subnet": snapshot("Subnet", "subnet-a", {"ipv4Cidr": "10.0.1.0/24"}),
+        "network_attachment": {
+            "interface": {
+                "type": "physical",
+                "name": "eth1",
+                "mac_address": "aa:bb:cc:dd:ee:ff",
+            }
+        },
+    }
+
+
+@pytest.mark.parametrize("status,retryable", [(400, False), (403, False), (503, True)])
+@pytest.mark.parametrize("read", ["subnet", "host"])
+def test_dhcp_provider_failures_use_http_retry_policy(
+    tmp_path, provider, status, retryable, read
+):
+    url, state = provider
+    state["subnets"] = [{"id": 5, "name": "subnet-a"}]
+    state[f"{read}_http_status"] = status
+    result, stats = run_task(tmp_path, "query_dhcp_lease", dhcp_input(), url)
+    assert result.returncode != 0
+    assert ("GET", "/api/v2/ipam/subnets") in state["calls"]
+    if read == "host":
+        assert ("GET", "/api/v2/ipam/hosts/5") in state["calls"]
+    assert stats["osac_error"]["retryable"] is retryable, stats
+
+
+@pytest.mark.parametrize(
+    "addresses", [[], ["10.0.1.130", "10.0.1.131"]], ids=["absent", "ambiguous"]
+)
+def test_dhcp_unresolved_lease_remains_retryable(tmp_path, provider, addresses):
+    url, state = provider
+    state["subnets"] = [{"id": 5, "name": "subnet-a"}]
+    state["hosts"] = [
+        {
+            "address": address,
+            "mac": [
+                {"address": "aa:bb:cc:dd:ee:ff", "source": "dhcp", "state": "active"}
+            ],
+        }
+        for address in addresses
+    ]
+    result, stats = run_task(tmp_path, "query_dhcp_lease", dhcp_input(), url)
+    assert result.returncode != 0
+    assert ("GET", "/api/v2/ipam/hosts/5") in state["calls"]
+    assert stats["osac_error"]["retryable"] is True, stats
+
+
+def nat_input():
+    return {
+        "resource": snapshot("NATGateway", "gateway"),
+        "virtual_network": snapshot(
+            "VirtualNetwork", "vn-a", {"ipv4Cidr": "10.0.0.0/16"}
+        ),
+        "external_ip": {"address": "198.51.100.3"},
+    }
+
+
+@pytest.mark.parametrize("legacy", [False, True], ids=["contract", "legacy-top-level"])
+@pytest.mark.parametrize("quoted", [False, True], ids=["plain", "json-shaped"])
+def test_secrets_are_absent_from_all_failure_output(tmp_path, provider, legacy, quoted):
+    url, state = provider
+    marker = "SYNTHETIC_REVIEW_2049_NO_REAL_SECRET"
+    state["http_status"] = 503
+    state["error_message"] = (
+        json.dumps({"token": marker}) if quoted else "token=" + marker
+    )
+    state["error_reason"] = state["error_message"]
+    extra = nat_input()
+    task = "create_nat_gateway"
+    if legacy:
+        resource = snapshot("VirtualNetwork", "vn-a", {"ipv4Cidr": "10.0.0.0/16"})
+        resource["metadata"]["annotations"] = {
+            "osac.openshift.io/implementation-strategy": "netris",
+            "osac.openshift.io/tenant": "tenant-api-id",
+        }
+        extra, task = {"resource": resource}, "create_virtual_network"
+    result, stats = run_task(
+        tmp_path, task, extra, url, contract=not legacy, top_level=legacy
+    )
+    assert result.returncode != 0
+    assert ("GET", "/api/v2/vpc") in state["calls"]
+    assert "<redacted>" in result.stdout
+    assert marker not in result.stdout + result.stderr + json.dumps(stats)
+    assert "fixture-cookie" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "url", ["", "not-a-url", "ftp://controller", "https://", "http://host:bad"]
+)
+def test_invalid_url_setting_is_named_and_retryable_before_auth(
+    tmp_path, provider, url
+):
+    _, state = provider
+    result, stats = run_task(
+        tmp_path, "create_nat_gateway", nat_input(), url, authenticate=True
+    )
+    assert result.returncode != 0
+    assert state["calls"] == []
+    assert stats["osac_error"]["retryable"] is True, stats
+    assert "NETRIS_CONTROLLER_URL" in stats["osac_error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "status,retryable", [(200, False), (401, False), (403, False), (503, True)]
+)
+def test_valid_url_reaches_auth_and_preserves_provider_policy(
+    tmp_path, provider, status, retryable
+):
+    url, state = provider
+    state["auth_status"] = status
+    result, stats = run_task(
+        tmp_path, "create_nat_gateway", nat_input(), url, authenticate=True
+    )
+    assert result.returncode != 0
+    assert ("POST", "/api/auth") in state["calls"]
+    # With successful auth the empty VPC fixture produces a final ownership error.
+    assert (("GET", "/api/v2/vpc") in state["calls"]) is (status == 200)
+    assert stats["osac_error"]["retryable"] is retryable, stats
+    if status != 200:
+        assert "Netris setting error" not in stats["osac_error"]["message"]
+    assert "fixture-cookie" not in result.stdout + result.stderr

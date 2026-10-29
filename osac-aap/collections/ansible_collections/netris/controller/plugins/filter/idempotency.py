@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 
 def _dig(obj: Any, path: str) -> Any:
@@ -249,7 +250,9 @@ def netris_safe_error_detail(result: Any) -> str:
 
     detail = re.sub(r"[\r\n\t]+", " ", detail).strip()
     detail = re.sub(
-        r"(?i)\b(connect\.sid|cookie|authorization|token|password|secret)\b\s*[:=]\s*(?:Bearer\s+)?[^\s,;]+",
+        r"""(?ix)\b(connect\.sid|cookie|authorization|token|password|secret)\b
+        ["']?\s*[:=]\s*
+        (?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?:Bearer\s+)?[^\s,;}\]]+)""",
         r"\1=<redacted>",
         detail,
     )
@@ -291,7 +294,12 @@ ACTIVE_DHCP_STATE = "active"
 
 
 def netris_attachment_port_plan(
-    vnet: dict, server_ports: list, uid: str, selected_id: Any, deleting=False
+    vnet: dict,
+    server_ports: list,
+    target_id: str,
+    selected_id: Any,
+    deleting=False,
+    legacy_uid: str | None = None,
 ) -> dict:
     """Remember only this host's provisioning ports across jobs and retries.
 
@@ -299,19 +307,33 @@ def netris_attachment_port_plan(
     A resource-scoped provider tag is saved before disconnecting any port, so
     delete can restore the exact set even in a fresh AAP job after interruption.
     """
-    if not isinstance(uid, str) or not re.fullmatch(r"[A-Za-z0-9-]+", uid):
-        raise ValueError("NetworkAttachment requires a stable resource UID")
+    if not isinstance(target_id, str) or not re.fullmatch(r"[A-Za-z0-9-]+", target_id):
+        raise ValueError("NetworkAttachment requires a stable target API ID")
     host_ids = {_norm(port.get("id")) for port in server_ports}
     if any(not re.fullmatch(r"[1-9][0-9]*", value) for value in host_ids):
         raise ValueError("Host inventory contains an invalid port ID")
-    prefix = f"osac-na:{uid}:"
+    prefix = f"osac-na-target:{target_id}:"
     tags = vnet.get("tags") or []
     if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
         raise ValueError("Provider returned malformed provisioning V-Net tags")
     saved = [tag for tag in tags if tag.startswith(prefix)]
+    # OSAC-6754: only the supplied UID can prove ownership of a legacy tag.
+    # Never guess from port overlap after a hub CR has been replaced: refusing
+    # the operation preserves the only record of already-disconnected ports.
+    legacy_prefix = f"osac-na:{legacy_uid}:" if legacy_uid else None
+    for tag in tags:
+        if not tag.startswith("osac-na:"):
+            continue
+        if legacy_prefix and tag.startswith(legacy_prefix):
+            saved.append(tag)
+        elif host_ids.intersection(tag.rsplit(":", 1)[-1].split(",")):
+            raise ValueError(
+                "Unverified legacy NetworkAttachment snapshot overlaps this host; "
+                "verify its owner and migrate it to the target API ID before retrying"
+            )
     if len(saved) > 1:
         raise ValueError("Ambiguous saved NetworkAttachment port identity")
-    ids = set(saved[0][len(prefix):].split(",")) if saved else set()
+    ids = set(saved[0].rsplit(":", 1)[-1].split(",")) if saved else set()
     if not ids <= host_ids:
         raise ValueError("Saved NetworkAttachment ports do not belong to this host")
     selected = _norm(selected_id)
@@ -329,10 +351,31 @@ def netris_attachment_port_plan(
     return {
         "port_ids": port_ids,
         "tag": tag,
-        "tags": [value for value in tags if not value.startswith(prefix)] + [tag],
+        "tags": [value for value in tags if value not in saved] + [tag],
         "had_snapshot": bool(saved),
         "saved_tag": saved[0] if saved else "",
     }
+
+
+def netris_controller_url_valid(value: Any) -> bool:
+    """Validate the installation's HTTP(S) base URL before attempting auth."""
+    if not isinstance(value, str) or re.search(r"[\s\\]", value):
+        return False
+    try:
+        url = urlsplit(value)
+        return bool(
+            url.scheme in ("http", "https")
+            and url.hostname
+            and not url.username
+            and not url.password
+            and "@" not in url.netloc
+            and not url.netloc.endswith(":")
+            and (url.port is None or 0 < url.port <= 65535)
+            and not url.query
+            and not url.fragment
+        )
+    except ValueError:
+        return False
 
 
 def netris_active_dhcp_addresses(host: Any, mac_address: Any) -> list[str]:
@@ -431,5 +474,6 @@ class FilterModule:
             "netris_retryable_error": netris_retryable_error,
             "netris_active_dhcp_addresses": netris_active_dhcp_addresses,
             "netris_attachment_port_plan": netris_attachment_port_plan,
+            "netris_controller_url_valid": netris_controller_url_valid,
             "netris_ip_in_cidrs": netris_ip_in_cidrs,
         }

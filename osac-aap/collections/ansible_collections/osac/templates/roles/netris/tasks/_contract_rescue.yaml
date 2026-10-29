@@ -33,5 +33,4 @@
     msg: >-
       {{ _osac_rescue_message
          if (_osac_contract | default(false) | bool)
-         else (ansible_failed_result.msg
-               | default('Netris ' ~ _osac_error_label ~ ' failed')) }}
+         else (ansible_failed_result | netris.controller.netris_safe_error_detail) }}

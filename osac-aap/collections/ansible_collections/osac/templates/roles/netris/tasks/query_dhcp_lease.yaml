@@ -63,10 +63,9 @@
       - "Querying DHCP lease for host '{{ _dq_host_name }}'"
       - "Subnet: {{ _dq_subnet_name }} (UUID: {{ _dq_subnet_ref }})"
 
-# Every provider read and the lease acceptance check share one rescue. A
-# temporary backend failure here must publish a retryable osac_error, or
-# contract 4.6 treats the outage as final and stops the BMaaS queries.
-- name: Query the provider and require exactly one active DHCP lease
+# Provider failures use the shared HTTP/transport classifier. Only lease
+# acceptance forces a retry, since a booting host or stale DHCP state can settle.
+- name: Query the provider for active DHCP leases
   block:
     - name: Find IPAM subnet by name
       ansible.builtin.include_role:
@@ -113,7 +112,14 @@
           {{ (netris_ipam_hosts | default([]))
              | map('netris.controller.netris_active_dhcp_addresses', _dq_mac)
              | flatten | unique | list }}
+  rescue:
+    - name: Publish the sanitized DHCP provider error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
+      vars:
+        _osac_error_label: DHCP provider query
 
+- name: Require exactly one active DHCP lease
+  block:
     - name: Fail if no active DHCP lease was found yet
       ansible.builtin.fail:
         msg: >-

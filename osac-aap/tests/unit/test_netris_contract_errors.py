@@ -29,11 +29,11 @@ def test_nat_gateway_contract_create_publishes_a_sanitized_error() -> None:
     assert rescue[0]["vars"]["_osac_error_label"] == "NATGateway create"
 
 
-def test_dhcp_query_publishes_a_retryable_error() -> None:
+def test_dhcp_provider_errors_do_not_force_retryability() -> None:
     rescue = list(_rescue_includes(_tasks("query_dhcp_lease")))
 
     assert rescue, "the DHCP query must publish osac_error on failure"
-    assert rescue[0]["vars"]["_osac_error_retryable_default"] is True
+    assert "_osac_error_retryable_default" not in rescue[0]["vars"]
 
 
 # Task files that serve both the contract envelope and the legacy playbooks in

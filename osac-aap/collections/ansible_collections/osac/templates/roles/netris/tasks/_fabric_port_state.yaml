@@ -38,8 +38,8 @@
   ansible.builtin.set_fact:
     _na_fabric_plan: >-
       {{ netris_vnet_detail | netris.controller.netris_attachment_port_plan(
-           netris_server_ports, _osac_resource.metadata.uid, _target_port.id,
-           _na_reconcile == 'delete') }}
+           netris_server_ports, _osac_target.id, _target_port.id,
+           _na_reconcile == 'delete', _osac_resource.metadata.uid) }}
 
 - name: Save the fabric port snapshot before detaching any port
   ansible.builtin.include_role:

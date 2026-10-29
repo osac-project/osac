@@ -1,5 +1,6 @@
 import { type BareMetalInstanceCatalogItem, GuestOSFamily } from '@osac/types';
 
+import { catalogUserDataValuesFromPolicy } from '../../catalog/authoring/catalogUserData';
 import { bareMetalDiskImageReferenceFromPolicy } from '../../catalog/bareMetalCatalogItemResourceDisplay';
 import { catalogFieldPolicyLocked } from '../../catalog/catalogFieldPolicyDisplay';
 import type { ResourceSelectValue } from '../../Form/resourceSelectValue';
@@ -99,10 +100,7 @@ export const getBareMetalInstanceInitialValues = (
     spec: {
       ...values.spec,
       sshKey: getFieldFromCatalogItemPolicy(catalogItem.fields?.sshPublicKey, ''),
-      userData: {
-        locked: false,
-        value: '',
-      },
+      ...catalogUserDataValuesFromPolicy(catalogItem.fields?.userDataSource),
       instanceType: (() => {
         const field = getFieldFromCatalogItemPolicy(catalogItem.fields?.instanceType, undefined);
         const reference = field.value as { id?: string; name?: string } | undefined;

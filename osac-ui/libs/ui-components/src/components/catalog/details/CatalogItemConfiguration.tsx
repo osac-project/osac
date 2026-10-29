@@ -18,7 +18,6 @@ import type {
 
 import { useTranslation } from '../../../hooks/useTranslation';
 import { formatReviewScalar } from '../../ProvisioningWizard/reviewFormatters';
-import { catalogUserDataDisplayValue } from '../authoring/catalogUserData';
 import {
   bareMetalCatalogItemFields,
   bareMetalDiskImageReferenceFromPolicy,
@@ -49,11 +48,13 @@ import {
   formatComputeCatalogDiskImage,
 } from '../computeCatalogItemResourceDisplay';
 import CatalogNodeSets from './CatalogNodeSets';
+import CatalogUserDataDetailValue from './CatalogUserDataDetailValue';
 
 interface CatalogConfigurationRowProps {
   label: string;
-  value: unknown;
+  value?: unknown;
   policy: unknown;
+  valueContent?: ReactNode;
 }
 
 interface CatalogConfiguration {
@@ -88,7 +89,12 @@ const policyDisplayValue = (value: unknown): string => {
   return formatReviewScalar(value);
 };
 
-const CatalogConfigurationRow = ({ label, value, policy }: CatalogConfigurationRowProps) => {
+const CatalogConfigurationRow = ({
+  label,
+  value,
+  policy,
+  valueContent,
+}: CatalogConfigurationRowProps) => {
   const { t } = useTranslation();
   const behavior = catalogFieldPolicyBehavior(policy as FieldPolicyLike);
 
@@ -101,7 +107,9 @@ const CatalogConfigurationRow = ({ label, value, policy }: CatalogConfigurationR
       <DescriptionListTerm>{label}</DescriptionListTerm>
       <DescriptionListDescription>
         <Flex flexWrap={{ default: 'nowrap' }} gap={{ default: 'gapXs' }}>
-          <FlexItem>{value === undefined ? t('Not set') : policyDisplayValue(value)}</FlexItem>
+          <FlexItem>
+            {valueContent ?? (value === undefined ? t('Not set') : policyDisplayValue(value))}
+          </FlexItem>
           <FlexItem>
             <CatalogFieldEditabilityLabel behavior={behavior} />
           </FlexItem>
@@ -168,7 +176,7 @@ const computeConfiguration = (
         />
         <CatalogConfigurationRow
           label={t('User data')}
-          value={catalogUserDataDisplayValue(fields?.userDataSource)}
+          valueContent={<CatalogUserDataDetailValue policy={fields?.userDataSource} />}
           policy={fields?.userDataSource}
         />
         <CatalogConfigurationRow
@@ -277,7 +285,7 @@ const bareMetalConfiguration = (
         />
         <CatalogConfigurationRow
           label={t('User data')}
-          value={catalogUserDataDisplayValue(fields?.userDataSource)}
+          valueContent={<CatalogUserDataDetailValue policy={fields?.userDataSource} />}
           policy={fields?.userDataSource}
         />
       </>

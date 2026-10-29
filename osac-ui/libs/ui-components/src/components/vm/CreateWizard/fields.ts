@@ -1,5 +1,6 @@
 import { type ComputeInstanceCatalogItem, GuestOSFamily } from '@osac/types';
 
+import { catalogUserDataValuesFromPolicy } from '../../catalog/authoring/catalogUserData';
 import { type ResourceSelectValue, emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 import {
   type NetworkAttachmentFormFields,
@@ -108,10 +109,7 @@ export const getComputeInstanceInitialValues = (
     },
     spec: {
       ...values.spec,
-      userData: {
-        locked: false,
-        value: '',
-      },
+      ...catalogUserDataValuesFromPolicy(catalogItem.fields?.userDataSource),
       sshKey: (() => {
         const field = getFieldFromCatalogItemPolicy<{ name: string }>(catalogItem.fields?.sshKey, {
           name: '',

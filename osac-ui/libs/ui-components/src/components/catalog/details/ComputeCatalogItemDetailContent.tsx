@@ -21,7 +21,6 @@ import type { ComputeInstanceCatalogItem } from '@osac/types';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { guestOsFamilyLabels } from '../../DiskImage/DiskImageTable';
 import { Timestamp } from '../../Primitives/Timestamp';
-import { catalogUserDataDisplayValue } from '../authoring/catalogUserData';
 import { findDiskImageForReference } from '../bareMetalCatalogItemResourceDisplay';
 import CatalogFieldEditabilityLabel from '../CatalogFieldEditabilityLabel';
 import { type FieldPolicyLike, catalogFieldPolicyBehavior } from '../catalogFieldPolicyDisplay';
@@ -38,6 +37,7 @@ import {
   int32ValueFromPolicy,
 } from '../computeCatalogItemResourceDisplay';
 import CatalogStorageTable, { type CatalogStorageTableRow } from './CatalogStorageTable';
+import CatalogUserDataDetailValue from './CatalogUserDataDetailValue';
 
 interface VmCatalogItemDetailContentProps {
   item: ComputeInstanceCatalogItem;
@@ -126,10 +126,6 @@ const additionalDisksFromPolicy = (value: unknown): AdditionalDisk[] => {
   return items ?? [];
 };
 
-const configuredUserData = (item: ComputeInstanceCatalogItem): boolean => {
-  return Boolean(catalogUserDataDisplayValue(item.fields?.userDataSource));
-};
-
 const displayReference = (reference: unknown, t: TFunction): string =>
   referenceLabel(reference) ?? t('Not set');
 
@@ -169,7 +165,6 @@ const VmCatalogItemDetailContent = ({ item }: VmCatalogItemDetailContentProps) =
   const vcpuValue = formatComputeCatalogVCpu(fields, instanceType, t) ?? t('Not set');
   const memoryValue = formatComputeCatalogMemory(fields, instanceType, t) ?? t('Not set');
   const gpu = instanceType?.spec?.gpu;
-  const userDataValue = configuredUserData(item) ? t('Configured') : t('Not set');
   const bootDiskSizeValue = formatComputeCatalogStorage(fields, bootDiskSize, t) ?? t('Not set');
   const additionalDisks = additionalDisksFromPolicy(policyValue(fields?.additionalDisks));
   const additionalDiskRows: CatalogStorageTableRow[] = additionalDisks.map((disk, index) => ({
@@ -219,7 +214,10 @@ const VmCatalogItemDetailContent = ({ item }: VmCatalogItemDetailContentProps) =
       <GridItem md={4}>
         <DetailSection title={t('Access & Initial run')}>
           <DetailRow label={t('Cloud-init')}>
-            <GovernedDetailValue value={userDataValue} policy={fields?.userDataSource} />
+            <GovernedDetailValue
+              value={<CatalogUserDataDetailValue policy={fields?.userDataSource} />}
+              policy={fields?.userDataSource}
+            />
           </DetailRow>
         </DetailSection>
       </GridItem>

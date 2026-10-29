@@ -33,9 +33,7 @@ describe('UserDataField', () => {
     await user.click(screen.getByRole('radio', { name: 'Select secret' }));
 
     expect(screen.getByRole('radio', { name: 'Select secret' })).toBeChecked();
-    expect(
-      await screen.findByRole('button', { name: 'No secret available' }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'No secret available' })).toBeInTheDocument();
 
     await user.click(screen.getByRole('radio', { name: 'Enter value' }));
 

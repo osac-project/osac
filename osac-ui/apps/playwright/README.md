@@ -111,8 +111,8 @@ The `vmaas-full-flow-launch` project runs the setup journeys and starts the
 tenant VM flow: instance type, disk image, storage tier (including its
 storage-backend readiness check), catalog item, tenant creation and login,
 published catalog item selection, and `Launch instance`. The setup project
-has a teardown project that first deletes the VM through the tenant UI and
-then removes the other resources created by the flow after the launch test
+has a teardown chain that first deletes the VM through the tenant UI and then
+removes the other resources created by the flow after the launch test
 completes. Run it with:
 
 ```bash

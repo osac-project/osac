@@ -119,6 +119,14 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
+      name: 'vmaas-full-flow',
+      testDir: vmaasDir,
+      testMatch:
+        /(create\.(instance_type|disk_images|storage_tier|catalog|tenant)|launch\.catalog)\.spec\.ts/,
+      fullyParallel: false,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+    },
+    {
       name: 'vmaas-storage-tier',
       testDir: vmaasDir,
       testMatch: /create\.storage_tier\.spec\.ts/,

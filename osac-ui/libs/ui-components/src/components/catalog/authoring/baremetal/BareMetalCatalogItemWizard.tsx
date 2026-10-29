@@ -106,11 +106,11 @@ const BareMetalCatalogItemWizard = ({ item }: BareMetalCatalogItemWizardProps) =
               </Button>
             </BreadcrumbItem>
             <BreadcrumbItem isActive>
-              {item ? t('Edit catalog item') : t('Create catalog item')}
+              {item ? t('Edit bare metal catalog item') : t('Create bare metal catalog item')}
             </BreadcrumbItem>
           </Breadcrumb>
           <Title headingLevel="h1" size="3xl">
-            {item ? t('Edit catalog item') : t('Create catalog item')}
+            {item ? t('Edit bare metal catalog item') : t('Create bare metal catalog item')}
           </Title>
         </PageSection>
         <FieldValidationProvider>

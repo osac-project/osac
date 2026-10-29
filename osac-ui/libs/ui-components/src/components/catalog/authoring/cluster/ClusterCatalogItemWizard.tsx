@@ -105,11 +105,11 @@ const ClusterCatalogItemWizard = ({ item }: ClusterCatalogItemWizardProps) => {
               </Button>
             </BreadcrumbItem>
             <BreadcrumbItem isActive>
-              {item ? t('Edit catalog item') : t('Create catalog item')}
+              {item ? t('Edit cluster catalog item') : t('Create cluster catalog item')}
             </BreadcrumbItem>
           </Breadcrumb>
           <Title headingLevel="h1" size="3xl">
-            {item ? t('Edit catalog item') : t('Create catalog item')}
+            {item ? t('Edit cluster catalog item') : t('Create cluster catalog item')}
           </Title>
         </PageSection>
         <FieldValidationProvider>

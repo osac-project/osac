@@ -287,19 +287,6 @@ Using OpenAI Codex? See [`docs/codex-getting-started.md`](docs/codex-getting-sta
 for Codex-specific onboarding (install, `/import`, permissions, trusting the
 repo's hooks, and skill discovery under `.agents/skills`).
 
-## Distrobox (Linux/x86_64)
-
-Requires [podman](https://podman.io/) and [distrobox](https://distrobox.it/) on Linux. Image tool binaries are x86_64 only. From this repo root:
-
-```bash
-make enter                     # Build image and enter
-make claude                    # Run Claude Code inside the distrobox
-make status
-make rebuild
-```
-
-The image lives in `tools/distrobox/`. It shares `$HOME` by default (`HOME_DIR` to override).
-
 ## Parallel worktrees
 
 ```bash

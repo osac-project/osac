@@ -1383,11 +1383,11 @@ func deleteTenantDefaultNetworkingFixture(ctx context.Context, manager defaultne
 	defer ticker.Stop()
 	for {
 		err := manager.Delete(ctx, tenant)
-		if !errors.Is(err, defaultnetworking.ErrResourcesDeleting) {
-			if err != nil {
-				return err
-			}
+		if err == nil {
 			return setTenantDefaultNetworkingCondition(ctx, tenant, false)
+		}
+		if !errors.Is(err, defaultnetworking.ErrResourcesDeleting) && !stillReferencedByActiveResources(err) {
+			return err
 		}
 		if err := clearTenantDefaultNetworkingFinalizers(ctx, tenant); err != nil {
 			return fmt.Errorf("clear terminating default networking fixture finalizers: %w", err)
@@ -1563,4 +1563,8 @@ func getTenantDefaultNetworkFixture(ctx context.Context, tenant, project string)
 
 	Fail("tenant default networking fixture is missing a READY subnet, virtual network, and security group")
 	return catalogItemNetworkFixture{}
+}
+
+func stillReferencedByActiveResources(err error) bool {
+	return strings.Contains(err.Error(), "still reference")
 }

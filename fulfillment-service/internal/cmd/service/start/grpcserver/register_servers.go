@@ -724,6 +724,28 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	privatev1.RegisterRoleBindingsServer(registrar, privateRoleBindingsServer)
 
+	serviceAccountsServer, err := servers.NewServiceAccountsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create service accounts server: %w", err)
+	}
+	publicv1.RegisterServiceAccountsServer(registrar, serviceAccountsServer)
+
+	privateServiceAccountsServer, err := servers.NewPrivateServiceAccountsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private service accounts server: %w", err)
+	}
+	privatev1.RegisterServiceAccountsServer(registrar, privateServiceAccountsServer)
+
 	// Create the project memberships server:
 	deps.Logger.InfoContext(ctx, "Creating project memberships server")
 	projectMembershipsServer, err := servers.NewProjectMembershipsServer().

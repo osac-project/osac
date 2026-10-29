@@ -38,6 +38,7 @@ import (
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/start/idpclient"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/autoexternalipattachment"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/baremetalinstance"
@@ -57,6 +58,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/role"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/rolebinding"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/securitygroup"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/serviceaccount"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/subnet"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/tenant"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/user"
@@ -206,6 +208,8 @@ type runnerContext struct {
 	client *grpc.ClientConn
 }
 
+const serviceAccountEventFilter = "has(event.service_account)"
+
 const fabricDomainEventFilter = "has(event.fabric_domain) || (has(event.virtual_network) && event.type == EVENT_TYPE_OBJECT_UPDATED && ((has(event.virtual_network.status) && event.virtual_network.status.hub != '') || (has(event.virtual_network.metadata) && has(event.virtual_network.metadata.deletion_timestamp))))"
 
 // run runs the `start controllers` command.
@@ -236,12 +240,6 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	if r.args.authClientSecret != "" && r.args.authClientSecretFile != "" {
 		return fmt.Errorf("flags '--auth-client-secret' and '--auth-client-secret-file' are mutually exclusive")
-	}
-	if r.args.idpClientId != "" && r.args.idpClientIdFile != "" {
-		return fmt.Errorf("flags '--idp-client-id' and '--idp-client-id-file' are mutually exclusive")
-	}
-	if r.args.idpClientSecret != "" && r.args.idpClientSecretFile != "" {
-		return fmt.Errorf("flags '--idp-client-secret' and '--idp-client-secret-file' are mutually exclusive")
 	}
 	if r.args.authIssuerUrl == "" && r.args.authIssuerUrlFile == "" {
 		return fmt.Errorf("flag '--auth-issuer-url' or '--auth-issuer-url-file' is required")
@@ -308,7 +306,6 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	if err != nil {
 		return err
 	}
-
 	// Create the token source:
 	r.logger.InfoContext(ctx, "Creating token source")
 	tokenSource, err := r.createTokenSource(ctx, caPool)
@@ -1038,6 +1035,44 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		}
 	}()
 
+	// Create the service account reconciler:
+	r.logger.InfoContext(ctx, "Creating service account reconciler")
+	serviceAccountReconcilerFunction, err := serviceaccount.NewFunction().
+		SetLogger(r.logger).
+		SetConnection(r.client).
+		SetIdpClient(idpClient).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create service account reconciler function: %w", err)
+	}
+	serviceAccountReconciler, err := controllers.NewReconciler[*privatev1.ServiceAccount]().
+		SetSync(r.args.sync).
+		SetLogger(r.logger).
+		SetName("service-account").
+		SetClient(r.client).
+		SetFunction(serviceAccountReconcilerFunction.Run).
+		SetEventFilter(serviceAccountEventFilter).
+		SetHealthReporter(healthAggregator).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create service account reconciler: %w", err)
+	}
+
+	// Start the service account reconciler:
+	r.logger.InfoContext(ctx, "Starting service account reconciler")
+	go func() {
+		err := serviceAccountReconciler.Start(ctx)
+		if err == nil || errors.Is(err, context.Canceled) {
+			r.logger.InfoContext(ctx, "Service account reconciler finished")
+		} else {
+			r.logger.InfoContext(
+				ctx,
+				"Service account reconciler failed",
+				slog.Any("error", err),
+			)
+		}
+	}()
+
 	// Create the tenant reconciler:
 	r.logger.InfoContext(ctx, "Creating tenant reconciler")
 	tenantReconcilerFunction, err := tenant.NewFunction().
@@ -1427,43 +1462,6 @@ func (r *runnerContext) createTokenSource(ctx context.Context, caPool *trust.Cer
 
 // createIDPClient creates the IDP client. The IDP URL and credentials are mandatory.
 func (r *runnerContext) createIDPClient(ctx context.Context, caPool *trust.CertPool) (*idp.Client, error) {
-	if r.args.idpURL == "" {
-		return nil, fmt.Errorf("flag '--idp-url' is required")
-	}
-	if r.args.idpClientId == "" && r.args.idpClientIdFile == "" {
-		return nil, fmt.Errorf("flag '--idp-client-id' or '--idp-client-id-file' is required")
-	}
-	if r.args.idpClientSecret == "" && r.args.idpClientSecretFile == "" {
-		return nil, fmt.Errorf("flag '--idp-client-secret' or '--idp-client-secret-file' is required")
-	}
-
-	// Get the client ID
-	idpClientId := r.args.idpClientId
-	if idpClientId == "" && r.args.idpClientIdFile != "" {
-		var err error
-		idpClientId, err = r.readTrimmedFile(r.args.idpClientIdFile)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to read IDP client identifier from file '%s': %w",
-				r.args.idpClientIdFile, err,
-			)
-		}
-	}
-
-	// Get the client secret
-	idpClientSecret := r.args.idpClientSecret
-	if idpClientSecret == "" && r.args.idpClientSecretFile != "" {
-		var err error
-		idpClientSecret, err = r.readTrimmedFile(r.args.idpClientSecretFile)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to read IDP client secret from file '%s': %w",
-				r.args.idpClientSecretFile, err,
-			)
-		}
-	}
-
-	// Get the issuer URL (same as auth issuer URL)
 	issuerUrl := r.args.authIssuerUrl
 	if issuerUrl == "" && r.args.authIssuerUrlFile != "" {
 		var err error
@@ -1476,52 +1474,16 @@ func (r *runnerContext) createIDPClient(ctx context.Context, caPool *trust.CertP
 		}
 	}
 
-	r.logger.DebugContext(
-		ctx,
-		"IDP credentials from flags",
-		slog.String("issuer_url", issuerUrl),
-		slog.String("!client_id", idpClientId),
-		slog.String("!client_secret", idpClientSecret),
-	)
-
-	// Create a token store that saves the token in memory
-	idpTokenStore, err := auth.NewMemoryTokenStore().
-		SetLogger(r.logger).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create IDP token store: %w", err)
-	}
-
-	// Create OAuth token source for IDP authentication
-	r.logger.InfoContext(ctx, "Creating IDP token source")
-	idpTokenSource, err := oauth.NewTokenSource().
-		SetLogger(r.logger).
-		SetStore(idpTokenStore).
-		SetCaPool(caPool).
-		SetIssuer(issuerUrl).
-		SetFlow(oauth.CredentialsFlow).
-		SetClientId(idpClientId).
-		SetClientSecret(idpClientSecret).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create IDP token source: %w", err)
-	}
-
-	// Create Keycloak IDP client:
-	r.logger.InfoContext(ctx, "Creating Keycloak IDP client")
-
-	idpClient, err := idp.NewClient().
+	return idpclient.NewClient().
 		SetLogger(r.logger).
 		SetBaseURL(r.args.idpURL).
-		SetTokenSource(idpTokenSource).
+		SetIssuerURL(issuerUrl).
+		SetClientID(r.args.idpClientId).
+		SetClientIDFile(r.args.idpClientIdFile).
+		SetClientSecret(r.args.idpClientSecret).
+		SetClientSecretFile(r.args.idpClientSecretFile).
 		SetCaPool(caPool).
 		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Keycloak client: %w", err)
-	}
-
-	r.logger.InfoContext(ctx, "Keycloak IDP client created successfully")
-	return idpClient, nil
 }
 
 // readTrimmedFile reads the content of the given file and returns it with all leading and trailing whitespace removed.

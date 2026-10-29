@@ -13,15 +13,20 @@ from tests.e2e.caas.regression import cluster_upgrade as scenario
 from tests.e2e.caas.regression import test_cluster_node_sets as journey
 
 
-def test_baseline_waits_for_both_node_pool_readiness_conditions(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A ready Cluster does not make an unready NodePool a steady baseline."""
+def test_baseline_waits_for_hypershift_readiness(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HyperShift health, not the API provisioning state, gates the upgrade."""
     first, second = "alpha", "beta"
     ready_pool = {
         "status": {"conditions": [{"type": "Ready", "status": "True"}, {"type": "AllMachinesReady", "status": "True"}]}
     }
     ready = {
-        "hosted": {"metadata": {"name": "hosted"}},
-        "cluster": {"status": {"state": "CLUSTER_STATE_READY"}},
+        "hosted": {
+            "metadata": {"name": "hosted"},
+            "status": {
+                "conditions": [{"type": "Available", "status": "True"}, {"type": "Degraded", "status": "False"}]
+            },
+        },
+        "cluster": {"status": {"state": "CLUSTER_STATE_PROGRESSING"}},
         "pools": {first: deepcopy(ready_pool), second: deepcopy(ready_pool)},
     }
     absent = deepcopy(ready)
@@ -32,9 +37,11 @@ def test_baseline_waits_for_both_node_pool_readiness_conditions(monkeypatch: pyt
     machines_not_ready["pools"][second]["status"]["conditions"][1]["status"] = "False"
     no_hosted = deepcopy(ready)
     no_hosted["hosted"] = {}
-    cluster_not_ready = deepcopy(ready)
-    cluster_not_ready["cluster"]["status"]["state"] = "CLUSTER_STATE_PROVISIONING"
-    snapshots = [absent, not_ready, machines_not_ready, no_hosted, cluster_not_ready, ready]
+    hosted_unavailable = deepcopy(ready)
+    hosted_unavailable["hosted"]["status"]["conditions"][0]["status"] = "False"
+    hosted_degraded = deepcopy(ready)
+    hosted_degraded["hosted"]["status"]["conditions"][1]["status"] = "True"
+    snapshots = [absent, not_ready, machines_not_ready, no_hosted, hosted_unavailable, hosted_degraded, ready]
     monkeypatch.setattr(scenario, "_snapshot", Mock(side_effect=snapshots))
     accepted: list[bool] = []
 
@@ -53,7 +60,52 @@ def test_baseline_waits_for_both_node_pool_readiness_conditions(monkeypatch: pyt
     refs = scenario._ClusterRefs("cluster-id", "order", "namespace", "hosted", {first: "a", second: "b"})
 
     assert scenario._ready_baseline(k8s=Mock(), grpc=Mock(), refs=refs) == ready
-    assert accepted == [False, False, False, False, False, True]
+    assert accepted == [False] * 6 + [True]
+
+
+def test_readiness_mismatch_warns_once_per_observed_state(caplog: pytest.LogCaptureFixture) -> None:
+    """Readiness disagreement is visible but does not reject the observation."""
+    snapshot = {
+        "cluster": {"status": {"state": "CLUSTER_STATE_PROGRESSING"}},
+        "hosted": {"status": {"conditions": [{"type": "Available", "status": "True"}]}},
+    }
+    reported: set[tuple[str | None, bool]] = set()
+
+    scenario._warn_readiness_mismatch(snapshot, reported)
+    scenario._warn_readiness_mismatch(snapshot, reported)
+    assert len(caplog.messages) == 1
+    assert "CLUSTER_STATE_PROGRESSING" in caplog.messages[0]
+
+    snapshot["cluster"]["status"]["state"] = "CLUSTER_STATE_READY"
+    scenario._warn_readiness_mismatch(snapshot, reported)
+    assert len(caplog.messages) == 1
+
+    snapshot["hosted"]["status"]["conditions"][0]["status"] = "False"
+    scenario._warn_readiness_mismatch(snapshot, reported)
+    assert len(caplog.messages) == 2
+    assert "ready=False" in caplog.messages[1]
+
+
+def test_unselected_components_survive_independent_cluster_state_change() -> None:
+    """Upgrade checks do not own the Cluster's provisioning state."""
+    snapshot = {
+        "cluster": {"status": {"state": "CLUSTER_STATE_PROGRESSING"}},
+        "hosted": {"spec": {"release": {"image": "target-image"}}},
+        "pools": {"gpu": {"spec": {"release": {"image": "source-image"}}, "status": {"version": "4.22.0"}}},
+    }
+    expected = {"images": {"gpu": "source-image"}, "versions": {"gpu": "4.22.0"}, "hosted_image": "target-image"}
+
+    scenario._assert_unchanged(snapshot, **expected)
+
+    changed_image = deepcopy(snapshot)
+    changed_image["pools"]["gpu"]["spec"]["release"]["image"] = "unexpected-image"
+    with pytest.raises(AssertionError, match="Unselected gpu NodePool image changed"):
+        scenario._assert_unchanged(changed_image, **expected)
+
+    changed_version = deepcopy(snapshot)
+    changed_version["pools"]["gpu"]["status"]["version"] = "4.22.1"
+    with pytest.raises(AssertionError, match="Unselected gpu NodePool version changed"):
+        scenario._assert_unchanged(changed_version, **expected)
 
 
 def test_node_pool_poll_rejects_later_control_plane_degradation(monkeypatch: pytest.MonkeyPatch) -> None:

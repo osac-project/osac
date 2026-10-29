@@ -87,6 +87,24 @@ def _condition(resource: dict[str, Any], kind: str) -> dict[str, Any]:
     return next((item for item in resource.get("status", {}).get("conditions", []) if item.get("type") == kind), {})
 
 
+def _hosted_ready(hosted: dict[str, Any]) -> bool:
+    """Use HyperShift health conditions for control-plane readiness."""
+    return (
+        _condition(hosted, "Available").get("status") == "True"
+        and _condition(hosted, "Degraded").get("status") != "True"
+    )
+
+
+def _warn_readiness_mismatch(snapshot: dict[str, Any], reported: set[tuple[str | None, bool]]) -> None:
+    """Report each distinct disagreement without making upgrade progress depend on it."""
+    state = snapshot["cluster"].get("status", {}).get("state")
+    hosted_ready = _hosted_ready(snapshot["hosted"])
+    mismatch = (state, hosted_ready)
+    if (state == "CLUSTER_STATE_READY") != hosted_ready and mismatch not in reported:
+        reported.add(mismatch)
+        logger.warning("OSAC Cluster state %s disagrees with HyperShift HostedCluster ready=%s", state, hosted_ready)
+
+
 def _pool_identity(k8s: K8sClient, namespace: str, co_name: str, expected_node_sets: set[str]) -> dict[str, str]:
     """Find the test-owned NodePools by their public NodeSet labels."""
     pools = k8s.list_json(resource="nodepools.hypershift.openshift.io", namespace=namespace).get("items", [])
@@ -145,15 +163,9 @@ def _check_hypershift_failure(resource: dict[str, Any], component: str) -> None:
 
 
 def _assert_unchanged(
-    snapshot: dict[str, Any],
-    *,
-    state: str,
-    images: dict[str, str],
-    versions: dict[str, str],
-    hosted_image: str | None = None,
+    snapshot: dict[str, Any], *, images: dict[str, str], versions: dict[str, str], hosted_image: str | None = None
 ) -> None:
-    """Keep the Cluster state and unselected components at their baseline."""
-    assert snapshot["cluster"].get("status", {}).get("state") == state, "Cluster provisioning state changed"
+    """Keep unselected HyperShift components at their baseline."""
     if hosted_image is not None:
         assert snapshot["hosted"].get("spec", {}).get("release", {}).get("image") == hosted_image, (
             "Unselected HostedCluster image changed"
@@ -248,22 +260,24 @@ def _cluster_references(*, k8s: K8sClient, uuid: str, co_name: str, expected_nod
 
 
 def _ready_baseline(*, k8s: K8sClient, grpc: GRPCClient, refs: _ClusterRefs) -> dict[str, Any]:
-    """Wait for a ready Cluster with both NodePools healthy."""
+    """Wait for a healthy HostedCluster and both NodePools before upgrading."""
+    reported: set[tuple[str | None, bool]] = set()
+
+    def ready(value: dict[str, Any]) -> bool:
+        _warn_readiness_mismatch(value, reported)
+        return _hosted_ready(value["hosted"]) and all(
+            pool
+            and _condition(pool, "Ready").get("status") == "True"
+            and _condition(pool, "AllMachinesReady").get("status") == "True"
+            for pool in value["pools"].values()
+        )
+
     return poll_until(
         fn=lambda: _snapshot(k8s=k8s, grpc=grpc, refs=refs),
-        until=lambda value: (
-            bool(value["hosted"])
-            and all(
-                pool
-                and _condition(pool, "Ready").get("status") == "True"
-                and _condition(pool, "AllMachinesReady").get("status") == "True"
-                for pool in value["pools"].values()
-            )
-            and value["cluster"].get("status", {}).get("state") == "CLUSTER_STATE_READY"
-        ),
+        until=ready,
         retries=60,
         delay=10,
-        description="test-owned Cluster ready with HostedCluster and NodePools",
+        description="test-owned HostedCluster and NodePools ready",
     )
 
 
@@ -280,7 +294,6 @@ def _upgrade_control_plane(
     """Submit the control-plane version edit and await HyperShift completion."""
     old_images = {name: pool["spec"]["release"]["image"] for name, pool in baseline["pools"].items()}
     old_versions = {name: pool["status"]["version"] for name, pool in baseline["pools"].items()}
-    initial_state = baseline["cluster"]["status"]["state"]
     prior_job_ids = {job["jobID"] for job in baseline["order"].get("status", {}).get("provisioningJobs", [])}
     target_image = target["image"]
 
@@ -293,11 +306,13 @@ def _upgrade_control_plane(
     )
     accepted = time.monotonic()
     evidence["phase"] = "control-plane-requested"
+    reported: set[tuple[str | None, bool]] = set()
 
     def observe() -> tuple[dict[str, Any], dict[str, Any]]:
         """Read control-plane progress while rejecting unrelated changes."""
         current = _snapshot(k8s=k8s, grpc=grpc, refs=refs)
-        _assert_unchanged(current, state=initial_state, images=old_images, versions=old_versions)
+        _warn_readiness_mismatch(current, reported)
+        _assert_unchanged(current, images=old_images, versions=old_versions)
         assert current["cluster"]["spec"]["version"]["name"] == target["name"]
         _check_hypershift_failure(current["hosted"], "control plane")
         job = _new_provision_job(current, prior_job_ids)
@@ -342,7 +357,6 @@ def _upgrade_node_pool(
     unchanged_node_set: str,
 ) -> None:
     """Upgrade one named NodePool while preserving another pool and the control plane."""
-    initial_state = baseline["cluster"]["status"]["state"]
     unchanged_pool = baseline["pools"][unchanged_node_set]
     upgraded_before = cp_snapshot["pools"][upgraded_node_set]
     old_transition = _condition(upgraded_before, "UpdatingVersion").get("lastTransitionTime", "")
@@ -361,13 +375,14 @@ def _upgrade_node_pool(
     )
     accepted = time.monotonic()
     evidence["phase"] = "node-pool-requested"
+    reported: set[tuple[str | None, bool]] = set()
 
     def observe() -> tuple[dict[str, Any], dict[str, Any]]:
         """Read NodePool progress and recheck the other pool and control-plane health."""
         current = _snapshot(k8s=k8s, grpc=grpc, refs=refs)
+        _warn_readiness_mismatch(current, reported)
         _assert_unchanged(
             current,
-            state=initial_state,
             images={unchanged_node_set: unchanged_pool["spec"]["release"]["image"]},
             versions={unchanged_node_set: unchanged_pool["status"]["version"]},
             hosted_image=target_image,

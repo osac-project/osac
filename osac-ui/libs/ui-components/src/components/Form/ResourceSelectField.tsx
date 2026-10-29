@@ -42,10 +42,7 @@ export interface ResourceSelectFieldProps {
   /** Client-side filter applied after the list response (e.g. GPU-class). */
   filterItems?: (item: ResourceListItem) => boolean;
   /** Validates the selected value against the currently listed resources. */
-  validateSelection?: (
-    value: ResourceSelectValue,
-    items: ResourceListItem[],
-  ) => string | undefined;
+  validateSelection?: (value: ResourceSelectValue, items: ResourceListItem[]) => string | undefined;
   /** Label for options and the closed toggle. Defaults to metadata.name. */
   formatOptionLabel?: (item: ResourceListItem) => string;
 }

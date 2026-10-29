@@ -81,7 +81,9 @@ export const virtualNetworkFilterForSubnetList = (
 ) =>
   cel<Subnet>((filter) =>
     filter.and(
-      virtualNetworkId ? filter.field('spec.virtualNetwork.id').equals(virtualNetworkId) : undefined,
+      virtualNetworkId
+        ? filter.field('spec.virtualNetwork.id').equals(virtualNetworkId)
+        : undefined,
       filter.field('status.state').equals(SubnetState.READY),
       ...(requireVmSupport ? [filter.field('status.computeInstanceSupported').equals(true)] : []),
     ),

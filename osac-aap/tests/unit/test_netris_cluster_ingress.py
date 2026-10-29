@@ -229,6 +229,63 @@ def test_reserve_retries_a_lost_race_and_keeps_the_observed_address():
     assert len(client.created) == 2
 
 
+def test_lost_create_response_is_read_back_before_another_write():
+    class LostResponseClient(FakeClient):
+        def create_subnet(self, *args, **kwargs):
+            super().create_subnet(*args, **kwargs)
+            raise netris_eip.NetrisExternalIPError(
+                "response lost", category="transport_error", http_status=-1
+            )
+
+    client = LostResponseClient()
+    result = netris_ci.reconcile(request(), client, 1, 7, delay_seconds=0)
+
+    assert result == {"changed": True, "address": "10.0.1.193"}
+    assert len(client.created) == 1
+
+
+def test_reserve_refuses_an_unexpected_address_after_create():
+    class ChangedAddressClient(FakeClient):
+        def create_subnet(self, *args, **kwargs):
+            super().create_subnet(*args, **kwargs)
+            self.records[-1]["prefix"] = "10.0.1.194/32"
+
+    client = ChangedAddressClient()
+    with pytest.raises(netris_ci.NetrisClusterIngressError) as caught:
+        netris_ci.reconcile(request(), client, 1, 7, delay_seconds=0)
+
+    assert caught.value.category == "uncertain_state"
+    assert "unexpected address" in str(caught.value)
+    assert len(client.created) == 1
+
+
+def test_reserve_preserves_provider_error_type_status_and_attempt_bound():
+    error = netris_eip.NetrisExternalIPError(
+        "provider unavailable", category="provider_error", http_status=503
+    )
+    client = FakeClient(create_errors=[error] * netris_ci.MAX_RESERVE_ATTEMPTS)
+    with pytest.raises(netris_ci.NetrisClusterIngressError) as caught:
+        netris_ci.reconcile(request(), client, 1, 7, delay_seconds=0)
+
+    assert caught.value.category == "provider_error"
+    assert caught.value.http_status == 503
+    assert str(caught.value) == "provider unavailable"
+    assert len(client.created) == netris_ci.MAX_RESERVE_ATTEMPTS
+
+
+def test_reserve_requires_observed_ownership_within_the_attempt_bound():
+    class UnobservedClient(FakeClient):
+        def list_subnets(self):
+            return []
+
+    client = UnobservedClient()
+    with pytest.raises(netris_ci.NetrisClusterIngressError) as caught:
+        netris_ci.reconcile(request(), client, 1, 7, delay_seconds=0)
+
+    assert caught.value.category == "exhausted_attempts"
+    assert len(client.created) == netris_ci.MAX_RESERVE_ATTEMPTS
+
+
 def test_reserve_never_writes_outside_the_load_balancer_range():
     client = FakeClient(
         records=[
@@ -306,6 +363,42 @@ def test_release_reports_a_persistent_reservation_as_retryable():
 
     assert caught.value.category == "exhausted_attempts"
     assert netris_ci.is_retryable(caught.value.category) is True
+    assert len(client.deleted) == netris_ci.MAX_RELEASE_OBSERVATIONS
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_release_404_is_not_success_without_observed_absence(stale):
+    class MissingClient(FakeClient):
+        def delete_subnet(self, subnet_id):
+            self.deleted.append(subnet_id)
+            if not stale:
+                self.records = []
+            raise netris_eip.NetrisExternalIPError(
+                "already missing", category="absent", http_status=404
+            )
+
+    client = MissingClient(records=[record()])
+    if stale:
+        with pytest.raises(netris_ci.NetrisClusterIngressError) as caught:
+            netris_ci.reconcile(
+                request(operation="cluster_ingress.release"),
+                client,
+                1,
+                7,
+                delay_seconds=0,
+            )
+        assert caught.value.category == "exhausted_attempts"
+        assert len(client.deleted) == netris_ci.MAX_RELEASE_OBSERVATIONS
+    else:
+        result = netris_ci.reconcile(
+            request(operation="cluster_ingress.release"),
+            client,
+            1,
+            7,
+            delay_seconds=0,
+        )
+        assert result == {"changed": True, "address": ""}
+        assert len(client.deleted) == 1
 
 
 def load_module():

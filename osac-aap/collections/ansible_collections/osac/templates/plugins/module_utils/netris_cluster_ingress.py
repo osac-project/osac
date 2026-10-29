@@ -8,9 +8,9 @@ from ansible_collections.osac.templates.plugins.module_utils.netris_external_ip 
     NetrisExternalIPError as NetrisIpamError,
     NetrisSubnetClient as NetrisSubnetClient,
     _canonical_ipv4,
-    _pause,
+    _release_reservation,
     _required_text,
-    _reservation_address,
+    _reserve_address,
     is_retryable as ipam_is_retryable,
 )
 
@@ -224,15 +224,9 @@ def _owned_record(
 
 def _reconcile_reserve(request, client, site_id, tenant_id, delay_seconds) -> dict:
     """Reserve or reuse the cluster_id address; return changed + address."""
-    wrote = False
-    last_error = None
-    for attempt in range(1, MAX_RESERVE_ATTEMPTS + 1):
-        subnets = client.list_subnets()
-        owned = _owned_record(request, subnets, site_id, tenant_id)
-        if owned is not None:
-            return {"changed": wrote, "address": _reservation_address(owned)}
+    def choose_address(subnets):
         try:
-            address = select_ingress_address(
+            return select_ingress_address(
                 request["ranges"],
                 request["subnet_cidr"],
                 request["gateway_ipv4"],
@@ -245,9 +239,9 @@ def _reconcile_reserve(request, client, site_id, tenant_id, delay_seconds) -> di
                 str(error), category="exhausted"
             ) from error
 
-        wrote = True
+    def create_reservation(address):
         try:
-            client.create_subnet(
+            return client.create_subnet(
                 request["reservation_name"],
                 f"{address}/32",
                 site_id,
@@ -255,57 +249,59 @@ def _reconcile_reserve(request, client, site_id, tenant_id, delay_seconds) -> di
                 purpose=RESERVATION_PURPOSE,
             )
         except NetrisIpamError as error:
-            last_error = NetrisClusterIngressError(
+            raise NetrisClusterIngressError(
                 str(error),
                 category=getattr(error, "category", "provider_error"),
                 http_status=getattr(error, "http_status", None),
-            )
-            _pause(delay_seconds, attempt, MAX_RESERVE_ATTEMPTS)
-            continue
+            ) from error
 
-        subnets = client.list_subnets()
-        owned = _owned_record(request, subnets, site_id, tenant_id)
-        if owned is not None:
-            if _reservation_address(owned) != address:
-                raise NetrisClusterIngressError(
-                    "Netris returned the cluster reservation at an unexpected"
-                    " address",
-                    category="uncertain_state",
-                )
-            return {"changed": True, "address": address}
-        _pause(delay_seconds, attempt, MAX_RESERVE_ATTEMPTS)
-
-    if last_error is not None:
-        raise last_error
-    raise NetrisClusterIngressError(
-        "Netris cluster ingress reservation did not converge within the"
-        " attempt bound",
-        category="exhausted_attempts",
+    return _reserve_address(
+        lambda: _read_owned(request, client, site_id, tenant_id),
+        choose_address,
+        create_reservation,
+        delay_seconds=delay_seconds,
+        max_attempts=MAX_RESERVE_ATTEMPTS,
+        unexpected_error=NetrisClusterIngressError(
+            "Netris returned the cluster reservation at an unexpected address",
+            category="uncertain_state",
+        ),
+        convergence_error=NetrisClusterIngressError(
+            "Netris cluster ingress reservation did not converge within the"
+            " attempt bound",
+            category="exhausted_attempts",
+        ),
     )
+
+
+def _read_owned(request, client, site_id, tenant_id):
+    """Read reservations and apply cluster-specific ownership validation."""
+    subnets = client.list_subnets()
+    return subnets, _owned_record(request, subnets, site_id, tenant_id)
 
 
 def _reconcile_release(request, client, site_id, tenant_id, delay_seconds) -> dict:
     """Delete the cluster_id reservation and confirm absence within the bound."""
-    changed = False
-    for observation in range(1, MAX_RELEASE_OBSERVATIONS + 1):
-        subnets = client.list_subnets()
-        owned = _owned_record(request, subnets, site_id, tenant_id)
-        if owned is None:
-            return {"changed": changed, "address": ""}
-        changed = True
+    def delete_reservation(reservation_id):
         try:
-            client.delete_subnet(owned["id"])
+            client.delete_subnet(reservation_id)
         except NetrisIpamError as error:
             if getattr(error, "http_status", None) != 404:
                 raise NetrisClusterIngressError(
                     str(error),
                     category=getattr(error, "category", "provider_error"),
                 ) from error
-        _pause(delay_seconds, observation, MAX_RELEASE_OBSERVATIONS)
-    raise NetrisClusterIngressError(
-        "Netris cluster ingress reservation persists after the observation"
-        " bound",
-        category="exhausted_attempts",
+            else:
+                raise
+
+    return _release_reservation(
+        lambda: _read_owned(request, client, site_id, tenant_id),
+        delete_reservation,
+        delay_seconds=delay_seconds,
+        max_observations=MAX_RELEASE_OBSERVATIONS,
+        convergence_error=NetrisClusterIngressError(
+            "Netris cluster ingress reservation persists after the observation bound",
+            category="exhausted_attempts",
+        ),
     )
 
 

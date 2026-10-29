@@ -333,6 +333,53 @@ def port_ids(vnet):
     return sorted(int(port["id"]) for port in vnet["ports"])
 
 
+@pytest.mark.parametrize("operation", ["attach", "detach"])
+@pytest.mark.parametrize(
+    "identity", ["missing", "scoped", "ambiguous-scoped", "ambiguous-unscoped"]
+)
+def test_shared_port_vnet_resolution_preserves_identity_and_absence_semantics(
+    tmp_path, provider, operation, identity
+):
+    url, state = provider
+    attachment_fixture(state)
+    extra = {
+        "_op_vnet_name": "provisioning",
+        "_target_port": {"id": 201},
+        "na_host_name": "server-a",
+        "na_logical_interface": "eth1",
+    }
+    if identity != "ambiguous-unscoped":
+        extra.update(vnet_vpc_id=9, vnet_tenant_id=1)
+    if identity == "missing":
+        state["vnets"] = []
+    elif identity == "ambiguous-scoped":
+        state["vnets"].append({**state["vnets"][1], "id": 12})
+
+    result, _ = run_task(
+        tmp_path,
+        (
+            f"_{operation}_port_to_vnet"
+            if operation == "attach"
+            else "_detach_port_from_vnet"
+        ),
+        extra,
+        url,
+        contract=False,
+    )
+    should_succeed = identity == "scoped" or (
+        identity == "missing" and operation == "detach"
+    )
+    assert (result.returncode == 0) == should_succeed, (
+        result.stderr + result.stdout[-4000:]
+    )
+    writes = [call for call in state["calls"] if call[0] == "PUT"]
+    if identity == "scoped" and operation == "detach":
+        assert [call[1] for call in writes] == ["/api/v2/vnet/8"]
+        assert port_ids(state["vnets"][1]) == [101, 102]
+    else:
+        assert not writes
+
+
 @pytest.mark.parametrize("legacy_env", [False, True], ids=["provisioning-setting", "parking-fallback"])
 def test_all_fabric_ports_are_isolated_and_restored_in_fresh_jobs(tmp_path, provider, legacy_env):
     url, state = provider

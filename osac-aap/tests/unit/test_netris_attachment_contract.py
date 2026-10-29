@@ -231,14 +231,19 @@ def test_delete_scopes_the_port_move_to_the_source_vpc() -> None:
 
 def test_port_helpers_refuse_an_ambiguous_vnet_identity() -> None:
     for name in ("_attach_port_to_vnet", "_detach_port_from_vnet"):
-        asserts = [
-            task["ansible.builtin.assert"]
-            for task in _walk(_tasks(name))
-            if "ansible.builtin.assert" in task
-        ]
         assert any(
-            "_vnet_candidates | length <= 1" in str(item["that"]) for item in asserts
-        ), f"{name} must refuse an ambiguous V-Net match"
+            task.get("ansible.builtin.include_tasks") == "_resolve_port_vnet.yaml"
+            for task in _walk(_tasks(name))
+        ), f"{name} must use the shared identity checks"
+    asserts = [
+        task["ansible.builtin.assert"]
+        for task in _walk(_tasks("_resolve_port_vnet"))
+        if "ansible.builtin.assert" in task
+    ]
+    assert any(
+        "_vnet_candidates | length <= 1" in str(item["that"]) for item in asserts
+    )
+    assert len(asserts) == 2, "both scoped and unscoped ambiguity must be rejected"
 
 
 def test_dhcp_query_reads_the_contract_attachment_inputs() -> None:

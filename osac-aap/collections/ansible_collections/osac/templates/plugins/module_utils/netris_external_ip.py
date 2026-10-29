@@ -518,16 +518,75 @@ def _pause(delay_seconds: float, attempt: int, max_attempts: int) -> None:
         time.sleep(delay_seconds)
 
 
-def _reconcile_allocate(request, client, site_id, tenant_id, delay_seconds) -> dict:
-    """Allocate or reuse the UID reservation; return changed + address."""
+def _reserve_address(
+    read_owned,
+    select_address,
+    create_reservation,
+    *,
+    delay_seconds,
+    max_attempts,
+    unexpected_error,
+    convergence_error,
+) -> dict:
+    """Reserve with bounded retries and read back uncertain create outcomes.
+
+    Resource-specific callbacks retain ownership, range and purpose validation.
+    A failed create is observed again before another write, since its response
+    may have been lost after the provider committed the reservation.
+    """
     wrote = False
     last_error = None
-    attempt = 0
-    while attempt < MAX_ALLOCATE_ATTEMPTS:
-        attempt += 1
-        subnets, owned = _read_owned(request, client, site_id, tenant_id)
+    for attempt in range(1, max_attempts + 1):
+        subnets, owned = read_owned()
         if owned is not None:
             return {"changed": wrote, "address": _reservation_address(owned)}
+        address = select_address(subnets)
+        wrote = True
+        try:
+            create_reservation(address)
+        except NetrisExternalIPError as error:
+            last_error = error
+            _pause(delay_seconds, attempt, max_attempts)
+            continue
+        _, owned = read_owned()
+        if owned is not None:
+            if _reservation_address(owned) != address:
+                raise unexpected_error
+            return {"changed": True, "address": address}
+        _pause(delay_seconds, attempt, max_attempts)
+    if last_error is not None:
+        raise last_error
+    raise convergence_error
+
+
+def _release_reservation(
+    read_owned,
+    delete_reservation,
+    *,
+    delay_seconds,
+    max_observations,
+    convergence_error,
+) -> dict:
+    """Delete only owned reservations and report success after observed absence."""
+    changed = False
+    for observation in range(1, max_observations + 1):
+        _, owned = read_owned()
+        if owned is None:
+            return {"changed": changed, "address": ""}
+        changed = True
+        try:
+            delete_reservation(owned["id"])
+        except NetrisExternalIPError as error:
+            if error.http_status != 404:
+                raise
+        _pause(delay_seconds, observation, max_observations)
+    raise convergence_error
+
+
+def _reconcile_allocate(request, client, site_id, tenant_id, delay_seconds) -> dict:
+    """Allocate or reuse the UID reservation; return changed + address."""
+
+    def choose_address(subnets):
         try:
             pool_network = ipaddress.ip_network(request["cidr"])
             occupied = [
@@ -536,53 +595,40 @@ def _reconcile_allocate(request, client, site_id, tenant_id, delay_seconds) -> d
                 if r["purpose"] == RESERVATION_PURPOSE
                 or not pool_network.subnet_of(ipaddress.ip_network(r["prefix"]))
             ]
-            address = select_address(request["cidr"], occupied)
+            return select_address(request["cidr"], occupied)
         except ValueError as error:
             raise NetrisExternalIPError(str(error), category="exhausted") from error
-        wrote = True
-        try:
-            client.create_subnet(
-                request["reservation_name"], f"{address}/32", site_id, tenant_id
-            )
-        except NetrisExternalIPError as error:
-            last_error = error
-            _pause(delay_seconds, attempt, MAX_ALLOCATE_ATTEMPTS)
-            continue
-        subnets, owned = _read_owned(request, client, site_id, tenant_id)
-        if owned is not None:
-            observed = _reservation_address(owned)
-            if observed != address:
-                raise NetrisExternalIPError(
-                    "Netris returned a UID reservation at an unexpected address",
-                    category="uncertain_state",
-                )
-            return {"changed": True, "address": address}
-        _pause(delay_seconds, attempt, MAX_ALLOCATE_ATTEMPTS)
-    if last_error is not None:
-        raise last_error
-    raise NetrisExternalIPError(
-        "Netris ExternalIP allocation did not converge within the attempt bound",
-        category="exhausted_attempts",
+
+    return _reserve_address(
+        lambda: _read_owned(request, client, site_id, tenant_id),
+        choose_address,
+        lambda address: client.create_subnet(
+            request["reservation_name"], f"{address}/32", site_id, tenant_id
+        ),
+        delay_seconds=delay_seconds,
+        max_attempts=MAX_ALLOCATE_ATTEMPTS,
+        unexpected_error=NetrisExternalIPError(
+            "Netris returned a UID reservation at an unexpected address",
+            category="uncertain_state",
+        ),
+        convergence_error=NetrisExternalIPError(
+            "Netris ExternalIP allocation did not converge within the attempt bound",
+            category="exhausted_attempts",
+        ),
     )
 
 
 def _reconcile_release(request, client, site_id, tenant_id, delay_seconds) -> dict:
     """Delete the UID reservation and confirm absence within the bound."""
-    changed = False
-    for observation in range(1, MAX_RELEASE_OBSERVATIONS + 1):
-        subnets, owned = _read_owned(request, client, site_id, tenant_id)
-        if owned is None:
-            return {"changed": changed, "address": ""}
-        changed = True
-        try:
-            client.delete_subnet(owned["id"])
-        except NetrisExternalIPError as error:
-            if error.http_status != 404:
-                raise
-        _pause(delay_seconds, observation, MAX_RELEASE_OBSERVATIONS)
-    raise NetrisExternalIPError(
-        "Netris UID reservation persists after the observation bound",
-        category="exhausted_observations",
+    return _release_reservation(
+        lambda: _read_owned(request, client, site_id, tenant_id),
+        client.delete_subnet,
+        delay_seconds=delay_seconds,
+        max_observations=MAX_RELEASE_OBSERVATIONS,
+        convergence_error=NetrisExternalIPError(
+            "Netris UID reservation persists after the observation bound",
+            category="exhausted_observations",
+        ),
     )
 
 

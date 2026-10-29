@@ -78,7 +78,6 @@ var _ = Describe("Service account creation", func() {
 		Expect(response.GetObject().GetStatus().GetState()).To(Equal(publicv1.ServiceAccountState_SERVICE_ACCOUNT_STATE_PENDING))
 		Expect(response.GetObject().GetStatus().GetClientSecret()).To(BeNil())
 		Expect(response.GetObject().GetStatus().GetMessage()).To(BeEmpty())
-		Expect(response.GetObject().GetMetadata().GetDisplayName()).To(BeEmpty())
 		Expect(response.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
 		Expect(response.GetObject().GetMetadata().GetAnnotations()).To(HaveKeyWithValue("osac.openshift.io/tenant", testTenant))
 		Expect(request.GetObject().GetStatus().GetState()).To(Equal(publicv1.ServiceAccountState_SERVICE_ACCOUNT_STATE_READY), "input must remain unmodified")
@@ -110,8 +109,6 @@ var _ = Describe("Service account creation", func() {
 	}, Entry("caller ID", func(o *publicv1.ServiceAccount) { o.SetId("chosen") }),
 		Entry("tenant mismatch", func(o *publicv1.ServiceAccount) { o.GetMetadata().SetTenant("foreign") }),
 		Entry("project", func(o *publicv1.ServiceAccount) { o.GetMetadata().SetProject("team") }),
-		Entry("display name", func(o *publicv1.ServiceAccount) { o.GetMetadata().SetDisplayName("Build robot") }),
-		Entry("description", func(o *publicv1.ServiceAccount) { o.GetMetadata().SetDescription("Automation identity") }),
 		Entry("bad name", func(o *publicv1.ServiceAccount) { o.GetMetadata().SetName("Invalid_name") }))
 	It("rejects a duplicate name", func() {
 		_, err := create(caller, request)

@@ -17,7 +17,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Cmd creates the top-level volumes command with list, get, create, update, and delete subcommands.
+// Cmd creates the top-level volumes command with list, get, create, and delete subcommands.
 func Cmd() *cobra.Command {
 	result := &cobra.Command{
 		Use:   "volumes",
@@ -27,7 +27,6 @@ func Cmd() *cobra.Command {
 	result.AddCommand(listCmd())
 	result.AddCommand(getCmd())
 	result.AddCommand(createCmd())
-	result.AddCommand(updateCmd())
 	result.AddCommand(deleteCmd())
 	return result
 }
@@ -56,12 +55,6 @@ To create a new volume:
 
 {{ bt 3 }}shell
 {{ binary }} volumes create --name my-volume --storage-tier gold --size-gib 100
-{{ bt 3 }}
-
-To update a volume:
-
-{{ bt 3 }}shell
-{{ binary }} volumes update my-volume --display-name "Production DB"
 {{ bt 3 }}
 
 To delete a volume:

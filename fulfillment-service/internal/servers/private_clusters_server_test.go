@@ -4542,9 +4542,9 @@ var _ = Describe("Private clusters server", func() {
 			metadataOnly, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Id:       clusterID,
-					Metadata: privatev1.Metadata_builder{Description: "edited"}.Build(),
+					Metadata: privatev1.Metadata_builder{Labels: map[string]string{"env": "test"}}.Build(),
 				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.description"}},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(proto.Equal(metadataOnly.GetObject().GetSpec(), created.GetObject().GetSpec())).To(BeTrue())

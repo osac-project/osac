@@ -4,7 +4,6 @@ on:
   pull_request:
     paths:
       - 'fulfillment-service/**'
-      - '!fulfillment-service/OWNERS'
       - '!fulfillment-service/LICENSE'
       - '!fulfillment-service/**/*.md'
       - '!fulfillment-service/docs/**'

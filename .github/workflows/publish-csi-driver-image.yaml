@@ -4,7 +4,6 @@ on:
   pull_request:
     paths:
       - 'osac-csi-driver/**'
-      - '!osac-csi-driver/OWNERS'
       - '!osac-csi-driver/LICENSE'
       - '!osac-csi-driver/**/*.md'
       - '!osac-csi-driver/docs/**'

@@ -48,8 +48,8 @@ plus a native approval on the head commit, and the merge queue.
   number).
 - Changes to the files that define the checks (`.github/workflows`, `actions`, `scripts`, `filters`, `e2e-policy.yml`,
   `CODEOWNERS`, `.pre-commit-config.yaml`; Markdown in them excepted) need an approval from `@osac-project/wg-infra`
-  (see `CODEOWNERS`). Only the osac-ui lint and typecheck workflows are also approvable by the osac-ui maintainers
-  (`osac-ui/OWNERS`); every other workflow reports a required check, uses secrets or publishes an image, so it stays with
+  (see `CODEOWNERS`). Only the osac-ui lint and typecheck workflows are also approvable by the UI working group
+  (`@osac-project/wg-ui`); every other workflow reports a required check, uses secrets or publishes an image, so it stays with
   wg-infra.
 
 ## CaaS suite selection and coverage

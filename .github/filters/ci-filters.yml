@@ -112,7 +112,6 @@ netris-relevant:
 # (no test-file exclusions).
 e2e-code:
   - '**'
-  - '!**/OWNERS'
   - '!**/LICENSE'
   - '!**/*.md'
   - '!**/docs/**'
@@ -185,7 +184,6 @@ vmaas-outside-known-safe:
   - '**'
   - '!**/*.md'
   - '!**/docs/**'
-  - '!**/OWNERS'
   - '!**/LICENSE'
   - '!**/.claude/**'
   - '!**/.cursor/**'
@@ -203,7 +201,6 @@ caas-outside-known-safe:
   - '**'
   - '!**/*.md'
   - '!**/docs/**'
-  - '!**/OWNERS'
   - '!**/LICENSE'
   - '!**/.claude/**'
   - '!**/.cursor/**'
@@ -219,7 +216,6 @@ bmaas-outside-known-safe:
   - '**'
   - '!**/*.md'
   - '!**/docs/**'
-  - '!**/OWNERS'
   - '!**/LICENSE'
   - '!**/.claude/**'
   - '!**/.cursor/**'
@@ -245,7 +241,6 @@ bmaas-outside-known-safe:
 # falling through to "nothing matched, skip everything".
 code:
   - '**'
-  - '!**/OWNERS'
   - '!**/LICENSE'
   - '!**/*.md'
   - '!**/docs/**'
@@ -285,7 +280,6 @@ proto-check:
 # Gates check-pull-request.yaml.
 fulfillment-service-checks:
   - '{fulfillment-service/**,.github/workflows/check-pull-request.yaml}'
-  - '!fulfillment-service/OWNERS'
   - '!fulfillment-service/LICENSE'
   - '!fulfillment-service/**/*.md'
   - '!fulfillment-service/docs/**'
@@ -293,7 +287,6 @@ fulfillment-service-checks:
 # Gates build-image.yaml.
 build-osac-operator:
   - '{osac-operator/**,.github/workflows/build-image.yaml}'
-  - '!osac-operator/OWNERS'
   - '!osac-operator/LICENSE'
   - '!osac-operator/**/*.md'
   - '!osac-operator/docs/**'
@@ -304,7 +297,6 @@ build-osac-operator:
 # bare-metal-fulfillment-operator/** and the workflow file).
 build-bare-metal-fulfillment-operator:
   - '{bare-metal-fulfillment-operator/**,.github/workflows/build-bmf-image.yaml}'
-  - '!bare-metal-fulfillment-operator/OWNERS'
   - '!bare-metal-fulfillment-operator/LICENSE'
   - '!bare-metal-fulfillment-operator/**/*.md'
   - '!bare-metal-fulfillment-operator/docs/**'
@@ -312,7 +304,6 @@ build-bare-metal-fulfillment-operator:
 # Gates ansible-lint.yml.
 ansible-osac-aap:
   - '{osac-aap/**,.github/workflows/ansible-lint.yml}'
-  - '!osac-aap/OWNERS'
   - '!osac-aap/LICENSE'
   - '!osac-aap/**/*.md'
   - '!osac-aap/docs/**'

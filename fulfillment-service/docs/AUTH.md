@@ -1,4 +1,4 @@
-# Keycloak Setup and Configuration Guide
+# Fulfillment API Authentication and Keycloak Setup Guide
 
 This guide explains how to set up Keycloak as an Identity Provider (IDP) broker for the fulfillment service
 and configure the necessary mappings and authorization rules.
@@ -15,16 +15,112 @@ and configure the necessary mappings and authorization rules.
 
 ## Table of Contents
 
-1. [Prerequisites](#prerequisites)
-2. [Installing Keycloak](#installing-keycloak)
-3. [Keycloak Configuration](#keycloak-configuration)
-4. [Fulfillment Service Configuration](#fulfillment-service-configuration)
-5. [User and Group Mapping](#user-and-group-mapping)
-6. [Tenancy Logic](#tenancy-logic)
-7. [Authorization Configuration](#authorization-configuration)
-8. [Authorization Flow](#authorization-flow)
-9. [Verification](#verification)
-10. [Troubleshooting](#troubleshooting)
+1. [API URLs and login by persona](#api-urls-and-login-by-persona)
+2. [Prerequisites](#prerequisites)
+3. [Installing Keycloak](#installing-keycloak)
+4. [Keycloak Configuration](#keycloak-configuration)
+5. [Fulfillment Service Configuration](#fulfillment-service-configuration)
+6. [User and Group Mapping](#user-and-group-mapping)
+7. [Tenancy Logic](#tenancy-logic)
+8. [Authorization Configuration](#authorization-configuration)
+9. [Authorization Flow](#authorization-flow)
+10. [Verification](#verification)
+11. [Troubleshooting](#troubleshooting)
+
+## API URLs and login by persona
+
+The address passed to `osac login` depends on the deployment. The examples
+below show the Kind development profile and a typical OpenShift installation.
+Use the private address for platform administration and the public address for
+tenant users.
+
+### Kind development profile
+
+For the `dev` Kind profile, the internal and external API hostnames use the
+`osac.svc.cluster.local` names below. When running `osac` from the host, these
+names must resolve to `127.0.0.1`; the Kind configuration maps host port `8443`
+to the Envoy Gateway.
+
+```bash
+export OSAC_NAMESPACE=osac
+export OSAC_PRIVATE="https://fulfillment-internal-api.${OSAC_NAMESPACE}.svc.cluster.local:8443"
+export OSAC_PUBLIC="https://fulfillment-api.${OSAC_NAMESPACE}.svc.cluster.local:8443"
+
+# Platform admin: use a service account authorized for the private API.
+osac login --address "$OSAC_PRIVATE" --private \
+  --token-script "kubectl create token -n ${OSAC_NAMESPACE} admin --duration 1h"
+
+# Tenant user: authenticate at the configured identity provider.
+osac login --address "$OSAC_PUBLIC" --flow device
+```
+
+The Kind development setup documents the required host mappings in
+[`TESTING_EXTERNAL_IDP.md`](TESTING_EXTERNAL_IDP.md#prerequisites). If the CLI
+runs inside the cluster, use the internal Service address and port `8001`
+instead of the host-mapped Gateway address.
+
+### OpenShift
+
+On OpenShift, use the hostnames of the Fulfillment API Routes. The installer
+derives its default hostnames from the cluster's apps domain, available from
+`oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'`. For example, if
+that command returns `apps.example.com`, the API hosts are
+`fulfillment-internal-api-osac.apps.example.com` and
+`fulfillment-api-osac.apps.example.com`. Confirm the actual hosts with
+`oc get routes -n "$OSAC_NAMESPACE"` because installation values can override
+them.
+
+```bash
+export OSAC_NAMESPACE=osac
+export OSAC_DOMAIN="$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')"
+export OSAC_PRIVATE="https://fulfillment-internal-api-${OSAC_NAMESPACE}.${OSAC_DOMAIN}"
+export OSAC_PUBLIC="https://fulfillment-api-${OSAC_NAMESPACE}.${OSAC_DOMAIN}"
+oc get routes -n "$OSAC_NAMESPACE"
+
+# Platform admin: use a service account authorized for the private API.
+osac login --address "$OSAC_PRIVATE" --private \
+  --token-script "oc create token -n ${OSAC_NAMESPACE} admin --duration 1h"
+
+# Tenant user: authenticate at the configured identity provider.
+osac login --address "$OSAC_PUBLIC" --flow device
+```
+
+The device flow is the recommended tenant login. It displays a URL and code
+for the tenant to open in a browser and authenticate at their configured
+identity provider. For a non-interactive client that already has a tenant
+access token, use
+`osac login --address "$OSAC_PUBLIC" --token-script '<command that prints the token>'`.
+The token must be trusted by the service and include the required API audience
+and tenant claims. If a local Keycloak account can use the direct-access grant,
+password flow is also available:
+
+```bash
+osac login --address "$OSAC_PUBLIC" --flow password \
+  --user alice --password-file /run/secrets/password
+```
+
+Federated tenant users should use the device flow so their password stays with
+their identity provider.
+
+If an API call returns an authentication or permission error, first check that
+the API URL and `--private` setting match the persona and operation above.
+Tenant OIDC users use the public Route. Platform operations on the private API
+require an authorized service-account token. A successful `osac login` checks
+connectivity and token acquisition; it does not grant access to every API
+method.
+
+The API advertises its trusted token issuer through the Capabilities API. The
+issuer in Keycloak metadata and in the token's `iss` claim must match the
+issuer trusted by Fulfillment. The standard OpenShift installer configures the
+Keycloak public hostname and Fulfillment issuer from the cluster domain. If
+login discovery fails, check that the advertised issuer hostname is reachable
+from the `osac` client and that the service trusts that same issuer. In current
+CLI builds, `--issuer` does not override the issuer advertised by the API.
+
+For lab certificates, `--insecure` skips TLS verification. In production,
+trust the cluster CA or pass it with `--ca-file` instead. See the
+[tenant identity and access guide](../../docs/guides/tenant-identity-and-access-guide.md)
+for tenant setup and lifecycle examples.
 
 ## Prerequisites
 

@@ -697,7 +697,10 @@ $ watch oc get -n <project-name> pods
 
 Once `helm install` completes successfully (including all post-install hooks),
 OSAC is ready for use. Cluster templates are published automatically by a
-post-install hook that runs after the AAP bootstrap job.
+post-install hook that runs after the AAP bootstrap job. The chart notes show
+the public and private API login commands. See the
+[Fulfillment authentication guide](../fulfillment-service/docs/AUTH.md) for
+the persona-to-endpoint mapping and issuer troubleshooting.
 
 ## OSAC CLI: Setup & Usage
 
@@ -719,18 +722,30 @@ $ sudo mv osac /usr/local/bin/
 
 ### 2. Log in to the Service
 
-Authenticate with the fulfillment API. You will need the route address and a valid
-token generation script.
+Use the private API as a platform admin when registering a hub. Tenant users
+use the public API and device flow. Set `NS` and `DOMAIN` to your installation
+values; retrieve the assigned hosts with `oc get routes -n "$NS"`.
 
 ```bash
-$ osac login \
-    --address <your-fulfillment-route-url> \
-    --token-script "oc create token fulfillment-controller -n <project-name> \
-    --duration 1h --as system:admin" \
-    --insecure
+export NS=osac
+export DOMAIN=apps.example.com
+
+# Platform admin: private API
+osac login \
+    --address "https://fulfillment-internal-api-${NS}.${DOMAIN}" \
+    --private \
+    --token-script "oc create token -n ${NS} admin --duration 1h"
+
+# Tenant user: public API, interactive device login
+osac login \
+    --address "https://fulfillment-api-${NS}.${DOMAIN}" \
+    --flow device
 ```
 
-> **Tip:** Retrieve your route URL using: `oc get routes -n <project-name>`
+For a self-signed lab certificate, add `--insecure`. For production, trust the
+cluster CA or provide it with `--ca-file`. The platform admin service account
+may have a different name in your deployment; use the account granted private
+API access.
 
 ### 3. Register the Hub
 

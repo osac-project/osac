@@ -35,6 +35,26 @@ The AAP bootstrap job runs as a post-install hook. To monitor its progress:
   kubectl logs -f job/{{ .Release.Name }}-aap-bootstrap -n {{ .Release.Namespace }}
 {{- end }}
 
+{{ if or .Values.service.internalHostname .Values.service.externalHostname }}
+
+OSAC CLI login (run from a client that can reach these Route hosts):
+{{ if .Values.service.internalHostname }}
+
+  Platform admin, private API:
+    osac login --address https://{{ .Values.service.internalHostname }} --private \
+      --token-script "oc create token -n {{ .Release.Namespace }} admin --duration 1h"
+{{ end }}
+{{ if .Values.service.externalHostname }}
+
+  Tenant user, public API (device flow):
+    osac login --address https://{{ .Values.service.externalHostname }} --flow device
+{{ end }}
+
+See the Fulfillment authentication guide for the persona-to-endpoint mapping,
+issuer configuration, and TLS guidance:
+  https://github.com/osac-project/osac/blob/main/fulfillment-service/docs/AUTH.md
+{{ end }}
+
 To upgrade the deployment (Helm 4; omit --force-conflicts on Helm 3):
 
   helm upgrade {{ .Release.Name }} <chart-path> -n {{ .Release.Namespace }} -f <values-file> --force-conflicts

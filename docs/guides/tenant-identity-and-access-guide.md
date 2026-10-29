@@ -97,6 +97,9 @@ After the IdP is registered and READY:
 - **Public API** (`fulfillment-api…`): tenant-scoped operations after IdP login
   (projects, memberships, day-2 RBAC).
 
+For the full persona-to-endpoint login table and issuer configuration details,
+see the [Fulfillment authentication guide](../../fulfillment-service/docs/AUTH.md).
+
 ### Checking the current user with `osac whoami`
 
 After any login, run:

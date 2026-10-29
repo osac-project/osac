@@ -125,9 +125,10 @@ oc get tenant <tenant-name> -o jsonpath='{.status.storageClasses}'
 # [{"name":"ontap-gold","tier":"gold"},{"name":"ontap-silver","tier":"silver"}]
 ```
 
-`StorageReady=True` means every configured tier resolved to
-exactly one class. The condition is a latched milestone: it stays `True`
-when tiers are added later. See
+`StorageReady=True` records that every configured tier resolved to
+exactly one class when the milestone was set. It remains `True` when
+tiers are added later, so inspect the current tier mapping before using
+a newly added tier. See
 [concepts/readiness.md](../concepts/readiness.md) for the full semantics.
 
 Tenant users can then create ComputeInstances, selecting a tier for the

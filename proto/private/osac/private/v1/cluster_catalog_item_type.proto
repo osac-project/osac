@@ -71,6 +71,8 @@ message ClusterCatalogItemFields {
   BoolFieldPolicy auto_external_ip_attachment = 6;
   // Policy for the cluster's subnet and security-group attachment.
   ClusterNetworkAttachmentFieldPolicy network_attachment = 7;
+  // Policy for the cluster's add-on operators.
+  AddOnOperatorReferenceListFieldPolicy add_on_operators = 8;
 }
 
 // Defines whether the complete cluster node-set map is locked or editable.

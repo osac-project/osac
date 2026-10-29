@@ -147,6 +147,11 @@ export const expectInstanceTypeNotToExist = async (page: Page, name: string): Pr
   );
 };
 
+/** Verify that the requested instance type is present in the list. */
+export const expectInstanceTypeToExist = async (page: Page, name: string): Promise<void> => {
+  await expect(getInstanceTypeRow(page, name)).toHaveCount(1);
+};
+
 /** Fill and submit the instance type creation form. */
 export const createInstanceType = async (
   page: Page,

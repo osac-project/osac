@@ -360,7 +360,10 @@ def setup_organization_memberships(ensure_tenants: None, keycloak_url: str, keyc
 
 @pytest.fixture(scope="session")
 def k8s_hub_client(namespace: str) -> K8sClient:
-    return K8sClient(namespace=namespace)
+    client = K8sClient(namespace=namespace)
+    # Fail on broken initial hub access before entering retrying polls.
+    client.get_json(resource="namespace", name=namespace)
+    return client
 
 
 _K8S_ONLY_NETWORK_MANAGER_CONFIGMAP = textwrap.dedent("""\

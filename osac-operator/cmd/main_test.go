@@ -228,6 +228,36 @@ var _ = Describe("clusterOrderStallThresholdsFromEnv", func() {
 	})
 })
 
+var _ = Describe("cluster upgrade timeouts", func() {
+	vars := []string{envClusterUpgradePendingTimeout, envClusterUpgradeControlPlaneTimeout,
+		envClusterUpgradeNodePoolPerNodeTimeout}
+	BeforeEach(func() {
+		for _, variable := range vars {
+			value, set := os.LookupEnv(variable)
+			Expect(os.Unsetenv(variable)).To(Succeed())
+			DeferCleanup(func() {
+				if set {
+					Expect(os.Setenv(variable, value)).To(Succeed())
+				} else {
+					Expect(os.Unsetenv(variable)).To(Succeed())
+				}
+			})
+		}
+	})
+
+	It("uses defaults and accepts positive duration overrides", func() {
+		Expect(clusterUpgradeTimeoutsFromEnv()).To(Equal(controller.DefaultClusterUpgradeTimeouts()))
+		Expect(os.Setenv(envClusterUpgradePendingTimeout, "2m")).To(Succeed())
+		Expect(os.Setenv(envClusterUpgradeControlPlaneTimeout, "5m")).To(Succeed())
+		Expect(os.Setenv(envClusterUpgradeNodePoolPerNodeTimeout, "3m")).To(Succeed())
+		Expect(clusterUpgradeTimeoutsFromEnv()).To(Equal(controller.ClusterUpgradeTimeouts{
+			Pending: 2 * time.Minute, ControlPlane: 5 * time.Minute, NodePoolPerNode: 3 * time.Minute,
+		}))
+		Expect(os.Setenv(envClusterUpgradePendingTimeout, "0s")).To(Succeed())
+		Expect(clusterUpgradeTimeoutsFromEnv().Pending).To(Equal(10 * time.Minute))
+	})
+})
+
 var _ = Describe("tenant CSI fulfillment configuration", func() {
 	BeforeEach(func() {
 		for _, variable := range []string{envFulfillmentEndpoint, envFulfillmentIssuerURL} {

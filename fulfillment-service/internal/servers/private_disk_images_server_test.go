@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"fmt"
+	"maps"
 	"time"
 
 	"buf.build/go/protovalidate"
@@ -330,6 +331,73 @@ var _ = Describe("Private disk images server", func() {
 				privatev1.Architecture_ARCHITECTURE_AMD64,
 				privatev1.Architecture_ARCHITECTURE_ARM64,
 			))
+		})
+
+		It("Updates labels and annotations with a field mask", func() {
+			createResponse, err := server.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "metadata-update-test",
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/test:metadata-update",
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := createResponse.GetObject()
+
+			labels := map[string]string{"admin.osac.openshift.io/metadata-test": "private-label"}
+			annotations := map[string]string{"operator.admin.osac.openshift.io/metadata-test": "private-annotation"}
+			updateResponse, err := server.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: object.GetId(),
+					Metadata: privatev1.Metadata_builder{
+						Labels:      labels,
+						Annotations: annotations,
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+					"metadata.labels",
+					"metadata.annotations",
+				}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(maps.Equal(updateResponse.GetObject().GetMetadata().GetLabels(), labels)).To(BeTrue())
+			Expect(maps.Equal(updateResponse.GetObject().GetMetadata().GetAnnotations(), annotations)).To(BeTrue())
+
+			getResponse, err := server.Get(ctx, privatev1.DiskImagesGetRequest_builder{
+				Id: object.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(maps.Equal(getResponse.GetObject().GetMetadata().GetLabels(), labels)).To(BeTrue())
+			Expect(maps.Equal(getResponse.GetObject().GetMetadata().GetAnnotations(), annotations)).To(BeTrue())
+
+			_, err = server.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: object.GetId(),
+					Metadata: privatev1.Metadata_builder{
+						Labels:      map[string]string{},
+						Annotations: map[string]string{},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+					"metadata.labels",
+					"metadata.annotations",
+				}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			getResponse, err = server.Get(ctx, privatev1.DiskImagesGetRequest_builder{
+				Id: object.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetMetadata().GetLabels()).To(BeEmpty())
+			Expect(getResponse.GetObject().GetMetadata().GetAnnotations()).To(BeEmpty())
 		})
 
 		It("Updates without mask does not duplicate architecture", func() {

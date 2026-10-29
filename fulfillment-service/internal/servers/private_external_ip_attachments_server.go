@@ -647,15 +647,18 @@ func (s *PrivateExternalIPAttachmentsServer) getTargetID(
 
 func (s *PrivateExternalIPAttachmentsServer) validateUniqueness(
 	ctx context.Context, externalIPID string, targetID string, externalIPName string) error {
-	eipFilter := externalIPConsumerFilter(externalIPID, externalIPName)
-	eipResp, err := s.externalIPAttachmentDao.List().
-		SetFilter(eipFilter).
-		SetLimit(1).
-		Do(ctx)
+	parent, err := s.externalIPDao.Get().SetId(externalIPID).Do(ctx)
 	if err != nil {
+		return ConvertDAOErrorToGRPC(err, "get", externalIPID)
+	}
+	attachments, err := s.lifecycle.externalIPAttachments(ctx, parent.GetObject())
+	if err != nil {
+		if _, ok := grpcstatus.FromError(err); ok {
+			return err
+		}
 		return ConvertDAOErrorToGRPC(err, "list", externalIPID)
 	}
-	if eipResp.GetTotal() > 0 {
+	if len(attachments) > 0 {
 		return grpcstatus.Errorf(grpccodes.AlreadyExists,
 			"an ExternalIPAttachment already exists for ExternalIP '%s'", externalIPID)
 	}

@@ -29,6 +29,7 @@ from tests.e2e.core.helpers import (
     wait_for_cluster_order_condition,
     wait_for_cluster_order_cr,
     wait_for_cluster_progressing,
+    wait_for_cluster_ready,
     wait_for_hosted_cluster_kubeconfig,
 )
 from tests.e2e.core.k8s_client import K8sClient
@@ -186,6 +187,7 @@ def _assert_worker_agent_installing(*, k8s: K8sClient, co_name: str, namespace: 
         retries=180,
         delay=10,
         description="CaaS worker Agent registration",
+        retry_on_error=True,
     )
     agent_name = agents[0]["metadata"]["name"]
     logger.info("CaaS: Agent found; waiting for installing state")
@@ -213,6 +215,7 @@ def _assert_worker_agent_installing(*, k8s: K8sClient, co_name: str, namespace: 
         retries=180,
         delay=10,
         description="CaaS worker Agent installing state",
+        retry_on_error=True,
     )
     logger.info("CaaS: Agent entered installing state")
 
@@ -225,6 +228,7 @@ def _assert_operator_worker_metrics(*, k8s: K8sClient, co_name: str) -> None:
             retries=30,
             delay=5,
             description=f"{co_name} worker metrics",
+            retry_on_error=True,
         )
     except (subprocess.CalledProcessError, RuntimeError) as exc:
         detail = (
@@ -261,6 +265,7 @@ def _assert_cluster_version_propagated(
         retries=30,
         delay=5,
         description=f"{co_name} HostedCluster reference",
+        retry_on_error=True,
     )
     hosted_cluster_image = run(
         *k8s._base(),
@@ -365,6 +370,7 @@ def _assert_worker_bmi_resources(
             retries=30,
             delay=2,
             description=f"{co_name} worker {bmi_id} Kubernetes BMI CR",
+            retry_on_error=True,
         )
         cr = k8s.get_json(resource="baremetalinstance", name=cr_name)
         assert cr["metadata"]["labels"]["osac.openshift.io/baremetalinstance-uuid"] == bmi_id
@@ -380,6 +386,7 @@ def _wait_for_cluster_infra_env_name(*, k8s: K8sClient, co_name: str) -> str:
         retries=30,
         delay=2,
         description=f"{co_name} InfraEnv name",
+        retry_on_error=True,
     )
 
 
@@ -424,9 +431,12 @@ def assert_cluster_available(
     # no project dimension: the engine emits only the facts a resource carries.
     metering.expect_no_project()
     # The control-plane meter has once: [READY] semantics: a cluster bills its
-    # installation time only when it reaches READY, so the heartbeat expectation can
-    # start only after the cluster is available.
-    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
+    # installation time only when it reaches READY, and ClusterAvailable=True
+    # does not imply phase Ready (the operator's Ready gate additionally needs
+    # ClusterVersion success and all NodePools ready), so wait for the phase
+    # the billing gate actually keys on before expecting the heartbeat.
+    wait_for_cluster_ready(k8s=k8s, name=co_name)
+    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=300)
     metering.verify()
 
     cluster = grpc.get_cluster(cluster_id=uuid)
@@ -747,6 +757,7 @@ def _assert_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers:
         retries=120,
         delay=10,
         description=f"{co_name} worker aggregates before NodePool isolation check",
+        retry_on_error=True,
     )
 
 
@@ -786,6 +797,7 @@ def _assert_installed_agents_by_node_set(
         retries=120,
         delay=10,
         description=f"{co_name} installed Agents by NodeSet",
+        retry_on_error=True,
     )
 
 
@@ -824,6 +836,7 @@ def _assert_isolated_node_pools(
         retries=60,
         delay=10,
         description=f"{co_name} per-NodeSet NodePool replicas",
+        retry_on_error=True,
     )
     for node_set, node_pool in node_pools.items():
         labels = node_pool.get("metadata", {}).get("labels", {})
@@ -884,9 +897,13 @@ def assert_cluster_with_two_node_sets_available(
     # no project dimension: the engine emits only the facts a resource carries.
     metering.expect_no_project()
     # The control-plane meter has once: [READY] semantics: a cluster bills its
-    # installation time only when it reaches READY, so the heartbeat expectation can
-    # start only after the worker and agent readiness checks above.
-    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
+    # installation time only when it reaches READY, and the worker and agent
+    # readiness checks above can all pass while the ClusterOrder is still
+    # Progressing (the operator's Ready gate additionally needs ClusterVersion
+    # success and all NodePools ready), so wait for the phase the billing gate
+    # actually keys on before expecting the heartbeat.
+    wait_for_cluster_ready(k8s=k8s, name=co_name)
+    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=300)
     metering.verify()
 
     cluster_tenant = cluster["metadata"]["tenant"]

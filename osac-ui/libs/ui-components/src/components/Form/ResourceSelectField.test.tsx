@@ -24,11 +24,15 @@ const makeTenant = (id: string, name: string): Tenant =>
 
 const renderSelect = ({
   autoSelectSingleOption = false,
+  filterItems,
+  formatOptionLabel,
   initialValue = emptyResourceSelectValue(),
   tenants = [makeTenant('only-1', 'Only tenant')],
   transportOverrides,
 }: {
   autoSelectSingleOption?: boolean;
+  filterItems?: (item: { id: string; metadata?: { name?: string } }) => boolean;
+  formatOptionLabel?: (item: { id: string; metadata?: { name?: string } }) => string;
   initialValue?: ResourceSelectValue;
   tenants?: Tenant[];
   transportOverrides?: MockTransportOverrides;
@@ -54,6 +58,8 @@ const renderSelect = ({
             service={Tenants}
             isRequired
             autoSelectSingleOption={autoSelectSingleOption}
+            filterItems={filterItems}
+            formatOptionLabel={formatOptionLabel}
             placeholder="Select a tenant"
             loadErrorTitle="Failed to fetch tenants"
             emptyTitle="No registered tenants"
@@ -90,7 +96,7 @@ describe('ResourceSelectField', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Tenant/)).toHaveTextContent('Select a tenant');
+      expect(screen.getByPlaceholderText('Select a tenant')).toBeInTheDocument();
     });
     expect(screen.getByLabelText('formik-value')).toHaveTextContent('{"id":"","name":""}');
   });
@@ -111,7 +117,7 @@ describe('ResourceSelectField', () => {
         '{"id":"t-2","name":"globex"}',
       );
     });
-    expect(screen.getByLabelText(/^Tenant/)).toHaveTextContent('globex');
+    expect(screen.getByRole('combobox')).toHaveValue('globex');
   });
 
   it('auto-selects a single listed resource as id and name', async () => {
@@ -123,7 +129,9 @@ describe('ResourceSelectField', () => {
       );
     });
 
-    expect(screen.getByLabelText(/^Tenant/)).toHaveTextContent('Only tenant');
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toHaveValue('Only tenant');
+    });
   });
 
   it('does not auto-select when multiple resources are listed', async () => {
@@ -133,7 +141,7 @@ describe('ResourceSelectField', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Tenant/)).toHaveTextContent('Select a tenant');
+      expect(screen.getByPlaceholderText('Select a tenant')).toBeInTheDocument();
     });
     expect(screen.getByLabelText('formik-value')).toHaveTextContent('{"id":"","name":""}');
   });
@@ -174,7 +182,7 @@ describe('ResourceSelectField', () => {
     expect(
       screen.getByText('Register a tenant before creating and assigning an external IP pool.'),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText(/^Tenant/)).toBeDisabled();
+    expect(document.getElementById('tenant')).toHaveClass('pf-m-disabled');
   });
 
   it('shows a load error above a disabled select when listing fails', async () => {
@@ -189,6 +197,77 @@ describe('ResourceSelectField', () => {
     expect(await screen.findByText('Failed to fetch tenants')).toBeInTheDocument();
     expect(screen.getByText('tenants unavailable')).toBeInTheDocument();
     expect(screen.queryByText('No registered tenants')).not.toBeInTheDocument();
-    expect(screen.getByLabelText(/^Tenant/)).toBeDisabled();
+    expect(document.getElementById('tenant')).toHaveClass('pf-m-disabled');
+  });
+
+  it('hides options that fail filterItems', async () => {
+    const { user } = renderSelect({
+      tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
+      filterItems: (item) => item.id === 't-2',
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
+    });
+    await user.click(screen.getByLabelText(/^Tenant/));
+
+    expect(screen.getByRole('option', { name: 'globex' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'acme' })).not.toBeInTheDocument();
+  });
+
+  it('renders formatOptionLabel for options and the toggle', async () => {
+    const { user } = renderSelect({
+      tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
+      formatOptionLabel: (item) => `${item.metadata?.name ?? item.id} (custom)`,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
+    });
+    await user.click(screen.getByLabelText(/^Tenant/));
+    await user.click(screen.getByRole('option', { name: 'globex (custom)' }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('formik-value')).toHaveTextContent(
+        '{"id":"t-2","name":"globex"}',
+      );
+    });
+    expect(screen.getByRole('combobox')).toHaveValue('globex (custom)');
+  });
+
+  it('keeps distinct ids for the typeahead select and toggle', async () => {
+    const { user } = renderSelect({
+      tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
+    });
+
+    expect(document.querySelectorAll('#tenant')).toHaveLength(1);
+    await user.click(screen.getByLabelText(/^Tenant/));
+    expect(document.getElementById('tenant-select')).not.toBeNull();
+    expect(document.getElementById('tenant')).not.toBe(document.getElementById('tenant-select'));
+  });
+
+  it('filters options by typeahead input', async () => {
+    const { user } = renderSelect({
+      tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
+    });
+
+    const toggle = screen.getByLabelText(/^Tenant/);
+    await user.click(toggle);
+    const input = screen.getByRole('combobox');
+    await user.clear(input);
+    await user.type(input, 'glob');
+
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: 'globex' })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('option', { name: 'acme' })).not.toBeInTheDocument();
   });
 });

@@ -5,9 +5,10 @@ import { describe, expect, it } from 'vitest';
 import {
   ComputeInstance,
   ComputeInstanceCatalogItemReferenceSchema,
+  ComputeInstanceState,
   ComputeInstanceTemplateReferenceSchema,
   InstanceTypeReferenceSchema,
-  SecretLocalReferenceSchema,
+  SecretReferenceSchema,
   StorageTierReferenceSchema,
 } from '@osac/types';
 
@@ -40,14 +41,14 @@ const catalogVm: ComputeInstance = {
       id: 'catalog-rhel-9',
       name: 'RHEL 9 catalog',
     }),
-    sshKey: create(SecretLocalReferenceSchema, { name: 'tenant-ssh-key' }),
+    sshKey: create(SecretReferenceSchema, { name: 'tenant-ssh-key' }),
     instanceType: create(InstanceTypeReferenceSchema, { id: 'standard-4-8' }),
     bootDisk: {
       $typeName: 'osac.public.v1.ComputeInstanceDisk',
       sizeGib: 40,
       storageTier: create(StorageTierReferenceSchema, { name: 'balanced' }),
     },
-    userData: '#cloud-config',
+    //userData: '#cloud-config',
     additionalDisks: {
       $typeName: 'osac.public.v1.ComputeInstanceDiskList',
       items: [],
@@ -123,6 +124,53 @@ describe('VmDetailsCard', () => {
     expect(screen.getByText('Additional disk 2')).toBeInTheDocument();
     expect(screen.getByText('20 GB, legacy-tier')).toBeInTheDocument();
     expect(screen.queryAllByRole('combobox')).toHaveLength(0);
-    expect(screen.queryAllByRole('button')).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Edit instance type' })).toBeInTheDocument();
+  });
+
+  it.each([
+    ComputeInstanceState.RUNNING,
+    ComputeInstanceState.PAUSED,
+    ComputeInstanceState.STOPPED,
+  ])('enables the instance type pencil when the VM is %s', (state) => {
+    renderCard({ ...catalogVm, status: { state } } as ComputeInstance);
+
+    expect(screen.getByRole('button', { name: 'Edit instance type' })).toBeEnabled();
+  });
+
+  it('disables the pencil while the VM is starting', async () => {
+    const { user } = renderCard({
+      ...catalogVm,
+      status: { state: ComputeInstanceState.STARTING },
+    } as ComputeInstance);
+
+    const button = screen.getByRole('button', { name: 'Edit instance type' });
+    expect(button).toBeDisabled();
+    await user.hover(button);
+    expect(
+      await screen.findByText(
+        'The instance type can be changed when the virtual machine is running, paused, or stopped.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('opens the edit instance type modal from the pencil', async () => {
+    const { user } = renderCard({
+      ...catalogVm,
+      status: { state: ComputeInstanceState.RUNNING },
+    } as ComputeInstance);
+
+    await user.click(screen.getByRole('button', { name: 'Edit instance type' }));
+
+    expect(await screen.findByRole('heading', { name: 'Edit instance type' })).toBeInTheDocument();
+  });
+
+  it('explains that a deleting VM cannot be edited', async () => {
+    const { user } = renderCard({
+      ...catalogVm,
+      status: { state: ComputeInstanceState.DELETING },
+    } as ComputeInstance);
+
+    await user.hover(screen.getByRole('button', { name: 'Edit instance type' }));
+    expect(await screen.findByText('This virtual machine is being deleted.')).toBeInTheDocument();
   });
 });

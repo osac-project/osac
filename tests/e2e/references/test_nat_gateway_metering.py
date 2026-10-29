@@ -34,7 +34,12 @@ from tests.e2e.core.metering import (
 )
 from tests.e2e.core.runner import poll_until
 
-pytestmark = pytest.mark.metering
+# NAT gateway provisioning is a fabric-level operation: fulfillment rejects
+# the create on any NetworkClass without a fabric manager, and the k8s-only
+# VMaaS environments (staging, vmaas-ci) have none. Gate on requires_bmaas
+# like the other NAT gateway reference tests so the journey runs only where a
+# fabric exists.
+pytestmark = [pytest.mark.metering, pytest.mark.requires_bmaas]
 
 HEARTBEAT_TIMEOUT: int = 300
 
@@ -140,12 +145,13 @@ def test_nat_gateway_bills_allocation(
             "the NATGateway CR was never deleted, so no deletion timestamp was recorded"
         )
 
-        # The billing end is the meter's own last interval end, read once the
-        # heartbeat stream has gone quiet for a full round: the final partial
-        # piece lands in the first round after the fold consumes the deletion,
-        # and reading the end earlier anchors on an intermediate round, making
-        # the final piece read as billing past the anchor.
-        billing_end = metering.wait_for_billing_end(nat_id)
+        # The billing end is the meter's own last interval end, anchored on the
+        # recorded deletion: a round skips its tick while the fold lags the
+        # event topic, so the final partial piece can land several round
+        # intervals after the deletion, and reading the end before the piece
+        # lands anchors on an intermediate round, making the piece read as
+        # billing past the anchor.
+        billing_end = metering.wait_for_billing_end(nat_id, deletion=deletion_recorded)
 
         # The billed life is exact: the heartbeats collapse into contiguous net
         # intervals, each billing exactly one second per second, and the last

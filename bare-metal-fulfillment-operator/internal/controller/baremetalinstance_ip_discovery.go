@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -246,7 +247,7 @@ func (r *BareMetalInstanceReconciler) applyIPDiscoveryResults(
 
 // buildSubnetMACMap maps each attachment's SubnetRef to the MAC address of its NIC,
 // resolved from the host's interface-name → MAC mapping. When an attachment has no
-// Interface set and the host exposes exactly one interface, that MAC is used (the
+// Interface set and the host exposes exactly one distinct MAC, that MAC is used (the
 // single-NIC case). Attachments whose MAC cannot be resolved are omitted, so the role
 // falls back to name-based matching for them.
 func buildSubnetMACMap(
@@ -254,18 +255,31 @@ func buildSubnetMACMap(
 	ifaceMACs map[string]string,
 ) map[string]string {
 	subnetMACs := make(map[string]string)
+	onlyMAC := singleInterfaceMAC(ifaceMACs)
 	for _, na := range attachments {
 		mac := ifaceMACs[na.Interface]
-		if mac == "" && na.Interface == "" && len(ifaceMACs) == 1 {
-			for _, only := range ifaceMACs {
-				mac = only
-			}
+		if mac == "" && na.Interface == "" {
+			mac = onlyMAC
 		}
 		if mac != "" {
 			subnetMACs[na.SubnetRef] = mac
 		}
 	}
 	return subnetMACs
+}
+
+func singleInterfaceMAC(ifaceMACs map[string]string) string {
+	var onlyMAC string
+	for _, mac := range ifaceMACs {
+		if mac == "" {
+			continue
+		}
+		if onlyMAC != "" && !strings.EqualFold(onlyMAC, mac) {
+			return ""
+		}
+		onlyMAC = mac
+	}
+	return onlyMAC
 }
 
 // initNetworkAttachmentStatuses ensures statuses exist for all attachments and syncs

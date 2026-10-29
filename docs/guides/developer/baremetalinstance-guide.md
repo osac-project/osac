@@ -46,12 +46,24 @@ updated.
 
 ## 2. Register and discover the DiskImage
 
-BareMetalInstanceType CPU architecture accepts exactly `amd64`, `arm64`, and
-`s390x`; aliases such as `x86_64` and `aarch64` are rejected.
+`BareMetalCPUSpec.architecture` (`spec.hardware.cpu.architecture`) is a string
+accepting exactly `amd64`, `arm64`, and `s390x`. Aliases, uppercase, and
+surrounding whitespace are rejected. A Cloud Provider Admin can create a type
+with labels matching the provider's inventory:
+
+```bash
+osac create baremetalinstancetype --name standard-amd64 \
+  --cpu-cores 4 --cpu-architecture amd64 --memory-total-gb 16 \
+  --cpu-threads-per-core 1 --network-port data-0:fabric:Ethernet:10Gbps \
+  --host-label hardware=standard
+```
 
 Create a named OSAC DiskImage. The CLI defaults `--source-type` to `registry`
 and `--guest-os-family` to `linux`; `--architecture` is required and may be
-repeated for a multi-architecture artifact.
+repeated for a multi-architecture artifact. These flags accept canonical names
+case-insensitively. `DiskImageSpec.architecture` is an enum list: raw JSON/YAML
+uses `ARCHITECTURE_AMD64`, `ARCHITECTURE_ARM64`, or `ARCHITECTURE_S390X`
+(protobuf values 1, 2, 3); human-readable architecture labels are lowercase.
 
 ```bash
 osac create diskimage \
@@ -78,7 +90,9 @@ A BareMetalInstance must have an effective `spec.disk_image`. Set it with
 not be sent. `disk_image` is immutable after creation.
 
 Use `--disk-image` with a DiskImage name or ID. The command requires a
-CatalogItem; it has no `--image` or `--image-source-type` flags.
+CatalogItem; it has no `--image` or `--image-source-type` flags. For this example,
+`standard-bare-metal` must select an `amd64` type and permit caller-selected
+images. If the image is locked, omit `--disk-image`, even for the same image.
 
 ```bash
 osac create baremetalinstance \
@@ -92,7 +106,8 @@ osac create baremetalinstance \
 
 OSAC resolves the DiskImage reference before creating the instance. The
 following outcomes apply to direct selections and to an effective CatalogItem
-default:
+default. Reference visibility and image lifecycle checks precede architecture
+comparison:
 
 | Situation | Result |
 |---|---|
@@ -104,30 +119,31 @@ default:
 | Delete is requested for a DiskImage still referenced by a BMI or CatalogItem | `FailedPrecondition`; the deletion is blocked |
 
 Deprecated-image warning details are available in the gRPC Create response.
-The REST Create endpoint returns only the BareMetalInstance object, and the
-CLI displays a success message without showing warning details. Warnings
+The CLI prints them to stderr as `Warning: ...`; the REST Create endpoint
+returns only the BareMetalInstance object and omits warnings. Warnings
 describe accepted input; they do not indicate that OSAC inspected or can
 retrieve the artifact behind `source_ref`.
 
-A DiskImage cannot be deleted while a BareMetalInstance or BareMetalInstance
-CatalogItem still references it. The deletion request returns
-`FailedPrecondition`; remove or replace dependent objects before retrying it.
-
 ## Architecture compatibility
 
-Create requires the effective instance type's CPU architecture to appear in the
-selected DiskImage's `spec.architecture`, after CatalogItem and template
-defaults. This applies to ID and name references. Mismatches return
-`InvalidArgument` with `INCOMPATIBLE_DISK_IMAGE_ARCHITECTURE`; select a compatible
-image or instance type.
+Creating a BareMetalInstance compares the effective type's CPU architecture
+with the selected DiskImage's entire architecture list after caller, CatalogItem,
+and template selection. A DiskImage that lists multiple CPU architectures is allowed to be used with a type that
+matches any of the listed architectures. CaaS requests through private BareMetalInstance Create
+receive the same check. This compares declarations; it does not establish image
+content correctness, physical inventory compatibility, or VM image compatibility.
 
-DiskImage updates reject removal of an architecture required by an active
-BareMetalInstance or a concrete CatalogItem type/image combination.
+| Rejected request | Error | Correction |
+|---|---|---|
+| Instance Create or concrete CatalogItem Create/Update selects a mismatched pair | `InvalidArgument`, `INCOMPATIBLE_DISK_IMAGE_ARCHITECTURE` | Select a compatible image or type |
+| DiskImage Update removes an architecture needed by an active instance or concrete CatalogItem pair | `FailedPrecondition`, `DISK_IMAGE_ARCHITECTURE_IN_USE` | Retain the architecture or replace dependent resources |
+| Template Update changes its type incompatibly with an inheriting CatalogItem's image | `FailedPrecondition`, `INCOMPATIBLE_DISK_IMAGE_ARCHITECTURE` | Select a compatible type or replace dependent CatalogItems |
 
-Template instance-type updates return `FailedPrecondition` with
-`INCOMPATIBLE_DISK_IMAGE_ARCHITECTURE` if an active CatalogItem inherits that
-type and its locked or default DiskImage does not support the new architecture.
-Compatible type changes and descriptive template edits remain supported.
+Dependency checks include non-deleted catalogs across tenants including unpublished
+CatalogItems.
+
+BareMetalInstanceType hardware and existing instance type/image/template selections
+are immutable: replace the resource to change them.
 
 ## CatalogItem defaults
 

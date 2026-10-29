@@ -8,6 +8,10 @@ import { StorageProtocol, StorageTierSchema, StorageTierState } from '@osac/type
 
 import { type ResourceSelectValue, emptyResourceSelectValue } from './resourceSelectValue';
 import { StorageTierSelectField } from './StorageTierSelectField';
+import {
+  expectResourceSelectDisabled,
+  getResourceSelectCombobox,
+} from '../../test-utils/resourceSelect';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const makeTier = (
@@ -69,7 +73,7 @@ describe('StorageTierSelectField', () => {
         '{"id":"id-bulk","name":"bulk"}',
       );
     });
-    expect(toggle).toHaveTextContent('bulk');
+    expect(getResourceSelectCombobox(/^Storage tier/)).toHaveValue('bulk');
   });
 
   it('lists only active tiers', async () => {
@@ -177,7 +181,7 @@ describe('StorageTierSelectField', () => {
 
     expect(await screen.findByText('No storage tiers available')).toBeInTheDocument();
     expect(screen.getByText('Contact your administrator.')).toBeInTheDocument();
-    expect(screen.getByLabelText(/^Storage tier/)).toBeDisabled();
+    expectResourceSelectDisabled(/^Storage tier/);
   });
 
   it('shows a load error while preserving other form state', async () => {
@@ -192,7 +196,7 @@ describe('StorageTierSelectField', () => {
     expect(await screen.findByText('Failed to load storage tiers')).toBeInTheDocument();
     expect(screen.getByText('boom')).toBeInTheDocument();
     expect(screen.getByText('keep-me', { selector: '[data-other]' })).toBeInTheDocument();
-    expect(screen.getByLabelText(/^Storage tier/)).toBeDisabled();
+    expectResourceSelectDisabled(/^Storage tier/);
   });
 
   it('does not show a lock badge by default', async () => {
@@ -212,9 +216,9 @@ describe('StorageTierSelectField', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Storage tier/)).toHaveTextContent('fast');
+      expect(getResourceSelectCombobox(/^Storage tier/)).toHaveValue('fast');
     });
     expect(screen.getByText('Locked by catalog')).toBeInTheDocument();
-    expect(screen.getByLabelText(/^Storage tier/)).toBeDisabled();
+    expectResourceSelectDisabled(/^Storage tier/);
   });
 });

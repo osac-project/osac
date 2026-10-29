@@ -374,7 +374,7 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	}
 	// The resolved creation reference is the initial observed baseline until
 	// HyperShift reports the installed versions.
-	candidate.GetStatus().SetObservedCpVersion(clusterVersion.GetSpec().GetVersion())
+	candidate.GetStatus().SetObservedVersion(clusterVersion.GetSpec().GetVersion())
 	nodeSetStatus := make(map[string]*privatev1.ClusterNodeSet, len(spec.GetNodeSets()))
 	for name := range spec.GetNodeSets() {
 		status := &privatev1.ClusterNodeSet{}
@@ -406,6 +406,8 @@ func (s *PrivateClustersServer) resolveCreationSource(ctx context.Context,
 		"template", grpccodes.InvalidArgument)
 }
 
+// Update validates a partial cluster update and merges accepted
+// upgrade feedback.
 func (s *PrivateClustersServer) Update(ctx context.Context,
 	request *privatev1.ClustersUpdateRequest) (response *privatev1.ClustersUpdateResponse, err error) {
 	if err = s.validateNoDuplicateConditions(request.GetObject()); err != nil {
@@ -419,7 +421,8 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 	if err = s.validateClusterUpdateRequest(ctx, request); err != nil {
 		return
 	}
-	// Upgrade-history updates contain only the changed state, time, and attempt ID.
+	// Upgrade-history updates identify the attempt and component, then supply its
+	// changed state and transition time.
 	// Merge the stored audit fields before validating the completed candidate.
 	err = s.generic.updateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context,
 		current, candidate *privatev1.Cluster) error {

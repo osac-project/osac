@@ -121,6 +121,9 @@ const (
 	envClusterControlPlaneStartingStallThreshold    = "OSAC_CLUSTER_CONTROL_PLANE_STARTING_STALL_THRESHOLD"
 	envClusterWorkersJoiningStallThreshold          = "OSAC_CLUSTER_WORKERS_JOINING_STALL_THRESHOLD"
 	envClusterWorkersJoiningStallThresholdOverrides = "OSAC_CLUSTER_WORKERS_JOINING_STALL_THRESHOLD_OVERRIDES"
+	envClusterUpgradePendingTimeout                 = "OSAC_CLUSTER_UPGRADE_PENDING_TIMEOUT"
+	envClusterUpgradeControlPlaneTimeout            = "OSAC_CLUSTER_UPGRADE_CONTROL_PLANE_TIMEOUT"
+	envClusterUpgradeNodePoolPerNodeTimeout         = "OSAC_CLUSTER_UPGRADE_NODE_POOL_PER_NODE_TIMEOUT"
 	envEnableFulfillmentTrust                       = "OSAC_ENABLE_FULFILLMENT_TRUST_RECONCILER"
 	envFulfillmentTrustTenantNamespace              = "OSAC_FULFILLMENT_TRUST_TENANT_NAMESPACE"
 
@@ -461,7 +464,10 @@ func setupClusterControllers(
 			}
 			return controller.NewFeedbackReconciler(
 				localMgr.GetClient(), grpcConn,
-				os.Getenv(envClusterOrderNamespace),
+				controller.FeedbackReconcilerConfig{
+					ClusterOrderNamespace: os.Getenv(envClusterOrderNamespace),
+					UpgradeTimeouts:       clusterUpgradeTimeoutsFromEnv(),
+				},
 			).SetupWithManager(mgr)
 		},
 		func(provider provisioning.ProvisioningProvider, pollInterval time.Duration) error {
@@ -526,6 +532,21 @@ func clusterOrderStallThresholdsFromEnv() controller.ClusterOrderStallThresholds
 		thresholds.WorkersJoiningByInstanceType[instanceType] = duration
 	}
 	return thresholds
+}
+
+// clusterUpgradeTimeoutsFromEnv reads positive upgrade timeout overrides from
+// the environment and retains deployment defaults for invalid values.
+func clusterUpgradeTimeoutsFromEnv() controller.ClusterUpgradeTimeouts {
+	timeouts := controller.DefaultClusterUpgradeTimeouts()
+	positive := func(value time.Duration) bool { return value > 0 }
+	timeouts.Pending = helpers.GetEnvWithDefault(envClusterUpgradePendingTimeout, timeouts.Pending, positive)
+	timeouts.ControlPlane = helpers.GetEnvWithDefault(
+		envClusterUpgradeControlPlaneTimeout, timeouts.ControlPlane, positive,
+	)
+	timeouts.NodePoolPerNode = helpers.GetEnvWithDefault(
+		envClusterUpgradeNodePoolPerNodeTimeout, timeouts.NodePoolPerNode, positive,
+	)
+	return timeouts
 }
 
 // setupComputeInstanceControllers registers the ComputeInstance controller and, when grpcConn is set,

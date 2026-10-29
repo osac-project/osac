@@ -18,6 +18,7 @@
 import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
+import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_public_v1_metadata_type } from "./metadata_type_pb";
 import type { StorageProtocol } from "./storage_common_type_pb";
@@ -28,7 +29,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/storage_tier_type.proto.
  */
 export const file_osac_public_v1_storage_tier_type: GenFile = /*@__PURE__*/
-  fileDesc("CiZvc2FjL3B1YmxpYy92MS9zdG9yYWdlX3RpZXJfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEipwEKC1N0b3JhZ2VUaWVyEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESLQoEc3BlYxgDIAEoCzIfLm9zYWMucHVibGljLnYxLlN0b3JhZ2VUaWVyU3BlYxIxCgZzdGF0dXMYBCABKAsyIS5vc2FjLnB1YmxpYy52MS5TdG9yYWdlVGllclN0YXR1cyJlCg9TdG9yYWdlVGllclNwZWMSEwoLZGVzY3JpcHRpb24YASABKAkSPQoIcHJvdG9jb2wYAiABKA4yHy5vc2FjLnB1YmxpYy52MS5TdG9yYWdlUHJvdG9jb2xCCrpIB4IBBBABIAAiZgoRU3RvcmFnZVRpZXJTdGF0dXMSLwoFc3RhdGUYASABKA4yIC5vc2FjLnB1YmxpYy52MS5TdG9yYWdlVGllclN0YXRlEhQKB21lc3NhZ2UYAiABKAlIAIgBAUIKCghfbWVzc2FnZSpVChBTdG9yYWdlVGllclN0YXRlEiIKHlNUT1JBR0VfVElFUl9TVEFURV9VTlNQRUNJRklFRBAAEh0KGVNUT1JBR0VfVElFUl9TVEFURV9BQ1RJVkUQAWIGcHJvdG8z", [file_buf_validate_validate, file_osac_public_v1_metadata_type, file_osac_public_v1_storage_common_type]);
+  fileDesc("CiZvc2FjL3B1YmxpYy92MS9zdG9yYWdlX3RpZXJfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEirQEKC1N0b3JhZ2VUaWVyEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESLQoEc3BlYxgDIAEoCzIfLm9zYWMucHVibGljLnYxLlN0b3JhZ2VUaWVyU3BlYxI3CgZzdGF0dXMYBCABKAsyIS5vc2FjLnB1YmxpYy52MS5TdG9yYWdlVGllclN0YXR1c0IE4kEBAyJlCg9TdG9yYWdlVGllclNwZWMSEwoLZGVzY3JpcHRpb24YASABKAkSPQoIcHJvdG9jb2wYAiABKA4yHy5vc2FjLnB1YmxpYy52MS5TdG9yYWdlUHJvdG9jb2xCCrpIB4IBBBABIAAiZgoRU3RvcmFnZVRpZXJTdGF0dXMSLwoFc3RhdGUYASABKA4yIC5vc2FjLnB1YmxpYy52MS5TdG9yYWdlVGllclN0YXRlEhQKB21lc3NhZ2UYAiABKAlIAIgBAUIKCghfbWVzc2FnZSpVChBTdG9yYWdlVGllclN0YXRlEiIKHlNUT1JBR0VfVElFUl9TVEFURV9VTlNQRUNJRklFRBAAEh0KGVNUT1JBR0VfVElFUl9TVEFURV9BQ1RJVkUQAWIGcHJvdG8z", [file_buf_validate_validate, file_google_api_field_behavior, file_osac_public_v1_metadata_type, file_osac_public_v1_storage_common_type]);
 
 /**
  * Describes a class of storage service that can be referenced by name when provisioning

@@ -17,6 +17,10 @@ import {
 import type { NetworkAttachmentFormFields } from './networkAttachments';
 import NetworkFields from './NetworkFields';
 import { type ProvisioningFieldValue, provisioningFieldValue } from './provisioningFieldValue';
+import {
+  expectResourceSelectDisabled,
+  getResourceSelectCombobox,
+} from '../../../test-utils/resourceSelect';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 import { emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 
@@ -118,8 +122,8 @@ describe('NetworkAttachmentFields', () => {
     renderFields(emptyTestValues(false), true);
 
     expect(screen.getByRole('checkbox', { name: 'Use tenant default network' })).toBeDisabled();
-    expect(screen.getByLabelText(/^Virtual network/)).toBeDisabled();
-    expect(screen.getByLabelText(/^Subnet/)).toBeDisabled();
+    expectResourceSelectDisabled(/^Virtual network/);
+    expectResourceSelectDisabled(/^Subnet/);
     expect(screen.getByLabelText(/^Security groups/).closest('.pf-v6-c-menu-toggle')).toHaveClass(
       'pf-m-disabled',
     );
@@ -197,9 +201,9 @@ describe('NetworkAttachmentFields', () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByLabelText(/^Virtual network/)).toHaveTextContent('vn-prod'),
+      expect(getResourceSelectCombobox(/^Virtual network/)).toHaveValue('vn-prod'),
     );
-    await waitFor(() => expect(screen.getByLabelText(/^Subnet/)).toHaveTextContent('subnet-a'));
+    await waitFor(() => expect(getResourceSelectCombobox(/^Subnet/)).toHaveValue('subnet-a'));
   });
 
   it('shows a load error with retry when catalog subnet lookup fails', async () => {

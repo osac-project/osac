@@ -1,5 +1,6 @@
 import { test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
@@ -316,6 +317,10 @@ const storageTierTestRunId = requiredString(
   process.env.OSAC_STORAGE_TIER_TEST_RUN_ID,
   'OSAC_STORAGE_TIER_TEST_RUN_ID',
 );
+const catalogTestRunId = requiredString(
+  process.env.OSAC_CATALOG_TEST_RUN_ID,
+  'OSAC_CATALOG_TEST_RUN_ID',
+);
 const diskImageTestName = rawDiskImage.name
   ? `${rawDiskImage.name}-${diskImageTestRunId}`
   : undefined;
@@ -390,6 +395,12 @@ export const catalogTestData: CatalogTestData = {
   type: rawCatalog.type,
   usage: rawCatalog.usage,
 };
+
+const safeCatalogName = (name: string): string =>
+  name.replace(/[^a-zA-Z0-9._-]/g, '_') || 'catalog';
+
+export const catalogOwnershipFilePath = (name: string): string =>
+  path.join(tmpdir(), `osac-catalog-${safeCatalogName(name)}-${catalogTestRunId}.created`);
 
 export const instanceTypeTestData: InstanceTypeTestData = {
   name: rawInstanceType.name ?? '',

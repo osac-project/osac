@@ -23,6 +23,7 @@ _RESOURCE_NOT_FOUND_RE = re.compile(
 _RESOURCE_NOT_FOUND_ALIASES = {
     "clusterorder": {"clusterorders", "clusterorders.osac.openshift.io"},
     "infraenv.agent-install.openshift.io": {"infraenvs.agent-install.openshift.io"},
+    "tenant": {"tenants", "tenants.osac.openshift.io"},
 }
 
 

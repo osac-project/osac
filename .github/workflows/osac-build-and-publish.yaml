@@ -1418,8 +1418,8 @@ jobs:
   # saw "Published" in Slack before create-component-releases/
   # publish-fulfillment-service-binaries/publish-fulfillment-service-proto
   # (all of which need this job and can still fail) had even started.
-  # notify-release below waits for all of those too before announcing
-  # success, so a later failure among them can't contradict an
+  # notify-release below waits for all of those, plus the umbrella release
+  # page, before announcing success, so a later failure can't contradict an
   # already-sent success message.
   # -------------------------------------------------------------------
   tag:
@@ -1758,30 +1758,86 @@ jobs:
       buf-token: ${{ secrets.BUF_TOKEN }}
 
   # -------------------------------------------------------------------
+  # Create the umbrella chart GitHub Release after component release pages,
+  # including the resolved version of every chart published or pinned into
+  # this release. This makes the OSAC platform release the repository's
+  # "latest" stable release unless a higher stable umbrella already exists.
+  # -------------------------------------------------------------------
+  create-umbrella-release:
+    name: Create GitHub Release (OSAC platform chart)
+    needs:
+      - prepare
+      - tag
+      - create-component-releases
+      - publish-fulfillment-service-binaries
+      - publish-fulfillment-service-proto
+    if: |
+      always() && !cancelled() &&
+      inputs.mode == 'release' &&
+      needs.tag.result == 'success' &&
+      contains(fromJSON('["success", "skipped"]'), needs.create-component-releases.result) &&
+      contains(fromJSON('["success", "skipped"]'), needs.publish-fulfillment-service-binaries.result) &&
+      contains(fromJSON('["success", "skipped"]'), needs.publish-fulfillment-service-proto.result)
+    concurrency:
+      group: osac-umbrella-recommendation
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      COMPONENT_VERSIONS: ${{ needs.prepare.outputs.component-versions }}
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+    - name: Checkout release automation
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        persist-credentials: false
+
+    - uses: ./.github/actions/setup-python
+
+    - name: Download published umbrella package
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+      with:
+        name: nightly-${{ env.VERSION }}
+        path: umbrella-artifacts
+
+    - name: Create or update umbrella chart release
+      env:
+        PACKAGE: umbrella-artifacts/osac-installer/osac-${{ env.VERSION }}.tgz
+      run: |
+        set -euo pipefail
+        uv run --no-project --with pyyaml==6.0.3 python .github/scripts/umbrella_release.py
+
+  # -------------------------------------------------------------------
   # Notify release success — the one and only "this run is genuinely
   # done and everything published" signal, deliberately separate from
   # tag above. Waits on create-component-releases/publish-fulfillment-
-  # service-binaries/publish-fulfillment-service-proto in addition to
-  # tag itself (each tolerated as success OR skipped: skipped is the
-  # normal outcome in nightly mode, or in a release that isn't bumping
-  # fulfillment-service/any of the 5 GitHub-Release-eligible components)
-  # so a failure in any of them is never contradicted by an
-  # already-sent "Published" message -- confirmed live: before this
+  # service-binaries/publish-fulfillment-service-proto and the umbrella
+  # chart release in addition to tag itself (release-only work is tolerated
+  # as skipped when it doesn't apply) so a failure is never contradicted by
+  # an already-sent "Published" message -- confirmed live: before this
   # job existed, tag-and-notify posted success immediately after
   # tagging, so a subsequent publish-proto failure produced both a green
   # success and a red failure message in Slack for the same run.
   # -------------------------------------------------------------------
   notify-release:
     name: Notify release success
-    needs: [prepare, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto]
+    needs: [prepare, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto, create-umbrella-release]
     runs-on: osac-ci
     timeout-minutes: 10
     if: |
-      always() &&
+      always() && !cancelled() &&
       needs.tag.result == 'success' &&
       contains(fromJSON('["success", "skipped"]'), needs.create-component-releases.result) &&
       contains(fromJSON('["success", "skipped"]'), needs.publish-fulfillment-service-binaries.result) &&
-      contains(fromJSON('["success", "skipped"]'), needs.publish-fulfillment-service-proto.result)
+      contains(fromJSON('["success", "skipped"]'), needs.publish-fulfillment-service-proto.result) &&
+      (needs.create-umbrella-release.result == 'success' ||
+       (inputs.mode == 'nightly' && needs.create-umbrella-release.result == 'skipped'))
     permissions:
       # Look up the package version URL for the Slack notification
       packages: read
@@ -1894,10 +1950,10 @@ jobs:
   # -------------------------------------------------------------------
   notify-failure:
     name: Notify failure
-    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, promote-and-publish, publish-umbrella, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto, notify-release]
+    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, promote-and-publish, publish-umbrella, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto, create-umbrella-release, notify-release]
     runs-on: osac-ci
     timeout-minutes: 10
-    if: failure()
+    if: failure() && !cancelled()
     permissions:
       # Only needed for the checkout step below (resolves the local
       # vault-slack-webhook composite action) -- least privilege.

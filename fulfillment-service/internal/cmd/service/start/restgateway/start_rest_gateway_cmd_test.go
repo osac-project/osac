@@ -72,15 +72,18 @@ var vmaasHandlers = []string{
 	"public/v1.RegisterComputeInstanceTemplatesHandler",
 	"public/v1.RegisterComputeInstanceCatalogItemsHandler",
 	"public/v1.RegisterComputeInstancesHandler",
-	"public/v1.RegisterDiskImagesHandler",
 	"public/v1.RegisterConsoleSessionsHandler",
 	"public/v1.RegisterInstanceTypesHandler",
 	"private/v1.RegisterComputeInstanceTemplatesHandler",
 	"private/v1.RegisterComputeInstanceCatalogItemsHandler",
 	"private/v1.RegisterComputeInstancesHandler",
-	"private/v1.RegisterDiskImagesHandler",
 	"private/v1.RegisterInstanceTypesHandler",
 	"private/v1.RegisterVolumesHandler",
+}
+
+var diskImagesHandlers = []string{
+	"public/v1.RegisterDiskImagesHandler",
+	"private/v1.RegisterDiskImagesHandler",
 }
 
 var bmaasHandlers = []string{
@@ -128,13 +131,14 @@ var sharedHandlers = []string{
 }
 
 var _ = Describe("buildHandlerList", func() {
-	It("always registers all CaaS, VMaaS, BMaaS, and shared handlers", func() {
+	It("always registers all tier, DiskImages, and shared handlers", func() {
 		handlers := buildHandlerList()
 		names := handlerNames(handlers)
 
 		Expect(containsAll(names, caasHandlers)).To(BeEmpty(), "missing CaaS handlers")
 		Expect(containsAll(names, vmaasHandlers)).To(BeEmpty(), "missing VMaaS handlers")
 		Expect(containsAll(names, bmaasHandlers)).To(BeEmpty(), "missing BMaaS handlers")
+		Expect(containsAll(names, diskImagesHandlers)).To(BeEmpty(), "missing DiskImages handlers")
 		Expect(containsAll(names, sharedHandlers)).To(BeEmpty(), "missing shared handlers")
 	})
 })

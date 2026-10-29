@@ -7,6 +7,7 @@ import { ExternalIPAttachmentsCreateResponseSchema, ExternalIPState } from '@osa
 
 import AttachExternalIpModal from './AttachExternalIpModal';
 import type { MockTransportOverrides } from '../../../test-utils/createMockConnectTransport';
+import { getResourceSelectCombobox } from '../../../test-utils/resourceSelect';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
 const vm = { id: 'vm-1', metadata: { name: 'test-vm', project: 'project-a' } } as ComputeInstance;
@@ -50,7 +51,7 @@ describe('AttachExternalIpModal', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^External IP/)).toHaveTextContent('edge-ip');
+      expect(getResourceSelectCombobox(/^External IP/)).toHaveValue('edge-ip');
     });
     await user.click(screen.getByRole('button', { name: /^Attach$/ }));
 

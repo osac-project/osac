@@ -47,12 +47,26 @@ const buildUpdateRequest = <Input extends DescMessage, Output extends DescMessag
     throw new Error(`${service.typeName}.update request is missing its resource object`);
   }
 
+  const explicitPaths = explicitUpdateMaskPaths(requestRecord.updateMask);
+
   return {
     ...request,
     updateMask: {
-      paths: buildUpdateMaskPaths(requestRecord.object, { schema: objectField.message }),
+      paths:
+        explicitPaths ??
+        buildUpdateMaskPaths(requestRecord.object, { schema: objectField.message }),
     },
   };
+};
+
+const explicitUpdateMaskPaths = (updateMask: unknown): string[] | undefined => {
+  if (!isRecord(updateMask) || !Array.isArray(updateMask.paths)) {
+    return undefined;
+  }
+  const paths = updateMask.paths.filter(
+    (path): path is string => typeof path === 'string' && path.length > 0,
+  );
+  return paths.length > 0 ? paths : undefined;
 };
 
 export const useListResource = <

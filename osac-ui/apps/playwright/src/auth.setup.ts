@@ -3,10 +3,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { AUTH_FILE } from './auth-file';
-import { openAndLoginWithEnvironment } from '../../../libs/test-utils/src/general/open_and_login';
+import { openAndLogin } from '../../../libs/test-utils/src/general/open_and_login';
 
 setup('authenticate', async ({ page }) => {
-  await openAndLoginWithEnvironment(page, '/');
+  await openAndLogin(
+    page,
+    '/',
+    process.env.OSAC_ADMIN_USERNAME ?? '',
+    process.env.OSAC_ADMIN_PASSWORD ?? '',
+    'admin',
+  );
 
   // Harden the .auth directory before storageState writes into it — AUTH_FILE
   // holds a live, real Keycloak session cookie, and creating the dir with

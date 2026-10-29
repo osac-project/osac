@@ -23,7 +23,9 @@ COPY --chown=1001:1001 osac-ui/proxy/go.mod osac-ui/proxy/go.sum osac-ui/proxy/
 # (GOPROXY/GOFLAGS pointed at the prefetched module cache) when present --
 # i.e. a hermetic Konflux build. Absent entirely for local/non-hermetic
 # builds, where go mod download falls back to the real network as before.
-RUN cd osac-csi-driver && { [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; GODEBUG=http2client=0 go mod download; }
+# Share module downloads and checksum database state across component builds.
+RUN --mount=type=cache,id=osac-go-pkg,target=/opt/app-root/src/go/pkg,uid=1001,gid=0 \
+    cd osac-csi-driver && { [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; GODEBUG=http2client=0 go mod download; }
 
 COPY --chown=1001:1001 proto/ proto/
 COPY --chown=1001:1001 osac-csi-driver/ osac-csi-driver/
@@ -31,7 +33,9 @@ COPY --chown=1001:1001 osac-csi-driver/ osac-csi-driver/
 WORKDIR /opt/app-root/src/osac-csi-driver
 ARG VERSION=0.1.0
 ARG GIT_COMMIT=unknown
-RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; \
+RUN --mount=type=cache,id=osac-go-pkg,target=/opt/app-root/src/go/pkg,uid=1001,gid=0 \
+    --mount=type=cache,id=osac-go-build,target=/opt/app-root/src/.cache/go-build,uid=1001,gid=0 \
+    [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -buildvcs=false -ldflags "-X main.version=${VERSION} -X main.gitCommit=${GIT_COMMIT}" \
     -o osac-csi-driver ./cmd/osac-csi-driver

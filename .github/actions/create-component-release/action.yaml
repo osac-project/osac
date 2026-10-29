@@ -48,11 +48,19 @@ runs:
         REPO: ${{ github.repository }}
       run: |
         set -euo pipefail
-        gh release create "${TAG}" \
+        RELEASES=$(gh api --paginate --slurp "repos/${REPO}/releases?per_page=100")
+        EXISTS=$(jq -r --arg tag "${TAG}" 'any(.[][]; .tag_name == $tag)' <<<"${RELEASES}")
+        OPERATION=create
+        NOTES_ARGS=(--generate-notes)
+        if [[ "${EXISTS}" == "true" ]]; then
+          OPERATION=edit
+          NOTES_ARGS=()
+        fi
+        PRERELEASE=false
+        [[ "${VERSION%%+*}" != *-* ]] || PRERELEASE=true
+        gh release "${OPERATION}" "${TAG}" \
           --repo "${REPO}" \
           --title "${COMPONENT} ${VERSION}" \
-          --generate-notes \
-          --verify-tag \
-        || gh release edit "${TAG}" \
-          --repo "${REPO}" \
-          --title "${COMPONENT} ${VERSION}"
+          --latest=false \
+          --prerelease="${PRERELEASE}" \
+          --verify-tag "${NOTES_ARGS[@]}"

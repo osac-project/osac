@@ -1,16 +1,19 @@
 import { useParams } from 'react-router-dom';
 
+import { ComputeInstances } from '@osac/types';
+
 import VmDetails from './DetailsPage/VmDetails';
 import { getVmDetailTabLabels } from './vm-detail-tabs';
-import { useComputeInstance } from '../../api/v1/compute-instance';
+import { useGetResource } from '../../api/use-resource';
 import { useTranslation } from '../../hooks/useTranslation';
 import { ResourceDetailsPageError } from '../Resource/ResourceDetailsPageError';
 import { ResourceDetailsPageLoading } from '../Resource/ResourceDetailsPageLoading';
 
 export const VmDetailsPage = () => {
   const { t } = useTranslation();
-  const { id } = useParams() as { id: string };
-  const { data: vm, isLoading, isError, error, refetch } = useComputeInstance(id);
+  const { id = '' } = useParams() as { id: string };
+  const { data, isLoading, isError, error, refetch } = useGetResource(ComputeInstances, { id });
+  const vm = data?.object;
 
   if (isLoading) {
     return (

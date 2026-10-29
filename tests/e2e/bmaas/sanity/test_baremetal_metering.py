@@ -41,22 +41,10 @@ pytestmark = [pytest.mark.sanity, pytest.mark.metering]
 HEARTBEAT_TIMEOUT: int = 600
 
 
-def _typed_heartbeats(metering: MeteringCollector, bmi_id: str, meter: str) -> list[dict[str, Any]]:
-    """The heartbeats of one meter that carry the instance_type dimension."""
-    typed = [
-        event
-        for event in metering.get_all_events(HEARTBEAT_TYPE, bmi_id)
-        if event.get("data", {}).get("meter") == meter
-        and event.get("data", {}).get("billing_dimensions", {}).get("instance_type")
-    ]
-    typed.sort(key=lambda event: event["data"]["usage"]["from"])
-    return typed
-
-
 def _wait_for_meter(metering: MeteringCollector, bmi_id: str, meter: str, instance_type: str) -> dict[str, Any]:
     """Return the first heartbeat of the meter carrying the instance type."""
     return poll_until(
-        fn=lambda: _typed_heartbeats(metering, bmi_id, meter),
+        fn=lambda: metering.typed_heartbeats(bmi_id, meter=meter, dimension="instance_type"),
         until=lambda events: len(events) > 0,
         retries=HEARTBEAT_TIMEOUT // 10,
         delay=10,
@@ -123,13 +111,15 @@ def test_baremetal_instance_bills_allocation_and_consumption(
         # Wait for a second heartbeat of each meter, then pin the arithmetic.
         for meter in ("allocation", "consumption"):
             poll_until(
-                fn=lambda meter=meter: len(_typed_heartbeats(metering, bmi_id, meter)),
+                fn=lambda meter=meter: len(metering.typed_heartbeats(bmi_id, meter=meter, dimension="instance_type")),
                 until=lambda count: count >= 2,
                 retries=HEARTBEAT_TIMEOUT // 10,
                 delay=10,
                 description=f"two typed {meter} heartbeats of {bmi_id}",
             )
-            _assert_contiguous_exact_seconds(_typed_heartbeats(metering, bmi_id, meter), meter)
+            _assert_contiguous_exact_seconds(
+                metering.typed_heartbeats(bmi_id, meter=meter, dimension="instance_type"), meter
+            )
 
         # Allocation bills from the moment the host was confirmed, which is at or
         # before the moment the instance started running: the allocation meter's
@@ -148,18 +138,19 @@ def test_baremetal_instance_bills_allocation_and_consumption(
     assert deletion_recorded is not None, "the instance's CR was never deleted, so no deletion timestamp was recorded"
 
     # The billing end is the meter's own last interval end across both meters,
-    # read once the heartbeat stream has gone quiet for a full round: the final
-    # partial pieces land in the first round after the fold consumes the
-    # deletion, and reading the end earlier anchors on an intermediate round,
-    # making the final piece read as billing past the anchor.
-    billing_end = metering.wait_for_billing_end(bmi_id)
+    # anchored on the recorded deletion: a round skips its tick while the fold
+    # lags the event topic, so the final partial pieces can land several round
+    # intervals after the deletion, and reading the end before they land
+    # anchors on an intermediate round, making the pieces read as billing past
+    # the anchor.
+    billing_end = metering.wait_for_billing_end(bmi_id, deletion=deletion_recorded)
 
     # Each meter ends at or after the recorded deletion: its final partial
     # interval is billed, not dropped, and its typed heartbeats collapse into
     # contiguous net intervals billing exactly one second per second.
     for meter in ("allocation", "consumption"):
         assert_exact_contiguous_life(
-            _typed_heartbeats(metering, bmi_id, meter),
+            metering.typed_heartbeats(bmi_id, meter=meter, dimension="instance_type"),
             multiplier=Decimal(1),
             deletion=deletion_recorded,
             label=f"typed {meter} heartbeats of {bmi_id}",

@@ -26,6 +26,12 @@ pnpm install
 FULFILLMENT_API_URL=https://... pnpm dev  # Go proxy + Vite on :5173
 ```
 
+For fulfillment APIs with authenticated gRPC reflection, log in with `oc`.
+`pnpm dev` reads the missing OIDC issuer and service client credentials from
+the ConfigMap and Secret in the `osac` project by default. Set
+`OSAC_UI_NAMESPACE="other_ns"` to use another project. See
+[README.md](README.md#quick-start).
+
 **Key commands**:
 - `pnpm run typecheck` — `tsc --noEmit` in every package (including `*.test.ts` / `*.test.tsx`); **separate CI job** from lint and test
 - `pnpm lint` — ESLint + Prettier + i18n sync check (CI fails if out of sync); **does not typecheck**
@@ -58,10 +64,11 @@ Multi-stage build images: `nodejs-22-minimal:9.8`, `go-toolset:1.25`, `ubi-minim
 
 **Go proxy** (proxy/):
 - chi router with OIDC auth + Connect JSON → gRPC bridge
-- Required env: `FULFILLMENT_API_URL` (HTTP URL; proxy derives the gRPC target from it)
+- Required env: `FULFILLMENT_API_URL` (HTTP URL; proxy derives the gRPC target from it).
+  Protected gRPC reflection also needs cluster access or the OIDC issuer and service client credentials.
 - Optional: `OIDC_CLIENT_ID`, `BASE_UI_URL`, TLS CA files, insecure flags (dev only)
 - API path: `/api/fulfillment/*` — Connect protocol (JSON) from the browser, translated to native gRPC upstream via `proxy/bridge/connectjson.go`
-- Development: `cd proxy && nodemon --watch 'proxy/**/*' --exec 'go run' main.go`
+- Development: `pnpm dev:proxy` (loads missing OIDC settings with `oc` when available)
 
 ## Key Workspace Packages
 
@@ -219,7 +226,7 @@ not a CI suite and not something that adds to this repo's persisted test count. 
   `pnpm playwright:run` re-runs just the `scratch/` specs without
   re-authenticating — faster than `pnpm playwright`, which always re-logs in.
 - Use this when asked to verify a UI change actually works in a browser against
-  a real deployment — requires `OSAC_UI_BASE_URL`, `OSAC_USERNAME`, `OSAC_PASSWORD`
+  a real deployment — requires `OSAC_UI_BASE_URL`, `OSAC_ADMIN_USERNAME`, `OSAC_ADMIN_PASSWORD`
   (or `OSAC_UI_BASE_URL=http://localhost:5173` against a local `pnpm dev`
   instance). There is no mock `fulfillment-service`, so this cannot run
   hermetically or in CI.
@@ -360,7 +367,7 @@ Assisted-by: Claude Code <noreply@anthropic.com>
 
 **Development**:
 ```bash
-cd proxy && nodemon --watch 'proxy/**/*' --exec 'go run' main.go
+pnpm dev:proxy
 ```
 
 See README.md for env vars and deployment details.

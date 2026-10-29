@@ -13,3 +13,7 @@ annotation:
 {{ binary }} annotate cluster 123 my-flag=true --type bool
 
 Use the '--help' option to get more details about the command.
+
+Keys in the 'admin.osac.openshift.io' domain and its subdomains are reserved for system use. Use an
+authorized private API session to manage them. Public reads hide these annotations and public writes
+that include a reserved key are rejected.

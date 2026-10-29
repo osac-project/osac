@@ -858,6 +858,8 @@ var _ = Describe("Event publisher", Ordered, func() {
 			pool, err = db.Pool(drainCtx)
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pool.Close)
+			_, err = pool.Exec(drainCtx, "truncate changes")
+			Expect(err).ToNot(HaveOccurred())
 
 			config, err := kafkaBroker.Config()
 			Expect(err).ToNot(HaveOccurred())

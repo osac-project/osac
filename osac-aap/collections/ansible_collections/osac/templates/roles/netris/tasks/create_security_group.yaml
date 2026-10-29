@@ -65,16 +65,21 @@
             they protect, so this task creates no policy object before a
             Subnet binding. Contract 4.10 permits this documented no-op.
   rescue:
+    - name: Build the SecurityGroup validation error
+      ansible.builtin.set_fact:
+        _sg_rescue_message: >-
+          {{ (_sg_plan | default({})).error
+             | default('SecurityGroup snapshot has no usable rules') }}
+
     - name: Publish the sanitized SecurityGroup error
       ansible.builtin.include_tasks: _fail_task.yaml
       vars:
-        _osac_error_message: >-
-          {{ _sg_plan.error | default('SecurityGroup snapshot has no usable rules') }}
+        _osac_error_message: "{{ _sg_rescue_message }}"
         _osac_error_retryable: false
 
     - name: Fail the SecurityGroup task after publishing the error
       ansible.builtin.fail:
-        msg: "{{ _osac_error_message }}"
+        msg: "{{ _sg_rescue_message }}"
 
 - name: Create Netris ACL rules from the legacy CR input
   when: not _osac_contract | default(false) | bool

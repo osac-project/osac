@@ -28,11 +28,19 @@
           - _osac_interface.name | default('') | length > 0
           - subnet.metadata.name | default('') | length > 0
           - _osac_virtual_network.metadata.name | default('') | length > 0
-          - provisioning_vnet | default('') | length > 0
         fail_msg: >-
           A physical attachment delete needs target.host_name, interface.name,
-          the Subnet name, the parent VirtualNetwork and the provisioning
-          V-Net.
+          the Subnet name and the parent VirtualNetwork.
+
+    - name: Require the provisioning network settings
+      ansible.builtin.assert:
+        that:
+          - provisioning_vnet | default('') | length > 0
+          - netris_mgmt_vpc_id | default(0) | int > 0
+        fail_msg: >-
+          Netris setting error: NETRIS_BM_PROVISIONING_VNET and
+          NETRIS_MGMT_VPC_ID must be set. A physical attachment delete needs
+          the provisioning V-Net and the management VPC to scope the port move.
 
     - name: Look up the tenant VPC for the Subnet segment
       ansible.builtin.include_role:

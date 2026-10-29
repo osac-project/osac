@@ -49,15 +49,7 @@
     - name: Emit the typed cluster ingress result
       ansible.builtin.include_tasks: _emit_result.yaml
   rescue:
-    - name: Publish the sanitized reservation error
-      ansible.builtin.include_tasks: _fail_task.yaml
+    - name: Publish the sanitized cluster ingress reservation error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
       vars:
-        _osac_error_message: >-
-          {{ ansible_failed_result.msg
-             | default('The Netris cluster ingress reservation failed') }}
-        _osac_error_retryable: >-
-          {{ ansible_failed_result.retryable | default(true) }}
-
-    - name: Fail the reservation after publishing the error
-      ansible.builtin.fail:
-        msg: "{{ _osac_error_message }}"
+        _osac_error_label: cluster ingress reservation

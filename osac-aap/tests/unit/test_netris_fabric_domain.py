@@ -81,10 +81,9 @@ def test_create_publishes_a_sanitized_error() -> None:
     publish = next(
         task
         for task in block["rescue"]
-        if task.get("ansible.builtin.include_tasks") == "_fail_task.yaml"
+        if task.get("ansible.builtin.include_tasks") == "_contract_rescue.yaml"
     )
-    assert "ansible_failed_result.msg" in publish["vars"]["_osac_error_message"]
-    assert publish["vars"]["_osac_error_retryable"]
+    assert publish["vars"]["_osac_error_label"] == "FabricDomain create"
 
 
 def test_delete_scopes_the_lookup_to_the_virtual_network_vpc() -> None:

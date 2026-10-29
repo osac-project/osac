@@ -374,9 +374,6 @@ def test_contract_tasks_publish_a_sanitized_error() -> None:
     publish = next(
         task
         for task in rescue_tasks
-        if task.get("ansible.builtin.include_tasks") == "_fail_task.yaml"
+        if task.get("ansible.builtin.include_tasks") == "_contract_rescue.yaml"
     )
-    message = publish["vars"]["_osac_error_message"]
-    assert "ansible_failed_result.msg" in message
-    assert "ansible_failed_result" not in message.replace("ansible_failed_result.msg", "")
-    assert publish["vars"]["_osac_error_retryable"]
+    assert publish["vars"]["_osac_error_label"] == "ExternalIP reservation"

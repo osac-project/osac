@@ -40,15 +40,7 @@
         ca_path: "{{ netris_ca_path | default(omit, true) }}"
       register: _ci_result
   rescue:
-    - name: Publish the sanitized release error
-      ansible.builtin.include_tasks: _fail_task.yaml
+    - name: Publish the sanitized cluster ingress release error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
       vars:
-        _osac_error_message: >-
-          {{ ansible_failed_result.msg
-             | default('The Netris cluster ingress release failed') }}
-        _osac_error_retryable: >-
-          {{ ansible_failed_result.retryable | default(true) }}
-
-    - name: Fail the release after publishing the error
-      ansible.builtin.fail:
-        msg: "{{ _osac_error_message }}"
+        _osac_error_label: cluster ingress release

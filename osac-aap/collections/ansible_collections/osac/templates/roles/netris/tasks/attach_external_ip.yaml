@@ -182,18 +182,7 @@
   rescue:
     - name: Preserve the underlying provider failure for the legacy report
       ansible.builtin.include_tasks: _preserve_failure.yaml
-    - name: Publish the sanitized ExternalIPAttachment attach error
-      ansible.builtin.include_tasks: _fail_task.yaml
+    - name: Publish the sanitized ExternalIPAttachment attach error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
       vars:
-        _osac_error_message: >-
-          {{ ansible_failed_result.msg
-             | default('The Netris ExternalIPAttachment attach failed') }}
-        _osac_error_retryable: >-
-          {{ ansible_failed_result.retryable | default(true) }}
-      when: _osac_contract | default(false) | bool
-
-    - name: Fail the ExternalIPAttachment attach task after the rescue
-      ansible.builtin.fail:
-        msg: >-
-          {{ _osac_error_message | default(ansible_failed_result.msg
-             | default('ExternalIPAttachment attach failed')) }}
+        _osac_error_label: ExternalIPAttachment attach

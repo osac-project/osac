@@ -80,18 +80,7 @@
   rescue:
     - name: Preserve the underlying provider failure for the legacy report
       ansible.builtin.include_tasks: _preserve_failure.yaml
-    - name: Publish the sanitized FabricDomain error
-      ansible.builtin.include_tasks: _fail_task.yaml
+    - name: Publish the sanitized FabricDomain delete error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
       vars:
-        _osac_error_message: >-
-          {{ ansible_failed_result.msg
-             | default('The Netris FabricDomain delete failed') }}
-        _osac_error_retryable: >-
-          {{ ansible_failed_result.retryable | default(true) }}
-      when: _osac_contract | default(false) | bool
-
-    - name: Fail the FabricDomain task after the rescue
-      ansible.builtin.fail:
-        msg: >-
-          {{ _osac_error_message | default(ansible_failed_result.msg
-             | default('FabricDomain delete failed')) }}
+        _osac_error_label: FabricDomain delete

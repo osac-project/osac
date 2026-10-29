@@ -71,7 +71,86 @@ def test_legacy_reporter_prefers_the_preserved_failure() -> None:
     reporter = _tasks("_report_failure")[0]["ansible.builtin.fail"]["msg"]
 
     assert "_netris_failure_origin_task" in reporter
-    assert "_netris_failure_origin_result" in reporter
+    assert "_netris_failure_origin_detail" in reporter
+    assert "ansible_failed_result" not in reporter
+
+
+def test_preserve_failure_keeps_only_a_sanitized_summary() -> None:
+    facts = _tasks("_preserve_failure")[0]["ansible.builtin.set_fact"]
+
+    assert "netris_safe_error_detail" in facts["_netris_failure_origin_detail"]
+    assert "_netris_failure_origin_result" not in facts
+
+
+def test_contract_rescue_publishes_the_sanitized_detail() -> None:
+    tasks = _tasks("_contract_rescue")
+
+    build = next(task for task in tasks if task.get("ansible.builtin.set_fact"))
+    facts = build["ansible.builtin.set_fact"]
+    assert "netris_safe_error_detail" in facts["_osac_rescue_message"]
+    assert "netris_retryable_error" in facts["_osac_rescue_retryable"]
+
+
+def test_no_rescue_reraises_an_include_scoped_variable() -> None:
+    pattern = 'msg: "{{ _osac_error_message }}"'
+    offenders = [
+        path.name
+        for path in TASKS.glob("*.yaml")
+        if pattern in path.read_text(encoding="utf-8")
+    ]
+
+    assert not offenders, (
+        "include vars do not survive the include; these rescues fail with an "
+        f"undefined variable instead of the real error: {offenders}"
+    )
+
+
+def test_missing_connection_settings_publish_the_setting_marker() -> None:
+    auth = (
+        TASKS.parents[4] / "netris/controller/roles/auth/tasks/main.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "Netris setting error" in auth
+    for setting in ("NETRIS_CONTROLLER_URL", "NETRIS_USERNAME", "NETRIS_PASSWORD"):
+        assert setting in auth
+
+
+def _walk_with_ancestors(tasks, ancestors=()):
+    for task in tasks or []:
+        if not isinstance(task, dict):
+            continue
+        yield task, ancestors
+        for key in ("block", "rescue", "always"):
+            yield from _walk_with_ancestors(task.get(key) or [], ancestors + (task,))
+
+
+def test_dhcp_provider_reads_are_inside_the_rescue() -> None:
+    reads = [
+        (task, ancestors)
+        for task, ancestors in _walk_with_ancestors(_tasks("query_dhcp_lease"))
+        if (task.get("ansible.builtin.include_role") or {}).get(
+            "name"
+        ) == "netris.controller.ipam"
+    ]
+
+    assert len(reads) == 2, "expected the subnet and host IPAM reads"
+    for task, ancestors in reads:
+        rescued = any(
+            any(
+                included.get("ansible.builtin.include_tasks")
+                == "_contract_rescue.yaml"
+                for included in (ancestor.get("rescue") or [])
+            )
+            for ancestor in ancestors
+        )
+        assert rescued, f"{task.get('name')} runs outside the DHCP rescue boundary"
+
+
+def test_dhcp_counts_only_active_dhcp_leases() -> None:
+    raw = (TASKS / "query_dhcp_lease.yaml").read_text(encoding="utf-8")
+
+    assert "netris_active_dhcp_addresses" in raw
+    assert "_dq_matched_hosts" not in raw
 
 
 def _walk(tasks):

@@ -253,10 +253,19 @@ shared dispatch lands, the role also accepts the previous raw-CR payload;
 | `create_subnet` | V-Net per Subnet, gateway and DHCP from `ipam`, typed `network_segment` when `network_type: evpn` |
 | `create_security_group` | Rules are validated exactly; Fabric ACL creation is a documented no-op |
 | `apply_network_attachment` | Physical port move; overlay and SecurityGroup bind are documented no-ops |
-| `query_dhcp_lease` | One typed `dhcp_lease` matched by MAC |
+| `query_dhcp_lease` | One typed `dhcp_lease`; only an active DHCP-sourced binding for the MAC counts, and zero or multiple matches retry |
 | `reserve_cluster_ingress_ip` | One `/32` from `ipam.lb_vip_ipv4_cidrs`, typed `cluster_ingress.address` |
 | ExternalIP family | Typed `external_ip.address` from the supplied snapshots |
 | `create_fabric_domain` | Netris server cluster bound to the VirtualNetwork VPC, typed `backend_id` |
+
+Every contract task publishes `osac_error {message, retryable}`. A
+missing or malformed Netris setting (`NETRIS_CONTROLLER_URL`,
+`NETRIS_USERNAME`, `NETRIS_PASSWORD`, `NETRIS_BM_PROVISIONING_VNET`,
+`NETRIS_MGMT_VPC_ID`) is retryable because an administrator can repair
+it; transport failures and HTTP 5xx/408/425/429 retry; other HTTP
+statuses and input validation are final. Provider messages are bounded
+and redacted, and `ansible_failed_result` is never published, logged, or
+kept in a fact.
 
 ### SecurityGroup enforcement
 

@@ -221,12 +221,25 @@ def format_immutable_mismatch_message(
     return "\n".join(lines)
 
 
+def _http_status(result: dict[str, Any]) -> int | None:
+    """Return a real HTTP status, ignoring the URI no-response sentinel (-1).
+
+    ``ansible.builtin.uri`` reports a connection that closed before any
+    response as ``status: -1``. That is a transport failure, not an HTTP
+    status, so retry classification must inspect the error text instead.
+    """
+    status = result.get("status")
+    if isinstance(status, int) and not isinstance(status, bool) and status >= 100:
+        return status
+    return None
+
+
 def netris_safe_error_detail(result: Any) -> str:
     """Return a bounded provider/task error summary without request secrets."""
     if not isinstance(result, dict):
         return "provider response details are unavailable"
 
-    status = result.get("status")
+    status = _http_status(result)
     body = result.get("json")
     detail = body.get("message") if isinstance(body, dict) else None
     if not isinstance(detail, str) or not detail.strip():
@@ -265,27 +278,68 @@ TRANSIENT_ERROR_MARKERS = (
     "broken pipe",
 )
 
+# Contract 4.3/4.6: a missing or malformed setting is retryable, because an
+# administrator can repair it and job pods read settings at start. Role tasks
+# prefix those failures with this marker so classification does not have to
+# guess from unrelated assertion text.
+MISSING_SETTING_MARKER = "netris setting error"
+
+# Contract 4.10: a MAC match alone may be a historical or reservation-only
+# record, so only a DHCP-sourced active binding is a lease.
+ACTIVE_DHCP_SOURCE = "dhcp"
+ACTIVE_DHCP_STATE = "active"
+
+
+def netris_active_dhcp_addresses(host: Any, mac_address: Any) -> list[str]:
+    """Return the addresses active DHCP leases hold for ``mac_address``.
+
+    Netris reports each address binding of an IPAM host as
+    ``{address, source, state}``. Only entries sourced from DHCP in the
+    active state count as a lease; reservations and inactive history do not.
+    """
+    if not isinstance(host, dict):
+        return []
+    if not isinstance(mac_address, str) or not mac_address.strip():
+        return []
+    want = mac_address.strip().lower()
+    addresses: list[str] = []
+    for entry in host.get("mac") or []:
+        if not isinstance(entry, dict):
+            continue
+        address = entry.get("address")
+        if not isinstance(address, str) or address.strip().lower() != want:
+            continue
+        source = str(entry.get("source", "")).strip().lower()
+        state = str(entry.get("state", "")).strip().lower()
+        if source != ACTIVE_DHCP_SOURCE or state != ACTIVE_DHCP_STATE:
+            continue
+        addresses.append(address.strip())
+    return addresses
+
 
 def netris_retryable_error(result: Any) -> bool:
     """Return whether a failed task is transient enough for OSAC to retry.
 
-    An explicit ``retryable`` field wins. Otherwise a provider HTTP status
-    decides: 5xx and 408/425/429 are transient, every other status is final.
-    Without a status only a recognized transport failure retries; an assert
-    or an explicit ``fail`` is a permanent input or contract problem.
+    An explicit ``retryable`` field wins. Otherwise a real HTTP status decides:
+    5xx and 408/425/429 are transient, every other status is final. A missing
+    HTTP status (including the URI ``-1`` no-response sentinel) falls back to
+    transport markers and then to the missing-setting marker; an assert or an
+    explicit ``fail`` is a permanent input or contract problem.
     """
     if not isinstance(result, dict):
         return False
     explicit = result.get("retryable")
     if isinstance(explicit, bool):
         return explicit
-    status = result.get("status")
-    if isinstance(status, int) and not isinstance(status, bool):
+    status = _http_status(result)
+    if status is not None:
         return status >= 500 or status in RETRYABLE_HTTP_STATUSES
     message = result.get("msg")
     if not isinstance(message, str):
         return False
     lowered = message.lower()
+    if MISSING_SETTING_MARKER in lowered:
+        return True
     return any(marker in lowered for marker in TRANSIENT_ERROR_MARKERS)
 
 
@@ -326,5 +380,6 @@ class FilterModule:
             "format_immutable_mismatch_message": format_immutable_mismatch_message,
             "netris_safe_error_detail": netris_safe_error_detail,
             "netris_retryable_error": netris_retryable_error,
+            "netris_active_dhcp_addresses": netris_active_dhcp_addresses,
             "netris_ip_in_cidrs": netris_ip_in_cidrs,
         }

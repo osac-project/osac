@@ -1,5 +1,8 @@
 ---
 # Attach _target_port to the Netris V-Net named _op_vnet_name (idempotent).
+# Pass vnet_vpc_id and/or vnet_tenant_id whenever another tenant can own a
+# V-Net with the same name; without a scope the name-only read is used only
+# when it is unambiguous.
 # Fails if the V-Net is not found or _target_port is none.
 # Waits for the V-Net to become active after attaching.
 # Asserts post-condition: port is a member of the target V-Net.
@@ -56,6 +59,21 @@
     - name: Set the scoped V-Net
       ansible.builtin.set_fact:
         netris_vnet: "{{ _vnet_candidates | first | default(none) }}"
+
+- name: Fail on an ambiguous unscoped V-Net identity
+  ansible.builtin.assert:
+    that:
+      - >-
+        (netris_vnets | default([])
+         | selectattr('name', 'equalto', _op_vnet_name)
+         | list) | length <= 1
+    fail_msg: >-
+      More than one Netris V-Net is named '{{ _op_vnet_name }}' and the caller
+      supplied no VPC/tenant scope. Refusing an unscoped move against an
+      ambiguous V-Net.
+  when:
+    - vnet_vpc_id | default(0) | int == 0
+    - vnet_tenant_id | default(0) | int == 0
 
 - name: Fail if V-Net not found
   ansible.builtin.fail:

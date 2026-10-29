@@ -322,6 +322,16 @@ class TestNetrisSafeErrorDetail:
         detail = idempotency.netris_safe_error_detail({"msg": "x" * 400})
         assert len(detail) == len("no HTTP status was received; ") + 240
 
+    def test_no_response_sentinel_is_not_rendered_as_an_http_status(self):
+        detail = idempotency.netris_safe_error_detail(
+            {
+                "status": -1,
+                "msg": "Connection failure: Remote end closed connection without response",
+            }
+        )
+        assert detail.startswith("no HTTP status was received;")
+        assert "HTTP -1" not in detail
+
 
 class TestNetrisIPInCIDRs:
     def test_host_address_and_host_prefix_are_in_pool(self):
@@ -349,6 +359,8 @@ class TestFilterModuleRegistration:
         assert "format_immutable_mismatch_message" in filters
         assert "netris_immutable_missing_fields" in filters
         assert "netris_safe_error_detail" in filters
+        assert "netris_retryable_error" in filters
+        assert "netris_active_dhcp_addresses" in filters
         assert "netris_ip_in_cidrs" in filters
 
 
@@ -387,3 +399,63 @@ class TestNetrisRetryableError:
 
     def test_non_mapping_result_is_final(self):
         assert idempotency.netris_retryable_error("boom") is False
+
+    def test_no_response_sentinel_falls_back_to_transport_classification(self):
+        assert idempotency.netris_retryable_error(
+            {
+                "status": -1,
+                "msg": "Status code was -1 and not [200]: Connection failure: Remote end closed connection without response",
+            }
+        ) is True
+        assert idempotency.netris_retryable_error(
+            {"status": -1, "msg": "Invalid JSON returned"}
+        ) is False
+
+    def test_missing_setting_failure_is_retryable(self):
+        assert idempotency.netris_retryable_error(
+            {
+                "failed": True,
+                "msg": "Netris setting error: NETRIS_BM_PROVISIONING_VNET must be set",
+            }
+        ) is True
+
+
+class TestNetrisActiveDhcpAddresses:
+    MAC = "aa:bb:cc:dd:ee:ff"
+
+    def test_active_dhcp_binding_is_a_lease(self):
+        host = {
+            "mac": [
+                {"address": self.MAC.upper(), "source": "dhcp", "state": "active"},
+                {"address": "11:22:33:44:55:66", "source": "dhcp", "state": "active"},
+            ]
+        }
+        assert idempotency.netris_active_dhcp_addresses(host, self.MAC) == [
+            self.MAC.upper()
+        ]
+
+    def test_inactive_and_reservation_only_records_are_not_leases(self):
+        host = {
+            "mac": [
+                {"address": self.MAC, "source": "dhcp", "state": "inactive"},
+                {"address": self.MAC, "source": "reservation", "state": "active"},
+            ]
+        }
+        assert idempotency.netris_active_dhcp_addresses(host, self.MAC) == []
+
+    def test_mixed_records_count_only_active_dhcp(self):
+        host = {
+            "mac": [
+                {"address": self.MAC, "source": "reservation", "state": "active"},
+                {"address": self.MAC, "source": "dhcp", "state": "inactive"},
+                {"address": self.MAC, "source": "dhcp", "state": "active"},
+            ]
+        }
+        assert idempotency.netris_active_dhcp_addresses(host, self.MAC) == [self.MAC]
+
+    def test_malformed_input_is_ignored(self):
+        assert idempotency.netris_active_dhcp_addresses(None, self.MAC) == []
+        assert idempotency.netris_active_dhcp_addresses({"mac": []}, "") == []
+        assert idempotency.netris_active_dhcp_addresses(
+            {"mac": ["not-a-dict", {"address": self.MAC}]}, self.MAC
+        ) == []

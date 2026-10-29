@@ -1,4 +1,17 @@
 ---
+# Contract 4.3/4.6: these settings come from the network-fulfillment-ig
+# ConfigMap/Secret as environment variables. A missing value is retryable,
+# because an administrator can repair it and job pods read settings at start.
+- name: Require the Netris connection settings
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.env', 'NETRIS_CONTROLLER_URL', default='') | length > 0
+      - lookup('ansible.builtin.env', 'NETRIS_USERNAME', default='') | length > 0
+      - lookup('ansible.builtin.env', 'NETRIS_PASSWORD', default='') | length > 0
+    fail_msg: >-
+      Netris setting error: NETRIS_CONTROLLER_URL, NETRIS_USERNAME and
+      NETRIS_PASSWORD must be set for Netris provider calls.
+
 - name: Resolve Netris TLS settings from the worker environment
   ansible.builtin.set_fact:
     netris_controller_url: "{{ lookup('ansible.builtin.env', 'NETRIS_CONTROLLER_URL', default='') }}"

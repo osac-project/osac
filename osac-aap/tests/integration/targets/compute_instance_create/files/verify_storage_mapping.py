@@ -78,6 +78,12 @@ class StorageMappingTests(unittest.TestCase):
                     {"sizeGiB": 100, "storageTier": "balanced"},
                     {"sizeGiB": 250, "storageTier": "archive"},
                 ],
+                # Synthetic prerequisites; this target tests StorageClass mapping.
+                "diskVolumeIDs": {
+                    "boot": "00000000-0000-4000-8000-000000000001",
+                    "disk-1": "00000000-0000-4000-8000-000000000002",
+                    "disk-2": "00000000-0000-4000-8000-000000000003",
+                },
                 "image": {
                     "sourceType": "registry",
                     "sourceRef": "quay.io/containerdisks/fedora:latest",

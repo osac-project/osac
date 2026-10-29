@@ -52,6 +52,8 @@ From `osac-aap/`, with `uv sync --all-groups` and the repository's required
 Ansible collections installed:
 
 ```bash
+(
+set -e
 mkdir -p ../.artifacts/implement/OSAC-6682
 export KUBECONFIG="$PWD/../.artifacts/implement/OSAC-6682/kubeconfig"
 kind create cluster --name osac-6682 --kubeconfig "$KUBECONFIG"
@@ -63,11 +65,16 @@ kubectl --kubeconfig "$KUBECONFIG" wait \
   --for=condition=Established --timeout=60s \
   crd/computeinstances.osac.openshift.io \
   crd/datavolumes.cdi.kubevirt.io \
-  crd/virtualmachines.kubevirt.io &&
-  uv run ansible-playbook \
-    tests/integration/targets/compute_instance_create/tasks/storage_tier_mapping.yml
+  crd/virtualmachines.kubevirt.io
+uv run ansible-playbook \
+  tests/integration/targets/compute_instance_create/tasks/storage_tier_mapping.yml
 kind delete cluster --name osac-6682
+)
 ```
+
+The subshell stops on any failure. If cluster creation fails, subsequent
+commands, including cluster deletion, do not run. If a later step fails, the
+test cluster is retained for inspection and manual cleanup.
 
 The verifier requires an explicit `KUBECONFIG`, creates unique namespaces and
 StorageClasses, and removes only its own resources. It clears inherited
@@ -77,7 +84,9 @@ Kubernetes module overrides before invoking the provisioning playbook.
 
 This target tests StorageClass selection independently of Volume-ID propagation
 and has no dependency on [PR #1907](https://github.com/osac-project/osac/pull/1907).
-It supplies no `diskVolumeIDs` and makes no Volume-ID coverage claim.
+It supplies fixed synthetic `diskVolumeIDs` for `boot`, `disk-1` and `disk-2`
+so it also works with consumers that require those inputs. No corresponding
+Volume records are created, and Volume-ID propagation is not asserted.
 
 The Volume-ID portion of [OSAC-6682](https://redhat.atlassian.net/browse/OSAC-6682)
 is deferred until after the Developer Preview, when the Volume API's ownership

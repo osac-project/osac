@@ -87,36 +87,69 @@ describe('buildComputeCatalogItemCreatePayload', () => {
     });
   });
 
-  it('omits userData when editable and empty, and sends it as a default when editable and set', () => {
+  it('omits user data when editable and empty, and sends inline defaults when set', () => {
     const emptyValues = emptyComputeCatalogItemValues();
-    expect(buildComputeCatalogItemCreatePayload(emptyValues).fields?.userData).toBeUndefined();
+    expect(
+      buildComputeCatalogItemCreatePayload(emptyValues).fields?.userDataSource,
+    ).toBeUndefined();
 
     const filledValues = emptyComputeCatalogItemValues();
     filledValues.userData = { value: 'echo hi', locked: false };
-    expect(buildComputeCatalogItemCreatePayload(filledValues).fields?.userData).toEqual({
-      behavior: { case: 'editable', value: { defaultValue: 'echo hi' } },
+    expect(buildComputeCatalogItemCreatePayload(filledValues).fields?.userDataSource).toEqual({
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { source: { case: 'inline', value: 'echo hi' } } },
+      },
     });
   });
 
-  it('does not serialize the UserDataField secret source before backend support is available', () => {
+  it('serializes an editable Secret user-data source', () => {
     const values = emptyComputeCatalogItemValues();
     values.userDataSource = { value: 'secret', locked: false };
     values.userDataSecret = { value: 'user-data-secret', locked: false };
 
     const payload = buildComputeCatalogItemCreatePayload(values);
 
-    expect(payload.fields).not.toHaveProperty('userDataSecret');
-    expect(payload.fields?.userData).toBeUndefined();
+    expect(payload.fields?.userDataSource).toEqual({
+      behavior: {
+        case: 'editable',
+        value: {
+          defaultValue: { source: { case: 'secret', value: { name: 'user-data-secret' } } },
+        },
+      },
+    });
   });
 
-  it('deserializes catalog user data as the inline source until backend support is available', () => {
+  it('deserializes inline and Secret user-data sources', () => {
     const values = getComputeCatalogItemInitialValues({
-      fields: { userData: { behavior: { case: 'locked', value: 'cloud-init' } } },
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'locked',
+            value: { source: { case: 'inline', value: 'cloud-init' } },
+          },
+        },
+      },
     } as ComputeInstanceCatalogItem);
 
     expect(values.userData).toEqual({ value: 'cloud-init', locked: true });
-    expect(values.userDataSource).toEqual({ value: 'inline', locked: false });
+    expect(values.userDataSource).toEqual({ value: 'inline', locked: true });
     expect(values.userDataSecret).toEqual({ value: '', locked: false });
+
+    const secretValues = getComputeCatalogItemInitialValues({
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: { defaultValue: { source: { case: 'secret', value: { name: 'cloud-init' } } } },
+          },
+        },
+      },
+    } as ComputeInstanceCatalogItem);
+
+    expect(secretValues.userData).toEqual({ value: '', locked: false });
+    expect(secretValues.userDataSource).toEqual({ value: 'secret', locked: false });
+    expect(secretValues.userDataSecret).toEqual({ value: 'cloud-init', locked: false });
   });
 
   it('writes a locked additional-disks list and omits an empty editable one', () => {
@@ -154,6 +187,11 @@ describe('buildComputeCatalogItemUpdatePayload', () => {
 
     expect(payload.metadata).toBeUndefined();
     expect(payload.template).toBeUndefined();
-    expect(payload.fields?.userData).toEqual({ behavior: { case: 'locked', value: 'echo hi' } });
+    expect(payload.fields?.userDataSource).toEqual({
+      behavior: {
+        case: 'locked',
+        value: { source: { case: 'inline', value: 'echo hi' } },
+      },
+    });
   });
 });

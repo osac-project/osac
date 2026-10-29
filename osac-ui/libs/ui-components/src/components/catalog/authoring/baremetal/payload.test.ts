@@ -41,8 +41,11 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
     expect(payload.fields?.diskImage).toEqual({
       behavior: { case: 'locked', value: { id: 'image-1' } },
     });
-    expect(payload.fields?.userData).toEqual({
-      behavior: { case: 'locked', value: '#cloud-config\nusers: []' },
+    expect(payload.fields?.userDataSource).toEqual({
+      behavior: {
+        case: 'locked',
+        value: { source: { case: 'inline', value: '#cloud-config\nusers: []' } },
+      },
     });
   });
 
@@ -61,20 +64,29 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
       },
     });
     expect(payload.fields?.diskImage).toBeUndefined();
-    expect(payload.fields?.userData).toEqual({
-      behavior: { case: 'editable', value: { defaultValue: 'echo hi' } },
+    expect(payload.fields?.userDataSource).toEqual({
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { source: { case: 'inline', value: 'echo hi' } } },
+      },
     });
   });
 
-  it('does not serialize the UserDataField secret source before backend support is available', () => {
+  it('serializes an editable Secret user-data source', () => {
     const values = emptyBareMetalCatalogItemValues();
     values.userDataSource = { value: 'secret', locked: false };
     values.userDataSecret = { value: 'user-data-secret', locked: false };
 
     const payload = buildBareMetalCatalogItemCreatePayload(values);
 
-    expect(payload.fields).not.toHaveProperty('userDataSecret');
-    expect(payload.fields?.userData).toBeUndefined();
+    expect(payload.fields?.userDataSource).toEqual({
+      behavior: {
+        case: 'editable',
+        value: {
+          defaultValue: { source: { case: 'secret', value: { name: 'user-data-secret' } } },
+        },
+      },
+    });
   });
 
   it('encodes global and tenant-scoped metadata consistently with the general step', () => {
@@ -110,7 +122,12 @@ describe('bare metal catalog item initial values and updates', () => {
             value: { defaultValue: { id: 'image-1', name: 'rhel-9' } },
           },
         },
-        userData: { behavior: { case: 'editable', value: {} } },
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: { defaultValue: { source: { case: 'inline', value: '' } } },
+          },
+        },
       },
     } as BareMetalInstanceCatalogItem;
 
@@ -121,6 +138,23 @@ describe('bare metal catalog item initial values and updates', () => {
     expect(values.userData).toEqual({ value: '', locked: false });
     expect(values.userDataSource).toEqual({ value: 'inline', locked: false });
     expect(values.userDataSecret).toEqual({ value: '', locked: false });
+  });
+
+  it('deserializes a Secret user-data source', () => {
+    const values = getBareMetalCatalogItemInitialValues({
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: { defaultValue: { source: { case: 'secret', value: { name: 'cloud-init' } } } },
+          },
+        },
+      },
+    } as BareMetalInstanceCatalogItem);
+
+    expect(values.userData).toEqual({ value: '', locked: false });
+    expect(values.userDataSource).toEqual({ value: 'secret', locked: false });
+    expect(values.userDataSecret).toEqual({ value: 'cloud-init', locked: false });
   });
 
   it('omits immutable general fields and the template from updates', () => {
@@ -138,8 +172,11 @@ describe('bare metal catalog item initial values and updates', () => {
 
     expect(payload.metadata).toBeUndefined();
     expect(payload.template).toBeUndefined();
-    expect(payload.fields?.userData).toEqual({
-      behavior: { case: 'locked', value: 'echo hi' },
+    expect(payload.fields?.userDataSource).toEqual({
+      behavior: {
+        case: 'locked',
+        value: { source: { case: 'inline', value: 'echo hi' } },
+      },
     });
   });
 });

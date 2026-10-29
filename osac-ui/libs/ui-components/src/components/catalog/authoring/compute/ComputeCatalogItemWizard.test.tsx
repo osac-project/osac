@@ -382,10 +382,13 @@ describe('ComputeCatalogItemWizard', () => {
 
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     const request = onCreate.mock.calls[0][0] as {
-      object?: { fields?: { userData?: unknown } };
+      object?: { fields?: { userDataSource?: unknown } };
     };
-    expect(request.object?.fields?.userData).toMatchObject({
-      behavior: { case: 'editable', value: { defaultValue: 'echo hi' } },
+    expect(request.object?.fields?.userDataSource).toMatchObject({
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { source: { case: 'inline', value: 'echo hi' } } },
+      },
     });
   });
 

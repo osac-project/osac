@@ -8,6 +8,7 @@ import type { ProvisioningFieldValue } from '../../../ProvisioningWizard/fields/
 import type { ComputeInstanceDiskValues } from '../../../vm/CreateWizard/fields';
 import { catalogGeneralItemPayload } from '../CatalogGeneralStep';
 import { policyFromCatalogValue } from '../catalogItemPolicy';
+import { catalogUserDataPolicyFromValues } from '../catalogUserData';
 
 type CatalogItemFieldsInit = NonNullable<
   MessageInitShape<typeof ComputeInstanceCatalogItemSchema>['fields']
@@ -74,18 +75,9 @@ const buildComputeCatalogItemFieldsPayload = (
     fields.instanceType = instanceType;
   }
 
-  // Gap: the catalog-item backend currently accepts only inline user data;
-  // UserDataField's source and secret reference are not serialized yet.
-  const userData =
-    values.userDataSource.value === 'inline'
-      ? buildFieldPolicy<FieldPolicyInit<'userData'>>(
-          values.userData,
-          isEmptyString,
-          toTrimmedString,
-        )
-      : undefined;
-  if (userData) {
-    fields.userData = userData;
+  const userDataSource = catalogUserDataPolicyFromValues(values);
+  if (userDataSource) {
+    fields.userDataSource = userDataSource;
   }
 
   const bootDiskSizeGib = buildFieldPolicy<NonNullable<BootDiskFieldsInit['sizeGib']>>(

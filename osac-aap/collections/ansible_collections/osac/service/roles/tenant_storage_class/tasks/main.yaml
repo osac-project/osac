@@ -2,8 +2,9 @@
 # Resolve a StorageClass for a specific storage tier from the pre-resolved
 # storageClasses list injected via extra_vars by the ComputeInstance controller.
 # The Tenant controller is the single source of truth for StorageClass
-# resolution (per-tier duplicate detection, tenant vs shared Default fallback).
-# This role performs tier selection only.
+# resolution (tenant vs shared Default fallback).
+# Repeated entries are valid when JIT returns an already-resolved class.
+# Different class names for the requested tier are ambiguous.
 # Sets tenant_storage_class_name or fails.
 
 - name: Fail if storageClasses list is empty
@@ -29,6 +30,14 @@
       {{ ('(resolving ' + tenant_storage_class_disk_label + ')') if tenant_storage_class_disk_label | length > 0 else '' }}.
       Available tiers: {{ _tenant_sc_available_tiers }}.
   when: _tenant_sc_match | length == 0
+
+- name: Fail if requested tier has multiple StorageClasses
+  ansible.builtin.fail:
+    msg: >-
+      Storage tier "{{ tenant_storage_class_storage_tier }}" has multiple resolved StorageClasses
+      for tenant "{{ tenant_storage_class_tenant_name }}".
+      Supply one distinct StorageClass name per requested tier.
+  when: _tenant_sc_match | map(attribute='name') | unique | length > 1
 
 - name: Set StorageClass name from resolved tier
   ansible.builtin.set_fact:

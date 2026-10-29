@@ -82,6 +82,8 @@ module.exit_json(changed=True)
 
 
 def _environment(tmp_path):
+    # Extracted role blocks resolve relative includes beside the temporary playbook.
+    shutil.copy(ROLE / "tasks/ensure_hub_access_vm_reader.yaml", tmp_path / "ensure_hub_access_vm_reader.yaml")
     modules = tmp_path / "ansible_collections/kubernetes/core/plugins/modules"
     modules.mkdir(parents=True)
     for name in ("k8s", "k8s_info"):

@@ -504,6 +504,26 @@ func (r *ComputeInstanceReconciler) syncMetadataPreflight(ctx context.Context, i
 	return subnetTargetNamespace, nil
 }
 
+func (r *ComputeInstanceReconciler) reconcileSubnetPlacement(ctx context.Context, instance *v1alpha1.ComputeInstance, vm *kubevirtv1.VirtualMachine) (ctrl.Result, bool, error) {
+	result, blocked, err := r.checkSubnetPlacement(ctx, instance)
+	if err != nil {
+		return result, false, err
+	}
+	// Placement failures prevent first-time VM creation only. Existing VMs and
+	// instances with provisioning history must keep reconciling their observed
+	// state and power operations if Subnet eligibility changes later.
+	if blocked && vm == nil && instance.Status.VirtualMachineReference == nil && len(instance.Status.ProvisioningJobs) == 0 {
+		if conditionStatus(instance, v1alpha1.ComputeInstanceConditionNetworkPlacement) == metav1.ConditionFalse {
+			placement := instance.GetStatusCondition(v1alpha1.ComputeInstanceConditionNetworkPlacement)
+			setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseFailed)
+			instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, placement.Message, networkAttachmentFailedReason)
+			instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionFalse, placement.Message, networkAttachmentFailedReason)
+		}
+		return result, true, nil
+	}
+	return ctrl.Result{}, false, nil
+}
+
 func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	subnetTargetNamespace, err := r.syncMetadataPreflight(ctx, instance)
@@ -557,21 +577,9 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	placementResult, placementBlocked, err := r.checkSubnetPlacement(ctx, instance)
-	if err != nil {
+	placementResult, stop, err := r.reconcileSubnetPlacement(ctx, instance, kv)
+	if err != nil || stop {
 		return placementResult, err
-	}
-	// Placement failures prevent first-time VM creation only. Existing VMs and
-	// instances with provisioning history must keep reconciling their observed
-	// state and power operations if Subnet eligibility changes later.
-	if placementBlocked && kv == nil && instance.Status.VirtualMachineReference == nil && len(instance.Status.ProvisioningJobs) == 0 {
-		if conditionStatus(instance, v1alpha1.ComputeInstanceConditionNetworkPlacement) == metav1.ConditionFalse {
-			placement := instance.GetStatusCondition(v1alpha1.ComputeInstanceConditionNetworkPlacement)
-			setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseFailed)
-			instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, placement.Message, networkAttachmentFailedReason)
-			instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionFalse, placement.Message, networkAttachmentFailedReason)
-		}
-		return placementResult, nil
 	}
 
 	if kv != nil {

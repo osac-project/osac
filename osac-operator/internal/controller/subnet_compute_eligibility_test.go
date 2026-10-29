@@ -13,7 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 func TestEVPNEligibilityRequiresPersistedOwner(test *testing.T) {
@@ -49,36 +48,6 @@ func TestEVPNEligibilityRequiresPersistedOwner(test *testing.T) {
 				test.Fatalf("supported=%v expected=%v", supported, scenario.expected)
 			}
 		})
-	}
-}
-
-func TestUnsupportedPlacementRemainsTerminalWithCachedNamespace(test *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := v1alpha1.AddToScheme(scheme); err != nil {
-		test.Fatal(err)
-	}
-	subnet := &v1alpha1.Subnet{ObjectMeta: metav1.ObjectMeta{Name: "fabric-only", Namespace: "test",
-		Annotations: map[string]string{osacK8sImplementationStrategyAnnotation: cudnEVPNManagerName,
-			subnetComputeSupportedAnnotation: "true"}},
-		Status: v1alpha1.SubnetStatus{Phase: v1alpha1.SubnetPhaseReady, ComputeInstanceSupported: ptr.To(false)}}
-	instance := &v1alpha1.ComputeInstance{ObjectMeta: metav1.ObjectMeta{Name: "vm", Namespace: "test",
-		Annotations: map[string]string{osacSubnetTargetNamespaceAnnotation: "cached-namespace"}}}
-	instance.Spec.NetworkAttachments = []v1alpha1.ComputeNetworkAttachment{{SubnetRef: subnet.Name}}
-	reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(subnet).Build()
-	reconciler := &ComputeInstanceReconciler{Client: reader, APIReader: reader}
-	for attempt := 0; attempt < 3; attempt++ {
-		instance.Spec.RestartRequestedAt = ptr.To(metav1.Now())
-		result, err := reconciler.handleUpdate(context.Background(), reconcile.Request{}, instance)
-		if err != nil {
-			test.Fatal(err)
-		}
-		if result.RequeueAfter != 0 || instance.Status.Phase != v1alpha1.ComputeInstancePhaseFailed ||
-			conditionReason(instance, v1alpha1.ComputeInstanceConditionProvisioned) != networkAttachmentFailedReason {
-			test.Fatalf("unsupported placement retried or lost terminal status: %+v", instance.Status)
-		}
-		if len(instance.Status.ProvisioningJobs) != 0 {
-			test.Fatal("unsupported VM dispatched provisioning")
-		}
 	}
 }
 

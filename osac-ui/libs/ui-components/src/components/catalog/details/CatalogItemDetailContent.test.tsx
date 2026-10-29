@@ -53,7 +53,6 @@ const vmItem = create(ComputeInstanceCatalogItemSchema, {
     tenant: 'foo',
   },
   title: 'RHEL 9 catalog',
-  description: 'RHEL 9 base image',
   template: create(ComputeInstanceTemplateReferenceSchema, { id: 'template-1' }),
   published: true,
   fields: {

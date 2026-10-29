@@ -77,7 +77,6 @@ const CatalogItemDetails = ({
                     },
                   ]}
                   resourceName={resourceName}
-                  description={item.description?.trim() || item.metadata?.description?.trim()}
                   titlePrefix={titlePrefix}
                   titleAddon={
                     showStatus

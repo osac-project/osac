@@ -1,17 +1,15 @@
 import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
-import { useFormikContext } from 'formik';
 
-import type { BareMetalCatalogItemValues } from './values';
 import { useTranslation } from '../../../../hooks/useTranslation';
 import BareMetalInstanceTypeField from '../../../BareMetalInstance/CreateWizard/fields/BareMetalInstanceTypeField';
+import { CATALOG_PROVISION_MULTILINE_TEXTAREA } from '../../../Form/constants';
+import { InputField } from '../../../Form/InputField';
 import OsacForm from '../../../Form/OsacForm';
-import UserDataField from '../../../Form/UserDataField';
 import DiskImageField from '../../../ProvisioningWizard/fields/DiskImageField';
 import CatalogField from '../CatalogField';
 
 const BareMetalCatalogConfigurationStep = () => {
   const { t } = useTranslation();
-  const { values } = useFormikContext<BareMetalCatalogItemValues>();
 
   return (
     <Stack hasGutter>
@@ -55,11 +53,16 @@ const BareMetalCatalogConfigurationStep = () => {
           </CatalogField>
           <CatalogField name="userData">
             {({ valueName, isDisabled, isRequired, labelInfo }) => (
-              <UserDataField
-                sourceName="userDataSource.value"
-                secretRefName="userDataSecret.value"
-                inlineName={valueName}
-                projectName={values.metadata.project}
+              // Workaround: project-scoped catalog items are not supported in
+              // the UI yet, so catalog item user data is limited to text.
+              <InputField
+                name={valueName}
+                label={t('User data')}
+                fieldId="bare-metal-catalog-user-data"
+                multiline
+                rows={CATALOG_PROVISION_MULTILINE_TEXTAREA.rows}
+                resizeOrientation={CATALOG_PROVISION_MULTILINE_TEXTAREA.resizeOrientation}
+                helperText={t('Optional cloud-init user data (max 64 KB).')}
                 isDisabled={isDisabled}
                 isRequired={isRequired}
                 labelInfo={labelInfo}

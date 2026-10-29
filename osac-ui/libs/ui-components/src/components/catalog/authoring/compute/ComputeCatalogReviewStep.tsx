@@ -180,13 +180,6 @@ const catalogEditChanges = (
 ): EditChange[] => {
   const fields = [
     {
-      label: t('Description'),
-      before: formatReviewScalar(initialValues.metadata.description),
-      after: formatReviewScalar(values.metadata.description),
-      beforeKey: initialValues.metadata.description.trim(),
-      afterKey: values.metadata.description.trim(),
-    },
-    {
       label: t('Guest operating system'),
       before: guestOsFamilyLabel(t, initialValues.guestOsFamily),
       after: guestOsFamilyLabel(t, values.guestOsFamily),
@@ -370,10 +363,6 @@ const ComputeCatalogReviewStep = ({ item }: ComputeCatalogReviewStepProps) => {
           />
         )}
         <ReviewRow label={t('Name')} value={formatReviewScalar(values.metadata.name)} />
-        <ReviewRow
-          label={t('Description')}
-          value={formatReviewScalar(values.metadata.description)}
-        />
         <ReviewRow
           label={t('Provisioning template')}
           value={formatReviewScalar(values.template.name || values.template.id)}

@@ -90,6 +90,5 @@ export const buildBareMetalCatalogItemUpdatePayload = (
   _item: BareMetalInstanceCatalogItem,
   values: BareMetalCatalogItemValues,
 ): MessageInitShape<typeof BareMetalInstanceCatalogItemSchema> => ({
-  metadata: { description: values.metadata.description.trim() },
   fields: buildBareMetalCatalogItemFieldsPayload(values),
 });

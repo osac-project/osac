@@ -81,7 +81,6 @@ export const buildComputeCatalogStepSchema = (
           .object({
             name: resourceNameSchema(t),
             project: yup.string(),
-            description: yup.string(),
             tenant: yup.object({ id: yup.string(), name: yup.string() }),
           })
           .test('tenant-required', t('Tenant is required'), function tenantRequired(value) {

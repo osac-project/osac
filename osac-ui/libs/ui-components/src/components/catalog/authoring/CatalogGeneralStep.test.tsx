@@ -68,20 +68,10 @@ describe('CatalogGeneralStep', () => {
     vi.mocked(useSession).mockReturnValue(makeSession('tenant-admin'));
   });
 
-  it('does not show the General step description', () => {
+  it('does not show a catalog item description field', () => {
     renderStep(false);
 
-    expect(
-      screen.queryByText(
-        'Define the name, scope, description, and provisioning template for this catalog item.',
-      ),
-    ).not.toBeInTheDocument();
-  });
-
-  it('uses a compact description field', () => {
-    renderStep(false);
-
-    expect(screen.getByRole('textbox', { name: 'Description' })).toHaveAttribute('rows', '4');
+    expect(screen.queryByRole('textbox', { name: 'Description' })).not.toBeInTheDocument();
   });
 
   it('shows provisioning template help information', async () => {
@@ -200,7 +190,6 @@ describe('catalogGeneralValuesFromItem', () => {
   const baseItem = {
     metadata: {
       name: 'my-item',
-      description: 'My description',
       project: 'team-a',
       tenant: 'tenant-1',
     },
@@ -213,7 +202,6 @@ describe('catalogGeneralValuesFromItem', () => {
       metadata: {
         name: 'my-item',
         project: 'team-a',
-        description: 'My description',
         tenant: { id: 'tenant-1', name: '' },
       },
       template: { id: 'template-1', name: '' },

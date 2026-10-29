@@ -275,8 +275,13 @@ var _ = Describe("Volume lifecycle", func() {
 			g.Expect(crList.Items).To(BeEmpty())
 		}, time.Minute, time.Second).Should(Succeed())
 
-		// The API object archives asynchronously after its Volume CR is removed.
-		// Wait for that lifecycle boundary before the project cleanup below.
+		// This suite disables periodic controller sync, so CR removal does not
+		// notify the Fulfillment controller. Signal it to remove its finalizer
+		// and archive the API object.
+		_, err = volumesClient.Signal(ctx,
+			privatev1.VolumesSignalRequest_builder{Id: volId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
 		Eventually(func(g Gomega) {
 			_, err := volumesClient.Get(ctx,
 				privatev1.VolumesGetRequest_builder{Id: volId}.Build())

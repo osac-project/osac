@@ -205,18 +205,10 @@ spec:
         - --token-encryption-crt=/etc/fulfillment-token-encryption/tls.crt
         - --token-issuer={{ include "fulfillment-api.tokenIssuerUrl" . }}
         - --metrics-listener-address=0.0.0.0:8002
-        {{- if include "fulfillment-service.serviceEnabled" (list . "caas") }}
-        - --enable-caas
-        {{- end }}
-        {{- if include "fulfillment-service.serviceEnabled" (list . "vmaas") }}
-        - --enable-vmaas
-        {{- end }}
-        {{- if include "fulfillment-service.serviceEnabled" (list . "bmaas") }}
-        - --enable-bmaas
-        {{- end }}
-        {{- if include "fulfillment-service.serviceEnabled" (list . "maas") }}
-        - --enable-maas
-        {{- end }}
+        - --enable-caas={{ include "fulfillment-service.serviceEnabled" (list . "caas") }}
+        - --enable-vmaas={{ include "fulfillment-service.serviceEnabled" (list . "vmaas") }}
+        - --enable-bmaas={{ include "fulfillment-service.serviceEnabled" (list . "bmaas") }}
+        - --enable-maas={{ include "fulfillment-service.serviceEnabled" (list . "maas") }}
         - --vault-endpoint={{ $vaultEndpoint }}
         - --vault-namespace={{ $vaultNamespace }}
         - --vault-kv-mount-path={{ $vaultKVMountPath }}

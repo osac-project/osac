@@ -29,6 +29,7 @@ from tests.e2e.core.helpers import (
     wait_for_cluster_order_condition,
     wait_for_cluster_order_cr,
     wait_for_cluster_progressing,
+    wait_for_cluster_ready,
     wait_for_hosted_cluster_kubeconfig,
 )
 from tests.e2e.core.k8s_client import K8sClient
@@ -430,9 +431,12 @@ def assert_cluster_available(
     # no project dimension: the engine emits only the facts a resource carries.
     metering.expect_no_project()
     # The control-plane meter has once: [READY] semantics: a cluster bills its
-    # installation time only when it reaches READY, so the heartbeat expectation can
-    # start only after the cluster is available.
-    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
+    # installation time only when it reaches READY, and ClusterAvailable=True
+    # does not imply phase Ready (the operator's Ready gate additionally needs
+    # ClusterVersion success and all NodePools ready), so wait for the phase
+    # the billing gate actually keys on before expecting the heartbeat.
+    wait_for_cluster_ready(k8s=k8s, name=co_name)
+    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=300)
     metering.verify()
 
     cluster = grpc.get_cluster(cluster_id=uuid)
@@ -893,9 +897,13 @@ def assert_cluster_with_two_node_sets_available(
     # no project dimension: the engine emits only the facts a resource carries.
     metering.expect_no_project()
     # The control-plane meter has once: [READY] semantics: a cluster bills its
-    # installation time only when it reaches READY, so the heartbeat expectation can
-    # start only after the worker and agent readiness checks above.
-    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
+    # installation time only when it reaches READY, and the worker and agent
+    # readiness checks above can all pass while the ClusterOrder is still
+    # Progressing (the operator's Ready gate additionally needs ClusterVersion
+    # success and all NodePools ready), so wait for the phase the billing gate
+    # actually keys on before expecting the heartbeat.
+    wait_for_cluster_ready(k8s=k8s, name=co_name)
+    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=300)
     metering.verify()
 
     cluster_tenant = cluster["metadata"]["tenant"]

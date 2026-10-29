@@ -97,7 +97,10 @@ export const getBareMetalInstanceInitialValues = (
     spec: {
       ...values.spec,
       sshKey: getFieldFromCatalogItemPolicy(catalogItem.fields?.sshPublicKey, ''),
-      userData: getFieldFromCatalogItemPolicy(catalogItem.fields?.userData, ''),
+      userData: {
+        locked: false,
+        value: '',
+      },
       instanceType: (() => {
         const field = getFieldFromCatalogItemPolicy(catalogItem.fields?.instanceType, undefined);
         const reference = field.value as { id?: string; name?: string } | undefined;

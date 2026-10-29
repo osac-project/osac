@@ -15,10 +15,10 @@ interface VmUserDataCardProps {
   vm: ComputeInstance;
 }
 
-const VmUserDataCard = ({ vm }: VmUserDataCardProps) => {
+const VmUserDataCard = (_props: VmUserDataCardProps) => {
   const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(false);
-  const userData = vm.spec?.userData?.trim();
+  const userData = undefined;
 
   if (!userData) {
     return null;

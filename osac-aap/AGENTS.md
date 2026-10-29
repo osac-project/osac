@@ -44,6 +44,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-aap
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
 | Filters, variable transforms, and isolated plugin logic | Unit | `uv run pytest tests/unit` |
+| Netris ExternalIP session transport and redirect isolation | Unit / local HTTP transport | `uv run pytest tests/unit/test_netris_external_ip_transport.py`; real Ansible HTTP and module subprocesses against a cookie-enforcing loopback fixture, including missing/incorrect-session rejection and redirects with and without response cookies. Both supplied and response-derived cookies must stay off redirect targets. No Kind, AAP, or real provider. The `netris_external_ip` integration target also requires the shared synthetic session on provider endpoints. |
 | Keycloak token lookup, cache refresh, and error handling | Unit | `uv run pytest tests/unit/plugins/lookup/test_fulfillment_token.py` |
 | AAP publish-templates credential and Kubernetes token wiring | Unit | `uv run pytest tests/unit/test_publish_templates_auth_config.py` |
 | Template publishing certificate validation | Local protocol integration | Run the `test_cert_validation` play in `collections/ansible_collections/osac/service/roles/publish_templates/tests/test.yml` with `uv run ansible-playbook`; the mock HTTPS server tests the client transport only |

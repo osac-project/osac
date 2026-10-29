@@ -32,6 +32,7 @@ Usage (from osac-aap/):
 """
 
 import contextlib
+import hmac
 import json
 import os
 import secrets
@@ -44,6 +45,7 @@ import time
 import unittest
 import uuid
 from pathlib import Path
+from urllib.error import HTTPError
 
 import yaml
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -97,8 +99,22 @@ class NetrisFixtureHandler(BaseHTTPRequestHandler):
             return None
         return body if isinstance(body, dict) else {}
 
+    def _authorized(self):
+        """Require the per-run session on provider endpoints only."""
+        if not self.path.startswith("/api/"):
+            return True
+        if hmac.compare_digest(
+            self.headers.get("Cookie", "").encode("utf-8"),
+            f"connect.sid={self.server.session_cookie}".encode("utf-8"),
+        ):
+            return True
+        self._respond(401, {"message": "authentication required"})
+        return False
+
     def do_GET(self):
         """Return provider lists, state, and record the request order."""
+        if not self._authorized():
+            return
         path = self.path.split("?")[0]
         if path == "/_state":
             with self.server.lock:
@@ -137,6 +153,8 @@ class NetrisFixtureHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """Serve scenario control and the subnet create endpoint."""
+        if not self._authorized():
+            return
         path = self.path.split("?")[0]
         if path == "/_scenario":
             body = self._read_body()
@@ -195,6 +213,8 @@ class NetrisFixtureHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         """Return a scenario-specific delete result and honor sticky mode."""
+        if not self._authorized():
+            return
         path = self.path.split("?")[0]
         if path.startswith("/api/v2/ipam/subnet/"):
             self._record("DELETE", path)
@@ -224,6 +244,7 @@ class NetrisFixtureServer(ThreadingHTTPServer):
     def __init__(self):
         """Bind the test provider to an ephemeral loopback port."""
         super().__init__(("127.0.0.1", 0), NetrisFixtureHandler)
+        self.session_cookie = secrets.token_hex(16)
         self.lock = threading.Lock()
         self.subnets = []
         self.allocations = []
@@ -536,9 +557,7 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         job_vars = {
             "osac_job_vars": {"resource": resource},
             "netris_controller_url": self.fixture_url,
-            # Per-run ephemeral value; the fixture endpoint is independent
-            # of real authentication and the value is never persisted.
-            "netris_session_cookie": secrets.token_hex(16),
+            "netris_session_cookie": self.server.session_cookie,
             "netris_site_id": PROVIDER_SITE_ID,
             "netris_tenant_id": PROVIDER_TENANT_ID,
             "netris_validate_certs": False,
@@ -792,6 +811,25 @@ class ExternalIPPlaybookTests(unittest.TestCase):
                 return snapshot
             time.sleep(0.5)
         self.fail(f"ExternalIP {name} never reported a deletionTimestamp")
+
+    def test_i00_provider_rejects_missing_or_incorrect_session(self):
+        """Reject unauthenticated requests before reading or mutating state."""
+        self._scenario()
+        for method, path in (
+            ("GET", "/api/v2/ipam/subnets"),
+            ("POST", "/api/v2/ipam/subnet"),
+            ("DELETE", "/api/v2/ipam/subnet/1"),
+        ):
+            for headers in ({}, {"Cookie": "connect.sid=invalid-test-session"}):
+                request = Request(
+                    f"{self.fixture_url}{path}", method=method, headers=headers
+                )
+                with self.assertRaises(HTTPError) as raised:
+                    urlopen(request, timeout=10)
+                self.assertEqual(raised.exception.code, 401)
+                raised.exception.close()
+        self.assertEqual(self._state()["calls"], [])
+        self.assertEqual(self._state()["subnets"], [])
 
     # I01: allocate from a supplied snapshot; the UID /32 persists and the
     # artifact matches UID, generation, and address exactly.

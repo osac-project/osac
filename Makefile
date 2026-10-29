@@ -4,8 +4,10 @@ HOME_DIR ?= $(HOME)
 CONTAINER_CMD ?= $(shell command -v podman 2>/dev/null || echo docker)
 DISTROBOX_CONTEXT := tools/distrobox
 ARGS ?=
+FEATURE ?=
+FEATURES ?=
 
-.PHONY: image enter claude stop rm rebuild status help
+.PHONY: image enter claude stop rm rebuild status coverage-report help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -32,6 +34,9 @@ rm: ## Remove the distrobox and its container
 	@distrobox rm --force $(DISTROBOX_NAME) 2>/dev/null || true
 
 rebuild: rm image enter ## Rebuild image from scratch and enter
+
+coverage-report: ## Generate a coverage report (FEATURE=KEY FEATURES=PATH ARGS="--coverprofile PATH")
+	python3 tools/coverage-report/coverage-report $(if $(FEATURE),"$(FEATURE)") $(if $(FEATURES),--features "$(FEATURES)") $(ARGS)
 
 status: ## Show distrobox and image status
 	@echo "=== Images ==="

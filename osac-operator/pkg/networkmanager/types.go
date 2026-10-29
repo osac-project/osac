@@ -17,6 +17,7 @@ limitations under the License.
 package networkmanager
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -53,6 +54,10 @@ const (
 	DataKeyNATGatewayContractVersion           = "natGatewayContractVersion"
 	NATGatewayContractVersionV1                = "v1"
 )
+
+// ErrUnsupportedNATGatewayContractVersion indicates that a manager registration
+// advertises a NATGateway contract this operator cannot handle.
+var ErrUnsupportedNATGatewayContractVersion = errors.New("unsupported NATGateway contract version")
 
 // ManagerType distinguishes fabric managers from k8s managers.
 type ManagerType string
@@ -150,8 +155,8 @@ func ParseConfigMap(cm *corev1.ConfigMap, managerType ManagerType) (*Manager, er
 	}
 	natGatewayContractVersion := strings.TrimSpace(cm.Data[DataKeyNATGatewayContractVersion])
 	if natGatewayContractVersion != "" && natGatewayContractVersion != NATGatewayContractVersionV1 {
-		return nil, fmt.Errorf("ConfigMap %s/%s: unsupported NATGateway contract version %q",
-			cm.Namespace, cm.Name, natGatewayContractVersion)
+		return nil, fmt.Errorf("ConfigMap %s/%s: %w %q",
+			cm.Namespace, cm.Name, ErrUnsupportedNATGatewayContractVersion, natGatewayContractVersion)
 	}
 
 	return &Manager{

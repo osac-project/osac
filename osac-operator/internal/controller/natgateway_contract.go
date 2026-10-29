@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -15,6 +16,8 @@ import (
 )
 
 const osacNATGatewayContractVersionAnnotation = "osac.openshift.io/natgateway-contract-version"
+
+var errNATGatewayContract = errors.New("NATGateway contract validation failed")
 
 type natGatewayJobInputs struct {
 	name            string
@@ -48,11 +51,11 @@ func resolveNATGatewayManager(
 	pinnedVersion string,
 ) (string, string, error) {
 	if pinnedVersion != "" && pinnedVersion != networkmanager.NATGatewayContractVersionV1 {
-		return "", "", fmt.Errorf("unsupported NATGateway contract version %q", pinnedVersion)
+		return "", "", fmt.Errorf("%w: unsupported NATGateway contract version %q", errNATGatewayContract, pinnedVersion)
 	}
 	if pinnedVersion == networkmanager.NATGatewayContractVersionV1 {
 		if pinnedStrategy == "" {
-			return "", "", fmt.Errorf("pinned NATGateway contract v1 has no implementation strategy")
+			return "", "", fmt.Errorf("%w: pinned NATGateway contract v1 has no implementation strategy", errNATGatewayContract)
 		}
 		return pinnedStrategy, pinnedVersion, nil
 	}
@@ -61,6 +64,9 @@ func resolveNATGatewayManager(
 	version := pinnedVersion
 	plan, err := resolveDispatchPlan(ctx, resolver, "NATGateway", networkClassID)
 	if err != nil {
+		if errors.Is(err, networkmanager.ErrUnsupportedNATGatewayContractVersion) {
+			return "", "", fmt.Errorf("%w: %v", errNATGatewayContract, err)
+		}
 		return "", "", err
 	}
 	if plan != nil {
@@ -76,7 +82,7 @@ func resolveNATGatewayManager(
 		}
 	}
 	if version != "" && version != networkmanager.NATGatewayContractVersionV1 {
-		return "", "", fmt.Errorf("unsupported NATGateway contract version %q", version)
+		return "", "", fmt.Errorf("%w: unsupported NATGateway contract version %q", errNATGatewayContract, version)
 	}
 	return strategy, version, nil
 }

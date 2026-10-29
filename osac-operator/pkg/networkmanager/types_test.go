@@ -18,6 +18,7 @@ package networkmanager_test
 
 import (
 	"context"
+	"errors"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -385,5 +386,6 @@ var _ = Describe("NATGatewayContractVersion", func() {
 		}, networkmanager.FabricManager)
 
 		Expect(err).To(MatchError(ContainSubstring("unsupported NATGateway contract version")))
+		Expect(errors.Is(err, networkmanager.ErrUnsupportedNATGatewayContractVersion)).To(BeTrue())
 	})
 })

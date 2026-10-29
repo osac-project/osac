@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -221,9 +222,12 @@ func (r *NATGatewayReconciler) resolveNATGatewayUpdateDependencies(
 		natgw.Annotations[osacNATGatewayContractVersionAnnotation],
 	)
 	if err != nil {
-		setNATGatewayPhase(&natgw.Status, v1alpha1.NATGatewayPhaseFailed)
-		setReadyConditionFailed(&natgw.Status.Conditions, err.Error())
-		return nil, ctrl.Result{}, nil
+		if errors.Is(err, errNATGatewayContract) {
+			setNATGatewayPhase(&natgw.Status, v1alpha1.NATGatewayPhaseFailed)
+			setReadyConditionFailed(&natgw.Status.Conditions, err.Error())
+			return nil, ctrl.Result{}, nil
+		}
+		return nil, ctrl.Result{}, err
 	}
 	if implementationStrategy == "" {
 		log.Info("implementation strategy not set on parent VirtualNetwork, requeueing", "virtualNetwork", vnet.Name)

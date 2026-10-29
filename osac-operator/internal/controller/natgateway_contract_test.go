@@ -3,18 +3,23 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/dispatcheradapter"
+	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 func TestBuildNATGatewayContext(t *testing.T) {
@@ -200,8 +205,40 @@ func TestResolveNATGatewayManagerHonorsPinnedContract(t *testing.T) {
 	if _, _, err := resolveNATGatewayManager(
 		context.Background(), nil, "", "agentless_net", "",
 		networkmanager.NATGatewayContractVersionV1,
-	); err == nil {
-		t.Fatal("resolveNATGatewayManager() accepted v1 without a pinned strategy")
+	); !errors.Is(err, errNATGatewayContract) {
+		t.Fatalf("resolveNATGatewayManager() error = %v, want errNATGatewayContract", err)
+	}
+}
+
+func TestResolveNATGatewayManagerMarksContractErrors(t *testing.T) {
+	if _, _, err := resolveNATGatewayManager(
+		context.Background(), nil, "", "", "", "v2",
+	); !errors.Is(err, errNATGatewayContract) {
+		t.Fatalf("unsupported pinned version error = %v, want errNATGatewayContract", err)
+	}
+
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	managerConfig := newFabricManagerConfigMap("fm-agentless", "test-ns", "agentless_net")
+	managerConfig.Data[networkmanager.DataKeyNATGatewayContractVersion] = "v2"
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(managerConfig).Build()
+	discovery, err := networkmanager.NewDiscovery(fakeClient, "test-ns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := dispatcher.NewResolver(
+		dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+			[]*privatev1.NetworkClass{{Id: "nc-agentless", FabricManager: ptr.To("agentless_net")}},
+			&[]*privatev1.NetworkClass{},
+		)),
+		discovery,
+	)
+	if _, _, err := resolveNATGatewayManager(
+		context.Background(), resolver, "nc-agentless", "", "", "",
+	); !errors.Is(err, errNATGatewayContract) {
+		t.Fatalf("unsupported dispatched version error = %v, want errNATGatewayContract", err)
 	}
 }
 

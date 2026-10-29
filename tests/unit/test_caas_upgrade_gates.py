@@ -108,6 +108,47 @@ def test_unselected_components_survive_independent_cluster_state_change() -> Non
         scenario._assert_unchanged(changed_version, **expected)
 
 
+def test_cluster_failure_guard_allows_progressing() -> None:
+    """Independent provisioning progress does not fail the upgrade check."""
+    scenario._check_cluster_failure({"cluster": {"status": {"state": "CLUSTER_STATE_PROGRESSING"}}})
+
+
+@pytest.mark.parametrize("stage", ("control_plane", "node_pool"))
+def test_upgrade_observers_reject_failed_cluster(stage: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neither upgrade stage may complete after the tenant Cluster fails."""
+    failed = {
+        "cluster": {"status": {"state": "CLUSTER_STATE_FAILED"}},
+        "hosted": {"status": {"conditions": [{"type": "Available", "status": "True"}]}},
+    }
+    snapshot = Mock(return_value=failed)
+    monkeypatch.setattr(scenario, "_snapshot", snapshot)
+    monkeypatch.setattr(scenario, "_wait_elapsed", lambda *, observe, **_kwargs: observe())
+    refs = scenario._ClusterRefs("cluster-id", "order", "namespace", "hosted", {"compute": "a", "gpu": "b"})
+    source_pool = {"spec": {"release": {"image": "source-image"}}, "status": {"version": "4.22.0"}}
+    common = {
+        "refs": refs,
+        "target": {"name": "target-name", "image": "target-image"},
+        "jwt_grpc_tenant1": Mock(),
+        "grpc": Mock(),
+        "k8s": Mock(),
+        "evidence": {},
+    }
+
+    with pytest.raises(AssertionError, match="OSAC Cluster entered FAILED state during upgrade"):
+        if stage == "control_plane":
+            scenario._upgrade_control_plane(baseline={"pools": {"gpu": source_pool}, "order": {"status": {}}}, **common)
+        else:
+            scenario._upgrade_node_pool(
+                baseline={"pools": {"gpu": source_pool}},
+                cp_snapshot={"pools": {"compute": {"spec": {"replicas": 1}}}, "order": {"status": {}}},
+                upgraded_node_set="compute",
+                unchanged_node_set="gpu",
+                **common,
+            )
+
+    assert snapshot.call_count == 1
+
+
 def test_node_pool_poll_rejects_later_control_plane_degradation(monkeypatch: pytest.MonkeyPatch) -> None:
     """Control-plane health must hold during the NodePool completion wait."""
     regular = journey.REGULAR_NODE_SET

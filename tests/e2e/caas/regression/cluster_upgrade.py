@@ -105,6 +105,12 @@ def _warn_readiness_mismatch(snapshot: dict[str, Any], reported: set[tuple[str |
         logger.warning("OSAC Cluster state %s disagrees with HyperShift HostedCluster ready=%s", state, hosted_ready)
 
 
+def _check_cluster_failure(snapshot: dict[str, Any]) -> None:
+    """Do not report upgrade progress for an unusable tenant Cluster."""
+    if snapshot["cluster"].get("status", {}).get("state") == "CLUSTER_STATE_FAILED":
+        raise AssertionError("OSAC Cluster entered FAILED state during upgrade")
+
+
 def _pool_identity(k8s: K8sClient, namespace: str, co_name: str, expected_node_sets: set[str]) -> dict[str, str]:
     """Find the test-owned NodePools by their public NodeSet labels."""
     pools = k8s.list_json(resource="nodepools.hypershift.openshift.io", namespace=namespace).get("items", [])
@@ -312,6 +318,7 @@ def _upgrade_control_plane(
         """Read control-plane progress while rejecting unrelated changes."""
         current = _snapshot(k8s=k8s, grpc=grpc, refs=refs)
         _warn_readiness_mismatch(current, reported)
+        _check_cluster_failure(current)
         _assert_unchanged(current, images=old_images, versions=old_versions)
         assert current["cluster"]["spec"]["version"]["name"] == target["name"]
         _check_hypershift_failure(current["hosted"], "control plane")
@@ -381,6 +388,7 @@ def _upgrade_node_pool(
         """Read NodePool progress and recheck the other pool and control-plane health."""
         current = _snapshot(k8s=k8s, grpc=grpc, refs=refs)
         _warn_readiness_mismatch(current, reported)
+        _check_cluster_failure(current)
         _assert_unchanged(
             current,
             images={unchanged_node_set: unchanged_pool["spec"]["release"]["image"]},

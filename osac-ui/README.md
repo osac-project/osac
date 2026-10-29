@@ -38,17 +38,44 @@ Resolve a tag to its digest with `helm pull oci://ghcr.io/osac-project/charts/ui
 
 ## Quick start
 
-Prerequisites: Node.js 20+, pnpm 9+, Go 1.23+
+Prerequisites: Node.js 20+, pnpm 9+, Go 1.25.5+, and `oc` for automatic
+authentication with a protected API
 
 ```bash
 pnpm install
 ```
 
-Start the Go proxy (requires a running fulfillment API) and Vite dev server:
+Start the Go proxy (requires a running fulfillment API) and Vite dev server.
+When the API requires authentication, log in to OpenShift first. The script
+reads the UI credentials from the `osac` project by default:
 
 ```bash
 FULFILLMENT_API_URL=https://fulfillment.your-env.example.com pnpm dev
 ```
+
+The script reads the OIDC issuer from ConfigMap `osac-ui` and the UI backend's
+client credentials from Secret `osac-ui-backend-credentials` in that project.
+You need permission to read both resources. Use an externally reachable
+`FULFILLMENT_API_URL` when running outside the cluster.
+
+To use another project, set `OSAC_UI_NAMESPACE`, for example:
+
+```bash
+OSAC_UI_NAMESPACE="other_ns" FULFILLMENT_API_URL=https://fulfillment.your-env.example.com pnpm dev
+```
+
+Values already set in `OIDC_ISSUER_URL`, `OIDC_SERVICE_CLIENT_ID`, or
+`OIDC_SERVICE_CLIENT_SECRET` take precedence over cluster values; when all
+three are set, the script does not call `oc`. If `oc` cannot provide the
+settings, the proxy can still start against an API with public reflection.
+The script passes credentials through the development proxy process tree's
+environment, without printing or storing them.
+
+Any `OIDC_ISSUER_URL` override must be
+reachable and match the issuer trusted by fulfillment. For self-signed
+certificates, set `OIDC_TLS_CA_FILE` and `FULFILLMENT_TLS_CA_FILE` to the
+appropriate CA bundle paths, or use the development-only
+`OIDC_TLS_INSECURE=1` and `FULFILLMENT_TLS_INSECURE=1` flags.
 
 ## Documentation
 

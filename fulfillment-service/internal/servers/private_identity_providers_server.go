@@ -152,6 +152,9 @@ func (s *PrivateIdentityProvidersServer) Create(ctx context.Context,
 	if err = s.validateClientSecretSecret(ctx, request.GetObject()); err != nil {
 		return
 	}
+	if err = validateDefaultProjectForCreate(request.GetObject().GetMetadata()); err != nil {
+		return
+	}
 	err = s.generic.Create(ctx, request, &response)
 	return
 }

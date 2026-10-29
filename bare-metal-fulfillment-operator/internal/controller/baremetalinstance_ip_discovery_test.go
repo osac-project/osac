@@ -511,6 +511,19 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 			}))
 		})
 
+		It("uses one MAC for an unnamed attachment when interface names are aliases", func() {
+			attachments := []v1alpha1.BareMetalNetworkAttachment{{SubnetRef: "subnet-a"}}
+			ifaceMACs := map[string]string{
+				"eno1":   "52:54:00:16:04:AB",
+				"data-0": "52:54:00:16:04:ab",
+			}
+
+			Expect(buildSubnetMACMap(attachments, ifaceMACs)).To(Or(
+				Equal(map[string]string{"subnet-a": "52:54:00:16:04:AB"}),
+				Equal(map[string]string{"subnet-a": "52:54:00:16:04:ab"}),
+			))
+		})
+
 		It("omits attachments whose interface has no known MAC", func() {
 			attachments := []v1alpha1.BareMetalNetworkAttachment{
 				{SubnetRef: "subnet-a", Interface: "eth9"},

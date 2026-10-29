@@ -16,6 +16,8 @@ package servers
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -40,7 +42,8 @@ var _ = Describe("Users Server", func() {
 		request := &privatev1.UsersCreateRequest{
 			Object: &privatev1.User{
 				Metadata: &privatev1.Metadata{
-					Name: "test-user",
+					Name:    "test-user",
+					Project: "",
 				},
 				Spec: &privatev1.UserSpec{
 					Username: "testuser",
@@ -58,6 +61,17 @@ var _ = Describe("Users Server", func() {
 		Expect(response.Object.Id).ToNot(BeEmpty())
 		Expect(response.Object.Metadata.Name).To(Equal("test-user"))
 		Expect(response.Object.Spec.Username).To(Equal("testuser"))
+	})
+
+	It("Rejects creating a user in a named project", func() {
+		_, err := privateServer.Create(ctx, &privatev1.UsersCreateRequest{
+			Object: &privatev1.User{
+				Metadata: &privatev1.Metadata{Name: "named-project-user", Project: "my-project"},
+				Spec:     &privatev1.UserSpec{Username: "default-project-user"},
+			},
+		})
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(err).To(MatchError("rpc error: code = InvalidArgument desc = field 'metadata.project' must be empty"))
 	})
 
 	It("Lists users", func() {

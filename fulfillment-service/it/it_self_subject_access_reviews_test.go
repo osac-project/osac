@@ -112,6 +112,53 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
+	It("preserves ordinary metadata and rejects reserved metadata before review evaluation", func() {
+		response, err := tenantAdminReviewClient.Create(ctx, publicv1.SelfSubjectAccessReviewsCreateRequest_builder{
+			Object: publicv1.SelfSubjectAccessReview_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name:        fmt.Sprintf("metadata-review-%s", uuid.New()[24:32]),
+					Tenant:      tenantName,
+					Labels:      map[string]string{"example.com/review": "visible-label"},
+					Annotations: map[string]string{"example.com/review": "visible-annotation"},
+				}.Build(),
+				Spec: publicv1.SelfSubjectAccessReviewSpec_builder{
+					Service: "osac.public.v1.Clusters",
+					Method:  "Get",
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.GetObject().GetStatus().GetAllowed()).To(BeTrue())
+		Expect(response.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{"example.com/review": "visible-label"}))
+		Expect(response.GetObject().GetMetadata().GetAnnotations()).To(Equal(map[string]string{"example.com/review": "visible-annotation"}))
+
+		_, err = tenantAdminReviewClient.Create(ctx, publicv1.SelfSubjectAccessReviewsCreateRequest_builder{
+			Object: publicv1.SelfSubjectAccessReview_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name:   fmt.Sprintf("reserved-metadata-review-%s", uuid.New()[24:32]),
+					Tenant: tenantName,
+					Labels: map[string]string{
+						"admin.osac.openshift.io/review": "reserved-label",
+						"example.com/review":             "ordinary-label",
+					},
+					Annotations: map[string]string{
+						"operator.admin.osac.openshift.io/review": "reserved-annotation",
+						"example.com/review":                      "ordinary-annotation",
+					},
+				}.Build(),
+				Spec: publicv1.SelfSubjectAccessReviewSpec_builder{
+					Service: "osac.public.v1.Clusters",
+					Method:  "Get",
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).To(HaveOccurred())
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+		Expect(status.Message()).To(Equal("Label or annotation is reserved for use by the system."))
+	})
+
 	Describe("Authorization Consistency", func() {
 		Context("System Admin user", func() {
 			It("should return allowed=true for Create permission check and succeed on actual Create", func() {

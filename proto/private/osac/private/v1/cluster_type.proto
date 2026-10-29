@@ -341,7 +341,7 @@ message ClusterStatus {
   repeated AddOnOperatorStatus add_on_operators = 12;
 
   // OpenShift version observed on the hosted control plane.
-  string observed_cp_version = 13 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string observed_version = 13 [(google.api.field_behavior) = OUTPUT_ONLY];
 
   reserved 14;
   reserved "upgrade";
@@ -379,7 +379,8 @@ enum ClusterUpgradeState {
   // HyperShift reported a terminal error and stopped working toward the requested version.
   CLUSTER_UPGRADE_STATE_FAILED = 5;
 
-  // The node set was removed and its NodePool deleted before the upgrade completed.
+  // The node set was removed and its NodePool deleted while this attempt was Pending or Progressing.
+  // An attempt already marked TimedOut retains that outcome after removal.
   CLUSTER_UPGRADE_STATE_NODE_SET_REMOVED = 6;
 }
 
@@ -410,8 +411,8 @@ message ClusterUpgradeHistoryEntry {
   // Time OSAC accepted the attempt.
   google.protobuf.Timestamp accepted_time = 4;
 
-  // Time this attempt last changed state, including a later update after TIMED_OUT.
-  google.protobuf.Timestamp last_state_time = 5;
+  // Time this attempt entered its current state, including a later update after TIMED_OUT.
+  google.protobuf.Timestamp state_transition_time = 5;
 
   // Current outcome or progress state of this attempt.
   ClusterUpgradeState state = 6;
@@ -421,6 +422,10 @@ message ClusterUpgradeHistoryEntry {
 
   // Identifier correlating this history entry with private operator feedback.
   string attempt_id = 8 [(cleanapi.field).private = true];
+
+  // Number of selected nodes when the node-set attempt was accepted.
+  // Private feedback uses this frozen count for the per-node timeout.
+  int32 timeout_node_count = 9 [(cleanapi.field).private = true];
 }
 
 // Represents the overall state of a cluster.

@@ -146,10 +146,15 @@ def test_the_caas_suite_passes_the_tier_the_decision_gives_and_nothing_else_does
     tier = caas[True]["workflow_dispatch"]["inputs"]["tier"]
     assert tier["required"] is False and tier["default"] == "" and tier["type"] == "string"
     assert caas["jobs"]["caas"]["with"]["tier"] == "${{ inputs.tier }}"
-    for other in ("vmaas", "bmaas", "netris"):
-        wrapper = _load(f".github/workflows/e2e-pr-{other}.yml")
+    # every other suite (the policy names the workflow of each; a suite can be renamed, as bmaas-netris was)
+    others = {j["suite"]: j["workflow"] for j in _load(".github/e2e-policy.yml")["jobs"].values() if j.get("workflow")}
+    assert len(others) > 1 and others["caas"] == "e2e-pr-caas.yml"
+    for suite, file in others.items():
+        if suite == "caas":
+            continue
+        wrapper = _load(f".github/workflows/{file}")
         assert "tier" not in wrapper[True]["workflow_dispatch"]["inputs"], "only the caas suite has a variant"
-        assert "tier" not in wrapper["jobs"][other]["with"]
+        assert "tier" not in wrapper["jobs"][suite]["with"]
     queue = _load(".github/workflows/e2e-queue.yml")["jobs"]
     assert not any("tier" in (job.get("with") or {}) for job in queue.values()), "the queue gets the sanity tests alone"
     assert "caas-full" not in queue, "a variant has no job in the queue either"

@@ -54,17 +54,6 @@ def metering_project(grpc: GRPCClient):
         grpc.delete_project(project_id=project_id)
 
 
-def _typed_heartbeats(metering: MeteringCollector, volume_id: str) -> list[dict[str, Any]]:
-    """The heartbeats that carry the storage_tier dimension, in interval order."""
-    typed = [
-        event
-        for event in metering.get_all_events(HEARTBEAT_TYPE, volume_id)
-        if event.get("data", {}).get("billing_dimensions", {}).get("storage_tier")
-    ]
-    typed.sort(key=lambda event: event["data"]["usage"]["from"])
-    return typed
-
-
 def test_volume_bills_gibibyte_seconds(
     grpc: GRPCClient,
     private_grpc: GRPCClient,
@@ -137,13 +126,13 @@ def test_volume_bills_gibibyte_seconds(
         # quantity must equal size x the exact length of its interval in seconds,
         # and consecutive intervals must be contiguous with no billed gap.
         poll_until(
-            fn=lambda: len(_typed_heartbeats(metering, volume_id)),
+            fn=lambda: len(metering.typed_heartbeats(volume_id, dimension="storage_tier")),
             until=lambda count: count >= 2,
             retries=HEARTBEAT_TIMEOUT // 10,
             delay=10,
             description=f"two typed heartbeats of volume {volume_id}",
         )
-        typed = _typed_heartbeats(metering, volume_id)
+        typed = metering.typed_heartbeats(volume_id, dimension="storage_tier")
         for event in typed:
             start, end, quantity = usage_interval(event)
             expected = Decimal(VOLUME_SIZE_GIB) * interval_seconds(start, end)
@@ -162,18 +151,18 @@ def test_volume_bills_gibibyte_seconds(
 
     assert deletion_recorded is not None, "the Volume CR was never deleted, so no deletion timestamp was recorded"
 
-    # The billing end is the meter's own last interval end, read once the
-    # heartbeat stream has gone quiet for a full round: the final partial piece
-    # lands in the first round after the fold consumes the deletion, and reading
-    # the end earlier anchors on an intermediate round, making the final piece
-    # read as billing past the anchor.
-    billing_end = metering.wait_for_billing_end(volume_id)
+    # The billing end is the meter's own last interval end, anchored on the
+    # recorded deletion: a round skips its tick while the fold lags the event
+    # topic, so the final partial piece can land several round intervals after
+    # the deletion, and reading the end before the piece lands anchors on an
+    # intermediate round, making the piece read as billing past the anchor.
+    billing_end = metering.wait_for_billing_end(volume_id, deletion=deletion_recorded)
 
     # The billed life is exact: the typed heartbeats collapse into contiguous
     # net intervals, each billing exactly its size in GiB per second, and the
     # last interval reaches the recorded deletion.
     assert_exact_contiguous_life(
-        _typed_heartbeats(metering, volume_id),
+        metering.typed_heartbeats(volume_id, dimension="storage_tier"),
         multiplier=Decimal(VOLUME_SIZE_GIB),
         deletion=deletion_recorded,
         label=f"typed heartbeats of volume {volume_id}",

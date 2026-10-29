@@ -63,6 +63,10 @@ type Bridge[O clnt.Object, R proto.Message] struct {
 	// SyncDelete maps CR state to the remote record on the delete path.
 	SyncDelete func(ctx context.Context, obj O, remote R) error
 
+	// ResultForUpdate chooses the reconcile result from the synced objects after
+	// any remote changes have been saved. If nil, the zero result is returned.
+	ResultForUpdate func(obj O, remote R) ctrl.Result
+
 	// PostSaveOnDelete is an optional callback invoked after Save completes
 	// on the delete path, before finalizer removal. Use it for cross-resource
 	// side effects that must happen after this resource's state is persisted
@@ -151,6 +155,9 @@ func (b *Bridge[O, R]) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 		if err := b.Save(ctx, remote); err != nil {
 			return result, err
 		}
+	}
+	if object.GetDeletionTimestamp().IsZero() && b.ResultForUpdate != nil {
+		result = b.ResultForUpdate(object, remote)
 	}
 
 	// Run post-save side effects on the delete path (e.g. cross-resource cleanup).

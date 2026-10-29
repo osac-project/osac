@@ -56,5 +56,6 @@ export const expectCatalogItemListed = async (
 
 /** Verify that a catalog item is absent from the Catalog page. */
 export const expectCatalogItemNotListed = async (page: Page, name: string): Promise<void> => {
+  await expect(page.getByRole(...CatalogMainPage.catalogLoadingIndicator)).toHaveCount(0);
   await expect(getCatalogItemCard(page, name)).toHaveCount(0);
 };

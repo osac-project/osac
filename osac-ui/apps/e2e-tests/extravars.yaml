@@ -1,7 +1,7 @@
 # Non-sensitive seed values for the VMaaS UI tests.
 #
 # The deployment URL and Keycloak credentials must be supplied through
-# OSAC_UI_BASE_URL, OSAC_USERNAME, and OSAC_PASSWORD.
+# OSAC_UI_BASE_URL, OSAC_ADMIN_USERNAME, and OSAC_ADMIN_PASSWORD.
 
 tenant_name: 'tenant1'
 

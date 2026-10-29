@@ -4,6 +4,7 @@ import ast
 import logging
 import subprocess
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -78,17 +79,36 @@ def test_poll_until_timeout_does_not_expose_last_value(
     assert "secret-response" not in caplog.text + str(exc.value)
 
 
+def test_poll_until_recovers_after_a_command_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+    observe = Mock(side_effect=[subprocess.CalledProcessError(1, ["kubectl"]), "ready"])
+
+    assert (
+        runner.poll_until(
+            fn=observe,
+            until=lambda value: value == "ready",
+            retries=2,
+            delay=0,
+            description="test recovery",
+            retry_on_error=True,
+        )
+        == "ready"
+    )
+
+
 def test_poll_until_retry_error_does_not_log_command_output(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(runner, "_PROGRESS_LOG_INTERVAL_S", 0)
+
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
 
     def fail() -> str:
         raise subprocess.CalledProcessError(1, "secret-command", output="secret-response")
 
     with caplog.at_level(logging.INFO, logger=runner.logger.name), pytest.raises(TimeoutError) as exc:
         runner.poll_until(
-            fn=fail, until=lambda _: False, retries=1, delay=0, description="secret-description", retry_on_error=True
+            fn=fail, until=lambda _: False, retries=2, delay=0, description="secret-description", retry_on_error=True
         )
 
     for secret in ("secret-description", "secret-command", "secret-response"):

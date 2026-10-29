@@ -406,6 +406,18 @@ var _ = Describe("BareMetalHost Manager", func() {
 			Expect(exists).To(BeTrue())
 		})
 
+		It("checks the API when the cache has not seen the BMH", func() {
+			bmh := &metal3api.BareMetalHost{ObjectMeta: metav1.ObjectMeta{Name: "node001", Namespace: testNamespace}}
+			scheme := newTestScheme()
+			cachedClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+			apiClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(bmh).Build()
+			mgr := NewManager(cachedClient, apiClient, testNamespace)
+
+			exists, err := mgr.BMHExists(ctx, "node001")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(exists).To(BeTrue())
+		})
+
 		It("should return false when BMH does not exist", func() {
 			mgr := newTestManager()
 

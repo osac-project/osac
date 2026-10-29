@@ -54,15 +54,18 @@ type clusterVersionChange struct {
 	component     *privatev1.ClusterUpgradeComponent
 	sourceVersion string
 	target        *privatev1.ClusterVersionReference
+	nodeCount     int32
 }
 
+// findClusterVersionChange returns the first version change
+// represented by the update.
 func findClusterVersionChange(current, candidate *privatev1.Cluster, controlPlaneChanged bool) *clusterVersionChange {
 	if controlPlaneChanged {
 		component := &privatev1.ClusterUpgradeComponent{}
 		component.SetControlPlane(&emptypb.Empty{})
 		return &clusterVersionChange{
 			component:     component,
-			sourceVersion: current.GetStatus().GetObservedCpVersion(),
+			sourceVersion: current.GetStatus().GetObservedVersion(),
 			target:        candidate.GetSpec().GetVersion(),
 		}
 	}
@@ -78,11 +81,14 @@ func findClusterVersionChange(current, candidate *privatev1.Cluster, controlPlan
 			component:     component,
 			sourceVersion: current.GetStatus().GetNodeSets()[name].GetObservedVersion(),
 			target:        nodeSet.GetVersion(),
+			nodeCount:     max(1, nodeSet.GetSize()),
 		}
 	}
 	return nil
 }
 
+// appendClusterUpgradeAttempt records a pending history entry
+// for the accepted change.
 func appendClusterUpgradeAttempt(candidate *privatev1.Cluster, change *clusterVersionChange,
 	targetVersion string, now *timestamppb.Timestamp) {
 	if !candidate.HasStatus() {
@@ -98,9 +104,10 @@ func appendClusterUpgradeAttempt(candidate *privatev1.Cluster, change *clusterVe
 	entry.SetSourceVersion(change.sourceVersion)
 	entry.SetTargetVersion(targetVersion)
 	entry.SetAcceptedTime(now)
-	entry.SetLastStateTime(now)
+	entry.SetStateTransitionTime(now)
 	entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING)
 	entry.SetAttemptId(uuid.New())
+	entry.SetTimeoutNodeCount(change.nodeCount)
 	candidate.GetStatus().SetUpgradeHistory(append(
 		[]*privatev1.ClusterUpgradeHistoryEntry{entry}, candidate.GetStatus().GetUpgradeHistory()...))
 	if change.component.GetControlPlane() != nil {
@@ -119,8 +126,8 @@ func (s *PrivateClustersServer) clusterVersionSemver(ctx context.Context,
 	return version.GetObject().GetSpec().GetVersion(), nil
 }
 
-// mergeClusterUpgradeHistory accepts private status transitions by attempt ID
-// while retaining the server's audit fields and newest-first order.
+// mergeClusterUpgradeHistory accepts private status transitions by attempt and
+// component while retaining the server's audit fields and newest-first order.
 func mergeClusterUpgradeHistory(current, candidate *privatev1.Cluster,
 	mask *fieldmaskpb.FieldMask) {
 	stored := current.GetStatus().GetUpgradeHistory()
@@ -137,31 +144,48 @@ func mergeClusterUpgradeHistory(current, candidate *privatev1.Cluster,
 	candidate.GetStatus().SetUpgradeHistory(result)
 }
 
+// mergeClusterUpgradeStateChanges merges only newer state
+// transitions into stored history.
 func mergeClusterUpgradeStateChanges(
 	stored, incoming []*privatev1.ClusterUpgradeHistoryEntry,
 ) []*privatev1.ClusterUpgradeHistoryEntry {
-	byID := make(map[string]*privatev1.ClusterUpgradeHistoryEntry, len(incoming))
+	byAttemptAndComponent := make(map[clusterUpgradeHistoryKey]*privatev1.ClusterUpgradeHistoryEntry, len(incoming))
 	for _, entry := range incoming {
-		if entry.GetAttemptId() != "" {
-			byID[entry.GetAttemptId()] = entry
+		if entry.GetAttemptId() != "" && entry.GetComponent() != nil {
+			byAttemptAndComponent[upgradeHistoryKey(entry)] = entry
 		}
 	}
 	result := make([]*privatev1.ClusterUpgradeHistoryEntry, len(stored))
 	for i, entry := range stored {
 		result[i] = entry
-		update := byID[entry.GetAttemptId()]
+		update := byAttemptAndComponent[upgradeHistoryKey(entry)]
 		if update == nil || update.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_UNSPECIFIED ||
-			update.GetState() == entry.GetState() || update.GetLastStateTime() == nil ||
-			!update.GetLastStateTime().AsTime().After(entry.GetLastStateTime().AsTime()) {
+			update.GetState() == entry.GetState() || update.GetStateTransitionTime() == nil ||
+			!update.GetStateTransitionTime().AsTime().After(entry.GetStateTransitionTime().AsTime()) {
 			continue
 		}
 		changed := proto.Clone(entry).(*privatev1.ClusterUpgradeHistoryEntry)
 		changed.SetState(update.GetState())
 		changed.SetMessage(update.GetMessage())
-		changed.SetLastStateTime(update.GetLastStateTime())
+		changed.SetStateTransitionTime(update.GetStateTransitionTime())
 		result[i] = changed
 	}
 	return result
+}
+
+type clusterUpgradeHistoryKey struct {
+	attemptID    string
+	nodeSetID    string
+	controlPlane bool
+}
+
+// upgradeHistoryKey distinguishes components that share an attempt ID.
+func upgradeHistoryKey(entry *privatev1.ClusterUpgradeHistoryEntry) clusterUpgradeHistoryKey {
+	return clusterUpgradeHistoryKey{
+		attemptID:    entry.GetAttemptId(),
+		nodeSetID:    entry.GetComponent().GetNodeSetId(),
+		controlPlane: entry.GetComponent().GetControlPlane() != nil,
+	}
 }
 
 func populateUnsetNodeSetVersions(nodeSets map[string]*privatev1.ClusterNodeSet, version *privatev1.ClusterVersionReference) {

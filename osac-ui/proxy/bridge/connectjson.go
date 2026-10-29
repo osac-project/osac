@@ -43,6 +43,11 @@ import (
 	"connectrpc.com/vanguard"
 )
 
+// reflectionTimeout bounds gRPC server reflection at startup. Reflection
+// uses one round trip per service. A high-latency link needs more than
+// 30s. A shorter limit makes the proxy exit before it listens.
+const reflectionTimeout = 2 * time.Minute
+
 // NewConnectJSONProxy creates an http.Handler that accepts Connect protocol
 // requests (JSON) and forwards them as native gRPC. Proto schemas are
 // discovered dynamically via gRPC server reflection — no generated stubs needed.
@@ -100,7 +105,7 @@ func NewConnectJSONProxy(grpcURL string, tlsConfig *tls.Config, bearerToken stri
 
 func discoverServices(conn *grpc.ClientConn, bearerToken string) (*protoregistry.Files, error) {
 	client := reflectpb.NewServerReflectionClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), reflectionTimeout)
 	defer cancel()
 	if bearerToken != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+bearerToken)

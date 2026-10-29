@@ -1027,6 +1027,13 @@ func (s *GenericServer[O]) validateMetadata(ctx context.Context, metadata metada
 	return nil
 }
 
+func validateDefaultProjectForCreate(metadata *privatev1.Metadata) error {
+	if metadata != nil && metadata.GetProject() != "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.project' must be empty")
+	}
+	return nil
+}
+
 // validateLabels validates label keys and values according to Kubernetes label naming conventions.
 //
 // Label keys consist of an optional prefix and a name separated by '/':

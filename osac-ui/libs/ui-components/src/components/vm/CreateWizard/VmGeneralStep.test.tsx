@@ -14,6 +14,10 @@ import {
 import { type ComputeInstanceWizardValues, getComputeInstanceInitialValues } from './fields';
 import { createEmptyComputeInstanceValues } from './payload';
 import VmGeneralStep from './VmGeneralStep';
+import {
+  expectResourceSelectDisabled,
+  getResourceSelectCombobox,
+} from '../../../test-utils/resourceSelect';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 import { provisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
@@ -69,7 +73,7 @@ describe('VmGeneralStep', () => {
 
     await user.click(screen.getByRole('option', { name: /rhel/ }));
 
-    await waitFor(() => expect(diskImageSelect).toHaveTextContent('rhel'));
+    await waitFor(() => expect(getResourceSelectCombobox(/^Disk image/)).toHaveValue('rhel'));
   });
 
   it('shows the catalog item disk image when the wizard opens', async () => {
@@ -97,9 +101,9 @@ describe('VmGeneralStep', () => {
       },
     );
 
-    const diskImageSelect = await screen.findByLabelText(/^Disk image/);
-    await waitFor(() => expect(diskImageSelect).toHaveTextContent('rhel'));
-    expect(diskImageSelect).toBeDisabled();
+    await screen.findByLabelText(/^Disk image/);
+    await waitFor(() => expect(getResourceSelectCombobox(/^Disk image/)).toHaveValue('rhel'));
+    expectResourceSelectDisabled(/^Disk image/);
   });
 
   it('clears unlocked SSH key and user-data secret references when the project changes', async () => {

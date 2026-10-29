@@ -167,8 +167,11 @@ The realm includes the following roles used by the authorization policy:
 | `tenant-admin` | Tenant administrator with full user and IdP management permissions |
 | `tenant-idp-manager` | Tenant IdP manager with IdP configuration permissions only (no user management) |
 
-Assign these roles to users via the Keycloak Admin Console under **Users** → Select user →
-**Role mapping** tab.
+The built-in Role catalog offers `cloud-provider-reader`, `tenant-idp-manager`, `tenant-admin`, and `tenant-reader` for explicit
+RoleBindings. Regular authenticated users receive tenant user permissions by default; no
+RoleBinding is needed for those permissions.
+
+Assign these roles to users by creating a RoleBinding for them.
 
 ### Token Audience (`aud` Claim)
 

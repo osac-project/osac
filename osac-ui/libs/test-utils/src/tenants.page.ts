@@ -1,5 +1,5 @@
 import { type Locator, type Page, expect } from '@playwright/test';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, rmdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,6 +16,57 @@ import {
 } from '../../locators/tenants';
 
 const defaultTenantNames = ['shared', 'system'] as const;
+
+export interface TenantCredentials {
+  username: string;
+  password: string;
+}
+
+const safeTenantName = (tenantName: string): string =>
+  tenantName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'tenant';
+
+const tenantCredentialsDirectoryPath = (tenantName: string): string =>
+  join(tmpdir(), `osac-${safeTenantName(tenantName)}-break-glass`);
+
+/** Return the temporary credential-file path for a tenant. */
+export const tenantCredentialsFilePath = (tenantName: string): string =>
+  join(
+    tenantCredentialsDirectoryPath(tenantName),
+    `${safeTenantName(tenantName)}-break-glass-credentials.txt`,
+  );
+
+const credentialFromFile = (contents: string, label: string, credentialsFile: string): string => {
+  const line = contents.split(/\r?\n/).find((entry) => entry.startsWith(`${label}:`));
+  const value = line?.slice(label.length + 1).trim();
+  if (!value) {
+    throw new Error(`Tenant credentials file "${credentialsFile}" is missing ${label}.`);
+  }
+  return value;
+};
+
+/** Read tenant credentials previously saved by createTenant. */
+export const readTenantCredentials = async (
+  credentialsFile: string,
+): Promise<TenantCredentials> => {
+  const contents = await readFile(credentialsFile, 'utf8');
+  return {
+    username: credentialFromFile(contents, 'Username', credentialsFile),
+    password: credentialFromFile(contents, 'Password', credentialsFile),
+  };
+};
+
+/** Remove the saved credentials for a tenant, if present. */
+export const removeTenantCredentials = async (tenantName: string): Promise<void> => {
+  await rm(tenantCredentialsFilePath(tenantName), { force: true });
+  try {
+    await rmdir(tenantCredentialsDirectoryPath(tenantName));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTEMPTY') {
+      throw error;
+    }
+  }
+};
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -107,36 +158,44 @@ export const createTenant = async (
   await expect(password).toHaveValue(/.+/);
 
   // Save the generated credentials in a tenant-specific temporary file.
-  const safeTenantName = tenantName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'tenant';
-  const temporaryDirectory = await mkdtemp(join(tmpdir(), `osac-${safeTenantName}-`));
-  const credentialsFile = join(temporaryDirectory, `${safeTenantName}-break-glass-credentials.txt`);
-  await writeFile(
-    credentialsFile,
-    [
-      `Tenant: ${tenantName}`,
-      `Username: ${await username.inputValue()}`,
-      `Password: ${await password.inputValue()}`,
-      '',
-    ].join('\n'),
-    { encoding: 'utf8', mode: 0o600 },
-  );
+  const credentialsFile = tenantCredentialsFilePath(tenantName);
+  await mkdir(tenantCredentialsDirectoryPath(tenantName), { mode: 0o700 });
+  try {
+    await writeFile(
+      credentialsFile,
+      [
+        `Tenant: ${tenantName}`,
+        `Username: ${await username.inputValue()}`,
+        `Password: ${await password.inputValue()}`,
+        '',
+      ].join('\n'),
+      { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+    );
+  } catch (error) {
+    await rmdir(tenantCredentialsDirectoryPath(tenantName)).catch(() => undefined);
+    throw error;
+  }
 
   // Close the credentials dialog and return to the Tenants main page.
   await page.getByRole(...TenantsCredentialsPage.savedCredentials).click();
   await expect(page.getByRole(...TenantsMainPage.pageTitle)).toBeVisible();
 
-  // Locate the newly created tenant row by its exact tenant name.
-  const tenantRow = await expectTenantToExist(page, tenantName);
+  return credentialsFile;
+};
 
-  // Verify that the new tenant is synced and, when supplied, has the expected domain.
+/** Verify that a tenant is synchronized and, when supplied, has the expected domain. */
+export const expectTenantToBeSynced = async (
+  page: Page,
+  tenantName: string,
+  domainName = '',
+): Promise<void> => {
+  const tenantRow = await expectTenantToExist(page, tenantName);
   await expect(tenantRow.locator(...TenantsMainPage.tenantStatusCell)).toHaveText('Synced');
   if (domainName) {
     await expect(tenantRow.locator(...TenantsMainPage.tenantPrimaryDomainCell)).toHaveText(
       exactText(domainName),
     );
   }
-
-  return credentialsFile;
 };
 
 /** Verify that the default shared and system tenants are synced. */
@@ -191,4 +250,6 @@ export const deleteTenant = async (page: Page, tenantName: string): Promise<void
     120_000,
     tenantRow.locator(...TenantsMainPage.tenantStatusCell),
   );
+
+  await removeTenantCredentials(tenantName);
 };

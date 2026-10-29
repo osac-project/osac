@@ -7,6 +7,7 @@ import { ExternalIPState } from '@osac/types';
 
 import AttachExternalIpModal from './AttachExternalIpModal';
 import type { MockTransportOverrides } from '../../test-utils/createMockConnectTransport';
+import { getResourceSelectCombobox } from '../../test-utils/resourceSelect';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const eligibleIp = {
@@ -60,7 +61,7 @@ describe('AttachExternalIpModal', () => {
     const { user } = renderModal({ onAttach, onClose });
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^External IP/)).toHaveTextContent('edge-ip');
+      expect(getResourceSelectCombobox(/^External IP/)).toHaveValue('edge-ip');
     });
     expect(screen.queryByLabelText(/^Name/)).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /^Attach$/ }));
@@ -120,7 +121,7 @@ describe('AttachExternalIpModal', () => {
     const { user } = renderModal({ onAttach, onClose });
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^External IP/)).toHaveTextContent('edge-ip');
+      expect(getResourceSelectCombobox(/^External IP/)).toHaveValue('edge-ip');
     });
     await user.click(screen.getByRole('button', { name: /^Attach$/ }));
 

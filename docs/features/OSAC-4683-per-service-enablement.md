@@ -16,9 +16,16 @@ OSAC has four service-tier switches:
 | Service | Value | Default | Scope |
 | --- | --- | --- | --- |
 | CaaS | `global.services.caas.enabled` | true | Cluster orders, templates, catalog items, and versions |
-| VMaaS | `global.services.vmaas.enabled` | true | Compute instances, disk images, instance types, volumes, and console sessions |
+| VMaaS | `global.services.vmaas.enabled` | true | Compute instances, instance types, volumes, and console sessions |
 | BMaaS | `global.services.bmaas.enabled` | true | Bare-metal instances and bare-metal instance types |
 | MaaS | `global.services.maas.enabled` | true | MaaS enablement signal; no MaaS gRPC services or operator controller currently exist |
+
+The DiskImages API is shared by the VMaaS and BMaaS tiers instead of belonging
+to one of them. Every valid configuration enables at least one of VMaaS or
+BMaaS, directly or through the CaaS dependency, so the DiskImages API is
+always available, including for the ClusterVersion disk image reference. As
+defense in depth, the server still rejects DiskImages requests if it is ever
+started with both VMaaS and BMaaS disabled.
 
 The default values keep all service tiers enabled. A service is disabled by
 setting its enabled value to false in the umbrella chart values:
@@ -53,9 +60,12 @@ command-line flags:
 | BMaaS | `--enable-bmaas` |
 | MaaS | `--enable-maas` |
 
-The chart adds a flag to each container command when the corresponding global
-service value is enabled. If the binary is started without any enable flags,
-the fulfillment-service enables all four services for backward compatibility.
+The chart passes all four enable flags to each container command with the
+configured boolean values, so a disabled tier is passed explicitly as
+`--enable-<service>=false`. If the binary is started without any enable
+flags, the fulfillment-service enables all four services for backward
+compatibility; explicitly provided flags are preserved as given, and an
+all-false combination is rejected at startup.
 
 The REST gateway currently registers its generated handlers for all services.
 Calls for a disabled service are rejected by the fulfillment-service gRPC
@@ -104,6 +114,8 @@ updates workloads:
 
 - CaaS can be enabled only when VMaaS or BMaaS is also enabled.
 - MaaS can be enabled only when CaaS is enabled.
+- At least one service tier must be enabled; an all-false configuration is
+  rejected.
 
 These rules are expressed in the chart's `values.schema.json`. Helm applies
 them to both `helm install` and `helm upgrade`. An invalid combination fails
@@ -127,6 +139,16 @@ helm template osac osac-installer/charts/osac \
   --set global.services.caas.enabled=false
 ```
 
+This configuration is invalid because no service tier is enabled:
+
+```bash
+helm template osac osac-installer/charts/osac \
+  --set global.services.caas.enabled=false \
+  --set global.services.vmaas.enabled=false \
+  --set global.services.bmaas.enabled=false \
+  --set global.services.maas.enabled=false
+```
+
 The fulfillment-service validates the same service dependencies when it starts
 outside Helm. Its startup sequence first enables all four services when no
 enable flags are set, then validates the resulting flags before creating the
@@ -134,6 +156,8 @@ server. The current error messages are:
 
 - invalid service flags: CaaS requires at least one of VMaaS or BMaaS
 - invalid service flags: MaaS requires CaaS
+- invalid service flags: at least one of CaaS, VMaaS, BMaaS, or MaaS must be
+  enabled
 
 The current osac-operator startup validation checks the CaaS dependency on at
 least one compute controller. MaaS has no operator controller, so the MaaS
@@ -279,8 +303,10 @@ the VMaaS service is not enabled on this server
 ```
 
 The current service group names in this message are CaaS, VMaaS, and BMaaS.
-Calls to a genuinely unknown gRPC method retain the default
-`codes.Unimplemented` response.
+The shared DiskImages API is not a service tier, but it has its own group
+name: when both VMaaS and BMaaS are disabled, its requests are rejected with
+the DiskImages group name. Calls to a genuinely unknown gRPC method retain
+the default `codes.Unimplemented` response.
 
 Disabled service implementations are not registered with the gRPC server, so
 they do not appear in gRPC reflection. For example:

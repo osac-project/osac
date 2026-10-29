@@ -1,0 +1,6 @@
+---
+- name: Verify compute template receives JIT storage resolution
+  ansible.builtin.assert:
+    that:
+      - >-
+        tenant_storage_class_storage_classes == [{'name': routing_test_storage_class_name, 'tier': 'fast'}]

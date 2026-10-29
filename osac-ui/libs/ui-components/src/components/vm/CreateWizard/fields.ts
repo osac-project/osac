@@ -106,7 +106,10 @@ export const getComputeInstanceInitialValues = (
     },
     spec: {
       ...values.spec,
-      userData: getFieldFromCatalogItemPolicy(catalogItem.fields?.userData, ''),
+      userData: {
+        locked: false,
+        value: '',
+      },
       sshKey: (() => {
         const field = getFieldFromCatalogItemPolicy<{ name: string }>(catalogItem.fields?.sshKey, {
           name: '',

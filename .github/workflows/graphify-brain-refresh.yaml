@@ -178,6 +178,7 @@ jobs:
             gh release upload "${RELEASE_TAG}" "${assets[@]}" --repo "${GITHUB_REPOSITORY}" --clobber
           else
             gh release create "${RELEASE_TAG}" "${assets[@]}" --repo "${GITHUB_REPOSITORY}" \
+              --latest=false \
               --target "${GITHUB_SHA}" \
               --title "graphify brain (latest)" \
               --notes "Auto-published by graphify-brain-refresh.yaml. Always points at the most recent successful run -- not a versioned release."

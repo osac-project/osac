@@ -24,8 +24,8 @@ const DISK_IMAGE_ID = 'disk-image-rhel-9';
 // input required to reach Review is the resource name on the General step —
 // this exercises the full wizard shell (catalog selection, step navigation,
 // submission, and error handling) without duplicating the per-field coverage
-// already in the individual step tests. `userData` is locked with non-empty
-// content so the Review step's authentication-method check is satisfied.
+// already in the individual step tests. The locked SSH key satisfies the
+// Review step's authentication-method check.
 const bareMetalCatalogItem = create(BareMetalInstanceCatalogItemSchema, {
   id: 'catalog-bm-1',
   metadata: { name: 'catalog-bm-1' },
@@ -33,8 +33,16 @@ const bareMetalCatalogItem = create(BareMetalInstanceCatalogItemSchema, {
   description: 'A small bare metal instance',
   published: true,
   fields: {
+    sshPublicKey: {
+      behavior: { case: 'locked', value: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample' },
+    },
     runStrategy: { behavior: { case: 'locked', value: BareMetalInstanceRunStrategy.HALTED } },
-    userData: { behavior: { case: 'locked', value: '#cloud-config\nruncmd: []' } },
+    userDataSource: {
+      behavior: {
+        case: 'locked',
+        value: { source: { case: 'inline', value: '#cloud-config\nruncmd: []' } },
+      },
+    },
     instanceType: {
       behavior: { case: 'locked', value: { id: INSTANCE_TYPE_ID, name: 'standard' } },
     },

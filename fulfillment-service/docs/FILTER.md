@@ -94,6 +94,40 @@ The index operator `[]` can be used to access values inside map fields. For exam
 `this.metadata.labels['env']` returns the value of the `env` label. The key must be a literal
 string. The result can then be compared with `==` or `!=`.
 
+## Reserved metadata
+
+The public API does not allow List filters or `Events.Watch` filters to test whether a reserved
+metadata key exists or what value it has. A reserved key has the domain
+`admin.osac.openshift.io` or a dot-delimited subdomain before the slash, matched case-sensitively.
+For example, each of these public filters is rejected:
+
+- List value lookup: `this.metadata.labels['admin.osac.openshift.io/managed'] == 'true'`
+- List key membership: `'controller.admin.osac.openshift.io/source' in this.metadata.annotations`
+- Event value lookup: `event.project.metadata.labels['admin.osac.openshift.io/managed'] == 'true'`
+
+The List request is rejected with `InvalidArgument`, even when it uses `limit=0` to request only a
+count. The filter must not be used as an existence probe. A public event filter that refers to a
+reserved key in a resource payload is rejected with `InvalidArgument` at Watch setup as well;
+Watch's error may include the submitted filter expression. Neither error reports whether the key
+exists or returns its stored value. Public event payloads omit reserved label and annotation
+entries. These rules apply to every public caller and do not depend on the caller's tenant role.
+
+Ordinary keys remain filterable. For example, a List filter may select a label value:
+
+```cel
+this.metadata.labels['team'] == 'platform'
+```
+
+An event filter uses the event payload field. This expression selects project events carrying that
+ordinary label:
+
+```cel
+event.project.metadata.labels['team'] == 'platform'
+```
+
+The reserved namespace and public/private response behavior are described in
+[API.md — Administrator-only metadata](API.md#administrator-only-metadata).
+
 ## String functions
 
 Three string functions are supported, and they must be called on a string field with a single

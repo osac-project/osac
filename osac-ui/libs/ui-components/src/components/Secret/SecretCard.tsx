@@ -1,18 +1,14 @@
 import {
-  Card,
   CardBody,
-  CardHeader,
   DescriptionList,
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
-  Flex,
-  FlexItem,
-  Icon,
 } from '@patternfly/react-core';
 import KeyIcon from '@patternfly/react-icons/dist/esm/icons/key-icon';
 
 import { Secret, SecretType } from '@osac/types';
+import ListPageCard from '@osac/ui-components/components/Page/ListPageCard';
 import SecretActionsMenu from '@osac/ui-components/components/Secret/SecretActionsMenu';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
@@ -33,23 +29,11 @@ const SecretCard = ({ secret, onEdit, onDelete }: SecretCardProps) => {
   const dataKeys = getSecretTypeDataKeys(secret.type);
 
   return (
-    <Card isFullHeight>
-      <CardHeader
-        actions={{
-          actions: <SecretActionsMenu secret={secret} onEdit={onEdit} onDelete={onDelete} />,
-        }}
-      >
-        <Flex spaceItems={{ default: 'spaceItemsSm' }} alignItems={{ default: 'alignItemsCenter' }}>
-          <FlexItem>
-            <Icon size="lg">
-              <KeyIcon />
-            </Icon>
-          </FlexItem>
-          <FlexItem>
-            <ResourceNameField resource={secret} detailsUrl={`/secrets/${secret.id}`} />
-          </FlexItem>
-        </Flex>
-      </CardHeader>
+    <ListPageCard
+      title={<ResourceNameField resource={secret} detailsUrl={`/secrets/${secret.id}`} />}
+      icon={<KeyIcon />}
+      actionMenu={<SecretActionsMenu secret={secret} onEdit={onEdit} onDelete={onDelete} />}
+    >
       <CardBody>
         <DescriptionList isCompact isHorizontal>
           <DescriptionListGroup>
@@ -68,7 +52,7 @@ const SecretCard = ({ secret, onEdit, onDelete }: SecretCardProps) => {
           </DescriptionListGroup>
         </DescriptionList>
       </CardBody>
-    </Card>
+    </ListPageCard>
   );
 };
 

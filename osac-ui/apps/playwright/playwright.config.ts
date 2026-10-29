@@ -45,6 +45,14 @@ if (!/^[a-z0-9]{1,32}$/i.test(storageTierTestRunId)) {
 }
 process.env.OSAC_STORAGE_TIER_TEST_RUN_ID = storageTierTestRunId.toLowerCase();
 
+// Share a unique ID across catalog projects so teardown only targets this run's item.
+const catalogTestRunId =
+  process.env.OSAC_CATALOG_TEST_RUN_ID ?? randomUUID().replace(/-/g, '').slice(0, 12);
+if (!/^[a-z0-9]{1,32}$/i.test(catalogTestRunId)) {
+  throw new Error('OSAC_CATALOG_TEST_RUN_ID must contain 1-32 letters or digits.');
+}
+process.env.OSAC_CATALOG_TEST_RUN_ID = catalogTestRunId.toLowerCase();
+
 // Ad hoc specs (typically written by an AI agent to manually verify a change)
 // live in this gitignored scratch directory, never under src/ — that keeps
 // the "throwaway, not a test suite" boundary obvious to anyone browsing the
@@ -175,13 +183,13 @@ export default defineConfig({
       testDir: vmaasDir,
       testMatch: /create\.catalog\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      teardown: 'vmaas-catalog-delete',
     },
     {
       name: 'vmaas-catalog-delete',
       testDir: vmaasDir,
       testMatch: /delete\.catalog\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      dependencies: ['vmaas-catalog'],
     },
   ],
 });

@@ -106,6 +106,13 @@ spec:
         volumeMounts:
         - name: tmp
           mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true

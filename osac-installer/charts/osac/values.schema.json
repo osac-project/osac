@@ -106,7 +106,7 @@
     },
     "cliImage": {
       "type": "string",
-      "description": "Default OpenShift CLI image used by hook jobs"
+      "description": "Default OpenShift CLI image used by hook jobs. When Netris CA validation is enabled it must provide kubectl, sh and openssl."
     },
     "dbInit": {
       "type": "object",

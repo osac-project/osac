@@ -31,6 +31,10 @@ SHELL := /usr/bin/env bash -o pipefail
 
 # Extra helm --set/--set-string args appended to the OSAC chart command.
 EXTRA_HELM_ARGS ?=
+# Optional PEM CA bundle file for Keycloak's external OIDC identity providers.
+OIDC_IDP_CA_FILE ?=
+export OIDC_IDP_CA_FILE
+OIDC_IDP_CA_HELM_ARGS = $(if $(strip $(OIDC_IDP_CA_FILE)),--set-file keycloak.oidcIdpTrust.caPem="$${OIDC_IDP_CA_FILE}")
 FULFILLMENT_GINKGO_ARGS ?=
 FULFILLMENT_IT_REPORT_DIR ?=
 fulfillment-json-report = $(if $(strip $(FULFILLMENT_IT_REPORT_DIR)),--json-report="$(abspath $(FULFILLMENT_IT_REPORT_DIR)/$(1).json)")
@@ -389,6 +393,7 @@ endif
 		-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set osacNamespace=$(NS) \
 		$(INFRA_HELM_ARGS) \
+		$(OIDC_IDP_CA_HELM_ARGS) \
 		--wait-for-jobs --timeout 30m \
 	|| { echo "=== osac-infra hook jobs ==="; kubectl get jobs,pods,cm -n osac-infra || true; kubectl logs -n osac-infra -l job-name=osac-infra-apply-ca-bundle --tail=200 || true; kubectl get deploy,endpoints,certificate -n cert-manager || true; exit 1; }
 	@for f in ../osac-operator/config/crd/fakes/*.yaml; do \
@@ -440,6 +445,7 @@ else
 		--set keycloak.hostname=https://keycloak-keycloak.$(DOMAIN) \
 		--set keycloak.route.hostname=keycloak-keycloak.$(DOMAIN) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
+		$(OIDC_IDP_CA_HELM_ARGS) \
 		--timeout "$${helm_timeout_seconds}s" --wait-for-jobs \
 	|| { \
 		echo "=== osac-infra release status ==="; \
@@ -613,7 +619,8 @@ ifeq ($(PLATFORM),kind)
 	helm template osac-infra $(INFRA_CHART) \
 		--namespace osac-infra \
 		-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
-		--set osacNamespace=$(NS)
+		--set osacNamespace=$(NS) \
+		$(OIDC_IDP_CA_HELM_ARGS)
 else
 	helm template osac-deps $(DEPS_CHART) \
 		--namespace osac-deps \
@@ -626,7 +633,8 @@ else
 		--set lvms.channel=stable-$(DRY_RUN_OCP_VERSION) \
 		--set keycloak.hostname=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
 		--set keycloak.route.hostname=keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
-		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac"
+		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac" \
+		$(OIDC_IDP_CA_HELM_ARGS)
 endif
 	helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \

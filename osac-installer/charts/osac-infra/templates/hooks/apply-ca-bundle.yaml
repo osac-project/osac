@@ -179,6 +179,10 @@ spec:
               value: {{ .Release.Namespace | quote }}
             - name: OSAC_NAMESPACE
               value: {{ .Values.osacNamespace | quote }}
+            {{- if .Values.keycloak.enabled }}
+            - name: KEYCLOAK_NAMESPACE
+              value: keycloak
+            {{- end }}
             - name: USE_DEFAULT_CAS
               value: {{ .Values.keycloak.route.publicIngress | quote }}
           volumeMounts:

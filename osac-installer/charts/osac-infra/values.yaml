@@ -49,6 +49,11 @@ keycloak:
   # Use this for SPI overrides that must be set at the server level (e.g.
   # KC_SPI_CONNECTIONS_HTTP_CLIENT_DEFAULT_DISABLE_TRUST_MANAGER for Kind).
   extraEnv: []
+  oidcIdpTrust:
+    # PEM-encoded CA bundle for outbound TLS to an external OIDC identity
+    # provider. The chart adds it to the shared trust-manager bundle.
+    # Set with --set-file keycloak.oidcIdpTrust.caPem=/path/to/idp-ca.pem.
+    caPem: ""
   route:
     hostname: ""
     publicIngress: false

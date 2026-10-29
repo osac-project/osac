@@ -5,6 +5,21 @@ metadata:
   name: keycloak
   labels:
     {{- include "osac-infra.labels" . | nindent 4 }}
+{{- if .Values.keycloak.oidcIdpTrust.caPem }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-oidc-idp-ca
+  namespace: cert-manager
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+    osac.openshift.io/ca-bundle: additional
+type: Opaque
+stringData:
+  ca.crt: |
+{{ .Values.keycloak.oidcIdpTrust.caPem | trim | nindent 4 }}
+{{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -349,6 +364,10 @@ spec:
     metadata:
       labels:
         app: keycloak-service
+      {{- if .Values.certs.caBundle.configMap }}
+      annotations:
+        checksum/keycloak-oidc-idp-ca-bundle: {{ printf "%s:%s" .Values.certs.caBundle.configMap (.Values.keycloak.oidcIdpTrust.caPem | default "") | sha256sum | quote }}
+      {{- end }}
     spec:
       serviceAccountName: keycloak-service
       volumes:
@@ -367,6 +386,14 @@ spec:
       - name: tls-cert
         secret:
           secretName: keycloak-tls-cert
+      {{- if .Values.certs.caBundle.configMap }}
+      - name: ca-bundle
+        configMap:
+          name: {{ .Values.certs.caBundle.configMap }}
+          items:
+            - key: bundle.pem
+              path: ca-bundle.pem
+      {{- end }}
       initContainers:
       - name: wait-for-database
         image: {{ .Values.keycloak.images.postgres }}
@@ -423,6 +450,11 @@ spec:
         - name: tls-cert
           mountPath: /secrets/tls
           readOnly: true
+        {{- if .Values.certs.caBundle.configMap }}
+        - name: ca-bundle
+          mountPath: /etc/keycloak/truststore
+          readOnly: true
+        {{- end }}
         env:
         - name: KEYCLOAK_ADMIN
           valueFrom:
@@ -458,6 +490,10 @@ spec:
           value: keycloak
         - name: KC_DB_PASSWORD
           value: ""
+        {{- if .Values.keycloak.oidcIdpTrust.caPem }}
+        - name: KC_TRUSTSTORE_PATHS
+          value: "/etc/keycloak/truststore/ca-bundle.pem"
+        {{- end }}
         {{- if .Values.keycloak.realmOverwrite }}
         - name: KC_SPI_IMPORT_REALM_FILE_STRATEGY
           value: OVERWRITE

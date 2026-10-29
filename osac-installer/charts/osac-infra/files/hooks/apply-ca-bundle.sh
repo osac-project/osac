@@ -17,6 +17,7 @@ WAIT_DEFAULT_CA="${WAIT_DEFAULT_CA:-true}"
 CA_BUNDLE_NAME="${CA_BUNDLE_NAME:-ca-bundle}"
 RELEASE_NAMESPACE="${RELEASE_NAMESPACE:-}"
 OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac}"
+KEYCLOAK_NAMESPACE="${KEYCLOAK_NAMESPACE:-}"
 USE_DEFAULT_CAS="${USE_DEFAULT_CAS:-false}"
 OC=(oc --request-timeout=10s)
 
@@ -142,6 +143,13 @@ spec:
   - secret:
       name: "default-ca"
       key: "ca.crt"
+  # Trust-manager watches matching Secrets in cert-manager, so operators can
+  # add or remove extra roots without changing this Bundle or upgrading Helm.
+  - secret:
+      selector:
+        matchLabels:
+          osac.openshift.io/ca-bundle: additional
+      key: "ca.crt"
 EOF
   if [[ "${USE_DEFAULT_CAS}" == "true" ]]; then
     cat <<'EOF'
@@ -167,6 +175,11 @@ EOF
         - "${RELEASE_NAMESPACE}"
         - "${OSAC_NAMESPACE}"
 EOF
+  if [[ -n "${KEYCLOAK_NAMESPACE}" ]]; then
+    cat <<EOF
+        - "${KEYCLOAK_NAMESPACE}"
+EOF
+  fi
 } | oc_run apply -f -
 
 echo "CA Bundle applied."

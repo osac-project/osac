@@ -510,6 +510,34 @@ longer needs them. The VTEP range and uplink ranges must not overlap tenant
 address space. Add these infrastructure ranges to
 `global.networking.excludedIpv4Cidrs` in the `osac` chart when that value is
 available in the installed chart.
+### Adding CA roots to the shared bundle at runtime
+
+The `ca-bundle` trust-manager Bundle includes the `ca.crt` key from every
+Secret in the `cert-manager` namespace labeled
+`osac.openshift.io/ca-bundle=additional`. Create one Secret per CA root:
+
+```bash
+oc create secret generic partner-ca \
+    --namespace cert-manager \
+    --from-file=ca.crt=/path/to/partner-root.pem
+oc label secret partner-ca osac.openshift.io/ca-bundle=additional \
+    --namespace cert-manager
+```
+
+Trust-manager adds matching Secrets to the `ca-bundle` ConfigMaps in the
+`osac-infra` and OSAC namespaces, and in `keycloak` when Keycloak is enabled.
+The next `osac-infra` install or upgrade applies the selector to the Bundle.
+After that, creating, updating, labeling, or deleting a matching Secret
+updates the bundle without another Helm upgrade. The source must contain only
+public CA certificates in `ca.crt`; the Bundle selects that key specifically.
+During CA rotation, keep both roots in the source until certificates and
+clients have moved to the new root.
+
+For Keycloak's outbound OIDC provider trust, set
+`keycloak.oidcIdpTrust.caPem` with `--set-file` when installing or upgrading
+`osac-infra`. The chart creates a labeled Secret in `cert-manager` from that
+value, and changing the value rolls out Keycloak with the updated trust bundle
+mounted in the `keycloak` namespace.
 
 ## When Prerequisites Already Exist
 

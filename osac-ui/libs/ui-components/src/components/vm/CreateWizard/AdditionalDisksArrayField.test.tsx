@@ -126,11 +126,11 @@ describe('AdditionalDisksArrayField', () => {
     expect(inputs[1]).toHaveValue('bulk');
   });
 
-  it('defaults a new disk to the first available storage tier', async () => {
+  it('leaves a new disk storage tier unset until selected', async () => {
     renderField([{ sizeGib: '30', storageTier: emptyResourceSelectValue() }], true);
 
-    await waitFor(() => expect(getAllResourceSelectInputs(/^Storage tier/)[0]).toHaveValue('fast'));
-    expect(screen.queryByText('Storage tier is required')).not.toBeInTheDocument();
+    await waitFor(() => expect(getAllResourceSelectInputs(/^Storage tier/)[0]).toHaveValue(''));
+    expect(screen.getByText('Storage tier is required')).toBeInTheDocument();
   });
 
   it('removes a row when its Remove action is clicked', async () => {

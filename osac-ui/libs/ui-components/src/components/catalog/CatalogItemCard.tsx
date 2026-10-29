@@ -46,10 +46,10 @@ const CatalogItemCard = ({ item, selection, resourceLookups }: CatalogItemCardPr
     <Card
       id={cardId}
       ouiaId={`catalog-item-option-${item.id}`}
+      variant={item.published ? 'default' : 'secondary'}
       isSelectable={isWizardMode}
       isSelected={selection?.selected}
       isFullHeight
-      isDisabled={!item.published}
     >
       <CardHeader
         className="catalog-item-card-header"

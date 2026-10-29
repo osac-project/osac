@@ -84,7 +84,6 @@ export const AdditionalDisksArrayField = ({
                 fieldId={`vm-additional-disk-${index}-storage-tier`}
                 isRequired
                 isDisabled={isDisabled}
-                autoSelectFirstOption
                 description={t('Storage tiers are defined by your cloud provider administrator.')}
               />
             </StackItem>

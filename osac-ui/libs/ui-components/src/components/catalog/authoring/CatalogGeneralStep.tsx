@@ -9,8 +9,6 @@ import {
 } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 
-import { Tenants } from '@osac/types/private';
-
 import CatalogScopeField from './CatalogScopeField';
 import { useSession } from '../../../hooks/use-session';
 import { useTranslation } from '../../../hooks/useTranslation';
@@ -23,6 +21,7 @@ import {
   type ResourceSelectValue,
   emptyResourceSelectValue,
 } from '../../Form/ResourceSelectField';
+import TenantSelectField from '../../Form/TenantSelectField';
 import { GLOBAL_TENANT_VALUE } from '../catalogItemDisplay';
 
 export type CatalogItemScope = 'global' | 'tenant';
@@ -139,18 +138,7 @@ const CatalogGeneralStep = ({
                   'Global resources are available to all tenants. Tenant-scoped resources must be assigned to one tenant.',
                 )}
               </Content>
-              {values.scope === 'tenant' && (
-                <ResourceSelectField
-                  name="metadata.tenant"
-                  label={t('Tenant')}
-                  fieldId="catalog-item-tenant"
-                  service={Tenants}
-                  isRequired
-                  isDisabled={isEdit}
-                  placeholder={t('Search and select a tenant')}
-                  loadErrorTitle={t('Failed to fetch tenants')}
-                />
-              )}
+              {values.scope === 'tenant' && <TenantSelectField isDisabled={isEdit} />}
             </>
           ) : isEdit ? (
             <ProjectField isDisabled={isEdit} />

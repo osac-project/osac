@@ -57,6 +57,7 @@ respective areas.
 | OpenBao security context, podSecurityContext, or Kind/OpenShift UID handling | Helm contract | `make openbao-security-context-test` |
 | `evpn` values, EVPN ConfigMap, or configure-evpn hook | Helm contract | `make evpn-render-test` |
 | Deployed hooks or cross-component startup | Component integration | `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` with a deployed Kind environment; see [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer) |
+| Kind `dev-full` startup, core deployment readiness, UI routing, and authenticated tenant listing | E2E smoke | `.github/scripts/test-kind-dev-full.sh`, run by `.github/workflows/kind-dev-full-smoke.yml` after `make install PLATFORM=kind PROFILE=dev-full NS=osac`; requires rootful Podman-backed Kind with `/dev/kvm` |
 
 ## Validation
 

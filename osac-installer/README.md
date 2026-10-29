@@ -565,6 +565,23 @@ Tear down everything (including the kind cluster, via the same runtime wrapper):
 make uninstall PLATFORM=kind PROFILE=dev-full NS=osac
 ```
 
+The GitHub Actions workflow [`Kind dev-full smoke`](../.github/workflows/kind-dev-full-smoke.yml)
+installs this profile nightly, checks that fulfillment, the operator, AWX,
+Keycloak, and the UI deployments are available, verifies the UI Gateway route,
+then authenticates with the `osac-admin` Keycloak service client and lists
+tenants through the Fulfillment gRPC API. It uses the published Fulfillment
+Service image and reads the admin client secret
+from the `keycloak-client-secrets` Secret in the running cluster.
+Once the workflow is on the default branch, a repository collaborator can run
+it on a pull request by commenting `/test-kind-dev-full`. To run the same smoke
+test on a running dev-full cluster, use:
+
+```bash
+KUBECONFIG="$HOME/.kube/osac-dev-kind-root.kubeconfig" \
+  OSAC_FULFILLMENT_GRPC_ADDRESS=fulfillment-api.osac.localhost:8443 \
+  bash ../.github/scripts/test-kind-dev-full.sh
+```
+
 #### Configure Values
 
 Each profile has two values files under `values/<profile>/`:

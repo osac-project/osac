@@ -102,7 +102,7 @@ def test_get_storage_class_for_tier_and_datavolume_support_tenant_and_vm_namespa
     ) in calls
 
 
-def test_get_storage_class_for_tier_fallback_prefers_csp_and_tenant_over_shared(
+def test_get_storage_class_for_tier_fallback_uses_target_tenant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, ...]] = []
@@ -132,6 +132,15 @@ def test_get_storage_class_for_tier_fallback_prefers_csp_and_tenant_over_shared(
                             },
                         }
                     },
+                    {
+                        "metadata": {
+                            "name": "tenant-gold-sc",
+                            "labels": {
+                                "osac.openshift.io/storage-tier": " GOLD ",
+                                "osac.openshift.io/tenant": "tenant1",
+                            },
+                        }
+                    },
                 ]
             }
         )
@@ -144,7 +153,7 @@ def test_get_storage_class_for_tier_fallback_prefers_csp_and_tenant_over_shared(
         hub_client.get_storage_class_for_tier(
             tier_name="gold", tenant_name="tenant1", storage_class_client=virt_client
         )
-        == "csp-gold-sc"
+        == "tenant-gold-sc"
     )
     assert (
         "kubectl",

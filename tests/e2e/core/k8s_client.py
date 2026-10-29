@@ -434,14 +434,13 @@ class K8sClient:
                 return name
 
         items = (storage_class_client or self).list_json(resource="storageclass").get("items", [])
-        for allowed_tenant in ("csp-managed", target_tenant, "shared"):
-            for item in items:
-                labels = item.get("metadata", {}).get("labels", {})
-                sc_tier = labels.get("osac.openshift.io/storage-tier", "").strip().lower()
-                sc_tenant = labels.get("osac.openshift.io/tenant", "").strip()
-                name = item.get("metadata", {}).get("name", "").strip()
-                if sc_tier == normalized_tier and sc_tenant == allowed_tenant and name:
-                    return name
+        for item in items:
+            labels = item.get("metadata", {}).get("labels", {})
+            sc_tier = labels.get("osac.openshift.io/storage-tier", "").strip().lower()
+            sc_tenant = labels.get("osac.openshift.io/tenant", "").strip()
+            name = item.get("metadata", {}).get("name", "").strip()
+            if sc_tier == normalized_tier and sc_tenant == target_tenant and name:
+                return name
 
         raise ValueError(f"No StorageClass found for tier '{tier_name}' in Tenant {target_tenant}")
 

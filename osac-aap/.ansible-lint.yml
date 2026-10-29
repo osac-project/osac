@@ -8,6 +8,7 @@ exclude_paths:
   - vendor/
   - .github/
   - execution-environment/ # Built artifacts, not source
+  - rpms.lock.yaml # Generated RPM lockfile uses the generator's YAML style
 kinds:
   # Integration test files are playbooks (multi-play), not task files
   - playbook: "**/integration/**/tasks/*.yml"

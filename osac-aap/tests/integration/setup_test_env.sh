@@ -40,7 +40,11 @@ echo "Installing KubeVirt CR to trigger CRD creation..."
 kubectl apply -f https://github.com/kubevirt/kubevirt/releases/download/v1.1.0/kubevirt-cr.yaml
 
 echo "Waiting for VirtualMachine CRD to be created..."
-timeout 60 bash -c 'until kubectl get crd virtualmachines.kubevirt.io 2>/dev/null; do echo "Waiting for VirtualMachine CRD..."; sleep 2; done' || echo "Timeout waiting for VirtualMachine CRD"
+timeout 60 bash -c 'until kubectl get crd virtualmachines.kubevirt.io 2>/dev/null; do echo "Waiting for VirtualMachine CRD..."; sleep 2; done' || {
+  echo "Timeout waiting for VirtualMachine CRD" >&2
+  exit 1
+}
+kubectl wait --for=condition=Established --timeout=60s crd/virtualmachines.kubevirt.io
 
 echo "Installing CDI operator for DataVolume support..."
 kubectl apply -f https://github.com/kubevirt/containerized-data-importer/releases/download/v1.58.0/cdi-operator.yaml
@@ -52,7 +56,11 @@ echo "Installing CDI CR to trigger DataVolume CRD creation..."
 kubectl apply -f https://github.com/kubevirt/containerized-data-importer/releases/download/v1.58.0/cdi-cr.yaml
 
 echo "Waiting for DataVolume CRD to be created..."
-timeout 60 bash -c 'until kubectl get crd datavolumes.cdi.kubevirt.io 2>/dev/null; do echo "Waiting for DataVolume CRD..."; sleep 2; done' || echo "Timeout waiting for DataVolume CRD"
+timeout 60 bash -c 'until kubectl get crd datavolumes.cdi.kubevirt.io 2>/dev/null; do echo "Waiting for DataVolume CRD..."; sleep 2; done' || {
+  echo "Timeout waiting for DataVolume CRD" >&2
+  exit 1
+}
+kubectl wait --for=condition=Established --timeout=60s crd/datavolumes.cdi.kubevirt.io
 
 # 2.2. Scale down all deployments (keep CRs and CRDs)
 echo "Scaling down all KubeVirt and CDI deployments to save resources..."

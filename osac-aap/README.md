@@ -16,6 +16,10 @@ annotations record the decision; fabric-only decisions survive retries and owner
 removal. No Kubernetes manager means no VM support; the EVPN single-owner limit
 does not constrain other managers.
 
+Each CUDN EVPN workload namespace has a namespace-scoped Role and RoleBinding that let the
+`hub-access` ServiceAccount list KubeVirt VirtualMachines there. This keeps VM inspection scoped to
+the relevant Subnet namespace instead of granting cluster-wide KubeVirt access.
+
 The fulfillment service still accepts valid VM requests. The actual provisioning
 consumer permanently rejects unsupported placement with `NetworkAttachmentFailed`
 before creating VM, SSH Secret, DataVolume, or VMI resources. Unknown eligibility

@@ -234,6 +234,15 @@
       loop_control:
         label: "{{ item.item.metadata.name }}"
 
+    - name: Ensure hub-access can inspect existing Subnet workload namespaces
+      ansible.builtin.include_tasks: ensure_hub_access_vm_reader.yaml
+      vars:
+        hub_access_vm_reader_namespace: "{{ item.item.metadata.name }}"
+      loop: "{{ _cudn_namespace_lookups.results }}"
+      loop_control:
+        label: "{{ item.item.metadata.name }}"
+      when: item.resources | default([]) | length > 0
+
     - name: Preserve ambiguous historical explicit opt-out namespaces
       ansible.builtin.assert:
         that:
@@ -292,6 +301,11 @@
                 annotations:
                   osac.openshift.io/tenant: "{{ tenant_id }}"
                   osac.openshift.io/owner-reference: "Subnet/{{ subnet_name }}"
+
+        - name: Ensure hub-access can inspect the new Subnet workload namespace
+          ansible.builtin.include_tasks: ensure_hub_access_vm_reader.yaml
+          vars:
+            hub_access_vm_reader_namespace: "{{ subnet_name }}"
 
         - name: Apply ClusterUserDefinedNetwork for its current Subnet owner
           kubernetes.core.k8s:

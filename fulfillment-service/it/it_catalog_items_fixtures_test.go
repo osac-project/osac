@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -1244,7 +1245,11 @@ func deleteTenantDefaultNetworkingFixture(ctx context.Context, manager defaultne
 	defer ticker.Stop()
 	for {
 		err := manager.Delete(ctx, tenant)
-		if !errors.Is(err, defaultnetworking.ErrResourcesDeleting) {
+		// The resource guard rejects deleting a default SecurityGroup while
+		// terminating clusters still reference it; those references finish
+		// asynchronously, so the delete is retried like a finalizer wait.
+		if err != nil && !errors.Is(err, defaultnetworking.ErrResourcesDeleting) &&
+			!stillReferencedByActiveResources(err) {
 			return err
 		}
 		if err := clearTenantDefaultNetworkingFinalizers(ctx, tenant); err != nil {
@@ -1258,6 +1263,13 @@ func deleteTenantDefaultNetworkingFixture(ctx context.Context, manager defaultne
 		case <-ticker.C:
 		}
 	}
+}
+
+// stillReferencedByActiveResources reports whether the delete was rejected by
+// the resource guard because terminating clusters still reference the tenant
+// defaults; the guard counts them as active, so the delete is retried.
+func stillReferencedByActiveResources(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "still reference")
 }
 
 func clearTenantDefaultNetworkingFinalizers(ctx context.Context, tenant string) error {

@@ -112,7 +112,6 @@ ATTACHMENT_KEYS = {
 }
 NAT_GATEWAY_CONTEXT_KEYS = {"external_ip", "virtual_network"}
 NAT_GATEWAY_PHASES = {"provisioning", "ready", "deleting"}
-NAT_GATEWAY_SOURCE_KEYS = {"subnet_uid", "cidr"}
 NAT_GATEWAY_PROVIDER_KEYS = {
     "namespace_name",
     "namespace_interface",
@@ -130,11 +129,6 @@ NAT_GATEWAY_KEYS = {
     "phase",
     "context",
     "provider",
-    "source_cidrs",
-    "source_revision",
-    "applied_source_cidrs",
-    "applied_revision",
-    "cleanup_source_cidrs",
 }
 
 
@@ -474,53 +468,6 @@ def _nat_gateway_context(value: Any, tenant_id: str) -> dict[str, Any]:
     return context
 
 
-def _nat_gateway_source_cidrs(value: Any) -> list[dict[str, str]]:
-    if not isinstance(value, list):
-        raise StateError("NATGateway source CIDRs must be a list")
-    result: list[dict[str, str]] = []
-    seen_uids: set[str] = set()
-    seen_cidrs: set[str] = set()
-    for item in value:
-        if not isinstance(item, dict) or set(item) != NAT_GATEWAY_SOURCE_KEYS:
-            raise StateError("NATGateway source CIDR entry has an invalid shape")
-        uid = item["subnet_uid"]
-        cidr = item["cidr"]
-        if not _is_canonical_uuid(uid):
-            raise StateError("NATGateway source Subnet UID must be a canonical UUID")
-        try:
-            parse_canonical_ipv4_network(cidr, context="NATGateway source CIDR")
-        except (TypeError, ValueError) as error:
-            raise StateError("NATGateway source CIDR must be IPv4") from error
-        if uid in seen_uids or cidr in seen_cidrs:
-            raise StateError("NATGateway source CIDRs must be unique")
-        seen_uids.add(uid)
-        seen_cidrs.add(cidr)
-        result.append({"subnet_uid": uid, "cidr": cidr})
-    return sorted(result, key=lambda entry: (entry["subnet_uid"], entry["cidr"]))
-
-
-def _merge_nat_gateway_source_cidrs(*values: list[dict[str, str]]) -> list[dict[str, str]]:
-    merged: dict[str, str] = {}
-    for value in values:
-        for source in value:
-            previous = merged.get(source["subnet_uid"])
-            if previous is not None and previous != source["cidr"]:
-                raise StateError("NATGateway Subnet CIDR changed under the same UID")
-            merged[source["subnet_uid"]] = source["cidr"]
-    return _nat_gateway_source_cidrs(
-        [{"subnet_uid": uid, "cidr": cidr} for uid, cidr in merged.items()]
-    )
-
-
-def _nat_gateway_source_revision(source_cidrs: list[dict[str, str]]) -> str:
-    pairs = [
-        [source["subnet_uid"], source["cidr"]]
-        for source in sorted(source_cidrs, key=lambda item: (item["subnet_uid"], item["cidr"]))
-    ]
-    serialized = json.dumps(pairs, separators=(",", ":"))
-    return hashlib.sha256(serialized.encode()).hexdigest()
-
-
 def _validate_nat_gateway_entry(entry: Any) -> None:
     if not isinstance(entry, dict) or set(entry) != NAT_GATEWAY_KEYS:
         raise StateCorrupt("NATGateway state entry has an invalid shape")
@@ -562,19 +509,20 @@ def _validate_nat_gateway_entry(entry: Any) -> None:
         next_hop = ipaddress.ip_interface(provider["next_hop"])
     except (TypeError, ValueError) as error:
         raise StateCorrupt("NATGateway transit next hop is invalid") from error
-    if not isinstance(next_hop, ipaddress.IPv4Interface) or next_hop.network.prefixlen != 31:
+    if (
+        not isinstance(next_hop, ipaddress.IPv4Interface)
+        or next_hop.network.prefixlen != 31
+        or str(next_hop) != provider["next_hop"]
+    ):
         raise StateCorrupt("NATGateway transit next hop must use an IPv4 /31")
-    for key in ("source_cidrs", "applied_source_cidrs", "cleanup_source_cidrs"):
-        try:
-            sources = _nat_gateway_source_cidrs(entry[key])
-        except StateError as error:
-            raise StateCorrupt(f"NATGateway {key} is malformed") from error
-        if sources != entry[key]:
-            raise StateCorrupt(f"NATGateway {key} is not canonical")
-    for key, sources_key in (("source_revision", "source_cidrs"), ("applied_revision", "applied_source_cidrs")):
-        expected_revision = _nat_gateway_source_revision(entry[sources_key])
-        if entry[key] not in ("", expected_revision):
-            raise StateCorrupt(f"NATGateway {key} does not match its CIDRs")
+    try:
+        virtual_network = ipaddress.ip_network(
+            context["virtual_network"]["ipv4_cidr"], strict=True
+        )
+    except ValueError as error:
+        raise StateCorrupt("NATGateway VirtualNetwork CIDR is invalid") from error
+    if not next_hop.network.subnet_of(virtual_network):
+        raise StateCorrupt("NATGateway transit next hop is outside its VirtualNetwork")
 
 
 def _validate_dhcp_supervisor(value: Any) -> str:
@@ -1821,9 +1769,6 @@ class StateStore:
                 subnet_changed = ensure_subnet_data_plane(
                     parent, active_subnets, dhcp_supervisor
                 )
-                nat_gateway_changed = self._reconcile_nat_gateways_for_virtual_network(
-                    virtual_network_uid
-                )
             except (SubnetProviderError, NetworkCommandError) as error:
                 raise StateError(str(error)) from error
 
@@ -1854,7 +1799,7 @@ class StateStore:
                         raise
                 entry = ready_entry
                 state_changed = True
-            return entry, state_changed, parent_changed or subnet_changed or nat_gateway_changed
+            return entry, state_changed, parent_changed or subnet_changed
 
     def prepare_delete_subnet(
         self,
@@ -1881,9 +1826,6 @@ class StateStore:
                         "SELECT 1 FROM attachments WHERE subnet_uid = ? LIMIT 1", (uid,)
                     ).fetchone() is not None:
                         raise StateError("Subnet still has an ExternalIPAttachment")
-                    self._require_subnet_not_claimed_by_deleting_nat_gateway(
-                        connection, uid, virtual_network_uid
-                    )
             if entry["phase"] != "deleting":
                 entry = {**entry, "phase": "deleting"}
             return entry, True
@@ -1939,13 +1881,6 @@ class StateStore:
                     if child["uid"] != uid and child["phase"] != "deleting"
                 ]
 
-            # Reconcile gateway source membership after marking the Subnet
-            # deleting and before removing its VLAN, gateway, or DHCP state.
-            self._reconcile_nat_gateways_for_virtual_network(
-                virtual_network_uid,
-                deleting_subnet_uid=uid,
-            )
-
             try:
                 provider_changed = prepare_subnet_delete_data_plane(
                     parent, deleting_entry, remaining, dhcp_supervisor
@@ -1972,10 +1907,6 @@ class StateStore:
                         "SELECT 1 FROM attachments WHERE subnet_uid = ? LIMIT 1", (uid,)
                     ).fetchone() is not None:
                         raise StateError("Subnet still has an ExternalIPAttachment")
-                    if self._subnet_has_nat_gateway_claim(
-                        connection, uid, virtual_network_uid
-                    ):
-                        raise StateError("Subnet still has an AgentlessNet NATGateway SNAT rule")
             if entry["phase"] != "deleting":
                 raise StateError("AgentlessNet Subnet must be deleting before VLAN release")
             return entry, True
@@ -1993,10 +1924,6 @@ class StateStore:
                     "SELECT 1 FROM attachments WHERE subnet_uid = ? LIMIT 1", (uid,)
                 ).fetchone() is not None:
                     raise StateError("Subnet still has an ExternalIPAttachment")
-                if self._subnet_has_nat_gateway_claim(
-                    connection, uid, virtual_network_uid
-                ):
-                    raise StateError("Subnet still has an AgentlessNet NATGateway SNAT rule")
                 if entry["phase"] != "deleting":
                     raise StateError("AgentlessNet Subnet must be deleting before VLAN release")
                 connection.execute("BEGIN IMMEDIATE")
@@ -2128,61 +2055,6 @@ class StateStore:
             "external_interface": external_interface,
             "next_hop": virtual_network["transit"]["namespace_ip"],
         }
-
-    def _active_nat_gateway_source_cidrs(
-        self,
-        connection: sqlite3.Connection,
-        virtual_network_uid: str,
-    ) -> list[dict[str, str]]:
-        subnets = self._subnets_for_virtual_network(connection, virtual_network_uid)
-        sources = [
-            {"subnet_uid": subnet["uid"], "cidr": subnet["ipv4_cidr"]}
-            for subnet in subnets
-            if subnet["phase"] != "deleting"
-        ]
-        return _nat_gateway_source_cidrs(sources)
-
-    @staticmethod
-    def _nat_gateway_source_uids(entry: dict[str, Any]) -> set[str]:
-        return {
-            source["subnet_uid"]
-            for key in ("source_cidrs", "applied_source_cidrs", "cleanup_source_cidrs")
-            for source in entry[key]
-        }
-
-    @staticmethod
-    def _subnet_has_nat_gateway_claim(
-        connection: sqlite3.Connection,
-        subnet_uid: str,
-        virtual_network_uid: str,
-    ) -> bool:
-        gateway_uids = connection.execute(
-            "SELECT uid FROM nat_gateways WHERE virtual_network_uid = ? ORDER BY uid",
-            (virtual_network_uid,),
-        )
-        for (gateway_uid,) in gateway_uids:
-            entry = StateStore._nat_gateway_for_uid(connection, gateway_uid)
-            if entry is not None and subnet_uid in StateStore._nat_gateway_source_uids(entry):
-                return True
-        return False
-
-    @staticmethod
-    def _require_subnet_not_claimed_by_deleting_nat_gateway(
-        connection: sqlite3.Connection,
-        subnet_uid: str,
-        virtual_network_uid: str,
-    ) -> None:
-        gateway_uids = connection.execute(
-            """SELECT uid FROM nat_gateways
-               WHERE virtual_network_uid = ? AND phase = 'deleting' ORDER BY uid""",
-            (virtual_network_uid,),
-        )
-        for (gateway_uid,) in gateway_uids:
-            entry = StateStore._nat_gateway_for_uid(connection, gateway_uid)
-            if entry is not None and subnet_uid in StateStore._nat_gateway_source_uids(entry):
-                raise StateError(
-                    "Subnet cannot be removed while a deleting NATGateway still owns SNAT state"
-                )
 
     def _validate_nat_gateway_dependencies(
         self,
@@ -2610,45 +2482,23 @@ class StateStore:
                         "phase": "provisioning",
                         "context": normalized_context,
                         "provider": provider,
-                        "source_cidrs": [],
-                        "source_revision": _nat_gateway_source_revision([]),
-                        "applied_source_cidrs": [],
-                        "applied_revision": _nat_gateway_source_revision([]),
-                        "cleanup_source_cidrs": [],
                     }
                     existing = self._nat_gateway_for_uid(connection, uid)
                     if existing is not None and not self._nat_gateway_identity_matches(existing, requested):
                         raise StateError("NATGateway identity does not match saved provider state")
+                    if existing is not None and existing["phase"] == "deleting":
+                        raise StateError("NATGateway is already deleting")
                     self._require_unique_nat_gateway_fulfillment_id(
                         connection, uid, fulfillment_id
                     )
                     self._require_nat_gateway_external_ip_exclusive(
                         connection, external_ip_uid, external_address, uid
                     )
-                    sources = self._active_nat_gateway_source_cidrs(connection, virtual_network_uid)
                     if check_mode:
-                        requested["source_cidrs"] = sources
-                        requested["source_revision"] = _nat_gateway_source_revision(sources)
-                        return requested, existing is None or existing["source_cidrs"] != sources, False
+                        return requested, existing is None or existing["phase"] != "ready", False
 
-                    entry = dict(requested if existing is None else existing)
-                    possible_old_sources = (
-                        (existing or {}).get("source_cidrs", [])
-                        + (existing or {}).get("applied_source_cidrs", [])
-                        + (existing or {}).get("cleanup_source_cidrs", [])
-                    )
-                    cleanup_sources = _merge_nat_gateway_source_cidrs(
-                        possible_old_sources,
-                        sources,
-                    )
-                    entry.update({
-                        "phase": "provisioning",
-                        "context": normalized_context,
-                        "provider": provider,
-                        "source_cidrs": sources,
-                        "source_revision": _nat_gateway_source_revision(sources),
-                        "cleanup_source_cidrs": cleanup_sources,
-                    })
+                    entry = {**(existing or requested), "phase": "provisioning"}
+                    entry.update({"context": normalized_context, "provider": provider})
                     _validate_nat_gateway_entry(entry)
                     if existing == entry:
                         # A retry still runs provider reconciliation to repair partial changes.
@@ -2667,7 +2517,7 @@ class StateStore:
             try:
                 with _with_firewall_lock(self.firewall_lock_path):
                     provider_changed = agentless_net_nat_gateway.reconcile_nat_gateway(
-                        virtual_network, entry, entry["source_cidrs"]
+                        virtual_network, entry
                     )
             except (agentless_net_nat_gateway.NATGatewayProviderError, NetworkCommandError) as error:
                 raise StateError(str(error)) from error
@@ -2675,9 +2525,6 @@ class StateStore:
             ready = {
                 **entry,
                 "phase": "ready",
-                "applied_source_cidrs": entry["source_cidrs"],
-                "applied_revision": entry["source_revision"],
-                "cleanup_source_cidrs": [],
             }
             with self._locked_database(create=False) as connection:
                 if connection is None:
@@ -2735,11 +2582,6 @@ class StateStore:
                     deleting = {
                         **current,
                         "phase": "deleting",
-                        "cleanup_source_cidrs": _merge_nat_gateway_source_cidrs(
-                            current["source_cidrs"]
-                            + current["applied_source_cidrs"],
-                            current["cleanup_source_cidrs"],
-                        ),
                     }
                     self._write_nat_gateway_entry(connection, deleting, existing=current)
                     connection.commit()
@@ -2776,94 +2618,6 @@ class StateStore:
                     raise
             return deleting, True
 
-    def _reconcile_nat_gateways_for_virtual_network(
-        self,
-        virtual_network_uid: str,
-        *,
-        deleting_subnet_uid: str | None = None,
-    ) -> bool:
-        """Reconcile gateway source CIDRs while the caller holds the VN UID lock."""
-        with self._locked_database(create=False) as connection:
-            if connection is None:
-                return False
-            gateway_uids = [
-                row[0]
-                for row in connection.execute(
-                    "SELECT uid FROM nat_gateways WHERE virtual_network_uid = ? ORDER BY uid",
-                    (virtual_network_uid,),
-                )
-            ]
-
-        changed = False
-        for uid in gateway_uids:
-            with self._locked_database(create=False) as connection:
-                if connection is None:
-                    raise StateCorrupt("AgentlessNet NATGateway state disappeared")
-                connection.execute("BEGIN IMMEDIATE")
-                try:
-                    current = self._nat_gateway_for_uid(connection, uid)
-                    if current is None:
-                        connection.rollback()
-                        continue
-                    if current["phase"] == "deleting":
-                        if deleting_subnet_uid in self._nat_gateway_source_uids(current):
-                            raise StateError(
-                                "Subnet cannot be removed while a deleting NATGateway still owns SNAT state"
-                            )
-                        connection.rollback()
-                        continue
-                    parent, _external_ip = self._validate_nat_gateway_dependencies(connection, current)
-                    sources = self._active_nat_gateway_source_cidrs(connection, virtual_network_uid)
-                    cleanup = _merge_nat_gateway_source_cidrs(
-                        current["source_cidrs"]
-                        + current["applied_source_cidrs"],
-                        current["cleanup_source_cidrs"],
-                    )
-                    pending = {
-                        **current,
-                        "phase": "provisioning",
-                        "source_cidrs": sources,
-                        "source_revision": _nat_gateway_source_revision(sources),
-                        "cleanup_source_cidrs": cleanup,
-                    }
-                    _validate_nat_gateway_entry(pending)
-                    self._write_nat_gateway_entry(connection, pending, existing=current)
-                    connection.commit()
-                except BaseException:
-                    if connection.in_transaction:
-                        connection.rollback()
-                    raise
-
-            try:
-                with _with_firewall_lock(self.firewall_lock_path):
-                    provider_changed = agentless_net_nat_gateway.reconcile_nat_gateway(
-                        parent, pending, pending["source_cidrs"]
-                    )
-            except (agentless_net_nat_gateway.NATGatewayProviderError, NetworkCommandError) as error:
-                raise StateError(str(error)) from error
-
-            ready = {
-                **pending,
-                "phase": "ready",
-                "applied_source_cidrs": sources,
-                "applied_revision": pending["source_revision"],
-                "cleanup_source_cidrs": [],
-            }
-            with self._locked_database(create=False) as connection:
-                if connection is None:
-                    raise StateCorrupt("AgentlessNet NATGateway state disappeared after reconciliation")
-                connection.execute("BEGIN IMMEDIATE")
-                try:
-                    latest = self._nat_gateway_for_uid(connection, uid)
-                    if latest != pending:
-                        raise StateError("NATGateway state changed during Subnet reconciliation")
-                    self._write_nat_gateway_entry(connection, ready, existing=latest)
-                    connection.commit()
-                except BaseException:
-                    connection.rollback()
-                    raise
-            changed = changed or current != ready or provider_changed
-        return changed
 
     def ensure_external_ip_pool(
         self,

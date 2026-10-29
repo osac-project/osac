@@ -176,12 +176,15 @@ identity, tenant and address/CIDR snapshot, then accepts only a matching
 same-job `nat_gateway.ensure` or `nat_gateway.delete` result. Unversioned
 managers keep their existing lifecycle. Netris adoption is tracked by OSAC-6694.
 
-AgentlessNet stores NATGateway ownership and source revisions in schema-v1
-SQLite. AAP installs explicit namespace SNAT per active Subnet CIDR, scoped host
-forwarding and a host SNAT-bypass rule before announcing the ExternalIP `/32`
-through local FRR. Subnet lifecycle reconciles that source set before Ready or
-VLAN release. Delete withdraws the route before removing SNAT, forwarding,
-bypass and matching conntrack entries; ExternalIP and VirtualNetwork cleanup
-remain blocked until saved NATGateway state is removed. The contract task is
-OSAC-6693. Deployed BGP convergence and packet delivery remain QE coverage under
-OSAC-5533.
+AgentlessNet stores NATGateway ownership in schema-v1 SQLite. AAP translates the
+immutable VirtualNetwork IPv4 CIDR with a constant namespace rule pair: a saved
+transit `/31` exemption followed by explicit SNAT on the namespace uplink.
+Subnet lifecycle does not inspect or reconcile NATGateway state. Scoped host
+forwarding and a host SNAT-bypass rule are installed before announcing the
+ExternalIP `/32` through local FRR. Delete withdraws the route before removing
+SNAT, the transit exemption, forwarding, bypass and matching reply-destination
+conntrack entries; ExternalIP and VirtualNetwork cleanup remain blocked until
+saved NATGateway state is removed. The current per-Subnet source behavior is
+superseded by OSAC-6202's VN-wide SNAT plan; the accepted design amendment must
+be published through the enhancement-proposals design workflow. Deployed BGP
+convergence and packet delivery remain QE coverage under OSAC-5533.

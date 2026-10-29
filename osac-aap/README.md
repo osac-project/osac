@@ -65,11 +65,12 @@ finalizers. BMaaS is the first supported consumer; VMaaS and CaaS target wiring
 remain follow-up work. Provider BGP peers are configured outside these jobs.
 For NATGateway contract v1, AAP reads the controller-supplied ExternalIP and
 VirtualNetwork snapshot and keeps the ExternalIP reservation until cleanup.
-It records each active Subnet CIDR under the VirtualNetwork lock, installs
-explicit SNAT, scoped host forwarding and a NAT bypass rule, and announces the
-ExternalIP `/32` through local FRR. Subnet creation and deletion reconcile the
-source CIDR set before the Subnet becomes Ready or its VLAN is removed. NATGateway
-delete withdraws the route before removing SNAT and matching conntrack state.
+It translates the complete immutable VirtualNetwork CIDR, excluding the saved
+transit `/31`, with a constant two-rule namespace pair. It installs explicit
+SNAT, scoped host forwarding and a NAT bypass rule, and announces the ExternalIP
+`/32` through local FRR. Subnet creation and deletion do not inspect or reconcile
+NATGateway state. NATGateway delete withdraws the route before removing SNAT,
+the transit exemption, and matching conntrack state.
 SecurityGroups remain unsupported.
 
 All AgentlessNet provider state uses schema version 1 in a SQLite database at
@@ -80,13 +81,13 @@ The current schema is created directly at v1 with `virtual_networks`,
 adding the missing consumer tables in one transaction; unknown layouts fail
 closed. These tables
 store VirtualNetwork, Subnet, immutable ExternalIPPool and ExternalIP state,
-attachment-owned cleanup snapshots, and NATGateway source revisions and route
-cleanup identity. `external_ips` reserves one provider
+attachment-owned cleanup snapshots, and NATGateway route cleanup identity.
+`external_ips` reserves one provider
 IPv4 address per ExternalIP Kubernetes UID and pool. `attachments` retains the
 ExternalIP, target, Subnet, VirtualNetwork and exact route/rule inputs until
 provider cleanup succeeds. `nat_gateways` retains the NATGateway, ExternalIP,
-VirtualNetwork, desired and applied Subnet source CIDRs, provider interfaces,
-route next hop, and any pending cleanup set until provider cleanup succeeds. The
+VirtualNetwork, provider interfaces, route next hop, and cleanup identity until
+provider cleanup succeeds. The
 `virtual_networks` table stores each VirtualNetwork's immutable CR CIDR and one UID-keyed `/31` transit
 link carved from that CIDR. The `subnets` table stores each Kubernetes Subnet
 UID, its parent Kubernetes UID and tenant, the global VLAN ID, and saved

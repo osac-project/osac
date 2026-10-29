@@ -8,8 +8,6 @@
     nat_gateway_uid: "10000000-0000-4000-8000-000000000011"
     virtual_network_id: "10000000-0000-4000-8000-000000000002"
     virtual_network_uid: "10000000-0000-4000-8000-000000000003"
-    subnet_id: "10000000-0000-4000-8000-000000000012"
-    subnet_uid: "10000000-0000-4000-8000-000000000004"
     external_ip_id: "10000000-0000-4000-8000-000000000006"
     external_ip_uid: "10000000-0000-4000-8000-000000000005"
     agentless_natgw_inventory:
@@ -115,10 +113,41 @@
               - (agentless_natgw_ensured_state.stdout | from_json).present
               - (agentless_natgw_ensured_state.stdout | from_json).phase == 'ready'
               - (agentless_natgw_ensured_state.stdout | from_json).nat_gateway.context == agentless_natgw_context
-              - (agentless_natgw_ensured_state.stdout | from_json).nat_gateway.applied_source_cidrs | length == 1
+              - >-
+                (agentless_natgw_ensured_state.stdout | from_json).nat_gateway.keys() | list | sort ==
+                ['context', 'external_address', 'external_ip_uid', 'fulfillment_id', 'phase', 'provider',
+                 'tenant_id', 'uid', 'virtual_network_uid']
+              - (agentless_natgw_ensured_state.stdout | from_json).nat_gateway.source_cidrs is not defined
+              - (agentless_natgw_ensured_state.stdout | from_json).nat_gateway.source_revision is not defined
+              - (agentless_natgw_ensured_state.stdout | from_json).nat_gateway.applied_source_cidrs is not defined
+              - (agentless_natgw_ensured_state.stdout | from_json).nat_gateway.applied_revision is not defined
+              - (agentless_natgw_ensured_state.stdout | from_json).nat_gateway.cleanup_source_cidrs is not defined
+
+        - name: Save the complete Ready payload before ensure retry
+          ansible.builtin.set_fact:
+            agentless_natgw_payload_before_retry: "{{ (agentless_natgw_ensured_state.stdout | from_json).nat_gateway }}"
 
         - name: Retry the production ensure playbook with the same snapshot
           ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Inspect saved NATGateway provider state after ensure retry
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - python
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_natgw_state_file }}"
+              - "{{ nat_gateway_uid }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_natgw_retried_state
+          changed_when: false
+
+        - name: Confirm ensure retry preserves the complete Ready payload
+          ansible.builtin.assert:
+            that:
+              - (agentless_natgw_retried_state.stdout | from_json).nat_gateway == agentless_natgw_payload_before_retry
 
         - name: Build the deleting NATGateway resource
           ansible.builtin.set_fact:

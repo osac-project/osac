@@ -214,6 +214,55 @@ var _ = Describe("NATGateway v1 Envtest", func() {
 		Expect(current.Annotations[osacNATGatewayContractVersionAnnotation]).To(Equal(networkmanager.NATGatewayContractVersionV1))
 	})
 
+	It("keeps the desired gateway configuration independent of Subnet lifecycle", func() {
+		createNATGateway()
+		provider.getProvisionStatusWithExtraVarsFunc = func(_ context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+			gateway := resource.(*v1alpha1.NATGateway)
+			return provisioning.ProvisionStatusWithExtraVars{
+				ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateSucceeded},
+				InputExtraVars:  natGatewayInputs(gateway, ptr.To(contextFor(gateway))),
+				ExtraVars: map[string]any{"osac_result": map[string]any{
+					"schemaVersion": "v1", "operation": provisioning.NATGatewayEnsureOperation,
+					"resourceUID": string(gateway.UID), "observedGeneration": gateway.Generation,
+					"data": map[string]any{},
+				}},
+			}, nil
+		}
+
+		request := mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(natGateway)}}
+		current := reconcileUntil(request, func(gateway *v1alpha1.NATGateway) bool {
+			return gateway.Status.Phase == v1alpha1.NATGatewayPhaseReady
+		})
+		desiredConfigVersion := current.Status.DesiredConfigVersion
+		provisioningJobs := append([]v1alpha1.JobStatus(nil), current.Status.ProvisioningJobs...)
+
+		subnet := &v1alpha1.Subnet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "subnet", Namespace: namespaceName,
+				Labels:      map[string]string{osacSubnetIDLabel: "44444444-4444-4444-8444-444444444444"},
+				Annotations: map[string]string{osacTenantKey: "tenant-a"},
+			},
+			Spec: v1alpha1.SubnetSpec{VirtualNetwork: virtualNetworkID, IPv4CIDR: "10.20.1.0/24"},
+		}
+		Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		unchanged := &v1alpha1.NATGateway{}
+		Expect(k8sClient.Get(ctx, request.NamespacedName, unchanged)).To(Succeed())
+		Expect(unchanged.Status.Phase).To(Equal(v1alpha1.NATGatewayPhaseReady))
+		Expect(unchanged.Status.DesiredConfigVersion).To(Equal(desiredConfigVersion))
+		Expect(unchanged.Status.ProvisioningJobs).To(Equal(provisioningJobs))
+
+		Expect(k8sClient.Delete(ctx, subnet)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, request.NamespacedName, unchanged)).To(Succeed())
+		Expect(unchanged.Status.Phase).To(Equal(v1alpha1.NATGatewayPhaseReady))
+		Expect(unchanged.Status.DesiredConfigVersion).To(Equal(desiredConfigVersion))
+		Expect(unchanged.Status.ProvisioningJobs).To(Equal(provisioningJobs))
+	})
+
 	It("rejects a successful ensure when the ExternalIP snapshot changed during the job", func() {
 		createNATGateway()
 		provider.getProvisionStatusWithExtraVarsFunc = func(_ context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {

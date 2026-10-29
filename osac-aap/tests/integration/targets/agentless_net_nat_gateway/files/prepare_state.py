@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -16,6 +17,8 @@ TENANT = "agentless-natgw-test"
 
 def prepare(state_path: Path) -> None:
     prepare_provider_network_state(state_path, TENANT, "NATGateway")
+    with sqlite3.connect(state_path) as connection:
+        connection.execute("DELETE FROM subnets")
 
 
 if __name__ == "__main__":

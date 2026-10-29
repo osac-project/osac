@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	k8sfiles "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/files"
+	"github.com/osac-project/osac/fulfillment-service/internal/serviceaccounts"
 )
 
 // k8sTokenFile is the value of the 'namespace' external data item passed to the Rego policy when we aren't running
@@ -28,14 +29,24 @@ var authzPolicy string
 // using an embedded Rego policy evaluated with the OPA library. Don't create instances of this type directly, use the
 type EvaluatorBuilder struct {
 	emergencyServiceAccounts []string
+	serviceAccountResolver   ManagedServiceAccountResolver
 }
+
+// ManagedServiceAccountResolver loads current Fulfillment authorization state
+// for a candidate managed service-account token.
+type ManagedServiceAccountResolver func(
+	ctx context.Context,
+	clientID string,
+	tenant string,
+) (*serviceaccounts.AuthorizationIdentity, error)
 
 // AuthzDecision contains the result of an authorization evaluation.
 type AuthzDecision struct {
-	Allowed        bool
-	Reason         string
-	SubjectUser    string   // The user extracted from OPA policy output (subject_user)
-	SubjectTenants []string // The tenants extracted from OPA policy output (subject_tenant_result)
+	Allowed               bool
+	Reason                string
+	SubjectUser           string   // The user extracted from OPA policy output (subject_user)
+	SubjectTenants        []string // The tenants extracted from OPA policy output (subject_tenant_result)
+	ManagedServiceAccount bool
 }
 
 // AuthContext holds the complete identity claims extracted from a JWT token.
@@ -69,6 +80,16 @@ type AuthContext struct {
 	Tenant string
 	// Name of the object requested by the incoming authorization request, currently only used for project operations.
 	Name string
+
+	// Managed service-account candidate claims are signed JWT inputs. Authorization
+	// is granted only after resolving the client against current Fulfillment state.
+	ManagedServiceAccountCandidate   bool
+	ManagedServiceAccountClaimsValid bool
+	ManagedServiceAccountClientID    string
+	ManagedServiceAccountTenantClaim string
+	ManagedServiceAccountValid       bool
+	ManagedServiceAccountTenant      string
+	ManagedServiceAccountRoles       []string
 }
 
 // ContextExtensionToMap converts the context extensions to the untyped map OPA expects, omitting empty fields.
@@ -125,7 +146,8 @@ type AuthorizationEvaluator interface {
 // This is the production implementation that evaluates authorization using the existing
 // OPA policy (authz.rego).
 type OPAAuthorizationEvaluator struct {
-	query rego.PreparedEvalQuery
+	query                  rego.PreparedEvalQuery
+	serviceAccountResolver ManagedServiceAccountResolver
 }
 
 // NewEvaluator creates a new Evaluator that can be used to evaluate authorization decisions.
@@ -135,6 +157,13 @@ func NewEvaluator() *EvaluatorBuilder {
 
 func (b *EvaluatorBuilder) AddEmergencyServiceAccounts(value []string) *EvaluatorBuilder {
 	b.emergencyServiceAccounts = value
+	return b
+}
+
+func (b *EvaluatorBuilder) SetManagedServiceAccountResolver(
+	value ManagedServiceAccountResolver,
+) *EvaluatorBuilder {
+	b.serviceAccountResolver = value
 	return b
 }
 
@@ -160,7 +189,8 @@ func (b *EvaluatorBuilder) Build() (*OPAAuthorizationEvaluator, error) {
 
 	// Create the evaluator:
 	result := &OPAAuthorizationEvaluator{
-		query: query,
+		query:                  query,
+		serviceAccountResolver: b.serviceAccountResolver,
 	}
 	return result, nil
 }
@@ -224,8 +254,37 @@ func (e *OPAAuthorizationEvaluator) Evaluate(
 	if method == "" {
 		return nil, errors.New("method is mandatory")
 	}
+	if authContext.ManagedServiceAccountCandidate &&
+		(method == "/osac.public.v1.Events/Watch" || method == "/osac.public.v1.ConsoleSessions/Create") {
+		return &AuthzDecision{Allowed: false}, nil
+	}
 
-	input := constructOPAInput(authContext, method)
+	effectiveAuthContext := *authContext
+	effectiveAuthContext.ManagedServiceAccountValid = false
+	effectiveAuthContext.ManagedServiceAccountTenant = ""
+	effectiveAuthContext.ManagedServiceAccountRoles = []string{}
+	if effectiveAuthContext.ManagedServiceAccountCandidate &&
+		effectiveAuthContext.AuthMethod == "jwt" &&
+		effectiveAuthContext.ManagedServiceAccountClaimsValid &&
+		e.serviceAccountResolver != nil {
+		identity, resolveErr := e.serviceAccountResolver(
+			ctx,
+			effectiveAuthContext.ManagedServiceAccountClientID,
+			effectiveAuthContext.ManagedServiceAccountTenantClaim,
+		)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("failed to resolve managed service-account authorization: %w", resolveErr)
+		}
+		if identity != nil && identity.ClientID == effectiveAuthContext.ManagedServiceAccountClientID &&
+			identity.Tenant == effectiveAuthContext.ManagedServiceAccountTenantClaim {
+			effectiveAuthContext.ManagedServiceAccountValid = true
+			effectiveAuthContext.ManagedServiceAccountTenant = identity.Tenant
+			effectiveAuthContext.ManagedServiceAccountRoles = append(
+				[]string{}, identity.Roles...,
+			)
+		}
+	}
+	input := constructOPAInput(&effectiveAuthContext, method)
 
 	// Query the OPA policy. Following GrpcAuthzInterceptor pattern:
 	// query is "data.authz", result is results[0].Expressions[0].Value as map[string]any
@@ -245,6 +304,7 @@ func (e *OPAAuthorizationEvaluator) Evaluate(
 
 	// Extract allow boolean
 	allow, _ := authzData["allow"].(bool)
+	managedServiceAccount, _ := authzData["subject_managed_service_account"].(bool)
 
 	// Extract subject data from OPA output
 	subjectUser, _ := authzData["subject_user"].(string)
@@ -259,9 +319,10 @@ func (e *OPAAuthorizationEvaluator) Evaluate(
 	}
 
 	decision := &AuthzDecision{
-		Allowed:        allow,
-		SubjectUser:    subjectUser,
-		SubjectTenants: subjectTenants,
+		Allowed:               allow,
+		SubjectUser:           subjectUser,
+		SubjectTenants:        subjectTenants,
+		ManagedServiceAccount: managedServiceAccount,
 	}
 
 	// Note: Current OPA policy does not return a "reason" field.
@@ -309,6 +370,15 @@ func constructOPAInput(authContext *AuthContext, method string) map[string]any {
 		if len(authContext.RealmAccess) > 0 {
 			identity["realm_access"] = authContext.RealmAccess
 		}
+	}
+	if authContext.ManagedServiceAccountCandidate {
+		identity["managed_service_account_candidate"] = true
+		identity["managed_service_account_claims_valid"] = authContext.ManagedServiceAccountClaimsValid
+		identity["managed_service_account_client_id"] = authContext.ManagedServiceAccountClientID
+		identity["managed_service_account_tenant_claim"] = authContext.ManagedServiceAccountTenantClaim
+		identity["managed_service_account_valid"] = authContext.ManagedServiceAccountValid
+		identity["managed_service_account_tenant"] = authContext.ManagedServiceAccountTenant
+		identity["managed_service_account_roles"] = authContext.ManagedServiceAccountRoles
 	}
 
 	return map[string]any{

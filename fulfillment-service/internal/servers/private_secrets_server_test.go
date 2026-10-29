@@ -19,6 +19,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -171,6 +172,14 @@ var _ = Describe("Private secrets server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			return response.GetObject()
 		}
+
+		It("does not reserve names for service-account Secrets", func() {
+			secret := privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{Name: "robot", Tenant: testTenant}.Build(),
+				Data:     map[string][]byte{"registration_access_token": []byte("not-a-real-token")},
+			}.Build()
+			Expect(server.validateSecretCreate(secret)).To(Succeed())
+		})
 
 		It("Creates and gets a Vault secret", func() {
 			created := createVaultSecret()
@@ -865,6 +874,21 @@ var _ = Describe("Private secrets server", func() {
 				return response.GetObject()
 			}
 
+			createServiceAccountCredential := func(name string) *privatev1.Secret {
+				mockStore.EXPECT().
+					Store(gomock.Any(), testTenant, "", name, map[string][]byte{"client_secret": []byte("credential")}).
+					Return(nil)
+				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{Name: name, Tenant: testTenant}.Build(),
+						Type:     privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL,
+						Data:     map[string][]byte{"client_secret": []byte("credential")},
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				return created.GetObject()
+			}
+
 			It("allows a platform administrator to create and retrieve a shared Vault Secret", func() {
 				created := createSharedSecret("shared-admin-secret")
 				mockStore.EXPECT().
@@ -974,6 +998,44 @@ var _ = Describe("Private secrets server", func() {
 				Expect(response.GetObject().GetData()).To(HaveKeyWithValue("public_key", publicKey))
 			})
 
+			It("allows a platform administrator to create, retrieve, and update a system Vault Secret", func() {
+				mockStore.EXPECT().
+					Store(gomock.Any(), auth.SystemTenant, "", "system-admin-secret", gomock.Any()).
+					Return(nil)
+				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "system-admin-secret",
+							Tenant: auth.SystemTenant,
+						}.Build(),
+						Data: map[string][]byte{"key": []byte("value")},
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(created.GetObject().GetMetadata().GetTenant()).To(Equal(auth.SystemTenant))
+
+				mockStore.EXPECT().
+					Fetch(gomock.Any(), auth.SystemTenant, "", "system-admin-secret").
+					Return(map[string][]byte{"key": []byte("value")}, nil)
+				response, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
+					Id: created.GetObject().GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetData()).To(HaveKeyWithValue("key", []byte("value")))
+
+				mockStore.EXPECT().
+					Store(gomock.Any(), auth.SystemTenant, "", "system-admin-secret", gomock.Any()).
+					Return(nil)
+				_, err = server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Id:   created.GetObject().GetId(),
+						Data: map[string][]byte{"key": []byte("updated-value")},
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			})
+
 			It("hides system Secrets from tenant-scoped identities", func() {
 				mockStore.EXPECT().
 					Store(gomock.Any(), auth.SystemTenant, "", "system-protected-secret", gomock.Any()).
@@ -1007,6 +1069,15 @@ var _ = Describe("Private secrets server", func() {
 
 				_, err = restrictedServer.Get(ctx, privatev1.SecretsGetRequest_builder{
 					Id: created.GetObject().GetId(),
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.NotFound))
+
+				_, err = restrictedServer.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Id:   created.GetObject().GetId(),
+						Data: map[string][]byte{"key": []byte("changed")},
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data"}},
 				}.Build())
 				Expect(status.Code(err)).To(Equal(codes.NotFound))
 			})
@@ -1054,6 +1125,59 @@ var _ = Describe("Private secrets server", func() {
 					Id: created.GetId(),
 				}.Build())
 				Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
+			})
+
+			It("hides service-account credentials from ordinary tenant clients", func() {
+				created := createServiceAccountCredential("service-account-credential")
+				restrictedServer := newTenantUserServer()
+				clientCtx := auth.ContextWithToken(ctx, &jwt.Token{Claims: jwt.MapClaims{
+					"realm_access": map[string]any{"roles": []any{"is_client"}},
+				}})
+
+				list, err := restrictedServer.List(clientCtx, privatev1.SecretsListRequest_builder{
+					Filter: new("this.id == '" + created.GetId() + "'"),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(list.GetItems()).To(BeEmpty())
+
+				_, err = restrictedServer.Get(clientCtx, privatev1.SecretsGetRequest_builder{Id: created.GetId()}.Build())
+				Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
+
+				_, err = restrictedServer.Create(clientCtx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{Name: "client-created-credential"}.Build(),
+						Type:     privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL,
+						Data:     map[string][]byte{"client_secret": []byte("credential")},
+					}.Build(),
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
+
+				_, err = restrictedServer.Update(clientCtx, privatev1.SecretsUpdateRequest_builder{
+					Object:     privatev1.Secret_builder{Id: created.GetId(), Data: map[string][]byte{"client_secret": []byte("changed")}}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data"}},
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
+
+				_, err = restrictedServer.Delete(clientCtx, privatev1.SecretsDeleteRequest_builder{Id: created.GetId()}.Build())
+				Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
+
+				_, err = restrictedServer.Signal(clientCtx, privatev1.SecretsSignalRequest_builder{Id: created.GetId()}.Build())
+				Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
+			})
+
+			It("allows tenant administrators to retrieve service-account credentials", func() {
+				created := createServiceAccountCredential("service-account-credential-admin")
+				mockStore.EXPECT().
+					Fetch(gomock.Any(), testTenant, "", "service-account-credential-admin").
+					Return(map[string][]byte{"client_secret": []byte("credential")}, nil)
+				tenantAdminCtx := auth.ContextWithToken(ctx, &jwt.Token{Claims: jwt.MapClaims{
+					"realm_access": map[string]any{"roles": []any{"tenant-admin"}},
+				}})
+
+				response, err := newTenantUserServer().Get(tenantAdminCtx,
+					privatev1.SecretsGetRequest_builder{Id: created.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetData()).To(HaveKeyWithValue("client_secret", []byte("credential")))
 			})
 		})
 

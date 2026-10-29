@@ -17,6 +17,9 @@ To get started with tenant and provider credentials, see
 For Kafka broker requirements, connection settings, and a Strimzi example,
 see [Configuring an external Kafka cluster](guides/installation/kafka-configuration.md).
 
+For tenant machine identities, see the [Tenant Admin service-account guide](guides/tenant-admin-service-accounts.md)
+and the [Tenant User service-account guide](guides/tenant-user-service-accounts.md).
+
 - [Ethernet FabricDomains](guides/admin/fabric-domains.md): hardware bindings,
   inventory onboarding, membership changes, cleanup, and troubleshooting.
 - [Labels and annotations](guides/admin/metadata.md): reserved metadata,

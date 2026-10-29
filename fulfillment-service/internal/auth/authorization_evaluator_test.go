@@ -27,6 +27,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	k8sfiles "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/files"
+	"github.com/osac-project/osac/fulfillment-service/internal/serviceaccounts"
 	_ "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	_ "github.com/osac-project/osac/proto/gen/osac/public/v1"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -264,6 +265,92 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				Expect(decision).ToNot(BeNil())
 				// The decision should be based on all the provided claims
 				Expect(decision.SubjectUser).To(Equal("jane.smith"))
+			})
+		})
+
+		Context("With managed service-account token", func() {
+			It("uses current RoleBinding roles and isolates managed clients from legacy grants", func(ctx context.Context) {
+				roles := []string{"tenant-automation"}
+				resolverCalls := 0
+				var err error
+				evaluator, err = NewEvaluator().
+					SetManagedServiceAccountResolver(func(_ context.Context, clientID, tenant string) (*serviceaccounts.AuthorizationIdentity, error) {
+						resolverCalls++
+						return &serviceaccounts.AuthorizationIdentity{
+							ClientID: clientID,
+							Tenant:   tenant,
+							Roles:    roles,
+						}, nil
+					}).Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				authContext := &AuthContext{
+					AuthMethod:                       "jwt",
+					Username:                         "machine-user",
+					Groups:                           []any{"admins"},
+					Organization:                     []any{"forged-tenant"},
+					RealmAccess:                      map[string]any{"roles": []any{"tenant-admin"}},
+					ManagedServiceAccountCandidate:   true,
+					ManagedServiceAccountClaimsValid: true,
+					ManagedServiceAccountClientID:    "osac-sa-tenant-a-d3c4e3db-95b8-481d-8b5c-963da477da12",
+					ManagedServiceAccountTenantClaim: "tenant-a",
+				}
+
+				decision, err := evaluator.Evaluate(ctx, authContext, "/osac.public.v1.Projects/List")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(BeTrue())
+				Expect(decision.SubjectUser).To(Equal(authContext.ManagedServiceAccountClientID))
+				Expect(decision.SubjectTenants).To(Equal([]string{"tenant-a"}))
+				Expect(decision.ManagedServiceAccount).To(BeTrue())
+
+				decision, err = evaluator.Evaluate(ctx, authContext, "/osac.public.v1.Secrets/Get")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(BeFalse())
+
+				decision, err = evaluator.Evaluate(ctx, authContext, "/osac.public.v1.ServiceAccounts/Delete")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(BeFalse(), "legacy admin claims must not grant methods")
+				Expect(decision.SubjectTenants).To(ConsistOf("tenant-a"))
+
+				roles = []string{"tenant-idp-manager"}
+				decision, err = evaluator.Evaluate(ctx, authContext, "/osac.public.v1.IdentityProviders/Create")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(BeTrue())
+				decision, err = evaluator.Evaluate(ctx, authContext, "/osac.public.v1.Users/Create")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(BeFalse())
+
+				roles = []string{"tenant-admin"}
+				decision, err = evaluator.Evaluate(ctx, authContext, "/osac.public.v1.Secrets/Get")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(BeTrue())
+				decision, err = evaluator.Evaluate(ctx, authContext, "/osac.public.v1.Events/Watch")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(BeFalse())
+
+				roles = []string{"osac-csi-driver"}
+				decision, err = evaluator.Evaluate(ctx, authContext, "/osac.private.v1.Volumes/Get")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(BeTrue())
+				decision, err = evaluator.Evaluate(ctx, authContext, "/osac.public.v1.Clusters/List")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(BeFalse())
+				Expect(resolverCalls).To(Equal(8))
+			})
+
+			It("denies managed candidates when claims are malformed or unresolved", func(ctx context.Context) {
+				candidate := &AuthContext{
+					AuthMethod:                       "jwt",
+					Username:                         "machine-user",
+					RealmAccess:                      map[string]any{"roles": []any{"tenant-admin"}},
+					ManagedServiceAccountCandidate:   true,
+					ManagedServiceAccountClaimsValid: false,
+					ManagedServiceAccountClientID:    "osac-sa-tenant-a-d3c4e3db-95b8-481d-8b5c-963da477da12",
+					ManagedServiceAccountTenantClaim: "tenant-a",
+				}
+				decision, err := evaluator.Evaluate(ctx, candidate, "/osac.public.v1.Clusters/List")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(BeFalse())
 			})
 		})
 

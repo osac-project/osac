@@ -60,14 +60,14 @@ const ClusterCatalogReviewStep = () => {
                   : formatReviewScalar(values.metadata.tenant.name || values.metadata.tenant.id)}
               </DescriptionListDescription>
             </DescriptionListGroup>
-          ) : (
+          ) : values.metadata.project.trim() ? (
             <DescriptionListGroup>
               <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
               <DescriptionListDescription>
                 {formatReviewScalar(values.metadata.project)}
               </DescriptionListDescription>
             </DescriptionListGroup>
-          )}
+          ) : null}
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Provisioning template')}</DescriptionListTerm>
             <DescriptionListDescription>

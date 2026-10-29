@@ -7,6 +7,8 @@ export const MainPage = {
   navigation: ['navigation', { name: 'Primary navigation', exact: true }],
   catalog: ['link', { name: 'Catalog', exact: true }],
   projects: ['link', { name: 'Projects', exact: true }],
+  services: ['button', { name: 'Services', exact: true }],
+  virtualMachines: ['link', { name: 'Virtual Machines', exact: true }],
   administration: ['button', { name: 'Administration', exact: true }],
   tenants: ['link', { name: 'Tenants', exact: true }],
   infrastructure: ['button', { name: 'Infrastructure', exact: true }],

@@ -19,6 +19,14 @@ import {
   readTenantCredentials,
   tenantCredentialsFilePath,
 } from '../../../../libs/test-utils/src/tenants.page';
+import {
+  expectVmDetailsPage,
+  expectVmDetailsToBeRunning,
+  expectVmToBeRunning,
+  openVmDetailsPage,
+  openVmsPage,
+  waitForVmToBeRunning,
+} from '../../../../libs/test-utils/src/vms.page';
 
 const vmName = `vm-e2e-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
 const cloudInit = '#cloud-config\nruncmd:\n  - echo vm-e2e';
@@ -160,8 +168,21 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
 
   await testStep('catalog-launch', `Submit the VM "${vmName}"`, async () => {
     await page.getByRole('button', { name: 'Create', exact: true }).click();
-    await expect(page).toHaveURL(/\/vms\/[^/]+$/);
-    await expect(page.getByRole('heading', { name: vmName, exact: true })).toBeVisible();
-    await expect(page.getByText('Details', { exact: true })).toBeVisible();
+    await expectVmDetailsPage(page, vmName);
+  });
+
+  await testStep('catalog-launch', `Verify the VM "${vmName}" reaches Running`, () =>
+    waitForVmToBeRunning(page, vmName),
+  );
+
+  await testStep('catalog-launch', `Verify the VM "${vmName}" appears in the VM list`, async () => {
+    await openVmsPage(page);
+    await expectVmToBeRunning(page, vmName, 60_000);
+  });
+
+  await testStep('catalog-launch', `Verify the VM "${vmName}" details page`, async () => {
+    await openVmDetailsPage(page, vmName);
+    await expectVmDetailsPage(page, vmName);
+    await expectVmDetailsToBeRunning(page);
   });
 });

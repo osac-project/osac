@@ -1,5 +1,4 @@
 import { type Page, expect, test } from '@playwright/test';
-import { randomUUID } from 'node:crypto';
 import { access } from 'node:fs/promises';
 
 import {
@@ -7,6 +6,7 @@ import {
   instanceTypeTestData,
   storageTierTestData,
   tenantNameOrSkip,
+  vmTestName,
 } from './test_data';
 import {
   launchCatalogItem,
@@ -28,7 +28,7 @@ import {
   waitForVmToBeRunning,
 } from '../../../../libs/test-utils/src/vms.page';
 
-const vmName = `vm-e2e-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+const vmName = vmTestName;
 const cloudInit = '#cloud-config\nruncmd:\n  - echo vm-e2e';
 
 const selectOption = async (

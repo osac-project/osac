@@ -92,3 +92,45 @@ export const openVmDetailsPage = async (page: Page, name: string): Promise<void>
     .click();
   await expectVmDetailsPage(page, name);
 };
+
+/** Delete a VM from its details page and wait for navigation to the list. */
+export const deleteVm = async (page: Page, name: string): Promise<void> => {
+  await expectVmDetailsPage(page, name);
+  await page.getByRole(...VmDetailsPage.deleteButton).click();
+
+  const deleteDialog = page.locator(...VmDetailsPage.deleteDialog);
+  await expect(deleteDialog).toBeVisible();
+  await expect(deleteDialog.locator(...VmDetailsPage.deleteTitle)).toContainText(`Delete ${name}?`);
+  await expect(deleteDialog.getByText(...VmDetailsPage.deleteWarning)).toBeVisible();
+  await deleteDialog.getByRole(...VmDetailsPage.deleteButton).click();
+  await expect(deleteDialog).toBeHidden();
+  await expect(page).toHaveURL((url) => url.pathname === '/vms');
+  await expect(page.getByRole(...VmsMainPage.pageTitle)).toBeVisible();
+};
+
+/** Poll the tenant VM list until a deleted VM is no longer returned. */
+export const waitForVmToBeDeleted = async (
+  page: Page,
+  name: string,
+  timeout = 180_000,
+): Promise<void> => {
+  await expect
+    .poll(
+      async () => {
+        await page.reload();
+        await expect(page).toHaveURL((url) => url.pathname === '/vms');
+        await expect(page.getByRole(...VmsMainPage.pageTitle)).toBeVisible();
+
+        const table = page.getByRole(...VmsMainPage.vmsTable);
+        const emptyState = page.getByText(...VmsMainPage.emptyState);
+        await expect(table.or(emptyState)).toBeVisible();
+        if ((await table.count()) === 0) {
+          return 0;
+        }
+        await expect(table).toBeVisible();
+        return await getVmRow(page, name).count();
+      },
+      { timeout, intervals: [1_000, 2_000, 5_000] },
+    )
+    .toBe(0);
+};

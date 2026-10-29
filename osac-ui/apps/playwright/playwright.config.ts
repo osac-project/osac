@@ -136,7 +136,7 @@ export default defineConfig({
     {
       name: 'vmaas-full-flow-delete',
       testDir: vmaasDir,
-      testMatch: /delete\.(catalog|disk_images|instance_type|storage_tier|tenant)\.spec\.ts/,
+      testMatch: /delete\.(00-vm|catalog|disk_images|instance_type|storage_tier|tenant)\.spec\.ts/,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },

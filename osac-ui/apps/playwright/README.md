@@ -107,14 +107,16 @@ pnpm --filter @osac/playwright exec playwright test \
 
 ### Full VMaaS setup flow
 
-The `vmaas-full-flow` project runs the setup journeys and starts the tenant VM
-flow: instance type, disk image, storage tier (including its storage-backend
-readiness check), catalog item, tenant creation and login, published catalog
-item selection, and `Launch instance`. Run it with:
+The `vmaas-full-flow-launch` project runs the setup journeys and starts the
+tenant VM flow: instance type, disk image, storage tier (including its
+storage-backend readiness check), catalog item, tenant creation and login,
+published catalog item selection, and `Launch instance`. The setup project
+has a teardown project that removes the resources created by the flow after
+the launch test completes. Run it with:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-full-flow
+  --project=vmaas-full-flow-launch
 ```
 
 The flow uses the same values from `apps/e2e-tests/extravars.yaml` as the

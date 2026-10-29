@@ -121,8 +121,22 @@ export default defineConfig({
     {
       name: 'vmaas-full-flow',
       testDir: vmaasDir,
-      testMatch:
-        /(create\.(instance_type|disk_images|storage_tier|catalog|tenant)|launch\.catalog)\.spec\.ts/,
+      testMatch: /create\.(instance_type|disk_images|storage_tier|catalog|tenant)\.spec\.ts/,
+      fullyParallel: false,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      teardown: 'vmaas-full-flow-delete',
+    },
+    {
+      name: 'vmaas-full-flow-launch',
+      testDir: vmaasDir,
+      testMatch: /launch\.catalog\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['vmaas-full-flow'],
+    },
+    {
+      name: 'vmaas-full-flow-delete',
+      testDir: vmaasDir,
+      testMatch: /delete\.(catalog|disk_images|instance_type|storage_tier|tenant)\.spec\.ts/,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },

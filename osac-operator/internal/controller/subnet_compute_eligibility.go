@@ -75,6 +75,21 @@ func (r *SubnetReconciler) syncComputeEligibility(ctx context.Context, subnet *v
 		} else if subnet.Annotations[osacSkipK8sManagerAnnotation] == labelValueTrue {
 			supported, reason = ptr.To(false), subnetOptOutReason
 		}
+	} else if subnet.Annotations[osacK8sImplementationStrategyAnnotation] == cudnEVPNManagerName ||
+		subnet.Annotations[osacK8sCleanupStrategyAnnotation] == cudnEVPNManagerName {
+		// A persisted EVPN strategy still owns shared resources when the current
+		// dispatch plan is absent (for example, when networking provisioning is
+		// disabled). Revalidate its owner instead of treating the missing plan as
+		// proof that this Subnet is unsupported.
+		reader := r.APIReader
+		if reader == nil {
+			reader = r.Client
+		}
+		var err error
+		supported, reason, err = readEVPNComputeEligibility(ctx, reader, subnet)
+		if err != nil {
+			return err
+		}
 	}
 	subnet.Status.ComputeInstanceSupported = supported
 	subnet.Status.ComputeInstanceUnsupportedReason = reason
@@ -82,12 +97,9 @@ func (r *SubnetReconciler) syncComputeEligibility(ctx context.Context, subnet *v
 }
 
 func (r *ComputeInstanceReconciler) checkSubnetPlacement(ctx context.Context, instance *v1alpha1.ComputeInstance) (ctrl.Result, bool, error) {
-	if conditionReason(instance, v1alpha1.ComputeInstanceConditionProvisioned) == networkAttachmentFailedReason {
-		setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseFailed)
-		return ctrl.Result{}, true, nil
-	}
 	reference := instance.Spec.PrimarySubnetRef()
 	if reference == "" {
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionNetworkPlacement, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 		return ctrl.Result{}, false, nil
 	}
 	reader := r.APIReader
@@ -97,6 +109,8 @@ func (r *ComputeInstanceReconciler) checkSubnetPlacement(ctx context.Context, in
 	subnet := &v1alpha1.Subnet{}
 	if err := reader.Get(ctx, client.ObjectKey{Namespace: instance.Namespace, Name: reference}, subnet); err != nil {
 		if apierrors.IsNotFound(err) {
+			instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionNetworkPlacement, metav1.ConditionUnknown,
+				fmt.Sprintf("Waiting for Subnet %q", reference), "WaitingForSubnet")
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, true, nil
 		}
 		return ctrl.Result{}, true, err
@@ -116,13 +130,14 @@ func (r *ComputeInstanceReconciler) checkSubnetPlacement(ctx context.Context, in
 			reason = "Subnet does not support compute instances"
 		}
 		message := fmt.Sprintf("Subnet %q: %s", subnet.Name, reason)
-		setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseFailed)
-		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, message, networkAttachmentFailedReason)
-		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionFalse, message, networkAttachmentFailedReason)
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionNetworkPlacement, metav1.ConditionFalse, message, networkAttachmentFailedReason)
 		return ctrl.Result{}, true, nil
 	}
 	if supported == nil || subnet.Status.Phase != v1alpha1.SubnetPhaseReady || !subnet.DeletionTimestamp.IsZero() {
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionNetworkPlacement, metav1.ConditionUnknown,
+			fmt.Sprintf("Waiting for Subnet %q to become READY and VM-capable", subnet.Name), "WaitingForSubnet")
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, true, nil
 	}
+	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionNetworkPlacement, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 	return ctrl.Result{}, false, nil
 }

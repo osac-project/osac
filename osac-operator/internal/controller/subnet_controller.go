@@ -256,15 +256,6 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 		subnet.Status.Phase = v1alpha1.SubnetPhaseProgressing
 	}
 
-	// When networking provisioning is disabled, skip AAP job dispatch and set Ready
-	// immediately. IP address pool creation on the target cluster is also skipped
-	// since there is no backend to configure in noop mode.
-	if !r.NetworkProvisioningEnabled {
-		subnet.Status.Phase = v1alpha1.SubnetPhaseReady
-		setReadyConditionTrue(&subnet.Status.Conditions)
-		return ctrl.Result{}, nil
-	}
-
 	// Get parent VirtualNetwork by UUID label to read implementation strategy
 	vnet, result, err := r.getParentVirtualNetwork(ctx, subnet)
 	if err != nil || vnet == nil {
@@ -288,6 +279,14 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 	}
 	if err := r.syncComputeEligibility(ctx, subnet, configuredK8sTarget); err != nil {
 		return ctrl.Result{}, err
+	}
+	// When networking provisioning is disabled, skip AAP job dispatch and set Ready
+	// immediately. Compute eligibility still needs to reflect the configured or
+	// persisted Kubernetes manager for VM placement decisions.
+	if !r.NetworkProvisioningEnabled {
+		subnet.Status.Phase = v1alpha1.SubnetPhaseReady
+		setReadyConditionTrue(&subnet.Status.Conditions)
+		return ctrl.Result{}, nil
 	}
 	implementationStrategy := vnet.Annotations[osacImplementationStrategyAnnotation]
 	// plan may be nil here (no-dispatcher legacy path); FabricTarget/K8sTarget have

@@ -236,6 +236,11 @@ const (
 	// ComputeInstanceConditionReady means the compute instance is ready (KubeVirt VM readiness reflected on the CR).
 	ComputeInstanceConditionReady ComputeInstanceConditionType = "Ready"
 
+	// ComputeInstanceConditionNetworkPlacement reports whether the primary Subnet
+	// can host this ComputeInstance. It is separate from Ready and Provisioned so
+	// a later Subnet eligibility change does not replace the VM's observed state.
+	ComputeInstanceConditionNetworkPlacement ComputeInstanceConditionType = "NetworkPlacement"
+
 	// ComputeInstanceConditionRestartInProgress indicates a restart is in progress
 	ComputeInstanceConditionRestartInProgress ComputeInstanceConditionType = "RestartInProgress"
 

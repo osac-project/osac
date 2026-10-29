@@ -241,6 +241,16 @@ const matchesReadyStateFilter = (
   return state === VirtualNetworkState.READY;
 };
 
+const matchesComputeSupportFilter = (
+  filter: string | undefined,
+  computeInstanceSupported: boolean | undefined,
+): boolean => {
+  if (!filter?.includes('this.status.compute_instance_supported == true')) {
+    return true;
+  }
+  return computeInstanceSupported === true;
+};
+
 const matchesStringEqualityFilter = (
   filter: string | undefined,
   field: string,
@@ -647,6 +657,7 @@ export const createMockConnectTransport = (
             items: subnets.filter(
               (item) =>
                 matchesReadyStateFilter(req.filter, item.status?.state) &&
+                matchesComputeSupportFilter(req.filter, item.status?.computeInstanceSupported) &&
                 matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
             ),
           };

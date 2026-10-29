@@ -30,11 +30,24 @@ const SubnetField = ({
       fieldId={name}
       service={Subnets}
       request={
-        virtualNetworkId
-          ? { filter: virtualNetworkFilterForSubnetList(virtualNetworkId, requireVmSupport) }
+        virtualNetworkId || requireVmSupport
+          ? {
+              filter: virtualNetworkFilterForSubnetList(
+                virtualNetworkId || undefined,
+                requireVmSupport,
+              ),
+            }
           : {}
       }
       isDisabled={isDisabled || !virtualNetworkId}
+      validateSelection={
+        requireVmSupport && isDisabled
+          ? (value, items) =>
+              value.id && !items.some((item) => item.id === value.id)
+                ? t('A subnet must be READY and support compute instances.')
+                : undefined
+          : undefined
+      }
       autoSelectSingleOption
       placeholder={t('Select subnet')}
       emptyTitle={requireVmSupport ? t('No VM-capable subnets available') : undefined}

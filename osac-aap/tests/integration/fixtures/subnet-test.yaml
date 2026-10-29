@@ -1,0 +1,11 @@
+apiVersion: osac.openshift.io/v1alpha1
+kind: Subnet
+metadata:
+  name: test-subnet
+  namespace: osac-system
+  annotations:
+    osac.openshift.io/tenant: integration-tenant
+    osac.openshift.io/owner-reference: VirtualNetwork/test-vnet
+spec:
+  virtualNetwork: test-vnet
+  ipv4Cidr: 10.10.0.0/24

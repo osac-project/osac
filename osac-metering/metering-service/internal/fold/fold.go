@@ -192,10 +192,12 @@ func (f *Fold) apply(ctx context.Context, tenant string, messages []*sarama.Cons
 			if !skip {
 				return err
 			}
-			// The envelope still records the tenant's billing id, including on a payload
-			// the fold cannot bill. A fatal extraction error returns above so this
+			// The envelope still records the tenant's billing id on a payload this
+			// tenant owns but cannot bill. A misrouted event belongs to another
+			// tenant: writing it here would attribute this tenant's later heartbeats
+			// to that account. A fatal extraction error returns above so this
 			// transaction rolls back instead of advancing past it.
-			if billingChanged {
+			if billingChanged && !errors.Is(err, ErrForeignTenant) {
 				if err := database.InsertFacts(ctx, tx, tenant, []database.Fact{billing}, message.Offset+1); err != nil {
 					return err
 				}

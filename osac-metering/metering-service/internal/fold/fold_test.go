@@ -864,3 +864,47 @@ func TestFoldRecordsExternalBillingIDWhenItChanges(t *testing.T) {
 		t.Fatal("billable event did not record the compute instance")
 	}
 }
+
+// TestFoldRecordsBillingIDWhenPayloadIsUnknown checks that an event this build cannot
+// bill still records the envelope billing id for the topic tenant.
+func TestFoldRecordsBillingIDWhenPayloadIsUnknown(t *testing.T) {
+	tenant := "billing-unknown-payload"
+	bare := &privatev1.Event{
+		Id:        "b1",
+		Type:      privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+		Timestamp: timestamppb.New(base),
+	}
+	bare.SetExternalBillingId("acct-1")
+	store := testenv.Database(t)
+	total := produce(t, tenant, []*privatev1.Event{bare})
+	foldAll(t, store, tenant, total, false)
+	want := []string{billingLine(tenant, base, "acct-1")}
+	if got := billingLines(t, store, tenant); stringsJoin(got) != stringsJoin(want) {
+		t.Fatalf("unknown-payload billing history:\ngot:\n%s\nwant:\n%s", stringsJoin(got), stringsJoin(want))
+	}
+}
+
+// TestFoldIgnoresBillingIDOnForeignTenantEvent checks that a misrouted event does not
+// change this tenant's billing identity, even when its envelope carries another account.
+func TestFoldIgnoresBillingIDOnForeignTenantEvent(t *testing.T) {
+	tenant := "billing-foreign"
+	store := testenv.Database(t)
+	mine := billingEnvelope("m1", base, "acct-1")
+	foreign := testenv.VMEventOf("vm-foreign", "f2",
+		privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED, base.Add(time.Minute), base, "web",
+		"RUNNING", base, "small", base)
+	foreign.GetComputeInstance().Metadata.Tenant = "beta"
+	foreign.SetExternalBillingId("acct-other")
+
+	first := produce(t, tenant, []*privatev1.Event{mine})
+	second := testenv.ProduceEventsAsWritten(t, tenant, []*privatev1.Event{foreign})
+	foldAll(t, store, tenant, first+second, false)
+
+	want := []string{billingLine(tenant, base, "acct-1")}
+	if got := billingLines(t, store, tenant); stringsJoin(got) != stringsJoin(want) {
+		t.Fatalf("foreign-tenant billing history:\ngot:\n%s\nwant:\n%s", stringsJoin(got), stringsJoin(want))
+	}
+	if strings.Contains(stringsJoin(dumpHistory(t, store, tenant)), "vm-foreign") {
+		t.Fatal("foreign-tenant event was folded into resource history")
+	}
+}

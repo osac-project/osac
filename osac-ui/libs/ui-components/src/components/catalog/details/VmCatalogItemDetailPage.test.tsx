@@ -8,9 +8,13 @@ import { ComputeInstanceCatalogItemSchema } from '@osac/types';
 import { VmCatalogItemDetailPage } from './VmCatalogItemDetailPage';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
-vi.mock('../../../hooks/use-session', () => ({
-  useSession: () => ({ role: 'admin', tenantId: 'tenant-1' }),
-}));
+vi.mock('../../../hooks/use-session', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../hooks/use-session')>();
+  return {
+    ...actual,
+    useSession: () => ({ role: 'admin', tenantId: 'tenant-1' }),
+  };
+});
 
 describe('VmCatalogItemDetailPage', () => {
   it('loads a VM catalog item and renders its four detail sections', async () => {

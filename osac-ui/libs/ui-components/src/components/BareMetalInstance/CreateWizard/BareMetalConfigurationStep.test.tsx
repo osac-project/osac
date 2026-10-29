@@ -43,8 +43,11 @@ describe('BareMetalConfigurationStep', () => {
       },
     );
 
-    const diskImageSelect = await screen.findByRole('combobox');
-    await user.click(diskImageSelect);
+    const diskImageToggle = await screen.findByRole('button', {
+      name: 'Select the image reference',
+    });
+    const diskImageSelect = screen.getByRole('combobox');
+    await user.click(diskImageToggle);
 
     expect(screen.getByRole('option', { name: /fedora/ })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /rhel/ })).toBeInTheDocument();
@@ -87,8 +90,22 @@ describe('BareMetalConfigurationStep', () => {
   });
 
   it('disables instance type selection when the catalog item locks its value', async () => {
+    const catalogItem = create(BareMetalInstanceCatalogItemSchema, {
+      fields: {
+        instanceType: {
+          behavior: {
+            case: 'locked',
+            value: { name: 'worker' },
+          },
+        },
+      },
+    });
+
     renderWithProviders(
-      <Formik initialValues={createEmptyBareMetalInstanceValues()} onSubmit={() => undefined}>
+      <Formik
+        initialValues={getBareMetalInstanceInitialValues(catalogItem)}
+        onSubmit={() => undefined}
+      >
         <BareMetalConfigurationStep />
       </Formik>,
       {
@@ -99,7 +116,9 @@ describe('BareMetalConfigurationStep', () => {
       },
     );
 
-    const instanceTypeSelect = await screen.findByLabelText('Instance type');
+    const instanceTypeSelect = await screen.findByRole('button', {
+      name: 'Instance type',
+    });
     expect(instanceTypeSelect).toBeDisabled();
   });
 

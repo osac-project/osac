@@ -22,13 +22,17 @@ vi.mock('react-router-dom', async (importOriginal) => {
   return { ...actual, useNavigate: () => mockNavigate };
 });
 
-vi.mock('@osac/ui-components/hooks/use-session.tsx', () => ({
-  useSession: vi.fn(() => ({
-    role: 'tenant-admin',
-    username: 'test-user',
-    tenantId: 'test-tenant',
-  })),
-}));
+vi.mock('@osac/ui-components/hooks/use-session.tsx', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@osac/ui-components/hooks/use-session.tsx')>();
+  return {
+    ...actual,
+    useSession: vi.fn(() => ({
+      role: 'tenant-admin',
+      username: 'test-user',
+      tenantId: 'test-tenant',
+    })),
+  };
+});
 
 const { useSession } = await import('@osac/ui-components/hooks/use-session.tsx');
 

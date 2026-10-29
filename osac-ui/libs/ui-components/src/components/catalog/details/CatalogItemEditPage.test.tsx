@@ -8,9 +8,13 @@ import { ComputeInstanceCatalogItemSchema, ComputeInstanceTemplateSchema } from 
 import { CatalogItemEditPage } from './CatalogItemEditPage';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
-vi.mock('../../../hooks/use-session', () => ({
-  useSession: () => ({ role: 'tenant-admin', tenantId: 'tenant-1' }),
-}));
+vi.mock('../../../hooks/use-session', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../hooks/use-session')>();
+  return {
+    ...actual,
+    useSession: () => ({ role: 'tenant-admin', tenantId: 'tenant-1' }),
+  };
+});
 
 describe('CatalogItemEditPage', () => {
   it('loads the item and renders its service wizard in edit mode', async () => {

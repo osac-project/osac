@@ -1,6 +1,6 @@
-import { type ReactElement, type ReactNode, useEffect, useMemo, useRef } from 'react';
+import { type ReactElement, type ReactNode, useCallback, useEffect, useMemo } from 'react';
 import { Alert, Content } from '@patternfly/react-core';
-import { getIn, useFormikContext } from 'formik';
+import { getIn, setIn, useFormikContext } from 'formik';
 
 import type { ListParams } from '@osac/ui-components/api/types';
 import { useListResource } from '@osac/ui-components/api/use-resource';
@@ -73,7 +73,7 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
 }: ResourceSelectFieldProps<TResource>) => {
   const idFieldName = `${name}.id`;
   const nameFieldName = `${name}.name`;
-  const { values, setFieldValue } = useFormikContext<Record<string, unknown>>();
+  const { dirty, resetForm, values, setFieldValue } = useFormikContext<Record<string, unknown>>();
   const { data, isLoading, error: loadError } = useListResource(service, request);
   const items = useMemo(() => {
     const listed = ((data as { items?: TResource[] } | undefined)?.items ?? []).filter(
@@ -89,23 +89,36 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
 
   const selectedId = (getIn(values, idFieldName) as string | undefined) ?? '';
 
-  // Keep the resource's name in sync with its id, and resolve the id to the resource name
-  // whenever a resource is picked, auto-selected, or cleared.
-  const isFirstRender = useRef(true);
+  const notifyResourceSelection = useCallback(
+    (resourceId: string) => {
+      const item = items.find((resource) => resource.id === resourceId);
+      const resourceName = item?.metadata?.name ?? '';
+      void setFieldValue(nameFieldName, resourceName, false);
+      onSelectResource?.(
+        resourceId ? { id: resourceId, name: resourceName } : emptyResourceSelectValue(),
+        item,
+      );
+    },
+    [items, nameFieldName, onSelectResource, setFieldValue],
+  );
+
+  // Keep the resource's name in sync with its id, including when a resource list
+  // finishes loading after an initial id was provided.
   useEffect(() => {
-    if (isFirstRender.current) {
-      isFirstRender.current = false;
+    const item = items.find((resource) => resource.id === selectedId);
+    if (selectedId && !item) {
       return;
     }
-    const item = items.find((resource) => resource.id === selectedId);
     const resourceName = item?.metadata?.name ?? '';
-    void setFieldValue(nameFieldName, resourceName, false);
-    onSelectResource?.(
-      selectedId ? { id: selectedId, name: resourceName } : emptyResourceSelectValue(),
-      item,
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId]);
+    if (getIn(values, nameFieldName) !== resourceName) {
+      const nextValues = setIn(values, nameFieldName, resourceName) as Record<string, unknown>;
+      if (dirty) {
+        void setFieldValue(nameFieldName, resourceName, false);
+      } else {
+        resetForm({ values: nextValues });
+      }
+    }
+  }, [dirty, items, nameFieldName, resetForm, selectedId, setFieldValue, values]);
 
   useEffect(() => {
     if (
@@ -118,12 +131,14 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
       return;
     }
     void setFieldValue(idFieldName, items[0].id, false);
+    notifyResourceSelection(items[0].id);
   }, [
     autoSelectSingleOption,
     controlDisabled,
     idFieldName,
     isLoading,
     items,
+    notifyResourceSelection,
     selectedId,
     setFieldValue,
   ]);
@@ -139,12 +154,14 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
       return;
     }
     void setFieldValue(idFieldName, items[0].id, true);
+    notifyResourceSelection(items[0].id);
   }, [
     autoSelectFirstOption,
     controlDisabled,
     idFieldName,
     isLoading,
     items,
+    notifyResourceSelection,
     selectedId,
     setFieldValue,
   ]);
@@ -182,6 +199,7 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
         labelHelp={labelHelp}
         description={description}
         placeholder={effectivePlaceholder}
+        onSelectionChange={notifyResourceSelection}
       />
     </>
   );

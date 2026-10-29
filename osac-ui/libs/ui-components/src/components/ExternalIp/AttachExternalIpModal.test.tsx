@@ -73,7 +73,7 @@ describe('AttachExternalIpModal', () => {
   it('lists only allocated unattached external IPs', async () => {
     const { user } = renderModal({ externalIps: [eligibleIp, attachedIp] });
 
-    await user.click(await screen.findByLabelText(/^External IP/));
+    await user.click(await screen.findByRole('button', { name: /^External IP/ }));
 
     expect(screen.getByRole('option', { name: 'edge-ip' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'in-use-ip' })).not.toBeInTheDocument();

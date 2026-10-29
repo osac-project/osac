@@ -1,5 +1,5 @@
 import { type ReactElement, type ReactNode, useMemo } from 'react';
-import { FormGroup } from '@patternfly/react-core';
+import { FormGroup, TextInput } from '@patternfly/react-core';
 import { TypeaheadSelect, type TypeaheadSelectOption } from '@patternfly/react-templates';
 import { useField } from 'formik';
 
@@ -21,6 +21,7 @@ interface TypeaheadSelectFieldProps {
   placeholder?: string;
   description?: string;
   noOptionsFoundMessage?: (filter: string) => string;
+  onSelectionChange?: (value: string) => void;
 }
 
 // Generic Formik-bound typeahead single-select (mirrors SelectField). Owns the
@@ -37,6 +38,7 @@ export const TypeaheadSelectField = ({
   placeholder,
   description,
   noOptionsFoundMessage,
+  onSelectionChange,
 }: TypeaheadSelectFieldProps) => {
   const [field, meta, helpers] = useField<string>(name);
   const showValidationErrors = useShowFieldValidationErrors();
@@ -47,6 +49,8 @@ export const TypeaheadSelectField = ({
     () => options.map((option) => ({ ...option, selected: field.value === option.value })),
     [options, field.value],
   );
+  const selectedOption = selectableOptions.find((option) => option.selected);
+  const selectedLabel = selectedOption?.content ?? String(field.value ?? '');
 
   return (
     <FormGroup
@@ -57,31 +61,47 @@ export const TypeaheadSelectField = ({
       labelInfo={labelInfo}
       labelHelp={labelHelp}
     >
-      <TypeaheadSelect
-        id={fieldId}
-        initialOptions={selectableOptions}
-        isDisabled={isDisabled}
-        placeholder={placeholder}
-        noOptionsFoundMessage={noOptionsFoundMessage}
-        onSelect={async (_event, value) => {
-          await helpers.setValue(String(value), true);
-          await helpers.setTouched(true, false);
-        }}
-        onClearSelection={
-          isRequired
-            ? undefined
-            : () => {
-                void helpers.setValue('', true);
-              }
-        }
-        toggleProps={{
-          id: fieldId,
-          'aria-label': label,
-          isFullWidth: true,
-          status: error ? 'danger' : undefined,
-          'aria-describedby': helperDescribedBy,
-        }}
-      />
+      {isDisabled ? (
+        <TextInput
+          id={fieldId}
+          role="combobox"
+          aria-label={label}
+          aria-expanded={false}
+          aria-describedby={helperDescribedBy}
+          value={selectedLabel}
+          placeholder={placeholder}
+          isDisabled
+          readOnly
+        />
+      ) : (
+        <TypeaheadSelect
+          id={fieldId}
+          initialOptions={selectableOptions}
+          placeholder={placeholder}
+          noOptionsFoundMessage={noOptionsFoundMessage}
+          onSelect={async (_event, value) => {
+            const selectedValue = String(value);
+            await helpers.setValue(selectedValue, true);
+            await helpers.setTouched(true, false);
+            onSelectionChange?.(selectedValue);
+          }}
+          onClearSelection={
+            isRequired
+              ? undefined
+              : () => {
+                  void helpers.setValue('', true);
+                  onSelectionChange?.('');
+                }
+          }
+          toggleProps={{
+            id: fieldId,
+            'aria-label': label,
+            isFullWidth: true,
+            status: error ? 'danger' : undefined,
+            'aria-describedby': helperDescribedBy,
+          }}
+        />
+      )}
       <FormFieldHelper error={error} description={description} fieldId={fieldId} />
     </FormGroup>
   );

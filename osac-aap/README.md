@@ -33,6 +33,10 @@ The old owner name remains a fence until its Subnet CR disappears. New candidate
 retry while the owner is deleting, rather than becoming permanently fabric-only.
 Cleanup failures retain the assignment. Existing fabric-only siblings are never
 promoted; a newly created Subnet may claim the cleaned slot.
+Namespace ownership is validated before shared-network deletion. API discovery
+failures are not resource absence: claim and cleanup tasks stop without treating
+an undiscoverable API as an empty inventory. Classification also rejects a stale
+job snapshot when the requested Subnet's Kubernetes UID has changed.
 
 Upgrade preserves a validated Lease/CUDN owner. An unannotated historical CUDN is
 adopted only when its CIDR and historical target identify one unambiguous Subnet.

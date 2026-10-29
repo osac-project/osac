@@ -62,6 +62,16 @@ def test_owner_remains_without_any_vm_inventory():
     assert owner == original
 
 
+def test_stale_job_cannot_classify_a_replacement_subnet_with_the_same_name():
+    original = subnet("candidate")
+    original["metadata"]["uid"] = "original-uid"
+    replacement = deepcopy(original)
+    replacement["metadata"]["uid"] = "replacement-uid"
+    with pytest.raises(AnsibleFilterError, match="identity changed"):
+        MODULE.evpn_owner_decision(original, [replacement], lease(), {})
+    assert MODULE.SUPPORTED not in replacement["metadata"]["annotations"]
+
+
 def test_explicit_skip_never_claims_and_never_deletes_existing_owner():
     candidate = subnet("skip", **{MODULE.PREFIX + "skip-k8s-manager": "true"})
     decision = MODULE.evpn_owner_decision(candidate, [candidate], lease(), {})

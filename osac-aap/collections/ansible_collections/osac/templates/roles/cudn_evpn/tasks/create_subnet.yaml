@@ -33,6 +33,7 @@
     label_selectors:
       - "osac.openshift.io/virtualnetwork-uuid={{ vnet_uuid }}"
   register: _parent_vnet_lookup
+  failed_when: _parent_vnet_lookup.failed | default(false) or not (_parent_vnet_lookup.api_found | default(false))
 
 - name: Validate parent VirtualNetwork lookup
   ansible.builtin.assert:
@@ -74,6 +75,7 @@
         kind: Subnet
         namespace: "{{ subnet.metadata.namespace }}"
       register: _vnet_subnet_lookup
+      failed_when: _vnet_subnet_lookup.failed | default(false) or not (_vnet_subnet_lookup.api_found | default(false))
 
     - name: Read persisted CUDN owner from the shared Lease
       kubernetes.core.k8s_info:
@@ -82,6 +84,7 @@
         name: "{{ vnet_lock_name }}"
         namespace: "{{ vnet_lock_namespace }}"
       register: _cudn_owner_lease
+      failed_when: _cudn_owner_lease.failed | default(false) or not (_cudn_owner_lease.api_found | default(false))
 
     - name: Validate shared CUDN owner Lease exists
       ansible.builtin.assert:
@@ -98,6 +101,7 @@
         kind: ClusterUserDefinedNetwork
         name: "{{ vnet_name }}"
       register: _existing_cudn
+      failed_when: _existing_cudn.failed | default(false) or not (_existing_cudn.api_found | default(false))
 
     - name: Validate existing CUDN belongs to the parent VirtualNetwork
       ansible.builtin.assert:
@@ -179,6 +183,7 @@
           metadata:
             name: "{{ subnet_name }}"
             namespace: "{{ subnet.metadata.namespace }}"
+            uid: "{{ subnet.metadata.uid | default(omit) }}"
             annotations:
               osac.openshift.io/compute-instance-supported: "{{ _evpn_decision.supported | ternary('true', 'false') }}"
               osac.openshift.io/compute-instance-unsupported-reason: "{{ _evpn_decision.reason }}"
@@ -200,6 +205,7 @@
       loop_control:
         label: "{{ item.metadata.name }}"
       register: _cudn_namespace_lookups
+      failed_when: _cudn_namespace_lookups.failed | default(false) or not (_cudn_namespace_lookups.api_found | default(false))
 
     - name: Validate existing workload namespaces before selector migration
       ansible.builtin.assert:

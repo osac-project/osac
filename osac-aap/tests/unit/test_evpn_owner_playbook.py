@@ -31,12 +31,16 @@ with open(os.environ["EVPN_STATE"] + ".lock", "a") as lock:
     name = definition["metadata"]["name"] if definition else module.params.get("name")
     identity = kind + "/" + (name or "")
     if not definition and not module.params.get("state"):
+        if state.get("read_failure_kind") == kind:
+            module.fail_json(msg="Injected API read failure")
+        if state.get("missing_api_kind") == kind:
+            module.exit_json(changed=False, resources=[], api_found=False)
         if kind == "Subnet" and not name:
             resources = list(state["subnets"].values())
         else:
             resource = state["subnets"].get(name) if kind == "Subnet" else state["resources"].get(identity)
             resources = [resource] if resource else []
-        module.exit_json(changed=False, resources=resources)
+        module.exit_json(changed=False, resources=resources, api_found=True)
     if module.params.get("state") == "absent":
         if state.get("delete_failure_kind") == kind:
             module.fail_json(msg="Injected cleanup failure")
@@ -58,6 +62,8 @@ with open(os.environ["EVPN_STATE"] + ".lock", "a") as lock:
         stored["metadata"]["resourceVersion"] = str(int(stored["metadata"]["resourceVersion"]) + 1)
         state["resources"][identity] = stored
     elif kind == "Subnet":
+        if definition["metadata"].get("uid") != state["subnets"][name]["metadata"].get("uid"):
+            module.fail_json(msg="Subnet UID changed")
         state["subnets"][name]["metadata"].setdefault("annotations", {}).update(definition["metadata"]["annotations"])
     else:
         if kind == "ClusterUserDefinedNetwork":
@@ -86,7 +92,7 @@ def _environment(tmp_path):
 
 def _subnet(name):
     return {"apiVersion": "osac.openshift.io/v1alpha1", "kind": "Subnet",
-            "metadata": {"name": name, "namespace": "management", "annotations": {
+            "metadata": {"name": name, "namespace": "management", "uid": f"uid-{name}", "annotations": {
                 "osac.openshift.io/tenant": "tenant"}},
             "spec": {"virtualNetwork": "vn-id", "ipv4Cidr": "192.0.2.0/24"}}
 
@@ -213,3 +219,37 @@ def test_real_teardown_failure_preserves_fence_and_new_claim_waits(tmp_path):
     assert state["resources"]["Lease/shared"]["metadata"]["annotations"]["osac.openshift.io/cudn-owner-subnet"] == "new"
     assert state["subnets"]["fabric"]["metadata"]["annotations"]["osac.openshift.io/compute-instance-supported"] == "false"
     assert set(state["network_writes"]) == {"new"}
+
+
+@pytest.mark.parametrize("failure", ["identity", "read", "missing-Namespace", "missing-Subnet",
+                                     "missing-ComputeInstance", "missing-Lease", "missing-ClusterUserDefinedNetwork"])
+def test_namespace_identity_and_api_errors_stop_before_shared_network_deletion(tmp_path, failure):
+    environment = _environment(tmp_path)
+    state_path = Path(environment["EVPN_STATE"])
+    cudn = {"metadata": {"name": "vnet", "annotations": {
+        "osac.openshift.io/tenant": "tenant", "osac.openshift.io/owner-reference": "VirtualNetwork/vnet",
+        "osac.openshift.io/cudn-owner-subnet": "owner"}}}
+    namespace = {"metadata": {"name": "owner", "annotations": {
+        "osac.openshift.io/tenant": "other-tenant", "osac.openshift.io/owner-reference": "Subnet/owner"}}}
+    state = {"subnets": {"owner": _subnet("owner")}, "network_writes": [], "resources": {
+        "Lease/shared": {"metadata": {"resourceVersion": "1", "annotations": {
+            "osac.openshift.io/cudn-owner-subnet": "owner"}}, "spec": {}},
+        "ClusterUserDefinedNetwork/vnet": cudn, "Namespace/owner": namespace}}
+    if failure == "read":
+        state["read_failure_kind"] = "Namespace"
+    elif failure.startswith("missing-"):
+        state["missing_api_kind"] = failure.removeprefix("missing-")
+    state_path.write_text(json.dumps(state))
+    deletion = next(task for task in yaml.safe_load((ROLE / "tasks/delete_subnet.yaml").read_text()) if "block" in task)
+    playbook = _playbook(tmp_path, "owner", [{"name": "Set deleting Subnet identity", "ansible.builtin.set_fact": {
+        "_deleting_subnet_name": "owner"}}, deletion])
+    result = subprocess.run(["ansible-playbook", "-i", "localhost,", "-c", "local", str(playbook)],
+        cwd=ROOT, env=environment, capture_output=True, text=True, timeout=120)
+    assert result.returncode != 0
+    expected = "api_found" if failure.startswith("missing-") else (
+        "Injected API read failure" if failure == "read" else "Refusing to delete a namespace")
+    assert expected in result.stdout
+    persisted = json.loads(state_path.read_text())
+    assert persisted["resources"]["ClusterUserDefinedNetwork/vnet"] == cudn
+    assert persisted["resources"]["Namespace/owner"] == namespace
+    assert "osac.openshift.io/cudn-owner-cleaned" not in persisted["resources"]["Lease/shared"]["metadata"]["annotations"]

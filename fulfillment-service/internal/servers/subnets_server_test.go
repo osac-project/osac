@@ -20,6 +20,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
@@ -223,6 +224,40 @@ var _ = Describe("Subnets server", func() {
 			Expect(err).NotTo(HaveOccurred())
 			_, err = createPublicSubnet(publicServer, "second-subnet", "10.0.2.0/24")
 			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("roundtrips optional eligibility and evaluates the VM wizard predicate", func() {
+			var supportedID string
+			for index, supported := range []*bool{nil, new(false), new(true)} {
+				object, err := createPublicSubnet(server, fmt.Sprintf("eligibility-%d", index), fmt.Sprintf("10.0.%d.0/24", index+1))
+				Expect(err).NotTo(HaveOccurred())
+				_, err = server.delegate.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+					Object: privatev1.Subnet_builder{Id: object.GetId(), Status: privatev1.SubnetStatus_builder{
+						State: privatev1.SubnetState_SUBNET_STATE_READY, ComputeInstanceSupported: supported,
+						ComputeInstanceUnsupportedReason: "eligibility explanation",
+					}.Build()}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status"}},
+				}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				response, err := server.Get(ctx, publicv1.SubnetsGetRequest_builder{Id: object.GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				status := response.GetObject().GetStatus()
+				Expect(status.HasComputeInstanceSupported()).To(Equal(supported != nil))
+				if supported != nil {
+					Expect(status.GetComputeInstanceSupported()).To(Equal(*supported))
+					if *supported {
+						supportedID = object.GetId()
+					}
+				}
+				Expect(status.GetComputeInstanceUnsupportedReason()).To(Equal("eligibility explanation"))
+			}
+			response, err := server.List(ctx, publicv1.SubnetsListRequest_builder{Filter: new(fmt.Sprintf(
+				"this.spec.virtual_network.id == %q && this.status.state == 2 && this.status.compute_instance_supported == true", virtualNetworkID,
+			))}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(response.GetItems()).To(HaveLen(1))
+			Expect(response.GetItems()[0].GetId()).To(Equal(supportedID))
+			Expect(response.GetItems()[0].GetStatus().HasComputeInstanceSupported()).To(BeTrue())
 		})
 
 		It("Creates object", func() {

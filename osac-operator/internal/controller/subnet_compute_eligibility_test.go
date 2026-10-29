@@ -7,6 +7,7 @@ import (
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	coordinationv1 "k8s.io/api/coordination/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -66,6 +67,7 @@ func TestUnsupportedPlacementRemainsTerminalWithCachedNamespace(test *testing.T)
 	reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(subnet).Build()
 	reconciler := &ComputeInstanceReconciler{Client: reader, APIReader: reader}
 	for attempt := 0; attempt < 3; attempt++ {
+		instance.Spec.RestartRequestedAt = ptr.To(metav1.Now())
 		result, err := reconciler.handleUpdate(context.Background(), reconcile.Request{}, instance)
 		if err != nil {
 			test.Fatal(err)
@@ -76,6 +78,26 @@ func TestUnsupportedPlacementRemainsTerminalWithCachedNamespace(test *testing.T)
 		}
 		if len(instance.Status.ProvisioningJobs) != 0 {
 			test.Fatal("unsupported VM dispatched provisioning")
+		}
+	}
+}
+
+func TestSubnetFeedbackPreservesOptionalEligibility(test *testing.T) {
+	for _, supported := range []*bool{nil, ptr.To(false), ptr.To(true)} {
+		subnet := &v1alpha1.Subnet{Status: v1alpha1.SubnetStatus{
+			Phase: v1alpha1.SubnetPhaseReady, ComputeInstanceSupported: supported,
+		}}
+		remote := privatev1.Subnet_builder{Status: privatev1.SubnetStatus_builder{
+			ComputeInstanceSupported: ptr.To(true), ComputeInstanceUnsupportedReason: "stale reason",
+		}.Build()}.Build()
+		if err := syncSubnetUpdate(context.Background(), subnet, remote); err != nil {
+			test.Fatal(err)
+		}
+		status := remote.GetStatus()
+		if status.HasComputeInstanceSupported() != (supported != nil) ||
+			(supported != nil && status.GetComputeInstanceSupported() != *supported) ||
+			status.GetComputeInstanceUnsupportedReason() != "" || status.GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
+			test.Fatalf("feedback lost optional capability or retained a stale reason: %v", status)
 		}
 	}
 }

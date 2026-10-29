@@ -43,6 +43,8 @@ def evpn_owner_decision(subnet, siblings, lease, cudn):
     }
     if current_name not in candidates:
         raise AnsibleFilterError("Subnet disappeared during EVPN owner classification; retry")
+    if subnet.get("metadata", {}).get("uid") != candidates[current_name].get("metadata", {}).get("uid"):
+        raise AnsibleFilterError("Subnet identity changed during EVPN owner classification; retry")
     subnet = candidates[current_name]
     owner = evpn_persisted_owner(list(candidates.values()), lease, cudn)
     owner_resource = candidates.get(owner)

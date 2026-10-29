@@ -38,7 +38,7 @@
     - name: Require the provisioning network settings
       ansible.builtin.assert:
         that:
-          - provisioning_vnet | default('') | length > 0
+          - netris_bm_provisioning_vnet | default('') | length > 0
           - netris_mgmt_vpc_id | default(0) | int > 0
         fail_msg: >-
           Netris setting error: NETRIS_BM_PROVISIONING_VNET and
@@ -68,11 +68,12 @@
         network_attachment:
           host_name: "{{ _osac_target.host_name }}"
           logical_interface_name: "{{ _osac_interface.name }}"
-          from_vnet_name: "{{ provisioning_vnet }}"
+          from_vnet_name: "{{ netris_bm_provisioning_vnet }}"
           from_vpc_id: "{{ netris_mgmt_vpc_id | default(0) | int }}"
           to_vnet_name: "{{ subnet.metadata.name }}"
           to_vpc_id: "{{ netris_vpc.id }}"
           to_tenant_id: "{{ netris_tenant_id }}"
+          reconcile_host_ports: apply
   rescue:
     - name: Publish the sanitized NetworkAttachment apply error and fail
       ansible.builtin.include_tasks: _contract_rescue.yaml

@@ -1,0 +1,69 @@
+---
+# Read and snapshot the idle host's fabric ports before any membership change.
+# Do not infer fabric ports from every inventory interface: that would include
+# FabricDomain ports. The snapshot survives separate AAP apply/delete jobs.
+
+- name: Find the provisioning V-Net
+  ansible.builtin.include_role:
+    name: netris.controller.vnet
+    tasks_from: read
+  vars:
+    vnet_name: "{{ netris_bm_provisioning_vnet }}"
+
+- name: Select the management-scoped provisioning V-Net
+  ansible.builtin.set_fact:
+    _na_provisioning_candidates: >-
+      {{ netris_vnets | selectattr('name', 'equalto', netris_bm_provisioning_vnet)
+         | selectattr('vpc.id', 'defined')
+         | selectattr('vpc.id', 'equalto', netris_mgmt_vpc_id | int) | list }}
+
+- name: Require an unambiguous provisioning V-Net
+  ansible.builtin.assert:
+    that:
+      - _na_provisioning_candidates | length == 1
+    fail_msg: "The management VPC must contain exactly one provisioning V-Net"
+
+- name: Save the provisioning V-Net identity
+  ansible.builtin.set_fact:
+    _na_provisioning_id: "{{ (_na_provisioning_candidates | first).id }}"
+
+- name: Read the provisioning port membership and saved snapshots
+  ansible.builtin.include_role:
+    name: netris.controller.vnet
+    tasks_from: read_by_id
+  vars:
+    vnet_id: "{{ _na_provisioning_id }}"
+
+- name: Resolve the exact host fabric port set
+  ansible.builtin.set_fact:
+    _na_fabric_plan: >-
+      {{ netris_vnet_detail | netris.controller.netris_attachment_port_plan(
+           netris_server_ports, _osac_resource.metadata.uid, _target_port.id,
+           _na_reconcile == 'delete') }}
+
+- name: Save the fabric port snapshot before detaching any port
+  ansible.builtin.include_role:
+    name: netris.controller.vnet
+    tasks_from: update
+  vars:
+    vnet_id: "{{ _na_provisioning_id }}"
+    vnet_body: "{{ netris_vnet_detail | combine({'tags': _na_fabric_plan.tags}) }}"
+  when:
+    - _na_reconcile == 'apply'
+    - netris_vnet_detail.tags | default([]) != _na_fabric_plan.tags
+
+- name: Confirm that the recoverable snapshot is durable before disconnecting
+  when: _na_reconcile == 'apply'
+  block:
+    - name: Re-read the saved provisioning snapshot
+      ansible.builtin.include_role:
+        name: netris.controller.vnet
+        tasks_from: read_by_id
+      vars:
+        vnet_id: "{{ _na_provisioning_id }}"
+
+    - name: Require the provider to retain the fabric port snapshot
+      ansible.builtin.assert:
+        that:
+          - _na_fabric_plan.tag in (netris_vnet_detail.tags | default([]))
+        fail_msg: "Provider did not retain the NetworkAttachment port snapshot"

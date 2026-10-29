@@ -48,6 +48,27 @@ fields are treated as **create-only**. When the named object already exists:
 Move-network-attachment is the supported mutable operation (port membership).
 SecurityGroup ingress/egress desired-state prune remains deferred.
 
+### Contract physical attachments (OSAC-6754)
+
+The contract apply isolates every fabric port of the host, not just the
+selected tenant interface. Fabric ports are identified by their provisioning
+V-Net membership while the host is idle. Interfaces outside that set,
+including FabricDomain ports, are left alone.
+
+Before disconnecting any port, apply saves the exact port IDs in a
+`osac-na:<attachment-uid>:<port-ids>` tag on the management-scoped provisioning
+V-Net and confirms the tag survived a provider read. That snapshot survives
+separate AAP jobs and interrupted apply/delete operations. Delete restores
+every saved port and removes the tag only after all membership checks pass.
+Unrelated tags and other hosts' ports are preserved. Do not remove or edit an
+active attachment's snapshot manually. The provisioning V-Net must support
+persisting tags; apply fails without disconnecting ports if it cannot.
+
+Both contract entry points use `netris_bm_provisioning_vnet`, backed by
+`NETRIS_BM_PROVISIONING_VNET` with the deprecated `NETRIS_BM_PARKING_VNET`
+fallback. They do not require the legacy playbook's `provisioning_vnet` alias.
+The legacy move entry point remains a single-interface move.
+
 Delete operations verify the provider object against the OSAC resource before
 deleting it. Checks include tenant, prefix, site, purpose, VPC, and NAT binding
 fields when those values are available from the resource. A missing provider

@@ -290,31 +290,80 @@ ACTIVE_DHCP_SOURCE = "dhcp"
 ACTIVE_DHCP_STATE = "active"
 
 
+def netris_attachment_port_plan(
+    vnet: dict, server_ports: list, uid: str, selected_id: Any, deleting=False
+) -> dict:
+    """Remember only this host's provisioning ports across jobs and retries.
+
+    Ports outside provisioning are not candidates, notably FabricDomain ports.
+    A resource-scoped provider tag is saved before disconnecting any port, so
+    delete can restore the exact set even in a fresh AAP job after interruption.
+    """
+    if not isinstance(uid, str) or not re.fullmatch(r"[A-Za-z0-9-]+", uid):
+        raise ValueError("NetworkAttachment requires a stable resource UID")
+    host_ids = {_norm(port.get("id")) for port in server_ports}
+    if any(not re.fullmatch(r"[1-9][0-9]*", value) for value in host_ids):
+        raise ValueError("Host inventory contains an invalid port ID")
+    prefix = f"osac-na:{uid}:"
+    tags = vnet.get("tags") or []
+    if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+        raise ValueError("Provider returned malformed provisioning V-Net tags")
+    saved = [tag for tag in tags if tag.startswith(prefix)]
+    if len(saved) > 1:
+        raise ValueError("Ambiguous saved NetworkAttachment port identity")
+    ids = set(saved[0][len(prefix):].split(",")) if saved else set()
+    if not ids <= host_ids:
+        raise ValueError("Saved NetworkAttachment ports do not belong to this host")
+    selected = _norm(selected_id)
+    if selected not in host_ids:
+        raise ValueError("Selected port does not belong to this host")
+    if saved and selected not in ids:
+        raise ValueError("Selected port differs from the saved fabric port identity")
+    ids.update(port_id for port_id in host_ids if netris_port_on_vnet(vnet, port_id))
+    if not deleting and selected not in ids:
+        raise ValueError("Selected port is not a provisioning fabric port")
+    # Also supports deleting an attachment applied by the old single-port path.
+    ids.add(selected)
+    port_ids = sorted(int(port_id) for port_id in ids)
+    tag = prefix + ",".join(str(port_id) for port_id in port_ids)
+    return {
+        "port_ids": port_ids,
+        "tag": tag,
+        "tags": [value for value in tags if not value.startswith(prefix)] + [tag],
+        "had_snapshot": bool(saved),
+        "saved_tag": saved[0] if saved else "",
+    }
+
+
 def netris_active_dhcp_addresses(host: Any, mac_address: Any) -> list[str]:
     """Return the addresses active DHCP leases hold for ``mac_address``.
 
-    Netris reports each address binding of an IPAM host as
-    ``{address, source, state}``. Only entries sourced from DHCP in the
-    active state count as a lease; reservations and inactive history do not.
+    The IP is the enclosing IPAM host's address, not ``mac[].address``.
+    MAC history only establishes whether that host has an active DHCP binding.
     """
     if not isinstance(host, dict):
         return []
     if not isinstance(mac_address, str) or not mac_address.strip():
         return []
+    if not isinstance(host.get("address"), str):
+        return []
     want = mac_address.strip().lower()
-    addresses: list[str] = []
+    try:
+        address = str(ipaddress.IPv4Address(host.get("address")))
+    except (ValueError, TypeError):
+        return []
     for entry in host.get("mac") or []:
         if not isinstance(entry, dict):
             continue
-        address = entry.get("address")
-        if not isinstance(address, str) or address.strip().lower() != want:
+        mac = entry.get("address")
+        if not isinstance(mac, str) or mac.strip().lower() != want:
             continue
         source = str(entry.get("source", "")).strip().lower()
         state = str(entry.get("state", "")).strip().lower()
         if source != ACTIVE_DHCP_SOURCE or state != ACTIVE_DHCP_STATE:
             continue
-        addresses.append(address.strip())
-    return addresses
+        return [address]
+    return []
 
 
 def netris_retryable_error(result: Any) -> bool:
@@ -381,5 +430,6 @@ class FilterModule:
             "netris_safe_error_detail": netris_safe_error_detail,
             "netris_retryable_error": netris_retryable_error,
             "netris_active_dhcp_addresses": netris_active_dhcp_addresses,
+            "netris_attachment_port_plan": netris_attachment_port_plan,
             "netris_ip_in_cidrs": netris_ip_in_cidrs,
         }

@@ -77,8 +77,10 @@ def _canonical_ipv4(value, context: str) -> ipaddress.IPv4Network:
     return network
 
 
-def is_retryable(category: str) -> bool:
-    """Return whether OSAC should retry a failure of this category."""
+def is_retryable(category: str, http_status=None) -> bool:
+    """Prefer the HTTP status over the category for provider failures."""
+    if isinstance(http_status, int) and http_status > 0:
+        return http_status >= 500 or http_status in (408, 425, 429)
     return category in RETRYABLE_CATEGORIES
 
 

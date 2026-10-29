@@ -35,7 +35,7 @@
     - name: Require the provisioning network settings
       ansible.builtin.assert:
         that:
-          - provisioning_vnet | default('') | length > 0
+          - netris_bm_provisioning_vnet | default('') | length > 0
           - netris_mgmt_vpc_id | default(0) | int > 0
         fail_msg: >-
           Netris setting error: NETRIS_BM_PROVISIONING_VNET and
@@ -68,8 +68,9 @@
           from_vnet_name: "{{ subnet.metadata.name }}"
           from_vpc_id: "{{ netris_vpc.id }}"
           from_tenant_id: "{{ netris_tenant_id }}"
-          to_vnet_name: "{{ provisioning_vnet }}"
+          to_vnet_name: "{{ netris_bm_provisioning_vnet }}"
           to_vpc_id: "{{ netris_mgmt_vpc_id | default(0) | int }}"
+          reconcile_host_ports: delete
   rescue:
     - name: Publish the sanitized NetworkAttachment delete error and fail
       ansible.builtin.include_tasks: _contract_rescue.yaml

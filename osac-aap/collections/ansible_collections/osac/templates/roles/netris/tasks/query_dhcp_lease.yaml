@@ -112,7 +112,7 @@
         _dq_lease_addresses: >-
           {{ (netris_ipam_hosts | default([]))
              | map('netris.controller.netris_active_dhcp_addresses', _dq_mac)
-             | flatten }}
+             | flatten | unique | list }}
 
     - name: Fail if no active DHCP lease was found yet
       ansible.builtin.fail:

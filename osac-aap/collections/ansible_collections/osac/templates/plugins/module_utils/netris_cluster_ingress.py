@@ -6,11 +6,12 @@ import ipaddress
 
 from ansible_collections.osac.templates.plugins.module_utils.netris_external_ip import (
     NetrisExternalIPError as NetrisIpamError,
-    NetrisSubnetClient,
+    NetrisSubnetClient as NetrisSubnetClient,
     _canonical_ipv4,
     _pause,
     _required_text,
     _reservation_address,
+    is_retryable as ipam_is_retryable,
 )
 
 OPERATIONS = ("cluster_ingress.reserve", "cluster_ingress.release")
@@ -37,8 +38,10 @@ class NetrisClusterIngressError(NetrisIpamError):
     """A cluster ingress reservation failed or could not be verified."""
 
 
-def is_retryable(category: str) -> bool:
+def is_retryable(category: str, http_status=None) -> bool:
     """Return whether OSAC should retry a failure of this category."""
+    if http_status is not None:
+        return ipam_is_retryable(category, http_status)
     return category in RETRYABLE_CATEGORIES
 
 

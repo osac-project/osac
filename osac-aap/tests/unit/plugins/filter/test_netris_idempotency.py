@@ -425,17 +425,19 @@ class TestNetrisActiveDhcpAddresses:
 
     def test_active_dhcp_binding_is_a_lease(self):
         host = {
+            "address": "10.0.1.130",
             "mac": [
                 {"address": self.MAC.upper(), "source": "dhcp", "state": "active"},
                 {"address": "11:22:33:44:55:66", "source": "dhcp", "state": "active"},
             ]
         }
         assert idempotency.netris_active_dhcp_addresses(host, self.MAC) == [
-            self.MAC.upper()
+            "10.0.1.130"
         ]
 
     def test_inactive_and_reservation_only_records_are_not_leases(self):
         host = {
+            "address": "10.0.1.130",
             "mac": [
                 {"address": self.MAC, "source": "dhcp", "state": "inactive"},
                 {"address": self.MAC, "source": "reservation", "state": "active"},
@@ -445,13 +447,29 @@ class TestNetrisActiveDhcpAddresses:
 
     def test_mixed_records_count_only_active_dhcp(self):
         host = {
+            "address": "10.0.1.130",
             "mac": [
                 {"address": self.MAC, "source": "reservation", "state": "active"},
                 {"address": self.MAC, "source": "dhcp", "state": "inactive"},
                 {"address": self.MAC, "source": "dhcp", "state": "active"},
             ]
         }
-        assert idempotency.netris_active_dhcp_addresses(host, self.MAC) == [self.MAC]
+        assert idempotency.netris_active_dhcp_addresses(host, self.MAC) == ["10.0.1.130"]
+
+    def test_repeated_mac_history_counts_the_host_address_once(self):
+        host = {
+            "address": "10.0.1.130",
+            "mac": [{"address": self.MAC, "source": "dhcp", "state": "active"}] * 2,
+        }
+        assert idempotency.netris_active_dhcp_addresses(host, self.MAC) == ["10.0.1.130"]
+
+    @pytest.mark.parametrize("address", [None, "invalid", "aa:bb:cc:dd:ee:ff", "2001:db8::1"])
+    def test_invalid_or_non_ipv4_host_address_is_not_a_lease(self, address):
+        host = {
+            "address": address,
+            "mac": [{"address": self.MAC, "source": "dhcp", "state": "active"}],
+        }
+        assert idempotency.netris_active_dhcp_addresses(host, self.MAC) == []
 
     def test_malformed_input_is_ignored(self):
         assert idempotency.netris_active_dhcp_addresses(None, self.MAC) == []
@@ -459,3 +477,37 @@ class TestNetrisActiveDhcpAddresses:
         assert idempotency.netris_active_dhcp_addresses(
             {"mac": ["not-a-dict", {"address": self.MAC}]}, self.MAC
         ) == []
+
+
+class TestNetrisAttachmentPortPlan:
+    PORTS = [{"id": 101}, {"id": 102}, {"id": 103}]
+
+    def test_captures_only_host_ports_on_provisioning(self):
+        vnet = {"ports": [{"id": "101"}, {"id": 102}, {"id": 201}], "tags": ["keep"]}
+        plan = idempotency.netris_attachment_port_plan(vnet, self.PORTS, "uid-1", 101)
+        assert plan["port_ids"] == [101, 102]
+        assert plan["tags"] == ["keep", "osac-na:uid-1:101,102"]
+
+    def test_fresh_job_recovers_detached_ports_and_preserves_other_snapshots(self):
+        vnet = {"ports": [], "tags": ["osac-na:uid-1:101,102", "osac-na:other:201"]}
+        plan = idempotency.netris_attachment_port_plan(vnet, self.PORTS, "uid-1", 101, True)
+        assert plan["port_ids"] == [101, 102]
+        assert plan["tags"] == ["osac-na:other:201", "osac-na:uid-1:101,102"]
+
+    @pytest.mark.parametrize("tags", [
+        ["osac-na:uid-1:201"],
+        ["osac-na:uid-1:101", "osac-na:uid-1:102"],
+        ["osac-na:uid-1:102"],
+        ["osac-na:uid-1:"],
+    ])
+    def test_invalid_or_changed_saved_identity_is_refused(self, tags):
+        with pytest.raises(ValueError):
+            idempotency.netris_attachment_port_plan(
+                {"ports": [], "tags": tags}, self.PORTS, "uid-1", 101
+            )
+
+    def test_apply_refuses_an_interface_outside_provisioning(self):
+        with pytest.raises(ValueError, match="not a provisioning fabric port"):
+            idempotency.netris_attachment_port_plan(
+                {"ports": [{"id": 101}]}, self.PORTS, "uid-1", 103
+            )

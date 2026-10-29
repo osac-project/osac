@@ -585,3 +585,22 @@ def test_contract_shape_reports_a_provider_failure_as_retryable(monkeypatch, cap
     assert result["failed"] is True
     assert result["category"] == "provider_error"
     assert result["retryable"] is True
+
+
+@pytest.mark.parametrize("status, retryable", [
+    (400, False), (401, False), (403, False), (404, False), (409, False),
+    (422, False), (408, True), (425, True), (429, True), (500, True), (503, True),
+    (-1, True), (None, True),
+])
+def test_module_provider_failure_retry_policy(monkeypatch, capsys, status, retryable):
+    class FailedClient(StubNetrisClient):
+        def list_subnets(self):
+            raise netris_eip.NetrisExternalIPError(
+                "provider read failed",
+                category="transport_error" if status == -1 else "provider_error",
+                http_status=status,
+            )
+
+    result = run_main(monkeypatch, capsys, contract_args(), FailedClient())
+    assert result["failed"] is True
+    assert result["retryable"] is retryable

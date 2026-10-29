@@ -15,6 +15,23 @@
     fabric_domain_spec: "{{ _osac_resource.spec | default({}) }}"
     fabric_domain_servers: "{{ (_osac_resource.spec | default({})).servers | default([]) }}"
 
+- name: Validate legacy ServerCluster provisioning fields before conversion
+  ansible.builtin.assert:
+    that:
+      - server_cluster.metadata.name is defined
+      - server_cluster.spec.servers is defined
+      - server_cluster.spec.templateId is defined
+      - server_cluster.spec.vpcId is defined
+      - server_cluster.spec.region is defined
+      - server_cluster.spec.vpcId | string is match('^[1-9][0-9]*$')
+      - >-
+        server_cluster.spec.backendId | default('') | string == ''
+        or server_cluster.spec.backendId | string is match('^[1-9][0-9]*$')
+    fail_msg: >-
+      ServerCluster requires a name, servers, templateId, region, and a
+      positive numeric vpcId/backendId
+  when: not _osac_contract | default(false) | bool
+
 - name: Validate the contract FabricDomain snapshot
   ansible.builtin.assert:
     that:

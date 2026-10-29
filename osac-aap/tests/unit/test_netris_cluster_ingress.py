@@ -358,6 +358,25 @@ def test_argument_spec_marks_only_string_secrets_no_log():
     assert loaded.ARGUMENT_SPEC["timeout"]["default"] == 30
 
 
+@pytest.mark.parametrize("status, retryable", [
+    (400, False), (401, False), (403, False), (404, False), (409, False),
+    (422, False), (408, True), (425, True), (429, True), (500, True), (503, True),
+    (-1, True), (None, True),
+])
+def test_module_provider_failure_retry_policy(monkeypatch, capsys, status, retryable):
+    class FailedClient(FakeClient):
+        def list_subnets(self):
+            raise netris_eip.NetrisExternalIPError(
+                "provider read failed",
+                category="transport_error" if status == -1 else "provider_error",
+                http_status=status,
+            )
+
+    result = run_main(monkeypatch, capsys, module_args(), FailedClient())
+    assert result["failed"] is True
+    assert result["retryable"] is retryable
+
+
 def test_check_mode_validates_inputs_without_any_provider_write(monkeypatch, capsys):
     client = FakeClient()
 

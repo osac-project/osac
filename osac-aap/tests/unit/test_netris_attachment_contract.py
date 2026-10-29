@@ -35,7 +35,7 @@ def _move_vars(tasks):
 def test_apply_moves_a_physical_port_from_provisioning_to_the_subnet() -> None:
     move = _move_vars(_tasks("apply_network_attachment"))
 
-    assert move["from_vnet_name"] == "{{ provisioning_vnet }}"
+    assert move["from_vnet_name"] == "{{ netris_bm_provisioning_vnet }}"
     assert move["to_vnet_name"] == "{{ subnet.metadata.name }}"
     assert move["host_name"] == "{{ _osac_target.host_name }}"
     assert move["logical_interface_name"] == "{{ _osac_interface.name }}"
@@ -45,7 +45,7 @@ def test_delete_returns_a_physical_port_to_the_provisioning_network() -> None:
     move = _move_vars(_tasks("delete_network_attachment"))
 
     assert move["from_vnet_name"] == "{{ subnet.metadata.name }}"
-    assert move["to_vnet_name"] == "{{ provisioning_vnet }}"
+    assert move["to_vnet_name"] == "{{ netris_bm_provisioning_vnet }}"
 
 
 def test_overlay_attachments_change_nothing_on_the_fabric() -> None:

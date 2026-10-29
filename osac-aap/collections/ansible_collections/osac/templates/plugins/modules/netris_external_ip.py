@@ -167,7 +167,7 @@ def main() -> None:
             msg=f"Netris ExternalIP {params['operation']} failed"
             f" ({category}{suffix}): {error}",
             category=category,
-            retryable=core.is_retryable(category),
+            retryable=core.is_retryable(category, status),
             invocation=_redacted_invocation(params),
         )
         return

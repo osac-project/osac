@@ -59,8 +59,14 @@ global:
       # contain the PEM bundle under the fixed key bundle.pem.
       caBundle:
         configMap: ""
+        # Groups allowed to create, update or delete the active CA ConfigMap.
+        # OpenShift cluster administrators are in system:cluster-admins;
+        # system:masters is the break-glass group of the system:admin
+        # certificate. Identity-provider groups bound directly to cluster-admin
+        # are in neither group and must be listed here explicitly.
         adminGroups:
           - "system:masters"
+          - "system:cluster-admins"
       credentials:
         username: ""
       siteId: ""
@@ -77,6 +83,9 @@ global:
     networkClass: false
     networkManagers: false
 
+# Used by the validation and CA identity hook Jobs. With Netris CA validation
+# enabled the image must provide kubectl, sh and openssl (the hooks fail with
+# NETRIS_CA_OPENSSL_MISSING instead of skipping the bundle check).
 cliImage: quay.io/openshift/origin-cli:4.20.0
 
 # Shared PostgreSQL host for the db-init hook.

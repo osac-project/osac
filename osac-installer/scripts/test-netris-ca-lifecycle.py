@@ -126,6 +126,7 @@ class RenderContractTests(unittest.TestCase):
         )
         self.assertEqual(pre_env["CHECK_IDENTITY"], "false")
         self.assertIn("NETRIS_CA_", pre_command)
+        self.assertIn("Netris CA ConfigMap validated", pre_command)
 
         identity = find(docs, "Job", "osac-netris-ca-identity-validate")
         self.assertEqual(
@@ -156,6 +157,13 @@ class RenderContractTests(unittest.TestCase):
             self.assertEqual(
                 [mount for mount in container["volumeMounts"] if mount["mountPath"] == "/tmp"],
                 [{"name": "tmp", "mountPath": "/tmp"}],
+            )
+            self.assertEqual(
+                container["resources"],
+                {
+                    "requests": {"cpu": "50m", "memory": "64Mi"},
+                    "limits": {"cpu": "100m", "memory": "128Mi"},
+                },
             )
 
         hook_role = find(docs, "ClusterRole", "osac-validate-default")
@@ -237,13 +245,29 @@ class RenderContractTests(unittest.TestCase):
 
         variables = {item["name"]: item["expression"] for item in policy["spec"]["variables"]}
         self.assertEqual(json.loads(variables["activeName"]), "customer-netris-ca")
-        self.assertEqual(json.loads(variables["adminGroups"]), ["system:masters"])
+        self.assertEqual(
+            json.loads(variables["adminGroups"]),
+            ["system:masters", "system:cluster-admins"],
+        )
         self.assertIn(
             "request.userInfo.groups.exists", policy["spec"]["validations"][0]["expression"]
         )
         self.assertIn(
             "system:serviceaccount:kube-system:namespace-controller",
             policy["spec"]["validations"][0]["expression"],
+        )
+        self.assertEqual(
+            variables["target"],
+            "request.operation == 'DELETE' ? oldObject : object",
+        )
+        expression = policy["spec"]["validations"][0]["expression"]
+        self.assertIn(
+            "variables.target.metadata.name != variables.activeName", expression
+        )
+        self.assertIn(
+            "(request.operation == 'DELETE' && request.userInfo.username == "
+            "'system:serviceaccount:kube-system:namespace-controller')",
+            expression,
         )
 
         binding = find(
@@ -329,7 +353,12 @@ class ValidationScriptTests(unittest.TestCase):
 
                 if args[:1] == ["create"]:
                     request = sys.stdin.read()
+                    expected_user = (
+                        'user: "' + os.environ["CA_EXECUTION_IDENTITY"] + '"'
+                    )
                     if "kind: SubjectAccessReview" not in request:
+                        sys.exit(1)
+                    if expected_user not in request:
                         sys.exit(1)
                     print("false" if mode == "denied" else "true")
                     sys.exit(0)

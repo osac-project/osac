@@ -151,10 +151,14 @@ HTTP is suitable only for an isolated test profile; production Netris
 configuration uses HTTPS and certificate validation.
 
 The platform administrator group owns this lifecycle: the installer never
-creates, rotates, or deletes the ConfigMap. Deployments where the platform
-administrator is not in `system:masters` must set
-`global.networking.netris.caBundle.adminGroups` to the groups that may manage
-the active object. The default is `["system:masters"]`.
+creates, rotates, or deletes the ConfigMap. The default
+`global.networking.netris.caBundle.adminGroups` is
+`["system:masters", "system:cluster-admins"]`: `system:masters` is the
+break-glass group of the `system:admin` client certificate, and
+`system:cluster-admins` contains the built-in `cluster-admin` subjects
+(`kubeadmin` and the default cluster administrator binding). An identity
+provider group bound directly to `cluster-admin` is in neither group; add each
+such group to `adminGroups` explicitly.
 
 #### Validation and protection
 
@@ -165,6 +169,11 @@ these checks before AAP configuration:
   exists, sets `immutable: true`, and has a non-empty `data.bundle.pem` that
   OpenSSL can parse as a certificate bundle. Each failure uses a stable
   `ERROR: NETRIS_CA_*` message.
+- Both CA jobs run `.Values.cliImage`. With CA validation enabled that image
+  must provide `kubectl`, `sh` and `openssl`. The default
+  `quay.io/openshift/origin-cli` image does; a custom `cliImage` that omits
+  `openssl` fails with `ERROR: NETRIS_CA_OPENSSL_MISSING` instead of skipping
+  the bundle check.
 - The post-install/post-upgrade hook reads the same object as
   `system:serviceaccount:<namespace>:<aap.serviceAccounts.osacSa>` (default
   `osac-sa`) and fails unless that identity can `get` the ConfigMap. This hook
@@ -181,6 +190,15 @@ A ValidatingAdmissionPolicy protects only the active ConfigMap name. It denies
 ConfigMap names are unaffected, so a new CA version can be created before the
 Helm switch. Any identity that is not in `adminGroups` is denied even if its
 RBAC would otherwise allow ConfigMap writes.
+
+The AAP execution ServiceAccount (`osac-sa` by default) is not in
+`adminGroups`, so the policy denies it any create, update or delete of the
+active object; the identity hook only needs `get`. That ServiceAccount is bound
+to `cluster-admin` by the release, so it can still edit or delete the
+ValidatingAdmissionPolicy itself. The policy guards against accidental
+ConfigMap writes by ordinary editors; it is not a boundary against an identity
+that can change cluster policy. Narrow the AAP ServiceAccount binding or extend
+`adminGroups` to match your threat model.
 
 #### Rotation and rollback
 

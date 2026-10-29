@@ -35,12 +35,26 @@
     netris_server_ports: >-
       {{ (_server_ports_resp.json.data.data | default(_server_ports_resp.json.data)) | default([]) }}
 
-- name: Find port by name
+- name: Collect ports matching the interface name
   ansible.builtin.set_fact:
-    netris_server_port: >-
+    _server_port_matches: >-
       {{ netris_server_ports
          | selectattr('port', 'equalto', port_name)
-         | list | first | default(none) }}
+         | list }}
+  when: port_name is defined
+
+- name: Require an unambiguous host interface mapping
+  ansible.builtin.assert:
+    that:
+      - _server_port_matches | length <= 1
+    fail_msg: >-
+      Netris host interface mapping is ambiguous: more than one port is named
+      '{{ port_name }}' on server ID {{ server_id }}. Refusing to select a port.
+  when: port_name is defined
+
+- name: Find port by name
+  ansible.builtin.set_fact:
+    netris_server_port: "{{ _server_port_matches | first | default(none) }}"
   when: port_name is defined
 
 - name: Set port fact (no filter)

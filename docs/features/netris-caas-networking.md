@@ -267,6 +267,22 @@ statuses and input validation are final. Provider messages are bounded
 and redacted, and `ansible_failed_result` is never published, logged, or
 kept in a fact.
 
+Physical attachments require an unambiguous host/interface-to-port mapping
+before any provider write. Apply saves the host's provisioning fabric-port
+IDs in a durable, target-API-ID-scoped snapshot. Delete restores that saved
+set. Without a snapshot, legacy single-port cleanup restores the selected
+port only if it is already on provisioning or belongs to the intended
+VPC/tenant-scoped Subnet segment. Otherwise cleanup fails closed without
+changing membership, so deleting a rejected apply cannot pull a
+FabricDomain-only or unrelated port onto provisioning. An already-idle
+delete remains a no-op, even if the tenant segment no longer exists.
+
+Diagnostic redaction covers complete Authorization scheme/value fields
+and common token, API-key, and client-secret keys. An unquoted
+Authorization field or an unterminated quoted credential suppresses the
+remaining diagnostic text rather than guessing where its secret ends;
+the bounded HTTP status and preceding diagnostic context remain available.
+
 ### SecurityGroup enforcement
 
 Netris v1 ACLs are flat, VPC-scoped prefix rules: each rule needs the

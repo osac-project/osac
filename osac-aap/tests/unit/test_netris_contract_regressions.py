@@ -1,5 +1,7 @@
 """Exercise Netris contract roles against a stateful localhost HTTP provider."""
 
+import base64
+import copy
 import json
 import os
 import subprocess
@@ -333,6 +335,112 @@ def port_ids(vnet):
     return sorted(int(port["id"]) for port in vnet["ports"])
 
 
+@pytest.mark.parametrize("location", ["east-west", "unassigned", "foreign-subnet"])
+def test_rejected_apply_then_delete_never_moves_an_unverified_port(
+    tmp_path, provider, location
+):
+    url, state = provider
+    extra = attachment_fixture(state)
+    extra["network_attachment"]["interface"]["name"] = "east-west"
+    if location != "east-west":
+        state["vnets"][2]["ports"] = []
+    if location == "foreign-subnet":
+        state["vnets"].append(
+            {
+                "id": 12,
+                "name": "subnet-a",
+                "vpc": {"id": 99},
+                "tenant": {"id": 2},
+                "state": "active",
+                "ports": [{"id": 103}],
+            }
+        )
+    before = copy.deepcopy(state["vnets"])
+    for task in ["apply_network_attachment", "delete_network_attachment"]:
+        result, stats = run_task(tmp_path, task, extra, url)
+        assert result.returncode != 0
+        assert stats["osac_error"]["retryable"] is False, stats
+        assert state["vnets"] == before
+        assert not any(call[0] != "GET" for call in state["calls"])
+
+
+def test_legacy_delete_without_snapshot_requires_the_scoped_tenant_segment(
+    tmp_path, provider
+):
+    url, state = provider
+    extra = attachment_fixture(state)
+    state["vnets"][0]["ports"] = [{"id": 101}]
+    state["vnets"][1]["ports"] = [{"id": 102}, {"id": 201}]
+    state["vnets"].append(
+        {
+            "id": 12,
+            "name": "subnet-a",
+            "vpc": {"id": 99},
+            "tenant": {"id": 2},
+            "state": "active",
+            "ports": [{"id": 301}],
+        }
+    )
+    foreign = copy.deepcopy(state["vnets"][2:])
+    for _ in range(2):
+        result, _ = run_task(tmp_path, "delete_network_attachment", extra, url)
+        assert result.returncode == 0, result.stderr + result.stdout[-5000:]
+        assert port_ids(state["vnets"][0]) == []
+        assert port_ids(state["vnets"][1]) == [101, 102, 201]
+        assert state["vnets"][1]["tags"] == ["operator-owned-tag"]
+        assert state["vnets"][2:] == foreign
+    assert [call[1] for call in state["calls"] if call[0] == "PUT"] == [
+        "/api/v2/vnet/7",
+        "/api/v2/vnet/8",
+    ]
+
+
+def test_idle_delete_without_snapshot_or_tenant_segment_is_a_noop(tmp_path, provider):
+    url, state = provider
+    extra = attachment_fixture(state)
+    state["vnets"].pop(0)
+    before = copy.deepcopy(state["vnets"])
+    result, _ = run_task(tmp_path, "delete_network_attachment", extra, url)
+    assert result.returncode == 0, result.stderr + result.stdout[-5000:]
+    assert state["vnets"] == before
+    assert not any(call[0] != "GET" for call in state["calls"])
+
+
+@pytest.mark.parametrize(
+    "task",
+    [
+        "apply_network_attachment",
+        "delete_network_attachment",
+        "move_network_attachment",
+    ],
+)
+def test_duplicate_interface_names_are_rejected_before_any_mutation(
+    tmp_path, provider, task
+):
+    url, state = provider
+    extra = attachment_fixture(state)
+    state["ports"][1]["port"] = "eth1"
+    before = copy.deepcopy(state["vnets"])
+    contract = task != "move_network_attachment"
+    if not contract:
+        extra = {
+            "network_attachment": {
+                "host_name": "server-a",
+                "logical_interface_name": "eth1",
+                "from_vnet_name": "provisioning",
+                "to_vnet_name": "subnet-a",
+            }
+        }
+    result, stats = run_task(tmp_path, task, extra, url, contract=contract)
+    assert result.returncode != 0
+    assert "ambiguous" in result.stdout.lower()
+    if contract:
+        assert "ambiguous" in stats["osac_error"]["message"].lower(), stats
+        assert stats["osac_error"]["retryable"] is False, stats
+    assert state["vnets"] == before
+    assert not any(call[0] != "GET" for call in state["calls"])
+
+
 @pytest.mark.parametrize("operation", ["attach", "detach"])
 @pytest.mark.parametrize(
     "identity", ["missing", "scoped", "ambiguous-scoped", "ambiguous-unscoped"]
@@ -559,14 +667,32 @@ def nat_input():
 
 
 @pytest.mark.parametrize("legacy", [False, True], ids=["contract", "legacy-top-level"])
-@pytest.mark.parametrize("quoted", [False, True], ids=["plain", "json-shaped"])
-def test_secrets_are_absent_from_all_failure_output(tmp_path, provider, legacy, quoted):
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        "plain",
+        "json-shaped",
+        "basic",
+        "access-token",
+        "refresh-token",
+        "malformed-token",
+    ],
+)
+def test_secrets_are_absent_from_all_failure_output(
+    tmp_path, provider, legacy, diagnostic
+):
     url, state = provider
     marker = "SYNTHETIC_REVIEW_2049_NO_REAL_SECRET"
     state["http_status"] = 503
-    state["error_message"] = (
-        json.dumps({"token": marker}) if quoted else "token=" + marker
-    )
+    encoded = base64.b64encode(("fixture:" + marker).encode()).decode()
+    state["error_message"] = {
+        "plain": "token=" + marker,
+        "json-shaped": json.dumps({"token": marker}),
+        "basic": "Authorization: Basic " + encoded,
+        "access-token": json.dumps({"access_token": marker}),
+        "refresh-token": json.dumps({"refresh_token": marker}),
+        "malformed-token": 'access_token="synthetic prefix ' + marker,
+    }[diagnostic]
     state["error_reason"] = state["error_message"]
     extra = nat_input()
     task = "create_nat_gateway"
@@ -584,6 +710,7 @@ def test_secrets_are_absent_from_all_failure_output(tmp_path, provider, legacy, 
     assert ("GET", "/api/v2/vpc") in state["calls"]
     assert "<redacted>" in result.stdout
     assert marker not in result.stdout + result.stderr + json.dumps(stats)
+    assert encoded not in result.stdout + result.stderr + json.dumps(stats)
     assert "fixture-cookie" not in result.stdout + result.stderr
 
 

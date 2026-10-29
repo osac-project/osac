@@ -297,6 +297,94 @@ class TestFormatImmutableMismatchMessage:
 class TestNetrisSafeErrorDetail:
 
     @pytest.mark.parametrize(
+        "scheme", ["Basic", "Bearer", "Digest", "Negotiate", "Custom"]
+    )
+    @pytest.mark.parametrize("key", ["Authorization", "Proxy-Authorization"])
+    def test_redacts_complete_unquoted_authorization(self, scheme, key):
+        message = (
+            f"backend unavailable; {key}: {scheme} SYNTHETIC_CREDENTIAL "
+            'realm="SYNTHETIC_REALM", nonce="SYNTHETIC_NONCE"'
+        )
+        detail = idempotency.netris_safe_error_detail(
+            {"status": 503, "json": {"message": message}}
+        )
+        assert detail.startswith("HTTP 503; backend unavailable;")
+        assert "<redacted>" in detail
+        assert "SYNTHETIC_" not in detail
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "access_token",
+            "refresh_token",
+            "id_token",
+            "api_token",
+            "auth_token",
+            "session_token",
+            "accessToken",
+            "refreshToken",
+            "client_secret",
+            "api_key",
+        ],
+    )
+    def test_redacts_common_structured_credentials(self, key):
+        detail = idempotency.netris_safe_error_detail(
+            {
+                "status": 401,
+                "json": {
+                    "message": f'backend rejected {{"{key}": "SYNTHETIC_SECRET"}}'
+                },
+            }
+        )
+        assert detail.startswith("HTTP 401; backend rejected")
+        assert "<redacted>" in detail
+        assert "SYNTHETIC_SECRET" not in detail
+
+    @pytest.mark.parametrize("scheme", ["Bearer", "Basic"])
+    @pytest.mark.parametrize("key", ["token", "access_token", "password"])
+    def test_unquoted_scheme_prefixed_credentials_remain_redacted(self, scheme, key):
+        detail = idempotency.netris_safe_error_detail(
+            {"status": 401, "msg": f"backend rejected {key}={scheme} SYNTHETIC_SECRET"}
+        )
+        assert detail == f"HTTP 401; backend rejected {key}=<redacted>"
+
+    def test_folded_authorization_never_forwards_the_credential_continuation(self):
+        detail = idempotency.netris_safe_error_detail(
+            {
+                "status": 401,
+                "msg": "backend rejected Authorization: Basic\r\n SYNTHETIC_SECRET",
+            }
+        )
+        assert detail == "HTTP 401; backend rejected Authorization=<redacted>"
+
+    def test_quoted_authorization_keeps_the_safe_diagnostic_after_the_value(self):
+        detail = idempotency.netris_safe_error_detail(
+            {
+                "status": 401,
+                "msg": '{"Authorization": "Basic SYNTHETIC_SECRET", "reason": "invalid credentials"}',
+            }
+        )
+        assert "SYNTHETIC_SECRET" not in detail
+        assert "invalid credentials" in detail
+        assert "Authorization=<redacted>" in detail
+
+    @pytest.mark.parametrize(
+        "key", ["token", "access_token", "password", "Authorization"]
+    )
+    @pytest.mark.parametrize("quote", ['"', "'"])
+    def test_unterminated_quoted_secret_discards_the_untrusted_remainder(
+        self, key, quote
+    ):
+        detail = idempotency.netris_safe_error_detail(
+            {
+                "msg": f"backend rejected {key}={quote}SYNTHETIC_FIRST SYNTHETIC_REMAINDER"
+            }
+        )
+        assert "backend rejected" in detail
+        assert "<redacted>" in detail
+        assert "SYNTHETIC_" not in detail
+
+    @pytest.mark.parametrize(
         "key", ["token", "password", "secret", "Cookie", "connect.sid", "Authorization"]
     )
     @pytest.mark.parametrize("quote", ['"', "'"])
@@ -579,6 +667,41 @@ class TestNetrisAttachmentPortPlan:
         with pytest.raises(ValueError, match="not a provisioning fabric port"):
             idempotency.netris_attachment_port_plan(
                 {"ports": [{"id": 101}]}, self.PORTS, "uid-1", 103
+            )
+
+    def test_delete_without_snapshot_refuses_an_unverified_port(self):
+        with pytest.raises(ValueError, match="not a verified fabric port"):
+            idempotency.netris_attachment_port_plan(
+                {"ports": [{"id": 101}]}, self.PORTS, "target-id", 103, True
+            )
+
+    def test_delete_without_snapshot_accepts_verified_tenant_membership(self):
+        plan = idempotency.netris_attachment_port_plan(
+            {"ports": [{"id": 102}]},
+            self.PORTS,
+            "target-id",
+            101,
+            True,
+            tenant_vnet={"ports": [{"id": "101"}]},
+        )
+        assert plan["port_ids"] == [101, 102]
+        assert plan["had_snapshot"] is False
+
+    def test_idle_delete_does_not_need_a_tenant_segment_or_snapshot(self):
+        plan = idempotency.netris_attachment_port_plan(
+            {"ports": [{"id": 101}, {"id": 102}]}, self.PORTS, "target-id", 101, True
+        )
+        assert plan["port_ids"] == [101, 102]
+        assert plan["had_snapshot"] is False
+
+    def test_apply_cannot_use_tenant_membership_to_bypass_the_fabric_guard(self):
+        with pytest.raises(ValueError, match="not a provisioning fabric port"):
+            idempotency.netris_attachment_port_plan(
+                {"ports": [{"id": 102}]},
+                self.PORTS,
+                "target-id",
+                101,
+                tenant_vnet={"ports": [{"id": 101}]},
             )
 
 

@@ -248,15 +248,27 @@ def netris_safe_error_detail(result: Any) -> str:
     if not isinstance(detail, str) or not detail.strip():
         detail = "provider returned no diagnostic message"
 
-    detail = re.sub(r"[\r\n\t]+", " ", detail).strip()
+    # Authorization schemes can contain spaces and comma-separated parameters.
+    # Without a quoted boundary, discard the remainder rather than forwarding
+    # an unverified part of a credential (including folded header lines).
     detail = re.sub(
-        r"""(?ix)\b(connect\.sid|cookie|authorization|token|password|secret)\b
+        r"""(?ix)\b((?:proxy[-_])?authorization)\b
         ["']?\s*[:=]\s*
-        (?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?:Bearer\s+)?[^\s,;}\]]+)""",
+        (?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[\s\S]*)""",
         r"\1=<redacted>",
         detail,
     )
-    detail = re.sub(r"(?i)\bBearer\s+[^\s,;]+", "Bearer <redacted>", detail)
+    detail = re.sub(
+        r"""(?ix)\b(connect\.sid|cookie|password|passwd|(?:client[_-]?)?secret|
+        api[_-]?key|(?:(?:access|refresh|id|api|auth|bearer|session)[_-]?)?token)\b
+        ["']?\s*[:=]\s*
+        (?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|["'][\s\S]*|
+        (?:(?:Bearer|Basic)\s+)?[^\s,;}\]]+)""",
+        r"\1=<redacted>",
+        detail,
+    )
+    detail = re.sub(r"(?i)\b(Bearer|Basic)\s+[^\s,;]+", r"\1 <redacted>", detail)
+    detail = re.sub(r"[\r\n\t]+", " ", detail).strip()
     detail = detail[:240]
 
     if status is None:
@@ -300,6 +312,7 @@ def netris_attachment_port_plan(
     selected_id: Any,
     deleting=False,
     legacy_uid: str | None = None,
+    tenant_vnet: dict | None = None,
 ) -> dict:
     """Remember only this host's provisioning ports across jobs and retries.
 
@@ -344,8 +357,16 @@ def netris_attachment_port_plan(
     ids.update(port_id for port_id in host_ids if netris_port_on_vnet(vnet, port_id))
     if not deleting and selected not in ids:
         raise ValueError("Selected port is not a provisioning fabric port")
-    # Also supports deleting an attachment applied by the old single-port path.
-    ids.add(selected)
+    if deleting and selected not in ids:
+        # Legacy single-port attachments have no snapshot. Only the caller's
+        # independently resolved, scoped tenant segment can prove membership;
+        # the inventory ID alone must never pull a FabricDomain port back.
+        if not netris_port_on_vnet(tenant_vnet, selected):
+            raise ValueError(
+                "Selected port is not a verified fabric port: no saved snapshot "
+                "or membership in provisioning or the intended tenant segment"
+            )
+        ids.add(selected)
     port_ids = sorted(int(port_id) for port_id in ids)
     tag = prefix + ",".join(str(port_id) for port_id in port_ids)
     return {

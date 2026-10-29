@@ -3,6 +3,33 @@
 # Do not infer fabric ports from every inventory interface: that would include
 # FabricDomain ports. The snapshot survives separate AAP apply/delete jobs.
 
+- name: Verify the scoped tenant segment for legacy delete recovery
+  when: _na_reconcile == 'delete'
+  block:
+    - name: Initialize the legacy delete membership proof
+      ansible.builtin.set_fact:
+        _na_delete_segment: {}
+
+    - name: Resolve the intended tenant segment without crossing VPC or tenant
+      ansible.builtin.include_tasks: _resolve_port_vnet.yaml
+      vars:
+        _op_vnet_name: "{{ _na_from }}"
+        vnet_vpc_id: "{{ _na_from_vpc_id }}"
+        vnet_tenant_id: "{{ _na_from_tenant_id }}"
+
+    - name: Read the scoped tenant segment membership
+      ansible.builtin.include_role:
+        name: netris.controller.vnet
+        tasks_from: read_by_id
+      vars:
+        vnet_id: "{{ netris_vnet.id }}"
+      when: netris_vnet is not none
+
+    - name: Preserve the independently verified tenant segment
+      ansible.builtin.set_fact:
+        _na_delete_segment: "{{ netris_vnet_detail }}"
+      when: netris_vnet is not none
+
 - name: Find the provisioning V-Net
   ansible.builtin.include_role:
     name: netris.controller.vnet
@@ -39,7 +66,8 @@
     _na_fabric_plan: >-
       {{ netris_vnet_detail | netris.controller.netris_attachment_port_plan(
            netris_server_ports, _osac_target.id, _target_port.id,
-           _na_reconcile == 'delete', _osac_resource.metadata.uid) }}
+           _na_reconcile == 'delete', _osac_resource.metadata.uid,
+           _na_delete_segment | default({})) }}
 
 - name: Save the fabric port snapshot before detaching any port
   ansible.builtin.include_role:

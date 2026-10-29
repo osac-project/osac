@@ -67,7 +67,9 @@ var _ = Describe("Cluster reconciler", func() {
 	BeforeEach(func() {
 		// Create a context:
 		ctx = context.Background()
-		getOrCreateTenantDefaultNetworkClassFixture(ctx)
+		// Cluster creates resolve omitted attachments to the tenant's default
+		// Subnet and SecurityGroup; usable tenant-default networking must exist.
+		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 		// Create the clients:
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())

@@ -4,10 +4,14 @@ import { screen } from '@testing-library/react';
 /**
  * Resolves the typeahead combobox input for a `ResourceSelectField`/`TypeaheadSelectField` from
  * its dropdown-arrow toggle button. The field's accessible label lands on that button, not the
- * combobox input itself (a PatternFly `TypeaheadSelect` quirk), so this walks from the button up
- * to the shared `MenuToggle` container and back down to the input.
+ * combobox input itself for an enabled PatternFly `TypeaheadSelect`; disabled fields render the
+ * combobox input directly.
  */
 const resolveResourceSelectInput = (toggleButton: HTMLElement): HTMLInputElement => {
+  if (toggleButton.matches('input[role="combobox"]')) {
+    return toggleButton as HTMLInputElement;
+  }
+
   const container = toggleButton.closest('.pf-v6-c-menu-toggle');
   const input = container?.querySelector<HTMLInputElement>('input[role="combobox"]');
   if (!input) {

@@ -22,9 +22,13 @@ const session = vi.hoisted(() => ({
   tenantId: 'tenant-1',
 }));
 
-vi.mock('../../../hooks/use-session', () => ({
-  useSession: () => session,
-}));
+vi.mock('../../../hooks/use-session', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../hooks/use-session')>();
+  return {
+    ...actual,
+    useSession: () => session,
+  };
+});
 
 const makeItem = (published: boolean): ComputeInstanceCatalogItem =>
   ({

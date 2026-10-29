@@ -197,9 +197,11 @@ describe('NetworkAttachmentFields', () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByLabelText(/^Virtual network/)).toHaveTextContent('vn-prod'),
+      expect(screen.getByPlaceholderText('Select virtual network')).toHaveValue('vn-prod'),
     );
-    await waitFor(() => expect(screen.getByLabelText(/^Subnet/)).toHaveTextContent('subnet-a'));
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText('Select subnet')).toHaveValue('subnet-a'),
+    );
   });
 
   it('shows a load error with retry when catalog subnet lookup fails', async () => {

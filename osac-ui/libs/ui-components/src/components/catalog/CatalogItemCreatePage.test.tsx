@@ -5,9 +5,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { CatalogItemCreatePage } from './CatalogItemCreatePage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
-vi.mock('../../hooks/use-session', () => ({
-  useSession: () => ({ role: 'tenant-admin' }),
-}));
+vi.mock('../../hooks/use-session', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../hooks/use-session')>();
+  return {
+    ...actual,
+    useSession: () => ({ role: 'tenant-admin' }),
+  };
+});
 
 const renderCreatePage = (routerEntries: string[]) =>
   renderWithProviders(

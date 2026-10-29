@@ -269,19 +269,12 @@ const matchesStringEqualityFilter = (
   field: string,
   value: string | undefined,
 ): boolean => {
-  const prefix = field + ' == "';
-  if (!filter?.startsWith(prefix)) {
+  if (!filter) {
     return true;
   }
-  const match = /^((?:\\.|[^"\\])*)"(?:\s*&&.*)?$/.exec(filter.slice(prefix.length));
-  if (!match) {
-    return false;
-  }
-  try {
-    return value === JSON.parse('"' + match[1] + '"');
-  } catch {
-    return false;
-  }
+  const escapedField = field.replaceAll('.', '\\.');
+  const match = filter.match(new RegExp(`${escapedField} == "([^"]+)"`));
+  return !match || match[1] === value;
 };
 
 const matchesProjectSearchFilter = (filter: string | undefined, project: Project): boolean => {

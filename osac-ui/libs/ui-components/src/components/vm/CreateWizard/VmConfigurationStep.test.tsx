@@ -37,17 +37,19 @@ describe('VmConfigurationStep', () => {
 
     expect(screen.getByRole('separator')).toBeInTheDocument();
 
-    const diskImageSelect = await waitFor(() =>
-      getResourceSelectInput(/^Select the image reference/),
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^Select the image reference/ })).toBeEnabled(),
     );
-    await user.click(diskImageSelect);
+    await user.click(screen.getByRole('button', { name: /^Select the image reference/ }));
 
     expect(screen.getByRole('option', { name: /fedora/ })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /rhel/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole('option', { name: /rhel/ }));
 
-    await waitFor(() => expect(diskImageSelect).toHaveValue('rhel'));
+    await waitFor(() =>
+      expect(getResourceSelectInput(/^Select the image reference/)).toHaveValue('rhel'),
+    );
   });
 
   it('shows the catalog item disk image when the wizard opens', async () => {

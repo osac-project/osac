@@ -8,6 +8,7 @@ import { StorageProtocol, StorageTierSchema, StorageTierState } from '@osac/type
 
 import { type ResourceSelectValue, emptyResourceSelectValue } from './resourceSelectValue';
 import { StorageTierSelectField } from './StorageTierSelectField';
+import { getResourceSelectInput } from '../../test-utils/query';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const makeTier = (
@@ -60,7 +61,7 @@ describe('StorageTierSelectField', () => {
       },
     });
 
-    const toggle = await screen.findByRole('combobox');
+    const toggle = await screen.findByRole('button', { name: 'Storage tier' });
     await user.click(toggle);
     await user.click(await screen.findByRole('option', { name: 'bulk' }));
 
@@ -69,7 +70,7 @@ describe('StorageTierSelectField', () => {
         '{"id":"id-bulk","name":"bulk"}',
       );
     });
-    expect(toggle).toHaveValue('bulk');
+    expect(getResourceSelectInput(/^Storage tier/)).toHaveValue('bulk');
   });
 
   it('lists only active tiers', async () => {
@@ -83,7 +84,7 @@ describe('StorageTierSelectField', () => {
       },
     });
 
-    await user.click(await screen.findByRole('combobox'));
+    await user.click(await screen.findByRole('button', { name: 'Storage tier' }));
 
     const options = await screen.findAllByRole('option');
     expect(options).toHaveLength(2);
@@ -164,7 +165,7 @@ describe('StorageTierSelectField', () => {
       StorageProtocol.BLOCK,
     );
 
-    const toggle = await screen.findByRole('combobox');
+    const toggle = await screen.findByRole('button', { name: 'Storage tier' });
     await user.click(toggle);
 
     expect(screen.getByRole('option', { name: 'block' })).toBeInTheDocument();

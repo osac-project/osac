@@ -101,7 +101,7 @@ describe('DiskImageField', () => {
       { apiFixtures: { diskImages } },
     );
 
-    const toggle = await screen.findByLabelText(/^Select the image reference/);
+    const toggle = await screen.findByRole('button', { name: 'Select the image reference' });
     await user.click(toggle);
     await user.click(screen.getByRole('option', { name: /rhel/ }));
 
@@ -144,7 +144,7 @@ describe('DiskImageField', () => {
       await user.click(screen.getByText(optionName));
     }
 
-    await user.click(await screen.findByLabelText(/^Select the image reference/));
+    await user.click(await screen.findByRole('button', { name: 'Select the image reference' }));
 
     expect(await screen.findByRole('option', { name: imageName })).toBeInTheDocument();
     expect(screen.getAllByRole('option')).toHaveLength(
@@ -183,7 +183,7 @@ describe('DiskImageField', () => {
       { apiFixtures: { diskImages: imagesWithDescriptions } },
     );
 
-    await user.click(await screen.findByLabelText(/^Select the image reference/));
+    await user.click(await screen.findByRole('button', { name: 'Select the image reference' }));
 
     expect(screen.getByRole('option', { name: 'fedora' })).not.toHaveTextContent(
       'Fedora disk image description',
@@ -239,7 +239,7 @@ describe('DiskImageField', () => {
       { apiFixtures: { diskImages } },
     );
 
-    await user.click(await screen.findByLabelText(/^Select the image reference/));
+    await user.click(await screen.findByRole('button', { name: 'Select the image reference' }));
     await user.click(screen.getByRole('option', { name: 'windows' }));
 
     await waitFor(() => {

@@ -29,13 +29,17 @@ vi.mock('react-router-dom', async (importOriginal) => {
   };
 });
 
-vi.mock('@osac/ui-components/hooks/use-session.tsx', () => ({
-  useSession: vi.fn(() => ({
-    role: 'tenant-admin',
-    username: 'test-user',
-    tenantId: 'test-tenant',
-  })),
-}));
+vi.mock('@osac/ui-components/hooks/use-session.tsx', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@osac/ui-components/hooks/use-session.tsx')>();
+  return {
+    ...actual,
+    useSession: vi.fn(() => ({
+      role: 'tenant-admin',
+      username: 'test-user',
+      tenantId: 'test-tenant',
+    })),
+  };
+});
 
 const { useSession } = await import('@osac/ui-components/hooks/use-session.tsx');
 
@@ -168,7 +172,7 @@ describe('ComputeCatalogItemWizard', () => {
         'Optionally set boot disk size, storage tier, and additional disk defaults for this catalog item. Leave fields Not set if tenants should choose when creating a virtual machine.',
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Boot storage tier' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Boot storage tier' })).toBeInTheDocument();
     expect(screen.getAllByRole('separator')).toHaveLength(2);
   });
 
@@ -459,7 +463,9 @@ describe('ComputeCatalogItemWizard', () => {
         updateMask?: { paths?: string[] };
       };
       expect(request.object?.id).toBe('catalog-item-1');
-      expect(request.updateMask?.paths).toContain('fields.user_data');
+      expect(request.updateMask?.paths).toContain(
+        'fields.user_data_source.editable.default_value.inline',
+      );
       expect(request.updateMask?.paths).not.toContain('template');
       expect(request.updateMask?.paths).not.toContain('metadata.name');
       expect(request.updateMask?.paths).not.toContain('metadata.tenant');

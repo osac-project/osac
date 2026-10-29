@@ -121,7 +121,7 @@ describe('ResourceSelectField', () => {
     await waitFor(() => {
       expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
     });
-    await user.click(screen.getByRole('combobox'));
+    await user.click(screen.getByRole('button', { name: 'Tenant' }));
     await user.click(screen.getByRole('option', { name: 'globex' }));
 
     await waitFor(() => {
@@ -140,7 +140,10 @@ describe('ResourceSelectField', () => {
       ],
     });
 
-    await user.click(await screen.findByRole('combobox'));
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
+    });
+    await user.click(screen.getByRole('button', { name: 'Tenant' }));
 
     expect(screen.getByRole('option', { name: /acme/ })).toHaveTextContent('Production tenant');
     expect(screen.getByRole('option', { name: /globex/ })).toHaveTextContent('Development tenant');
@@ -232,7 +235,7 @@ describe('ResourceSelectField', () => {
     await waitFor(() => {
       expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
     });
-    await user.click(screen.getByRole('combobox'));
+    await user.click(screen.getByRole('button', { name: 'Tenant' }));
 
     expect(screen.getByRole('option', { name: 'globex' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'acme' })).not.toBeInTheDocument();
@@ -247,7 +250,7 @@ describe('ResourceSelectField', () => {
     await waitFor(() => {
       expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
     });
-    await user.click(screen.getByRole('combobox'));
+    await user.click(screen.getByRole('button', { name: 'Tenant' }));
     await user.click(screen.getByRole('option', { name: 'globex (custom)' }));
 
     await waitFor(() => {
@@ -281,7 +284,7 @@ describe('ResourceSelectField', () => {
       await waitFor(() => {
         expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
       });
-      await user.click(screen.getByRole('combobox'));
+      await user.click(screen.getByRole('button', { name: 'Tenant' }));
       await user.click(screen.getByRole('option', { name: 'globex' }));
 
       await waitFor(() => {
@@ -307,15 +310,17 @@ describe('ResourceSelectField', () => {
       await waitFor(() => {
         expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
       });
-      await user.click(screen.getByRole('combobox'));
+      await user.click(screen.getByRole('button', { name: 'Tenant' }));
       await user.click(screen.getByRole('option', { name: 'globex' }));
 
       await waitFor(() => {
         expect(screen.getByRole('combobox')).toHaveValue('globex');
       });
       expect(
-        screen.getByRole('button', { name: 'Clear input value', hidden: true }),
-      ).not.toBeVisible();
+        screen
+          .getByRole('button', { name: 'Clear input value', hidden: true })
+          .closest('.pf-v6-c-form__group'),
+      ).toHaveClass('osac-typeahead-select--required');
       expect(screen.getByLabelText('formik-value')).toHaveTextContent(
         '{"id":"t-2","name":"globex"}',
       );

@@ -113,7 +113,7 @@ describe('EditInstanceTypeModal wrapper', () => {
         'Select an instance type',
       );
     });
-    expect(document.getElementById('edit-instance-type')).toHaveClass('pf-m-disabled');
+    expect(screen.getByRole('combobox')).toBeDisabled();
   });
 
   it('keeps Save disabled until the selection changes', async () => {
@@ -124,7 +124,7 @@ describe('EditInstanceTypeModal wrapper', () => {
     });
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
 
-    await user.click(screen.getByRole('combobox'));
+    await user.click(screen.getByRole('button', { name: 'Instance type' }));
     await user.click(await screen.findByRole('option', { name: /CPU large/ }));
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
@@ -169,7 +169,7 @@ describe('EditInstanceTypeModal wrapper', () => {
       types: [cpu, gpu],
     });
 
-    await user.click(await screen.findByRole('combobox'));
+    await user.click(await screen.findByRole('button', { name: 'Instance type' }));
     expect(await screen.findByRole('option', { name: /GPU small/ })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /CPU small/ })).not.toBeInTheDocument();
   });
@@ -180,7 +180,7 @@ describe('EditInstanceTypeModal wrapper', () => {
     });
 
     expect(screen.queryByText('Resize will apply on next start.')).not.toBeInTheDocument();
-    await user.click(await screen.findByRole('combobox'));
+    await user.click(await screen.findByRole('button', { name: 'Instance type' }));
     await user.click(await screen.findByRole('option', { name: /CPU large/ }));
     expect(await screen.findByText('Resize will apply on next start.')).toBeInTheDocument();
   });
@@ -191,7 +191,7 @@ describe('EditInstanceTypeModal wrapper', () => {
       rejectUpdate: true,
     });
 
-    await user.click(await screen.findByRole('combobox'));
+    await user.click(await screen.findByRole('button', { name: 'Instance type' }));
     await user.click(await screen.findByRole('option', { name: /CPU large/ }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
@@ -212,7 +212,7 @@ describe('EditInstanceTypeModal wrapper', () => {
       },
     });
 
-    await user.click(await screen.findByRole('combobox'));
+    await user.click(await screen.findByRole('button', { name: 'Instance type' }));
     await user.click(await screen.findByRole('option', { name: /CPU large/ }));
     expect(screen.queryByText('Resize will apply on next start.')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Save' }));

@@ -21,13 +21,17 @@ describe('CatalogItemCreatePage', () => {
   it('renders the bare metal catalog item wizard for the bm kind', () => {
     renderCreatePage(['/catalog/bm/create']);
 
-    expect(screen.getByRole('heading', { name: 'Create catalog item' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'Create bare metal catalog item' }),
+    ).toBeInTheDocument();
   });
 
   it('renders the cluster catalog item wizard for the cluster kind', () => {
     renderCreatePage(['/catalog/cluster/create']);
 
-    expect(screen.getByRole('heading', { name: 'Create catalog item' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'Create cluster catalog item' }),
+    ).toBeInTheDocument();
   });
 
   it('renders the compute catalog item wizard for the vm kind', () => {

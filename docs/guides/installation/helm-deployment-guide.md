@@ -638,6 +638,49 @@ LVM Storage Operator and its operand does not register an OSAC storage offering.
 The automatic local-storage registration hook is for development and CI only;
 see [Evaluation only](customer-install-guide.md#92-evaluation-only).
 
+On the `osac` chart, select this host setup with
+`operator.networkManagers.k8sManagers.cudn_evpn.enabled: true` and
+`networkClass.k8sManager: cudn_evpn`. The
+[customer install guide](customer-install-guide.md#61-installing-osac-for-vmaas)
+covers that phase-2 selection next to the fabric-less `k8s_only` workflow.
+
+## Separate VMaaS workload cluster
+
+Run the OSAC management services on one OpenShift cluster and the virtual
+machines on another. Both clusters need `cluster-admin` access and different
+API server addresses. Leave CaaS disabled. The cluster controller cannot run
+in the same operator instance as a remote kubeconfig.
+
+Create the workload kubeconfig Secret on the management cluster before phase
+2. The Secret contents and the console-proxy label are described in
+[VMaaS dedicated cluster](../../../osac-operator/docs/vmaas-dedicated-cluster/README.md).
+The phase-2 values that mount that Secret are in the
+[customer install guide](customer-install-guide.md#64-installing-vmaas-on-a-separate-workload-cluster).
+
+**Workload cluster.** Point `KUBECONFIG` at the workload cluster. In
+`my-infra-values.yaml`, enable `cnv` and `lvms`. Enable `evpn` when that
+cluster uses CUDN EVPN, as described in
+[EVPN host networking (VMaaS)](#evpn-host-networking-vmaas). Disable the other
+phase-1 toggles, including `certManager`, `aapOperator`, `keycloak`, `mce`,
+and `kafka`. Run
+[Phase 1a](#phase-1a-install-prerequisite-operators) and
+[Phase 1b](#phase-1b-install-shared-infrastructure) against that kubeconfig.
+Do not install the `osac` chart on this cluster.
+
+**Management cluster.** Point `KUBECONFIG` at the management cluster. Keep
+OpenShift Virtualization and EVPN off in `my-infra-values.yaml`:
+
+```yaml
+cnv:
+  enabled: false
+evpn:
+  enabled: false
+```
+
+Run phase 1a and phase 1b with that file, then phase 2 with the remote
+kubeconfig values from the customer install guide. The Secret must exist in
+the OSAC namespace before `helm upgrade --install osac`.
+
 ## When Prerequisites Already Exist
 
 If some or all of the prerequisite Operators and infrastructure already exist

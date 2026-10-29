@@ -382,6 +382,9 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 		DescribeTable("rejects an omitted attachment without a usable tenant default",
 			func(configure func(project, virtualNetworkId string), wantField, wantPhrase string) {
 				project := createCatalogItemProjectFixture(ctx, usersGroup)
+				// The public caller needs project membership to resolve
+				// project-scoped defaults and references.
+				grantComputeInstanceSSHKeyProjectAccess(ctx, usersGroup, project)
 				virtualNetworkId := newIsolatedVirtualNetwork(project)
 				configure(project, virtualNetworkId)
 
@@ -426,6 +429,9 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 
 		It("resolves ready tenant defaults and stores both references", func() {
 			project := createCatalogItemProjectFixture(ctx, usersGroup)
+			// The public caller needs project membership to resolve
+			// project-scoped defaults and references.
+			grantComputeInstanceSSHKeyProjectAccess(ctx, usersGroup, project)
 			virtualNetworkId := newIsolatedVirtualNetwork(project)
 			defaultSubnetId := newProjectSubnet(project, virtualNetworkId, true, "ready")
 			defaultSecurityGroupId := newProjectSecurityGroup(project, virtualNetworkId, true, "ready")
@@ -458,6 +464,9 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 
 		It("preserves a complete explicit attachment without labelled defaults", func() {
 			project := createCatalogItemProjectFixture(ctx, usersGroup)
+			// The public caller needs project membership to resolve
+			// project-scoped defaults and references.
+			grantComputeInstanceSSHKeyProjectAccess(ctx, usersGroup, project)
 			virtualNetworkId := newIsolatedVirtualNetwork(project)
 			explicitSubnetId := newProjectSubnet(project, virtualNetworkId, false, "ready")
 			explicitSecurityGroupId := newProjectSecurityGroup(project, virtualNetworkId, false, "ready")

@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
+  Button,
   Card,
   CardBody,
   CardTitle,
@@ -7,10 +9,15 @@ import {
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
+  Flex,
+  Tooltip,
 } from '@patternfly/react-core';
+import PencilAltIcon from '@patternfly/react-icons/dist/esm/icons/pencil-alt-icon';
+import type { TFunction } from 'i18next';
 
-import type { ComputeInstance } from '@osac/types';
+import { type ComputeInstance, ComputeInstanceState } from '@osac/types';
 
+import EditInstanceTypeModal from './EditInstanceTypeModal';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
 import { Timestamp } from '../../Primitives/Timestamp';
@@ -20,13 +27,40 @@ interface Props {
   vm: ComputeInstance;
 }
 
+const canEditInstanceType = (vm: ComputeInstance): boolean => {
+  const state = vm.status?.state;
+  return (
+    state === ComputeInstanceState.RUNNING ||
+    state === ComputeInstanceState.PAUSED ||
+    state === ComputeInstanceState.STOPPED
+  );
+};
+
+const disabledInstanceTypeTooltip = (vm: ComputeInstance, t: TFunction): string =>
+  vm.status?.state === ComputeInstanceState.DELETING
+    ? t('This virtual machine is being deleted.')
+    : t(
+        'The instance type can be changed when the virtual machine is running, paused, or stopped.',
+      );
+
 const VmDetailsCard = ({ vm }: Props) => {
   const { t } = useTranslation();
+  const [editOpen, setEditOpen] = useState(false);
   const catalogItem = vm.spec?.catalogItem;
   const instanceType = vm.spec?.instanceType;
   const sshKey = vm.spec?.sshKey;
   const sshKeyLabel = sshKey?.name || sshKey?.id;
   const sshKeyDetailsUrl = sshKey?.id ? `/secrets/${sshKey.id}` : undefined;
+  const canEdit = canEditInstanceType(vm);
+  const editButton = (
+    <Button
+      variant="plain"
+      icon={<PencilAltIcon />}
+      aria-label={t('Edit instance type')}
+      isDisabled={!canEdit}
+      onClick={() => setEditOpen(true)}
+    />
+  );
 
   return (
     <Card isFullHeight>
@@ -58,7 +92,19 @@ const VmDetailsCard = ({ vm }: Props) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Instance type')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {displayValue(instanceType?.name || instanceType?.id)}
+              <Flex
+                spaceItems={{ default: 'spaceItemsSm' }}
+                alignItems={{ default: 'alignItemsCenter' }}
+              >
+                {displayValue(instanceType?.name || instanceType?.id)}
+                {canEdit ? (
+                  editButton
+                ) : (
+                  <Tooltip content={disabledInstanceTypeTooltip(vm, t)}>
+                    <span tabIndex={0}>{editButton}</span>
+                  </Tooltip>
+                )}
+              </Flex>
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
@@ -89,6 +135,7 @@ const VmDetailsCard = ({ vm }: Props) => {
           </DescriptionListGroup>
         </DescriptionList>
       </CardBody>
+      {editOpen ? <EditInstanceTypeModal vm={vm} onClose={() => setEditOpen(false)} /> : null}
     </Card>
   );
 };

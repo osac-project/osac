@@ -27,6 +27,7 @@ set -euo pipefail
 ROOTFUL_SOCKET="${ROOTFUL_SOCKET:-/run/podman/podman.sock}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 TOPOLVM_RUNTIME_DIR="/var/lib/osac-dev-full/topolvm"
+TOPOLVM_BACKING_SIZE="${TOPOLVM_BACKING_SIZE:-20G}"
 TOPOLVM_LVMD_IMAGE="osac-dev/topolvm-lvmd:0.41.1-container-v2"
 TOPOLVM_LVMD_CONTAINER="osac-dev-full-topolvm-lvmd"
 TOPOLVM_LVM_BASE_DEVICE_ARGS=(
@@ -243,7 +244,14 @@ prepare_topolvm_storage() {
   setup_script='set -euo pipefail
 mkdir -p /runtime/socket /runtime/kubelet
 disk=/runtime/backing.img
-expected_size=21474836480
+if [[ ! "$TOPOLVM_BACKING_SIZE" =~ ^[1-9][0-9]*([KMGTPE])?$ ]]; then
+  echo "ERROR: TOPOLVM_BACKING_SIZE must be a positive byte count or an integer with a binary size suffix (for example, 20G)." >&2
+  exit 1
+fi
+if ! expected_size=$(numfmt --from=iec "$TOPOLVM_BACKING_SIZE" 2>/dev/null); then
+  echo "ERROR: TOPOLVM_BACKING_SIZE is not a valid size: ${TOPOLVM_BACKING_SIZE}." >&2
+  exit 1
+fi
 if [[ -e "$disk" ]]; then
   actual_size=$(stat -c %s "$disk")
   if [[ "$actual_size" != "$expected_size" ]]; then
@@ -251,7 +259,10 @@ if [[ -e "$disk" ]]; then
     exit 1
   fi
 else
-  truncate -s 20G "$disk"
+  if ! truncate -s "$expected_size" "$disk"; then
+    echo "ERROR: could not create the TopoLVM backing file with size ${expected_size} bytes; it may exceed the filesystem or process file-size limit." >&2
+    exit 1
+  fi
 fi
 
 loopdev=$(losetup -j "$disk" | awk -F: "NR == 1 { print \$1 }")
@@ -293,6 +304,7 @@ EOF'
   container_cmd run --rm "${TOPOLVM_LVM_DEVICE_ARGS[@]}" \
     --volume "${TOPOLVM_RUNTIME_DIR}:/runtime" \
     --volume /dev:/dev \
+    --env "TOPOLVM_BACKING_SIZE=${TOPOLVM_BACKING_SIZE}" \
     "${TOPOLVM_LVMD_IMAGE}" bash -euo pipefail -c "${setup_script}"
 }
 

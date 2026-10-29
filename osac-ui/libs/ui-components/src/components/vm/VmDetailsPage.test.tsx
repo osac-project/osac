@@ -1,13 +1,22 @@
 import { Route, Routes } from 'react-router-dom';
 import { screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { ComputeInstances } from '@osac/types';
 
 import { VmDetailsPage } from './VmDetailsPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
-vi.mock('../../api/v1/compute-instance', () => ({
-  useComputeInstance: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  const useGetResource = vi.fn();
+  return { useGetResource };
+});
+
+vi.mock('../../api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api/use-resource')>();
+  mocks.useGetResource.mockImplementation(actual.useGetResource);
+  return { ...actual, useGetResource: mocks.useGetResource };
+});
 
 vi.mock('../Resource/ResourceDetailsPageLoading', () => ({
   ResourceDetailsPageLoading: ({ tabLabels }: { tabLabels?: string[] }) => (
@@ -19,8 +28,6 @@ vi.mock('./DetailsPage/VmDetails', () => ({
   default: () => <div>VM details loaded</div>,
 }));
 
-const { useComputeInstance } = await import('../../api/v1/compute-instance');
-
 const renderPage = () =>
   renderWithProviders(
     <Routes>
@@ -30,14 +37,29 @@ const renderPage = () =>
   );
 
 describe('VmDetailsPage', () => {
-  it('passes shared VM tab labels to the loading skeleton', () => {
-    vi.mocked(useComputeInstance).mockReturnValue({
-      data: undefined,
-      isLoading: true,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useComputeInstance>);
+  beforeEach(async () => {
+    const actual =
+      await vi.importActual<typeof import('../../api/use-resource')>('../../api/use-resource');
+    mocks.useGetResource.mockReset();
+    mocks.useGetResource.mockImplementation(actual.useGetResource);
+  });
+
+  it('passes shared VM tab labels to the loading skeleton', async () => {
+    const actual =
+      await vi.importActual<typeof import('../../api/use-resource')>('../../api/use-resource');
+    mocks.useGetResource.mockImplementation((...args: Parameters<typeof actual.useGetResource>) => {
+      const [service] = args;
+      if (service === ComputeInstances) {
+        return {
+          data: undefined,
+          isLoading: true,
+          isError: false,
+          error: null,
+          refetch: vi.fn(),
+        } as unknown as ReturnType<typeof actual.useGetResource>;
+      }
+      return actual.useGetResource(...args);
+    });
 
     renderPage();
 

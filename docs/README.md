@@ -19,6 +19,8 @@ see [Configuring an external Kafka cluster](guides/installation/kafka-configurat
 
 - [Ethernet FabricDomains](guides/admin/fabric-domains.md): hardware bindings,
   inventory onboarding, membership changes, cleanup, and troubleshooting.
+- [Labels and annotations](guides/admin/metadata.md): reserved metadata,
+  private/public API behavior, permissions, filters, and compatibility.
 
 This directory also contains concise, hand-maintained guidance for
 architecture and conventions that span component or repository boundaries

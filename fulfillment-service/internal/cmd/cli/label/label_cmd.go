@@ -259,4 +259,9 @@ Adding and removing labels can be combined in a single command:
 {{ bt 3 }}
 
 Objects can be referenced by their identifier or by their name.
+
+Keys in the {{ bt }}admin.osac.openshift.io{{ bt }} domain and its subdomains are reserved for
+system use. Use an authorized private API session to manage these labels. The public API hides them;
+public Create and Update requests that include one are rejected, and removing a hidden label with
+{{ bt }}key-{{ bt }} through a public session does not remove its stored value.
 `

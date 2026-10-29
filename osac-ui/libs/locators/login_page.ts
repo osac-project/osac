@@ -1,9 +1,15 @@
 export const LoginPage = {
   brand: ['#kc-header-wrapper'],
   pageTitle: ['heading', { name: 'Sign in to your account', exact: true }],
+  passwordUpdatePageTitle: ['heading', { name: 'Update password', exact: true }],
+  tenantIdentityProvidersPageTitle: ['heading', { name: 'Identity providers', exact: true }],
+  createIdentityProvider: ['link', { name: 'Create identity provider', exact: true }],
   username: ['Username or email'],
   password: ['input[type="password"]'],
+  newPassword: ['New Password', { exact: true }],
+  confirmPassword: ['Confirm password', { exact: true }],
   signIn: ['button', { name: 'Sign In', exact: true }],
+  passwordUpdateSubmit: ['button', { name: 'Submit', exact: true }],
   accountMenu: ['button', { name: 'Account menu', exact: true }],
   osacLogo: ['.pf-v6-c-masthead__brand a[aria-label="Red Hat"]'],
 } as const;

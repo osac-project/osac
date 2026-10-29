@@ -270,18 +270,13 @@ func (l *externalIPLifecycle) lockNATGateway(ctx context.Context, id string) (*p
 }
 
 func (l *externalIPLifecycle) lockExternalIPConsumers(ctx context.Context, externalIP *privatev1.ExternalIP) error {
-	externalIPID := externalIP.GetId()
-	filter := externalIPConsumerFilter(externalIPID, externalIP.GetMetadata().GetName())
 	if l.externalIPAttachmentDao != nil {
-		response, err := l.externalIPAttachmentDao.List().SetFilter(filter).SetLimit(1000).Do(ctx)
+		attachments, err := l.externalIPAttachments(ctx, externalIP)
 		if err != nil {
 			return err
 		}
-		if response.GetTotal() > 1000 {
-			return fmt.Errorf("ExternalIP %s has more than 1000 live consumers", externalIPID)
-		}
-		ids := make([]string, 0, len(response.GetItems()))
-		for _, attachment := range response.GetItems() {
+		ids := make([]string, 0, len(attachments))
+		for _, attachment := range attachments {
 			ids = append(ids, attachment.GetId())
 		}
 		sort.Strings(ids)
@@ -289,24 +284,39 @@ func (l *externalIPLifecycle) lockExternalIPConsumers(ctx context.Context, exter
 			if _, err = l.externalIPAttachmentDao.Lock().AddIds(ids...).Do(ctx); err != nil {
 				return err
 			}
+			for _, before := range attachments {
+				after, getErr := l.externalIPAttachmentDao.Get().SetId(before.GetId()).Do(ctx)
+				if getErr != nil {
+					return getErr
+				}
+				if !sameExternalIPConsumer(before.GetSpec().GetExternalIp(), before.GetMetadata(), after.GetObject().GetSpec().GetExternalIp(), after.GetObject().GetMetadata()) {
+					return grpcstatus.Error(grpccodes.Aborted, "ExternalIP consumer identity changed while acquiring lock")
+				}
+			}
 		}
 	}
 	if l.natGatewayDao != nil {
-		response, err := l.natGatewayDao.List().SetFilter(filter).SetLimit(1000).Do(ctx)
+		gateways, err := l.externalIPNATGateways(ctx, externalIP)
 		if err != nil {
 			return err
 		}
-		if response.GetTotal() > 1000 {
-			return fmt.Errorf("ExternalIP %s has more than 1000 live consumers", externalIPID)
-		}
-		ids := make([]string, 0, len(response.GetItems()))
-		for _, gateway := range response.GetItems() {
+		ids := make([]string, 0, len(gateways))
+		for _, gateway := range gateways {
 			ids = append(ids, gateway.GetId())
 		}
 		sort.Strings(ids)
 		if len(ids) > 0 {
 			if _, err = l.natGatewayDao.Lock().AddIds(ids...).Do(ctx); err != nil {
 				return err
+			}
+			for _, before := range gateways {
+				after, getErr := l.natGatewayDao.Get().SetId(before.GetId()).Do(ctx)
+				if getErr != nil {
+					return getErr
+				}
+				if !sameExternalIPConsumer(before.GetSpec().GetExternalIp(), before.GetMetadata(), after.GetObject().GetSpec().GetExternalIp(), after.GetObject().GetMetadata()) {
+					return grpcstatus.Error(grpccodes.Aborted, "ExternalIP consumer identity changed while acquiring lock")
+				}
 			}
 		}
 	}
@@ -323,16 +333,16 @@ func (l *externalIPLifecycle) ensureExternalIPAvailableExcept(
 	externalIPName string,
 	exceptAttachmentID string,
 ) error {
-	filter := externalIPConsumerFilter(externalIPID, externalIPName)
+	parent, err := l.externalIPDao.Get().SetId(externalIPID).Do(ctx)
+	if err != nil {
+		return err
+	}
 	if l.externalIPAttachmentDao != nil {
-		response, err := l.externalIPAttachmentDao.List().SetFilter(filter).SetLimit(1000).Do(ctx)
+		attachments, err := l.externalIPAttachments(ctx, parent.GetObject())
 		if err != nil {
 			return err
 		}
-		if response.GetTotal() > 1000 {
-			return fmt.Errorf("ExternalIP %s has more than 1000 live consumers", externalIPID)
-		}
-		for _, attachment := range response.GetItems() {
+		for _, attachment := range attachments {
 			if attachment.GetId() != exceptAttachmentID {
 				return grpcstatus.Errorf(grpccodes.FailedPrecondition,
 					"ExternalIP '%s' is already in use by an ExternalIPAttachment", externalIPID)
@@ -340,30 +350,196 @@ func (l *externalIPLifecycle) ensureExternalIPAvailableExcept(
 		}
 	}
 	if l.natGatewayDao != nil {
-		response, err := l.natGatewayDao.List().SetFilter(filter).SetLimit(1000).Do(ctx)
+		gateways, err := l.externalIPNATGateways(ctx, parent.GetObject())
 		if err != nil {
 			return err
 		}
-		if response.GetTotal() > 0 {
+		if len(gateways) > 0 {
 			return grpcstatus.Errorf(grpccodes.FailedPrecondition, "ExternalIP '%s' is already in use by a NATGateway", externalIPID)
 		}
 	}
 	return nil
 }
 
-func externalIPConsumerFilter(externalIPID, externalIPName string) string {
+func externalIPConsumerFilter(externalIPID, externalIPName string, owner *privatev1.Metadata) (string, error) {
+	if externalIPID == "" {
+		return "", grpcstatus.Error(grpccodes.FailedPrecondition, "ExternalIP parent has no canonical identity")
+	}
+	if owner.GetTenant() == "" {
+		return "", grpcstatus.Error(grpccodes.FailedPrecondition, "ExternalIP legacy consumer has no name or owner")
+	}
+	for _, value := range []string{owner.GetTenant(), owner.GetProject()} {
+		if err := externalIPLookupValue(value); err != nil {
+			return "", err
+		}
+	}
 	keys := []string{externalIPID}
 	if externalIPName != "" && externalIPName != externalIPID {
 		keys = append(keys, externalIPName)
 	}
 	conditions := make([]string, 0, len(keys)*2)
 	for _, key := range keys {
+		if err := externalIPLookupValue(key); err != nil {
+			return "", err
+		}
 		quotedKey := strconv.Quote(key)
 		conditions = append(conditions,
 			"this.spec.external_ip.id == "+quotedKey,
 			"this.spec.external_ip.name == "+quotedKey)
 	}
-	return "(" + strings.Join(conditions, " || ") + ")"
+	conditions = append(conditions, `((!has(this.spec.external_ip.id) || this.spec.external_ip.id == "") && (!has(this.spec.external_ip.name) || this.spec.external_ip.name == ""))`)
+	// Canonical references remain global blockers. Scope legacy and malformed
+	// candidates before the cap so unrelated owners cannot exhaust it.
+	return fmt.Sprintf("(this.spec.external_ip.id == %s || (this.metadata.tenant == %s && this.metadata.project == %s && (%s)))",
+		strconv.Quote(externalIPID), strconv.Quote(owner.GetTenant()), strconv.Quote(owner.GetProject()), strings.Join(conditions, " || ")), nil
+}
+
+func externalIPLookupValue(value string) error {
+	for _, character := range value {
+		if character < 32 || character >= 127 || character == '\\' || character == '\'' || character == '"' {
+			return grpcstatus.Error(grpccodes.FailedPrecondition, "ExternalIP consumer identity cannot be safely queried")
+		}
+	}
+	return nil
+}
+
+func sameExternalIPConsumer(beforeRef *privatev1.ExternalIPLocalReference, beforeOwner *privatev1.Metadata, afterRef *privatev1.ExternalIPLocalReference, afterOwner *privatev1.Metadata) bool {
+	return proto.Equal(beforeRef, afterRef) && beforeOwner.GetTenant() == afterOwner.GetTenant() && beforeOwner.GetProject() == afterOwner.GetProject()
+}
+
+func (l *externalIPLifecycle) externalIPConsumerMatches(ctx context.Context, parent *privatev1.ExternalIP, reference *privatev1.ExternalIPLocalReference, owner *privatev1.Metadata) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, grpcstatus.FromContextError(err).Err()
+	}
+	if parent.GetId() == "" || reference == nil {
+		return false, grpcstatus.Error(grpccodes.FailedPrecondition, "ExternalIP consumer has incomplete identity")
+	}
+	id, name := reference.GetId(), reference.GetName()
+	if id == parent.GetId() {
+		return true, nil
+	}
+	if err := externalIPLookupValue(id); err != nil {
+		return false, err
+	}
+	if id != "" {
+		found, err := l.externalIPDao.List().SetFilter("this.id == " + strconv.Quote(id)).SetLimit(2).Do(ctx)
+		if err != nil {
+			return false, err
+		}
+		if found.GetTotal() < 0 || found.GetTotal() > 1 || int(found.GetTotal()) != len(found.GetItems()) {
+			return false, grpcstatus.Error(grpccodes.FailedPrecondition, "ExternalIP canonical identity is ambiguous")
+		}
+		if found.GetTotal() == 1 {
+			if name != "" {
+				return false, nil
+			}
+			alias, err := l.externalIPConsumerAlias(ctx, id, owner, false)
+			if err != nil {
+				return false, err
+			}
+			if alias != nil && alias.GetId() != id {
+				return false, grpcstatus.Error(grpccodes.FailedPrecondition, "ExternalIP legacy identity is ambiguous")
+			}
+			return false, nil
+		}
+	}
+	alias := name
+	if id != "" {
+		alias = id
+	}
+	resolved, err := l.externalIPConsumerAlias(ctx, alias, owner, true)
+	if err != nil {
+		return false, err
+	}
+	if id != "" && name != "" && id != name {
+		byName, nameErr := l.externalIPConsumerAlias(ctx, name, owner, true)
+		if nameErr != nil {
+			return false, nameErr
+		}
+		if byName.GetId() != resolved.GetId() {
+			return false, grpcstatus.Error(grpccodes.FailedPrecondition, "ExternalIP legacy identity is ambiguous")
+		}
+	}
+	return resolved.GetId() == parent.GetId(), nil
+}
+
+func (l *externalIPLifecycle) externalIPConsumerAlias(ctx context.Context, name string, owner *privatev1.Metadata, required bool) (*privatev1.ExternalIP, error) {
+	if name == "" || owner.GetTenant() == "" {
+		return nil, grpcstatus.Error(grpccodes.FailedPrecondition, "ExternalIP legacy consumer has no name or owner")
+	}
+	for _, value := range []string{name, owner.GetTenant(), owner.GetProject()} {
+		if err := externalIPLookupValue(value); err != nil {
+			return nil, err
+		}
+	}
+	filter := "this.metadata.name == " + strconv.Quote(name) + " && this.metadata.tenant == " + strconv.Quote(owner.GetTenant()) + " && this.metadata.project == " + strconv.Quote(owner.GetProject())
+	response, err := l.externalIPDao.List().SetFilter(filter).SetLimit(2).Do(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if response.GetTotal() == 0 && len(response.GetItems()) == 0 && !required {
+		return nil, nil
+	}
+	if response.GetTotal() != 1 || len(response.GetItems()) != 1 {
+		return nil, grpcstatus.Error(grpccodes.FailedPrecondition, "ExternalIP legacy identity cannot be resolved unambiguously")
+	}
+	return response.GetItems()[0], nil
+}
+
+func (l *externalIPLifecycle) externalIPAttachments(ctx context.Context, parent *privatev1.ExternalIP) ([]*privatev1.ExternalIPAttachment, error) {
+	filter, err := externalIPConsumerFilter(parent.GetId(), parent.GetMetadata().GetName(), parent.GetMetadata())
+	if err != nil {
+		return nil, err
+	}
+	response, err := l.externalIPAttachmentDao.List().SetFilter(filter).SetLimit(1000).Do(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if response.GetTotal() > 1000 {
+		return nil, grpcstatus.Error(grpccodes.FailedPrecondition, "ExternalIP has more than 1000 consumer candidates")
+	}
+	if int(response.GetTotal()) != len(response.GetItems()) {
+		return nil, grpcstatus.Error(grpccodes.FailedPrecondition, "ExternalIP consumer candidate list is incomplete")
+	}
+	var matches []*privatev1.ExternalIPAttachment
+	for _, attachment := range response.GetItems() {
+		match, resolveErr := l.externalIPConsumerMatches(ctx, parent, attachment.GetSpec().GetExternalIp(), attachment.GetMetadata())
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if match {
+			matches = append(matches, attachment)
+		}
+	}
+	return matches, nil
+}
+
+func (l *externalIPLifecycle) externalIPNATGateways(ctx context.Context, parent *privatev1.ExternalIP) ([]*privatev1.NATGateway, error) {
+	filter, err := externalIPConsumerFilter(parent.GetId(), parent.GetMetadata().GetName(), parent.GetMetadata())
+	if err != nil {
+		return nil, err
+	}
+	response, err := l.natGatewayDao.List().SetFilter(filter).SetLimit(1000).Do(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if response.GetTotal() > 1000 {
+		return nil, grpcstatus.Error(grpccodes.FailedPrecondition, "ExternalIP has more than 1000 consumer candidates")
+	}
+	if int(response.GetTotal()) != len(response.GetItems()) {
+		return nil, grpcstatus.Error(grpccodes.FailedPrecondition, "ExternalIP consumer candidate list is incomplete")
+	}
+	var matches []*privatev1.NATGateway
+	for _, gateway := range response.GetItems() {
+		match, resolveErr := l.externalIPConsumerMatches(ctx, parent, gateway.GetSpec().GetExternalIp(), gateway.GetMetadata())
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if match {
+			matches = append(matches, gateway)
+		}
+	}
+	return matches, nil
 }
 
 func (l *externalIPLifecycle) settleAttachmentParent(
@@ -529,15 +705,12 @@ func (l *externalIPLifecycle) deleteAutoCreatedExternalIPs(ctx context.Context, 
 			continue
 		}
 		if l.externalIPAttachmentDao != nil {
-			attachments, err := l.externalIPAttachmentDao.List().
-				SetFilter(externalIPConsumerFilter(externalIP.GetId(), externalIP.GetMetadata().GetName())).
-				SetLimit(1).
-				Do(ctx)
+			attachments, err := l.externalIPAttachments(ctx, externalIP)
 			if err != nil {
 				return fmt.Errorf("failed to check ExternalIPAttachment references for ExternalIP %s: %w",
 					externalIP.GetId(), err)
 			}
-			if len(attachments.GetItems()) > 0 {
+			if len(attachments) > 0 {
 				// The parent deletion can proceed, but the ExternalIP release must
 				// wait until every attachment finalizer has completed.
 				continue

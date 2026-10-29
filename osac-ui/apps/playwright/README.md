@@ -29,24 +29,25 @@ pnpm --filter @osac/playwright exec playwright install chromium
 
 ## Running
 
-Required environment variables:
+Environment variables:
 
 | Variable           | Description                                                                                       |
 | ------------------ | ------------------------------------------------------------------------------------------------- |
 | `OSAC_UI_BASE_URL` | Full URL of the `osac-ui` deployment to test, e.g. `https://osac-ui-<namespace>.<cluster-domain>` |
-| `OSAC_USERNAME`    | Username of a Keycloak test user on that deployment's realm                                       |
-| `OSAC_PASSWORD`    | Password for that user                                                                            |
+| `OSAC_ADMIN_USERNAME` | Username of the Keycloak admin test user on that deployment's realm                              |
+| `OSAC_ADMIN_PASSWORD` | Password for the admin test user                                                                  |
 
 ```bash
-export OSAC_UI_BASE_URL=https://... OSAC_USERNAME=...
-read -rs OSAC_PASSWORD && export OSAC_PASSWORD   # avoids leaving the password in shell history
+export OSAC_UI_BASE_URL=https://... OSAC_ADMIN_USERNAME=...
+read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD   # avoids leaving the password in shell history
 pnpm playwright
 ```
 
 (`pnpm playwright` is a workspace-root shortcut for `pnpm --filter @osac/playwright
-run playwright`.) None of these have defaults — each is required, so a missing
-value fails immediately with a clear error instead of silently pointing at the
-wrong environment. `pnpm playwright` logs in, runs the [smoke
+run playwright`.) `OSAC_UI_BASE_URL`, `OSAC_ADMIN_USERNAME`, and `OSAC_ADMIN_PASSWORD` are
+required and fail immediately when missing instead of silently pointing at the
+wrong environment. The harness always logs in as the admin test user. `pnpm
+playwright` logs in, runs the [smoke
 test](#smoke-test), and runs every spec under `scratch/` — see [Writing a
 test](#writing-a-test). Tracked UI flows are excluded from this default
 command; select a project explicitly in the [flow instructions](#tenant-flow-tests).
@@ -72,15 +73,19 @@ The tenant specs read `tenant_name` from `apps/e2e-tests/extravars.yaml`.
 Before running, set it to a tenant that does not already exist. The tenant
 create flow requires that the configured tenant does not already exist; the
 delete flow requires that it exists. All VMaaS specs skip before browser
-actions when `tenant_name` is unset or empty.
+actions when `tenant_name` is unset or empty. These flows always authenticate
+with the admin test user. The create flow saves the generated tenant
+break-glass credentials in `/tmp` using a filename containing the tenant name,
+logs in with those credentials as the tenant, and the delete flow removes the
+file after the tenant is deleted.
 
-Set the deployment and login variables from the [Running](#running) section,
+Set the deployment and admin login variables from the [Running](#running) section,
 then run the flows:
 
 ```bash
 export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
-export OSAC_USERNAME=<keycloak-user>
-read -rs OSAC_PASSWORD && export OSAC_PASSWORD
+export OSAC_ADMIN_USERNAME=<keycloak-user>
+read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD
 ```
 
 Run the tenant create and delete flows together. The `vmaas-delete` project
@@ -168,8 +173,8 @@ then run the flow:
 
 ```bash
 export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
-export OSAC_USERNAME=<keycloak-user>
-read -rs OSAC_PASSWORD && export OSAC_PASSWORD
+export OSAC_ADMIN_USERNAME=<keycloak-user>
+read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD
 ```
 
 Run the disk image lifecycle flow:
@@ -189,7 +194,6 @@ Each run appends a unique suffix to `disk_image.name`, and the full name appears
 in the test title. To clean up an interrupted run, set
 `OSAC_DISK_IMAGE_TEST_RUN_ID` to that run's suffix when invoking the delete
 project.
-
 ### Instance type flow tests
 
 The instance type tests read their hard-coded test data from
@@ -256,7 +260,7 @@ pnpm --filter @osac/playwright exec playwright test \
 The catalog flow runs the `osac` CLI from Playwright, then opens the live UI,
 logs in, and verifies the created item on the Catalog page. Authenticate the
 CLI against the target environment before starting the test, for example with
-`osac login`. Set `OSAC_UI_BASE_URL`, `OSAC_USERNAME`, and `OSAC_PASSWORD` for
+`osac login`. Set `OSAC_UI_BASE_URL`, `OSAC_ADMIN_USERNAME`, and `OSAC_ADMIN_PASSWORD` for
 the browser verification.
 
 The catalog configuration is in `apps/e2e-tests/extravars.yaml`:
@@ -280,8 +284,8 @@ Optional variables:
 | `OSAC_CLI_PATH`   | Path to the `osac` executable; defaults to `osac` from `PATH`                           |
 | `OSAC_CLI_CONFIG` | CLI configuration directory; when unset, the CLI uses its normal configuration location |
 
-Run creation and deletion together. The delete project depends on the create
-project, and each CLI operation is followed by a JSON lookup and a browser
+Run creation and deletion together. The create project owns the delete project
+as teardown, and each CLI operation is followed by a JSON lookup and a browser
 check of the Catalog page:
 
 ```bash
@@ -289,7 +293,7 @@ export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
 export OSAC_CLI_CONFIG="$HOME/.config/osac"
 
 pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-catalog-delete
+  --project=vmaas-catalog
 ```
 
 Run the flows separately:
@@ -314,11 +318,11 @@ Optional:
 
 Testing against a local `pnpm dev` instance instead of a remote deployment:
 requires `pnpm dev` running in another terminal, and still needs
-`OSAC_USERNAME`/`OSAC_PASSWORD`.
+`OSAC_ADMIN_USERNAME`/`OSAC_ADMIN_PASSWORD`.
 
 ```bash
-export OSAC_UI_BASE_URL=http://localhost:5173 OSAC_USERNAME=...
-read -rs OSAC_PASSWORD && export OSAC_PASSWORD
+export OSAC_UI_BASE_URL=http://localhost:5173 OSAC_ADMIN_USERNAME=...
+read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD
 pnpm playwright
 ```
 
@@ -329,8 +333,8 @@ you hit a TLS error, explicitly opt in with `IGNORE_HTTPS_ERRORS=true` rather
 than trusting it by default:
 
 ```bash
-export OSAC_UI_BASE_URL=http://localhost:5173 OSAC_USERNAME=... IGNORE_HTTPS_ERRORS=true
-read -rs OSAC_PASSWORD && export OSAC_PASSWORD
+export OSAC_UI_BASE_URL=http://localhost:5173 OSAC_ADMIN_USERNAME=... IGNORE_HTTPS_ERRORS=true
+read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD
 pnpm playwright
 ```
 
@@ -342,8 +346,9 @@ flow (and Keycloak's own login page) for every test, this harness follows
 Playwright's standard pattern for testing authenticated apps:
 
 1. A `setup` project (`src/auth.setup.ts`) opens the app, which auto-redirects
-   to Keycloak when unauthenticated, fills in `OSAC_USERNAME`/`OSAC_PASSWORD`
-   on Keycloak's real login form, and saves the resulting browser session
+   to Keycloak when unauthenticated, fills in the admin credentials from
+   `OSAC_ADMIN_USERNAME`/`OSAC_ADMIN_PASSWORD` on Keycloak's real login form,
+   and saves the resulting browser session
    (cookies) to `.auth/user.json`.
 2. Every real test (the `smoke` and `chromium` projects) declares a dependency
    on `setup` and loads that saved session before the test body runs — so
@@ -411,8 +416,8 @@ It runs in the `chromium` project — already authenticated via `auth.setup.ts`,
 no need to handle login in the test itself. Run it with:
 
 ```bash
-export OSAC_UI_BASE_URL=... OSAC_USERNAME=...
-read -rs OSAC_PASSWORD && export OSAC_PASSWORD
+export OSAC_UI_BASE_URL=... OSAC_ADMIN_USERNAME=...
+read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD
 pnpm playwright
 ```
 

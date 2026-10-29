@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
@@ -20,6 +21,12 @@ import (
 // field, since Any is opaque, so gRPC reflection never surfaces it. Without those imports in
 // connectjson.go, lookups like this fail with "unable to resolve
 // type.googleapis.com/google.protobuf.StringValue: not found" (or .Value, .BoolValue, ...).
+func TestReflectionTimeoutCoversSlowLinks(t *testing.T) {
+	if reflectionTimeout < 2*time.Minute {
+		t.Fatalf("reflectionTimeout = %s, want at least 2m0s", reflectionTimeout)
+	}
+}
+
 func TestGlobalTypes_resolvesWellKnownWrapperTypes(t *testing.T) {
 	t.Parallel()
 

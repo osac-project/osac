@@ -94,7 +94,7 @@ func (x RoleState) Number() protoreflect.EnumNumber {
 // groups to control what actions the members of those groups can perform. Roles themselves do not carry any data
 // beyond their identity and metadata; the actual permissions are determined by the system based on the role name.
 //
-// Examples of predefined roles include `cloud-provider-admin`, `tenant-admin`, and `tenant-reader`.
+// Predefined roles include `cloud-provider-admin`, `cloud-provider-reader`, `tenant-idp-manager`, `tenant-admin`, and `tenant-reader`.
 type Role struct {
 	state               protoimpl.MessageState `protogen:"opaque.v1"`
 	xxx_hidden_Id       string                 `protobuf:"bytes,1,opt,name=id,proto3"`
@@ -291,7 +291,7 @@ type RoleSpec_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
 	// Human-friendly short description of the role, only a few words, suitable for displaying in one single line on
-	// a UI or CLI. For example: "Cloud Provider Administrator" or "Tenant Reader".
+	// a UI or CLI. For example: "Cloud Provider Administrator" or "Tenant Administrator".
 	Title string
 	// Human-friendly long description of the role, using Markdown format. This should explain what permissions the
 	// role grants and in what contexts it is typically used.

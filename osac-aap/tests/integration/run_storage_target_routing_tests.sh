@@ -65,6 +65,8 @@ tenant_fixture="fixtures/storage/tenant-storage-routing-test.yaml"
 clusterorder_fixture="fixtures/storage/clusterorder-storage-routing-test.yaml"
 create_playbook="${AAP_ROOT}/playbook_osac_create_tenant_cluster_storage.yml"
 delete_playbook="${AAP_ROOT}/playbook_osac_delete_tenant_cluster_storage.yml"
+compute_fixture="fixtures/storage/compute-instance-storage-routing-test.yaml"
+compute_playbook="${AAP_ROOT}/playbook_osac_create_compute_instance.yml"
 
 run_ansible_playbook targets/storage_target_routing/tasks/cleanup.yml "${routing_vars[@]}"
 
@@ -100,5 +102,39 @@ run_without_remote_kubeconfig "${delete_playbook}" \
   -e "@${clusterorder_fixture}" "${routing_vars[@]}"
 run_ansible_playbook targets/storage_target_routing/tasks/verify.yml \
   "${routing_vars[@]}" -e routing_test_management_count=1 -e routing_test_workload_count=0
+
+run_ansible_playbook targets/storage_target_routing/tasks/cleanup.yml "${routing_vars[@]}"
+
+echo "Checking compute JIT provisioning with no remote kubeconfig..."
+run_without_remote_kubeconfig "${compute_playbook}" \
+  -e "@${compute_fixture}" "${routing_vars[@]}"
+run_ansible_playbook targets/storage_target_routing/tasks/verify.yml \
+  "${routing_vars[@]}" -e routing_test_management_count=1 -e routing_test_workload_count=0
+run_ansible_playbook targets/storage_target_routing/tasks/cleanup.yml "${routing_vars[@]}"
+
+echo "Checking compute JIT provisioning with an empty remote kubeconfig..."
+OSAC_REMOTE_CLUSTER_KUBECONFIG="" run_ansible_playbook "${compute_playbook}" \
+  -e "@${compute_fixture}" "${routing_vars[@]}"
+run_ansible_playbook targets/storage_target_routing/tasks/verify.yml \
+  "${routing_vars[@]}" -e routing_test_management_count=1 -e routing_test_workload_count=0
+run_ansible_playbook targets/storage_target_routing/tasks/cleanup.yml "${routing_vars[@]}"
+
+echo "Checking split-cluster compute JIT provisioning..."
+OSAC_REMOTE_CLUSTER_KUBECONFIG="${TARGET_KUBECONFIG}" run_ansible_playbook "${compute_playbook}" \
+  -e "@${compute_fixture}" "${routing_vars[@]}"
+run_ansible_playbook targets/storage_target_routing/tasks/verify.yml \
+  "${routing_vars[@]}" -e routing_test_management_count=0 -e routing_test_workload_count=1
+run_ansible_playbook targets/storage_target_routing/tasks/cleanup.yml "${routing_vars[@]}"
+
+echo "Checking compute JIT ignores a misplaced management StorageClass..."
+run_ansible_playbook targets/storage_target_routing/tasks/seed_management.yml "${routing_vars[@]}"
+for attempt in 1 2; do
+  echo "  Provisioning attempt ${attempt}"
+  OSAC_REMOTE_CLUSTER_KUBECONFIG="${TARGET_KUBECONFIG}" run_ansible_playbook "${compute_playbook}" \
+    -e "@${compute_fixture}" "${routing_vars[@]}"
+  run_ansible_playbook targets/storage_target_routing/tasks/verify.yml \
+    "${routing_vars[@]}" -e routing_test_management_count=1 -e routing_test_workload_count=1
+done
+test -s "${TARGET_KUBECONFIG}"
 
 echo "Storage target routing integration checks passed."

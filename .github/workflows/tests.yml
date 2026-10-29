@@ -368,6 +368,11 @@ jobs:
           helm lint charts/osac-infra/ --values values/dev/infra.yaml
           helm lint charts/osac/ --values values/dev/kind-instance.yaml
 
+      - name: Validate Helm networking values
+        if: inputs.kind == 'it-osac-installer'
+        working-directory: osac-installer
+        run: make helm-networking-test
+
       - name: Template charts (dry-run validation)
         if: inputs.kind == 'it-osac-installer'
         working-directory: osac-installer

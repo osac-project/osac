@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import base64
 import ipaddress
+import logging
 import os
 import re
 import subprocess
 import time
 from collections.abc import Callable, Iterator
-from typing import Any, TypeVar
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -16,26 +17,16 @@ from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until, run_unchecked
 
+logger = logging.getLogger(__name__)
+
 _POOL_READY_STATE = "EXTERNAL_IP_POOL_STATE_READY"
 _SUBNET_READY_STATE = "SUBNET_STATE_READY"
 _SECURITY_GROUP_READY_STATE = "SECURITY_GROUP_STATE_READY"
 _BMI_RUNNING_RETRIES = 180
 _BMI_RUNNING_DELAY = 10
-_WORKLOAD_HEALTH_RETRIES = 120
+# Initial check plus ten retries: five minutes of scheduled waits after hub Ready.
+_WORKLOAD_HEALTH_RETRIES = 11
 _WORKLOAD_HEALTH_DELAY = 30
-_RETRYABLE_KUBECTL_ERRORS = (
-    "connection refused",
-    "connection reset",
-    "connection timed out",
-    "context deadline exceeded",
-    "i/o timeout",
-    "service unavailable",
-    "serviceunavailable",
-    "temporarily unavailable",
-    "tls handshake timeout",
-    "unexpected eof",
-)
-T = TypeVar("T")
 
 
 def unique_name(prefix: str) -> str:
@@ -141,16 +132,6 @@ def assert_grpc_method_unavailable(
     combined: str = (exc.stderr or "") + (exc.stdout or "")
     descriptor_error = f'service "{service}" does not include a method named "{method}"'
     assert descriptor_error in combined, f"Expected {service}/{method} to be unavailable, got: {combined.strip()}"
-
-
-def _call_kubectl_with_retry_policy(fn: Callable[[], T]) -> T:
-    try:
-        return fn()
-    except subprocess.CalledProcessError as exc:
-        error_output = f"{exc.stdout or ''}\n{exc.stderr or ''}".strip()
-        if not any(error in error_output.lower() for error in _RETRYABLE_KUBECTL_ERRORS):
-            raise RuntimeError(f"workload cluster kubectl access failed: {error_output}") from exc
-        raise
 
 
 def assert_grpc_field_violation(
@@ -515,6 +496,7 @@ def wait_for_cluster_order_cr(*, k8s: K8sClient, uuid: str) -> str:
         retries=30,
         delay=2,
         description=f"ClusterOrder CR for {uuid}",
+        retry_on_error=True,
     )
 
 
@@ -525,6 +507,7 @@ def wait_for_cluster_progressing(*, k8s: K8sClient, name: str) -> None:
         retries=60,
         delay=2,
         description=f"{name} ClusterOrder Progressing phase",
+        retry_on_error=True,
     )
 
 
@@ -546,6 +529,7 @@ def wait_for_cluster_order_event_reasons(
         retries=480,
         delay=15,
         description=f"{name} ClusterOrder provisioning events",
+        retry_on_error=True,
     )
 
 
@@ -593,7 +577,14 @@ def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
             raise AssertionError(f"{name} entered Failed phase before becoming Ready")
         return phase
 
-    poll_until(fn=_check, until=lambda v: v == "Ready", retries=480, delay=15, description=f"{name} ClusterOrder Ready")
+    poll_until(
+        fn=_check,
+        until=lambda v: v == "Ready",
+        retries=480,
+        delay=15,
+        description=f"{name} ClusterOrder Ready",
+        retry_on_error=True,
+    )
 
 
 def wait_for_hosted_cluster_kubeconfig(
@@ -616,7 +607,7 @@ def wait_for_hosted_cluster_kubeconfig(
         return base64.b64decode(encoded_kubeconfig, validate=True)
 
     return poll_until(
-        fn=lambda: _call_kubectl_with_retry_policy(_get_kubeconfig),
+        fn=_get_kubeconfig,
         until=lambda value: bool(value),
         retries=60,
         delay=5,
@@ -672,14 +663,13 @@ def workload_cluster_health_ready(
 
 
 def wait_for_workload_cluster_health(*, k8s: K8sClient, expected_workers: int) -> None:
+    attempts = 0
+
     def _check() -> bool:
-        def _get_health_resources() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-            nodes = k8s.list_json(resource="nodes").get("items", [])
-            operators = k8s.list_json(resource="clusteroperators.config.openshift.io").get("items", [])
-
-            return nodes, operators
-
-        nodes, operators = _call_kubectl_with_retry_policy(_get_health_resources)
+        nonlocal attempts
+        attempts += 1
+        nodes = k8s.list_json(resource="nodes").get("items", [])
+        operators = k8s.list_json(resource="clusteroperators.config.openshift.io").get("items", [])
         return workload_cluster_health_ready(nodes=nodes, operators=operators, expected_workers=expected_workers)
 
     poll_until(
@@ -690,6 +680,8 @@ def wait_for_workload_cluster_health(*, k8s: K8sClient, expected_workers: int) -
         description="workload cluster worker and ClusterOperator health",
         retry_on_error=True,
     )
+    if attempts > 1:
+        logger.info("Guest health became ready after %d checks", attempts)
 
 
 def wait_for_cluster_guest_readiness(
@@ -702,6 +694,8 @@ def wait_for_cluster_guest_readiness(
     expected_ready_nodes: int,
     node_pool_description: str,
 ) -> dict[str, Any]:
+    wait_for_cluster_ready(k8s=k8s, name=name)
+    # Hub Ready can precede usable guest access; retain bounded guest retries.
     wait_for_workload_cluster_health(k8s=workload_k8s, expected_workers=expected_workers)
     node_pool = poll_until(
         fn=get_node_pool,
@@ -709,8 +703,8 @@ def wait_for_cluster_guest_readiness(
         retries=60,
         delay=10,
         description=node_pool_description,
+        retry_on_error=True,
     )
-    wait_for_cluster_ready(k8s=k8s, name=name)
     return node_pool
 
 
@@ -730,6 +724,7 @@ def wait_for_cluster_deletion_without_cleanup(
         retries=121,
         delay=10,
         description="ClusterOrder natural deletion",
+        retry_on_error=True,
     )
 
 
@@ -757,7 +752,12 @@ def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:
         return k8s.get_cluster_order_phase(name=name, checked=False) is None
 
     poll_until(
-        fn=_check_deleted, until=lambda v: v is True, retries=120, delay=10, description=f"{name} ClusterOrder deletion"
+        fn=_check_deleted,
+        until=lambda v: v is True,
+        retries=120,
+        delay=10,
+        description=f"{name} ClusterOrder deletion",
+        retry_on_error=True,
     )
 
 
@@ -856,6 +856,7 @@ def wait_for_cluster_deleting(*, k8s: K8sClient, name: str) -> None:
         retries=30,
         delay=5,
         description=f"{name} ClusterOrder Deleting phase",
+        retry_on_error=True,
     )
 
 
@@ -938,12 +939,13 @@ def wait_for_tenant_cr(*, k8s: K8sClient, name: str) -> None:
         retries=30,
         delay=2,
         description=f"Tenant CR {name}",
+        retry_on_error=True,
     )
 
 
 def wait_for_tenant_condition(*, k8s: K8sClient, name: str, condition_type: str, expected_status: str = "True") -> None:
     def _check() -> str:
-        if not k8s.is_present(resource="tenant", name=name):
+        if k8s.is_absent(resource="tenant", name=name):
             raise AssertionError(f"Tenant {name} disappeared before {condition_type}={expected_status}")
         phase: str = k8s.get_tenant_phase(name=name, checked=False)
         if phase == "Failed":
@@ -958,16 +960,18 @@ def wait_for_tenant_condition(*, k8s: K8sClient, name: str, condition_type: str,
         retries=120,
         delay=5,
         description=f"Tenant {name} {condition_type}={expected_status}",
+        retry_on_error=True,
     )
 
 
 def wait_for_tenant_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="tenant", name=name),
+        fn=lambda: k8s.is_absent(resource="tenant", name=name),
         until=lambda v: v is True,
         retries=120,
         delay=5,
         description=f"Tenant {name} deletion",
+        retry_on_error=True,
     )
 
 
@@ -978,7 +982,7 @@ def wait_for_cluster_order_condition(
     *, k8s: K8sClient, name: str, condition_type: str, expected_status: str = "True"
 ) -> None:
     def _check() -> str:
-        if not k8s.is_present(resource="clusterorder", name=name):
+        if k8s.is_absent(resource="clusterorder", name=name):
             raise AssertionError(f"ClusterOrder {name} disappeared before {condition_type}={expected_status}")
         phase: str = k8s.get_cluster_order_phase(name=name, checked=False)
         cond_status = k8s.get_cluster_order_condition_status(name=name, condition_type=condition_type, checked=False)
@@ -992,6 +996,7 @@ def wait_for_cluster_order_condition(
         retries=120,
         delay=10,
         description=f"ClusterOrder {name} {condition_type}={expected_status}",
+        retry_on_error=True,
     )
 
 
@@ -1009,19 +1014,20 @@ def wait_for_tenant_cluster_storage_entry(*, k8s: K8sClient, tenant_name: str, c
         retries=60,
         delay=10,
         description=f"Tenant {tenant_name} clusterStorage entry for {cluster_name}",
+        retry_on_error=True,
     )
 
 
 def wait_for_tenant_cluster_storage_entry_removed(*, k8s: K8sClient, tenant_name: str, cluster_name: str) -> None:
     poll_until(
         fn=lambda: all(
-            entry.get("clusterName") != cluster_name
-            for entry in k8s.get_tenant_cluster_storage(name=tenant_name, checked=False)
+            entry.get("clusterName") != cluster_name for entry in k8s.get_tenant_cluster_storage(name=tenant_name)
         ),
         until=lambda v: v is True,
         retries=60,
         delay=10,
         description=f"Tenant {tenant_name} clusterStorage entry for {cluster_name} removed",
+        retry_on_error=True,
     )
 
 

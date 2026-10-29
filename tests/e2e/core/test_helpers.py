@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from tests.e2e.core import helpers
+from tests.e2e.core import helpers, runner
 from tests.e2e.core import k8s_client as k8s_client_module
 from tests.e2e.core.k8s_client import K8sClient
 
@@ -68,37 +68,21 @@ def test_wait_for_hosted_cluster_kubeconfig_reads_hcp_secret(monkeypatch: pytest
     }
 
 
-def test_wait_for_hosted_cluster_kubeconfig_fails_fast_on_permanent_kubectl_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_wait_for_hosted_cluster_kubeconfig_recovers_after_a_command_error(monkeypatch: pytest.MonkeyPatch) -> None:
     k8s = Mock()
-    k8s.get_json.side_effect = subprocess.CalledProcessError(
-        1, ["kubectl", "get", "hostedcontrolplane"], stderr="Error from server (Forbidden)"
-    )
+    k8s.get_json.side_effect = [
+        subprocess.CalledProcessError(1, ["kubectl"], stderr="Forbidden"),
+        {"status": {"kubeConfig": {"name": "admin-kubeconfig", "key": "kubeconfig"}}},
+        {"data": {"kubeconfig": base64.b64encode(b"apiVersion: v1\n").decode()}},
+    ]
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
 
-    def run_once(*, fn: Callable[[], bytes], **_kwargs: object) -> bytes:
-        return fn()
-
-    monkeypatch.setattr(helpers, "poll_until", run_once)
-
-    with pytest.raises(RuntimeError, match="workload cluster kubectl access failed"):
+    assert (
         helpers.wait_for_hosted_cluster_kubeconfig(
             k8s=k8s, hosted_cluster_namespace="osac-order", hosted_cluster_name="order"
         )
-
-
-def test_not_found_resource_error_fails_fast() -> None:
-    error = subprocess.CalledProcessError(
-        1,
-        ["kubectl", "get", "hostedcontrolplane"],
-        stderr='Error from server (NotFound): hostedcontrolplanes "order" not found',
+        == b"apiVersion: v1\n"
     )
-
-    def raise_error() -> None:
-        raise error
-
-    with pytest.raises(RuntimeError, match="workload cluster kubectl access failed"):
-        helpers._call_kubectl_with_retry_policy(raise_error)
 
 
 def test_workload_cluster_health_waits_for_worker_and_all_operators() -> None:
@@ -272,9 +256,12 @@ def test_workload_cluster_health_waits_for_degraded_operator_to_clear() -> None:
     assert helpers.workload_cluster_health_ready(nodes=nodes, operators=operators, expected_workers=1) is False
 
 
-def test_wait_for_workload_cluster_health_reads_guest_resources(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_guest_health_recovers_from_access_and_readiness_delays(monkeypatch: pytest.MonkeyPatch) -> None:
     k8s = Mock()
     k8s.list_json.side_effect = [
+        subprocess.CalledProcessError(1, ["kubectl"], stderr="Forbidden"),
+        {"items": []},
+        {"items": []},
         {
             "items": [
                 {
@@ -299,20 +286,18 @@ def test_wait_for_workload_cluster_health_reads_guest_resources(monkeypatch: pyt
         },
     ]
 
-    def run_once(*, fn: Callable[[], bool], until: Callable[[bool], bool], **_kwargs: object) -> bool:
-        value = fn()
-        assert until(value)
-        return value
-
-    monkeypatch.setattr(helpers, "poll_until", run_once)
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
 
     helpers.wait_for_workload_cluster_health(k8s=k8s, expected_workers=1)
 
-    assert k8s.list_json.call_args_list[0].kwargs == {"resource": "nodes"}
-    assert k8s.list_json.call_args_list[1].kwargs == {"resource": "clusteroperators.config.openshift.io"}
+
+def test_guest_health_has_at_most_five_minutes_of_scheduled_waits() -> None:
+    scheduled_wait = (helpers._WORKLOAD_HEALTH_RETRIES - 1) * helpers._WORKLOAD_HEALTH_DELAY
+
+    assert 0 < scheduled_wait <= 5 * 60
 
 
-def test_wait_for_cluster_guest_readiness_orders_guest_health_node_pool_and_final_ready(
+def test_wait_for_cluster_guest_readiness_waits_for_hub_ready_before_guest_checks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
@@ -344,40 +329,7 @@ def test_wait_for_cluster_guest_readiness_orders_guest_health_node_pool_and_fina
         node_pool_description="order-test NodePool",
     )
 
-    assert events == ["guest", "nodepool", "ready"]
-
-
-@pytest.mark.parametrize(
-    "error_message",
-    [
-        "Error from server (Forbidden): nodes is forbidden",
-        "the server doesn't have a resource type 'clusteroperators'",
-        "certificate signed by unknown authority",
-    ],
-)
-def test_wait_for_workload_cluster_health_fails_fast_on_permanent_kubectl_error(
-    monkeypatch: pytest.MonkeyPatch, error_message: str
-) -> None:
-    k8s = Mock()
-    k8s.list_json.side_effect = subprocess.CalledProcessError(1, ["kubectl", "get", "nodes"], stderr=error_message)
-
-    def run_once(*, fn: Callable[[], bool], **_kwargs: object) -> bool:
-        return fn()
-
-    monkeypatch.setattr(helpers, "poll_until", run_once)
-
-    with pytest.raises(RuntimeError, match="workload cluster kubectl access failed"):
-        helpers.wait_for_workload_cluster_health(k8s=k8s, expected_workers=1)
-
-
-def test_service_unavailable_kubectl_error_remains_retryable() -> None:
-    error = subprocess.CalledProcessError(1, ["kubectl", "get", "nodes"], stderr="ServiceUnavailable")
-
-    def raise_error() -> None:
-        raise error
-
-    with pytest.raises(subprocess.CalledProcessError, match="kubectl"):
-        helpers._call_kubectl_with_retry_policy(raise_error)
+    assert events == ["ready", "guest", "nodepool"]
 
 
 def test_guest_k8s_client_does_not_impersonate_system_admin() -> None:

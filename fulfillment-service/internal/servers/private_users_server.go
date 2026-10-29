@@ -130,6 +130,9 @@ func (s *PrivateUsersServer) Get(ctx context.Context,
 
 func (s *PrivateUsersServer) Create(ctx context.Context,
 	request *privatev1.UsersCreateRequest) (response *privatev1.UsersCreateResponse, err error) {
+	if err = validateDefaultProjectForCreate(request.GetObject().GetMetadata()); err != nil {
+		return
+	}
 	err = s.generic.Create(ctx, request, &response)
 	return
 }

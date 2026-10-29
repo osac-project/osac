@@ -4,18 +4,24 @@ import os from 'node:os';
 import path from 'node:path';
 import { stringify } from 'yaml';
 
-import { catalogTestData } from './test_data';
+import { catalogOwnershipFilePath, catalogTestData } from './test_data';
 import { getCatalogItems } from '../../../../libs/osac-cli/src/catalog';
 import { expectOsacCommandSucceeded, runOsacCommand } from '../../../../libs/osac-cli/src/cli';
 import { expectCatalogItemListed } from '../../../../libs/test-utils/src/catalog.page';
-import { openAndLoginWithEnvironment } from '../../../../libs/test-utils/src/general/open_and_login';
+import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
+import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import { openCatalogPage } from '../../../../libs/test-utils/src/main.page';
 
 test('creates a catalog item with the osac CLI and lists it in Catalog', async ({ page }) => {
   test.setTimeout(180_000);
+  logProgress('catalog-create', `Starting flow for "${catalogTestData.name}".`);
 
   // Verify the name is available before attempting creation.
-  const existingItems = await getCatalogItems(catalogTestData.name);
+  const existingItems = await testStep(
+    'catalog-create',
+    `Verify catalog item "${catalogTestData.name}" does not exist before creation`,
+    () => getCatalogItems(catalogTestData.name),
+  );
   if (existingItems.length !== 0) {
     throw new Error(
       `Catalog item '${catalogTestData.name}' already exists. ` +
@@ -60,48 +66,73 @@ test('creates a catalog item with the osac CLI and lists it in Catalog', async (
     },
   };
 
-  const manifestDirectory = await mkdtemp(path.join(os.tmpdir(), 'osac-catalog-'));
-  const manifestPath = path.join(manifestDirectory, 'catalog-item.yaml');
-  await writeFile(manifestPath, stringify(manifest), { mode: 0o600 });
+  await testStep('catalog-create', 'Create catalog item with the osac CLI', async () => {
+    const manifestDirectory = await mkdtemp(path.join(os.tmpdir(), 'osac-catalog-'));
+    const manifestPath = path.join(manifestDirectory, 'catalog-item.yaml');
+    await writeFile(manifestPath, stringify(manifest), { mode: 0o600 });
 
-  try {
-    const createResult = await runOsacCommand(['create', '-f', manifestPath]);
-    expectOsacCommandSucceeded(createResult, `Create catalog item '${catalogTestData.name}'`);
-  } finally {
-    await rm(manifestDirectory, { force: true, recursive: true });
-  }
+    try {
+      const createResult = await runOsacCommand(['create', '-f', manifestPath]);
+      expectOsacCommandSucceeded(createResult, `Create catalog item '${catalogTestData.name}'`);
+      await writeFile(catalogOwnershipFilePath(catalogTestData.name), '', {
+        encoding: 'utf8',
+        flag: 'wx',
+        mode: 0o600,
+      });
+    } finally {
+      await rm(manifestDirectory, { force: true, recursive: true });
+    }
+  });
 
   // Verify the created object and its user-visible metadata through the CLI.
-  const createdItems = await getCatalogItems(catalogTestData.name);
-  expect(createdItems).toHaveLength(1);
-  expect(createdItems[0]?.metadata?.name).toBe(catalogTestData.name);
-  expect(createdItems[0]?.title).toBe(catalogTestData.title);
-  expect(createdItems[0]?.description).toBe(catalogTestData.description);
-  expect(createdItems[0]?.template?.id).toBeTruthy();
-  expect(createdItems[0]?.fields?.instance_type?.editable?.default_value?.name).toBe(
-    catalogTestData.fields.instanceType.name,
-  );
-  expect(createdItems[0]?.fields?.boot_disk?.size_gib?.editable?.default_value).toBe(
-    catalogTestData.fields.bootDisk.sizeGib,
-  );
-  expect(createdItems[0]?.fields?.disk_image?.locked?.name).toBe(
-    catalogTestData.fields.diskImage.name,
+  await testStep(
+    'catalog-create',
+    `Verify catalog item "${catalogTestData.name}" exists after creation`,
+    async () => {
+      const createdItems = await getCatalogItems(catalogTestData.name);
+      expect(createdItems).toHaveLength(1);
+      expect(createdItems[0]?.metadata?.name).toBe(catalogTestData.name);
+      expect(createdItems[0]?.title).toBe(catalogTestData.title);
+      expect(createdItems[0]?.description).toBe(catalogTestData.description);
+      expect(createdItems[0]?.template?.id).toBeTruthy();
+      expect(createdItems[0]?.fields?.instance_type?.editable?.default_value?.name).toBe(
+        catalogTestData.fields.instanceType.name,
+      );
+      expect(createdItems[0]?.fields?.boot_disk?.size_gib?.editable?.default_value).toBe(
+        catalogTestData.fields.bootDisk.sizeGib,
+      );
+      expect(createdItems[0]?.fields?.disk_image?.locked?.name).toBe(
+        catalogTestData.fields.diskImage.name,
+      );
+    },
   );
 
   // Open the browser, authenticate, and verify the created catalog item in the UI.
-  await openAndLoginWithEnvironment(page, '/');
-  await openCatalogPage(page);
-  await expectCatalogItemListed(
-    page,
-    catalogTestData.name,
-    catalogTestData.type,
-    catalogTestData.status,
-    catalogTestData.usage,
-    {
-      vcpus: catalogTestData.fields.instanceType.vcpus,
-      memoryGib: catalogTestData.fields.instanceType.memoryGib,
-      storageGib: catalogTestData.fields.bootDisk.sizeGib,
-      diskImage: catalogTestData.fields.diskImage.name,
+  await testStep(
+    'catalog-create',
+    `Verify catalog item "${catalogTestData.name}" is visible in the UI`,
+    async () => {
+      await openAndLogin(
+        page,
+        '/',
+        process.env.OSAC_ADMIN_USERNAME ?? '',
+        process.env.OSAC_ADMIN_PASSWORD ?? '',
+        'admin',
+      );
+      await openCatalogPage(page);
+      await expectCatalogItemListed(
+        page,
+        catalogTestData.name,
+        catalogTestData.type,
+        catalogTestData.status,
+        catalogTestData.usage,
+        {
+          vcpus: catalogTestData.fields.instanceType.vcpus,
+          memoryGib: catalogTestData.fields.instanceType.memoryGib,
+          storageGib: catalogTestData.fields.bootDisk.sizeGib,
+          diskImage: catalogTestData.fields.diskImage.name,
+        },
+      );
     },
   );
 });

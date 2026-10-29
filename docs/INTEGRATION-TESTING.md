@@ -664,7 +664,7 @@ applicable integration tests separately to validate workflow behavior.
 - **Execution-environment definition or dependency inputs:** Image success does not prove the workflow boundary.
 - **AAP, OpenStack, KubeVirt/RHACM, or provider provisioning:** Kind-only tests with mocks cannot claim provider coverage.
 - **Storage-provider behavior:** The mock VMS server validates role logic, not the provider API.
-- **Split-cluster Tenant StorageClass routing:** The storage target-routing integration test exercises the Tenant create/delete playbooks against separate management and workload Kind APIs. It does not verify Tenant status resolution or a deployed AAP/provider lifecycle; that cross-component journey remains QE coverage tracked by [OSAC-4850](https://redhat.atlassian.net/browse/OSAC-4850).
+- **Split-cluster Tenant StorageClass routing:** The storage target-routing integration test exercises the Tenant create/delete playbooks and compute-instance JIT provisioning against separate management and workload Kind APIs. Compute coverage includes unset/empty remote configuration, workload placement, a misplaced management StorageClass, repeated provisioning, and preservation of the supplied kubeconfig. It does not verify Tenant status resolution, VM creation, or a deployed AAP/provider lifecycle; that cross-component journey remains QE coverage tracked by [OSAC-4850](https://redhat.atlassian.net/browse/OSAC-4850).
 
 ### Coverage gaps
 

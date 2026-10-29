@@ -71,31 +71,14 @@ def test_wait_for_cluster_deleting_accepts_only_not_found_as_already_gone(monkey
     assert until("") is False
 
 
-@pytest.mark.parametrize(
-    "kubectl_output",
-    [
-        "Error from server (Forbidden): clusterorders.osac.openshift.io is forbidden",
-        'Error from server (NotFound): namespaces "tenant-a" not found',
-        "Unable to connect to the server: connection refused",
-    ],
-)
-def test_wait_for_cluster_deleting_propagates_kubectl_errors(
-    monkeypatch: pytest.MonkeyPatch, kubectl_output: str
-) -> None:
+def test_wait_for_cluster_deleting_eventually_fails_on_persistent_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     k8s = Mock(spec=K8sClient)
-    k8s.get_cluster_order_phase.side_effect = subprocess.CalledProcessError(
-        1, ["kubectl"], stderr=kubectl_output
-    )
+    k8s.get_cluster_order_phase.side_effect = subprocess.CalledProcessError(1, ["kubectl"])
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+    monkeypatch.setattr(helpers, "poll_until", lambda **kwargs: runner.poll_until(**(kwargs | {"retries": 2})))
 
-    def invoke_once(**kwargs: Any) -> None:
-        kwargs["fn"]()
-
-    monkeypatch.setattr(helpers, "poll_until", invoke_once)
-
-    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+    with pytest.raises(TimeoutError):
         helpers.wait_for_cluster_deleting(k8s=k8s, name="cluster-a")
-
-    assert exc_info.value.stderr == kubectl_output
 
 
 @pytest.mark.parametrize("phase, expected", [(None, True), ("", False), ("Deleting", False)])
@@ -122,10 +105,10 @@ def test_wait_for_cluster_deletion_uses_not_found_as_the_deletion_signal(
     assert captured["fn"]() is expected
 
 
-def test_wait_for_cluster_deletion_propagates_kubectl_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wait_for_cluster_deletion_recovers_after_a_kubectl_error(monkeypatch: pytest.MonkeyPatch) -> None:
     k8s = Mock(spec=K8sClient)
     error = subprocess.CalledProcessError(1, ["kubectl"], stderr="Unable to connect to the server")
-    k8s.get_cluster_order_phase.side_effect = error
+    k8s.get_cluster_order_phase.side_effect = [error, None]
 
     for cleanup in (
         "_force_cleanup_agentcluster_finalizers",
@@ -134,15 +117,9 @@ def test_wait_for_cluster_deletion_propagates_kubectl_errors(monkeypatch: pytest
     ):
         monkeypatch.setattr(helpers, cleanup, lambda **kwargs: None)
 
-    def invoke_once(**kwargs: Any) -> None:
-        kwargs["fn"]()
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
 
-    monkeypatch.setattr(helpers, "poll_until", invoke_once)
-
-    with pytest.raises(subprocess.CalledProcessError) as exc_info:
-        helpers.wait_for_cluster_deletion(k8s=k8s, name="cluster-a")
-
-    assert exc_info.value.stderr == "Unable to connect to the server"
+    helpers.wait_for_cluster_deletion(k8s=k8s, name="cluster-a")
 
 
 @pytest.fixture
@@ -196,7 +173,7 @@ def test_natural_deletion_uses_separate_parent_polling_budget(monkeypatch: pytes
     assert captured["retries"] == 121
     assert captured["delay"] == 10
     assert captured["description"] == "ClusterOrder natural deletion"
-    assert captured.get("retry_on_error", False) is False
+    assert captured["retry_on_error"] is True
 
 
 @pytest.mark.parametrize(
@@ -256,21 +233,21 @@ _INVALID_ABSENCE_ERRORS = [
 ]
 
 
-@pytest.mark.parametrize("kubectl_output", _INVALID_ABSENCE_ERRORS)
-def test_natural_deletion_propagates_lookup_errors_without_retrying(
-    monkeypatch: pytest.MonkeyPatch, kubectl_output: str, forbid_cleanup: list[Mock]
+def test_natural_deletion_retries_lookup_errors_until_exact_not_found(
+    monkeypatch: pytest.MonkeyPatch, forbid_cleanup: list[Mock]
 ) -> None:
-    get = Mock(return_value=(kubectl_output, 1))
-    sleep = Mock()
+    get = Mock(
+        side_effect=[
+            ("Unable to connect to the server", 1),
+            ("", 0),
+            ('Error from server (NotFound): clusterorders.osac.openshift.io "cluster-a" not found', 1),
+        ]
+    )
     monkeypatch.setattr(k8s_client_module, "run_unchecked", get)
-    monkeypatch.setattr(runner.time, "sleep", sleep)
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
 
-    with pytest.raises(subprocess.CalledProcessError) as exc_info:
-        helpers.wait_for_cluster_deletion_without_cleanup(k8s=K8sClient(namespace="tenant-a"), name="cluster-a")
+    helpers.wait_for_cluster_deletion_without_cleanup(k8s=K8sClient(namespace="tenant-a"), name="cluster-a")
 
-    assert exc_info.value.stderr == kubectl_output
-    assert get.call_count == 1
-    sleep.assert_not_called()
     for cleanup in forbid_cleanup:
         cleanup.assert_not_called()
 

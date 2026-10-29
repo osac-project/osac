@@ -158,13 +158,42 @@ The `Metadata` message is shared by all object types and contains the following 
 | `creator`              | `string`                     | Identity that created the object.                |
 | `name`                 | `string`                     | Required, immutable identifier (RFC 1123 DNS label format). Unique within its scope and immutable after creation. |
 | `tenant`               | `string`                     | Tenant that owns the object.                     |
-| `labels`               | `map<string, string>`        | Indexed key-value pairs for organizing objects.  |
-| `annotations`          | `map<string, string>`        | Arbitrary user-controlled metadata.              |
+| `labels`               | `map<string, string>`        | Indexed key-value pairs for organizing objects. Public API responses omit administrator-only reserved keys; see [Administrator-only metadata](#administrator-only-metadata). |
+| `annotations`          | `map<string, string>`        | Arbitrary user-controlled metadata, plus administrator-only reserved keys on the private API. Public API responses omit reserved keys; see [Administrator-only metadata](#administrator-only-metadata). |
 | `version`              | `int32`                      | Auto-incremented on every change.                |
 | `display_name`         | `string`                     | Optional friendly label (max 63, not unique, not DNS-constrained). |
 | `description`          | `string`                     | Optional description (max 256, not unique).      |
 
 The private API adds a `finalizers` field (`repeated string`) that is not exposed in the public API.
+
+### Administrator-only metadata
+
+Labels and annotations whose key domain is exactly `admin.osac.openshift.io` or a dot-delimited
+subdomain of it are reserved for system use. Matching is case-sensitive and applies to the domain
+before the slash. For example, `admin.osac.openshift.io/managed` and
+`controller.admin.osac.openshift.io/source` are reserved. Similar-looking keys such as
+`fakeadmin.osac.openshift.io/managed`, `admin.osac.openshift.io.example/managed`, and the
+slashless key `admin.osac.openshift.io` do not match this reserved namespace. The operational keys
+`osac.openshift.io/tenant` and `osac.openshift.io/owner-reference` are also outside this reserved
+namespace; their existing ownership and validation rules still apply.
+
+The private API returns and accepts reserved metadata under the caller's existing authorization.
+The public API omits reserved entries from object metadata and event payloads for every caller,
+regardless of tenant role. A public Create or Update request that supplies any reserved label or
+annotation is rejected atomically with `InvalidArgument` and the message
+`Label or annotation is reserved for use by the system.` The error does not include the submitted
+key or value. See [Filter expressions — reserved metadata](FILTER.md#reserved-metadata) for the
+corresponding List and Watch filter rules, and the
+[metadata administrator guide](../../docs/guides/admin/metadata.md) for permissions and CLI examples.
+
+On Update, an explicitly selected `metadata.labels` or `metadata.annotations` field is a whole-map
+replacement. On the private API, keys omitted from that selected map are removed; an empty map
+or an omitted selected map clears it, and an empty string is still a value. On the public API, the
+replacement applies to ordinary entries only: stored reserved entries are retained even when
+omitted or when the selected map is empty or omitted. An unselected map is unchanged. Behavior for
+updates without a mask remains resource-specific; public updates preserve stored reserved entries
+on those paths as well. Use an explicit map path when the resource supports it and the request must
+clearly replace or clear a map.
 
 ### Resource names
 
@@ -219,6 +248,7 @@ controller status and feedback.
 | Name missing or empty on create | `InvalidArgument` | Validation error on `metadata.name` (protovalidate) |
 | Name fails RFC 1123 format | `InvalidArgument` | Validation error on `metadata.name` (protovalidate) |
 | Name already taken in scope | `AlreadyExists` | `virtual network 'prod-net' already exists` |
+| User or identity provider created with a non-empty `metadata.project` | `InvalidArgument` | `field 'metadata.project' must be empty` |
 | Update attempts to change name on an update-capable service | `InvalidArgument` | `field 'metadata.name' is immutable` |
 | Update attempt on a public networking service without update support | `Unimplemented` | The public service has no `Update` method |
 | Singleton or single-default invariant (for example a second non-deleted `NetworkClass`) | `FailedPrecondition` | `only one NetworkClass per deployment is allowed (existing NetworkClass id '...')` |
@@ -575,7 +605,14 @@ message ThingsUpdateResponse {
   populates this from the fields present in the JSON request body.
 - `lock` enables optimistic locking. When set to `true`, the server rejects the update if the
   current `metadata.version` of the stored object does not match the version in the submitted
-  object.
+  object. A stale locked update returns `Aborted`; read the object again, reapply the intended
+  change, and retry. Locking is optional and does not change when `false` or omitted.
+
+For the `metadata.labels` and `metadata.annotations` map rules, including reserved-entry handling,
+see [Administrator-only metadata](#administrator-only-metadata). The REST gateway normally builds
+the update mask from fields present in the JSON body. Unmasked-update behavior otherwise remains
+resource-specific; an explicit metadata map path makes the intended replacement or clear explicit
+where that resource supports the path.
 
 ### Delete
 

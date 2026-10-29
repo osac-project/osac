@@ -237,6 +237,214 @@ var _ = Describe("Private external IP attachments server", func() {
 	})
 
 	Describe("Behaviour", func() {
+		It("resolves attachment uniqueness canonically and preserves the exact child exclusion", func() {
+			tenantsDAO, err := dao.NewGenericDAO[*privatev1.Tenant]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = tenantsDAO.Create().SetObject(privatev1.Tenant_builder{Id: "attachment-tenant", Metadata: privatev1.Metadata_builder{Name: "attachment-tenant", Tenant: "attachment-tenant"}.Build()}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			makeEIP := func(tenant string) *privatev1.ExternalIP {
+				response, createErr := externalIPDao.Create().SetObject(privatev1.ExternalIP_builder{
+					Metadata: privatev1.Metadata_builder{Name: "shared-display-name", Tenant: tenant, Creator: systemCreator}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: sharedPool.GetId()}.Build()}.Build(),
+					Status:   privatev1.ExternalIPStatus_builder{State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, Address: "203.0.113.1", Hub: "network-hub-a"}.Build(),
+				}.Build()).Do(ctx)
+				Expect(createErr).ToNot(HaveOccurred())
+				return response.GetObject()
+			}
+			first, second := makeEIP(testTenant), makeEIP("attachment-tenant")
+			ci := createComputeInstanceInState(ctx, computeInstanceDao, privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+			created, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{Object: privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{Name: "canonical-attachment", Tenant: testTenant}.Build(),
+				Spec:     privatev1.ExternalIPAttachmentSpec_builder{ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: first.GetId(), Name: "shared-display-name"}.Build(), ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build()}.Build(),
+			}.Build()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(server.validateUniqueness(ctx, second.GetId(), "unused-target", "shared-display-name")).To(Succeed())
+			Expect(grpcstatus.Code(server.validateUniqueness(ctx, first.GetId(), ci.GetId(), "misleading-name"))).To(Equal(grpccodes.AlreadyExists))
+			Expect(server.lifecycle.ensureExternalIPAvailableExcept(ctx, first.GetId(), "ignored-name", created.GetObject().GetId())).To(Succeed())
+			for _, parent := range []*privatev1.ExternalIP{first, second} {
+				parent.GetMetadata().SetLabels(map[string]string{autoCreatedLabel: "true", autoCreatedForLabel: ci.GetId()})
+				parent.GetMetadata().SetFinalizers([]string{"test-hold"})
+				_, err = externalIPDao.Update().SetObject(parent).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+			Expect(server.lifecycle.deleteAutoCreatedExternalIPs(ctx, ci.GetId())).To(Succeed())
+			for _, parent := range []*privatev1.ExternalIP{first, second} {
+				fresh, getErr := externalIPDao.Get().SetId(parent.GetId()).Do(ctx)
+				Expect(getErr).ToNot(HaveOccurred())
+				Expect(fresh.GetObject().GetMetadata().HasDeletionTimestamp()).To(Equal(parent.GetId() == second.GetId()))
+			}
+			Expect(grpcstatus.Code(server.lifecycle.ensureExternalIPAvailableExcept(ctx, first.GetId(), "ignored-name", "unrelated-child"))).To(Equal(grpccodes.FailedPrecondition))
+			_, err = suiteTx.Exec(ctx, "update external_ip_attachments set deletion_timestamp=now() where id=$1", created.GetObject().GetId())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(grpcstatus.Code(server.lifecycle.ensureExternalIPAvailable(ctx, first.GetId(), "ignored-name"))).To(Equal(grpccodes.FailedPrecondition))
+			Expect(server.lifecycle.ensureExternalIPAvailableExcept(ctx, first.GetId(), "ignored-name", created.GetObject().GetId())).To(Succeed())
+		})
+
+		DescribeTable("scopes attachment candidate capacity before collecting foreign owners", func(foreignProjects bool) {
+			tenants, err := dao.NewGenericDAO[*privatev1.Tenant]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			projects, err := dao.NewGenericDAO[*privatev1.Project]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			pool, err := externalIPPoolDao.Create().SetObject(privatev1.ExternalIPPool_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant, Name: "attachment-capacity-pool"}.Build(),
+				Spec:     privatev1.ExternalIPPoolSpec_builder{Cidrs: []string{"198.18.0.0/15"}}.Build(),
+				Status:   privatev1.ExternalIPPoolStatus_builder{State: privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, Total: 2000, Available: 2000}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			createdParent, err := externalIPDao.Create().SetObject(privatev1.ExternalIP_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: testTenant, Name: "attachment-default"}.Build(),
+				Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetObject().GetId()}.Build()}.Build(),
+				Status:   privatev1.ExternalIPStatus_builder{State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, Address: "198.19.0.1", Hub: "network-hub-a"}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			parent := createdParent.GetObject()
+			for ordinal := range 1001 {
+				tenant, project := testTenant, ""
+				if foreignProjects {
+					project = fmt.Sprintf("attachment-project-%d", ordinal)
+					_, err = projects.Create().SetObject(privatev1.Project_builder{
+						Metadata: privatev1.Metadata_builder{Tenant: tenant, Name: project}.Build(),
+					}.Build()).Do(ctx)
+				} else {
+					tenant = fmt.Sprintf("attachment-tenant-%d", ordinal)
+					_, err = tenants.Create().SetObject(privatev1.Tenant_builder{
+						Id: tenant, Metadata: privatev1.Metadata_builder{Tenant: tenant, Name: tenant}.Build(),
+					}.Build()).Do(ctx)
+				}
+				Expect(err).ToNot(HaveOccurred())
+				foreign, createErr := externalIPDao.Create().SetObject(privatev1.ExternalIP_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: tenant, Project: project, Name: parent.GetMetadata().GetName()}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetObject().GetId()}.Build()}.Build(),
+					Status:   privatev1.ExternalIPStatus_builder{State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, Address: fmt.Sprintf("198.18.%d.%d", ordinal/256, ordinal%256), Hub: "network-hub-a"}.Build(),
+				}.Build()).Do(ctx)
+				Expect(createErr).ToNot(HaveOccurred())
+				compute, createErr := computeInstanceDao.Create().SetObject(privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: tenant, Project: project, Name: "attachment-target"}.Build(),
+					Spec:     privatev1.ComputeInstanceSpec_builder{Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build()}.Build(),
+					Status:   privatev1.ComputeInstanceStatus_builder{State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, Hub: "network-hub-a"}.Build(),
+				}.Build()).Do(ctx)
+				Expect(createErr).ToNot(HaveOccurred())
+				_, err = server.lifecycle.externalIPAttachmentDao.Create().SetObject(privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: tenant, Project: project, Name: "attachment-consumer"}.Build(),
+					Spec: privatev1.ExternalIPAttachmentSpec_builder{
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: foreign.GetObject().GetId(), Name: parent.GetMetadata().GetName()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: compute.GetObject().GetId()}.Build(),
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+			population, err := server.lifecycle.externalIPAttachmentDao.List().SetLimit(1).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(population.GetTotal()).To(Equal(int32(1001)))
+			Expect(server.lifecycle.ensureExternalIPAvailable(ctx, parent.GetId(), "")).To(Succeed())
+			compute := createComputeInstanceInState(ctx, computeInstanceDao, privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+			created, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{Object: privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: testTenant, Name: "target-consumer"}.Build(),
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: parent.GetId()}.Build(),
+					ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: compute.GetId()}.Build(),
+				}.Build(),
+			}.Build()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(grpcstatus.Code(server.lifecycle.ensureExternalIPAvailable(ctx, parent.GetId(), ""))).To(Equal(grpccodes.FailedPrecondition))
+			Expect(server.lifecycle.ensureExternalIPAvailableExcept(ctx, parent.GetId(), "", created.GetObject().GetId())).To(Succeed())
+			Expect(grpcstatus.Code(server.lifecycle.ensureExternalIPAvailableExcept(ctx, parent.GetId(), "", "different-child"))).To(Equal(grpccodes.FailedPrecondition))
+		}, Entry("foreign tenants with empty projects", false), Entry("foreign projects in the same tenant", true))
+
+		It("rejects ownerless DAO attachments and stores nonnullable owner columns", func() {
+			_, err := server.lifecycle.externalIPAttachmentDao.Create().SetObject(privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{Name: "ownerless-attachment"}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).To(MatchError("cannot create object with empty tenant"))
+			for _, table := range []string{"external_ip_attachments", "nat_gateways"} {
+				var columns int
+				Expect(suiteTx.QueryRow(ctx, `select count(*) from information_schema.columns where table_schema='public' and table_name=$1 and column_name in ('tenant','project') and is_nullable='NO'`, table).Scan(&columns)).To(Succeed())
+				Expect(columns).To(Equal(2))
+				var ownerConstraints int
+				Expect(suiteTx.QueryRow(ctx, `select count(*) from pg_constraint where conrelid=$1::regclass and contype='f' and confrelid in ('tenants'::regclass,'projects'::regclass)`, table).Scan(&ownerConstraints)).To(Succeed())
+				Expect(ownerConstraints).To(Equal(2))
+			}
+		})
+
+		DescribeTable("checks migrated attachment owner projection and reference admissibility", func(tenant, project, referenceKind string) {
+			if project != "" {
+				projects, err := dao.NewGenericDAO[*privatev1.Project]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+				Expect(err).ToNot(HaveOccurred())
+				_, err = projects.Create().SetObject(privatev1.Project_builder{Metadata: privatev1.Metadata_builder{Tenant: tenant, Name: project}.Build()}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+			parent, err := externalIPDao.Create().SetObject(privatev1.ExternalIP_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: tenant, Project: project, Name: "legacy-attachment-parent"}.Build(),
+				Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: sharedPool.GetId()}.Build()}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			var reference *privatev1.ExternalIPLocalReference
+			switch referenceKind {
+			case "canonical":
+				reference = privatev1.ExternalIPLocalReference_builder{Id: parent.GetObject().GetId(), Name: "misleading-name"}.Build()
+			case "name":
+				reference = privatev1.ExternalIPLocalReference_builder{Name: parent.GetObject().GetMetadata().GetName()}.Build()
+			case "id-alias":
+				reference = privatev1.ExternalIPLocalReference_builder{Id: parent.GetObject().GetMetadata().GetName()}.Build()
+			case "empty":
+				reference = privatev1.ExternalIPLocalReference_builder{}.Build()
+			}
+			compute := createComputeInstanceInState(ctx, computeInstanceDao, privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+			created, err := server.lifecycle.externalIPAttachmentDao.Create().SetObject(privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: tenant, Project: project, Name: "legacy-attachment"}.Build(),
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp: reference, ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: compute.GetId()}.Build(),
+				}.Build(),
+			}.Build()).Do(ctx)
+			if referenceKind != "canonical" {
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("does not exist or has been deleted"))
+				return
+			}
+			Expect(err).ToNot(HaveOccurred())
+			stored, err := server.lifecycle.externalIPAttachmentDao.Get().SetId(created.GetObject().GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(tenant))
+			Expect(stored.GetObject().GetMetadata().GetProject()).To(Equal(project))
+			matches, err := server.lifecycle.externalIPAttachments(ctx, parent.GetObject())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(matches).To(HaveLen(1))
+			Expect(matches[0].GetId()).To(Equal(created.GetObject().GetId()))
+		}, Entry("default project canonical", testTenant, "", "canonical"),
+			Entry("shared owner canonical", auth.SharedTenant, "", "canonical"),
+			Entry("nonempty project canonical", testTenant, "legacy-project", "canonical"),
+			Entry("default project name-only", testTenant, "", "name"),
+			Entry("default project ID alias", testTenant, "", "id-alias"),
+			Entry("shared owner name-only", auth.SharedTenant, "", "name"),
+			Entry("nonempty project name-only", testTenant, "legacy-project", "name"),
+			Entry("empty imported reference", testTenant, "", "empty"))
+
+		DescribeTable("keeps imported cross-owner canonical attachment blockers", func(terminating bool) {
+			tenants, err := dao.NewGenericDAO[*privatev1.Tenant]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = tenants.Create().SetObject(privatev1.Tenant_builder{
+				Id: "import-owner", Metadata: privatev1.Metadata_builder{Tenant: "import-owner", Name: "import-owner"}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			parent := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(), privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+			compute := createComputeInstanceInState(ctx, computeInstanceDao, privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+			imported, err := server.lifecycle.externalIPAttachmentDao.Create().SetObject(privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: "import-owner", Name: "imported-consumer"}.Build(),
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: parent.GetId(), Name: "misleading-name"}.Build(),
+					ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: compute.GetId()}.Build(),
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			if terminating {
+				_, err = suiteTx.Exec(ctx, "update external_ip_attachments set deletion_timestamp=now() where id=$1", imported.GetObject().GetId())
+				Expect(err).ToNot(HaveOccurred())
+			}
+			Expect(grpcstatus.Code(server.lifecycle.ensureExternalIPAvailable(ctx, parent.GetId(), "ignored-name"))).To(Equal(grpccodes.FailedPrecondition))
+			Expect(server.lifecycle.ensureExternalIPAvailableExcept(ctx, parent.GetId(), "ignored-name", imported.GetObject().GetId())).To(Succeed())
+			Expect(grpcstatus.Code(server.lifecycle.ensureExternalIPAvailableExcept(ctx, parent.GetId(), "ignored-name", "different-child"))).To(Equal(grpccodes.FailedPrecondition))
+		}, Entry("live", false), Entry("terminating", true))
+
 		It("rejects caller-supplied output status on Create", func() {
 			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
 				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)

@@ -9,6 +9,7 @@
 - [Overview](#overview)
 - [Why This Flow Matters](#why-this-flow-matters)
 - [Concepts](#concepts)
+- [Labels and annotations](#labels-and-annotations)
 - [Checking the current user with `osac whoami`](#checking-the-current-user-with-osac-whoami)
 - [Flow map](#flow-map)
 - [Prerequisites](#prerequisites)
@@ -96,6 +97,35 @@ After the IdP is registered and READY:
   tenants and (in many labs) registering identity providers.
 - **Public API** (`fulfillment-api…`): tenant-scoped operations after IdP login
   (projects, memberships, day-2 RBAC).
+
+### Labels and annotations
+
+Tenant users can use labels and annotations for ordinary metadata on resources where their public
+API permissions allow Create or Update. For example:
+
+```shell
+osac label projects demo-project team=platform
+osac annotate projects demo-project support-contact=team-a
+osac label projects demo-project team-
+```
+
+Keys in `admin.osac.openshift.io` and its dot-delimited subdomains are reserved for system use.
+Public reads and event payloads omit those entries for every caller. Public Create or Update
+requests that supply one fail with `InvalidArgument`:
+
+```text
+Label or annotation is reserved for use by the system.
+```
+
+The request is rejected as a whole; remove the reserved entry from the request rather than retrying
+the same payload. Removing a known reserved key with `key-` through a public session does not
+remove the stored value, because public reads hide it. An authorized private API client must make
+that change.
+
+Ordinary metadata keys remain available to CEL List filters and event filters. Public filters may
+not test the presence or value of a reserved key. See the
+[metadata administrator guide](admin/metadata.md) for the full API and CLI contract, and
+[Filter expressions](../../fulfillment-service/docs/FILTER.md) for filter syntax.
 
 ### Checking the current user with `osac whoami`
 

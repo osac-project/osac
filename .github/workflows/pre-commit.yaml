@@ -20,6 +20,8 @@ jobs:
         fetch-depth: 0
         persist-credentials: false
     - uses: ./.github/actions/setup-python
+    - name: Release automation regression tests
+      run: uv run --no-project --with pyyaml==6.0.3 python -m unittest discover -s .github/scripts -p test_umbrella_release.py -v
     - uses: ./.github/actions/setup-go
       with:
         working-directory: fulfillment-service

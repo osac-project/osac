@@ -264,6 +264,31 @@ the end-to-end "create a VM from the UI" experience:
 make install PLATFORM=kind PROFILE=dev-full NS=osac
 ```
 
+New dev-full clusters use Kind's default node image. On Apple Silicon, before
+installing the `osac-devstack` release, the installer checks that the API
+server reports v1.36 or later and that all Kind nodes are `arm64`; these are
+prerequisites for the ARM compatibility policy. If an existing cluster's API
+server is older, upgrade its Kubernetes version or recreate it; if its nodes
+are not `arm64`, recreate the cluster:
+
+```bash
+make uninstall PLATFORM=kind PROFILE=dev-full NS=osac
+make install PLATFORM=kind PROFILE=dev-full NS=osac
+```
+
+Recreating dev-full also removes its disposable TopoLVM storage.
+
+Linux dev-full does not run this compatibility check and does not require
+Kubernetes v1.36.
+
+The ARM compatibility policy is enabled only on Apple Silicon dev-full
+installations, after the installer confirms all Kind nodes report `arm64`. The
+binding applies to OSAC tenant namespaces, where the dev-full flow creates VM
+resources. It removes SMM and Hyper-V domain settings from KubeVirt VM creates
+and updates. Existing VMs are unchanged until they are updated or recreated
+after the policy is installed. Linux dev-full and `PROFILE=dev` do not install
+the policy.
+
 The devstack release uses client-side apply so AWX can manage its resources.
 On Helm 4, the installer passes `--server-side=false` without
 `--force-conflicts`; combining these flags prevents initial AWX CRD creation.
@@ -369,8 +394,15 @@ the `osac` and `osac-devstack` releases plus `scripts/dev-full/`:
   its default VirtualNetwork + Subnet + SecurityGroup via tenant onboarding, so those are
   ready without manual seeding.
 
-The `dev-full` overlay also sets `operator.controllers.networkingProvisioning=false`
-so networking resources reconcile to READY without a real fabric (kind has none).
+The `dev-full` overlay enables `operator.controllers.networkingProvisioning` so
+Subnet AAP jobs create a target namespace and `ClusterUserDefinedNetwork` object
+for every tenant. The Kind-only `ClusterUserDefinedNetwork` CRD is installed by
+the earlier `osac-infra` phase and accepts the object without running an OVN
+controller. This supports VM target-namespace provisioning but creates no CUDN
+dataplane and does not validate tenant subnet isolation. Kind VMs continue
+to use the default pod network and the cluster-wide `l2bridge` binding. The
+dev-full tenant hook waits for the starter tenant's namespace and CUDN object so
+missing AAP provisioning or CRD installation fails the install visibly.
 
 **Prerequisites** (beyond the base tools) — enforced by `scripts/dev-full/kind-runtime.sh check`:
 
@@ -386,7 +418,7 @@ so networking resources reconcile to READY without a real fabric (kind has none)
   - **macOS** — Docker Desktop or Podman Desktop. For Podman, start its machine and
     verify `podman info` succeeds before installing.
 - **`/dev/kvm`** present (Linux), **`fs.inotify.max_user_instances >= 256`**, and
-  `kind`, `helm`, `kubectl`, `jq`, `curl`, `openssl`, `python3` on `PATH`
+  `kind`, `helm`, `kubectl`, `jq`, `curl`, `openssl`, and `python3` on `PATH`
 - Override runtime detection with `KIND_EXPERIMENTAL_PROVIDER=docker|podman`.
   On Apple Silicon, an explicit `CONTAINER_TOOL=docker|podman` selects the same
   runtime for installer operations when `KIND_EXPERIMENTAL_PROVIDER` is unset;
@@ -402,8 +434,18 @@ make install PLATFORM=kind PROFILE=dev-full NS=osac
 ```
 
 `dev-full` installs TopoLVM as the tenant `local` storage backend. Before Kind
-is created, `kind-runtime.sh` prepares a disposable 20 GiB sparse disk, the
-`vg1` volume group, and an external `lvmd` process. Linux stores these at
+is created, `kind-runtime.sh` prepares a disposable sparse disk (20 GiB by
+default), the `vg1` volume group, and an external `lvmd` process. Set
+`TOPOLVM_BACKING_SIZE` in the script's environment to a positive byte count or
+integer binary size such as `40G` to change the disk size. Make forwards the
+same setting when it invokes the script:
+
+```bash
+TOPOLVM_BACKING_SIZE=40G make install PLATFORM=kind PROFILE=dev-full NS=osac
+```
+
+Changing the configured size requires removing the existing dev-full Kind
+cluster and its local storage before reinstalling. Linux stores these at
 `/var/lib/osac-dev-full/topolvm` on the host. Docker Desktop and Podman Desktop
 store them at the same path inside the selected Linux VM. Podman Desktop needs
 a rootful machine; switch the machine to rootful mode in Podman Desktop and

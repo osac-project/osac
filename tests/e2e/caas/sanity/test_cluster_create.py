@@ -186,6 +186,7 @@ def _assert_worker_agent_installing(*, k8s: K8sClient, co_name: str, namespace: 
         retries=180,
         delay=10,
         description="CaaS worker Agent registration",
+        retry_on_error=True,
     )
     agent_name = agents[0]["metadata"]["name"]
     logger.info("CaaS: Agent found; waiting for installing state")
@@ -213,6 +214,7 @@ def _assert_worker_agent_installing(*, k8s: K8sClient, co_name: str, namespace: 
         retries=180,
         delay=10,
         description="CaaS worker Agent installing state",
+        retry_on_error=True,
     )
     logger.info("CaaS: Agent entered installing state")
 
@@ -225,6 +227,7 @@ def _assert_operator_worker_metrics(*, k8s: K8sClient, co_name: str) -> None:
             retries=30,
             delay=5,
             description=f"{co_name} worker metrics",
+            retry_on_error=True,
         )
     except (subprocess.CalledProcessError, RuntimeError) as exc:
         detail = (
@@ -261,6 +264,7 @@ def _assert_cluster_version_propagated(
         retries=30,
         delay=5,
         description=f"{co_name} HostedCluster reference",
+        retry_on_error=True,
     )
     hosted_cluster_image = run(
         *k8s._base(),
@@ -365,6 +369,7 @@ def _assert_worker_bmi_resources(
             retries=30,
             delay=2,
             description=f"{co_name} worker {bmi_id} Kubernetes BMI CR",
+            retry_on_error=True,
         )
         cr = k8s.get_json(resource="baremetalinstance", name=cr_name)
         assert cr["metadata"]["labels"]["osac.openshift.io/baremetalinstance-uuid"] == bmi_id
@@ -380,6 +385,7 @@ def _wait_for_cluster_infra_env_name(*, k8s: K8sClient, co_name: str) -> str:
         retries=30,
         delay=2,
         description=f"{co_name} InfraEnv name",
+        retry_on_error=True,
     )
 
 
@@ -747,6 +753,7 @@ def _assert_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers:
         retries=120,
         delay=10,
         description=f"{co_name} worker aggregates before NodePool isolation check",
+        retry_on_error=True,
     )
 
 
@@ -786,6 +793,7 @@ def _assert_installed_agents_by_node_set(
         retries=120,
         delay=10,
         description=f"{co_name} installed Agents by NodeSet",
+        retry_on_error=True,
     )
 
 
@@ -824,6 +832,7 @@ def _assert_isolated_node_pools(
         retries=60,
         delay=10,
         description=f"{co_name} per-NodeSet NodePool replicas",
+        retry_on_error=True,
     )
     for node_set, node_pool in node_pools.items():
         labels = node_pool.get("metadata", {}).get("labels", {})

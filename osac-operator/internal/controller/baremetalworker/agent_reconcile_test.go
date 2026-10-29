@@ -65,6 +65,7 @@ func agentPhaseFixture(worker string, installed bool) *unstructured.Unstructured
 	a.SetName("agent")
 	a.SetNamespace("osac")
 	a.SetLabels(map[string]string{workerNameLabel: worker, clusterOrderLabel: "order"})
+	_ = unstructured.SetNestedField(a.Object, "worker", "spec", "role")
 	state := "installing"
 	if installed {
 		state = "installed"
@@ -158,6 +159,90 @@ var _ = Describe("Agent binding refuses existing assignments", func() {
 			Expect(before).To(Equal(got), "modified an Agent assigned elsewhere")
 		})
 	}
+})
+
+var _ = Describe("Agent worker role", func() {
+	DescribeTable("assigns the role during initial binding without replacing existing roles",
+		func(initialRole, wantRole string) {
+			a := agentPhaseFixture("", false)
+			Expect(unstructured.SetNestedField(a.Object, initialRole, "spec", "role")).To(Succeed())
+			a.SetAnnotations(map[string]string{
+				"osac.openshift.io/tenant":          "tenant",
+				"osac.openshift.io/owner-reference": "ClusterOrder/order",
+			})
+			c := clientfake.NewClientBuilder().WithObjects(a).Build()
+			r := &Reconciler{Client: c, apiReader: c}
+			co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "osac"}}
+			w := newWorkerStatus("standard", "standard", "worker", "id", workerPhaseWaitingForAgent)
+			Expect(r.bindAgent(context.Background(), co, a, &w)).To(Succeed())
+			got := &unstructured.Unstructured{}
+			got.SetGroupVersionKind(agentGVK)
+			Expect(c.Get(context.Background(), client.ObjectKeyFromObject(a), got)).To(Succeed())
+			role, _, err := unstructured.NestedString(got.Object, "spec", "role")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(role).To(Equal(wantRole))
+			approved, _, err := unstructured.NestedBool(got.Object, "spec", "approved")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(approved).To(BeTrue())
+			Expect(got.GetAnnotations()).To(Equal(a.GetAnnotations()))
+		},
+		Entry("empty role", "", "worker"),
+		Entry("existing role", "master", "master"),
+	)
+
+	It("repairs an already approved Agent once without changing its binding", func() {
+		a := agentPhaseFixture("worker", false)
+		a.SetUID("agent-uid")
+		unstructured.RemoveNestedField(a.Object, "spec", "role")
+		Expect(unstructured.SetNestedField(a.Object, true, "spec", "approved")).To(Succeed())
+		binding := map[string]interface{}{"name": "order", "namespace": "osac"}
+		Expect(unstructured.SetNestedMap(a.Object, binding, "spec", "clusterDeploymentName")).To(Succeed())
+		a.SetAnnotations(map[string]string{"osac.openshift.io/tenant": "tenant"})
+		base := clientfake.NewClientBuilder().WithObjects(a).Build()
+		patches := &failingAgentPatchClient{Client: base, succeed: true}
+		r := &Reconciler{Client: patches, apiReader: base, recorder: events.NewFakeRecorder(10)}
+		co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "osac"}}
+		w := newWorkerStatus("standard", "standard", "worker", "id", workerPhaseBinding)
+		for range 2 {
+			current := &unstructured.Unstructured{}
+			current.SetGroupVersionKind(agentGVK)
+			Expect(base.Get(context.Background(), client.ObjectKeyFromObject(a), current)).To(Succeed())
+			workers, _, err := reconcileAgentStage(r, co, []v1alpha1.WorkerStatus{w}, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*current}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(workers[0].Phase).To(Equal(workerPhaseBinding))
+		}
+		Expect(patches.patches).To(Equal(1))
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(agentGVK)
+		Expect(base.Get(context.Background(), client.ObjectKeyFromObject(a), got)).To(Succeed())
+		role, _, err := unstructured.NestedString(got.Object, "spec", "role")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(role).To(Equal("worker"))
+		deployment, _, err := unstructured.NestedMap(got.Object, "spec", "clusterDeploymentName")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(deployment).To(Equal(binding))
+		Expect(got.GetLabels()).To(Equal(a.GetLabels()))
+		Expect(got.GetAnnotations()).To(Equal(a.GetAnnotations()))
+	})
+
+	It("refuses role repair when the live Agent moved to another cluster", func() {
+		observed := agentPhaseFixture("worker", false)
+		observed.SetUID("agent-uid")
+		unstructured.RemoveNestedField(observed.Object, "spec", "role")
+		live := observed.DeepCopy()
+		labels := live.GetLabels()
+		labels[clusterOrderLabel] = "foreign"
+		live.SetLabels(labels)
+		c := clientfake.NewClientBuilder().WithObjects(live).Build()
+		r := &Reconciler{Client: c, apiReader: c}
+		co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "osac"}}
+		w := newWorkerStatus("standard", "standard", "worker", "id", workerPhaseBinding)
+		Expect(r.repairAgentRole(context.Background(), co, observed, &w)).To(MatchError(ContainSubstring("another cluster")))
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(agentGVK)
+		Expect(c.Get(context.Background(), client.ObjectKeyFromObject(live), got)).To(Succeed())
+		Expect(got).To(Equal(live))
+	})
 })
 
 type failingAgentPatchClient struct {

@@ -1667,6 +1667,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileAgent", Label("baremetalwor
 			Expect(unstructured.SetNestedMap(agent.Object, map[string]interface{}{
 				"name": name, "namespace": testNamespace,
 			}, "spec", "clusterDeploymentName")).To(Succeed())
+			Expect(unstructured.SetNestedField(agent.Object, "worker", "spec", "role")).To(Succeed())
 			if installed {
 				Expect(unstructured.SetNestedField(agent.Object, "installed", "status", "debugInfo", "state")).To(Succeed())
 			}
@@ -1854,6 +1855,32 @@ var _ = Describe("BareMetalWorkerReconciler reconcileAgent", Label("baremetalwor
 		Expect(agentObj.GetLabels()).To(HaveKeyWithValue("agentBareMetal", "true"))
 		cdName, _, _ := unstructured.NestedString(agentObj.Object, "spec", "clusterDeploymentName", "name")
 		Expect(cdName).To(Equal("bmw-corr"))
+		role, _, err := unstructured.NestedString(agentObj.Object, "spec", "role")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(role).To(Equal("worker"))
+
+		// A previously claimed Agent must be repaired even though no new worker is selected.
+		beforeRepair := agentObj.DeepCopy()
+		unstructured.RemoveNestedField(agentObj.Object, "spec", "role")
+		Expect(k8sClient.Update(ctx, agentObj)).To(Succeed())
+		_, err = runReconcile("bmw-corr")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(agentObj), agentObj)).To(Succeed())
+		role, _, err = unstructured.NestedString(agentObj.Object, "spec", "role")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(role).To(Equal("worker"))
+		Expect(agentObj.GetLabels()).To(Equal(beforeRepair.GetLabels()))
+		Expect(agentObj.GetAnnotations()).To(Equal(beforeRepair.GetAnnotations()))
+		deployment, _, err := unstructured.NestedMap(agentObj.Object, "spec", "clusterDeploymentName")
+		Expect(err).ToNot(HaveOccurred())
+		originalDeployment, _, err := unstructured.NestedMap(beforeRepair.Object, "spec", "clusterDeploymentName")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(deployment).To(Equal(originalDeployment))
+		version := agentObj.GetResourceVersion()
+		_, err = runReconcile("bmw-corr")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(agentObj), agentObj)).To(Succeed())
+		Expect(agentObj.GetResourceVersion()).To(Equal(version), "role repair repeated after convergence")
 
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, agentObj) })
 	})

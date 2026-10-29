@@ -20,7 +20,6 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
 
     expect(payload.metadata).toEqual({
       name: 'my-bare-metal-item',
-      description: '',
       project: 'team-a',
     });
     expect(payload.template).toEqual({ id: 'template-1' });
@@ -84,7 +83,6 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
     globalValues.metadata.name = 'global-item';
     expect(buildBareMetalCatalogItemCreatePayload(globalValues).metadata).toEqual({
       name: 'global-item',
-      description: '',
       tenant: 'shared',
     });
 
@@ -93,7 +91,6 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
     tenantValues.metadata.tenant = { id: 'tenant-1', name: 'Tenant One' };
     expect(buildBareMetalCatalogItemCreatePayload(tenantValues).metadata).toEqual({
       name: 'tenant-item',
-      description: '',
       tenant: 'tenant-1',
     });
   });
@@ -129,7 +126,6 @@ describe('bare metal catalog item initial values and updates', () => {
   it('omits immutable general fields and the template from updates', () => {
     const values = emptyBareMetalCatalogItemValues();
     values.metadata.name = 'should-not-be-sent';
-    values.metadata.description = 'updated description';
     values.metadata.tenant = { id: 'tenant-1', name: '' };
     values.metadata.project = 'team-a';
     values.template = { id: 'template-1', name: '' };
@@ -140,7 +136,7 @@ describe('bare metal catalog item initial values and updates', () => {
       values,
     );
 
-    expect(payload.metadata).toEqual({ description: 'updated description' });
+    expect(payload.metadata).toBeUndefined();
     expect(payload.template).toBeUndefined();
     expect(payload.fields?.userData).toEqual({
       behavior: { case: 'locked', value: 'echo hi' },

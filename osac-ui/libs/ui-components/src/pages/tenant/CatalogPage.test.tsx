@@ -69,7 +69,6 @@ const vmCatalogItemWithReferences = create(ComputeInstanceCatalogItemSchema, {
   id: vmCatalogItem.id,
   metadata: vmCatalogMetaData,
   title: vmCatalogItem.title,
-  description: vmCatalogItem.description,
   template: { id: 'tpl-rhel-9' },
   published: true,
   templateParameters: {},
@@ -93,7 +92,6 @@ const vmCatalogItemWithIdOnlyReferences = create(ComputeInstanceCatalogItemSchem
   id: 'catalog-rhel-8',
   metadata: { ...vmCatalogMetaData, name: 'catalog-rhel-8' },
   title: 'RHEL 8 catalog',
-  description: 'RHEL 8 base image',
   template: { id: 'tpl-rhel-8' },
   published: true,
   templateParameters: {},
@@ -646,7 +644,6 @@ describe('CatalogPage', () => {
         name: 'catalog-rhel-8-draft',
       },
       title: 'RHEL 8 draft',
-      description: 'Unpublished RHEL 8 image',
       published: false,
     };
 
@@ -753,7 +750,6 @@ describe('CatalogPage', () => {
         version: 1,
       },
       title: 'Fedora 40 catalog',
-      description: 'Fedora 40 workstation image',
     };
 
     renderWithProviders(<CatalogPage />, {

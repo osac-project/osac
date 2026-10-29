@@ -58,11 +58,7 @@ export const catalogItemMetadataLabelEntries = (
 export const searchableCatalogItemText = (item: CatalogItem): string => {
   const labels = item.metadata?.labels ?? {};
 
-  return [
-    item.description,
-    item.metadata?.name,
-    ...Object.entries(labels).map(([key, value]) => `${key} ${value}`),
-  ]
+  return [item.metadata?.name, ...Object.entries(labels).map(([key, value]) => `${key} ${value}`)]
     .filter(Boolean)
     .join(' ')
     .toLowerCase();

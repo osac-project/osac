@@ -227,7 +227,7 @@ describe('ClusterCatalogItemWizard', () => {
   it('prefills edit mode and submits an update without the template', async () => {
     const existingItem = create(ClusterCatalogItemSchema, {
       id: 'catalog-item-1',
-      metadata: { name: 'existing-item', description: 'An existing item', tenant: 'test-tenant' },
+      metadata: { name: 'existing-item', tenant: 'test-tenant' },
       title: 'Existing item',
       template: { id: 'template-1' },
       published: true,
@@ -252,7 +252,6 @@ describe('ClusterCatalogItemWizard', () => {
       updateMask?: { paths?: string[] };
     };
     expect(request.object?.id).toBe('catalog-item-1');
-    expect(request.updateMask?.paths).toContain('metadata.description');
     expect(request.updateMask?.paths).not.toContain('template');
     expect(request.updateMask?.paths).not.toContain('metadata.name');
     expect(request.updateMask?.paths).not.toContain('metadata.tenant');

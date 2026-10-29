@@ -138,6 +138,5 @@ export const buildComputeCatalogItemUpdatePayload = (
   _item: ComputeInstanceCatalogItem,
   values: ComputeCatalogItemValues,
 ): MessageInitShape<typeof ComputeInstanceCatalogItemSchema> => ({
-  metadata: { description: values.metadata.description.trim() },
   fields: buildComputeCatalogItemFieldsPayload(values),
 });

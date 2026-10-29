@@ -32,7 +32,6 @@ export interface CatalogGeneralValues {
   metadata: {
     name: string;
     project: string;
-    description: string;
     /** Selected tenant when scope is `tenant`. Empty when scope is `global`. */
     tenant: ResourceSelectValue;
   };
@@ -41,7 +40,7 @@ export interface CatalogGeneralValues {
 
 export const catalogGeneralValues = (): CatalogGeneralValues => ({
   scope: 'tenant',
-  metadata: { name: '', project: '', description: '', tenant: emptyResourceSelectValue() },
+  metadata: { name: '', project: '', tenant: emptyResourceSelectValue() },
   template: emptyResourceSelectValue(),
 });
 
@@ -49,7 +48,6 @@ export const catalogGeneralValues = (): CatalogGeneralValues => ({
 export interface CatalogItemGeneralLike {
   metadata?: {
     name?: string;
-    description?: string;
     project?: string;
     tenant?: string;
   };
@@ -67,7 +65,6 @@ export const catalogGeneralValuesFromItem = (
     metadata: {
       name: metadata?.name ?? '',
       project: metadata?.project ?? '',
-      description: metadata?.description ?? '',
       tenant: scope === 'tenant' && tenant ? { id: tenant, name: '' } : emptyResourceSelectValue(),
     },
     template: item.template?.id ? { id: item.template.id, name: '' } : emptyResourceSelectValue(),
@@ -84,12 +81,11 @@ export const catalogGeneralValuesFromItem = (
  */
 export const catalogGeneralItemPayload = (
   values: CatalogGeneralValues,
-): { name: string; description: string; tenant?: string; project?: string } => {
+): { name: string; tenant?: string; project?: string } => {
   const tenant = values.scope === 'global' ? GLOBAL_TENANT_VALUE : values.metadata.tenant.id.trim();
   const project = values.metadata.project.trim();
   return {
     name: values.metadata.name.trim(),
-    description: values.metadata.description.trim(),
     ...(tenant ? { tenant } : {}),
     ...(project ? { project } : {}),
   };
@@ -166,13 +162,6 @@ const CatalogGeneralStep = ({
             isRequired
             isDisabled={isEdit}
             helperText={t('Name must be a valid DNS label (RFC 1035).')}
-          />
-          <InputField
-            name="metadata.description"
-            label={t('Description')}
-            fieldId="catalog-item-description"
-            multiline
-            rows={4}
           />
           <ResourceSelectField
             name="template"

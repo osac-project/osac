@@ -20,7 +20,7 @@ describe('buildComputeCatalogItemCreatePayload', () => {
 
     expect(payload.fields).toEqual({});
     expect(payload.published).toBe(false);
-    expect(payload.metadata).toEqual({ name: 'my-item', description: '', project: 'team-a' });
+    expect(payload.metadata).toEqual({ name: 'my-item', project: 'team-a' });
     expect(payload.template).toEqual({ id: 'template-1' });
   });
 
@@ -31,7 +31,7 @@ describe('buildComputeCatalogItemCreatePayload', () => {
 
     const payload = buildComputeCatalogItemCreatePayload(values);
 
-    expect(payload.metadata).toEqual({ name: 'global-item', description: '', tenant: 'shared' });
+    expect(payload.metadata).toEqual({ name: 'global-item', tenant: 'shared' });
   });
 
   it('encodes an admin tenant-scoped item with the selected tenant id', () => {
@@ -42,7 +42,7 @@ describe('buildComputeCatalogItemCreatePayload', () => {
 
     const payload = buildComputeCatalogItemCreatePayload(values);
 
-    expect(payload.metadata).toEqual({ name: 'tenant-item', description: '', tenant: 'tenant-1' });
+    expect(payload.metadata).toEqual({ name: 'tenant-item', tenant: 'tenant-1' });
   });
 
   it('writes a locked resource field even if a value is present', () => {
@@ -145,7 +145,6 @@ describe('buildComputeCatalogItemUpdatePayload', () => {
   it('omits name, tenant, project, and template, and includes the governed fields', () => {
     const values = emptyComputeCatalogItemValues();
     values.metadata.name = 'should-not-be-sent';
-    values.metadata.description = 'updated description';
     values.metadata.tenant = { id: 'tenant-1', name: '' };
     values.metadata.project = 'team-a';
     values.template = { id: 'template-1', name: '' };
@@ -153,7 +152,7 @@ describe('buildComputeCatalogItemUpdatePayload', () => {
 
     const payload = buildComputeCatalogItemUpdatePayload(item, values);
 
-    expect(payload.metadata).toEqual({ description: 'updated description' });
+    expect(payload.metadata).toBeUndefined();
     expect(payload.template).toBeUndefined();
     expect(payload.fields?.userData).toEqual({ behavior: { case: 'locked', value: 'echo hi' } });
   });

@@ -9,8 +9,6 @@ import {
   type ComputeInstanceTemplate,
   type DiskImage,
   type InstanceType,
-  SecretSchema,
-  SecretType,
   StorageProtocol,
   type StorageTier,
   StorageTierSchema,
@@ -174,7 +172,7 @@ describe('ComputeCatalogItemWizard', () => {
     expect(screen.getAllByRole('separator')).toHaveLength(2);
   });
 
-  it('shows the Access & Initial run step with user data choices', async () => {
+  it('shows the Access & Initial run step with text-only user data', async () => {
     const { user } = renderWizard();
 
     await fillGeneralStep(user, 'my-item');
@@ -186,8 +184,9 @@ describe('ComputeCatalogItemWizard', () => {
       await screen.findByText('Add optional user data, or skip this step to continue.'),
     ).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Access & Initial run' })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Enter value' })).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'Select secret' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'User data' })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Enter value' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Select secret' })).not.toBeInTheDocument();
   });
 
   describe('Review step', () => {
@@ -215,7 +214,6 @@ describe('ComputeCatalogItemWizard', () => {
       expect(screen.getByRole('heading', { name: 'Storage' })).toBeInTheDocument();
       expect(screen.getByRole('heading', { name: 'Access & Initial run' })).toBeInTheDocument();
       expect(screen.getByText('Name')).toBeInTheDocument();
-      expect(screen.getByText('Description')).toBeInTheDocument();
       expect(screen.getByText('Provisioning template')).toBeInTheDocument();
       expect(screen.getByText('Guest operating system')).toBeInTheDocument();
       expect(screen.getByText('Disk image')).toBeInTheDocument();
@@ -296,29 +294,6 @@ describe('ComputeCatalogItemWizard', () => {
 
       expect(await screen.findByText('Configured')).toBeInTheDocument();
       expect(screen.queryByText('secret inline value')).not.toBeInTheDocument();
-    });
-
-    it('shows a selected Cloud-init secret by reference without exposing secret data', async () => {
-      const secret = create(SecretSchema, {
-        id: 'secret-1',
-        metadata: { name: 'cloud-init-secret', project: 'test-tenant' },
-        type: SecretType.USER_DATA,
-      });
-      const { user } = renderWithProviders(<ComputeCatalogItemWizard />, {
-        apiFixtures: { ...apiFixtures, secrets: [secret] },
-      });
-
-      await fillGeneralStep(user, 'my-item');
-      await user.click(screen.getByRole('button', { name: 'Next' }));
-      await user.click(screen.getByRole('button', { name: 'Next' }));
-      await user.click(screen.getByRole('button', { name: 'Next' }));
-      await user.click(screen.getByRole('radio', { name: 'Select secret' }));
-      await user.click(await screen.findByRole('button', { name: 'Select a user data secret' }));
-      await user.click(screen.getByRole('option', { name: 'cloud-init-secret' }));
-      await user.click(screen.getByRole('button', { name: 'Next' }));
-
-      expect(await screen.findByText('cloud-init-secret')).toBeInTheDocument();
-      expect(screen.queryByText('Configured')).not.toBeInTheDocument();
     });
 
     it('formats configured storage defaults as concise disk-set summaries', async () => {
@@ -435,13 +410,11 @@ describe('ComputeCatalogItemWizard', () => {
   describe('edit mode', () => {
     const existingItem = create(ComputeInstanceCatalogItemSchema, {
       id: 'catalog-item-1',
-      metadata: { name: 'existing-item', description: 'An existing item', tenant: 'test-tenant' },
+      metadata: { name: 'existing-item', tenant: 'test-tenant' },
       title: 'Existing item',
       template: { id: 'template-1' },
       published: true,
-      fields: {
-        userData: { behavior: { case: 'locked', value: 'cloud-init' } },
-      },
+      fields: {},
     });
 
     it('shows no changes and disables Save changes when the edit is pristine', async () => {
@@ -467,19 +440,14 @@ describe('ComputeCatalogItemWizard', () => {
       }));
       const { user } = renderWizard(existingItem, { onComputeInstanceCatalogItemUpdate: onUpdate });
 
-      const description = screen.getByRole('textbox', { name: 'Description' });
-      expect(description).toHaveValue('An existing item');
-      await user.clear(description);
-      await user.type(description, 'Updated description');
-
       await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.type(screen.getByRole('textbox', { name: 'User data' }), 'updated cloud-init');
       await user.click(screen.getByRole('button', { name: 'Next' }));
 
-      expect(screen.getByText('An existing item')).toBeInTheDocument();
-      expect(screen.getByText('Updated description')).toBeInTheDocument();
-      expect(screen.queryByText(/cloud-init/i)).not.toBeInTheDocument();
+      expect(screen.getByText('Configured')).toBeInTheDocument();
+      expect(screen.queryByText('updated cloud-init')).not.toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
       await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
@@ -488,7 +456,7 @@ describe('ComputeCatalogItemWizard', () => {
         updateMask?: { paths?: string[] };
       };
       expect(request.object?.id).toBe('catalog-item-1');
-      expect(request.updateMask?.paths).toContain('metadata.description');
+      expect(request.updateMask?.paths).toContain('fields.user_data');
       expect(request.updateMask?.paths).not.toContain('template');
       expect(request.updateMask?.paths).not.toContain('metadata.name');
       expect(request.updateMask?.paths).not.toContain('metadata.tenant');
@@ -501,11 +469,10 @@ describe('ComputeCatalogItemWizard', () => {
       });
       const { user } = renderWizard(existingItem, { onComputeInstanceCatalogItemUpdate: onUpdate });
 
-      await user.clear(screen.getByRole('textbox', { name: 'Description' }));
-      await user.type(screen.getByRole('textbox', { name: 'Description' }), 'Updated description');
       await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.type(screen.getByRole('textbox', { name: 'User data' }), 'updated cloud-init');
       await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.click(screen.getByRole('button', { name: 'Save changes' }));
 

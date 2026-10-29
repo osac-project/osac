@@ -20,7 +20,6 @@ export type CatalogListResource =
 export type CatalogListFilterableItem = {
   metadata?: { name?: string; tenant?: string };
   title?: string;
-  description?: string;
   published?: boolean;
 };
 
@@ -53,12 +52,10 @@ export const catalogItemMatchesListFilter = (
   }
 
   const containsMatches = [
-    ...filter.matchAll(
-      /this\.(?:metadata\.name|title|description)\.contains\("((?:\\.|[^"\\])*)"\)/g,
-    ),
+    ...filter.matchAll(/this\.(?:metadata\.name|title)\.contains\("((?:\\.|[^"\\])*)"\)/g),
   ].map((match) => match[1].replaceAll('\\"', '"').replaceAll('\\\\', '\\'));
   if (containsMatches.length > 0) {
-    const haystack = [item.metadata?.name, item.title, item.description].filter(Boolean).join(' ');
+    const haystack = [item.metadata?.name, item.title].filter(Boolean).join(' ');
     if (!containsMatches.some((term) => haystack.includes(term))) {
       return false;
     }
@@ -87,7 +84,6 @@ export const buildCatalogListFilter = (
         filter.or(
           filter.field('metadata.name').contains(search),
           filter.field('title').contains(search),
-          filter.field('description').contains(search),
         ),
       );
     }

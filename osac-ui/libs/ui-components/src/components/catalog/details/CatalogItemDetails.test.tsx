@@ -32,11 +32,9 @@ const makeItem = (published: boolean): ComputeInstanceCatalogItem =>
     id: 'catalog-vm',
     metadata: {
       name: 'catalog-vm',
-      description: 'A virtual machine catalog item',
       tenant: 'tenant-1',
       creationTimestamp: { seconds: 1_735_689_600n, nanos: 0 },
     },
-    description: 'A virtual machine catalog item',
     published,
     fields: {},
   }) as ComputeInstanceCatalogItem;

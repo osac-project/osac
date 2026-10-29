@@ -110,6 +110,5 @@ export const buildClusterCatalogItemUpdatePayload = (
   _item: ClusterCatalogItem,
   values: ClusterCatalogItemValues,
 ): MessageInitShape<typeof ClusterCatalogItemSchema> => ({
-  metadata: { description: values.metadata.description.trim() },
   fields: buildClusterCatalogItemFieldsPayload(values),
 });

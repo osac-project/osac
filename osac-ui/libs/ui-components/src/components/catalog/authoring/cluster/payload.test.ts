@@ -20,7 +20,6 @@ describe('buildClusterCatalogItemCreatePayload', () => {
 
     expect(payload.metadata).toEqual({
       name: 'my-cluster-item',
-      description: '',
       project: 'team-a',
     });
     expect(payload.template).toEqual({ id: 'template-1' });
@@ -90,7 +89,6 @@ describe('buildClusterCatalogItemCreatePayload', () => {
     globalValues.metadata.name = 'global-item';
     expect(buildClusterCatalogItemCreatePayload(globalValues).metadata).toEqual({
       name: 'global-item',
-      description: '',
       tenant: 'shared',
     });
 
@@ -99,7 +97,6 @@ describe('buildClusterCatalogItemCreatePayload', () => {
     tenantValues.metadata.tenant = { id: 'tenant-1', name: 'Tenant One' };
     expect(buildClusterCatalogItemCreatePayload(tenantValues).metadata).toEqual({
       name: 'tenant-item',
-      description: '',
       tenant: 'tenant-1',
     });
   });
@@ -109,7 +106,6 @@ describe('buildClusterCatalogItemUpdatePayload', () => {
   it('omits immutable general fields and template from updates', () => {
     const values = emptyClusterCatalogItemValues();
     values.metadata.name = 'unchanged-name';
-    values.metadata.description = 'updated description';
     values.metadata.project = 'team-a';
     values.metadata.tenant = { id: 'tenant-1', name: '' };
     values.template = { id: 'template-1', name: '' };
@@ -120,7 +116,7 @@ describe('buildClusterCatalogItemUpdatePayload', () => {
       values,
     );
 
-    expect(payload.metadata).toEqual({ description: 'updated description' });
+    expect(payload.metadata).toBeUndefined();
     expect(payload.template).toBeUndefined();
     expect(payload.fields?.network?.podCidr).toEqual({
       behavior: { case: 'locked', value: '10.128.0.0/14' },

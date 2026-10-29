@@ -119,8 +119,8 @@ describe('BareMetalCatalogItemWizard', () => {
     expect(screen.getByLabelText('Instance type')).toBeInTheDocument();
     expect(screen.getByLabelText('Select the image reference')).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'User data' })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Enter value' })).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'Select secret' })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Enter value' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Select secret' })).not.toBeInTheDocument();
     expect(screen.queryByText(/run strategy/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/SSH public key/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/network attachment/i)).not.toBeInTheDocument();
@@ -211,7 +211,7 @@ describe('BareMetalCatalogItemWizard', () => {
   it('prefills edit mode and submits an update without the template', async () => {
     const existingItem = create(BareMetalInstanceCatalogItemSchema, {
       id: 'catalog-item-1',
-      metadata: { name: 'existing-item', description: 'An existing item', tenant: 'test-tenant' },
+      metadata: { name: 'existing-item', tenant: 'test-tenant' },
       template: { id: 'template-1' },
       published: true,
       fields: {
@@ -246,7 +246,6 @@ describe('BareMetalCatalogItemWizard', () => {
       updateMask?: { paths?: string[] };
     };
     expect(request.object?.id).toBe('catalog-item-1');
-    expect(request.updateMask?.paths).toContain('metadata.description');
     expect(request.updateMask?.paths).not.toContain('template');
     expect(request.updateMask?.paths).not.toContain('metadata.name');
     expect(request.updateMask?.paths).not.toContain('metadata.tenant');

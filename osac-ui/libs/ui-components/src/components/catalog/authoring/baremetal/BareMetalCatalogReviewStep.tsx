@@ -45,12 +45,6 @@ const BareMetalCatalogReviewStep = () => {
               {formatReviewScalar(values.metadata.name)}
             </DescriptionListDescription>
           </DescriptionListGroup>
-          <DescriptionListGroup>
-            <DescriptionListTerm>{t('Description')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {formatReviewScalar(values.metadata.description)}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
           {role === 'admin' ? (
             <DescriptionListGroup>
               <DescriptionListTerm>{t('Scope')}</DescriptionListTerm>

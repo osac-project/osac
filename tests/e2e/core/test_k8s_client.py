@@ -85,7 +85,7 @@ def test_get_storage_class_for_tier_and_datavolume_support_tenant_and_vm_namespa
     monkeypatch.setattr(k8s_client, "run", fake_run)
 
     client = K8sClient(namespace="osac-devel")
-    assert client.get_storage_class_for_tier(tier_name="GOLD", tenant_name="tenant1") == "netapp-gold-sc"
+    assert client.get_storage_class_for_tier(tier_name=" GOLD ", tenant_name=" tenant1 ") == "netapp-gold-sc"
     assert client.get_datavolume_storage_class(name="vm-1-root-disk", namespace="subnet-ns") == "netapp-gold-sc"
     assert ("kubectl", "--as", "system:admin", "get", "tenant", "tenant1", "-n", "osac-devel", "-o", "json") in calls
     assert (
@@ -100,3 +100,41 @@ def test_get_storage_class_for_tier_and_datavolume_support_tenant_and_vm_namespa
         "-o",
         "json",
     ) in calls
+
+
+def test_get_storage_class_for_tier_fallback_prefers_csp_and_tenant_over_shared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args: str, **_kwargs: object) -> str:
+        if "tenant" in args:
+            return json.dumps({"status": {"storageClasses": []}})
+        return json.dumps(
+            {
+                "items": [
+                    {
+                        "metadata": {
+                            "name": "shared-gold-sc",
+                            "labels": {
+                                "osac.openshift.io/storage-tier": "gold",
+                                "osac.openshift.io/tenant": "shared",
+                            },
+                        }
+                    },
+                    {
+                        "metadata": {
+                            "name": "csp-gold-sc",
+                            "labels": {
+                                "osac.openshift.io/storage-tier": " GOLD ",
+                                "osac.openshift.io/tenant": "csp-managed",
+                            },
+                        }
+                    },
+                ]
+            }
+        )
+
+    monkeypatch.setattr(k8s_client, "run", fake_run)
+
+    client = K8sClient(namespace="osac-devel")
+    assert client.get_storage_class_for_tier(tier_name="gold", tenant_name="tenant1") == "csp-gold-sc"
+

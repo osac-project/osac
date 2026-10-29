@@ -2920,6 +2920,17 @@ var _ = Describe("ComputeInstance Controller", func() {
 			ready, msg := checkCSPStorageReadiness(inMemoryTenant, []string{"gold", "silver"}, nil, nil)
 			Expect(ready).To(BeFalse())
 			Expect(msg).To(ContainSubstring("ambiguous tier(s): silver"))
+
+			By("Subcase C: requestedCSPTiers classifies non-OSAC tiers as CSP tiers when cspTiers is non-empty even before StorageReady is set")
+			preOnboardTenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(requestedCSPTiers(
+				preOnboardTenant,
+				[]string{"platinum", "fast"},
+				[]provisioning.TierDefinition{{Name: "fast", Provider: "vast"}},
+				[]provisioning.TierDefinition{{Name: "gold", Provider: "netapp"}},
+			)).To(Equal([]string{"platinum"}))
 		})
 
 		It("should fail closed with ReasonTenantNotReady when tier resolution fails on a Tenant with StorageReady set or StorageBackendReady=TierResolutionFailed, or when a requested tier is skipped in the catalog", func() {

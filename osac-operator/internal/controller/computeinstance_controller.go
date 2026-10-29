@@ -1323,8 +1323,8 @@ func requestedStorageTiers(instance *v1alpha1.ComputeInstance) []string {
 }
 
 // requestedCSPTiers returns the subset of requestedTiers that are CSP-managed:
-// either explicitly present in cspTiers, or (when Tenant has the StorageReady
-// condition set) not present in osacTiers.
+// either explicitly present in cspTiers, or (when CSP storage is active in the
+// catalog or on the Tenant via StorageReady) not present in osacTiers.
 func requestedCSPTiers(
 	tenant *v1alpha1.Tenant,
 	requestedTiers []string,
@@ -1335,13 +1335,13 @@ func requestedCSPTiers(
 	}
 	cspSet := tierNameSet(cspTiers)
 	osacSet := tierNameSet(osacTiers)
-	hasStorageReady := tenant != nil && tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady) != nil
+	hasCSPContext := len(cspTiers) > 0 || (tenant != nil && tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady) != nil)
 
 	var out []string
 	for _, tier := range requestedTiers {
 		_, inCSP := cspSet[tier]
 		_, inOSAC := osacSet[tier]
-		if inCSP || (hasStorageReady && !inOSAC) {
+		if inCSP || (hasCSPContext && !inOSAC) {
 			out = append(out, tier)
 		}
 	}

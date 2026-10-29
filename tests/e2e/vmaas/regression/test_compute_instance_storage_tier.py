@@ -208,13 +208,9 @@ def test_compute_instance_tier_immutability(
         cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
         assert cr["spec"]["bootDisk"]["storageTier"] == default_storage_tier
 
-        # E2E: Verify DataVolume StorageClass (commented out until osac PR #257)
-        # verify_datavolume_storage_classes(
-        #     k8s_hub_client=k8s_hub_client,
-        #     k8s_virt_client=k8s_virt_client,
-        #     ci_name=ci_name,
-        #     cr=cr,
-        # )
+        verify_datavolume_storage_classes(
+            k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+        )
 
         # Attempt to update the storage tier via K8s
         import json
@@ -382,13 +378,9 @@ def test_compute_instance_boot_disk_tier_from_catalog_item_default(
             assert cr["spec"]["bootDisk"]["storageTier"] == default_storage_tier
             assert len(cr["spec"].get("additionalDisks", [])) == 0
 
-            # E2E: Verify DataVolume StorageClass (commented out until osac PR #257)
-            # verify_datavolume_storage_classes(
-            #     k8s_hub_client=k8s_hub_client,
-            #     k8s_virt_client=k8s_virt_client,
-            #     ci_name=ci_name,
-            #     cr=cr,
-            # )
+            verify_datavolume_storage_classes(
+                k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+            )
         finally:
             grpc.delete_compute_instance(ci_id=uuid)
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
@@ -480,13 +472,9 @@ def test_compute_instance_user_tier_overrides_catalog_item_default(
             assert cr["spec"]["bootDisk"]["storageTier"] == fast_tier
             assert len(cr["spec"].get("additionalDisks", [])) == 0
 
-            # E2E: Verify DataVolume StorageClass (commented out until osac PR #257)
-            # verify_datavolume_storage_classes(
-            #     k8s_hub_client=k8s_hub_client,
-            #     k8s_virt_client=k8s_virt_client,
-            #     ci_name=ci_name,
-            #     cr=cr,
-            # )
+            verify_datavolume_storage_classes(
+                k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+            )
         finally:
             grpc.delete_compute_instance(ci_id=uuid)
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
@@ -568,13 +556,9 @@ def test_compute_instance_explicit_additional_disks_without_catalog_item_default
             assert cr["spec"]["additionalDisks"][1]["sizeGiB"] == 10
             assert cr["spec"]["additionalDisks"][1]["storageTier"] == archive_tier
 
-            # E2E: Verify DataVolume StorageClass (commented out until osac PR #257)
-            # verify_datavolume_storage_classes(
-            #     k8s_hub_client=k8s_hub_client,
-            #     k8s_virt_client=k8s_virt_client,
-            #     ci_name=ci_name,
-            #     cr=cr,
-            # )
+            verify_datavolume_storage_classes(
+                k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+            )
         finally:
             grpc.delete_compute_instance(ci_id=uuid)
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
@@ -645,13 +629,9 @@ def test_compute_instance_additional_disks_from_catalog_item_default(
             assert cr["spec"]["additionalDisks"][0]["sizeGiB"] == 10
             assert cr["spec"]["additionalDisks"][0]["storageTier"] == fast_tier
 
-            # E2E: Verify DataVolume StorageClass (commented out until osac PR #257)
-            # verify_datavolume_storage_classes(
-            #     k8s_hub_client=k8s_hub_client,
-            #     k8s_virt_client=k8s_virt_client,
-            #     ci_name=ci_name,
-            #     cr=cr,
-            # )
+            verify_datavolume_storage_classes(
+                k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+            )
         finally:
             grpc.delete_compute_instance(ci_id=uuid)
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
@@ -721,6 +701,10 @@ def test_compute_instance_additional_disks_from_catalog_item_typed_name_default(
             assert len(cr["spec"]["additionalDisks"]) == 1
             assert cr["spec"]["additionalDisks"][0]["sizeGiB"] == 10
             assert cr["spec"]["additionalDisks"][0]["storageTier"] == fast_tier
+
+            verify_datavolume_storage_classes(
+                k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+            )
         finally:
             grpc.delete_compute_instance(ci_id=uuid)
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
@@ -794,13 +778,9 @@ def test_compute_instance_user_additional_disks_override_catalog_item_default(
             assert cr["spec"]["additionalDisks"][0]["sizeGiB"] == 10
             assert cr["spec"]["additionalDisks"][0]["storageTier"] == archive_tier
 
-            # E2E: Verify DataVolume StorageClass (commented out until osac PR #257)
-            # verify_datavolume_storage_classes(
-            #     k8s_hub_client=k8s_hub_client,
-            #     k8s_virt_client=k8s_virt_client,
-            #     ci_name=ci_name,
-            #     cr=cr,
-            # )
+            verify_datavolume_storage_classes(
+                k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+            )
         finally:
             grpc.delete_compute_instance(ci_id=uuid)
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
@@ -868,13 +848,9 @@ def test_compute_instance_empty_additional_disks_disables_catalog_item_default(
             cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
             assert cr["spec"].get("additionalDisks", []) == []
 
-            # E2E: Verify DataVolume StorageClass (commented out until osac PR #257)
-            # verify_datavolume_storage_classes(
-            #     k8s_hub_client=k8s_hub_client,
-            #     k8s_virt_client=k8s_virt_client,
-            #     ci_name=ci_name,
-            #     cr=cr,
-            # )
+            verify_datavolume_storage_classes(
+                k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+            )
         finally:
             grpc.delete_compute_instance(ci_id=uuid)
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)

@@ -142,11 +142,11 @@ for newer builds and use the newest successful run. The chart includes a
 `values.schema.json` file and a `values-example.yaml` file.
 
 Select an umbrella chart version from the release links above and export it
-once. The following example uses the `osac-release/v0.0.62` tag from the
-[OSAC tags page](https://github.com/osac-project/osac/tags):
+once. The following example uses the published stable
+[`osac-release/v0.0.63` release](https://github.com/osac-project/osac/releases/tag/osac-release%2Fv0.0.63):
 
 ```console
-export OSAC_RELEASE_VERSION="0.0.62"
+export OSAC_RELEASE_VERSION="0.0.63"
 ```
 
 > **Note**
@@ -412,10 +412,11 @@ Required for a production deployment:
 
 Required for CaaS:
 
-- **DNS credentials.** With the default DNS backend, Route 53
-  (`DNS_CLASS: dns.route53.dns`), you need an `AWS_ACCESS_KEY_ID` value and an
-  `AWS_SECRET_ACCESS_KEY` value that can manage the target hosted zone. To run
-  without OSAC managing DNS (`dns.noop.dns`), you need no AWS credentials; see
+- **DNS credentials.** The chart schema accepts `dns.route53.dns` (the
+  default) and `dns.noop.dns`. Route 53 requires an `AWS_ACCESS_KEY_ID` value
+  and an `AWS_SECRET_ACCESS_KEY` value that can manage the target hosted zone.
+  `dns.noop.dns` does not. To run without OSAC managing DNS, set
+  `DNS_CLASS` as described in
   [Section 8.4](#84-installing-without-dns-management). For more information,
   see
   [`dns-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/dns-backend.md).
@@ -1475,6 +1476,8 @@ subchart's own `values.yaml` file.
 | `operator.hubAccess.enabled` | schema | Creates the hub-access `ClusterRole` that the Fulfillment Service binds to. |
 | `operator.stall.preparingInfrastructureThreshold`, `operator.stall.controlPlaneStartingThreshold`, `operator.stall.workersJoiningThreshold` | schema | How long a cluster provisioning phase can wait before the Operator marks it stalled. |
 | `operator.tenants[]` | subchart | Tenants pre-created at installation. `shared` is the built-in tenant. |
+| `operator.networkManagers.fabricManagers.<name>.enabled`, `operator.networkManagers.k8sManagers.<name>.enabled` | subchart | Enables a fabric manager (`netris`, `cudn_net`) or a Kubernetes manager (`k8s_only`, `cudn_evpn`). |
+| `operator.remoteClusterKubeconfig`, `operator.remoteClusterKubeconfigSecretName`, `operator.remoteClusterKubeconfigSecretKey` | schema | Kubeconfig mount for VMaaS on a separate workload cluster. Set the path and Secret name together. The key defaults to `kubeconfig`. See [Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster). |
 
 <a id="table-53-networking-globalnetworking"></a>
 **Table 5.3. Networking (`global.networking.*`)**
@@ -1528,6 +1531,8 @@ configured by the `evpn` values of the phase-1 releases
 | `aap.configAsCode.manifestSecret` | Secret that holds `license.zip`. |
 | `aap.configAsCode.secret` | Secret with config-as-code runtime flags. |
 | `aap.configAsCode.projectGitUri`, `aap.configAsCode.projectGitBranch` | Git source for the Ansible content that the bootstrap job imports. |
+| `aap.configAsCode.remoteClusterKubeconfigSecretName`, `aap.configAsCode.remoteClusterKubeconfigSecretKey` | Secret name and key that AAP config-as-code uses for VM operations on a separate workload cluster. The key defaults to `kubeconfig`. See [Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster). |
+| `aap.configAsCode.importAgentsEnabled`, `aap.configAsCode.importBcmAgentsEnabled` | Enable bare-metal agent import and the BCM inventory backend. |
 | `aap.instanceGroups.clusterFulfillment.enabled`, `aap.instanceGroups.clusterFulfillment.config`, `aap.instanceGroups.clusterFulfillment.secret` | The `cluster-fulfillment` instance group for CaaS provisioning. See [Section 6.2](#62-installing-osac-for-caas). |
 | `aap.instanceGroups.networkFulfillment.enabled`, `aap.instanceGroups.networkFulfillment.config`, `aap.instanceGroups.networkFulfillment.secret` | The settings (`config`, the `ConfigMap` `network-fulfillment-ig`) and secrets (`secret`, the `Secret` `network-fulfillment-ig`) of the Fabric Manager, which networking jobs read as environment variables. Leave `enabled: true` (the default); `false` writes both empty and is rejected with provider networking enabled. The installer writes both at every rollout. See [Section 4.4.3](#443-setting-the-networking-helm-values). |
 | `aap.instanceGroups.storageFulfillment.config.STORAGE_SNAPSHOTS_ENABLED` | Snapshot toggle for the `storage-operations` instance group. |
@@ -1651,6 +1656,10 @@ the cluster. Every workflow also needs the networking values and steps of
    hook, which creates the `local` `StorageBackend` and `StorageTier` that the
    first `ComputeInstance` needs. Without it, provisioning fails with an empty
    `storage_tier_definitions` even though every pod looks healthy.
+
+   For virtual machines on a different cluster from the OSAC management
+   services, see
+   [Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster).
 
 2. Add the `service.*`, `aap.configAsCode.*`, and database Secret settings to
    `my-values.yaml`, and the Keycloak hardening to the `osac-infra` values, from [Section 4.2](#42-configuring-the-helm-values).
@@ -1870,6 +1879,43 @@ Manager such as Netris.
 
 - Create a `BareMetalPool` or `BareMetalInstance` custom resource and confirm
   that the Bare Metal Fulfillment Operator reconciles it.
+
+### 6.4 Installing VMaaS on a separate workload cluster
+
+Use this layout when OSAC management services run on one OpenShift cluster
+and virtual machines run on another. Leave CaaS disabled. The cluster
+controller cannot run in the same operator instance.
+
+Prepare the two clusters with Helm as described in
+[Separate VMaaS workload cluster](helm-deployment-guide.md#separate-vmaas-workload-cluster).
+Create the workload kubeconfig Secret on the management cluster, including
+the console-proxy label, as described in
+[VMaaS dedicated cluster](https://github.com/osac-project/osac/blob/main/osac-operator/docs/vmaas-dedicated-cluster/README.md).
+
+In `my-values.yaml`, enable VMaaS only and point the operator and AAP at that
+Secret:
+
+```yaml
+global:
+  services: { vmaas: { enabled: true }, caas: { enabled: false }, bmaas: { enabled: false }, maas: { enabled: false } }
+operator:
+  remoteClusterKubeconfig: /var/run/secrets/remote/kubeconfig
+  remoteClusterKubeconfigSecretName: osac-remote-kubeconfig
+  remoteClusterKubeconfigSecretKey: kubeconfig
+aap:
+  configAsCode:
+    remoteClusterKubeconfigSecretName: osac-remote-kubeconfig
+    remoteClusterKubeconfigSecretKey: kubeconfig
+```
+
+`remoteClusterKubeconfig` is the path inside the operator container. The
+Secret name and key must match the Secret on the management cluster. The
+chart default key is `kubeconfig`.
+
+Install OSAC on the management cluster. See
+[Section 4.3](#43-installing-osac). Complete
+[Section 7](#7-verifying-the-installation) there, and confirm that the
+virtual machine is created on the workload cluster.
 
 ---
 
@@ -2383,6 +2429,7 @@ Cluster exists.
    aap:
      instanceGroups:
        clusterFulfillment:
+         enabled: true
          config:
            DNS_CLASS: dns.noop.dns
            EXTERNAL_ACCESS_BASE_DOMAIN: "<guest_domain>"
@@ -2401,8 +2448,8 @@ Cluster exists.
        | grep -E 'DNS_CLASS|EXTERNAL_ACCESS|HOSTED_CLUSTER'
    ```
 
-4. Create these DNS records yourself; `dns.noop.dns` stops OSAC from managing
-   DNS, it does not create records for you:
+4. Create these DNS records yourself. `dns.noop.dns` stops OSAC from managing
+   DNS. It does not create records for you:
 
    ```text
    api.<cluster>.<guest_domain>       -> API endpoint
@@ -2419,6 +2466,9 @@ Cluster exists.
 Do not change `DNS_CLASS`, `DNS_ZONE`, or `EXTERNAL_ACCESS_BASE_DOMAIN` while
 any Cluster exists (see
 [Table 4.2](#table-42-settings-fixed-at-installation)).
+
+On a later upgrade, keep `DNS_CLASS: dns.noop.dns` in the values file. Helm
+reconciles the `ConfigMap` from those values.
 
 ### 8.5 Additional resources
 

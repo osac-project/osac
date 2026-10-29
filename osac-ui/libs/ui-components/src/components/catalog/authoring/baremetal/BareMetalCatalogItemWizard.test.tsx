@@ -222,7 +222,12 @@ describe('BareMetalCatalogItemWizard', () => {
             value: { defaultValue: { id: 'image-1', name: 'rhel-9' } },
           },
         },
-        userData: { behavior: { case: 'locked', value: 'echo hi' } },
+        userDataSource: {
+          behavior: {
+            case: 'locked',
+            value: { source: { case: 'inline', value: 'echo hi' } },
+          },
+        },
       },
     });
     const onUpdate = vi.fn((req: { object?: unknown }) => ({

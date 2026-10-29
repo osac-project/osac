@@ -7,6 +7,7 @@ import { type ResourceSelectValue } from '../../../Form/resourceSelectValue';
 import type { ProvisioningFieldValue } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
 import { catalogGeneralItemPayload } from '../CatalogGeneralStep';
 import { policyFromCatalogValue } from '../catalogItemPolicy';
+import { catalogUserDataPolicyFromValues } from '../catalogUserData';
 
 type CatalogItemFieldsInit = NonNullable<
   MessageInitShape<typeof BareMetalInstanceCatalogItemSchema>['fields']
@@ -60,18 +61,9 @@ const buildBareMetalCatalogItemFieldsPayload = (
     fields.diskImage = diskImage;
   }
 
-  // Gap: the catalog-item backend currently accepts only inline user data;
-  // UserDataField's source and secret reference are not serialized yet.
-  const userData =
-    values.userDataSource.value === 'inline'
-      ? buildFieldPolicy<FieldPolicyInit<'userData'>>(
-          values.userData,
-          isEmptyString,
-          toTrimmedString,
-        )
-      : undefined;
-  if (userData) {
-    fields.userData = userData;
+  const userDataSource = catalogUserDataPolicyFromValues(values);
+  if (userDataSource) {
+    fields.userDataSource = userDataSource;
   }
 
   return fields;

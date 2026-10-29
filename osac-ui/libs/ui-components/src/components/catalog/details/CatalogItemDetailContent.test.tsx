@@ -65,8 +65,11 @@ const vmItem = create(ComputeInstanceCatalogItemSchema, {
         value: { defaultValue: { id: 'di-rhel-10', name: 'RHEL 10' } },
       },
     },
-    userData: {
-      behavior: { case: 'locked', value: '#cloud-config' },
+    userDataSource: {
+      behavior: {
+        case: 'locked',
+        value: { source: { case: 'inline', value: '#cloud-config' } },
+      },
     },
     bootDisk: {
       sizeGib: { behavior: { case: 'locked', value: 64 } },
@@ -148,7 +151,12 @@ const bareMetalItem = create(BareMetalInstanceCatalogItemSchema, {
         value: { defaultValue: { id: 'di-rhel-10', name: 'RHEL 10' } },
       },
     },
-    userData: { behavior: { case: 'editable', value: { defaultValue: 'echo ready' } } },
+    userDataSource: {
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { source: { case: 'inline', value: 'echo ready' } } },
+      },
+    },
     runStrategy: { behavior: { case: 'locked', value: 1 } },
     networkAttachments: { behavior: { case: 'locked', value: {} } },
     autoExternalIpAttachment: { behavior: { case: 'locked', value: true } },

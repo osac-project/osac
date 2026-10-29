@@ -15,6 +15,7 @@ import {
   catalogGeneralValuesFromItem,
 } from '../CatalogGeneralStep';
 import { catalogValueFromPolicy } from '../catalogItemPolicy';
+import { catalogUserDataValuesFromPolicy } from '../catalogUserData';
 
 export interface ComputeCatalogItemValues extends CatalogGeneralValues {
   guestOsFamily: GuestOSFamily;
@@ -89,11 +90,7 @@ export const getComputeCatalogItemInitialValues = (
       readResourceReference,
       emptyResourceSelectValue(),
     ),
-    // Gap: catalog-item serialization currently exposes only inline user data,
-    // so the shared UserDataField source and secret reference cannot be restored.
-    userDataSource: provisioningFieldValue('inline'),
-    userData: catalogValueFromPolicy(fields?.userData, readStringValue, ''),
-    userDataSecret: provisioningFieldValue(''),
+    ...catalogUserDataValuesFromPolicy(fields?.userDataSource),
     bootDiskSizeGib: catalogValueFromPolicy(fields?.bootDisk?.sizeGib, readStringValue, ''),
     bootDiskStorageTier: catalogValueFromPolicy(
       fields?.bootDisk?.storageTier,

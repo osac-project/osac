@@ -18,6 +18,7 @@ import type {
 
 import { useTranslation } from '../../../hooks/useTranslation';
 import { formatReviewScalar } from '../../ProvisioningWizard/reviewFormatters';
+import { catalogUserDataDisplayValue } from '../authoring/catalogUserData';
 import {
   bareMetalCatalogItemFields,
   bareMetalDiskImageReferenceFromPolicy,
@@ -167,8 +168,8 @@ const computeConfiguration = (
         />
         <CatalogConfigurationRow
           label={t('User data')}
-          value={policyValue(fields?.userData)}
-          policy={fields?.userData}
+          value={catalogUserDataDisplayValue(fields?.userDataSource)}
+          policy={fields?.userDataSource}
         />
         <CatalogConfigurationRow
           label={t('Boot disk size')}
@@ -190,7 +191,7 @@ const computeConfiguration = (
     hasConfiguredField: hasConfiguredPolicy(
       fields?.instanceType,
       fields?.diskImage,
-      fields?.userData,
+      fields?.userDataSource,
       bootDisk?.sizeGib,
       bootDisk?.storageTier,
       fields?.additionalDisks,
@@ -276,15 +277,15 @@ const bareMetalConfiguration = (
         />
         <CatalogConfigurationRow
           label={t('User data')}
-          value={policyValue(fields?.userData)}
-          policy={fields?.userData}
+          value={catalogUserDataDisplayValue(fields?.userDataSource)}
+          policy={fields?.userDataSource}
         />
       </>
     ),
     hasConfiguredField: hasConfiguredPolicy(
       fields?.instanceType,
       fields?.diskImage,
-      fields?.userData,
+      fields?.userDataSource,
     ),
   };
 };

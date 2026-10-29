@@ -21,6 +21,7 @@ import type { ComputeInstanceCatalogItem } from '@osac/types';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { guestOsFamilyLabels } from '../../DiskImage/DiskImageTable';
 import { Timestamp } from '../../Primitives/Timestamp';
+import { catalogUserDataDisplayValue } from '../authoring/catalogUserData';
 import { findDiskImageForReference } from '../bareMetalCatalogItemResourceDisplay';
 import CatalogFieldEditabilityLabel from '../CatalogFieldEditabilityLabel';
 import { type FieldPolicyLike, catalogFieldPolicyBehavior } from '../catalogFieldPolicyDisplay';
@@ -126,8 +127,7 @@ const additionalDisksFromPolicy = (value: unknown): AdditionalDisk[] => {
 };
 
 const configuredUserData = (item: ComputeInstanceCatalogItem): boolean => {
-  const value = policyValue(item.fields?.userData);
-  return typeof value === 'string' && value.trim().length > 0;
+  return Boolean(catalogUserDataDisplayValue(item.fields?.userDataSource));
 };
 
 const displayReference = (reference: unknown, t: TFunction): string =>
@@ -219,7 +219,7 @@ const VmCatalogItemDetailContent = ({ item }: VmCatalogItemDetailContentProps) =
       <GridItem md={4}>
         <DetailSection title={t('Access & Initial run')}>
           <DetailRow label={t('Cloud-init')}>
-            <GovernedDetailValue value={userDataValue} policy={fields?.userData} />
+            <GovernedDetailValue value={userDataValue} policy={fields?.userDataSource} />
           </DetailRow>
         </DetailSection>
       </GridItem>

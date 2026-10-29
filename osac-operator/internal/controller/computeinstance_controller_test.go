@@ -2427,8 +2427,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 			nn := types.NamespacedName{Name: name, Namespace: namespaceName}
 			if err := k8sClient.Get(ctx, nn, ci); err == nil {
 				ci.Finalizers = nil
-				_ = k8sClient.Update(ctx, ci)
-				_ = k8sClient.Delete(ctx, ci)
+				Expect(client.IgnoreNotFound(k8sClient.Update(ctx, ci))).To(Succeed())
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, ci))).To(Succeed())
 			}
 		}
 
@@ -3480,7 +3480,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, vm) })
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vm))).To(Succeed())
+			})
 			Eventually(func(g Gomega) {
 				cachedVM := &kubevirtv1.VirtualMachine{}
 				g.Expect(ciReconciler.Client.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: namespaceName}, cachedVM)).To(Succeed())

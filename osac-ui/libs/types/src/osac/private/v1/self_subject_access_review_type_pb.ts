@@ -19,6 +19,7 @@ import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
+import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_private_v1_metadata_type } from "./metadata_type_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -27,7 +28,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/self_subject_access_review_type.proto.
  */
 export const file_osac_private_v1_self_subject_access_review_type: GenFile = /*@__PURE__*/
-  fileDesc("CjVvc2FjL3ByaXZhdGUvdjEvc2VsZl9zdWJqZWN0X2FjY2Vzc19yZXZpZXdfdHlwZS5wcm90bxIPb3NhYy5wcml2YXRlLnYxIsoBChdTZWxmU3ViamVjdEFjY2Vzc1JldmlldxIrCghtZXRhZGF0YRgBIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5NZXRhZGF0YRJCCgRzcGVjGAIgASgLMiwub3NhYy5wcml2YXRlLnYxLlNlbGZTdWJqZWN0QWNjZXNzUmV2aWV3U3BlY0IGukgDyAEBEj4KBnN0YXR1cxgDIAEoCzIuLm9zYWMucHJpdmF0ZS52MS5TZWxmU3ViamVjdEFjY2Vzc1Jldmlld1N0YXR1cyJ5ChtTZWxmU3ViamVjdEFjY2Vzc1Jldmlld1NwZWMSPwoHc2VydmljZRgBIAEoCUIuukgrcikQARiAATIiXm9zYWNcLnB1YmxpY1wudjFcLltBLVpdW2EtekEtWl0qJBIZCgZtZXRob2QYAiABKAlCCbpIBnIEEAEYQCJACh1TZWxmU3ViamVjdEFjY2Vzc1Jldmlld1N0YXR1cxIPCgdhbGxvd2VkGAEgASgIEg4KBnJlYXNvbhgCIAEoCUIUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_metadata_type]);
+  fileDesc("CjVvc2FjL3ByaXZhdGUvdjEvc2VsZl9zdWJqZWN0X2FjY2Vzc19yZXZpZXdfdHlwZS5wcm90bxIPb3NhYy5wcml2YXRlLnYxItABChdTZWxmU3ViamVjdEFjY2Vzc1JldmlldxIrCghtZXRhZGF0YRgBIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5NZXRhZGF0YRJCCgRzcGVjGAIgASgLMiwub3NhYy5wcml2YXRlLnYxLlNlbGZTdWJqZWN0QWNjZXNzUmV2aWV3U3BlY0IGukgDyAEBEkQKBnN0YXR1cxgDIAEoCzIuLm9zYWMucHJpdmF0ZS52MS5TZWxmU3ViamVjdEFjY2Vzc1Jldmlld1N0YXR1c0IE4kEBAyJ5ChtTZWxmU3ViamVjdEFjY2Vzc1Jldmlld1NwZWMSPwoHc2VydmljZRgBIAEoCUIuukgrcikQARiAATIiXm9zYWNcLnB1YmxpY1wudjFcLltBLVpdW2EtekEtWl0qJBIZCgZtZXRob2QYAiABKAlCCbpIBnIEEAEYQCJACh1TZWxmU3ViamVjdEFjY2Vzc1Jldmlld1N0YXR1cxIPCgdhbGxvd2VkGAEgASgIEg4KBnJlYXNvbhgCIAEoCUIUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_metadata_type]);
 
 /**
  * SelfSubjectAccessReview checks whether the current user can perform an action.

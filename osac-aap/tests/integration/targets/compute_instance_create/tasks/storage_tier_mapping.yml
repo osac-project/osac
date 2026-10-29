@@ -1,0 +1,16 @@
+---
+- name: Verify ComputeInstance disk mappings through the provisioning playbook
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Exercise storage selection and real DataVolume creation against Kind
+      ansible.builtin.command:
+        argv:
+          - uv
+          - run
+          - python
+          - "{{ playbook_dir }}/../files/verify_storage_mapping.py"
+      args:
+        chdir: "{{ playbook_dir }}/../../../../../"
+      changed_when: false

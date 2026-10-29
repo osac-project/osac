@@ -24,6 +24,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -114,20 +115,26 @@ func newPublishedScopedAddOnOperatorResourceResolver(
 ) *addOnOperatorResourceResolver {
 	return &addOnOperatorResourceResolver{
 		dao: operatorDAO,
-		get: getPublishedAddOnOperator,
+		get: getPublishedSharedAddOnOperator,
 	}
 }
 
-// getPublishedAddOnOperator resolves a published operator by reference.
-func getPublishedAddOnOperator(
+// getPublishedSharedAddOnOperator resolves an active published shared operator.
+func getPublishedSharedAddOnOperator(
 	ctx context.Context,
 	operatorDAO *dao.GenericDAO[*privatev1.AddOnOperator],
 	id string,
 ) (*privatev1.AddOnOperator, error) {
-	operator, err := getReferenceResource(ctx, operatorDAO, id)
+	operator, err := resolveResourceInScope(
+		ctx, operatorDAO, referenceScope{tenant: auth.SharedTenant}, id, "",
+		"add-on operator", "", grpccodes.NotFound,
+	)
 	if err != nil {
 		return nil, err
 	}
+	// Graph resolution treats unpublished or deleted operators as unavailable;
+	// catalog-item authoring performs its own lookup and reports unpublished
+	// references with a specific validation error.
 	if !operator.GetPublished() || operator.GetMetadata().GetDeletionTimestamp() != nil {
 		return nil, &dao.ErrNotFound{IDs: []string{id}}
 	}

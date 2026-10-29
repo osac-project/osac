@@ -124,6 +124,10 @@ operator:
     controlPlaneStartingThreshold: "30m"
     workersJoiningThreshold: "20m"
     workersJoiningByInstanceType: {}
+  upgradeTimeouts:
+    pending: "10m"
+    controlPlane: "40m"
+    nodePoolPerNode: "20m"
   fulfillment:
     serverAddress: "fulfillment-internal-api:8001"
     credentials:

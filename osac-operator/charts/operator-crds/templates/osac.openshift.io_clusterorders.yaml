@@ -482,16 +482,46 @@ spec:
                       minimum: 0
                       type: integer
                     upgradeObservation:
-                      description: UpgradeObservation reports the version observed
-                        on this node set for its current attempt.
+                      description: |-
+                        UpgradeObservation reports the observed version and state of this node set's
+                        current upgrade attempt.
                       properties:
                         attemptID:
-                          description: AttemptID links this observation to the current
-                            component attempt.
+                          description: |-
+                            AttemptID links this observation to the selected control-plane or node-pool
+                            attempt.
+                          type: string
+                        baselineTransitionTime:
+                          description: |-
+                            BaselineTransitionTime is the NodePool UpdatingVersion transition before AAP
+                            stamped this attempt. It is compared only with another NodePool time and is
+                            unused for control-plane observations.
+                          format: date-time
+                          type: string
+                        message:
+                          description: |-
+                            Message explains a failed component attempt without including provider
+                            output.
+                          type: string
+                        readyAtVersion:
+                          description: |-
+                            ReadyAtVersion reports that a NodePool is ready at Version; it is unused for
+                            control-plane observations. Feedback compares Version with the private
+                            attempt target.
+                          type: boolean
+                        state:
+                          description: |-
+                            State reports observed progress or a terminal result for the selected
+                            component.
+                          enum:
+                          - Progressing
+                          - Succeeded
+                          - Failed
                           type: string
                         version:
-                          description: Version is the OpenShift version observed on
-                            that component.
+                          description: |-
+                            Version is the OpenShift version observed on the selected control plane or
+                            node pool.
                           type: string
                       required:
                       - attemptID
@@ -592,16 +622,46 @@ spec:
                 format: int32
                 type: integer
               upgradeObservation:
-                description: UpgradeObservation reports the version observed on the
-                  control plane for its current attempt.
+                description: |-
+                  UpgradeObservation reports the observed version and state of the control
+                  plane's current upgrade attempt.
                 properties:
                   attemptID:
-                    description: AttemptID links this observation to the current component
+                    description: |-
+                      AttemptID links this observation to the selected control-plane or node-pool
                       attempt.
                     type: string
-                  version:
-                    description: Version is the OpenShift version observed on that
+                  baselineTransitionTime:
+                    description: |-
+                      BaselineTransitionTime is the NodePool UpdatingVersion transition before AAP
+                      stamped this attempt. It is compared only with another NodePool time and is
+                      unused for control-plane observations.
+                    format: date-time
+                    type: string
+                  message:
+                    description: |-
+                      Message explains a failed component attempt without including provider
+                      output.
+                    type: string
+                  readyAtVersion:
+                    description: |-
+                      ReadyAtVersion reports that a NodePool is ready at Version; it is unused for
+                      control-plane observations. Feedback compares Version with the private
+                      attempt target.
+                    type: boolean
+                  state:
+                    description: |-
+                      State reports observed progress or a terminal result for the selected
                       component.
+                    enum:
+                    - Progressing
+                    - Succeeded
+                    - Failed
+                    type: string
+                  version:
+                    description: |-
+                      Version is the OpenShift version observed on the selected control plane or
+                      node pool.
                     type: string
                 required:
                 - attemptID

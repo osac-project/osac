@@ -18,6 +18,7 @@
 import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
+import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_private_v1_metadata_type } from "./metadata_type_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -26,7 +27,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/role_type.proto.
  */
 export const file_osac_private_v1_role_type: GenFile = /*@__PURE__*/
-  fileDesc("Ch9vc2FjL3ByaXZhdGUvdjEvcm9sZV90eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEilQEKBFJvbGUSCgoCaWQYASABKAkSKwoIbWV0YWRhdGEYAiABKAsyGS5vc2FjLnByaXZhdGUudjEuTWV0YWRhdGESJwoEc3BlYxgDIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5Sb2xlU3BlYxIrCgZzdGF0dXMYBCABKAsyGy5vc2FjLnByaXZhdGUudjEuUm9sZVN0YXR1cyIuCghSb2xlU3BlYxINCgV0aXRsZRgBIAEoCRITCgtkZXNjcmlwdGlvbhgCIAEoCSJZCgpSb2xlU3RhdHVzEikKBXN0YXRlGAEgASgOMhoub3NhYy5wcml2YXRlLnYxLlJvbGVTdGF0ZRIUCgdtZXNzYWdlGAIgASgJSACIAQFCCgoIX21lc3NhZ2UiSgoNUm9sZVJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEg8KB3Byb2plY3QYAyABKAkSDgoGc2hhcmVkGAQgASgIKmwKCVJvbGVTdGF0ZRIaChZST0xFX1NUQVRFX1VOU1BFQ0lGSUVEEAASFgoSUk9MRV9TVEFURV9QRU5ESU5HEAESFAoQUk9MRV9TVEFURV9SRUFEWRACEhUKEVJPTEVfU1RBVEVfRkFJTEVEEANCFIq1GBASDm9zYWMucHVibGljLnYxYgZwcm90bzM", [file_cleanapi_cleanapi, file_osac_private_v1_metadata_type]);
+  fileDesc("Ch9vc2FjL3ByaXZhdGUvdjEvcm9sZV90eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEimwEKBFJvbGUSCgoCaWQYASABKAkSKwoIbWV0YWRhdGEYAiABKAsyGS5vc2FjLnByaXZhdGUudjEuTWV0YWRhdGESJwoEc3BlYxgDIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5Sb2xlU3BlYxIxCgZzdGF0dXMYBCABKAsyGy5vc2FjLnByaXZhdGUudjEuUm9sZVN0YXR1c0IE4kEBAyIuCghSb2xlU3BlYxINCgV0aXRsZRgBIAEoCRITCgtkZXNjcmlwdGlvbhgCIAEoCSJZCgpSb2xlU3RhdHVzEikKBXN0YXRlGAEgASgOMhoub3NhYy5wcml2YXRlLnYxLlJvbGVTdGF0ZRIUCgdtZXNzYWdlGAIgASgJSACIAQFCCgoIX21lc3NhZ2UiSgoNUm9sZVJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEg8KB3Byb2plY3QYAyABKAkSDgoGc2hhcmVkGAQgASgIKmwKCVJvbGVTdGF0ZRIaChZST0xFX1NUQVRFX1VOU1BFQ0lGSUVEEAASFgoSUk9MRV9TVEFURV9QRU5ESU5HEAESFAoQUk9MRV9TVEFURV9SRUFEWRACEhUKEVJPTEVfU1RBVEVfRkFJTEVEEANCFIq1GBASDm9zYWMucHVibGljLnYxYgZwcm90bzM", [file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_metadata_type]);
 
 /**
  * Represents a role that can be assigned to groups.

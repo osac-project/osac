@@ -85,7 +85,7 @@ type runnerContext struct {
 // run runs the `start rest-gateway` command.
 func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 	// Apply service flag defaults and validate (before context creation to avoid cancel leak):
-	c.args.services.EnableAllIfNoneSet()
+	c.args.services.EnableAllIfNoneSet(cmd.Flags())
 	if err := c.args.services.Validate(); err != nil {
 		return fmt.Errorf("invalid service flags: %w", err)
 	}
@@ -361,14 +361,15 @@ func buildHandlerList() []handlerRegistrar {
 		publicv1.RegisterComputeInstanceTemplatesHandler,
 		publicv1.RegisterComputeInstanceCatalogItemsHandler,
 		publicv1.RegisterComputeInstancesHandler,
-		publicv1.RegisterDiskImagesHandler,
 		publicv1.RegisterConsoleSessionsHandler,
 		publicv1.RegisterInstanceTypesHandler,
 		privatev1.RegisterComputeInstanceTemplatesHandler,
 		privatev1.RegisterComputeInstanceCatalogItemsHandler,
 		privatev1.RegisterComputeInstancesHandler,
-		privatev1.RegisterDiskImagesHandler,
 		privatev1.RegisterInstanceTypesHandler,
+		// Disk images, shared by the VMaaS and BMaaS tiers:
+		publicv1.RegisterDiskImagesHandler,
+		privatev1.RegisterDiskImagesHandler,
 		// BMaaS:
 		publicv1.RegisterBareMetalInstanceTemplatesHandler,
 		publicv1.RegisterBareMetalInstanceCatalogItemsHandler,

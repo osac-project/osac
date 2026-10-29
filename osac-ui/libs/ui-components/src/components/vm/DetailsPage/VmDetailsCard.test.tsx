@@ -8,7 +8,7 @@ import {
   ComputeInstanceState,
   ComputeInstanceTemplateReferenceSchema,
   InstanceTypeReferenceSchema,
-  SecretLocalReferenceSchema,
+  SecretReferenceSchema,
   StorageTierReferenceSchema,
 } from '@osac/types';
 
@@ -41,14 +41,14 @@ const catalogVm: ComputeInstance = {
       id: 'catalog-rhel-9',
       name: 'RHEL 9 catalog',
     }),
-    sshKey: create(SecretLocalReferenceSchema, { name: 'tenant-ssh-key' }),
+    sshKey: create(SecretReferenceSchema, { name: 'tenant-ssh-key' }),
     instanceType: create(InstanceTypeReferenceSchema, { id: 'standard-4-8' }),
     bootDisk: {
       $typeName: 'osac.public.v1.ComputeInstanceDisk',
       sizeGib: 40,
       storageTier: create(StorageTierReferenceSchema, { name: 'balanced' }),
     },
-    userData: '#cloud-config',
+    //userData: '#cloud-config',
     additionalDisks: {
       $typeName: 'osac.public.v1.ComputeInstanceDiskList',
       items: [],

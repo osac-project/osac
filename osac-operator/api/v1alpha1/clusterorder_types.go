@@ -169,20 +169,46 @@ type NodeRequestStatus struct {
 	BareMetal *BareMetalNodeSpec `json:"bareMetal,omitempty"`
 	// +kubebuilder:validation:Optional
 	FabricInterface string `json:"fabricInterface,omitempty"`
-	// UpgradeObservation reports the version observed on this node set for its current attempt.
+	// UpgradeObservation reports the observed version and state of this node set's
+	// current upgrade attempt.
 	// +kubebuilder:validation:Optional
 	UpgradeObservation *UpgradeObservation `json:"upgradeObservation,omitempty"`
 }
 
-// UpgradeObservation carries one component's observed OpenShift version from
-// the HyperShift reconciler to Fulfillment feedback.
+// UpgradeObservation carries the observed version and state of one control-plane
+// or node-pool upgrade attempt from HyperShift to Fulfillment feedback.
 type UpgradeObservation struct {
-	// AttemptID links this observation to the current component attempt.
+	// AttemptID links this observation to the selected control-plane or node-pool
+	// attempt.
 	// +kubebuilder:validation:Required
 	AttemptID string `json:"attemptID"`
-	// Version is the OpenShift version observed on that component.
+	// Version is the OpenShift version observed on the selected control plane or
+	// node pool.
 	Version string `json:"version,omitempty"`
+	// ReadyAtVersion reports that a NodePool is ready at Version; it is unused for
+	// control-plane observations. Feedback compares Version with the private
+	// attempt target.
+	ReadyAtVersion bool `json:"readyAtVersion,omitempty"`
+	// State reports observed progress or a terminal result for the selected
+	// component.
+	// +kubebuilder:validation:Enum=Progressing;Succeeded;Failed
+	State UpgradeObservationState `json:"state,omitempty"`
+	// Message explains a failed component attempt without including provider
+	// output.
+	Message string `json:"message,omitempty"`
+	// BaselineTransitionTime is the NodePool UpdatingVersion transition before AAP
+	// stamped this attempt. It is compared only with another NodePool time and is
+	// unused for control-plane observations.
+	BaselineTransitionTime *metav1.Time `json:"baselineTransitionTime,omitempty"`
 }
+
+type UpgradeObservationState string
+
+const (
+	UpgradeObservationProgressing UpgradeObservationState = "Progressing"
+	UpgradeObservationSucceeded   UpgradeObservationState = "Succeeded"
+	UpgradeObservationFailed      UpgradeObservationState = "Failed"
+)
 
 // BareMetalNodeSpec holds configuration specific to bare-metal node requests.
 type BareMetalNodeSpec struct {
@@ -274,7 +300,8 @@ type AddOnOperatorJobStatus struct {
 
 // ClusterOrderStatus defines the observed state of ClusterOrder
 type ClusterOrderStatus struct {
-	// UpgradeObservation reports the version observed on the control plane for its current attempt.
+	// UpgradeObservation reports the observed version and state of the control
+	// plane's current upgrade attempt.
 	// +kubebuilder:validation:Optional
 	UpgradeObservation *UpgradeObservation `json:"upgradeObservation,omitempty"`
 	// Phase provides a single-value overview of the state of the ClusterOrder
@@ -309,7 +336,6 @@ type ClusterOrderStatus struct {
 	// Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
 	// +kubebuilder:validation:Optional
 	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
-
 	// ClusterStorageJobs holds the history of cluster storage provisioning/deprovisioning jobs
 	// +kubebuilder:validation:Optional
 	ClusterStorageJobs []JobStatus `json:"clusterStorageJobs,omitempty"`

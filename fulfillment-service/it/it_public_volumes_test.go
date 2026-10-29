@@ -16,6 +16,7 @@ package it
 import (
 	"context"
 	"fmt"
+	"maps"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -23,6 +24,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -34,6 +36,7 @@ var _ = Describe("Public volumes API", func() {
 		ctx context.Context
 
 		publicVolumesClient   publicv1.VolumesClient
+		privateVolumesClient  privatev1.VolumesClient
 		storageBackendsClient privatev1.StorageBackendsClient
 		storageTiersClient    privatev1.StorageTiersClient
 
@@ -48,6 +51,7 @@ var _ = Describe("Public volumes API", func() {
 		ctx = context.Background()
 
 		publicVolumesClient = publicv1.NewVolumesClient(tool.ExternalView().UserConn())
+		privateVolumesClient = privatev1.NewVolumesClient(tool.InternalView().AdminConn())
 		storageBackendsClient = privatev1.NewStorageBackendsClient(tool.InternalView().AdminConn())
 		storageTiersClient = privatev1.NewStorageTiersClient(tool.InternalView().AdminConn())
 
@@ -169,6 +173,194 @@ var _ = Describe("Public volumes API", func() {
 			g.Expect(ok).To(BeTrue())
 			g.Expect(st.Code()).To(Equal(grpccodes.NotFound))
 		}, 30*time.Second, time.Second).Should(Succeed())
+	})
+
+	It("rejects reserved metadata atomically and preserves private values on public replacement", func() {
+		rejectedName := fmt.Sprintf("metadata-rejected-%s", uuid.New()[24:32])
+		_, err := publicVolumesClient.Create(ctx, publicv1.VolumesCreateRequest_builder{
+			Object: publicv1.Volume_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: rejectedName,
+					Labels: map[string]string{
+						"admin.osac.openshift.io/metadata-test": "private-marker",
+						"example.com/metadata-test":             "ordinary-marker",
+					},
+					Annotations: map[string]string{
+						"operator.admin.osac.openshift.io/metadata-test": "private-marker",
+						"example.com/metadata-test":                      "ordinary-marker",
+					},
+				}.Build(),
+				Spec: publicv1.VolumeSpec_builder{
+					StorageTier: tierName,
+					SizeGib:     10,
+					AccessMode:  publicv1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		filter := fmt.Sprintf("this.metadata.name == %q", rejectedName)
+		listed, err := publicVolumesClient.List(ctx, publicv1.VolumesListRequest_builder{Filter: &filter}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listed.GetTotal()).To(BeZero())
+
+		name := fmt.Sprintf("metadata-volume-%s", uuid.New()[24:32])
+		created, err := publicVolumesClient.Create(ctx, publicv1.VolumesCreateRequest_builder{
+			Object: publicv1.Volume_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name:        name,
+					Labels:      map[string]string{"example.com/metadata-test": "visible-before"},
+					Annotations: map[string]string{"example.com/metadata-test": "visible-before"},
+				}.Build(),
+				Spec: publicv1.VolumeSpec_builder{
+					StorageTier: tierName,
+					SizeGib:     10,
+					AccessMode:  publicv1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		id := created.GetObject().GetId()
+		DeferCleanup(func(cleanupCtx SpecContext) {
+			_, deleteErr := publicVolumesClient.Delete(cleanupCtx, publicv1.VolumesDeleteRequest_builder{Id: id}.Build())
+			Expect(deleteErr).NotTo(HaveOccurred())
+		})
+
+		_, err = privateVolumesClient.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+			Object: privatev1.Volume_builder{
+				Id: id,
+				Metadata: privatev1.Metadata_builder{
+					Labels: map[string]string{
+						"admin.osac.openshift.io/metadata-test": "stored-label",
+						"example.com/metadata-test":             "visible-before",
+					},
+					Annotations: map[string]string{
+						"operator.admin.osac.openshift.io/metadata-test": "stored-annotation",
+						"example.com/metadata-test":                      "visible-before",
+					},
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels", "metadata.annotations"}},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		before, err := privateVolumesClient.Get(ctx, privatev1.VolumesGetRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(maps.Equal(before.GetObject().GetMetadata().GetLabels(), map[string]string{
+			"admin.osac.openshift.io/metadata-test": "stored-label",
+			"example.com/metadata-test":             "visible-before",
+		})).To(BeTrue())
+		Expect(maps.Equal(before.GetObject().GetMetadata().GetAnnotations(), map[string]string{
+			"operator.admin.osac.openshift.io/metadata-test": "stored-annotation",
+			"example.com/metadata-test":                      "visible-before",
+		})).To(BeTrue())
+
+		By("allowing private reserved-key queries while denying public existence probes")
+		reservedFilter := fmt.Sprintf("this.metadata.name == %q && this.metadata.labels[%q] == %q",
+			name, "admin.osac.openshift.io/metadata-test", "stored-label")
+		privateList, err := privateVolumesClient.List(ctx, privatev1.VolumesListRequest_builder{Filter: &reservedFilter}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(privateList.GetTotal()).To(Equal(int32(1)))
+		for _, publicClient := range []publicv1.VolumesClient{
+			publicVolumesClient,
+			publicv1.NewVolumesClient(tool.ExternalView().AdminConn()),
+		} {
+			_, listErr := publicClient.List(ctx, publicv1.VolumesListRequest_builder{Filter: &reservedFilter}.Build())
+			Expect(listErr).To(HaveOccurred())
+			Expect(grpcstatus.Code(listErr)).To(Equal(grpccodes.InvalidArgument))
+		}
+		ordinaryFilter := fmt.Sprintf("this.metadata.name == %q && this.metadata.labels[%q] == %q",
+			name, "example.com/metadata-test", "visible-before")
+		ordinaryList, err := publicVolumesClient.List(ctx, publicv1.VolumesListRequest_builder{Filter: &ordinaryFilter}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ordinaryList.GetTotal()).To(Equal(int32(1)))
+		Expect(ordinaryList.GetItems()).To(HaveLen(1))
+		Expect(ordinaryList.GetItems()[0].GetMetadata().GetLabels()).To(Equal(map[string]string{
+			"example.com/metadata-test": "visible-before",
+		}))
+
+		By("hiding reserved values from both user and administrator public views")
+		userView, err := publicVolumesClient.Get(ctx, publicv1.VolumesGetRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		adminView, err := publicv1.NewVolumesClient(tool.ExternalView().AdminConn()).Get(ctx, publicv1.VolumesGetRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		for _, object := range []*publicv1.Volume{userView.GetObject(), adminView.GetObject()} {
+			Expect(object.GetMetadata().GetLabels()).To(HaveKeyWithValue("example.com/metadata-test", "visible-before"))
+			Expect(object.GetMetadata().GetAnnotations()).To(HaveKeyWithValue("example.com/metadata-test", "visible-before"))
+			Expect(object.GetMetadata().GetLabels()).NotTo(HaveKey("admin.osac.openshift.io/metadata-test"))
+			Expect(object.GetMetadata().GetAnnotations()).NotTo(HaveKey("operator.admin.osac.openshift.io/metadata-test"))
+		}
+
+		By("rejecting a mixed public replacement without changing private metadata")
+		_, err = publicVolumesClient.Update(ctx, publicv1.VolumesUpdateRequest_builder{
+			Object: publicv1.Volume_builder{
+				Id: id,
+				Metadata: publicv1.Metadata_builder{
+					Labels: map[string]string{
+						"admin.osac.openshift.io/metadata-test": "attacker-value",
+						"example.com/metadata-test":             "must-not-persist",
+					},
+					Annotations: map[string]string{
+						"operator.admin.osac.openshift.io/metadata-test": "attacker-value",
+						"example.com/metadata-test":                      "must-not-persist",
+					},
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels", "metadata.annotations"}},
+		}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		afterRejected, err := privateVolumesClient.Get(ctx, privatev1.VolumesGetRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(maps.Equal(afterRejected.GetObject().GetMetadata().GetLabels(), map[string]string{
+			"admin.osac.openshift.io/metadata-test": "stored-label",
+			"example.com/metadata-test":             "visible-before",
+		})).To(BeTrue())
+		Expect(maps.Equal(afterRejected.GetObject().GetMetadata().GetAnnotations(), map[string]string{
+			"operator.admin.osac.openshift.io/metadata-test": "stored-annotation",
+			"example.com/metadata-test":                      "visible-before",
+		})).To(BeTrue())
+
+		By("applying ordinary replacement while retaining the latest private maps")
+		updated, err := publicVolumesClient.Update(ctx, publicv1.VolumesUpdateRequest_builder{
+			Object: publicv1.Volume_builder{
+				Id: id,
+				Metadata: publicv1.Metadata_builder{
+					Labels:      map[string]string{"example.com/metadata-test": "visible-after"},
+					Annotations: map[string]string{"example.com/metadata-test": "visible-after"},
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels", "metadata.annotations"}},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updated.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{"example.com/metadata-test": "visible-after"}))
+		Expect(updated.GetObject().GetMetadata().GetAnnotations()).To(Equal(map[string]string{"example.com/metadata-test": "visible-after"}))
+		afterReplacement, err := privateVolumesClient.Get(ctx, privatev1.VolumesGetRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(maps.Equal(afterReplacement.GetObject().GetMetadata().GetLabels(), map[string]string{
+			"admin.osac.openshift.io/metadata-test": "stored-label",
+			"example.com/metadata-test":             "visible-after",
+		})).To(BeTrue())
+		Expect(maps.Equal(afterReplacement.GetObject().GetMetadata().GetAnnotations(), map[string]string{
+			"operator.admin.osac.openshift.io/metadata-test": "stored-annotation",
+			"example.com/metadata-test":                      "visible-after",
+		})).To(BeTrue())
+
+		By("clearing both private metadata maps with explicit empty maps")
+		_, err = privateVolumesClient.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+			Object: privatev1.Volume_builder{
+				Id: id,
+				Metadata: privatev1.Metadata_builder{
+					Labels:      map[string]string{},
+					Annotations: map[string]string{},
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels", "metadata.annotations"}},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		cleared, err := privateVolumesClient.Get(ctx, privatev1.VolumesGetRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cleared.GetObject().GetMetadata().GetLabels()).To(BeEmpty())
+		Expect(cleared.GetObject().GetMetadata().GetAnnotations()).To(BeEmpty())
 	})
 
 	// TC-IT6: Positive field allowlist — verify the public Volume response contains exactly

@@ -31,6 +31,11 @@ stall:
   workersJoiningThreshold: "20m"
   workersJoiningByInstanceType: {}
 
+upgradeTimeouts:
+  pending: "10m"
+  controlPlane: "40m"
+  nodePoolPerNode: "20m"
+
 # On OpenShift, trust the platform-managed ingress CA when fetching Assisted
 # Service discovery ignition through its HTTPS Route.
 ignition:

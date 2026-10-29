@@ -356,7 +356,14 @@ incompatible with OpenShift 4.17's Kubernetes 1.30; use Helm 3.17.x or 3.18.x
 for OpenShift 4.17. For other cluster versions, choose a Helm 3 minor that
 supports the cluster's Kubernetes version; see the
 [Helm 3 version-skew documentation](https://helm.sh/docs/v3/topics/version_skew/).
-Helm 3.17.0 is the minimum version required for `--take-ownership`.
+Helm 3.17.0 is the minimum version required for `--take-ownership`. It is
+also the minimum version that can install a chart pinned by content digest
+(`OSAC_CHART_OCI_REF` containing `@sha256:...`, the `install-osac` Makefile
+target's escape hatch for validating a staged OCI chart build by exact
+artifact rather than by semver tag) — on an older Helm, `make install-osac`
+rejects a digest-pinned `OSAC_CHART_OCI_REF` outright with an explicit
+version error instead of failing deep inside Helm's own tag-constraint
+parsing.
 
 ```bash
 helm dependency update ./charts/osac

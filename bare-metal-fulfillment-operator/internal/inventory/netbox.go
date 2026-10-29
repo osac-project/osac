@@ -51,7 +51,19 @@ const (
 	netBoxAssignmentUnavailable
 )
 
-var errNetBoxClientNotImplemented = errors.New("NetBox inventory client is not implemented")
+type netBoxReleaseState uint8
+
+const (
+	netBoxReleaseUnspecified netBoxReleaseState = iota
+	netBoxReleaseComplete
+	netBoxReleaseClaimed
+	netBoxReleaseOwnedByAnotherInstance
+)
+
+var (
+	errNetBoxClientNotImplemented = errors.New("NetBox inventory client is not implemented")
+	errNetBoxBMHDeletionPending   = errors.New("NetBox BareMetalHost deletion is pending")
+)
 
 // NetBoxAPI defines the operations needed by the inventory adapter. It is
 // satisfied by netboxclient.Client and keeps generated SDK calls behind a
@@ -59,6 +71,7 @@ var errNetBoxClientNotImplemented = errors.New("NetBox inventory client is not i
 type NetBoxAPI interface {
 	ForEachDevice(ctx context.Context, query netboxclient.DeviceQuery, visit func(netboxclient.Device) (bool, error)) error
 	ForEachDeviceCustomField(ctx context.Context, visit func(netboxclient.CustomField) (bool, error)) error
+	ListDeviceInterfaces(ctx context.Context, id string) ([]netboxclient.DeviceInterface, error)
 	GetDevice(ctx context.Context, id string) (netboxclient.DeviceSnapshot, error)
 	PatchDevice(ctx context.Context, id string, patch netboxclient.DevicePatch, etag string) (netboxclient.DeviceSnapshot, error)
 }
@@ -481,17 +494,186 @@ func netBoxInstanceOwner(device netboxclient.Device) (string, error) {
 	return owner, nil
 }
 
-func (*NetBoxClient) UnassignHost(_ context.Context, _, _ string, _ []string) error {
-	return errNetBoxClientNotImplemented
+// UnassignHost removes the NetBox claim after BMH and generated Secret deletion completes.
+func (c *NetBoxClient) UnassignHost(ctx context.Context, inventoryHostID, bareMetalInstanceID string, _ []string) error {
+	_, deviceID, err := c.parseNetBoxHostID(inventoryHostID)
+	if err != nil {
+		return err
+	}
+	return c.unassignNetBoxDevice(ctx, deviceID, bareMetalInstanceID)
 }
 
-func (*NetBoxClient) GetHostNICs(_ context.Context, _ string) ([]HostNIC, error) {
-	return nil, errNetBoxClientNotImplemented
+func (c *NetBoxClient) unassignNetBoxDevice(ctx context.Context, deviceID, bareMetalInstanceID string) error {
+	snapshot, err := c.readNetBoxDevice(ctx, deviceID)
+	if err != nil {
+		return err
+	}
+	return c.unassignNetBoxSnapshot(ctx, deviceID, bareMetalInstanceID, snapshot)
 }
 
-// GetHostLogicalPortMACs is not implemented until NetBox inventory operations are added.
-func (*NetBoxClient) GetHostLogicalPortMACs(_ context.Context, _ string) (map[string]string, error) {
-	return nil, errNetBoxClientNotImplemented
+func (c *NetBoxClient) unassignNetBoxSnapshot(ctx context.Context, deviceID, bareMetalInstanceID string, snapshot netboxclient.DeviceSnapshot) error {
+	state, err := classifyNetBoxRelease(snapshot.Device, bareMetalInstanceID)
+	if err != nil {
+		return err
+	}
+	return c.cleanupAndReleaseNetBoxDevice(ctx, deviceID, snapshot.ETag, state)
+}
+
+func classifyNetBoxRelease(device netboxclient.Device, bareMetalInstanceID string) (netBoxReleaseState, error) {
+	owner, err := netBoxInstanceOwner(device)
+	if err != nil {
+		return netBoxReleaseUnspecified, err
+	}
+	return netBoxReleaseStateFor(device.Status, owner, bareMetalInstanceID)
+}
+
+func netBoxReleaseStateFor(status, owner, bareMetalInstanceID string) (netBoxReleaseState, error) {
+	if status == netBoxStatusActive && owner != "" && owner == bareMetalInstanceID {
+		return netBoxReleaseClaimed, nil
+	}
+	if status == netBoxStatusActive && owner != "" {
+		return netBoxReleaseOwnedByAnotherInstance, nil
+	}
+	if status != netBoxStatusActive && owner == "" {
+		return netBoxReleaseComplete, nil
+	}
+	return netBoxReleaseUnspecified, errors.New("NetBox device has inconsistent release state")
+}
+
+func (c *NetBoxClient) deleteNetBoxResources(ctx context.Context, deviceID string) error {
+	name := netBoxHostPrefix + deviceID
+	if err := c.deleteNetBoxBMH(ctx, name); err != nil {
+		return err
+	}
+	return c.bmhManager.DeleteBMCSecret(ctx, name+bmcSecretSuffix)
+}
+
+func (c *NetBoxClient) deleteNetBoxBMH(ctx context.Context, name string) error {
+	if err := c.bmhManager.DeleteBMH(ctx, name); err != nil {
+		return err
+	}
+	return c.confirmNetBoxBMHDeletion(ctx, name)
+}
+
+func (c *NetBoxClient) confirmNetBoxBMHDeletion(ctx context.Context, name string) error {
+	exists, err := c.bmhManager.BMHExists(ctx, name)
+	if err != nil || !exists {
+		return err
+	}
+	return errNetBoxBMHDeletionPending
+}
+
+func (c *NetBoxClient) cleanupAndReleaseNetBoxDevice(ctx context.Context, deviceID, etag string, state netBoxReleaseState) error {
+	if state == netBoxReleaseOwnedByAnotherInstance {
+		return nil
+	}
+	if err := c.deleteNetBoxResources(ctx, deviceID); err != nil {
+		return err
+	}
+	if state == netBoxReleaseComplete {
+		return nil
+	}
+	return c.stageNetBoxDevice(ctx, deviceID, etag)
+}
+
+func (c *NetBoxClient) stageNetBoxDevice(ctx context.Context, deviceID, etag string) error {
+	staged := netBoxStatusStaged
+	patch := netboxclient.DevicePatch{
+		Status: &staged, CustomFields: map[string]interface{}{"osac_instance_id": nil},
+	}
+	_, err := c.api.PatchDevice(ctx, deviceID, patch, etag)
+	return err
+}
+
+// GetHostNICs reads inspected NICs from the allocated BareMetalHost.
+func (c *NetBoxClient) GetHostNICs(ctx context.Context, inventoryHostID string) ([]HostNIC, error) {
+	_, deviceID, err := c.parseNetBoxHostID(inventoryHostID)
+	if err != nil {
+		return nil, err
+	}
+	bmhName := netBoxHostPrefix + deviceID
+	ready, err := c.bmhManager.IsBMHReady(ctx, bmhName)
+	if err != nil {
+		return nil, err
+	}
+	if !ready {
+		return nil, fmt.Errorf("BareMetalHost %s is not ready for NIC metadata", bmhName)
+	}
+	macs, err := c.bmhManager.GetHardwareNICs(ctx, bmhName)
+	if err != nil {
+		return nil, err
+	}
+	nics := make([]HostNIC, len(macs))
+	for i, mac := range macs {
+		nics[i] = HostNIC{MAC: strings.ToLower(mac)}
+	}
+	return nics, nil
+}
+
+// GetHostLogicalPortMACs returns the logical-port MAC mapping for a NetBox device.
+func (c *NetBoxClient) GetHostLogicalPortMACs(ctx context.Context, inventoryHostID string) (map[string]string, error) {
+	_, deviceID, err := c.parseNetBoxHostID(inventoryHostID)
+	if err != nil {
+		return nil, err
+	}
+	if c.api == nil {
+		return nil, errNetBoxClientNotImplemented
+	}
+
+	nativeMACs, err := c.nativeLogicalPortMACs(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	customMACs, err := c.customFieldLogicalPortMACs(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	return mergeLogicalPortMACs(nativeMACs, customMACs), nil
+}
+
+func mergeLogicalPortMACs(nativeMACs, customMACs map[string]string) map[string]string {
+	macs := make(map[string]string)
+	for name, mac := range nativeMACs {
+		macs[name] = mac
+	}
+	for name, mac := range customMACs {
+		macs[name] = mac
+	}
+	return macs
+}
+
+func (c *NetBoxClient) nativeLogicalPortMACs(ctx context.Context, deviceID string) (map[string]string, error) {
+	interfaces, err := c.api.ListDeviceInterfaces(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	macs := make(map[string]string, len(interfaces))
+	for _, iface := range interfaces {
+		if iface.PrimaryMAC != "" {
+			macs[iface.Name] = iface.PrimaryMAC
+		}
+	}
+	return macs, nil
+}
+
+func (c *NetBoxClient) customFieldLogicalPortMACs(ctx context.Context, deviceID string) (map[string]string, error) {
+	snapshot, err := c.readNetBoxDevice(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	value := snapshot.Device.CustomFields["osac_interface_macs"]
+	if value == nil {
+		return nil, nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	macs := map[string]string{}
+	if err := json.Unmarshal(raw, &macs); err != nil {
+		return nil, err
+	}
+	return macs, nil
 }
 
 const (

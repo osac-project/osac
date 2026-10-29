@@ -1436,7 +1436,7 @@ var _ = Describe("Clusters server", func() {
 			Entry("named node set", "spec.node_set_attempt_ids.compute"),
 		)
 
-		It("preserves component attempt IDs through a public full-object edit", func() {
+		It("preserves attempt IDs and history through a public full-object edit", func() {
 			created, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{Name: "test-cluster"}.Build(),
@@ -1481,6 +1481,10 @@ var _ = Describe("Clusters server", func() {
 
 			full := proto.Clone(updated.GetObject()).(*publicv1.Cluster)
 			full.GetMetadata().SetLabels(map[string]string{"example.com/review": "updated"})
+			Expect(full.GetStatus().GetUpgradeHistory()).To(HaveLen(2))
+			for _, attempt := range full.GetStatus().GetUpgradeHistory() {
+				attempt.SetState(publicv1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED)
+			}
 			_, err = server.Update(ctx, publicv1.ClustersUpdateRequest_builder{Object: full}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			after, err := server.private.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
@@ -1491,6 +1495,8 @@ var _ = Describe("Clusters server", func() {
 			Expect(after.GetObject().GetStatus().GetUpgradeHistory()).To(HaveLen(2))
 			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[0].GetAttemptId()).To(Equal(computeID))
 			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[1].GetAttemptId()).To(Equal(cpID))
+			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[1].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
 		})
 
 		It("updates node-set size then version in separate masked requests", func() {

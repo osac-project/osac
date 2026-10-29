@@ -83,12 +83,12 @@ export const buildComputeInstanceCreatePayload = (
   if (values.spec.userDataSource.value === 'secret') {
     const userDataSecretName = values.spec.userDataSecret.value.trim();
     if (!values.spec.userDataSecret.locked && userDataSecretName) {
-      spec.userDataSecret = { name: userDataSecretName };
+      //spec.userDataSecret = { name: userDataSecretName };
     }
   } else {
     const userData = values.spec.userData.value.trim();
     if (!values.spec.userData.locked && userData) {
-      spec.userData = userData;
+      //spec.userData = userData;
     }
   }
 

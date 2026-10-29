@@ -1838,6 +1838,33 @@ func TestRoundCarriesTheLatestExternalBillingAccountID(t *testing.T) {
 	}
 }
 
+// TestRoundCarriesBillingAccountFromLaterEventOffset checks that a later Kafka
+// offset wins when its event timestamp is earlier than a previous envelope.
+func TestRoundCarriesBillingAccountFromLaterEventOffset(t *testing.T) {
+	const tenant = "billing-round-offset"
+	p := pipelinetest.NewPipeline(t, tenant)
+	laterStamp := testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+		base.Add(time.Minute), base, "web", "RUNNING", base, "small", base)
+	laterStamp.SetExternalBillingId("acct-2")
+	earlierStamp := testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+		base, base, "web", "RUNNING", base, "small", base)
+	earlierStamp.SetExternalBillingId("acct-1")
+	total := testenv.ProduceEvents(t, tenant, []*privatev1.Event{laterStamp, earlierStamp})
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(2*time.Minute))
+	rows := pendingHeartbeats(t, p.Store, tenant)
+	if len(rows) == 0 {
+		t.Fatal("expected heartbeats")
+	}
+	for _, row := range rows {
+		data := heartbeatDataOf(t, row)
+		if data.ExternalBillingAccountID == nil || *data.ExternalBillingAccountID != "acct-1" {
+			t.Fatalf("heartbeat %s billing id = %v, want acct-1 from the later offset",
+				row.ID, data.ExternalBillingAccountID)
+		}
+	}
+}
+
 func TestRoundOmitsExternalBillingAccountIDWhenTheTenantHasNone(t *testing.T) {
 	const tenant = "billing-round-empty"
 	p := pipelinetest.NewPipeline(t, tenant)

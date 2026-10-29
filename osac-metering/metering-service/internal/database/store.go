@@ -345,8 +345,9 @@ func (s *Store) LastRoundTime(ctx context.Context) (time.Time, error) {
 	return *lastRound, nil
 }
 
-// LatestFactValue returns the history value with the greatest since for this field.
-// ok is false when no row exists.
+// LatestFactValue returns the history value last written in log order for this field.
+// ok is false when no row exists. event_offset is Kafka order; since is the event
+// timestamp and can run backwards relative to the log.
 func LatestFactValue(
 	ctx context.Context, q Querier, tenant, resourceType, resourceID, field string,
 ) (value string, ok bool, err error) {
@@ -355,7 +356,7 @@ func LatestFactValue(
 		`SELECT value
 		 FROM history
 		 WHERE tenant = $1 AND resource_type = $2 AND resource_id = $3 AND field = $4
-		 ORDER BY since DESC
+		 ORDER BY event_offset DESC NULLS LAST, since DESC
 		 LIMIT 1`,
 		tenant, resourceType, resourceID, field,
 	).Scan(&value)

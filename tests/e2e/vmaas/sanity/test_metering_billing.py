@@ -796,7 +796,8 @@ def test_metering_external_billing_account_on_heartbeats(
                 "after the tenant billing id was updated"
             )
     finally:
-        with contextlib.suppress(Exception):
+        try:
             _set_external_billing_id(private_grpc, original, _spec_billing_id(original.get("spec") or {}))
-        if uuid is not None:
-            _delete_vm(cli, grpc, k8s_hub_client, uuid=uuid, ci_name=ci_name)
+        finally:
+            if uuid is not None:
+                _delete_vm(cli, grpc, k8s_hub_client, uuid=uuid, ci_name=ci_name)

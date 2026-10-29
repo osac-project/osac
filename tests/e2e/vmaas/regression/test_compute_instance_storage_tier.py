@@ -30,7 +30,9 @@ def verify_datavolume_storage_classes(
 
     # Verify boot disk
     boot_tier = cr["spec"]["bootDisk"]["storageTier"]
-    expected_boot_sc = k8s_hub_client.get_storage_class_for_tier(tier_name=boot_tier, tenant_name=tenant_name)
+    expected_boot_sc = k8s_hub_client.get_storage_class_for_tier(
+        tier_name=boot_tier, tenant_name=tenant_name, storage_class_client=k8s_virt_client
+    )
     boot_dv_name = f"{ci_name}-root-disk"
     actual_boot_sc = k8s_virt_client.get_datavolume_storage_class(name=boot_dv_name, namespace=vm_namespace)
     assert actual_boot_sc == expected_boot_sc, (
@@ -40,7 +42,9 @@ def verify_datavolume_storage_classes(
     # Verify additional disks (1-indexed)
     for idx, disk in enumerate(cr.get("spec", {}).get("additionalDisks", [])):
         tier = disk["storageTier"]
-        expected_sc = k8s_hub_client.get_storage_class_for_tier(tier_name=tier, tenant_name=tenant_name)
+        expected_sc = k8s_hub_client.get_storage_class_for_tier(
+            tier_name=tier, tenant_name=tenant_name, storage_class_client=k8s_virt_client
+        )
 
         dv_name = f"{ci_name}-disk-{idx + 1}"
         actual_sc = k8s_virt_client.get_datavolume_storage_class(name=dv_name, namespace=vm_namespace)

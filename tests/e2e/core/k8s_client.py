@@ -415,7 +415,13 @@ class K8sClient:
 
     # Storage tier resolution
 
-    def get_storage_class_for_tier(self, *, tier_name: str, tenant_name: str | None = None) -> str:
+    def get_storage_class_for_tier(
+        self,
+        *,
+        tier_name: str,
+        tenant_name: str | None = None,
+        storage_class_client: K8sClient | None = None,
+    ) -> str:
         """Resolve StorageClass name from tier name via Tenant.status.storageClasses or labeled StorageClasses."""
         normalized_tier = tier_name.strip().lower()
         target_tenant = (tenant_name or self.namespace).strip()
@@ -427,7 +433,7 @@ class K8sClient:
             if sc.get("tier", "").strip().lower() == normalized_tier and name:
                 return name
 
-        items = self.list_json(resource="storageclass").get("items", [])
+        items = (storage_class_client or self).list_json(resource="storageclass").get("items", [])
         for allowed_tenant in ("csp-managed", target_tenant, "shared"):
             for item in items:
                 labels = item.get("metadata", {}).get("labels", {})

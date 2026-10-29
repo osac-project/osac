@@ -70,87 +70,45 @@ func (mr *MockBMHLifecycleManagerMockRecorder) CreateBMH(ctx, params any) *gomoc
 }
 
 // DeleteBMCSecret mocks base method.
-func (m *MockBMHLifecycleManager) DeleteBMCSecret(ctx context.Context, name string) error {
+func (m *MockBMHLifecycleManager) DeleteBMCSecret(ctx context.Context, name, ownerUID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteBMCSecret", ctx, name)
+	ret := m.ctrl.Call(m, "DeleteBMCSecret", ctx, name, ownerUID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteBMCSecret indicates an expected call of DeleteBMCSecret.
-func (mr *MockBMHLifecycleManagerMockRecorder) DeleteBMCSecret(ctx, name any) *gomock.Call {
+func (mr *MockBMHLifecycleManagerMockRecorder) DeleteBMCSecret(ctx, name, ownerUID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteBMCSecret", reflect.TypeOf((*MockBMHLifecycleManager)(nil).DeleteBMCSecret), ctx, name)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteBMCSecret", reflect.TypeOf((*MockBMHLifecycleManager)(nil).DeleteBMCSecret), ctx, name, ownerUID)
 }
 
 // DeleteBMH mocks base method.
-func (m *MockBMHLifecycleManager) DeleteBMH(ctx context.Context, name string) error {
+func (m *MockBMHLifecycleManager) DeleteBMH(ctx context.Context, name, ownerUID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteBMH", ctx, name)
+	ret := m.ctrl.Call(m, "DeleteBMH", ctx, name, ownerUID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteBMH indicates an expected call of DeleteBMH.
-func (mr *MockBMHLifecycleManagerMockRecorder) DeleteBMH(ctx, name any) *gomock.Call {
+func (mr *MockBMHLifecycleManagerMockRecorder) DeleteBMH(ctx, name, ownerUID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteBMH", reflect.TypeOf((*MockBMHLifecycleManager)(nil).DeleteBMH), ctx, name)
-}
-
-// DeleteOwnedBMCSecret mocks base method.
-func (m *MockBMHLifecycleManager) DeleteOwnedBMCSecret(ctx context.Context, name, ownerUID string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteOwnedBMCSecret", ctx, name, ownerUID)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// DeleteOwnedBMCSecret indicates an expected call of DeleteOwnedBMCSecret.
-func (mr *MockBMHLifecycleManagerMockRecorder) DeleteOwnedBMCSecret(ctx, name, ownerUID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteOwnedBMCSecret", reflect.TypeOf((*MockBMHLifecycleManager)(nil).DeleteOwnedBMCSecret), ctx, name, ownerUID)
-}
-
-// DeleteOwnedBMH mocks base method.
-func (m *MockBMHLifecycleManager) DeleteOwnedBMH(ctx context.Context, name, ownerUID string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteOwnedBMH", ctx, name, ownerUID)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// DeleteOwnedBMH indicates an expected call of DeleteOwnedBMH.
-func (mr *MockBMHLifecycleManagerMockRecorder) DeleteOwnedBMH(ctx, name, ownerUID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteOwnedBMH", reflect.TypeOf((*MockBMHLifecycleManager)(nil).DeleteOwnedBMH), ctx, name, ownerUID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteBMH", reflect.TypeOf((*MockBMHLifecycleManager)(nil).DeleteBMH), ctx, name, ownerUID)
 }
 
 // EnsureBMCSecret mocks base method.
-func (m *MockBMHLifecycleManager) EnsureBMCSecret(ctx context.Context, name, username, password string) error {
+func (m *MockBMHLifecycleManager) EnsureBMCSecret(ctx context.Context, name, username, password, ownerUID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "EnsureBMCSecret", ctx, name, username, password)
+	ret := m.ctrl.Call(m, "EnsureBMCSecret", ctx, name, username, password, ownerUID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // EnsureBMCSecret indicates an expected call of EnsureBMCSecret.
-func (mr *MockBMHLifecycleManagerMockRecorder) EnsureBMCSecret(ctx, name, username, password any) *gomock.Call {
+func (mr *MockBMHLifecycleManagerMockRecorder) EnsureBMCSecret(ctx, name, username, password, ownerUID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnsureBMCSecret", reflect.TypeOf((*MockBMHLifecycleManager)(nil).EnsureBMCSecret), ctx, name, username, password)
-}
-
-// EnsureOwnedBMCSecret mocks base method.
-func (m *MockBMHLifecycleManager) EnsureOwnedBMCSecret(ctx context.Context, name, username, password, ownerUID string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "EnsureOwnedBMCSecret", ctx, name, username, password, ownerUID)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// EnsureOwnedBMCSecret indicates an expected call of EnsureOwnedBMCSecret.
-func (mr *MockBMHLifecycleManagerMockRecorder) EnsureOwnedBMCSecret(ctx, name, username, password, ownerUID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnsureOwnedBMCSecret", reflect.TypeOf((*MockBMHLifecycleManager)(nil).EnsureOwnedBMCSecret), ctx, name, username, password, ownerUID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnsureBMCSecret", reflect.TypeOf((*MockBMHLifecycleManager)(nil).EnsureBMCSecret), ctx, name, username, password, ownerUID)
 }
 
 // GetHardwareNICs mocks base method.

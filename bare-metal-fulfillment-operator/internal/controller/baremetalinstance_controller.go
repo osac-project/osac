@@ -1153,7 +1153,7 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 
 		err := r.InventoryClient.UnassignHost(ctx, hostID, string(bareMetalInstance.UID), labelsToRemove)
 		if err != nil {
-			log.Error(err, "Failed to unassign host in inventory")
+			log.Error(err, "Failed to unassign host in inventory", "InventoryHostID", hostID)
 			return ctrl.Result{}, err
 		}
 	}

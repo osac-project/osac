@@ -183,7 +183,7 @@ var _ = Describe("Public volumes API", func() {
 			"creation_timestamp": true, "deletion_timestamp": true,
 			"creator": true, "tenant": true, "name": true,
 			"labels": true, "annotations": true, "version": true,
-			"project": true, "display_name": true, "description": true,
+			"project": true,
 		}
 		approvedSpecFields := map[string]bool{
 			"storage_tier": true, "size_gib": true, "access_mode": true,

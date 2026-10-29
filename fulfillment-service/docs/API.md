@@ -161,8 +161,6 @@ The `Metadata` message is shared by all object types and contains the following 
 | `labels`               | `map<string, string>`        | Indexed key-value pairs for organizing objects. Public API responses omit administrator-only reserved keys; see [Administrator-only metadata](#administrator-only-metadata). |
 | `annotations`          | `map<string, string>`        | Arbitrary user-controlled metadata, plus administrator-only reserved keys on the private API. Public API responses omit reserved keys; see [Administrator-only metadata](#administrator-only-metadata). |
 | `version`              | `int32`                      | Auto-incremented on every change.                |
-| `display_name`         | `string`                     | Optional friendly label (max 63, not unique, not DNS-constrained). |
-| `description`          | `string`                     | Optional description (max 256, not unique).      |
 
 The private API adds a `finalizers` field (`repeated string`) that is not exposed in the public API.
 
@@ -290,7 +288,7 @@ do not necessarily follow them.
   metadata fields. Omitted fields stay unchanged; clearing a scalar or an empty
   map requires an explicit mask path.
 - **Explicit mask selects writable fields only.** Permitted metadata paths are
-  `labels`, `annotations`, `display_name`, and `description`; spec paths are
+  `labels` and `annotations`; spec paths are
   accepted and validated by the field-path compiler. Any other root — including
   `name`, `tenant`, and `project`, which are server-assigned and immutable once
   the object is created, and private metadata such as `version`, timestamps,

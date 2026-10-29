@@ -661,6 +661,10 @@ describe('CatalogPage', () => {
       expect(screen.getByText(unpublishedVmItem.metadata?.name ?? '')).toBeInTheDocument();
     });
 
+    expect(document.getElementById(`catalog-item-card-${unpublishedVmItem.id}`)).toHaveClass(
+      'pf-m-secondary',
+    );
+
     await user.click(screen.getByRole('button', { name: 'Filter catalog by publication status' }));
     await user.click(screen.getByRole('option', { name: 'Unpublished' }));
 

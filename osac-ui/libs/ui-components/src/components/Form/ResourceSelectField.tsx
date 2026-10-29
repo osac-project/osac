@@ -36,7 +36,6 @@ export interface ResourceSelectFieldProps<TResource extends ResourceListItem = R
   loadErrorTitle?: string;
   emptyTitle?: string;
   emptyDescription?: string;
-  autoSelectFirstOption?: boolean;
   showOptionDescriptions?: boolean;
   /** Called after a new resource is selected or the field is cleared. Use to trigger cascade resets. */
   onSelectResource?: (value: ResourceSelectValue, resource?: TResource) => void;
@@ -65,7 +64,6 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
   loadErrorTitle,
   emptyTitle,
   emptyDescription,
-  autoSelectFirstOption = false,
   showOptionDescriptions = true,
   onSelectResource,
   filterItems,
@@ -134,29 +132,6 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
     notifyResourceSelection(items[0].id);
   }, [
     autoSelectSingleOption,
-    controlDisabled,
-    idFieldName,
-    isLoading,
-    items,
-    notifyResourceSelection,
-    selectedId,
-    setFieldValue,
-  ]);
-
-  useEffect(() => {
-    if (
-      !autoSelectFirstOption ||
-      isLoading ||
-      controlDisabled ||
-      items.length === 0 ||
-      selectedId !== ''
-    ) {
-      return;
-    }
-    void setFieldValue(idFieldName, items[0].id, true);
-    notifyResourceSelection(items[0].id);
-  }, [
-    autoSelectFirstOption,
     controlDisabled,
     idFieldName,
     isLoading,

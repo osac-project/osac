@@ -33,14 +33,12 @@ export const CatalogItemDetailContent = ({ item }: CatalogItemDetailContentProps
   const resourceLookups = useCatalogItemResourceLookups();
 
   const tenant = item.metadata?.tenant?.trim();
-  const detailsTitleId = 'catalog-item-details-card-title';
   const configurationTitleId = 'catalog-item-configuration-card-title';
 
   return (
     <Grid hasGutter>
       <GridItem md={6} lg={8}>
-        <Card component="section" isFullHeight aria-labelledby={detailsTitleId}>
-          <CardTitle id={detailsTitleId}>{t('Details')}</CardTitle>
+        <Card component="section" isFullHeight>
           <CardBody>
             <Grid hasGutter>
               <GridItem md={6}>

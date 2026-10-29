@@ -227,6 +227,7 @@ describe('CatalogItemDetailContent', () => {
       apiFixtures: catalogApiFixtures,
     });
 
+    expect(screen.queryByText('Details', { exact: true })).not.toBeInTheDocument();
     expect(screen.getByText('Cluster version')).toBeInTheDocument();
     expect(screen.getByText('OpenShift 4.16')).toBeInTheDocument();
     expect(screen.getByText('Node sets')).toBeInTheDocument();
@@ -256,6 +257,7 @@ describe('CatalogItemDetailContent', () => {
       apiFixtures: catalogApiFixtures,
     });
 
+    expect(screen.queryByText('Details', { exact: true })).not.toBeInTheDocument();
     expect(screen.getByText('Instance type')).toBeInTheDocument();
     expect(screen.getByText('bm.large')).toBeInTheDocument();
     expect(screen.getByText('RHEL 10')).toBeInTheDocument();

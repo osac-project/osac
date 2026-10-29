@@ -25,7 +25,6 @@ export interface StorageTierSelectFieldProps {
   isDisabled?: boolean;
   labelInfo?: ReactNode;
   description?: string;
-  autoSelectFirstOption?: boolean;
 }
 
 export const StorageTierSelectField = ({
@@ -37,7 +36,6 @@ export const StorageTierSelectField = ({
   isDisabled = false,
   labelInfo,
   description,
-  autoSelectFirstOption = false,
 }: StorageTierSelectFieldProps) => {
   const { t } = useTranslation();
 
@@ -56,7 +54,6 @@ export const StorageTierSelectField = ({
       isRequired={isRequired}
       isDisabled={isDisabled}
       description={description}
-      autoSelectFirstOption={autoSelectFirstOption}
       labelInfo={
         labelInfo ??
         (isDisabled ? (

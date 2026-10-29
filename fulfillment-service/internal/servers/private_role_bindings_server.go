@@ -16,13 +16,18 @@ package servers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/serviceaccounts"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -43,6 +48,7 @@ type PrivateRoleBindingsServer struct {
 
 	logger  *slog.Logger
 	generic *GenericServer[*privatev1.RoleBinding]
+	roles   *dao.GenericDAO[*privatev1.Role]
 }
 
 // NewPrivateRoleBindingsServer creates a new builder for the private role bindings server.
@@ -106,9 +112,17 @@ func (b *PrivateRoleBindingsServerBuilder) Build() (result *PrivateRoleBindingsS
 		return
 	}
 
+	roles, err := dao.NewGenericDAO[*privatev1.Role]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		Build()
+	if err != nil {
+		return
+	}
 	result = &PrivateRoleBindingsServer{
 		logger:  b.logger,
 		generic: generic,
+		roles:   roles,
 	}
 	return
 }
@@ -127,13 +141,13 @@ func (s *PrivateRoleBindingsServer) Get(ctx context.Context,
 
 func (s *PrivateRoleBindingsServer) Create(ctx context.Context,
 	request *privatev1.RoleBindingsCreateRequest) (response *privatev1.RoleBindingsCreateResponse, err error) {
-	err = s.generic.Create(ctx, request, &response)
+	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response, s.validateRoleBinding)
 	return
 }
 
 func (s *PrivateRoleBindingsServer) Update(ctx context.Context,
 	request *privatev1.RoleBindingsUpdateRequest) (response *privatev1.RoleBindingsUpdateResponse, err error) {
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, s.validateRoleBinding)
 	return
 }
 
@@ -147,4 +161,84 @@ func (s *PrivateRoleBindingsServer) Signal(ctx context.Context,
 	request *privatev1.RoleBindingsSignalRequest) (response *privatev1.RoleBindingsSignalResponse, err error) {
 	err = s.generic.Signal(ctx, request, &response)
 	return
+}
+
+func (s *PrivateRoleBindingsServer) validateRoleBinding(ctx context.Context, _, candidate *privatev1.RoleBinding) error {
+	ref := candidate.GetSpec().GetRole()
+	key := ref.GetId()
+	if key == "" {
+		key = ref.GetName()
+	}
+	serviceAccountRefs := candidate.GetSpec().GetServiceAccounts()
+	hasUsers := len(candidate.GetSpec().GetUsers()) > 0
+
+	// The controller resolves either selector as an ID first, then as a name.
+	if serviceaccounts.IsMachineOnlyRole(key) && hasUsers {
+		return status.Error(codes.InvalidArgument, "machine-only roles cannot be assigned to human users")
+	}
+	if key == "" {
+		if len(serviceAccountRefs) > 0 {
+			return status.Error(codes.InvalidArgument, "a role is required for service account subjects")
+		}
+		return nil
+	}
+	roleResponse, err := s.roles.Get().SetId(key).Do(ctx)
+	var role *privatev1.Role
+	if err != nil {
+		// Preserve the existing behavior for unresolved role references.
+		if _, ok := errors.AsType[*dao.ErrNotFound](err); !ok {
+			return err
+		}
+		if len(serviceAccountRefs) == 0 {
+			return nil
+		}
+		if ref.GetId() != "" {
+			return status.Error(codes.InvalidArgument, "service account role reference ID was not found")
+		}
+		// RoleBinding references may use a predefined role name instead of its ID.
+		if !serviceaccounts.IsAssignableRole(ref.GetName()) {
+			return status.Error(codes.InvalidArgument, "service accounts may only receive predefined OSAC roles")
+		}
+		filter := fmt.Sprintf("this.metadata.name == %q", ref.GetName())
+		listResponse, listErr := s.roles.List().SetFilter(filter).SetLimit(2).Do(ctx)
+		if listErr != nil {
+			return listErr
+		}
+		if listResponse.GetSize() != 1 {
+			return status.Error(codes.InvalidArgument, "service account role reference was not found")
+		}
+		role = listResponse.GetItems()[0]
+	} else {
+		role = roleResponse.GetObject()
+	}
+	roleName := role.GetMetadata().GetName()
+	if serviceaccounts.IsMachineOnlyRole(roleName) && hasUsers {
+		return status.Error(codes.InvalidArgument, "machine-only roles cannot be assigned to human users")
+	}
+	if len(serviceAccountRefs) == 0 {
+		return nil
+	}
+	if !serviceaccounts.IsAssignableRole(roleName) || role.GetMetadata().GetTenant() != auth.SharedTenant {
+		return status.Error(codes.InvalidArgument, "service accounts may only receive predefined OSAC roles")
+	}
+
+	tenant := candidate.GetMetadata().GetTenant()
+	seen := make(map[string]struct{}, len(serviceAccountRefs))
+	for _, ref := range serviceAccountRefs {
+		id := ref.GetId()
+		if id == "" {
+			return status.Error(codes.InvalidArgument, "service account reference ID is required")
+		}
+		if _, exists := seen[id]; exists {
+			return status.Error(codes.InvalidArgument, "service account references must be unique")
+		}
+		seen[id] = struct{}{}
+		if err = serviceaccounts.ValidateRoleBindingSubject(ctx, id, tenant); err != nil {
+			if errors.Is(err, serviceaccounts.ErrRoleBindingSubjectNotActive) {
+				return status.Error(codes.InvalidArgument, "service account must be active and provisioned in the RoleBinding tenant")
+			}
+			return err
+		}
+	}
+	return nil
 }

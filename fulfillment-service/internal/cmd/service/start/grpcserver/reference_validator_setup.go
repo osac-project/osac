@@ -33,6 +33,8 @@ import (
 // BMI Create network attachments are resolved by the private handler after tenant
 // assignment; resolving their names here can pick another tenant's same-named
 // default subnet/security group before the handler can enforce owner scope.
+// RoleBinding handlers validate service-account references in the request's
+// tenant scope.
 // Other references continue through the interceptor's registered lookups.
 func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, registerer prometheus.Registerer) (*references.ReferenceValidator, error) {
 	validator, err := references.NewReferenceValidator().SetLogger(logger).SetMetricsRegisterer(registerer).
@@ -42,6 +44,9 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 		SetExcludedReferencePaths(computeInstanceSSHKeyMethods(), "object.spec.ssh_key").
 		SetExcludedReferencePaths(clusterAddOnOperatorMethods(), "object.spec.add_on_operators").
 		SetExcludedReferencePaths(bareMetalInstanceCreationMethods(), "object.spec.network_attachments").
+		SetExcludedReferencePaths(serviceAccountControllerSecretReferenceMethods(),
+			"object.status.client_secret", "object.status.registration_secret").
+		SetExcludedReferencePaths(roleBindingServiceAccountMethods(), "object.spec.service_accounts").
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reference validator: %w", err)
@@ -50,6 +55,26 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 		return nil, err
 	}
 	return validator, nil
+}
+
+// The service-account controller writes both Secret references. The registration Secret is in the
+// system tenant, while the client Secret is in the account tenant, so generic local-reference
+// validation from the controller's system-tenant context cannot resolve either reference. The
+// controller creates these Secrets and verifies registration-Secret ownership before use.
+func serviceAccountControllerSecretReferenceMethods() []string {
+	return []string{
+		privatev1.ServiceAccounts_Create_FullMethodName,
+		privatev1.ServiceAccounts_Update_FullMethodName,
+	}
+}
+
+func roleBindingServiceAccountMethods() []string {
+	return []string{
+		publicv1.RoleBindings_Create_FullMethodName,
+		privatev1.RoleBindings_Create_FullMethodName,
+		publicv1.RoleBindings_Update_FullMethodName,
+		privatev1.RoleBindings_Update_FullMethodName,
+	}
 }
 
 func bareMetalInstanceCreationMethods() []string {

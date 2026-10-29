@@ -21,6 +21,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/util"
 )
 
@@ -110,6 +111,10 @@ func (i *GrpcJitProvisioningInterceptor) provisionIfNeeded(ctx context.Context) 
 		// No subject means anonymous or unauthenticated request - skip provisioning
 		return nil
 	}
+	if subject.ManagedServiceAccount {
+		// Managed service accounts are not tenant users.
+		return nil
+	}
 
 	// Only provision for users with exactly one tenant
 	// Users with zero tenants (unauthenticated), multiple tenants (cloud provider admins),
@@ -147,8 +152,24 @@ func (i *GrpcJitProvisioningInterceptor) provisionIfNeeded(ctx context.Context) 
 		return nil
 	}
 
-	// Provision the user
-	err := i.provisioner.Provision(ctx, username, tenant, claims)
+	// Provisioning normally shares the RPC transaction. Methods that manage their own
+	// short transactions provide only the manager, so scope provisioning separately.
+	provision := func(provisionCtx context.Context) error {
+		return i.provisioner.Provision(provisionCtx, username, tenant, claims)
+	}
+	var err error
+	// A missing transaction with a manager is expected for methods configured to
+	// manage their own transactions. JIT provisioning still needs one, so scope it
+	// separately; ordinary RPCs keep sharing their existing transaction.
+	if _, txErr := database.TxFromContext(ctx); txErr == nil {
+		err = provision(ctx)
+	} else if _, managerErr := database.TxManagerFromContext(ctx); managerErr == nil {
+		_, err = database.WithNewTx(ctx, func(txCtx context.Context) (struct{}, error) {
+			return struct{}{}, provision(txCtx)
+		})
+	} else {
+		err = provision(ctx)
+	}
 	if err != nil {
 		i.logger.ErrorContext(ctx, "Failed to provision user",
 			slog.String("!username", username),

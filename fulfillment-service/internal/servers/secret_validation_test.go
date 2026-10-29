@@ -14,9 +14,11 @@ specific language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -58,4 +60,25 @@ func TestValidateSecretData(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSecretNamesAreNotReservedForInternalUse(t *testing.T) {
+	name := "service-account"
+	secret := privatev1.Secret_builder{
+		Metadata: privatev1.Metadata_builder{Name: name, Tenant: "tenant-a"}.Build(),
+		Type:     privatev1.SecretType_SECRET_TYPE_OPAQUE,
+		Data:     map[string][]byte{"client_secret": []byte("credential")},
+	}.Build()
+	require.NoError(t, (&PrivateSecretsServer{}).validateSecretCreate(secret))
+
+	existing := privatev1.Secret_builder{
+		Metadata: privatev1.Metadata_builder{Name: name, Tenant: "tenant-a"}.Build(),
+		Backend:  privatev1.SecretBackend_SECRET_BACKEND_VAULT,
+		Type:     privatev1.SecretType_SECRET_TYPE_OPAQUE,
+	}.Build()
+	updated := privatev1.Secret_builder{
+		Data: map[string][]byte{"client_secret": []byte("rotated")},
+	}.Build()
+	require.NoError(t, (&PrivateSecretsServer{}).validateSecretUpdate(context.TODO(), updated,
+		&fieldmaskpb.FieldMask{Paths: []string{"data"}}, existing))
 }

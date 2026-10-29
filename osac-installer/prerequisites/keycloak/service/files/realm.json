@@ -760,7 +760,9 @@
           "view-realm",
           "view-users",
           "manage-identity-providers",
-          "view-identity-providers"
+          "view-identity-providers",
+          "create-client",
+          "view-clients"
         ]
       },
       "notBefore": 0,
@@ -2341,7 +2343,10 @@
             "oidc-sha256-pairwise-sub-mapper",
             "saml-role-list-mapper",
             "oidc-address-mapper",
-            "saml-user-attribute-mapper"
+            "saml-user-attribute-mapper",
+            "oidc-hardcoded-claim-mapper",
+            "oidc-audience-mapper",
+            "oidc-usersessionmodel-note-mapper"
           ]
         }
       },
@@ -2393,6 +2398,9 @@
         "config": {
           "allow-default-scopes": [
             "true"
+          ],
+          "allowed-client-scopes": [
+            "service_account"
           ]
         }
       },

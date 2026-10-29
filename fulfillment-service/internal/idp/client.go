@@ -27,6 +27,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/apiclient"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
 	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
 
@@ -37,8 +38,10 @@ import (
 // - OSAC organizations map to Keycloak Organizations within that realm
 // - Identity providers are realm-level resources assigned to organizations
 type Client struct {
-	logger     *slog.Logger
-	httpClient *apiclient.Client
+	logger                 *slog.Logger
+	httpClient             *apiclient.Client
+	registrationHTTPClient *http.Client
+	baseURL                string
 
 	// realmName is the single Keycloak realm that contains all OSAC organizations
 	realmName               string
@@ -117,17 +120,20 @@ func (b *ClientBuilder) Build() (result *Client, err error) {
 	}
 
 	// Build the underlying HTTP client
+	registrationHTTPClient := b.httpClient
+	if registrationHTTPClient == nil {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.TLSClientConfig = tlsconfig.NewClientTLSConfig()
+		if b.caPool != nil {
+			transport.TLSClientConfig.RootCAs = b.caPool.Pool()
+		}
+		registrationHTTPClient = &http.Client{Transport: transport}
+	}
 	httpClientBuilder := apiclient.NewClient().
 		SetLogger(b.logger).
 		SetBaseURL(strings.TrimSuffix(b.baseURL, "/")).
-		SetTokenSource(b.tokenSource)
-
-	if b.caPool != nil {
-		httpClientBuilder = httpClientBuilder.SetCaPool(b.caPool)
-	}
-	if b.httpClient != nil {
-		httpClientBuilder = httpClientBuilder.SetHTTPClient(b.httpClient)
-	}
+		SetTokenSource(b.tokenSource).
+		SetHTTPClient(registrationHTTPClient)
 
 	httpClient, err := httpClientBuilder.Build()
 	if err != nil {
@@ -135,9 +141,11 @@ func (b *ClientBuilder) Build() (result *Client, err error) {
 	}
 
 	result = &Client{
-		logger:     b.logger,
-		httpClient: httpClient,
-		realmName:  b.realmName,
+		logger:                 b.logger,
+		httpClient:             httpClient,
+		registrationHTTPClient: registrationHTTPClient,
+		baseURL:                strings.TrimSuffix(b.baseURL, "/"),
+		realmName:              b.realmName,
 	}
 	return
 }

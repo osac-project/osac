@@ -53,6 +53,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/provisioners"
 	"github.com/osac-project/osac/fulfillment-service/internal/recovery"
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
+	"github.com/osac-project/osac/fulfillment-service/internal/serviceaccounts"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
 	"github.com/osac-project/osac/fulfillment-service/internal/trust"
@@ -466,6 +467,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	// Create the authorization evaluator:
 	evaluator, err := auth.NewEvaluator().
 		AddEmergencyServiceAccounts(c.args.emergencyServiceAccounts).
+		SetManagedServiceAccountResolver(serviceaccounts.ResolveAuthorization).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create authorization evaluator: %w", err)

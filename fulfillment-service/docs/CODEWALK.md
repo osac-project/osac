@@ -25,9 +25,11 @@ is simultaneously:
   [`internal/servers/private_baremetal_instances_server.go`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/servers/private_baremetal_instances_server.go)
   call `bmi.GetSpec()` / `bmi.SetNetworkAttachments(...)` on the proto type itself, no separate
   domain struct exists, and
-- the **persistence model** — `dao.GenericDAO[O]` serializes the object (minus `id` and `metadata`,
-  which get their own columns) as JSON into the `data` column of a hand-written Postgres table (see
+- the **persistence model** — `dao.GenericDAO[O]` stores the object body as JSON in the `data`
+  column of a hand-written Postgres table (see
   [`internal/database/migrations/54_create_baremetal_tables.up.sql`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/database/migrations/54_create_baremetal_tables.up.sql)).
+  Metadata fields represented by dedicated columns are stored in those columns; a resource DAO can
+  opt in to storing the remaining metadata fields in `data`.
 
 This mirrors Kubernetes itself: a CRD Go type is simultaneously the API type, the etcd storage
 format, and the object controllers reconcile against — no intermediate entity layer either. It is a

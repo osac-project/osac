@@ -127,7 +127,8 @@ var _ = Describe("Migrations", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(files).ToNot(BeEmpty())
 
-		knownGaps := map[int]bool{18: true}
+		// 136-138 were merged with event-log metering and later reverted.
+		knownGaps := map[int]bool{18: true, 136: true, 137: true, 138: true}
 
 		present := map[int]bool{}
 		maxNum := 0

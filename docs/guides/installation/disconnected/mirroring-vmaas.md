@@ -12,15 +12,8 @@
     - [Step 2 — Run oc-mirror (connected bastion)](#step-2--run-oc-mirror-connected-bastion)
     - [Step 3 — Apply updated ITMS (disconnected cluster)](#step-3--apply-updated-itms-disconnected-cluster)
       - [Enforce NeverContactSource (recommended)](#enforce-nevercontactsource-recommended)
-    - [Step 4 — Configure CDI for disconnected registry imports](#step-4--configure-cdi-for-disconnected-registry-imports)
-      - [Registry TLS trust](#registry-tls-trust)
-      - [Optional: CDI insecureRegistries (insecure fallback)](#optional-cdi-insecureregistries-insecure-fallback)
-    - [Step 5 — Verify containerdisk resolution via ITMS](#step-5--verify-containerdisk-resolution-via-itms)
-  - [Validation](#validation)
-    - [1. Verify the DiskImage catalog points at the mirror](#1-verify-the-diskimage-catalog-points-at-the-mirror)
-    - [2. Provision a fresh VM from a mirrored DiskImage](#2-provision-a-fresh-vm-from-a-mirrored-diskimage)
-    - [3. Cluster-side checks (`oc`)](#3-cluster-side-checks-oc)
-  - [Troubleshooting](#troubleshooting)
+  - [Consumer handoff constraints](#consumer-handoff-constraints)
+  - [Mirroring artifact checks (`oc`)](#mirroring-artifact-checks-oc)
   - [Known Gaps / Limitations](#known-gaps--limitations)
 
 ## Aim
@@ -28,9 +21,6 @@
 Mirror VM disk images (containerdisks) required by OSAC's VMaaS (Virtual
 Machine as a Service) into a disconnected mirror registry using the
 `additionalImages` section of the `oc-mirror` v2 `ImageSetConfiguration`.
-Configure ITMS (ImageTagMirrorSet) for containerdisk resolution and make
-CDI registry imports work by pointing `DiskImage` references at the
-mirror registry with anonymous pull access.
 
 > **Relationship to the main guide**: this document covers VMaaS-specific
 > images that extend the base `ImageSetConfiguration` from
@@ -43,56 +33,22 @@ mirror registry with anonymous pull access.
 
 | Check | Command / evidence |
 | ----- | ------------------ |
-| Category A complete: `kubevirt-hyperconverged` operator installed | `oc get csv -n openshift-cnv \| grep kubevirt \| grep Succeeded` |
 | Category B complete: IDMS/ITMS applied, core images mirrored | `oc get idms,itms` |
-| `HyperConverged` CR created (Phase 1b) | `oc get hyperconverged -n openshift-cnv` |
-| CDI (Containerized Data Importer) is running | `oc get pods -n openshift-cnv -l app=cdi-operator` |
-| Mirror registry reachable and trusted from cluster nodes | `oc debug node/<node> -- chroot /host curl -sS https://<registry>:8443/v2/` (no `-k`) — an HTTP 401 response confirms reachability and CA trust; see [Registry TLS trust](#registry-tls-trust) |
-| Mirror registry reachable from importer pod network | Run the importer-network diagnostic below; DNS, TLS, and TCP reachability must succeed from the target namespace before provisioning a VM |
 | VMaaS is enabled in OSAC Helm values | `global.services.vmaas.enabled: true` in values file |
 
-CDI importer pods pull containerdisks from the pod network, not through
-CRI-O. Bastion and node checks do not prove this path. Run a temporary
-diagnostic pod in the namespace where CDI creates importer pods:
+<!-- Moved to prereqs.md §3 diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
 
-```bash
-IMPORT_NAMESPACE="<target-namespace>"
-MIRROR_HOST="<registry-hostname>"
-MIRROR_PORT="8443"
+H6/H7 must include the selected mirror authority and CA/read-access
+binding, with approved node and importer-network reachability evidence.
+A bastion or node result alone does not establish importer-network access.
 
-oc run mirror-network-check \
-  -n "$IMPORT_NAMESPACE" \
-  --image=registry.redhat.io/openshift4/ose-cli:v4.20.0 \
-  --restart=Never \
-  --command -- sleep 600
-
-oc wait pod/mirror-network-check \
-  -n "$IMPORT_NAMESPACE" \
-  --for=condition=Ready \
-  --timeout=2m
-
-oc exec -n "$IMPORT_NAMESPACE" mirror-network-check -- \
-  getent hosts "$MIRROR_HOST"
-
-oc exec -n "$IMPORT_NAMESPACE" mirror-network-check -- \
-  curl -sS -o /dev/null -w '%{http_code}\n' \
-  "https://${MIRROR_HOST}:${MIRROR_PORT}/v2/"
-
-oc delete pod/mirror-network-check -n "$IMPORT_NAMESPACE"
-```
-
-Expected: DNS resolves the mirror hostname and the registry returns HTTP
-`200` or `401` without `-k`. A timeout, `no route to host`, DNS failure,
-or TLS error blocks VMaaS acceptance. A NetworkPolicy or SecurityGroup egress rule alone does not
-create the required route.
-If the diagnostic pod cannot pull the CLI image before mirror policy is active, use an already mirrored diagnostic image that provides getent and curl; do not fall back to an external image.
+<!-- Moved to prereqs.md §3 diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
 
 ## Resources Required
 
 | Resource | Minimum |
 | -------- | ------- |
 | Additional disk (mirror registry) | Varies by OS image count; typically 2-10 GiB per containerdisk |
-| Storage (cluster) | LVMCluster configured via LVMS operator or any other supported storage operator |
 
 ## ImageSetConfiguration Section
 
@@ -141,21 +97,7 @@ The CLI accepts `registry` as the source-type input; the stored
 resource uses the protobuf enum `SOURCE_TYPE_REGISTRY`, which is
 the value used in programmatic jq filters.
 
-1. List the `DiskImage` resources offered in your OSAC deployment:
-
-   ```bash
-   osac get diskimages --tenant shared -o json
-   ```
-
-   The `DiskImages.List` API (`GET /api/private/v1/disk_images`) returns
-   the same data programmatically.
-
-2. Read each image's containerdisk URL from `spec.source_ref`.  For a
-   single image, run `osac describe diskimage ID|NAME` and use the
-   `Source Ref` line.
-
-3. Add each unique `source_ref` value to the `additionalImages` section
-   of your `ImageSetConfiguration`.
+<!-- Moved to operators.md §Selected DiskImage inventory export. See docs/guides/installation/disconnected/operators.md -->
 
 ## Execution Steps
 
@@ -204,14 +146,16 @@ oc get itms -o yaml | grep -A2 "containerdisk\|rhel-guest"
 
 #### Enforce NeverContactSource (recommended)
 
-Build the exact source set from the `DiskImage` resources selected for this
-mirror run. Do not infer it from repository names:
+Consume the approved H7 selected-source input for this mirror run as
+`selected-diskimage-sources.txt`: one upstream repository reference per
+line, derived from the approved selected image inventory. Preserve that
+original inventory, including full tags or digests, with the ISC and
+workspace; this repository-only policy-check input does not replace it.
+A first mirror does not require a running OSAC API or installed CDI.
+
+<!-- Moved to operators.md §Selected DiskImage inventory export. See docs/guides/installation/disconnected/operators.md -->
 
 ```bash
-osac get diskimages --tenant shared -o json | \
-  jq -r '.[] | select(.spec.source_type == "SOURCE_TYPE_REGISTRY") | .spec.source_ref' | \
-  sed -E 's#^docker://##; s#@sha256:.*$##; s#:[^/:]+$##' | \
-  sort -u > selected-diskimage-sources.txt
 
 test -s selected-diskimage-sources.txt || {
   echo "ERROR: no selected registry DiskImage sources found" >&2
@@ -288,7 +232,7 @@ fi
 echo "PASS: all selected sources have enforced ITMS NeverContactSource"
 ```
 
-### Step 4 — Configure CDI for disconnected registry imports
+## Consumer handoff constraints
 
 Two distinct image-pull paths exist for VMaaS:
 
@@ -308,272 +252,25 @@ Two distinct image-pull paths exist for VMaaS:
    redirected through ITMS nor authenticated with registry
    credentials.
 
-Work around this by making the CDI import target the mirror
-registry directly and anonymously:
-
 - **Public containerdisk repository** — ensure the repository
   holding each mirrored containerdisk is public and allows
   anonymous pulls; the CDI importer performs the registry pull
   itself and is given no credentials.
-- **Mirror-URL `DiskImage`** - set `spec.source_ref` to the mirror
-  registry image URL when creating the `DiskImage`. The field is
-  immutable after creation. The generated `DataVolume` copies the URL
-  verbatim, so the import targets the mirror directly instead of relying
-  on ITMS rewriting. To replace an existing upstream-backed DiskImage,
-  create a new DiskImage with the mirror URL, update tenant-facing
-  templates or catalog entries to reference the new DiskImage, verify
-  that no active ComputeInstance depends on the old entry, and then
-  retire the old DiskImage through the supported OSAC API or CLI. Do not
-  patch `spec.source_ref` in place.
+<!-- Moved to installation.md §Mirror-backed DiskImage preparation and replacement. See docs/guides/installation/disconnected/installation.md -->
 
-The resulting `DataVolume`, as OSAC creates it at provisioning
-time. The URL must include the site's actual mirror endpoint because CDI
-does not apply ITMS rewriting; the standard endpoint in this guide is
-`:8443` (use `:443` only when that is the configured endpoint):
+<!-- Moved to installation.md §CDI DataVolume import configuration. See docs/guides/installation/disconnected/installation.md -->
 
-```yaml
-apiVersion: cdi.kubevirt.io/v1beta1
-kind: DataVolume
-metadata:
-  name: <compute-instance-name>-root-disk
-spec:
-  source:
-    registry:
-      url: "docker://<mirror-registry>:8443/<containerdisk-image>:<tag>"
-      # pullMethod and secretRef stay unset: CDI's importer
-      # performs the pull itself, anonymously.
-  pvc:
-    accessModes:
-      - ReadWriteOnce
-    resources:
-      requests:
-        storage: <boot-disk-size>
-    storageClassName: <storage-tier-class>
-```
+<!-- Moved to prereqs.md §Registry trust configuration. See docs/guides/installation/disconnected/prereqs.md -->
 
-#### Registry TLS trust
+<!-- Moved to installation.md §CDI registry configuration and concurrency. See docs/guides/installation/disconnected/installation.md -->
 
-If the mirror registry's certificate is not signed by a CA the
-cluster already trusts (a self-signed certificate or an internal
-CA), both pull paths must be given that CA:
+<!-- Moved to prereqs.md §3 diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
 
-- **CRI-O / kubelet pulls** trust the registry through the node
-  trust store, which OpenShift populates from the cluster proxy
-  `trustedCA` setting.
-- **CDI registry imports** trust it because the CDI controller
-  copies the proxy `trustedCA` bundle into every importer pod.
+<!-- Moved to installation.md §VMaaS lifecycle acceptance. See docs/guides/installation/disconnected/installation.md -->
 
-Distributing the CA through the cluster proxy covers both paths
-at once:
+## Mirroring artifact checks (`oc`)
 
-```bash
-oc create configmap mirror-registry-ca -n openshift-config \
-  --from-file=ca-bundle.crt=<mirror-registry-ca>.crt
-oc patch proxy cluster --type merge \
-  -p '{"spec":{"trustedCA":{"name":"mirror-registry-ca"}}}'
-oc wait mcp --all --for=condition=Updated --timeout=30m
-```
-
-> **Preserve existing CA bundles**: if the cluster proxy already
-> references a `trustedCA` ConfigMap, the patch above replaces that
-> reference.  Merge the mirror registry certificate into the
-> existing bundle ConfigMap instead, or use these commands only
-> when no other custom CA bundle is configured.
-
-Verify from a node — the request must succeed **without** `-k`;
-an HTTP `401` response is normal (the registry's anonymous token
-challenge), and a TLS error means the CA is not yet distributed:
-
-```bash
-oc debug node/<node> -- chroot /host curl -sS \
-  https://<mirror-registry>:8443/v2/
-```
-
-The `image.config.openshift.io/cluster` `additionalTrustedCA` setting is
-a separate mechanism used by the image registry operator, imagestream
-imports, builds, and pod image pulls on nodes. It does not configure
-CRI-O node pulls or CDI registry imports, so it cannot replace the proxy
-`trustedCA` for the two paths covered here.
-
-#### Optional: CDI insecureRegistries (insecure fallback)
-
-As a last resort when the CA cannot be distributed, add the
-mirror registry to CDI's `insecureRegistries` to make CDI
-importers skip TLS verification for that registry.  The CDI CR is
-cluster-scoped (no namespace) and managed by the Hyperconverged
-Operator — `cdi-kubevirt-hyperconverged` on OpenShift
-Virtualization — so discover its name instead of assuming `cdi`:
-
-```bash
-# Only needed when the mirror registry CA is not trusted
-# cluster-wide.  This script preserves any existing entries and uses
-# resourceVersion compare-and-swap so a concurrent edit cannot be
-# silently overwritten: the API server rejects the patch when another
-# writer changed the CDI CR in between.  On conflict, re-read,
-# re-merge, and retry.
-MIRROR_REG="<mirror-registry>:8443"
-CDI_CR=$(oc get cdi -o jsonpath='{.items[0].metadata.name}')
-
-# Step 1: capture current state and resourceVersion in one GET
-CDI_JSON=$(oc get cdi "$CDI_CR" -o json) || {
-  echo "ERROR: cannot read CDI resource $CDI_CR" >&2
-  exit 1
-}
-CDI_RV=$(echo "$CDI_JSON" | jq -r '.metadata.resourceVersion')
-
-# Step 2: build the merge patch with the captured resourceVersion
-PATCH=$(echo "$CDI_JSON" | jq -c \
-  --arg reg "$MIRROR_REG" \
-  --arg rv "$CDI_RV" \
-  '{
-    metadata: { resourceVersion: $rv },
-    spec: { config: {
-      insecureRegistries: (
-        (.spec.config.insecureRegistries // [])
-        + [$reg] | unique
-      )
-    }}
-  }')
-
-# Step 3: apply — the server rejects a stale resourceVersion
-oc patch cdi "$CDI_CR" --type=merge -p "$PATCH" || {
-  echo "ERROR: CDI patch rejected (likely concurrent edit —" \
-    "re-read and retry)" >&2
-  exit 1
-}
-echo "CDI registry updated (resourceVersion was $CDI_RV)"
-```
-
-Prefer the CA distribution above: it is ordinary cluster
-configuration, while the CDI CR is owned by the Hyperconverged
-Operator on OpenShift Virtualization.
-
-### Step 5 — Verify containerdisk resolution via ITMS
-
-Pull using the **upstream** image reference to confirm that ITMS
-redirects the request to the mirror registry:
-
-```bash
-# Use the upstream tag reference — CRI-O should resolve it via ITMS
-oc debug node/<node-name> -- chroot /host \
-  crictl pull <upstream-registry>/<containerdisk-image>:<tag>
-```
-
-## Validation
-
-Validation follows the VMaaS tenant journey end to end: the
-`DiskImage` catalog must point at the mirror registry, and a VM
-provisioned through the OSAC API must reach the `RUNNING` state.
-Use the `osac` CLI for every step it covers; the raw OpenShift
-objects it hides (ITMS, CDI, DataVolumes) only need checking
-when something fails.
-
-### 1. Verify the DiskImage catalog points at the mirror
-
-```bash
-# List the DiskImages offered to tenants:
-osac get diskimages --tenant shared
-
-# Confirm each image's Source Ref references the mirror
-# registry, not the upstream:
-osac describe diskimage <name>
-```
-
-Every `Source Ref` must be a
-`<mirror-registry>/<repo>/<image>:<tag>` reference.  A
-`Source Ref` that still points at the upstream registry produces
-the classic disconnected failure — CDI ignores ITMS and dials
-the upstream directly (see Troubleshooting).
-
-### 2. Provision a fresh VM from a mirrored DiskImage
-
-Before creation, prove that no prior root `DataVolume` or PVC can be reused:
-
-```bash
-if oc get datavolume,pvc -A -o name | grep -q '/mirror-validation-root-disk$'; then
-  echo "ERROR: stale mirror-validation root disk exists" >&2
-  exit 1
-fi
-```
-
-Create a compute instance from a catalog item, forcing it onto the
-`DiskImage` being validated (adjust the remaining flags to what the catalog
-item already defaults):
-
-```bash
-osac create computeinstance \
-  --name mirror-validation \
-  --catalog-item <catalog-item> \
-  --disk-image <mirror-backed-diskimage> \
-  --boot-disk-storage-tier <tier> \
-  --network-attachment subnet=<subnet-id> \
-  --ssh-key <ssh-secret>
-```
-
-Then watch it progress and require the OSAC `ComputeInstance` Ready
-condition, not only its summary state:
-
-```bash
-osac get computeinstances --watch
-osac describe computeinstance mirror-validation
-osac get computeinstance mirror-validation -o yaml
-
-CI_NS=$(oc get computeinstance -A \
-  -l osac.openshift.io/name=mirror-validation \
-  -o jsonpath='{.items[0].metadata.namespace}')
-CI_NAME=$(oc get computeinstance -n "$CI_NS" \
-  -l osac.openshift.io/name=mirror-validation \
-  -o jsonpath='{.items[0].metadata.name}')
-oc wait -n "$CI_NS" "computeinstance/$CI_NAME" \
-  --for=condition=Ready --timeout=30m
-```
-
-Capture the generated root `DataVolume` and PVC identities, require a
-successful import and running VMI, and preserve importer logs as evidence:
-
-```bash
-DV_NAME=$(oc get datavolume -n "$CI_NS" -o json | \
-  jq -r '.items[] | select(.metadata.name | contains("mirror-validation")) | .metadata.name' | head -n1)
-test -n "$DV_NAME" || { echo "ERROR: root DataVolume not found" >&2; exit 1; }
-
-oc wait -n "$CI_NS" "datavolume/$DV_NAME" \
-  --for=jsonpath='{.status.phase}'=Succeeded --timeout=30m
-PVC_NAME=$(oc get datavolume -n "$CI_NS" "$DV_NAME" \
-  -o jsonpath='{.status.claimName}')
-printf 'ComputeInstance=%s DataVolume=%s PVC=%s\n' \
-  "$CI_NAME" "$DV_NAME" "$PVC_NAME"
-
-oc get vmi -n "$CI_NS" -o custom-columns=\
-'NAME:.metadata.name,PHASE:.status.phase' | grep mirror-validation
-
-IMPORTER_POD=$(oc get pod -n "$CI_NS" \
-  -l cdi.kubevirt.io=importer -o json | \
-  jq -r --arg pvc "$PVC_NAME" '.items[] | select(.metadata.name | contains($pvc)) | .metadata.name' | head -n1)
-test -n "$IMPORTER_POD" || { echo "ERROR: CDI importer pod not found" >&2; exit 1; }
-oc logs -n "$CI_NS" "$IMPORTER_POD" --all-containers \
-  > "${CI_NAME}-cdi-importer.log"
-if grep -E 'https?://(quay.io|registry.redhat.io|registry.access.redhat.com)' \
-  "${CI_NAME}-cdi-importer.log"; then
-  echo "ERROR: importer log contains an upstream registry URL" >&2
-  exit 1
-fi
-```
-
-The log check proves only what the importer logged. If egress is not blocked
-or independently observed, record no-external-contact as inferred rather than
-proven. If the Ready condition, DataVolume, or VMI check fails, document the
-disconnected limitation instead of claiming end-to-end VMaaS support.
-
-Delete the instance when done:
-
-```bash
-osac delete computeinstance mirror-validation
-```
-
-### 3. Cluster-side checks (`oc`)
-
-The `osac` CLI has no view of the OpenShift objects this
-document configures; check them directly when validation fails:
+Check the generated mirroring-policy resources directly:
 
 ```bash
 # ITMS includes containerdisk entries
@@ -584,41 +281,19 @@ oc get itms -o json | \
   jq '[.items[].spec.imageTagMirrors[] |
     select(.source | test("containerdisk|rhel-guest")) |
     {source, mirrorSourcePolicy}]'
-
-# CDI operator is healthy
-oc get pods -n openshift-cnv -l app.kubernetes.io/managed-by=cdi-operator
-
-# CDI insecureRegistries (only if the insecure fallback is used)
-oc get cdi -o custom-columns=\
-'NAME:.metadata.name,INSECURE:.spec.config.insecureRegistries'
-
-# DataVolume import status
-oc get datavolume -A -o custom-columns=\
-'NAME:.metadata.name,PHASE:.status.phase,PROGRESS:.status.progress'
-
-# Node pull via ITMS — use the upstream reference; CRI-O must
-# resolve it to the mirror
-oc debug node/<node-name> -- chroot /host \
-  crictl pull <upstream-registry>/<containerdisk-image>:<tag>
-
-# VirtualMachineInstance status
-oc get vmi -A -o custom-columns=\
-'NAME:.metadata.name,PHASE:.status.phase,NODE:.status.nodeName'
 ```
 
-## Troubleshooting
+<!-- Moved to installation.md §CDI health and configuration diagnostics. See docs/guides/installation/disconnected/installation.md -->
 
-Symptoms are listed as the tenant sees them (`osac`), with the
-underlying OpenShift diagnosis behind each.
+<!-- Moved to installation.md §DataVolume import diagnostics. See docs/guides/installation/disconnected/installation.md -->
 
-| Symptom | Likely cause | Resolution |
-| ------- | ------------ | ---------- |
-| Compute instance stuck in `STARTING`; CDI importer logs `dial tcp <upstream-registry>:443: i/o timeout` | `DiskImage` `source_ref` still points at the upstream registry — CDI's importer ignores ITMS/IDMS and dials the upstream directly | Confirm with `osac describe diskimage <name>`, then point the `DiskImage` at the mirror registry image URL (see Step 4) and re-provision |
-| Compute instance stuck in `STARTING`; CDI importer logs `401 Unauthorized` | Mirrored containerdisk repository requires authentication — the CDI importer is given no credentials | Make the repository public and allow anonymous pulls |
-| Compute instance stuck in `STARTING` or `FAILED`; CDI importer logs `x509: certificate signed by unknown authority` | Mirror registry CA not trusted by CDI | Distribute the CA via the cluster proxy `trustedCA` (see [Registry TLS trust](#registry-tls-trust)); CDI `insecureRegistries` is the insecure fallback |
-| Compute instance `FAILED` after the import | DataVolume import timed out or errored | Inspect `osac get computeinstance <name> -o yaml`, then `oc get datavolume -A` and the CDI importer pod logs |
-| `ImagePullBackOff` on virt-launcher pods — instance never starts | KubeVirt operator images (pod images, not containerdisks) not mirrored or missing ITMS entries | Complete the VMaaS operator mirroring in [mirroring-operators.md](mirroring-operators.md) |
-| `ErrImagePull: unauthorized` on a node pull from the mirror | Mirror registry credentials missing from the node for private repositories | Verify global pull secret contains registry entry: `oc get secret/pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' \| base64 -d \| jq '.auths \| keys'` |
+<!-- Moved to prereqs.md §3 diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
+
+<!-- Moved to installation.md §VirtualMachineInstance diagnostics. See docs/guides/installation/disconnected/installation.md -->
+
+<!-- Moved to installation.md §VMaaS runtime troubleshooting. See docs/guides/installation/disconnected/installation.md -->
+<!-- Moved to installation.md §VMaaS runtime troubleshooting. See docs/guides/installation/disconnected/installation.md -->
+<!-- Moved to prereqs.md §Mirror-read credential diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
 
 ## Known Gaps / Limitations
 
@@ -628,12 +303,11 @@ underlying OpenShift diagnosis behind each.
    the importer pulls the containerdisk itself; neither the OSAC
    API nor the `osac` CLI exposes a way to change it, so CDI
    registry imports always bypass ITMS/IDMS and run
-   unauthenticated.  Disconnected VMaaS works around this by
-   pointing `DiskImage` `spec.source_ref` at the mirror registry
-   URL and allowing anonymous pulls on the containerdisk
-   repository (see Step 4).
+   unauthenticated.
 
-2. **Containerdisk size variability** — OS disk images vary widely in size
+<!-- Moved to installation.md §Mirror-backed DiskImage preparation. See docs/guides/installation/disconnected/installation.md -->
+
+2.**Containerdisk size variability** — OS disk images vary widely in size
    (500 MiB to 10+ GiB per image).  Plan registry storage accordingly
    based on the number and size of the containerdisks your `DiskImage`
    resources reference.

@@ -98,33 +98,29 @@ class CelField<Resource, Value> {
     asFilter<Resource>(`${this.path}.contains(${toCelLiteral(value)})`);
 
   /**
-   * Matches when at least one element in an array field equals `value`.
-   * Emits CEL such as `this.spec.tags.exists(item, item == "gpu")`.
+   * Matches when a repeated field contains `value`.
+   * Emits CEL such as `"gpu" in this.spec.tags`.
    */
-  public someEquals = (
-    value: Value extends readonly (infer Item)[] ? Extract<Item, CelLiteral> : never,
-    variableName = 'item',
-  ): CelFilter<Resource> =>
-    asFilter<Resource>(
-      `${this.path}.exists(${variableName}, ${variableName} == ${toCelLiteral(value)})`,
-    );
+  public includes = (
+    value: Value extends readonly unknown[] ? CelLiteral : never,
+  ): CelFilter<Resource> => asFilter<Resource>(`${toCelLiteral(value)} in ${this.path}`);
 
   /**
-   * Matches when at least one element in an array field equals any supplied value.
-   * Emits CEL such as `this.spec.tags.exists(item, item == "gpu" || item == "fast")`.
+   * Matches when a repeated field contains at least one of the supplied values.
+   * Emits CEL such as `"gpu" in this.spec.tags || "fast" in this.spec.tags`.
    * Returns `false` when no values are supplied.
    */
-  public someEqualsAny = (
-    values: Value extends readonly (infer Item)[] ? readonly Extract<Item, CelLiteral>[] : never,
-    variableName = 'item',
+  public includesAny = (
+    values: Value extends readonly unknown[] ? readonly CelLiteral[] : never,
   ): CelFilter<Resource> => {
     if (values.length === 0) {
       return asFilter<Resource>('false');
     }
+    if (values.length === 1) {
+      return asFilter<Resource>(`${toCelLiteral(values[0])} in ${this.path}`);
+    }
     return asFilter<Resource>(
-      `${this.path}.exists(${variableName}, ${values
-        .map((value) => `${variableName} == ${toCelLiteral(value)}`)
-        .join(' || ')})`,
+      `(${values.map((value) => `${toCelLiteral(value)} in ${this.path}`).join(' || ')})`,
     );
   };
 }

@@ -92,7 +92,7 @@ export const buildDiskImageListFilter = (
       clauses.push(filter.field('spec.guestOsFamily').equals(criteria.guestOsFamily));
     }
     if (criteria.architecture?.length) {
-      clauses.push(filter.field('spec.architecture').someEqualsAny(criteria.architecture, 'a'));
+      clauses.push(filter.field('spec.architecture').includesAny(criteria.architecture));
     }
     if (criteria.scope) {
       clauses.push(

@@ -32,9 +32,22 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+func equalComputeInstanceDiskStatus(actual, expected *privatev1.ComputeInstanceStatus) bool {
+	actualDiskStatus := privatev1.ComputeInstanceStatus_builder{
+		Volumes:            actual.GetVolumes(),
+		VolumeRegistration: actual.GetVolumeRegistration(),
+	}.Build()
+	expectedDiskStatus := privatev1.ComputeInstanceStatus_builder{
+		Volumes:            expected.GetVolumes(),
+		VolumeRegistration: expected.GetVolumeRegistration(),
+	}.Build()
+	return proto.Equal(actualDiskStatus, expectedDiskStatus)
+}
 
 var _ = Describe("Private compute instances server", func() {
 	var defaultTestNetworkClass *privatev1.NetworkClass
@@ -421,6 +434,38 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		}
 
+		createComputeInstanceWithStatus := func(name string, status *privatev1.ComputeInstanceStatus,
+			additionalDisks ...*privatev1.ComputeInstanceDisk) *privatev1.ComputeInstance {
+			templateID := name + "-template"
+			createTemplate(templateID)
+			spec := privatev1.ComputeInstanceSpec_builder{
+				Template: privatev1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+				NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+					privatev1.ComputeNetworkAttachment_builder{
+						Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+					}.Build(),
+				},
+			}.Build()
+			if len(additionalDisks) > 0 {
+				spec.SetAdditionalDisks(privatev1.ComputeInstanceDiskList_builder{Items: additionalDisks}.Build())
+			}
+			response, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+					Spec:     spec,
+					Status:   status,
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			return response.GetObject()
+		}
+		additionalDisk := func() *privatev1.ComputeInstanceDisk {
+			return privatev1.ComputeInstanceDisk_builder{
+				SizeGib:     proto.Int32(20),
+				StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
+			}.Build()
+		}
+
 		createUserDataSecret := func() *privatev1.Secret {
 			result, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
 				Metadata: privatev1.Metadata_builder{
@@ -737,6 +782,434 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(object.GetId()).To(Equal(id))
 			Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("general.small"))
 			Expect(object.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
+		})
+
+		It("preserves the latest status from the locked row for public-view updates", func() {
+			createTemplate("locked-status-update-template")
+			createResponse, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: "locked-status-update"}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "locked-status-update-template"}.Build(),
+						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+							privatev1.ComputeNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+					Status: privatev1.ComputeInstanceStatus_builder{
+						Volumes: []*privatev1.ComputeInstanceVolume{
+							privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-before"}.Build(),
+						},
+						VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+							privatev1.ComputeInstanceVolumeRegistration_builder{
+								DiskKey: "boot",
+								State:   privatev1.ComputeInstanceVolumeRegistration_STATE_NEVER_ATTEMPTED,
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+			_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Id: id,
+					Metadata: privatev1.Metadata_builder{
+						Version:    createResponse.GetObject().GetMetadata().GetVersion(),
+						Finalizers: []string{finalizers.Controller},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}},
+				Lock:       true,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			staleResponse, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			staleCandidate := proto.Clone(staleResponse.GetObject()).(*privatev1.ComputeInstance)
+
+			latestStatus := privatev1.ComputeInstanceStatus_builder{
+				Volumes: []*privatev1.ComputeInstanceVolume{
+					privatev1.ComputeInstanceVolume_builder{
+						DiskKey:  "boot",
+						VolumeId: "volume-after-0123456789abcdef-0123456789abcdef0123456789abcdef",
+					}.Build(),
+				},
+				VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+					privatev1.ComputeInstanceVolumeRegistration_builder{
+						DiskKey: "boot",
+						State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+					}.Build(),
+				},
+			}.Build()
+			_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{Id: id, Status: latestStatus}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"status.volumes", "status.volume_registration"},
+				},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			staleCandidate.GetSpec().SetRestartRequestedAt(timestamppb.Now())
+			updateResponse, err := server.Update(withPublicAPIView(ctx), privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: staleCandidate,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetStatus().GetVolumes()[0].GetVolumeId()).To(
+				Equal("volume-after-0123456789abcdef-0123456789abcdef0123456789abcdef"))
+			Expect(updateResponse.GetObject().GetStatus().GetVolumeRegistration()[0].GetState()).To(
+				Equal(privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED))
+
+			restartedServer, err := NewPrivateComputeInstancesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			persisted, err := restartedServer.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(persisted.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+			Expect(persisted.GetObject().GetStatus().GetVolumes()[0].GetVolumeId()).To(
+				Equal("volume-after-0123456789abcdef-0123456789abcdef0123456789abcdef"))
+			Expect(persisted.GetObject().GetStatus().GetVolumeRegistration()[0].GetState()).To(
+				Equal(privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED))
+			Expect(persisted.GetObject().GetSpec().GetTemplate().GetId()).To(Equal("locked-status-update-template"))
+		})
+
+		DescribeTable("round-trips empty, partial, and complete disk correlation lists",
+			func(volumes []*privatev1.ComputeInstanceVolume, registrations []*privatev1.ComputeInstanceVolumeRegistration,
+				additionalDiskCount int) {
+				additionalDisks := make([]*privatev1.ComputeInstanceDisk, 0, additionalDiskCount)
+				for range additionalDiskCount {
+					additionalDisks = append(additionalDisks, additionalDisk())
+				}
+				created := createComputeInstanceWithStatus("disk-correlation-roundtrip", privatev1.ComputeInstanceStatus_builder{
+					Volumes:            volumes,
+					VolumeRegistration: registrations,
+				}.Build(), additionalDisks...)
+
+				computeInstancesDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				persisted, err := computeInstancesDao.Get().SetId(created.GetId()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(equalComputeInstanceDiskStatus(
+					persisted.GetObject().GetStatus(),
+					privatev1.ComputeInstanceStatus_builder{
+						Volumes:            volumes,
+						VolumeRegistration: registrations,
+					}.Build(),
+				)).To(BeTrue())
+			},
+			Entry("zero pairs", []*privatev1.ComputeInstanceVolume(nil), []*privatev1.ComputeInstanceVolumeRegistration(nil), 0),
+			Entry("partial pairs", []*privatev1.ComputeInstanceVolume{
+				privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-boot"}.Build(),
+			}, []*privatev1.ComputeInstanceVolumeRegistration{
+				privatev1.ComputeInstanceVolumeRegistration_builder{
+					DiskKey: "boot",
+					State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+				}.Build(),
+				privatev1.ComputeInstanceVolumeRegistration_builder{
+					DiskKey: "disk-1",
+					State:   privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN,
+				}.Build(),
+			}, 1),
+			Entry("complete pairs", []*privatev1.ComputeInstanceVolume{
+				privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-boot"}.Build(),
+				privatev1.ComputeInstanceVolume_builder{DiskKey: "disk-1", VolumeId: "volume-disk-1"}.Build(),
+				privatev1.ComputeInstanceVolume_builder{DiskKey: "disk-2", VolumeId: "volume-disk-2"}.Build(),
+			}, []*privatev1.ComputeInstanceVolumeRegistration{
+				privatev1.ComputeInstanceVolumeRegistration_builder{
+					DiskKey: "boot",
+					State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+				}.Build(),
+				privatev1.ComputeInstanceVolumeRegistration_builder{
+					DiskKey: "disk-1",
+					State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+				}.Build(),
+				privatev1.ComputeInstanceVolumeRegistration_builder{
+					DiskKey: "disk-2",
+					State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+				}.Build(),
+			}, 2),
+		)
+
+		DescribeTable("persists each explicit disk registration outcome",
+			func(state privatev1.ComputeInstanceVolumeRegistration_State, hasVolumeID bool) {
+				status := privatev1.ComputeInstanceStatus_builder{
+					VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+						privatev1.ComputeInstanceVolumeRegistration_builder{DiskKey: "boot", State: state}.Build(),
+					},
+				}.Build()
+				if hasVolumeID {
+					status.SetVolumes([]*privatev1.ComputeInstanceVolume{
+						privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-boot"}.Build(),
+					})
+				}
+
+				created := createComputeInstanceWithStatus("disk-registration-outcome", nil)
+				_, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object:     privatev1.ComputeInstance_builder{Id: created.GetId(), Status: status}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.volumes", "status.volume_registration"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				persisted, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(equalComputeInstanceDiskStatus(persisted.GetObject().GetStatus(), status)).To(BeTrue())
+			},
+			Entry("never attempted", privatev1.ComputeInstanceVolumeRegistration_STATE_NEVER_ATTEMPTED, false),
+			Entry("confirmed non-committed failure", privatev1.ComputeInstanceVolumeRegistration_STATE_NON_COMMITTED_FAILURE, false),
+			Entry("unknown", privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN, false),
+			Entry("resolved", privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED, true),
+		)
+
+		It("commits a resolved disk ID and registration outcome in one update", func() {
+			created := createComputeInstanceWithStatus("disk-registration-atomic", nil)
+			updateStatus := privatev1.ComputeInstanceStatus_builder{
+				Volumes: []*privatev1.ComputeInstanceVolume{
+					privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-atomic"}.Build(),
+				},
+				VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+					privatev1.ComputeInstanceVolumeRegistration_builder{
+						DiskKey: "boot",
+						State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+					}.Build(),
+				},
+			}.Build()
+			_, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object:     privatev1.ComputeInstance_builder{Id: created.GetId(), Status: updateStatus}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.volumes", "status.volume_registration"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(suiteTx.End(ctx)).To(Succeed())
+			suiteTx = nil
+			verifyTx, err := tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			verifyCtx := database.TxIntoContext(context.Background(), verifyTx)
+			DeferCleanup(func() {
+				Expect(verifyTx.End(verifyCtx)).To(Succeed())
+			})
+
+			computeInstancesDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			persisted, err := computeInstancesDao.Get().SetId(created.GetId()).Do(verifyCtx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(equalComputeInstanceDiskStatus(persisted.GetObject().GetStatus(), updateStatus)).To(BeTrue())
+		})
+
+		It("allows only one attempted disk claim for a persisted object version", func() {
+			created := createComputeInstanceWithStatus("single-disk-registration-claim", nil)
+			Expect(suiteTx.End(ctx)).To(Succeed())
+			suiteTx = nil
+
+			versionTx, err := tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			versionCtx := database.TxIntoContext(context.Background(), versionTx)
+			current, err := server.Get(versionCtx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			staleVersion := current.GetObject().GetMetadata().GetVersion()
+			Expect(versionTx.End(context.Background())).To(Succeed())
+
+			staleClaim := privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Id: created.GetId(),
+					Metadata: privatev1.Metadata_builder{
+						Version: staleVersion,
+					}.Build(),
+					Status: privatev1.ComputeInstanceStatus_builder{
+						VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+							privatev1.ComputeInstanceVolumeRegistration_builder{
+								DiskKey: "boot",
+								State:   privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN,
+							}.Build(),
+						},
+						Conditions: []*privatev1.ComputeInstanceCondition{
+							privatev1.ComputeInstanceCondition_builder{
+								Type:    privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED,
+								Status:  privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+								Reason:  proto.String("VolumeRegistrationPending"),
+								Message: proto.String("Disk Volume IDs persisted: 0/1; blocked disks: boot; recovery pending."),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.volume_registration", "status.conditions"}},
+				Lock:       true,
+			}.Build()
+
+			firstTx, err := tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			firstCtx := database.TxIntoContext(context.Background(), firstTx)
+			_, err = server.Update(firstCtx, staleClaim)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(firstTx.End(context.Background())).To(Succeed())
+
+			secondTx, err := tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			secondCtx := database.TxIntoContext(context.Background(), secondTx)
+			_, err = server.Update(secondCtx, staleClaim)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Aborted))
+			Expect(secondTx.End(context.Background())).To(Succeed())
+
+			verifyTx, err := tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			verifyCtx := database.TxIntoContext(context.Background(), verifyTx)
+			DeferCleanup(func() {
+				Expect(verifyTx.End(verifyCtx)).To(Succeed())
+			})
+			persisted, err := server.Get(verifyCtx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(equalComputeInstanceDiskStatus(
+				persisted.GetObject().GetStatus(),
+				privatev1.ComputeInstanceStatus_builder{
+					VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+						privatev1.ComputeInstanceVolumeRegistration_builder{
+							DiskKey: "boot",
+							State:   privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN,
+						}.Build(),
+					},
+				}.Build(),
+			)).To(BeTrue())
+			Expect(persisted.GetObject().GetStatus().GetConditions()).To(ContainElement(WithTransform(
+				func(condition *privatev1.ComputeInstanceCondition) string { return condition.GetReason() },
+				Equal("VolumeRegistrationPending"))))
+		})
+
+		It("preserves both disk status lists across concurrent masked status updates", func() {
+			created := createComputeInstanceWithStatus("concurrent-disk-status", nil)
+			Expect(suiteTx.End(ctx)).To(Succeed())
+			suiteTx = nil
+
+			firstTx, err := tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			firstCtx := database.TxIntoContext(context.Background(), firstTx)
+			var secondTx database.Tx
+			var updateDone chan error
+			DeferCleanup(func() {
+				if firstTx != nil {
+					Expect(firstTx.End(context.Background())).To(Succeed())
+					firstTx = nil
+				}
+				if updateDone != nil {
+					select {
+					case <-updateDone:
+					case <-time.After(10 * time.Second):
+					}
+				}
+				if secondTx != nil {
+					Expect(secondTx.End(context.Background())).To(Succeed())
+					secondTx = nil
+				}
+			})
+
+			latestDiskStatus := privatev1.ComputeInstanceStatus_builder{
+				Volumes: []*privatev1.ComputeInstanceVolume{
+					privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-concurrent"}.Build(),
+				},
+				VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+					privatev1.ComputeInstanceVolumeRegistration_builder{
+						DiskKey: "boot",
+						State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+					}.Build(),
+				},
+			}.Build()
+			_, err = server.Update(firstCtx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object:     privatev1.ComputeInstance_builder{Id: created.GetId(), Status: latestDiskStatus}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.volumes", "status.volume_registration"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			secondTx, err = tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			secondCtx, cancel := context.WithTimeout(database.TxIntoContext(context.Background(), secondTx), 10*time.Second)
+			defer cancel()
+			updateDone = make(chan error, 1)
+			go func() {
+				_, updateErr := server.Update(secondCtx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: created.GetId(),
+						Status: privatev1.ComputeInstanceStatus_builder{
+							State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+							StateTransitionTime: timestamppb.New(time.Now().Add(time.Minute)),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.state_transition_time"}},
+				}.Build())
+				updateDone <- updateErr
+			}()
+
+			Eventually(func() (bool, error) {
+				var waiting bool
+				err := testPool.QueryRow(context.Background(), `
+					select exists (
+						select 1
+						from pg_stat_activity
+						where datname = current_database()
+						  and pid <> pg_backend_pid()
+						  and state = 'active'
+						  and wait_event_type = 'Lock'
+						  and cardinality(pg_blocking_pids(pid)) > 0
+						  and query ilike '%compute_instances%'
+					)
+				`).Scan(&waiting)
+				return waiting, err
+			}, 5*time.Second, 10*time.Millisecond).Should(BeTrue())
+
+			Expect(firstTx.End(context.Background())).To(Succeed())
+			firstTx = nil
+			Expect(<-updateDone).To(Succeed())
+			updateDone = nil
+			Expect(secondTx.End(context.Background())).To(Succeed())
+			secondTx = nil
+
+			verifyTx, err := tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			verifyCtx := database.TxIntoContext(context.Background(), verifyTx)
+			DeferCleanup(func() {
+				Expect(verifyTx.End(verifyCtx)).To(Succeed())
+			})
+			persisted, err := server.Get(verifyCtx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(persisted.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
+			Expect(equalComputeInstanceDiskStatus(persisted.GetObject().GetStatus(), latestDiskStatus)).To(BeTrue())
+		})
+
+		It("reads legacy status JSON without disk registration fields", func() {
+			created := createComputeInstanceWithStatus("legacy-disk-status", privatev1.ComputeInstanceStatus_builder{
+				Volumes: []*privatev1.ComputeInstanceVolume{
+					privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "old-volume"}.Build(),
+				},
+				VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+					privatev1.ComputeInstanceVolumeRegistration_builder{
+						DiskKey: "boot",
+						State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+					}.Build(),
+				},
+			}.Build())
+			tx, err := database.TxFromContext(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = tx.Exec(ctx, `
+				update compute_instances
+				set data = jsonb_set(
+					data,
+					'{status}',
+					coalesce(data->'status', '{}'::jsonb) - 'volumes' - 'volume_registration'
+				)
+				where id = $1`, created.GetId())
+			Expect(err).ToNot(HaveOccurred())
+
+			persisted, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(persisted.GetObject().GetStatus().GetVolumes()).To(BeEmpty())
+			Expect(persisted.GetObject().GetStatus().GetVolumeRegistration()).To(BeEmpty())
 		})
 
 		It("Deletes object", func() {

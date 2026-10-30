@@ -1,0 +1,142 @@
+---
+- name: Compute Instance Create - Volume ID annotation setup
+  hosts: localhost
+  gather_facts: true
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Read ComputeInstance fixture and add out-of-order disk IDs
+      ansible.builtin.set_fact:
+        test_compute_instance: >-
+          {{
+            (lookup('file', '../../../fixtures/computeinstance-test.yaml') | from_yaml)
+            | combine(
+                {
+                  'spec': {
+                    'diskVolumeIDs': {
+                      'disk-2': 'volume-data-2',
+                      'boot': 'volume-boot',
+                      'disk-1': 'volume-data-1'
+                    },
+                    'additionalDisks': [
+                      {'sizeGiB': 10, 'storageTier': 'local'},
+                      {'sizeGiB': 20, 'storageTier': 'local'}
+                    ]
+                  }
+                },
+                recursive=true
+              )
+          }}
+
+    - name: Set workflow variables for the real resource tasks
+      ansible.builtin.set_fact:
+        osac_job_vars:
+          resource: "{{ test_compute_instance }}"
+        tenant_storage_class_tenant_name: "test-tenant"
+        tenant_storage_class_storage_classes:
+          - name: "test-storage-class"
+            tier: "local"
+        create_step_wait_annotate_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+
+- name: Import compute instance create workflow with real DataVolume tasks
+  ansible.builtin.import_playbook: osac.workflows.compute_instance.create
+
+- name: Verify keyed DataVolume annotations and unchanged disk specs
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Verify boot and additional DataVolumes
+      block:
+        - name: Read root DataVolume
+          kubernetes.core.k8s_info:
+            api_version: cdi.kubevirt.io/v1beta1
+            kind: DataVolume
+            name: test-vm-root-disk
+            namespace: test-subnet
+          register: root_data_volume
+
+        - name: Read first additional DataVolume
+          kubernetes.core.k8s_info:
+            api_version: cdi.kubevirt.io/v1beta1
+            kind: DataVolume
+            name: test-vm-disk-1
+            namespace: test-subnet
+          register: disk_1_data_volume
+
+        - name: Read second additional DataVolume
+          kubernetes.core.k8s_info:
+            api_version: cdi.kubevirt.io/v1beta1
+            kind: DataVolume
+            name: test-vm-disk-2
+            namespace: test-subnet
+          register: disk_2_data_volume
+
+        - name: Verify the root DataVolume fields
+          ansible.builtin.assert:
+            that:
+              - root_data_volume.resources | length == 1
+              - root_data_volume.resources[0].metadata.namespace == 'test-subnet'
+              - root_data_volume.resources[0].metadata.labels | length == 1
+              - root_data_volume.resources[0].metadata.labels[compute_instance_label] == 'test-vm'
+              - root_data_volume.resources[0].metadata.annotations | length == 1
+              - root_data_volume.resources[0].metadata.annotations['osac.openshift.io/storage-volume-id'] == 'volume-boot'
+              - root_data_volume.resources[0].spec.source.registry.url == 'docker://quay.io/containerdisks/fedora:latest'
+              - root_data_volume.resources[0].spec.pvc.storageClassName == 'test-storage-class'
+              - root_data_volume.resources[0].spec.pvc.resources.requests.storage == '20Gi'
+              - root_data_volume.resources[0].spec.pvc.accessModes == ['ReadWriteOnce']
+
+        - name: Verify the first additional DataVolume fields
+          ansible.builtin.assert:
+            that:
+              - disk_1_data_volume.resources | length == 1
+              - disk_1_data_volume.resources[0].metadata.namespace == 'test-subnet'
+              - disk_1_data_volume.resources[0].metadata.labels | length == 1
+              - disk_1_data_volume.resources[0].metadata.labels[compute_instance_label] == 'test-vm'
+              - disk_1_data_volume.resources[0].metadata.annotations['osac.openshift.io/storage-volume-id'] == 'volume-data-1'
+              - "'osac.openshift.io/tenant' not in disk_1_data_volume.resources[0].metadata.annotations"
+              - "'osac.openshift.io/owner-reference' not in disk_1_data_volume.resources[0].metadata.annotations"
+              - disk_1_data_volume.resources[0].spec.source.blank == {}
+              - disk_1_data_volume.resources[0].spec.pvc.storageClassName == 'test-storage-class'
+              - disk_1_data_volume.resources[0].spec.pvc.resources.requests.storage == '10Gi'
+              - disk_1_data_volume.resources[0].spec.pvc.accessModes == ['ReadWriteOnce']
+
+        - name: Verify the second additional DataVolume fields
+          ansible.builtin.assert:
+            that:
+              - disk_2_data_volume.resources | length == 1
+              - disk_2_data_volume.resources[0].metadata.namespace == 'test-subnet'
+              - disk_2_data_volume.resources[0].metadata.labels | length == 1
+              - disk_2_data_volume.resources[0].metadata.labels[compute_instance_label] == 'test-vm'
+              - disk_2_data_volume.resources[0].metadata.annotations['osac.openshift.io/storage-volume-id'] == 'volume-data-2'
+              - "'osac.openshift.io/tenant' not in disk_2_data_volume.resources[0].metadata.annotations"
+              - "'osac.openshift.io/owner-reference' not in disk_2_data_volume.resources[0].metadata.annotations"
+              - disk_2_data_volume.resources[0].spec.source.blank == {}
+              - disk_2_data_volume.resources[0].spec.pvc.storageClassName == 'test-storage-class'
+              - disk_2_data_volume.resources[0].spec.pvc.resources.requests.storage == '20Gi'
+              - disk_2_data_volume.resources[0].spec.pvc.accessModes == ['ReadWriteOnce']
+      always:
+        - name: Remove the test VirtualMachine
+          kubernetes.core.k8s:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachine
+            name: test-vm
+            namespace: test-subnet
+            state: absent
+
+        - name: Remove test DataVolumes
+          kubernetes.core.k8s:
+            api_version: cdi.kubevirt.io/v1beta1
+            kind: DataVolume
+            name: "{{ item }}"
+            namespace: test-subnet
+            state: absent
+          loop:
+            - test-vm-root-disk
+            - test-vm-disk-1
+            - test-vm-disk-2

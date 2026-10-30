@@ -780,6 +780,19 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Spec: &privatev1.ComputeInstanceSpec{},
 					Status: &privatev1.ComputeInstanceStatus{
 						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+						Volumes: []*privatev1.ComputeInstanceVolume{
+							privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-delete-feedback"}.Build(),
+						},
+						VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+							privatev1.ComputeInstanceVolumeRegistration_builder{
+								DiskKey: "boot",
+								State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+							}.Build(),
+							privatev1.ComputeInstanceVolumeRegistration_builder{
+								DiskKey: "disk-1",
+								State:   privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN,
+							}.Build(),
+						},
 					},
 				},
 			}
@@ -806,6 +819,18 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(mockClient.updateCalled).To(BeTrue())
 			Expect(mockClient.lastUpdate).NotTo(BeNil())
 			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING))
+			Expect(mockClient.lastUpdateMask.GetPaths()).ToNot(ContainElement("status.volumes"))
+			Expect(mockClient.lastUpdateMask.GetPaths()).ToNot(ContainElement("status.volume_registration"))
+			Expect(mockClient.lastUpdate.GetStatus().GetVolumes()).To(HaveLen(1))
+			Expect(mockClient.lastUpdate.GetStatus().GetVolumes()[0].GetDiskKey()).To(Equal("boot"))
+			Expect(mockClient.lastUpdate.GetStatus().GetVolumes()[0].GetVolumeId()).To(Equal("volume-delete-feedback"))
+			Expect(mockClient.lastUpdate.GetStatus().GetVolumeRegistration()).To(HaveLen(2))
+			Expect(mockClient.lastUpdate.GetStatus().GetVolumeRegistration()[0].GetDiskKey()).To(Equal("boot"))
+			Expect(mockClient.lastUpdate.GetStatus().GetVolumeRegistration()[0].GetState()).To(
+				Equal(privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED))
+			Expect(mockClient.lastUpdate.GetStatus().GetVolumeRegistration()[1].GetDiskKey()).To(Equal("disk-1"))
+			Expect(mockClient.lastUpdate.GetStatus().GetVolumeRegistration()[1].GetState()).To(
+				Equal(privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN))
 		})
 
 		It("should signal and remove finalizer when it's the last one", func() {
@@ -1109,6 +1134,19 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					Spec: &privatev1.ComputeInstanceSpec{},
 					Status: &privatev1.ComputeInstanceStatus{
 						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED,
+						Volumes: []*privatev1.ComputeInstanceVolume{
+							privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-feedback"}.Build(),
+						},
+						VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+							privatev1.ComputeInstanceVolumeRegistration_builder{
+								DiskKey: "boot",
+								State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+							}.Build(),
+							privatev1.ComputeInstanceVolumeRegistration_builder{
+								DiskKey: "disk-1",
+								State:   privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN,
+							}.Build(),
+						},
 					},
 				},
 			}
@@ -1152,6 +1190,17 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
 			Expect(mockClient.lastUpdateMask).NotTo(BeNil())
 			Expect(mockClient.lastUpdateMask.GetPaths()).To(ContainElement("status.compute_network_attachment_statuses"))
+			Expect(mockClient.lastUpdateMask.GetPaths()).ToNot(ContainElement("status.volumes"))
+			Expect(mockClient.lastUpdateMask.GetPaths()).ToNot(ContainElement("status.volume_registration"))
+			Expect(mockClient.lastUpdate.GetStatus().GetVolumes()).To(HaveLen(1))
+			Expect(mockClient.lastUpdate.GetStatus().GetVolumes()[0].GetDiskKey()).To(Equal("boot"))
+			Expect(mockClient.lastUpdate.GetStatus().GetVolumes()[0].GetVolumeId()).To(Equal("volume-feedback"))
+			Expect(mockClient.lastUpdate.GetStatus().GetVolumeRegistration()).To(HaveLen(2))
+			Expect(mockClient.lastUpdate.GetStatus().GetVolumeRegistration()[0].GetDiskKey()).To(Equal("boot"))
+			Expect(mockClient.lastUpdate.GetStatus().GetVolumeRegistration()[0].GetState()).To(
+				Equal(privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED))
+			Expect(mockClient.lastUpdate.GetStatus().GetVolumeRegistration()[1].GetState()).To(
+				Equal(privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN))
 		})
 
 		It("should sync ConfigurationApplied condition", func() {

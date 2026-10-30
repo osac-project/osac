@@ -188,13 +188,17 @@ func createCatalogItemComputeInstanceTypeFixture(ctx context.Context) string {
 }
 
 func createCatalogItemStorageTierFixture(ctx context.Context) string {
+	return createCatalogItemStorageTierFixtureForProvider(ctx, "test")
+}
+
+func createCatalogItemStorageTierFixtureForProvider(ctx context.Context, provider string) string {
 	GinkgoHelper()
 	backends := privatev1.NewStorageBackendsClient(tool.InternalView().AdminConn())
 	backend, err := backends.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{
 		Object: privatev1.StorageBackend_builder{
 			Metadata: catalogItemFixtureMetadata("shared", ""),
 			Spec: privatev1.StorageBackendSpec_builder{
-				Provider: "test",
+				Provider: provider,
 				Endpoint: "https://storage.example.com",
 				Credentials: privatev1.StorageBackendCredentials_builder{
 					Username: "integration-test",

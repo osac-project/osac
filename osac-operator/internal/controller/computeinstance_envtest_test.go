@@ -314,6 +314,10 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
 			}
+			instance.Spec.DiskVolumeIDs = map[string]string{
+				"boot":   "volume-boot",
+				"disk-1": "volume-data-1",
+			}
 			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: "subnet-a"}}
 
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
@@ -330,6 +334,10 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 			// Re-fetch: RunProvisioningLifecycle flushes status after trigger
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
+			Expect(instance.Spec.DiskVolumeIDs).To(Equal(map[string]string{
+				"boot":   "volume-boot",
+				"disk-1": "volume-data-1",
+			}))
 			latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestProvisionJob).NotTo(BeNil())
 			Expect(latestProvisionJob.JobID).To(HavePrefix("prov-job-" + instanceName))

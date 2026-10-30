@@ -83,6 +83,8 @@ ROLE_SCENARIO_TESTS=(
   "cluster_working_namespace:test_predefined"
   "cluster_working_namespace:test_found"
   "compute_instance_create:sysprep_secret_copy"
+  "compute_instance_create:volume_id_validation"
+  "compute_instance_create:volume_id_annotations"
   "compute_instance_create:storage_tier_mapping"
 )
 
@@ -176,7 +178,12 @@ for entry in "${ROLE_SCENARIO_TESTS[@]}"; do
   echo "Testing role: $role ($scenario)"
   echo "----------------------------------------"
 
-  if run_ansible_playbook "targets/${role}/tasks/${scenario}.yml" -e "@common_vars.yml" -v; then
+  native_rendering=false
+  if [ "$entry" = "compute_instance_create:volume_id_annotations" ]; then
+    native_rendering=true
+  fi
+
+  if ANSIBLE_JINJA2_NATIVE="$native_rendering" run_ansible_playbook "targets/${role}/tasks/${scenario}.yml" -e "@common_vars.yml" -v; then
     echo "  ✓ Passed"
     PASSED+=("$role:$scenario")
   else

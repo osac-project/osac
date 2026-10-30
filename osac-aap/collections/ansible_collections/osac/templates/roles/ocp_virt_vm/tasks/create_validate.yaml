@@ -23,6 +23,7 @@
     vm_ssh_key: "{{ compute_instance.spec.sshKey | default('') }}"
     vm_user_data_secret_ref: "{{ (compute_instance.spec.userDataSecretRef | default({})).name | default('') }}"
     vm_additional_disks: "{{ compute_instance.spec.additionalDisks | default([]) }}"
+    vm_disk_volume_ids: "{{ compute_instance.spec.diskVolumeIDs | default({}, true) }}"
     vm_security_groups: >-
       {{
         compute_instance.spec.networkAttachments

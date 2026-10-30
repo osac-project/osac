@@ -28,6 +28,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"slices"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -67,6 +68,35 @@ const userDataSecretKey = "userdata"
 // instance's state untouched so it doesn't look like a permanent failure while it is retried.
 var errTransientK8sError = errors.New("transient kubernetes error")
 
+// Registration errors retain their private detail for the retry log, while the
+// public PROVISIONED condition is derived separately from persisted state.
+var errDiskRegistrationRetry = errors.New("disk registration retry")
+
+func diskRegistrationRetry(err error) error {
+	if err != nil {
+		err = fmt.Errorf("%w: %w", errDiskRegistrationRetry, err)
+	} else {
+		err = errDiskRegistrationRetry
+	}
+	return controllers.RequeueAfter(err, time.Second)
+}
+
+// SecretResolutionError classifies a failure while resolving the Secret referenced
+// by the ComputeInstance SSH key field.
+type SecretResolutionError struct {
+	Permanent bool
+	Reason    string
+	Err       error
+}
+
+func (e *SecretResolutionError) Error() string {
+	return fmt.Sprintf("failed to resolve SSH public key Secret: %v", e.Err)
+}
+
+func (e *SecretResolutionError) Unwrap() error {
+	return e.Err
+}
+
 // FunctionBuilder contains the data and logic needed to build a function that reconciles compute instances.
 type FunctionBuilder struct {
 	logger     *slog.Logger
@@ -80,6 +110,7 @@ type function struct {
 	networkingHubReader         controllers.NetworkingHubReader
 	networkingCleanup           controllers.WorkloadNetworkingCleanup
 	computeInstancesClient      privatev1.ComputeInstancesClient
+	volumesClient               privatev1.VolumesClient
 	externalIPsClient           privatev1.ExternalIPsClient
 	externalIPAttachmentsClient privatev1.ExternalIPAttachmentsClient
 	hubsClient                  privatev1.HubsClient
@@ -92,6 +123,7 @@ type function struct {
 type task struct {
 	r                  *function
 	computeInstance    *privatev1.ComputeInstance
+	registeredVolumes  []*privatev1.ComputeInstanceVolume
 	hubId              string
 	hubNamespace       string
 	hubClient          clnt.Client
@@ -142,6 +174,7 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		logger:                      b.logger,
 		networkingCleanup:           controllers.NewWorkloadNetworkingCleanup(b.connection),
 		computeInstancesClient:      privatev1.NewComputeInstancesClient(b.connection),
+		volumesClient:               privatev1.NewVolumesClient(b.connection),
 		externalIPsClient:           privatev1.NewExternalIPsClient(b.connection),
 		externalIPAttachmentsClient: privatev1.NewExternalIPAttachmentsClient(b.connection),
 		hubsClient:                  privatev1.NewHubsClient(b.connection),
@@ -196,7 +229,8 @@ func (r *function) run(ctx context.Context, computeInstance *privatev1.ComputeIn
 				proto.Reset(computeInstance)
 				proto.Merge(computeInstance, oldComputeInstance)
 			}
-		} else if !errors.Is(reconcileErr, errTransientK8sError) && !controllers.IsRequeueable(reconcileErr) {
+		} else if !errors.Is(reconcileErr, errTransientK8sError) &&
+			!errors.Is(reconcileErr, errDiskRegistrationRetry) && !controllers.IsRequeueable(reconcileErr) {
 			t.setReconciliationFailed(reconcileErr)
 		}
 	}
@@ -258,6 +292,13 @@ func (t *task) update(ctx context.Context) error {
 	object, err := t.getKubeObject(ctx)
 	if err != nil {
 		return err
+	}
+	ready, err := t.reconcileDiskRegistrationForWorkload(ctx, object == nil)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return nil
 	}
 
 	// Set the user data Secret name if user data is provided (no K8s call yet):
@@ -349,6 +390,57 @@ func (t *task) update(ctx context.Context) error {
 	return t.reconcileAutoExternalIPAttachment(ctx)
 }
 
+func (t *task) reconcileDiskRegistrationForWorkload(ctx context.Context, workloadAbsent bool) (bool, error) {
+	reconcileRegistration := workloadAbsent && t.computeInstance.GetSpec().GetBootDisk() != nil
+	if !reconcileRegistration && len(t.computeInstance.GetStatus().GetVolumeRegistration()) > 0 {
+		prepared, err := prepareDiskRegistrations(t.computeInstance)
+		if err != nil {
+			return false, err
+		}
+		complete, err := diskRegistrationsComplete(t.computeInstance, prepared)
+		if err != nil {
+			return false, err
+		}
+		reconcileRegistration = !complete
+	}
+	if !reconcileRegistration {
+		return true, nil
+	}
+	registrationErr := ReconcileDiskRegistrations(
+		ctx, t.r.computeInstancesClient, t.r.volumesClient, t.computeInstance.GetId())
+	latest, err := getComputeInstanceForDiskRegistration(ctx, t.r.computeInstancesClient, t.computeInstance.GetId())
+	if err != nil {
+		t.updateCondition(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED,
+			privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "VolumeRegistrationPending",
+			"Disk registration status is unavailable; retrying.")
+		return false, diskRegistrationRetry(err)
+	}
+	if !hasDiskRegistrationFinalizer(latest) || latest.GetMetadata().HasDeletionTimestamp() {
+		return false, nil
+	}
+	complete, reason, message, err := diskRegistrationProgress(latest)
+	if err != nil {
+		t.updateCondition(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED,
+			privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "VolumeRegistrationPending",
+			"Disk registration status is unavailable; retrying.")
+		return false, diskRegistrationRetry(err)
+	}
+	// The registration helper commits IDs and conditions independently. Copy
+	// only the latest conditions so the outer field mask cannot resend stale
+	// registration state or Volume IDs.
+	t.computeInstance.GetStatus().SetConditions(proto.Clone(latest.GetStatus()).(*privatev1.ComputeInstanceStatus).GetConditions())
+	t.updateCondition(privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED,
+		privatev1.ConditionStatus_CONDITION_STATUS_FALSE, reason, message)
+	if registrationErr != nil {
+		return false, diskRegistrationRetry(registrationErr)
+	}
+	if !complete {
+		return false, diskRegistrationRetry(nil)
+	}
+	t.registeredVolumes = latest.GetStatus().GetVolumes()
+	return true, nil
+}
+
 func (t *task) setDefaults() {
 	if !t.computeInstance.HasStatus() {
 		t.computeInstance.SetStatus(&privatev1.ComputeInstanceStatus{})
@@ -405,8 +497,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 		if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.computeInstance.GetId()); err != nil {
 			return err
 		}
-		t.removeFinalizer()
-		return nil
+		return t.releaseFinalizerAfterVolumeCleanup(ctx, t.removeFinalizer)
 	}
 	err = t.getHub(ctx)
 	if err != nil {
@@ -415,8 +506,16 @@ func (t *task) delete(ctx context.Context) (err error) {
 			if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.computeInstance.GetId()); err != nil {
 				return err
 			}
-			controllers.RemoveFinalizerOnDecommissionedHub(ctx, t.r.logger, t.hubId, "compute_instance_id", t.computeInstance.GetId(), t.removeFinalizer)
-			return nil
+			return t.releaseFinalizerAfterVolumeCleanup(ctx, func() {
+				controllers.RemoveFinalizerOnDecommissionedHub(
+					ctx,
+					t.r.logger,
+					t.hubId,
+					"compute_instance_id",
+					t.computeInstance.GetId(),
+					t.removeFinalizer,
+				)
+			})
 		}
 		// For transient errors (network, timeout, etc.), continue retrying
 		return
@@ -438,8 +537,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 		if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.computeInstance.GetId()); err != nil {
 			return err
 		}
-		t.removeFinalizer()
-		return
+		return t.releaseFinalizerAfterVolumeCleanup(ctx, t.removeFinalizer)
 	}
 
 	// Initiate K8s deletion if not already in progress:
@@ -464,7 +562,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 	}
 
 	// Don't remove finalizer — K8s object still exists with finalizers being processed.
-	return
+	return controllers.RequeueAfterKubernetesDeletion("compute instance")
 }
 
 func (t *task) reconcileAutoExternalIPAttachment(ctx context.Context) error {
@@ -1131,7 +1229,34 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Compute
 		}
 		spec.AdditionalDisks = operatorDisks
 	}
+	if err := t.addDiskVolumeIDs(spec); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+func (t *task) addDiskVolumeIDs(spec *osacv1alpha1.ComputeInstanceSpec) error {
+	volumeEntries := t.computeInstance.GetStatus().GetVolumes()
+	if t.registeredVolumes != nil {
+		volumeEntries = t.registeredVolumes
+	}
+	volumes, err := diskVolumesByKey(volumeEntries)
+	if err != nil {
+		return err
+	}
+	if len(volumes) == 0 {
+		return nil
+	}
+
+	diskVolumeIDs := make(map[string]string, len(volumes))
+	for key, volume := range volumes {
+		if volume.GetVolumeId() == "" {
+			return fmt.Errorf("ComputeInstance '%s' disk '%s' has an empty persisted Volume ID", t.computeInstance.GetId(), key)
+		}
+		diskVolumeIDs[key] = volume.GetVolumeId()
+	}
+	spec.DiskVolumeIDs = diskVolumeIDs
 	return nil
 }
 

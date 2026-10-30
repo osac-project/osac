@@ -116,6 +116,13 @@ spec:
                 x-kubernetes-validations:
                 - message: bootDisk is immutable
                   rule: self == oldSelf
+              diskVolumeIDs:
+                additionalProperties:
+                  type: string
+                description: |-
+                  DiskVolumeIDs maps stable disk keys to their returned Fulfillment Volume IDs.
+                  Keys are boot and disk-N.
+                type: object
               gpu:
                 description: Gpu defines GPU passthrough configuration resolved from
                   the InstanceType.

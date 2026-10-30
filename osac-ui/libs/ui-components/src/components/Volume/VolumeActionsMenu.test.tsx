@@ -28,42 +28,46 @@ describe('VolumeActionsMenu', () => {
     const { user } = renderMenu(makeVolume(VolumeState.AVAILABLE));
     await openMenu(user);
 
-    expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toHaveAttribute('aria-disabled');
   });
 
   it('enables Delete for a CREATING volume', async () => {
     const { user } = renderMenu(makeVolume(VolumeState.CREATING));
     await openMenu(user);
 
-    expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toHaveAttribute('aria-disabled');
   });
 
   it('enables Delete for a FAILED volume', async () => {
     const { user } = renderMenu(makeVolume(VolumeState.FAILED));
     await openMenu(user);
 
-    expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toHaveAttribute('aria-disabled');
   });
 
   it('shows Delete as disabled for a DELETING volume', async () => {
     const { user } = renderMenu(makeVolume(VolumeState.DELETING));
     await openMenu(user);
 
-    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeDisabled();
+    const deleteAction = screen.getByRole('menuitem', { name: 'Delete' });
+    expect(deleteAction).toHaveAttribute('aria-disabled', 'true');
+    expect(deleteAction).not.toBeDisabled();
+    await user.click(deleteAction);
+    expect(screen.queryByText(/This permanently deletes the volume/)).not.toBeInTheDocument();
   });
 
   it('enables Delete for a DELETED volume', async () => {
     const { user } = renderMenu(makeVolume(VolumeState.DELETED));
     await openMenu(user);
 
-    expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toHaveAttribute('aria-disabled');
   });
 
   it('enables Delete for an UNSPECIFIED volume', async () => {
     const { user } = renderMenu(makeVolume(VolumeState.UNSPECIFIED));
     await openMenu(user);
 
-    expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toHaveAttribute('aria-disabled');
   });
 
   it('opens the delete confirmation modal when Delete is clicked', async () => {

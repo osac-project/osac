@@ -15,8 +15,9 @@ import {
   Title,
 } from '@patternfly/react-core';
 
-import { Project } from '@osac/types';
-import { useProject } from '@osac/ui-components/api/v1/project';
+import { type Project, Projects } from '@osac/types';
+import { cel } from '@osac/ui-components/api/cel';
+import { useGetResource, useListResource } from '@osac/ui-components/api/use-resource';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import ProjectDetailsActionButtons from './ProjectDetailsActionButtons';
@@ -25,7 +26,7 @@ import ProjectMembership from '../../ProjectMembership/ProjectMembershipTable';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
 import ResourceDetailsPage from '../../Resource/ResourceDetailsPage';
 import ProjectStatusLabel from '../ProjectStatusLabel';
-import { getProjectName } from '../utils';
+import { getProjectName, getProjectParentPaths } from '../utils';
 
 interface ProjectDetailsPageContentProps {
   project: Project;
@@ -33,6 +34,40 @@ interface ProjectDetailsPageContentProps {
 
 const ProjectDetailsPageContent = ({ project }: ProjectDetailsPageContentProps) => {
   const { t } = useTranslation();
+  const parentPaths = getProjectParentPaths(project);
+
+  const { data, isLoading } = useListResource(
+    Projects,
+    {
+      filter: cel<Project>((filter) =>
+        filter.and(
+          filter.field('metadata.tenant').notEquals('shared'),
+          filter.field('metadata.name').isIn(parentPaths),
+        ),
+      ),
+    },
+    { enabled: parentPaths.length > 0 },
+  );
+
+  const projectsByPath = new Map(
+    (data?.items ?? []).map((parentProject) => [parentProject.metadata?.name ?? '', parentProject]),
+  );
+  const parents = [
+    { to: '/projects', label: t('Projects') },
+    ...(isLoading
+      ? parentPaths.map(() => ({
+          to: '',
+          label: '',
+          isLoading: true,
+        }))
+      : parentPaths
+          .map((path) => projectsByPath.get(path))
+          .filter((parentProject): parentProject is Project => !!parentProject)
+          .map((parentProject) => ({
+            to: `/projects/${parentProject.id}`,
+            label: getProjectName(parentProject, t),
+          }))),
+  ];
 
   return (
     <>
@@ -47,8 +82,7 @@ const ProjectDetailsPageContent = ({ project }: ProjectDetailsPageContentProps) 
             >
               <FlexItem>
                 <ResourceDetailHeader
-                  parentTo="/projects"
-                  parentLabel={t('Projects')}
+                  parents={parents}
                   resourceName={getProjectName(project, t)}
                   titleAddon={<ProjectStatusLabel project={project} />}
                 />
@@ -76,7 +110,7 @@ const ProjectDetailsPageContent = ({ project }: ProjectDetailsPageContentProps) 
                   <DescriptionListGroup>
                     <DescriptionListTerm>{t('Description')}</DescriptionListTerm>
                     <DescriptionListDescription>
-                      {project.spec?.description || '-'}
+                      {project.metadata?.description || '-'}
                     </DescriptionListDescription>
                   </DescriptionListGroup>
                   <DescriptionListGroup>
@@ -102,18 +136,18 @@ const ProjectDetailsPage = () => {
   const { t } = useTranslation();
   const { id } = useParams() as { id: string };
 
-  const { data, isLoading, error, refetch } = useProject(id);
+  const { data, isLoading, error, refetch } = useGetResource(Projects, { id });
 
   return (
     <ResourceDetailsPage
       error={error}
-      found={!!data}
+      found={!!data?.object}
       isLoading={isLoading}
       parentLabel={t('Projects')}
       parentTo="/projects"
       refetch={refetch}
     >
-      {data && <ProjectDetailsPageContent project={data} />}
+      {data?.object && <ProjectDetailsPageContent project={data.object} />}
     </ResourceDetailsPage>
   );
 };

@@ -260,6 +260,17 @@ const matchesStringEqualityFilter = (
   }
 };
 
+const matchesProjectSearchFilter = (filter: string | undefined, project: Project): boolean => {
+  const searchLiteral = filter?.match(/this\.metadata\.name\.contains\(("(?:\\.|[^"\\])*")\)/)?.[1];
+  if (!searchLiteral) {
+    return true;
+  }
+  const search = JSON.parse(searchLiteral) as string;
+  return (
+    (project.metadata?.name ?? '').includes(search) || (project.spec?.title ?? '').includes(search)
+  );
+};
+
 const matchesVirtualNetworkScopeFilter = (
   filter: string | undefined,
   virtualNetwork: string | undefined,
@@ -1051,11 +1062,12 @@ export const createMockConnectTransport = (
       });
 
       router.service(Projects, {
-        list: () => ({
-          items: projects,
-          size: projects.length,
-          total: projects.length,
-        }),
+        list: (req) => {
+          const items = projects.filter((project) =>
+            matchesProjectSearchFilter(req.filter, project),
+          );
+          return { items, size: items.length, total: items.length };
+        },
         get: (req) => ({
           object: projects.find((p) => p.id === req.id),
         }),

@@ -178,6 +178,11 @@ describe('VirtualNetworkDetailPage', () => {
 
     await screen.findByText('nat-egress');
     await user.click(screen.getByRole('button', { name: 'Actions for NAT gateway attachment' }));
-    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeDisabled();
+    const deleteItem = screen.getByRole('menuitem', { name: 'Delete' });
+    expect(deleteItem).toHaveAttribute('aria-disabled', 'true');
+    expect(deleteItem).not.toBeDisabled();
+
+    await user.click(deleteItem);
+    expect(screen.queryByRole('heading', { name: /Delete nat-egress\?/ })).not.toBeInTheDocument();
   });
 });

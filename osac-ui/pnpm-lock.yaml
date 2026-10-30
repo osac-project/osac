@@ -67,7 +67,7 @@ importers:
         version: 8.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(victory-area@37.3.6(react@19.2.5))(victory-axis@37.3.6(react@19.2.5))(victory-bar@37.3.6(react@19.2.5))(victory-box-plot@37.3.6(react@19.2.5))(victory-chart@37.3.6(react@19.2.5))(victory-core@37.3.6(react@19.2.5))(victory-create-container@37.3.6(react@19.2.5))(victory-cursor-container@37.3.6(react@19.2.5))(victory-group@37.3.6(react@19.2.5))(victory-legend@37.3.6(react@19.2.5))(victory-line@37.3.6(react@19.2.5))(victory-pie@37.3.6(react@19.2.5))(victory-scatter@37.3.6(react@19.2.5))(victory-stack@37.3.6(react@19.2.5))(victory-tooltip@37.3.6(react@19.2.5))(victory-voronoi-container@37.3.6(react@19.2.5))(victory-zoom-container@37.3.6(react@19.2.5))
       '@patternfly/react-core':
         specifier: ^6.6.1
-        version: 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+        version: 6.7.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-icons':
         specifier: ^6.6.1
         version: 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -231,7 +231,7 @@ importers:
         version: 8.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(victory-area@37.3.6(react@19.2.5))(victory-axis@37.3.6(react@19.2.5))(victory-bar@37.3.6(react@19.2.5))(victory-box-plot@37.3.6(react@19.2.5))(victory-chart@37.3.6(react@19.2.5))(victory-core@37.3.6(react@19.2.5))(victory-create-container@37.3.6(react@19.2.5))(victory-cursor-container@37.3.6(react@19.2.5))(victory-group@37.3.6(react@19.2.5))(victory-legend@37.3.6(react@19.2.5))(victory-line@37.3.6(react@19.2.5))(victory-pie@37.3.6(react@19.2.5))(victory-scatter@37.3.6(react@19.2.5))(victory-stack@37.3.6(react@19.2.5))(victory-tooltip@37.3.6(react@19.2.5))(victory-voronoi-container@37.3.6(react@19.2.5))(victory-zoom-container@37.3.6(react@19.2.5))
       '@patternfly/react-core':
         specifier: ^6.6.1
-        version: 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+        version: 6.7.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-icons':
         specifier: ^6.6.1
         version: 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -939,8 +939,8 @@ packages:
       victory-zoom-container:
         optional: true
 
-  '@patternfly/react-core@6.6.1':
-    resolution: {integrity: sha512-1XEBj+RllMnx+nQNaQaEH08umNdW1/HoqiNiZVBrVACI7GAGqjNR/NOWCbfl3p/o6OggD3M3mlJPhCMmcoOaGg==}
+  '@patternfly/react-core@6.7.0':
+    resolution: {integrity: sha512-3C256WUiQ3GzFdCKyjGCF/JVdp4xngLf0QHASAm1WHrJCPKRDnxgZIgPgvNrOKeficRR6yysQxJGitFk5DAK0A==}
     peerDependencies:
       react: ^17 || ^18 || ^19
       react-dom: ^17 || ^18 || ^19
@@ -951,8 +951,17 @@ packages:
       react: ^17 || ^18 || ^19
       react-dom: ^17 || ^18 || ^19
 
+  '@patternfly/react-icons@6.7.0':
+    resolution: {integrity: sha512-dqMuCtQvPKgCX+7JhRjwxF+0S1A0pJ04VPBrpEw4ss6el+1Mp5VHpwYQFUi2iJlt5vEF5NL1eHhnGoVEg7MjEw==}
+    peerDependencies:
+      react: ^17 || ^18 || ^19
+      react-dom: ^17 || ^18 || ^19
+
   '@patternfly/react-styles@6.6.1':
     resolution: {integrity: sha512-hwByXA4wSpOIBJFtrYUdkFDIqvzHRP5yzvip/NHDlG0y/kXausOh5Z4m00SbTA6t7Hzudw5eU1lf+IOPCm5C6Q==}
+
+  '@patternfly/react-styles@6.7.0':
+    resolution: {integrity: sha512-qW7ytJYZ/4QZ8bCF31nvoJsgMS6cVxdJL2NUTSAbajwODMf/PBJVKlWEodLCRwHXXQCTpVSvlrY+PLvqYITrAA==}
 
   '@patternfly/react-table@6.6.1':
     resolution: {integrity: sha512-owyLpkhFg28nQWkTA3jnhmbe8FOX5vXqZntbrjse4BfdaBTOzsBxPqtBzbf6o214Q8OQBzC2Atgz9C3j0yFscQ==}
@@ -968,6 +977,9 @@ packages:
 
   '@patternfly/react-tokens@6.6.1':
     resolution: {integrity: sha512-t7dDEJMnO3QkdIKyjbyKJznVYki9ONZG27Cn/9RXwaM0lDGCrgQEJXy2XoVUCdYhIdXZu+TGSEqXeNFYUyZECg==}
+
+  '@patternfly/react-tokens@6.7.0':
+    resolution: {integrity: sha512-jH96EUmjSUSTabxkBvxb95Fr+7baMACNlGBSUwOYJJcJQTE2N78lhRf8muoUKBFzpkmzn/w0KThoiBQRD2TdMw==}
 
   '@playwright/test@1.64.0':
     resolution: {integrity: sha512-oTN9FNYuN6bqQMwiho6jJKLCG2/QOYCixGXuCjRmzOq23eODeukuY2XiAVoVpAECbuezMt1MHQjAiQxK8F+Y+g==}
@@ -3055,8 +3067,8 @@ packages:
   symbol-tree@3.2.4:
     resolution: {integrity: sha512-9QNk5KwDF+Bvz+PyObkmSYjI5ksVUYtjW7AU22r2NKcfLJcXp96hkDWU3+XndOsUb+AQ9QhfzfCT2O+CNWT5Tw==}
 
-  tabbable@6.4.0:
-    resolution: {integrity: sha512-05PUHKSNE8ou2dwIxTngl4EzcnsCDZGJ/iCLtDflR/SHB/ny14rXc+qU5P4mG9JkusiV7EivzY9Mhm55AzAvCg==}
+  tabbable@6.5.1:
+    resolution: {integrity: sha512-dMCuwDUY6Noz3zVKLefBC4wq+aJV20yc7vWmM7uTNGwtQSFF5kX7OUIUsxuVajz/bdt5Xqdah3/0NLjth+cM5A==}
 
   tiny-case@1.0.3:
     resolution: {integrity: sha512-Eet/eeMhkO6TX8mnUteS9zgPbUMQa4I6Kkp5ORiBD5476/m+PIRiumP5tmh5ioJpH7k51Kehawy2UDfsnxxY8Q==}
@@ -3127,6 +3139,9 @@ packages:
 
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
+
+  tslib@2.9.1:
+    resolution: {integrity: sha512-a4Ux9VKuIMHsOS7ENbEq6hK2ZGYIT27Rtl0E4eD9KqwxhKiQeMZE/9xb3IdYwWaSOyIBQLExhQgXDTYoiCxnWA==}
 
   tsx@4.21.0:
     resolution: {integrity: sha512-5C1sg4USs1lfG0GFb2RLXsdpXqBSEhAaA/0kPL01wxzpMqLILNxIxIOKiILz+cdg/pLnOUxFYOR5yhHU666wbw==}
@@ -3787,17 +3802,17 @@ snapshots:
   '@emnapi/core@1.9.2':
     dependencies:
       '@emnapi/wasi-threads': 1.2.1
-      tslib: 2.8.1
+      tslib: 2.9.1
     optional: true
 
   '@emnapi/runtime@1.9.2':
     dependencies:
-      tslib: 2.8.1
+      tslib: 2.9.1
     optional: true
 
   '@emnapi/wasi-threads@1.2.1':
     dependencies:
-      tslib: 2.8.1
+      tslib: 2.9.1
     optional: true
 
   '@esbuild/aix-ppc64@0.27.7':
@@ -4119,16 +4134,16 @@ snapshots:
       victory-voronoi-container: 37.3.6(react@19.2.5)
       victory-zoom-container: 37.3.6(react@19.2.5)
 
-  '@patternfly/react-core@6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
+  '@patternfly/react-core@6.7.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:
-      '@patternfly/react-icons': 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@patternfly/react-styles': 6.6.1
-      '@patternfly/react-tokens': 6.6.1
+      '@patternfly/react-icons': 6.7.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@patternfly/react-styles': 6.7.0
+      '@patternfly/react-tokens': 6.7.0
       focus-trap: 7.6.6
       react: 19.2.5
       react-dom: 19.2.5(react@19.2.5)
       react-dropzone: 14.4.1(react@19.2.5)
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@patternfly/react-icons@6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:
@@ -4136,11 +4151,19 @@ snapshots:
       react-dom: 19.2.5(react@19.2.5)
       tslib: 2.8.1
 
+  '@patternfly/react-icons@6.7.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
+    dependencies:
+      react: 19.2.5
+      react-dom: 19.2.5(react@19.2.5)
+      tslib: 2.9.1
+
   '@patternfly/react-styles@6.6.1': {}
+
+  '@patternfly/react-styles@6.7.0': {}
 
   '@patternfly/react-table@6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:
-      '@patternfly/react-core': 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@patternfly/react-core': 6.7.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-icons': 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-styles': 6.6.1
       '@patternfly/react-tokens': 6.6.1
@@ -4151,7 +4174,7 @@ snapshots:
 
   '@patternfly/react-templates@6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:
-      '@patternfly/react-core': 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@patternfly/react-core': 6.7.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-icons': 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-styles': 6.6.1
       '@patternfly/react-tokens': 6.6.1
@@ -4160,6 +4183,8 @@ snapshots:
       tslib: 2.8.1
 
   '@patternfly/react-tokens@6.6.1': {}
+
+  '@patternfly/react-tokens@6.7.0': {}
 
   '@playwright/test@1.64.0':
     dependencies:
@@ -4335,7 +4360,7 @@ snapshots:
 
   '@tybys/wasm-util@0.10.1':
     dependencies:
-      tslib: 2.8.1
+      tslib: 2.9.1
     optional: true
 
   '@types/aria-query@5.0.4': {}
@@ -5272,7 +5297,7 @@ snapshots:
 
   file-selector@2.1.2:
     dependencies:
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   fill-range@7.1.1:
     dependencies:
@@ -5292,7 +5317,7 @@ snapshots:
 
   focus-trap@7.6.6:
     dependencies:
-      tabbable: 6.4.0
+      tabbable: 6.5.1
 
   for-each@0.3.5:
     dependencies:
@@ -6403,7 +6428,7 @@ snapshots:
 
   symbol-tree@3.2.4: {}
 
-  tabbable@6.4.0: {}
+  tabbable@6.5.1: {}
 
   tiny-case@1.0.3: {}
 
@@ -6463,6 +6488,8 @@ snapshots:
       strip-bom: 3.0.0
 
   tslib@2.8.1: {}
+
+  tslib@2.9.1: {}
 
   tsx@4.21.0:
     dependencies:

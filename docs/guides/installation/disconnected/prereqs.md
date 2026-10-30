@@ -3,6 +3,7 @@
 - [OSAC Disconnected Installation Prerequisites](#osac-disconnected-installation-prerequisites)
   - [1. Execution and input contract](#1-execution-and-input-contract)
     - [Evidence contract](#evidence-contract)
+    - [Pre-handoff node transport checkpoint](#pre-handoff-node-transport-checkpoint)
   - [2. Consume the mirror handoff](#2-consume-the-mirror-handoff)
   - [3. Registry access and bounded configuration](#3-registry-access-and-bounded-configuration)
     - [3.1 Node transport and representative image diagnostic](#31-node-transport-and-representative-image-diagnostic)
@@ -15,7 +16,7 @@
     - [Secret-key acceptance reference](#secret-key-acceptance-reference)
 
 > [!IMPORTANT]
-> This is Doc 2a for OSAC **0.0.62** on OpenShift **4.22**. Complete the selected-profile [mirroring handoff](README.md) first, then this guide, then [AAP Git source handoff](aap-git-source.md), then [operators and shared infrastructure](operators.md). [installation.md](installation.md) owns the OSAC Helm release.
+> This is Doc 2a for OSAC **0.0.62** on OpenShift **4.22**. The normal sequence is the selected-profile [mirroring handoff](README.md), then §2 and the rest of this guide, then [AAP Git source handoff](aap-git-source.md), then [operators and shared infrastructure](operators.md). During Doc 1 only, after full mirroring and before catalog application, its administrator may invoke just the [pre-handoff node transport checkpoint](#pre-handoff-node-transport-checkpoint); this does not start the remaining Doc 2 preparation. [installation.md](installation.md) owns the OSAC Helm release.
 
 This guide specifies disconnected inputs and acceptance gates. It does not install operators, shared services, provider operands, or the OSAC release. Use the canonical guides for configuration semantics; use the actual downloaded 0.0.62 chart for schema, defaults, images, and rendered consumers. Do not copy a different release's image inventory or version table.
 
@@ -51,6 +52,35 @@ Validation is manual and evidence-based. Record the exact inputs, observed ident
 | `CATALOG_SOURCE`, `CATALOG_NAMESPACE` | `redhat-operators`, `openshift-marketplace` |
 | `VALUES_FILE`, `OSAC_CHART_DIR` | Protected `values-osac.yaml` and exact path to the downloaded/extracted `0.0.62` chart |
 | Approved service inputs | Endpoint, namespace, credential/CA references, and owner evidence; no credential bytes in handoffs |
+
+### Pre-handoff node transport checkpoint
+
+This shared diagnostic is called only by Doc 1 after the selected inventory has been fully mirrored and before generated catalog resources are applied. It is not entry into §2 or the rest of this preparation guide. Do not run it before the mirror contains its approved debug image, and do not install operators, HCO/CDI or OSAC to obtain a diagnostic context.
+
+Use only the execution/privacy/authorization rules in §1 and these independent inputs: the exact approved `MIRROR_HOST`, an approved existing `NODE_DEBUG_NAMESPACE`, and `NODE_DEBUG_IMAGE` as a **direct mirror reference** already present in the selected mirrored inventory. An upstream reference that needs not-yet-applied IDMS/ITMS rewriting is not usable here. The node/debug-image clients' required trust and mirror-read credential bindings must already be prepared by their authorized owners under the approved site contract. Their preparation is not an output of §2 or the later §3 diagnostics. If that contract is unresolved or the image/context is unusable, stop with the responsible owner; do not select a CA/proxy/CDI mechanism, weaken TLS, use a public fallback or upload bastion write credentials.
+
+Node debugging creates privileged diagnostic resources; use it only under the existing administrator/probe authorization and private-output policy. Review the nonempty applicable node set and keep its identities in the private run record. New/replaced nodes require a fresh observation; this list is not a lock or continuing guarantee.
+
+```bash
+: "${MIRROR_HOST:?Set the approved registry authority}"
+: "${NODE_DEBUG_IMAGE:?Set the approved mirror-resident debug image}"
+: "${NODE_DEBUG_NAMESPACE:?Set the approved diagnostic namespace}"
+NODES=$(oc --request-timeout=30s get nodes -o name) || exit 1
+test -n "$NODES" || exit 1
+for NODE in $NODES; do
+  oc --request-timeout=30s debug "$NODE" --to-namespace="$NODE_DEBUG_NAMESPACE" --image="$NODE_DEBUG_IMAGE" -- chroot /host sh -c '
+    code=$(curl --connect-timeout 10 --max-time 30 -sS -o /dev/null -w "%{http_code}" "https://$1/v2/") || exit 1
+    case "$code" in 200|401) exit 0 ;; *) exit 1 ;; esac
+  ' sh "$MIRROR_HOST" >/dev/null 2>&1 || {
+    printf 'FAIL node-registry-transport\n' >&2
+    exit 1
+  }
+done
+```
+
+**Why:** this checks the chosen node HTTP client's transport/TLS result. HTTP 200/401 is not registry authorization, selected-image availability, kubelet pull-secret usability, or CDI-client trust proof. Do not parse the entire `oc debug` output as an HTTP code; the HTTP result is evaluated inside the node command. Apply an owner-reviewed overall operation deadline in addition to the bounded HTTP/API calls, and handle interrupted diagnostic cleanup by recorded identity.
+
+Keep the observed node identities, registry authority, time and individual result in the existing protected run context; no new receipt or compound `H6: pass` is produced. Return to Doc 1's next step after the observation. The HTTP result does not verify mirror authentication; selected-image pulls and later actual importer-client acceptance remain separate observations.
 
 ## 2. Consume the mirror handoff
 
@@ -103,31 +133,12 @@ Use the exact approved registry authority in `MIRROR_HOST` (including port) and 
 | Registry access | Approved DNS, hostname and chain validation; no `-k`, public image fallback or credential-bearing URL |
 | Mirror credentials | Approved mirror-read binding; never the bastion mirror-write authfile or an OpenShift API token |
 | Shared authentication | Preserve unrelated `openshift-config/pull-secret` entries and existing ownership; a present key is not successful authentication |
-| Node diagnostic image | `NODE_DEBUG_IMAGE`: approved mirror-resident image compatible with node debugging; no implicit public-image fallback |
+| Node diagnostic image | `NODE_DEBUG_IMAGE`: approved direct mirror reference compatible with node debugging, as required by the shared pre-handoff checkpoint; no implicit public-image fallback |
 | Pod diagnostic fixture | `PROBE_NAMESPACE`, `PROBE_IMAGE`, `PROBE_CA_FILE`: approved existing namespace, mirror-resident fixture with `sleep`, `getent`, `curl`, and an already available public CA file inside that fixture |
 
 ### 3.1 Node transport and representative image diagnostic
 
-Node debugging creates privileged diagnostic resources; use it only under the existing administrator/probe authorization and private-output policy. Review the nonempty applicable node set and keep its identities in the private run record. New/replaced nodes require a fresh observation; this list is not a lock or continuing guarantee.
-
-```bash
-: "${MIRROR_HOST:?Set the approved registry authority}"
-: "${NODE_DEBUG_IMAGE:?Set the approved mirror-resident debug image}"
-: "${NODE_DEBUG_NAMESPACE:?Set the approved diagnostic namespace}"
-NODES=$(oc --request-timeout=30s get nodes -o name) || exit 1
-test -n "$NODES" || exit 1
-for NODE in $NODES; do
-  oc --request-timeout=30s debug "$NODE" --to-namespace="$NODE_DEBUG_NAMESPACE" --image="$NODE_DEBUG_IMAGE" -- chroot /host sh -c '
-    code=$(curl --connect-timeout 10 --max-time 30 -sS -o /dev/null -w "%{http_code}" "https://$1/v2/") || exit 1
-    case "$code" in 200|401) exit 0 ;; *) exit 1 ;; esac
-  ' sh "$MIRROR_HOST" >/dev/null 2>&1 || {
-    printf 'FAIL node-registry-transport\n' >&2
-    exit 1
-  }
-done
-```
-
-**Why:** this checks the chosen node HTTP client's transport/TLS result. HTTP 200/401 is not registry authorization, selected-image availability, kubelet pull-secret usability, or CDI-client trust proof. Do not parse the entire `oc debug` output as an HTTP code; the HTTP result is evaluated inside the node command. Apply an owner-reviewed overall operation deadline in addition to the bounded HTTP/API calls, and handle interrupted diagnostic cleanup by recorded identity.
+For a fresh node-transport observation, use the single [pre-handoff node transport checkpoint](#pre-handoff-node-transport-checkpoint) above under its existing authority and private-output policy. Recheck after node replacement or a relevant trust/authentication change; the earlier observation is not continuing readiness. At this point the Doc 1 handoff, applied mirror policies and affected-pool observations are available, so the representative original-reference pull below remains a separate post-handoff diagnostic.
 
 For one reviewed original tag/digest reference from the selected image inventory, repeat the representative node pull in its approved context; neither a random registry image nor a future workload is a substitute:
 

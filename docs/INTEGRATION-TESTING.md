@@ -626,12 +626,23 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
   stays Envtest with an in-memory AAP; a real AAP and manager roles are E2E under
   [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 - **AAP, network task engine, provisioning, KubeVirt and fulfillment:** A test-local
-- **Remote VMaaS cluster `StorageClass` readiness ([OSAC-6576](https://redhat.atlassian.net/browse/OSAC-6576), DEV):**
+- **Remote VMaaS cluster `StorageClass` readiness and CSP storage readiness ([OSAC-6576](https://redhat.atlassian.net/browse/OSAC-6576), [OSAC-6683](https://redhat.atlassian.net/browse/OSAC-6683), DEV):**
   `internal/controller/storage_controller_test.go` covers dual-`envtest`
   `MultiClusterWatch` fan-out across two API servers, and
-  `test/integration/remote_storage_cluster_test.go` exercises a live second Kind
-  cluster (`osac-remote`) for remote `StorageClass` watches, kubeconfig Secret
-  rotation, and `Forbidden` RBAC fail-closed recovery.
+  `test/integration/remote_storage_cluster_test.go` exercises the deployed
+  operator against a live second Kind cluster (`osac-remote`) and an in-cluster
+  fixture server (`test/integration/testdata/cspfixture`) for OSAC-managed and
+  CSP-managed `StorageClass` readiness (`StorageReady`), unconfigured tiers,
+  live watch fan-out, condition latching, kubeconfig Secret rotation,
+  `Forbidden` RBAC fail-closed recovery, and non-mutating `Tenant` deletion.
+  **Real:** installed operator, CRDs, controller-manager, `Tenant` status
+  persistence, `StorageClass` API objects, and target selection against the
+  isolated `osac-remote` Kind cluster API. **Test-controlled:** in-cluster
+  Fulfillment gRPC/OIDC responses (`test/integration/testdata/cspfixture`) and
+  AAP HTTP job-launch observations (`SecretsGetCalls == 0`, `AAPLaunchCalls == 0`).
+  **Not claimed:** full-stack Fulfillment/PostgreSQL persistence, live AAP
+  controller/playbook execution, Trident, or real storage-provider volume
+  provisioning.
 - **AAP, dispatcher, provisioning, KubeVirt and fulfillment:** A test-local
   dependency double does not prove the receiving service/provider boundary.
 - **Generated CRDs/manifests:** Change the source and run the owning generator.

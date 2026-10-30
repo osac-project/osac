@@ -307,7 +307,7 @@ oc get itms -o json | \
 
 <!-- Moved to installation.md §Mirror-backed DiskImage preparation. See docs/guides/installation/disconnected/installation.md -->
 
-2.**Containerdisk size variability** — OS disk images vary widely in size
+2. **Containerdisk size variability** — OS disk images vary widely in size
    (500 MiB to 10+ GiB per image).  Plan registry storage accordingly
    based on the number and size of the containerdisks your `DiskImage`
    resources reference.

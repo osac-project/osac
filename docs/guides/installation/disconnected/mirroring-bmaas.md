@@ -172,6 +172,6 @@ oc get idms -o yaml | grep -c "multicluster-engine"
 
 <!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target prereqs.md §BMaaS provisioning network. See docs/guides/installation/disconnected/prereqs.md -->
 
-2.**Agent image versioning** — Metal3 agent images are versioned with
+2. **Agent image versioning** — Metal3 agent images are versioned with
    the MCE release.  Ensure the mirrored MCE version matches the
    installed operator version to avoid version skew.

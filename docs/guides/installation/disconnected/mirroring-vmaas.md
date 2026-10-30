@@ -38,9 +38,7 @@ Machine as a Service) into a disconnected mirror registry using the
 
 <!-- Moved to prereqs.md §3 diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
 
-H6/H7 must include the selected mirror authority and CA/read-access
-binding, with approved node and importer-network reachability evidence.
-A bastion or node result alone does not establish importer-network access.
+Before mirroring, H6/H7 supply the approved mirror authority, CA/read-access binding and independently selected source inventory; they do not require a live OSAC instance or a future importer. After the full mirror, obtain the node-transport observation through Category A Step 2c's [shared checkpoint](prereqs.md#pre-handoff-node-transport-checkpoint). Generic Pod-network diagnostics remain in `prereqs.md` §3 after handoff; actual importer-network/client acceptance remains in `installation.md` after product/platform preparation. A bastion or node result alone does not establish importer-network access.
 
 <!-- Moved to prereqs.md §3 diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
 

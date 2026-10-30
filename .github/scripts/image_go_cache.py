@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def input_paths(root: Path) -> list[Path]:
+    """List workspace manifests and integration build inputs included in the cache key."""
     paths = {
         Path("go.work"),
         Path("osac-installer/Makefile"),
@@ -43,6 +44,7 @@ def input_paths(root: Path) -> list[Path]:
 
 
 def fingerprint(root: Path, settings: dict[str, object]) -> str:
+    """Hash versioned settings and file contents for an exact, prefix-free cache key."""
     digest = hashlib.sha256(json.dumps({"schema": SCHEMA, **settings}, sort_keys=True).encode())
     for relative in input_paths(root):
         digest.update(str(relative).encode() + b"\0" + (root / relative).read_bytes())
@@ -50,6 +52,7 @@ def fingerprint(root: Path, settings: dict[str, object]) -> str:
 
 
 def payload_size(payload: Path, limit: int = LIMIT) -> int:
+    """Reject unexpected entries and links while bounding regular-file payload bytes."""
     if payload.is_symlink() or not payload.is_dir() or {entry.name for entry in payload.iterdir()} != set(MOUNTS):
         raise ValueError("payload must contain only pkg/ and build/")
     size = 0
@@ -71,6 +74,7 @@ def payload_size(payload: Path, limit: int = LIMIT) -> int:
 
 
 def check_ziphashes(root: Path, payload: Path) -> None:
+    """Compare cached ziphash and module-metadata checksums with committed workspace sums."""
     expected = {}
     for relative in input_paths(root):
         if relative.name == "go.sum":
@@ -99,20 +103,24 @@ def check_ziphashes(root: Path, payload: Path) -> None:
 
 
 def trusted_save(context: dict[str, object]) -> bool:
+    """Allow only public manual saves on the default branch or an isolated trial branch."""
     branch = context["ref"] == f"refs/heads/{context['default_branch']}"
     trial = context.get("trial", False) and context["ref"].startswith("refs/heads/")
     return context["event"] == "workflow_dispatch" and not context["private"] and (branch or trial)
 
 
 def run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    """Run a checked text subprocess without suppressing command failures."""
     return subprocess.run(arguments, check=True, text=True, **kwargs)
 
 
 def capture(arguments: list[str]) -> str:
+    """Capture stripped stdout from a checked command."""
     return run(arguments, stdout=subprocess.PIPE).stdout.strip()
 
 
 def transport_file(root: Path, image: str, operation: str) -> str:
+    """Render an isolated Dockerfile for module verification or named-mount transport."""
     mounts = " ".join(
         f"--mount=type=cache,id={identity},target={target},uid=1001,gid=0" for identity, target in MOUNTS.values()
     )
@@ -148,6 +156,7 @@ def transport_file(root: Path, image: str, operation: str) -> str:
 
 
 def transport(root: Path, state: Path, operation: str) -> None:
+    """Execute a transport Dockerfile on the existing default Docker builder."""
     with tempfile.TemporaryDirectory(prefix="osac-transfer-") as temporary:
         context = Path(temporary)
         if operation in ("verify", "inject"):
@@ -169,12 +178,14 @@ def transport(root: Path, state: Path, operation: str) -> None:
 
 
 def output(name: str, value: str) -> None:
+    """Append an action output when running with a GitHub output file."""
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
             stream.write(f"{name}={value}\n")
 
 
 def prepare(root: Path, state: Path, namespace: str) -> None:
+    """Resolve builder and base-image identities, fingerprint inputs, and select the default builder."""
     state.mkdir(parents=True, exist_ok=True)
     if not re.fullmatch(r"[a-zA-Z0-9-]{1,100}", namespace):
         raise ValueError("invalid namespace")
@@ -243,6 +254,7 @@ def prepare(root: Path, state: Path, namespace: str) -> None:
 
 
 def inject(root: Path, state: Path) -> None:
+    """Validate restored data before seeding mounts, or record a disposable-cache fallback."""
     metadata = json.loads((state / "state.json").read_text())
     metadata["restore_seconds"] = time.time() - metadata["restore_started"]
     metadata["restore"] = {
@@ -262,6 +274,7 @@ def inject(root: Path, state: Path) -> None:
 
 
 def extract(root: Path, state: Path) -> None:
+    """Enforce save trust, skip verified exact hits, and export only validated bounded payloads."""
     metadata = json.loads((state / "state.json").read_text())
     if os.environ.get("GITHUB_ACTIONS") == "true":
         context = {
@@ -273,6 +286,17 @@ def extract(root: Path, state: Path) -> None:
         }
         if not trusted_save(context):
             raise ValueError("cache save requires a public trusted manual context")
+    restore = metadata.get("restore")
+    if (
+        isinstance(restore, dict)
+        and isinstance(metadata.get("key"), str)
+        and bool(metadata["key"])
+        and restore.get("cache_hit") == "true"
+        and restore.get("matched_key") == metadata.get("key")
+        and metadata.get("injection") == "verified-and-injected"
+    ):
+        output("ready", "false")
+        return
     transport(root, state, "extract")
     size = payload_size(state / "payload")
     check_ziphashes(root, state / "payload")
@@ -285,6 +309,7 @@ def extract(root: Path, state: Path) -> None:
 
 
 def consumer_command(root: Path, containerfile: Path) -> list[str]:
+    """Build argv for the installer image-build macro without deployment prerequisites."""
     target = (
         "image-cache-trial: ; $(call kind-container-build,--no-cache --progress=plain "
         "--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f $(CACHE_TRIAL_CONTAINERFILE) ..)"
@@ -305,11 +330,13 @@ def consumer_command(root: Path, containerfile: Path) -> list[str]:
 
 
 def observe(log: str) -> dict[str, object]:
+    """Count lower-bound log observations without treating progress or restore hits as errors."""
     lines = log.splitlines()
     return {
         "observed_download_lines": sum("go: downloading " in line for line in lines),
         "observed_dependency_error_lines": sum(
-            bool(
+            not re.search(r"(?:^|\s)go:\s+downloading\s+\S+\s+\S+\s*$", line, re.I)
+            and bool(
                 re.search(
                     r"(proxy\.golang\.org|sum\.golang\.org|go:).*"
                     r"(error|timeout|INTERNAL_ERROR|reset|failed)",
@@ -325,6 +352,7 @@ def observe(log: str) -> dict[str, object]:
 
 
 def frozen_source(root: Path, source_sha: str) -> None:
+    """Require the exact frozen commit and refuse reruns beyond the fresh-job budget."""
     if (
         not re.fullmatch(r"[0-9a-f]{40}", source_sha)
         or capture(["git", "-C", str(root), "rev-parse", "HEAD"]) != source_sha
@@ -335,6 +363,7 @@ def frozen_source(root: Path, source_sha: str) -> None:
 
 
 def dependency_variant(root: Path, state: Path, source_sha: str) -> None:
+    """Generate a valid public dependency-input change using the matching toolset."""
     frozen_source(root, source_sha)
     metadata = json.loads((state / "state.json").read_text())
     if any(
@@ -372,6 +401,7 @@ def dependency_variant(root: Path, state: Path, source_sha: str) -> None:
 
 
 def observed_containerfile(root: Path, kind: str) -> str:
+    """Instrument a temporary production Containerfile to observe actual Go mount consumption."""
     original = (root / "fulfillment-service/Containerfile").read_text()
     before = (
         "printf 'OSAC_IMAGE_CACHE_BEFORE phase=%s pkg=%s build=%s\\n' PHASE "
@@ -401,6 +431,7 @@ def observed_containerfile(root: Path, kind: str) -> str:
 
 
 def sample(root: Path, state: Path, kind: str, source_sha: str) -> None:
+    """Run the real installer build macro, retain bounded evidence, and propagate build failures."""
     frozen_source(root, source_sha)
     state.mkdir(parents=True, exist_ok=True)
     sums = {
@@ -472,6 +503,7 @@ def sample(root: Path, state: Path, kind: str, source_sha: str) -> None:
 
 
 def compatibility(root: Path, state: Path) -> None:
+    """Gate mount round trips through ordinary default Docker builds, then clear trial data."""
     with tempfile.TemporaryDirectory(prefix="osac-gate-") as temporary:
         context = Path(temporary)
         for name in MOUNTS:
@@ -512,6 +544,7 @@ def compatibility(root: Path, state: Path) -> None:
 
 
 def main() -> None:
+    """Dispatch optional-cache operations while preserving trial and real-build failures."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "operation", choices=("prepare", "inject", "extract", "sample", "invalidation", "compatibility")

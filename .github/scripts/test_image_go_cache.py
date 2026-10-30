@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class CacheContracts(unittest.TestCase):
     def test_fingerprint_covers_all_workspace_inputs(self) -> None:
+        """Mutating any manifest or build setting must invalidate the exact cache identity."""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for relative in cache.input_paths(ROOT):
@@ -38,6 +39,7 @@ class CacheContracts(unittest.TestCase):
                 self.assertNotEqual(original, cache.fingerprint(root, settings | {field: "changed"}))
 
     def test_workspace_inputs_include_every_current_module(self) -> None:
+        """Every workspace and copied Containerfile manifest must participate in the key."""
         inputs = {str(path) for path in cache.input_paths(ROOT)}
         for module in (ROOT / "go.work").read_text().splitlines():
             if module.strip().startswith("./"):
@@ -50,6 +52,7 @@ class CacheContracts(unittest.TestCase):
                 self.assertIn(manifest, inputs)
 
     def test_payload_allows_only_bounded_regular_module_and_build_data(self) -> None:
+        """Reject oversize data, unexpected roots and symlinks before any Docker import."""
         with tempfile.TemporaryDirectory() as temporary:
             payload = Path(temporary)
             for name in ("pkg", "build"):
@@ -67,6 +70,7 @@ class CacheContracts(unittest.TestCase):
                 cache.payload_size(payload)
 
     def test_incomplete_and_hardlinked_payloads_are_rejected(self) -> None:
+        """Reject incomplete mount trees and hard links shared across payload directories."""
         with tempfile.TemporaryDirectory() as temporary:
             payload = Path(temporary)
             (payload / "pkg").mkdir()
@@ -79,6 +83,7 @@ class CacheContracts(unittest.TestCase):
                 cache.payload_size(payload)
 
     def test_transport_uses_exact_named_mounts_and_default_builder(self) -> None:
+        """Generated transport must retain production mount IDs, paths and ownership."""
         for operation in ("inject", "extract", "clear"):
             dockerfile = cache.transport_file(ROOT, "example.invalid/toolset@sha256:" + "a" * 64, operation)
             for mount in cache.MOUNTS.values():
@@ -87,6 +92,7 @@ class CacheContracts(unittest.TestCase):
         self.assertIn("go mod verify", cache.transport_file(ROOT, "toolset", "verify"))
 
     def test_actual_installer_macro_is_invoked_without_cluster_targets(self) -> None:
+        """Execute the real Make macro with fake Docker and preserve its nonzero exit."""
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             docker = directory / "docker"
@@ -107,6 +113,7 @@ class CacheContracts(unittest.TestCase):
             self.assertEqual("..", arguments[-1])
 
     def test_trust_requires_public_default_branch_and_manual_context(self) -> None:
+        """Private repositories and pull-request contexts must not satisfy the save boundary."""
         trusted = {"event": "workflow_dispatch", "ref": "refs/heads/main", "default_branch": "main", "private": False}
         self.assertTrue(cache.trusted_save(trusted))
         for change in (
@@ -118,6 +125,7 @@ class CacheContracts(unittest.TestCase):
             self.assertFalse(cache.trusted_save(trusted | change))
 
     def test_workflow_defaults_and_trial_budget(self) -> None:
+        """Keep opt-in inputs false and the manual experiment within six twenty-minute jobs."""
         workflows = ROOT / ".github/workflows"
         for filename in ("nightly-build.yaml", "osac-build-and-publish.yaml", "integration-tests.yml", "tests.yml"):
             workflow = yaml.safe_load((workflows / filename).read_text())
@@ -135,6 +143,7 @@ class CacheContracts(unittest.TestCase):
         self.assertEqual("ubuntu-24.04", sample["jobs"]["sample"]["runs-on"])
 
     def test_build_observations_do_not_equate_restore_to_consumption(self) -> None:
+        """Log-derived consumption and error counts must remain separate from cache hits."""
         observations = cache.observe(
             "#1 go: downloading example.org/m v1.0\n#2 OSAC_IMAGE_CACHE_BEFORE pkg=7 build=2\n"
         )
@@ -144,10 +153,12 @@ class CacheContracts(unittest.TestCase):
         self.assertNotIn("cache_hit", observations)
 
     def test_dockerfile_instruction_text_is_not_consumption_evidence(self) -> None:
+        """Only emitted RUN output, not Dockerfile instruction text, proves observations."""
         log = "#1 RUN echo OSAC_IMAGE_CACHE_VERIFIED\n#2 0.1 OSAC_IMAGE_CACHE_VERIFIED\n"
         self.assertEqual(["#2 0.1 OSAC_IMAGE_CACHE_VERIFIED"], cache.observe(log)["image_build_observations"])
 
     def test_dependency_errors_preserve_literal_hosts_case_and_go_fallback(self) -> None:
+        """Literal public hosts and case-insensitive Go errors must remain observable."""
         for line in (
             "#1 https://proxy.golang.org/example/@v/v1.zip: timeout",
             "#1 https://sum.golang.org/lookup/example@v1: failed",
@@ -160,13 +171,98 @@ class CacheContracts(unittest.TestCase):
                 self.assertEqual(1, cache.observe(line)["observed_dependency_error_lines"])
 
     def test_dependency_errors_reject_wildcard_substituted_hostnames(self) -> None:
+        """Replacing any hostname dot must not produce a matching dependency-error host."""
         for hostname in ("proxyXgolang.org", "proxy.golangXorg", "sumXgolang.org", "sum.golangXorg"):
             with self.subTest(hostname=hostname):
                 self.assertEqual(
                     0, cache.observe(f"#1 https://{hostname}/example: timeout")["observed_dependency_error_lines"]
                 )
 
+    def test_download_progress_module_names_are_not_errors(self) -> None:
+        """Progress with error-like module names must not hide real download or host failures."""
+        for module in (
+            "github.com/pkg/errors",
+            "github.com/hashicorp/go-multierror",
+            "example.org/timeout",
+            "example.org/reset",
+            "example.org/failed",
+            "example.org/INTERNAL_ERROR",
+        ):
+            with self.subTest(module=module):
+                observations = cache.observe(f"#1 0.1 go: downloading {module} v1.0.0")
+                self.assertEqual(1, observations["observed_download_lines"])
+                self.assertEqual(0, observations["observed_dependency_error_lines"])
+        for line in (
+            "#1 go: downloading example.org/module v1.0.0: failed",
+            "#1 https://proxy.golang.org/example: timeout",
+            "#1 go: module lookup error",
+        ):
+            with self.subTest(error=line):
+                self.assertEqual(1, cache.observe(line)["observed_dependency_error_lines"])
+
+    def test_extract_skips_only_verified_exact_hits_before_transport(self) -> None:
+        """Avoid immutable-key re-exports only after a verified exact restore; retain all other checks."""
+        exact = {"cache_hit": "true", "matched_key": "exact-key"}
+        for restore, injection, skip in (
+            (exact, "verified-and-injected", True),
+            (exact, "cold-fallback", False),
+            ({"cache_hit": "false", "matched_key": ""}, "cold-fallback", False),
+            ({"cache_hit": "true", "matched_key": "other-key"}, "verified-and-injected", False),
+            ({"cache_hit": True}, "verified-and-injected", False),
+            ({"cache_hit": "true"}, "verified-and-injected", False),
+            ("not-attempted", "not-attempted", False),
+            (None, "not-attempted", False),
+        ):
+            with self.subTest(restore=restore, injection=injection), tempfile.TemporaryDirectory() as temporary:
+                state = Path(temporary)
+                (state / "state.json").write_text(
+                    json.dumps({"key": "exact-key", "restore": restore, "injection": injection})
+                )
+                with (
+                    patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}),
+                    patch.object(cache, "transport") as transport,
+                    patch.object(cache, "payload_size", return_value=123) as size,
+                    patch.object(cache, "check_ziphashes") as checksums,
+                    patch.object(cache, "output") as output,
+                ):
+                    cache.extract(ROOT, state)
+                if skip:
+                    transport.assert_not_called()
+                    size.assert_not_called()
+                    checksums.assert_not_called()
+                    output.assert_called_once_with("ready", "false")
+                else:
+                    self.assertEqual(["extract", "verify"], [call.args[2] for call in transport.call_args_list])
+                    size.assert_called_once_with(state / "payload")
+                    checksums.assert_called_once_with(ROOT, state / "payload")
+                    self.assertIn(unittest.mock.call("ready", "true"), output.call_args_list)
+
+    def test_exact_hit_does_not_bypass_save_trust_guard(self) -> None:
+        """An otherwise skippable exact hit must still fail an untrusted save context."""
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            (state / "state.json").write_text(
+                json.dumps(
+                    {
+                        "key": "exact-key",
+                        "namespace": "fulfillment-integration",
+                        "restore": {"cache_hit": "true", "matched_key": "exact-key"},
+                        "injection": "verified-and-injected",
+                    }
+                )
+            )
+            with (
+                patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "pull_request"}),
+                patch.object(cache, "transport") as transport,
+                patch.object(cache, "output") as output,
+                self.assertRaises(ValueError),
+            ):
+                cache.extract(ROOT, state)
+            transport.assert_not_called()
+            output.assert_not_called()
+
     def test_missing_and_malformed_restore_fall_back_without_injection(self) -> None:
+        """Missing or malformed payloads must leave the normal build path available."""
         for malformed in (False, True):
             with self.subTest(malformed=malformed), tempfile.TemporaryDirectory() as temporary:
                 state = Path(temporary)
@@ -180,6 +276,7 @@ class CacheContracts(unittest.TestCase):
                 self.assertEqual("cold-fallback", json.loads((state / "state.json").read_text())["injection"])
 
     def test_verification_failure_does_not_inject_payload(self) -> None:
+        """Failed isolated Go verification must never seed the consumer cache mounts."""
         with tempfile.TemporaryDirectory() as temporary:
             state = Path(temporary)
             (state / "state.json").write_text(json.dumps({"restore_started": 0}))
@@ -191,6 +288,7 @@ class CacheContracts(unittest.TestCase):
             self.assertEqual("cold-fallback", json.loads((state / "state.json").read_text())["injection"])
 
     def test_optional_transport_cli_failures_disable_cache_without_failing_build(self) -> None:
+        """Optional transport errors must emit ready=false instead of failing normal builds."""
         for operation in ("prepare", "inject", "extract"):
             with self.subTest(operation=operation), tempfile.TemporaryDirectory() as temporary:
                 state = Path(temporary)
@@ -206,6 +304,7 @@ class CacheContracts(unittest.TestCase):
                 self.assertEqual("ready=false\n", output.read_text())
 
     def test_sample_cli_does_not_swallow_build_failure(self) -> None:
+        """The top-level sample command must propagate the consumer build error."""
         with (
             tempfile.TemporaryDirectory() as temporary,
             patch("sys.argv", ["image_go_cache.py", "sample", "--state", temporary]),
@@ -215,6 +314,7 @@ class CacheContracts(unittest.TestCase):
             cache.main()
 
     def test_checksum_payload_must_match_committed_sums(self) -> None:
+        """Reject a cached module ziphash that differs from the committed public checksum."""
         with tempfile.TemporaryDirectory() as temporary:
             payload = Path(temporary)
             module, version, checksum = next(
@@ -231,6 +331,7 @@ class CacheContracts(unittest.TestCase):
                 cache.check_ziphashes(ROOT, payload)
 
     def test_cached_module_manifest_is_checked_not_just_ziphash(self) -> None:
+        """Verify cached go.mod content independently of downloaded module ziphash files."""
         with tempfile.TemporaryDirectory() as temporary:
             payload = Path(temporary)
             manifest = payload / "pkg/mod/cache/download/github.com/google/uuid/@v/v1.6.0.mod"
@@ -242,6 +343,7 @@ class CacheContracts(unittest.TestCase):
                 cache.check_ziphashes(ROOT, payload)
 
     def test_sample_preserves_real_build_failures_and_records_measurements(self) -> None:
+        """The real Make boundary must preserve exits and record source, image and timing evidence."""
         source = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
         for exit_code in (0, 19):
             with self.subTest(exit_code=exit_code), tempfile.TemporaryDirectory() as temporary:
@@ -276,6 +378,7 @@ class CacheContracts(unittest.TestCase):
                 self.assertTrue((state / "build.log").is_file())
 
     def test_sample_bounds_logs_without_masking_real_build_failure(self) -> None:
+        """Drain oversized output without unbounded artifacts or losing the build exit status."""
         source = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
         with tempfile.TemporaryDirectory() as temporary:
             state = Path(temporary)
@@ -291,6 +394,7 @@ class CacheContracts(unittest.TestCase):
             self.assertTrue(json.loads((state / "measurement.json").read_text())["log_truncated"])
 
     def test_sample_checks_frozen_revision_and_rerun_budget_before_build(self) -> None:
+        """Reject floating revisions and repeated attempts before spending another sample."""
         with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaises(ValueError):
                 cache.sample(ROOT, Path(temporary), "baseline", "main")
@@ -299,6 +403,7 @@ class CacheContracts(unittest.TestCase):
                 cache.sample(ROOT, Path(temporary), "baseline", source)
 
     def test_sample_instruments_both_real_mount_consumers(self) -> None:
+        """Require observations and ownership/path assertions in actual download and compile steps."""
         observed = cache.observed_containerfile(ROOT, "invalidation")
         self.assertIn("phase=%s pkg=%s build=%s", observed)
         self.assertIn("build=%s\\n' download", observed)
@@ -311,6 +416,7 @@ class CacheContracts(unittest.TestCase):
         self.assertIn('test "$(id -u):$(id -g)" = 1001:0', observed)
 
     def test_trial_chain_has_no_parallel_or_seventh_runner(self) -> None:
+        """Keep all six fresh samples serial with compatibility inside the first sample."""
         workflow = yaml.safe_load((ROOT / ".github/workflows/image-go-cache-trial.yaml").read_text())
         previous = None
         for name, job in workflow["jobs"].items():
@@ -324,6 +430,7 @@ class CacheContracts(unittest.TestCase):
         self.assertIn("github.run_attempt == 1", sample["jobs"]["sample"]["if"])
 
     def test_action_save_trust_and_default_builder_do_not_expand_permissions(self) -> None:
+        """Restore only exact keys and retain public/manual/nightly-only save wiring."""
         action = yaml.safe_load((ROOT / ".github/actions/go-image-cache/action.yaml").read_text())
         restore = next(step for step in action["runs"]["steps"] if step.get("id") == "restore")
         self.assertNotIn("restore-keys", restore["with"])
@@ -334,6 +441,7 @@ class CacheContracts(unittest.TestCase):
         self.assertIn("inputs.mode == 'nightly'", shared["jobs"]["integration-tests"]["with"]["image_go_cache"])
 
     def test_prepare_uses_stable_default_builder_identity_and_rejects_other_drivers(self) -> None:
+        """Ignore activity timestamps in keys and reject docker-container driver substitution."""
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             docker = directory / "docker"

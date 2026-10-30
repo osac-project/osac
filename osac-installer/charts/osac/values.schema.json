@@ -109,7 +109,7 @@
     },
     "cliImage": {
       "type": "string",
-      "description": "Default OpenShift CLI image used by hook jobs"
+      "description": "Default OpenShift CLI image used by hook jobs. When Netris CA validation is enabled it must provide kubectl, sh and openssl."
     },
     "dbInit": {
       "type": "object",
@@ -2895,6 +2895,20 @@
               "description": "Name of the customer-created ConfigMap in the AAP namespace. It must contain bundle.pem and is mounted read-only into Netris execution pods.",
               "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
               "maxLength": 253
+            },
+            "adminGroups": {
+              "type": "array",
+              "description": "Groups allowed to create, update, or delete the active Netris CA ConfigMap. Defaults to the break-glass group system:masters and the OpenShift cluster administrator group system:cluster-admins.",
+              "minItems": 1,
+              "default": [
+                "system:masters",
+                "system:cluster-admins"
+              ],
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true
             }
           },
           "additionalProperties": false

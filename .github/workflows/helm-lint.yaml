@@ -172,6 +172,10 @@ jobs:
       working-directory: osac-installer
       run: ./scripts/test-networking-values.sh
 
+    - name: Test Netris CA lifecycle contracts
+      working-directory: osac-installer
+      run: uv run --project .. python scripts/test-netris-ca-lifecycle.py
+
     - name: Test MCE rendering
       working-directory: osac-installer
       run: uv run --project .. make mce-render-test

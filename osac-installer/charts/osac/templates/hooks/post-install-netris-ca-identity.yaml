@@ -1,0 +1,70 @@
+{{- if and .Values.validation.enabled (eq .Values.global.networking.fabricManager "netris") .Values.global.networking.netris.caBundle.configMap }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "osac.fullname" . }}-netris-ca-identity-validate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "osac.labels" . | nindent 8 }}
+      annotations:
+        openshift.io/required-scc: restricted-v2
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        {{- if not (.Capabilities.APIVersions.Has "security.openshift.io/v1") }}
+        runAsUser: 1000
+        fsGroup: 1000
+        {{- end }}
+      restartPolicy: Never
+      serviceAccountName: {{ include "osac.fullname" . }}-netris-ca-validate
+      containers:
+      - name: validate
+        image: {{ .Values.cliImage }}
+        env:
+        - name: HOME
+          value: /tmp
+        - name: CA_CONFIGMAP_NAME
+          value: {{ .Values.global.networking.netris.caBundle.configMap | quote }}
+        - name: AAP_NAMESPACE
+          value: {{ .Release.Namespace | quote }}
+        - name: CA_EXECUTION_IDENTITY
+          value: {{ printf "system:serviceaccount:%s:%s" .Release.Namespace (default "osac-sa" .Values.aap.serviceAccounts.osacSa) | quote }}
+        - name: CHECK_IDENTITY
+          value: "true"
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          echo "=== Netris CA Identity Validation ==="
+{{ .Files.Get "files/validate-netris-ca.sh" | nindent 10 }}
+          echo "=== Identity validation passed ==="
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: tmp
+        emptyDir: {}
+  backoffLimit: 0
+{{- end }}

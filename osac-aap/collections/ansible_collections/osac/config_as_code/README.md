@@ -15,8 +15,8 @@ AAP itself, and one used for cluster fulfillment operations.
 ### Config-as-code environment variables
 
 In order to reconcile the configuration of AAP, the following environment
-variables are used (injected from the `config-as-code-ig` secret or the pod
-where applicable):
+variables are used (injected from the configured config-as-code Secret, named
+`config-as-code-ig` by default, or the pod where applicable):
 
 | Variable | Description | Default |
 |----|----|----|
@@ -33,6 +33,7 @@ where applicable):
 | `AAP_PROJECT_GIT_BRANCH` | Git branch to use for the project | `main` |
 | `AAP_PROJECT_ARCHIVE_URI` | Optional archive URL instead of git (e.g. tarball) | — |
 | `AAP_EE_IMAGE` | Registry URL of the execution environment image | `ghcr.io/osac/osac-aap:latest` |
+| `AAP_OSAC_SERVICE_ACCOUNT` | Kubernetes ServiceAccount mounted into OSAC-managed AAP job pods | `osac-sa` |
 | `LICENSE_MANIFEST_PATH` | Path to the license manifest file to register the AAP instance ([Red Hat account](https://access.redhat.com/management/subscription_allocations)) | `/var/secrets/config-as-code-manifest/license.zip` |
 | `REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME` | Name of the secret holding the kubeconfig for the remote cluster (compute, networking, and storage operations) | — |
 | `REMOTE_CLUSTER_KUBECONFIG_SECRET_KEY` | Key within that secret for the kubeconfig file | `kubeconfig` |
@@ -40,8 +41,9 @@ where applicable):
 | `NETRIS_VALIDATE_CERTS` | Whether Netris TLS certificates are validated by managed jobs | `true` |
 | `NETRIS_CA_CONFIGMAP` | Optional customer-created ConfigMap name containing `bundle.pem` in the AAP namespace | — |
 
-These variables must be defined in a secret named `config-as-code-ig` in the
-namespace where AAP is deployed.
+These variables must be defined in the configured config-as-code Secret
+(`configAsCode.secret`, default `config-as-code-ig`) in the namespace where AAP
+is deployed.
 
 When `NETRIS_CA_CONFIGMAP` is configured, config-as-code adds a required,
 read-only `bundle.pem` mount to the OSAC-managed Netris container groups and
@@ -73,20 +75,23 @@ These variables must be defined in a secret named: `cluster-fulfillment-ig` in
 the namespace where AAP is deployed.
 
 The cluster fulfillment needs to access the Kube API of the cluster it runs on,
-so we expect a service account `osac-sa` to exists with enough rights.
+so the configured AAP service account (`AAP_OSAC_SERVICE_ACCOUNT`, default
+`osac-sa`) must exist with enough rights.
 
 ### Compute instance operations environment variables
 
 Compute instance (VMaaS) job templates run in the
 `compute-instance-operations-ig` instance group. The default KubeVirt path
-(`ocp_virt_vm`) uses the in-cluster `osac-sa` service account and does not
-require credentials in a dedicated secret.
+(`ocp_virt_vm`) uses the configured AAP service account
+(`AAP_OSAC_SERVICE_ACCOUNT`, default `osac-sa`) and does not require credentials
+in a dedicated secret.
 
 The pod spec optionally mounts a secret named
 `compute-instance-operations-ig`. Create it only when a deployment-specific
 compute template needs extra environment variables. OpenStack credentials are
 not required for VMaaS; Neutron networking uses `network-fulfillment-ig`, and
-cluster/ESI floating-IP workflows use `cluster-fulfillment-ig`.
+cluster/ESI floating-IP workflows use `cluster-fulfillment-ig`. Jobs use the
+configured AAP service account (`AAP_OSAC_SERVICE_ACCOUNT`, default `osac-sa`).
 
 The compute instance instance group also optionally mounts `storage-operations-ig`
 for JIT tenant storage during VM provisioning, and may mount a remote cluster

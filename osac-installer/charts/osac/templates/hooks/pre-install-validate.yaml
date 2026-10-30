@@ -15,12 +15,33 @@ spec:
     metadata:
       labels:
         {{- include "osac.labels" . | nindent 8 }}
+      annotations:
+        openshift.io/required-scc: restricted-v2
     spec:
+      securityContext:
+        runAsNonRoot: true
+        {{- if not (.Capabilities.APIVersions.Has "security.openshift.io/v1") }}
+        runAsUser: 1000
+        fsGroup: 1000
+        {{- end }}
       restartPolicy: Never
       serviceAccountName: {{ include "osac.fullname" . }}-validate
       containers:
       - name: validate
         image: {{ .Values.cliImage }}
+        env:
+        - name: HOME
+          value: /tmp
+        {{- if and (eq .Values.global.networking.fabricManager "netris") .Values.global.networking.netris.caBundle.configMap }}
+        - name: CA_CONFIGMAP_NAME
+          value: {{ .Values.global.networking.netris.caBundle.configMap | quote }}
+        - name: AAP_NAMESPACE
+          value: {{ .Release.Namespace | quote }}
+        - name: CA_EXECUTION_IDENTITY
+          value: {{ printf "system:serviceaccount:%s:%s" .Release.Namespace (default "osac-sa" .Values.aap.serviceAccounts.osacSa) | quote }}
+        - name: CHECK_IDENTITY
+          value: "false"
+        {{- end }}
         command:
         - /bin/sh
         - -c
@@ -78,7 +99,28 @@ spec:
           fi
           {{- end }}
 
+          {{- if and (eq .Values.global.networking.fabricManager "netris") .Values.global.networking.netris.caBundle.configMap }}
+{{ .Files.Get "files/validate-netris-ca.sh" | nindent 10 }}
+          {{ end }}
           echo "=== Validation passed ==="
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: tmp
+        emptyDir: {}
   backoffLimit: 0
 ---
 apiVersion: v1
@@ -134,4 +176,43 @@ subjects:
 - kind: ServiceAccount
   name: {{ include "osac.fullname" . }}-validate
   namespace: {{ .Release.Namespace }}
+{{- if and (eq .Values.global.networking.fabricManager "netris") .Values.global.networking.netris.caBundle.configMap }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "osac.fullname" . }}-validate-netris-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: [{{ .Values.global.networking.netris.caBundle.configMap | quote }}]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "osac.fullname" . }}-validate-netris-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "osac.fullname" . }}-validate-netris-ca
+subjects:
+- kind: ServiceAccount
+  name: {{ include "osac.fullname" . }}-validate
+  namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- end }}

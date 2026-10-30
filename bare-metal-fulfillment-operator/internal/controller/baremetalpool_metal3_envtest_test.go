@@ -20,7 +20,6 @@ import (
 	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -37,11 +36,7 @@ var _ = Describe("BareMetalPool Metal3 Integration", func() {
 	const bmhName = "metal3-pool-bmh"
 
 	BeforeEach(func() {
-		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: metal3TestNS}}
-		err := k8sClient.Create(ctx, ns)
-		if err != nil && client.IgnoreAlreadyExists(err) != nil {
-			Fail("failed to create test namespace: " + err.Error())
-		}
+		ensureTestNamespace(metal3TestNS)
 	})
 
 	AfterEach(func() {

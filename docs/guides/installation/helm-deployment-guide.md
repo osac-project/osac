@@ -638,18 +638,24 @@ LVM Storage Operator and its operand does not register an OSAC storage offering.
 The automatic local-storage registration hook is for development and CI only;
 see [Evaluation only](customer-install-guide.md#92-evaluation-only).
 
-On the `osac` chart, select this host setup with
-`operator.networkManagers.k8sManagers.cudn_evpn.enabled: true` and
-`networkClass.k8sManager: cudn_evpn`. The
-[customer install guide](customer-install-guide.md#61-installing-osac-for-vmaas)
-covers that phase-2 selection next to the fabric-less `k8s_only` workflow.
+For phase 2, use the complete
+[CUDN EVPN with Netris example](customer-install-guide.md#cudn-evpn-with-netris).
+It configures the Netris AAP backend, registers `cudn_evpn` with
+`capabilities: [ipv4]`, and enables the expert NetworkClass path with
+`global.expertOverrides.networkClass: true`. That path also requires
+`networkClass.enabled: true`, a nonempty title, and the Netris and EVPN
+manager names. The subchart has no built-in `cudn_evpn` registration defaults;
+enabling it alone creates an invalid registration with empty capabilities.
+The normal `global.networking.k8sManager` setting accepts only `""` or
+`k8s_only`, so it cannot select `cudn_evpn` directly.
 
 ## Separate VMaaS workload cluster
 
 Run the OSAC management services on one OpenShift cluster and the virtual
 machines on another. Both clusters need `cluster-admin` access and different
-API server addresses. Leave CaaS disabled. The cluster controller cannot run
-in the same operator instance as a remote kubeconfig.
+API server addresses. Disable CaaS and BMaaS. The operator refuses to start
+with a remote kubeconfig when either the cluster controller or the
+bare-metal-instance controller is enabled.
 
 Create the workload kubeconfig Secret on the management cluster before phase
 2. The Secret contents and the console-proxy label are described in
@@ -679,7 +685,10 @@ evpn:
 
 Run phase 1a and phase 1b with that file, then phase 2 with the remote
 kubeconfig values from the customer install guide. The Secret must exist in
-the OSAC namespace before `helm upgrade --install osac`.
+the OSAC namespace before `helm upgrade --install osac`. Keep
+`lvms.enabled: true` in the phase-2 `my-values.yaml` to register the workload
+cluster's local StorageBackend and StorageTier in fulfillment. Installing
+LVMS through phase 1 alone does not perform that registration.
 
 ## When Prerequisites Already Exist
 

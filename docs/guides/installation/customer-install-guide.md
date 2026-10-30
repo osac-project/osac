@@ -1385,6 +1385,12 @@ NetworkClass defaults, capabilities, and address plan are fixed at installation;
 an upgrade rejects changes to the existing NetworkClass spec. The provider
 provisioning switch is also fixed at installation.
 
+Normal deployments configure `global.networking`; Helm derives the AAP
+backend, manager registrations, and NetworkClass from it. The top-level
+`networkClass` block is a legacy expert override and is ignored unless
+`global.expertOverrides.networkClass: true`. CUDN EVPN uses that expert path
+as shown in [Section 6.1](#cudn-evpn-with-netris).
+
 | Parameter | Source | Description | Default |
 |---|---|---|---|
 | `global.networking.provisioningEnabled` | schema | Provider networking. When `false`, OSAC runs no networking job, and networking resources become `READY` without connectivity. Fixed at the first install. | `true` |

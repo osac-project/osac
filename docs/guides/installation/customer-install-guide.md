@@ -133,13 +133,11 @@ A stable release's `osac-release/vX.Y.Z` tag and matching `osac/vX.Y.Z`
 source tag point to the same commit. The source checkout and download
 commands below use `osac/v`; nightly source tags also use this prefix.
 
-An example nightly chart tag is
-[`osac/v0.0.58-nightly.20261027.8402b1c.141.1`](https://github.com/osac-project/osac/tree/osac/v0.0.58-nightly.20261027.8402b1c.141.1).
-It was built on 27 October 2026, before the install preflight, so it runs the
-old shell validation hook; see the note below.
-Check the [OSAC Nightly Build workflow](https://github.com/osac-project/osac/actions/workflows/nightly-build.yaml)
-for newer builds and use the newest successful run. The chart includes a
-`values.schema.json` file and a `values-example.yaml` file.
+For evaluation builds, check the
+[OSAC Nightly Build workflow](https://github.com/osac-project/osac/actions/workflows/nightly-build.yaml)
+and select the newest successful run. Use its exact chart version; a newer
+tag alone does not mean that the full pipeline succeeded. The chart
+includes a `values.schema.json` file and a `values-example.yaml` file.
 
 Select an umbrella chart version from the release links above and export it
 once. The following example uses the published stable
@@ -169,11 +167,11 @@ export OSAC_RELEASE_VERSION="0.0.63"
 > the network manager contract merged on 1 November 2026.
 
 Use only the chart version, without either tag prefix. For evaluation, set
-`OSAC_RELEASE_VERSION` to an exact nightly version from the workflow above;
-the linked example uses `0.0.58-nightly.20261027.8402b1c.141.1`. Select the
-version before retrieving chart values and keep it unchanged throughout the
-installation. Run the remaining commands in the same shell session; they
-use this variable for the chart version and matching source downloads.
+`OSAC_RELEASE_VERSION` to the exact nightly version from that successful run.
+Select the version before retrieving chart values and keep it unchanged
+throughout the installation. Run the remaining commands in the same shell
+session; they use this variable for the chart version and matching source
+downloads.
 
 To install for a specific service, follow the workflow in
 [Section 6](#6-installation-workflows-by-service). Each workflow lists the
@@ -930,7 +928,10 @@ Use this procedure when the cluster already meets the prerequisites.
 - The issuer configured by `service.certs.issuerRef`, trust-manager, the
   `ConfigMap` named by `service.certs.caBundle.configMap`, Keycloak with the
   `osac` realm, and the credential Secrets exist. The `ConfigMap` is required
-  even when the API certificates use public trust.
+  even when the API certificates use public trust. When `osac-infra` creates
+  the bundle, its `certs.caBundle.configMap` must match the phase-2
+  `service.certs.caBundle.configMap` value; see step 4 of
+  [Section 7](#7-verifying-the-installation).
 - For a production deployment, the external PostgreSQL server is ready for
   the chart's client-certificate authentication, and `dbInit.host` is set
   in `my-values.yaml`.
@@ -1515,7 +1516,7 @@ as shown in [Section 6.1](#cudn-evpn-with-netris).
 | `service.variant` | `openshift` or `kind`. Use `openshift`. |
 | `service.images.service`, `service.images.envoy` | Fulfillment Service and Envoy sidecar images. |
 | `service.certs.issuerRef.kind`, `service.certs.issuerRef.name` | cert-manager issuer for the service certificates. |
-| `service.certs.caBundle.configMap` | `ConfigMap` that holds the CA bundle. |
+| `service.certs.caBundle.configMap` | Existing CA-bundle `ConfigMap` mounted by the OSAC hooks. This value does not create or rename the ConfigMap. For OSAC-managed trust, match `certs.caBundle.configMap` in the phase-1 `osac-infra` values. Both default to `ca-bundle`; see step 4 of [Section 7](#7-verifying-the-installation). |
 | `service.auth.issuerUrl` | OIDC issuer. Templated from `global.clusterDomain` by default. |
 | `service.auth.controllerCredentials[]` | Volume sources for the controller OIDC client credentials. |
 | `service.idp.provider`, `service.idp.url`, `service.idp.credentials[]` | Identity provider for user and role management. Only `keycloak` is supported. |
@@ -2092,20 +2093,48 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
 
    Verify the trust bundle separately from the certificate issuer. For every
    deployment, including customer-managed bundles and upstream trust-manager
-   installations, check the `ConfigMap` named by
-   `service.certs.caBundle.configMap` in the OSAC release namespace. Replace
-   `<ca_bundle_configmap>` with that configured name:
+   installations, check the CA-bundle `ConfigMap` in the OSAC release
+   namespace.
+
+   For OSAC-managed trust, `certs.caBundle.configMap` in the phase-1
+   `my-infra-values.yaml` names the trust-manager `Bundle` and the
+   ConfigMaps it distributes. The hook targets the infrastructure release
+   namespace and the phase-2 namespace configured by `osacNamespace`.
+   Set `service.certs.caBundle.configMap` in the phase-2 `my-values.yaml`
+   to the same name. Both default to `ca-bundle`. Changing only the phase-2
+   value does not create or rename a ConfigMap; the OSAC hooks would mount
+   a ConfigMap that does not exist. For customer-managed trust, ensure that
+   the configured ConfigMap already exists in the OSAC release namespace.
+
+   Replace `<ca_bundle_configmap>` below with that shared name and
+   `<namespace>` with the phase-2 OSAC release namespace:
 
    ```console
    oc get configmap <ca_bundle_configmap> -n <namespace> -o yaml
    ```
 
-   Only for the OSAC-managed default trust-manager and bundle configuration,
-   also check the `ca-bundle` `Bundle`:
+   For OSAC-managed trust, also check the fully qualified trust-manager
+   `Bundle` resource. It is cluster-scoped and needs no namespace flag;
+   the hook Job that creates it runs in the infrastructure namespace:
 
    ```console
-   oc get bundle ca-bundle
+   oc get bundles.trust.cert-manager.io <ca_bundle_configmap>
    ```
+
+   Extract the bundle once for the client checks below. The example reads
+   the OSAC-managed `bundle.pem` key; adjust the JSONPath if your
+   customer-managed ConfigMap uses a different PEM key:
+
+   ```console
+   oc get configmap <ca_bundle_configmap> -n <namespace> \
+     -o jsonpath='{.data.bundle\.pem}' > osac-ca-bundle.pem
+   test -s osac-ca-bundle.pem
+   ```
+
+   Keep this file for the OIDC, API, and hub-registration checks. It must
+   contain the CA that signs the endpoint's certificate. If an endpoint
+   uses a different CA, obtain the matching PEM bundle from its
+   administrator and use that file for that endpoint.
 
    When `kafka.enabled` is `true` in `osac-infra`, also check that the
    bundled Kafka resource is `Ready`:
@@ -2166,12 +2195,10 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    Keycloak or a custom `keycloak.route.hostname`, use its configured issuer
    URL.
 
-   For the bundled Keycloak, extract the shared trust bundle and select it
-   for this check. Adjust the ConfigMap name and PEM key if you configured
-   different values:
+   For the bundled Keycloak, use the shared trust bundle extracted in
+   step 4 of [this section](#7-verifying-the-installation):
 
    ```console
-   oc get configmap ca-bundle -n <namespace> -o jsonpath='{.data.bundle\.pem}' > osac-ca-bundle.pem
    export OSAC_OIDC_CA_FILE="osac-ca-bundle.pem"
    ```
 
@@ -2235,15 +2262,11 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
     ```
 
 11. Check API reachability and log in with the `osac` CLI. For the bundled
-    CA or a custom CA, extract the API trust bundle and pass it to both
-    commands. Before running the extraction command below, replace
-    `ca-bundle` with the ConfigMap named by `service.certs.caBundle.configMap`
-    if you changed the default. The example reads the `bundle.pem` key;
-    if your bundle uses a different PEM key, adjust the JSONPath as well.
+    CA or a custom CA, use the API trust bundle prepared in step 4 of
+    [this section](#7-verifying-the-installation) for both commands:
 
     ```console
     ROUTE=$(oc get route fulfillment-api -n <namespace> -o jsonpath='{.spec.host}')
-    oc get configmap ca-bundle -n <namespace> -o jsonpath='{.data.bundle\.pem}' > osac-ca-bundle.pem
     curl --fail-with-body --cacert osac-ca-bundle.pem "https://$ROUTE/healthz"
     oc get serviceaccount admin -n <namespace>
     osac login \
@@ -2276,9 +2299,8 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
     If `admin` is missing, check that the Fulfillment Service chart installed
     successfully and that `auth.emergencyServiceAccounts` includes `admin`.
 
-    The extracted bundle must include the CA that signs the API route's
-    certificate. Use `--insecure` (skips certificate verification) only for
-    evaluation, never in production.
+    Use `--insecure` (skips certificate verification) only for evaluation,
+    never in production.
 
 12. CaaS only: check that the cluster templates were published:
 
@@ -2449,13 +2471,10 @@ local hub is not already registered.
 1. Log in to the Fulfillment Service through `fulfillment-internal-api`.
    Hub registration uses the private API, so run this procedure from an
    administrator host that can reach the internal route. For the bundled CA
-   or a custom CA, extract the API trust bundle and pass it to the CLI. Adjust
-   the ConfigMap name and PEM key if you configured different
-   `service.certs.caBundle` values, as described in step 11 of
+   or a custom CA, use the API trust bundle prepared in step 4 of
    [Section 7](#7-verifying-the-installation):
 
    ```console
-   oc get configmap ca-bundle -n <namespace> -o jsonpath='{.data.bundle\.pem}' > osac-ca-bundle.pem
    osac login \
        --address "$(oc get route fulfillment-internal-api -n <namespace> -o jsonpath='{.spec.host}')" \
        --token-script "oc create token admin -n <namespace> --duration 1h" \

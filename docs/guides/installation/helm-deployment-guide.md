@@ -893,8 +893,9 @@ For the Phase 1b TopoLVM and NetBox dependencies, use
 dependencies from `topolvm.github.io` and `netbox-community.github.io` during
 this step, even when `topolvm.enabled` and `netbox.enabled` are `false`. The
 disabled dependencies are not installed. This repository access is needed
-from the machine running Helm, not from the cluster at runtime. The Phase 2 `osac` chart uses `file://` subcharts and
-requires a full monorepo checkout; the install procedure updates those with
+from the machine running Helm, not from the cluster at runtime. The Phase 2
+`osac` chart uses `file://` subcharts and requires a full monorepo checkout;
+the install procedure updates those with
 `helm dependency update ./charts/osac`. OCI chart pulls require outbound
 access to `ghcr.io`. A `not found` error on
 `oci://ghcr.io/osac-project/charts/*` usually means an incorrect `--version`.

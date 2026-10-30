@@ -1437,6 +1437,7 @@ backend, manager registrations, and NetworkClass from it. The top-level
 `networkClass` block is a legacy expert override and is ignored unless
 `global.expertOverrides.networkClass: true`. CUDN EVPN uses that expert path
 as shown in [Section 6.1](#cudn-evpn-with-netris).
+The Fulfillment API permits one NetworkClass per deployment.
 
 | Parameter | Source | Description | Default |
 |---|---|---|---|
@@ -1457,7 +1458,7 @@ as shown in [Section 6.1](#cudn-evpn-with-netris).
 | `service.variant` | `openshift` or `kind`. Use `openshift`. |
 | `service.images.service`, `service.images.envoy` | Fulfillment Service and Envoy sidecar images. |
 | `service.certs.issuerRef.kind`, `service.certs.issuerRef.name` | cert-manager issuer for the service certificates. |
-| `service.certs.caBundle.configMap` | Existing CA-bundle `ConfigMap` mounted by the OSAC hooks. This value does not create or rename the ConfigMap. Set it to the existing ConfigMap name in the OSAC release namespace. Defaults to `ca-bundle`; see step 4 of [Section 7](#7-verifying-the-installation). |
+| `service.certs.caBundle.configMap` | Existing CA-bundle `ConfigMap` mounted by the OSAC hooks. It must contain the PEM bundle under the fixed `bundle.pem` key. This value does not create or rename the ConfigMap. Set it to the existing ConfigMap name in the OSAC release namespace. Defaults to `ca-bundle`; see step 4 of [Section 7](#7-verifying-the-installation). |
 | `service.auth.issuerUrl` | OIDC issuer. Templated from `global.clusterDomain` by default. |
 | `service.auth.controllerCredentials[]` | Volume sources for the controller OIDC client credentials. |
 | `service.idp.provider`, `service.idp.url`, `service.idp.credentials[]` | Identity provider for user and role management. Only `keycloak` is supported. |
@@ -1679,7 +1680,6 @@ networkClass:
   description: "IPv4 networking through Netris and CUDN EVPN"
   fabricManager: netris
   k8sManager: cudn_evpn
-  isDefault: true
 lvms:
   enabled: true
 aap:
@@ -2029,9 +2029,8 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    oc get configmap <ca_bundle_configmap> -n <namespace> -o yaml
    ```
 
-   Extract the bundle once for the client checks below. The example reads
-   the `bundle.pem` key; adjust the JSONPath if your ConfigMap uses a different
-   PEM key:
+   The ConfigMap must contain the CA bundle under the fixed `bundle.pem` key
+   required by the OSAC hooks. Extract it once for the client checks below:
 
    ```console
    oc get configmap <ca_bundle_configmap> -n <namespace> \

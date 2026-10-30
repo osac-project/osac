@@ -90,6 +90,7 @@ const (
 	remoteCSPSilverSC2                 = "remote-csp-silver-sc-2"
 	remoteCSPSilverSCDup               = "remote-csp-silver-sc-dup"
 	remoteCSPSilverSCV2                = "remote-csp-silver-sc-v2"
+	remoteCSPUnsupportedSC             = "remote-csp-unsupported-sc"
 	remoteCSPForbiddenGoldSC           = "remote-forbidden-csp-gold-sc"
 )
 
@@ -766,6 +767,29 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 				}, 60*time.Second, 2*time.Second).Should(Succeed())
 			}
 
+			By("verifying zero Hub Secrets, Secrets.Get calls, and AAP calls while CSP Tenants are active at StorageReady=True")
+			activeStats := getCSPFixtureStats()
+			Expect(activeStats.TiersListCalls).To(BeNumerically(">=", 1))
+			Expect(activeStats.BackendsListCalls).To(BeNumerically(">=", 1))
+			Expect(activeStats.SecretsGetCalls).To(
+				BeZero(),
+				"active CSP-managed reconcile must never call Secrets.Get (requested: %v)",
+				activeStats.SecretsRequestedIDs,
+			)
+			Expect(activeStats.AAPLaunchCalls).To(
+				BeZero(),
+				"active CSP-managed reconcile must never call AAP (requests: %v)",
+				activeStats.AAPRequests,
+			)
+			activeTenantSecretsOut, err := runMgmtKubectl(
+				"get", "secrets", "-n", operatorNamespace,
+				"-l", "osac.openshift.io/tenant", "-o", "name",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(strings.TrimSpace(string(activeTenantSecretsOut))).To(
+				BeEmpty(), "zero Hub Secrets with osac.openshift.io/tenant should exist while CSP Tenants are active",
+			)
+
 			By("snapshotting UID and ResourceVersion of remote CSP StorageClasses before deleting Tenants")
 			goldBefore := fetchRemoteStorageClassMeta(remoteKubeconfigPath, remoteCSPGoldSC)
 			silverBefore := fetchRemoteStorageClassMeta(remoteKubeconfigPath, remoteCSPSilverSCV2)
@@ -907,7 +931,68 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 				g.Expect(stats.AAPLaunchCalls).To(BeZero())
 			}, 6*time.Second, time.Second).Should(Succeed())
 
-			By("cleaning up ClusterOrder and tenant-csp-unsupported")
+			By(
+				"creating a matching remote csp-managed StorageClass for unsupported-csp-provider " +
+					"and verifying provider-neutral resolution without credential or AAP calls",
+			)
+			DeferCleanup(func() {
+				_, _ = runKubectlWithKubeconfig(
+					remoteKubeconfigPath, "delete", "storageclass", remoteCSPUnsupportedSC, "--ignore-not-found",
+				)
+			})
+			_, err = runKubectlWithStdin(
+				remoteKubeconfigPath,
+				storageClassYAMLWithProvisioner(
+					remoteCSPUnsupportedSC, "csp-managed", "csp-unsupported-tier", "csi.example.com",
+				),
+				"apply", "-f", "-",
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				status := fetchTenantStatus(g, cspTenantUnsupportedName)
+				g.Expect(findCondition(status.Conditions, "StorageBackendReady")).To(BeNil())
+				g.Expect(findCondition(status.Conditions, "ClusterStorageReady")).To(BeNil())
+
+				storageCond := findCondition(status.Conditions, "StorageReady")
+				g.Expect(storageCond).NotTo(BeNil())
+				g.Expect(storageCond.Status).To(Equal("True"))
+				g.Expect(storageCond.Reason).To(Equal("Found"))
+				g.Expect(status.StorageClasses).To(Equal([]tenantResolvedStorageClass{
+					{Name: remoteCSPUnsupportedSC, Tier: "csp-unsupported-tier"},
+				}))
+			}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+			Consistently(func(g Gomega) {
+				coOut, coErr := runMgmtKubectl(
+					"get", "clusterorder", cspClusterOrderUnsupported, "-n", operatorNamespace, "-o", "json",
+				)
+				g.Expect(coErr).NotTo(HaveOccurred())
+				var co struct {
+					Metadata struct {
+						Finalizers []string `json:"finalizers"`
+					} `json:"metadata"`
+					Status struct {
+						ClusterStorageJobs []any `json:"clusterStorageJobs"`
+					} `json:"status"`
+				}
+				g.Expect(json.Unmarshal(coOut, &co)).To(Succeed())
+				g.Expect(co.Metadata.Finalizers).NotTo(ContainElement("osac.openshift.io/cluster-storage"))
+				g.Expect(co.Status.ClusterStorageJobs).To(BeEmpty())
+
+				secretsOut, secErr := runMgmtKubectl(
+					"get", "secrets", "-n", operatorNamespace,
+					"-l", "osac.openshift.io/tenant", "-o", "name",
+				)
+				g.Expect(secErr).NotTo(HaveOccurred())
+				g.Expect(strings.TrimSpace(string(secretsOut))).To(BeEmpty())
+
+				stats := getCSPFixtureStats()
+				g.Expect(stats.SecretsGetCalls).To(BeZero())
+				g.Expect(stats.AAPLaunchCalls).To(BeZero())
+			}, 6*time.Second, time.Second).Should(Succeed())
+
+			By("cleaning up ClusterOrder, tenant-csp-unsupported, and remote StorageClass")
 			Expect(removeMgmtResourceFinalizers(
 				"clusterorder", cspClusterOrderUnsupported, clusterOrderUIDs[cspClusterOrderUnsupported],
 			)).To(Succeed())
@@ -924,6 +1009,11 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 			)).To(Succeed())
 			waitForMgmtObjectDeleted("tenant", cspTenantUnsupportedName, operatorNamespace)
 			delete(tenantUIDs, cspTenantUnsupportedName)
+
+			_, err = runKubectlWithKubeconfig(
+				remoteKubeconfigPath, "delete", "storageclass", remoteCSPUnsupportedSC, "--ignore-not-found",
+			)
+			Expect(err).NotTo(HaveOccurred())
 
 			stats := getCSPFixtureStats()
 			Expect(stats.SecretsGetCalls).To(BeZero())
@@ -1037,6 +1127,7 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying the operator recovers automatically and resolves the remote CSP StorageClass to StorageReady=True")
+			var latchedForbiddenTransitionTime string
 			Eventually(func(g Gomega) {
 				status := fetchTenantStatus(g, cspTenantForbiddenName)
 				g.Expect(status.Finalizers).To(ContainElement("osac.openshift.io/storage"))
@@ -1048,11 +1139,79 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 				g.Expect(storageCond.Reason).To(Equal("Found"))
 				g.Expect(storageCond.Message).To(ContainSubstring(remoteCSPForbiddenGoldSC))
 				g.Expect(storageCond.Message).NotTo(ContainSubstring(localCSPForbiddenDecoyStorageClass))
+				g.Expect(storageCond.LastTransitionTime).NotTo(BeEmpty())
+				latchedForbiddenTransitionTime = storageCond.LastTransitionTime
 
 				g.Expect(status.StorageClasses).To(Equal([]tenantResolvedStorageClass{
 					{Name: remoteCSPForbiddenGoldSC, Tier: "csp-gold"},
 				}))
 			}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+			By(
+				"revoking StorageClass RBAC after initial cache synchronization and " +
+					"verifying latched StorageReady=True is preserved without local fallback",
+			)
+			_, err = runKubectlWithStdin(
+				remoteKubeconfigPath, remoteRestrictedRBACManifest(false), "apply", "-f", "-",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			scRevokedOut, scRevokedErr := runKubectlWithKubeconfig(
+				remoteKubeconfigPath,
+				"auth", "can-i", "-A", "list", "storageclasses.storage.k8s.io", "--as="+restrictedIdentity,
+			)
+			Expect(scRevokedErr).To(HaveOccurred())
+			Expect(lastNonEmptyLine(string(scRevokedOut))).To(Equal("no"))
+
+			setCSPFixtureState(cspFixtureState{FailTiers: true})
+			Eventually(func(g Gomega) {
+				status := fetchTenantStatus(g, cspTenantForbiddenName)
+				backendCond := findCondition(status.Conditions, "StorageBackendReady")
+				g.Expect(backendCond).NotTo(BeNil())
+				g.Expect(backendCond.Status).To(Equal("False"))
+				g.Expect(backendCond.Reason).To(Equal("TierResolutionFailed"))
+
+				storageCond := findCondition(status.Conditions, "StorageReady")
+				g.Expect(storageCond).NotTo(BeNil())
+				g.Expect(storageCond.Status).To(Equal("True"))
+				g.Expect(storageCond.LastTransitionTime).To(Equal(latchedForbiddenTransitionTime))
+				g.Expect(status.StorageClasses).To(Equal([]tenantResolvedStorageClass{
+					{Name: remoteCSPForbiddenGoldSC, Tier: "csp-gold"},
+				}))
+			}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+			setCSPFixtureState(cspFixtureState{
+				Tiers: []cspFixtureTier{
+					{ID: "tier-csp-gold", Name: "csp-gold", BackendID: "backend-csp-netapp", Protocol: "block"},
+				},
+				Backends: []cspFixtureBackend{
+					{
+						ID:               "backend-csp-netapp",
+						Name:             "backend-csp-netapp",
+						Provider:         "netapp",
+						CspManaged:       true,
+						PasswordSecretID: "csp-secret-never-fetched",
+					},
+				},
+			})
+			Eventually(func(g Gomega) {
+				status := fetchTenantStatus(g, cspTenantForbiddenName)
+				g.Expect(findCondition(status.Conditions, "StorageBackendReady")).To(BeNil())
+
+				storageCond := findCondition(status.Conditions, "StorageReady")
+				g.Expect(storageCond).NotTo(BeNil())
+				g.Expect(storageCond.Status).To(Equal("True"))
+				g.Expect(storageCond.Reason).To(Equal("Found"))
+				g.Expect(storageCond.LastTransitionTime).To(Equal(latchedForbiddenTransitionTime))
+				g.Expect(storageCond.Message).NotTo(ContainSubstring(localCSPForbiddenDecoyStorageClass))
+				g.Expect(status.StorageClasses).To(Equal([]tenantResolvedStorageClass{
+					{Name: remoteCSPForbiddenGoldSC, Tier: "csp-gold"},
+				}))
+			}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+			_, err = runKubectlWithStdin(
+				remoteKubeconfigPath, remoteRestrictedRBACManifest(true), "apply", "-f", "-",
+			)
+			Expect(err).NotTo(HaveOccurred())
 
 			stats := getCSPFixtureStats()
 			Expect(stats.SecretsGetCalls).To(BeZero())

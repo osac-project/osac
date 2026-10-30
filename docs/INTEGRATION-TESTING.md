@@ -543,13 +543,16 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
   permissions. This is RBAC coverage, not worker watch delivery or host allocation.
 - **Remote VMaaS cluster `StorageClass` readiness and CSP storage readiness ([OSAC-6576](https://redhat.atlassian.net/browse/OSAC-6576), [OSAC-6683](https://redhat.atlassian.net/browse/OSAC-6683), DEV):**
   `internal/controller/storage_controller_test.go` covers dual-`envtest`
-  `MultiClusterWatch` fan-out across two API servers, and
+  `MultiClusterWatch` fan-out across two API servers and post-sync `Forbidden`
+  error preservation of latched readiness, and
   `test/integration/remote_storage_cluster_test.go` exercises the deployed
   operator against a live second Kind cluster (`osac-remote`) and an in-cluster
   fixture server (`test/integration/testdata/cspfixture`) for OSAC-managed and
-  CSP-managed `StorageClass` readiness (`StorageReady`), unconfigured tiers,
-  live watch fan-out, condition latching, kubeconfig Secret rotation,
-  `Forbidden` RBAC fail-closed recovery, and non-mutating `Tenant` deletion.
+  provider-neutral CSP-managed `StorageClass` readiness (`StorageReady`),
+  unconfigured tiers, live watch fan-out, condition latching, restart-based
+  kubeconfig Secret rotation (`watchRemoteKubeconfig`), cold-cache `Forbidden`
+  RBAC fail-closed startup recovery and post-sync RBAC revocation, and
+  non-mutating `Tenant` deletion.
   **Real:** installed operator, CRDs, controller-manager, `Tenant` status
   persistence, `StorageClass` API objects, and target selection against the
   isolated `osac-remote` Kind cluster API. **Test-controlled:** in-cluster

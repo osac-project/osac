@@ -71,7 +71,7 @@ The files in this directory are read in this order:
 5. [`installation.md`](installation.md) installs the OSAC Helm release
    and owns post-install acceptance.
 
-This guide covers mirroring only; installation begins in separate documents.
+This guide covers mirroring only; installation begins in separate documents. Category A Step 2c may call only the [shared pre-handoff node transport checkpoint](prereqs.md#pre-handoff-node-transport-checkpoint) after full mirror population and owner-prepared node access, before applying catalogs. This limited diagnostic call is not entry into the remaining prerequisite/operator/OSAC installation sequence.
 
 ## Category Guides
 
@@ -213,13 +213,12 @@ flowchart TD
 
 ## Doc 1 Acceptance Gate
 
-Complete this checklist before linking to Doc 2.  **Any failure
-returns ownership to the mirror operator; Doc 2 must not begin.**
+Complete this checklist before entering `prereqs.md` §2 and the remaining Doc 2 preparation. A failed handoff check stops its dependent preparation and returns to the responsible mirror/access/trust owner. Category A's earlier named node-checkpoint call does not waive this checklist.
 
 - [ ] All three core package manifests are visible
 - [ ] If VMaaS is selected, all three VMaaS package manifests are visible
 - [ ] If BMaaS is selected, the MCE package manifest is visible
-- [ ] Representative image pulls succeed with read-only mirror credentials
+- [ ] Representative selected-image pulls from the populated mirror succeed in the approved administration-host mirror-read client context, using read-only mirror credentials and direct mirror references; these are not the later original-reference node pull or actual CDI import tests
 - [ ] ISC and workspace metadata are archived for incremental updates
 
 Only after every check passes, continue to

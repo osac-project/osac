@@ -238,7 +238,8 @@
 # ──────────────────────────────────────────────────────────────
 # Test 7: CSP-filtered multi-disk tiers + playbook_osac_create_compute_instance.yml pre_tasks validation
 # Expected: role resolves CSP boot disk and OSAC additional disk; playbook pre_tasks pass on valid
-#           deduplicated tiers and fail closed before tasks:/finalizer on missing or ambiguous tiers
+#           deduplicated tiers and fail closed before tasks:/finalizer on missing, ambiguous, or
+#           whitespace-only StorageClass names
 # ──────────────────────────────────────────────────────────────
 - name: Test tenant_storage_class role and create_compute_instance pre_tasks -- CSP-filtered tiers
   hosts: localhost
@@ -435,3 +436,53 @@
               Expected ambiguous tier 'fast' to fail in pre_tasks before tasks:,
               got (rc={{ _ambiguous_tier_playbook_run.rc }}):
               {{ _ambiguous_tier_playbook_run.stdout + _ambiguous_tier_playbook_run.stderr }}
+
+        - name: Execute playbook_osac_create_compute_instance.yml with a whitespace-only StorageClass name for requested tier (fast)
+          ansible.builtin.command:
+            argv:
+              - ansible-playbook
+              - --inventory
+              - localhost,
+              - --connection
+              - local
+              - "{{ playbook_dir }}/../../../../../../../playbook_osac_create_compute_instance.yml"
+              - -e
+              - >-
+                {{
+                  {
+                    "osac_job_vars": {
+                      "resource": {
+                        "metadata": {"name": "vm-csp-test", "namespace": "default"},
+                        "status": {"tenantReference": {"name": "tenant-acme", "namespace": "default"}},
+                        "spec": {
+                          "templateID": "osac.templates.ocp_virt_vm",
+                          "bootDisk": {"sizeGiB": 30, "storageTier": "gold"},
+                          "additionalDisks": [{"sizeGiB": 20, "storageTier": "fast"}]
+                        }
+                      },
+                      "tenant_storage_classes": [
+                        {"name": "netapp-gold-sc", "tier": "gold"},
+                        {"name": "   ", "tier": "fast"}
+                      ]
+                    }
+                  } | to_json
+                }}
+            chdir: "{{ playbook_dir }}/../../../../../../../"
+          environment:
+            KUBECONFIG: "/dev/null"
+            K8S_AUTH_KUBECONFIG: "/dev/null"
+          register: _blank_name_playbook_run
+          changed_when: false
+          failed_when: false
+
+        - name: Assert whitespace-only StorageClass name failed in pre_tasks before tasks:/finalizer
+          ansible.builtin.assert:
+            that:
+              - _blank_name_playbook_run.rc != 0
+              - "'is not available for tenant' in (_blank_name_playbook_run.stdout + _blank_name_playbook_run.stderr)"
+              - "'Available tiers: gold.' in (_blank_name_playbook_run.stdout + _blank_name_playbook_run.stderr)"
+              - "'Display compute instance information' not in (_blank_name_playbook_run.stdout + _blank_name_playbook_run.stderr)"
+            fail_msg: >-
+              Expected whitespace-only StorageClass name for tier 'fast' to fail in pre_tasks before tasks:,
+              got (rc={{ _blank_name_playbook_run.rc }}):
+              {{ _blank_name_playbook_run.stdout + _blank_name_playbook_run.stderr }}

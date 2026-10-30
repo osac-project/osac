@@ -17,28 +17,29 @@
       is empty. Check the Tenant StorageReady and ClusterStorageReady conditions.
   when: tenant_storage_class_storage_classes | length == 0
 
+# StorageClass names are trimmed before comparison, so whitespace-only names
+# never resolve and padded duplicates of one name are not ambiguous.
 - name: Resolve StorageClass for requested tier
   ansible.builtin.set_fact:
     _tenant_sc_unique_names: >-
       {% set _req_tier = tenant_storage_class_storage_tier | string | trim | lower -%}
       {% set _names = [] -%}
       {% for _sc in tenant_storage_class_storage_classes -%}
-      {% if (_sc.name is defined) and (_sc.name != '') and ((_sc.tier | default('') | string | trim | lower) == _req_tier) and (_sc.name not in _names) -%}
-      {% set _ = _names.append(_sc.name) -%}
+      {% set _name = _sc.name | default('', true) | string | trim -%}
+      {% if (_name != '') and ((_sc.tier | default('', true) | string | trim | lower) == _req_tier) and (_name not in _names) -%}
+      {% set _ = _names.append(_name) -%}
       {% endif -%}
       {% endfor -%}
       {{ _names }}
     _tenant_sc_available_tiers: >-
-      {{ tenant_storage_class_storage_classes
-         | selectattr('name', 'defined')
-         | rejectattr('name', 'equalto', '')
-         | map(attribute='tier')
-         | map('trim')
-         | map('lower')
-         | reject('equalto', '')
-         | unique
-         | sort
-         | join(', ') }}
+      {% set _tiers = [] -%}
+      {% for _sc in tenant_storage_class_storage_classes -%}
+      {% set _tier = _sc.tier | default('', true) | string | trim | lower -%}
+      {% if ((_sc.name | default('', true) | string | trim) != '') and (_tier != '') and (_tier not in _tiers) -%}
+      {% set _ = _tiers.append(_tier) -%}
+      {% endif -%}
+      {% endfor -%}
+      {{ _tiers | sort | join(', ') }}
 
 - name: Fail if requested tier is not available
   ansible.builtin.fail:

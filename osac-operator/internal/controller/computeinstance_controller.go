@@ -555,7 +555,10 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		return ctrl.Result{}, err
 	}
 
-	priorProvisionedReason := conditionReason(instance, v1alpha1.ComputeInstanceConditionProvisioned)
+	// Capture the persisted reason of the condition that records a storage
+	// readiness gate before this reconcile overwrites it, so the TenantNotReady
+	// event fires only when the gate is first hit.
+	priorGateReason := conditionReason(instance, storageGateCondition(kv))
 	if kv != nil {
 		if err := r.handleKubeVirtVM(ctx, targetClient, instance, kv); err != nil {
 			return ctrl.Result{}, err
@@ -600,7 +603,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	recordRunningConfig(instance)
 
 	var gated bool
-	ctx, gated, err = r.prepareStorageContext(ctx, targetClient, instance, tenant, kv, priorProvisionedReason)
+	ctx, gated, err = r.prepareStorageContext(ctx, targetClient, instance, tenant, kv, priorGateReason)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -631,7 +634,7 @@ func (r *ComputeInstanceReconciler) prepareStorageContext(
 	instance *v1alpha1.ComputeInstance,
 	tenant *v1alpha1.Tenant,
 	kv *kubevirtv1.VirtualMachine,
-	priorProvisionedReason string,
+	priorGateReason string,
 ) (context.Context, bool, error) {
 	if !r.willTriggerProvisioning(instance) {
 		return ctx, false, nil
@@ -654,16 +657,15 @@ func (r *ComputeInstanceReconciler) prepareStorageContext(
 	cspRequested := len(reqCSPTiers) > 0 || len(unresolvedTiers) > 0
 	cspStoragePresent := cspRequested || len(cspTiers) > 0 || tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady) != nil
 
-	if r.shouldGateBeforeProvisioning(instance, kv) {
-		ready, msg := checkCSPStorageReadiness(tenant, reqCSPTiers, unresolvedTiers, tierErr)
-		if !ready {
-			instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, msg, v1alpha1.ReasonTenantNotReady)
-			if priorProvisionedReason != v1alpha1.ReasonTenantNotReady {
-				r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, eventReasonTenantNotReady, eventActionReconcile, "%s", msg)
-			}
-			log.Info("tenant CSP storage is not ready for requested tiers, requeueing", "tenant", tenant.GetName(), "reason", msg)
-			return ctx, true, nil
+	// Every job this pass would trigger runs the AAP tier validation, so gate
+	// day-2 jobs on an existing VM as well as initial provisioning.
+	if ready, msg := checkStorageReadiness(tenant, reqTiers, reqCSPTiers, unresolvedTiers, tierErr); !ready {
+		instance.SetStatusCondition(storageGateCondition(kv), metav1.ConditionFalse, msg, v1alpha1.ReasonTenantNotReady)
+		if priorGateReason != v1alpha1.ReasonTenantNotReady {
+			r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, eventReasonTenantNotReady, eventActionReconcile, "%s", msg)
 		}
+		log.Info("tenant storage is not ready for requested tiers, deferring provisioning", "tenant", tenant.GetName(), "reason", msg)
+		return ctx, true, nil
 	}
 
 	// Inject tenant storage classes into context for AAP extra_vars.
@@ -1389,38 +1391,42 @@ func (r *ComputeInstanceReconciler) willTriggerProvisioning(
 	return action == provisioning.Trigger
 }
 
-// shouldGateBeforeProvisioning reports whether the reconciler should gate on
-// CSP storage readiness on this reconcile pass. Gating applies only before
-// initial VM creation (kv == nil) when a new provisioning job would be
-// triggered, so running VMs, in-flight job polling, completed configs, and
-// failed-job backoff are never overwritten.
-func (r *ComputeInstanceReconciler) shouldGateBeforeProvisioning(
-	instance *v1alpha1.ComputeInstance,
-	kv *kubevirtv1.VirtualMachine,
-) bool {
-	return kv == nil && r.willTriggerProvisioning(instance)
+// storageGateCondition returns the ComputeInstance condition that records a
+// storage readiness gate: Provisioned before the KubeVirt VM exists, and
+// ConfigurationApplied for a day-2 job on an existing VM, so the Provisioned
+// and Ready conditions keep reporting the running VM while the job waits.
+func storageGateCondition(kv *kubevirtv1.VirtualMachine) v1alpha1.ComputeInstanceConditionType {
+	if kv == nil {
+		return v1alpha1.ComputeInstanceConditionProvisioned
+	}
+	return v1alpha1.ComputeInstanceConditionConfigurationApplied
 }
 
-// checkCSPStorageReadiness verifies that catalog tier resolution succeeded, no
-// requested tier was skipped in the catalog, Tenant StorageReady is True when
-// CSP-managed tiers are requested, and every requested CSP tier maps to a
-// single non-empty StorageClass name in Tenant.status.storageClasses.
-func checkCSPStorageReadiness(
+// checkStorageReadiness reports whether a provisioning job can be triggered
+// for the requested storage tiers. A requested tier that already maps to a
+// single StorageClass in Tenant.status.storageClasses is usable as-is, so a
+// storage tier catalog or backend credential lookup failure blocks only the
+// requested tiers that still need catalog data: unmapped OSAC-managed tiers
+// need JIT provisioning, and unclassified tiers may be CSP-managed. Requested
+// CSP-managed tiers also require StorageReady=True and a single StorageClass
+// per tier.
+func checkStorageReadiness(
 	tenant *v1alpha1.Tenant,
-	reqCSPTiers, unresolvedTiers []string,
+	reqTiers, reqCSPTiers, unresolvedTiers []string,
 	tierErr error,
 ) (bool, string) {
-	if tierErr != nil {
-		srCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady)
-		sbCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
-		if srCond != nil || (sbCond != nil && sbCond.Reason == "TierResolutionFailed") {
-			return false, fmt.Sprintf("Tenant '%s' storage tier catalog resolution failed while verifying storage readiness", tenant.GetName())
+	classCounts := countStorageClassNamesByTier(tenant)
+
+	if tierErr != nil && tenantStorageClassesAuthoritative(tenant) {
+		if unmapped := tiersWithoutStorageClass(reqTiers, classCounts); len(unmapped) > 0 {
+			return false, fmt.Sprintf("Tenant '%s' storage tier catalog resolution failed and requested tier(s) have no StorageClass in Tenant status: %s",
+				tenant.GetName(), strings.Join(unmapped, ", "))
 		}
 	}
 
-	if len(unresolvedTiers) > 0 {
+	if unmapped := tiersWithoutStorageClass(unresolvedTiers, classCounts); len(unmapped) > 0 {
 		return false, fmt.Sprintf("Tenant '%s' storage tier catalog has unresolved backend references for requested tier(s): %s",
-			tenant.GetName(), strings.Join(unresolvedTiers, ", "))
+			tenant.GetName(), strings.Join(unmapped, ", "))
 	}
 
 	if len(reqCSPTiers) == 0 {
@@ -1440,16 +1446,7 @@ func checkCSPStorageReadiness(
 	var missing []string
 	var ambiguous []string
 	for _, tier := range reqCSPTiers {
-		distinctNames := make(map[string]struct{})
-		for _, sc := range tenant.Status.StorageClasses {
-			name := strings.TrimSpace(sc.Name)
-			scTier := strings.ToLower(strings.TrimSpace(sc.Tier))
-			if name == "" || scTier != tier {
-				continue
-			}
-			distinctNames[name] = struct{}{}
-		}
-		switch len(distinctNames) {
+		switch classCounts[tier] {
 		case 0:
 			missing = append(missing, tier)
 		case 1:
@@ -1472,6 +1469,56 @@ func checkCSPStorageReadiness(
 	}
 	return false, fmt.Sprintf("Tenant '%s' storage classes are not ready for requested CSP-managed tier(s): %s",
 		tenant.GetName(), strings.Join(details, "; "))
+}
+
+// countStorageClassNamesByTier returns, for each lowercased tier in
+// Tenant.status.storageClasses, the number of distinct non-empty StorageClass
+// names mapped to it. A count of 1 is a usable, unambiguous mapping.
+func countStorageClassNamesByTier(tenant *v1alpha1.Tenant) map[string]int {
+	names := make(map[string]map[string]bool)
+	for _, sc := range tenant.Status.StorageClasses {
+		name := strings.TrimSpace(sc.Name)
+		tier := strings.ToLower(strings.TrimSpace(sc.Tier))
+		if name == "" || tier == "" {
+			continue
+		}
+		if names[tier] == nil {
+			names[tier] = make(map[string]bool)
+		}
+		names[tier][name] = true
+	}
+	counts := make(map[string]int, len(names))
+	for tier, tierNames := range names {
+		counts[tier] = len(tierNames)
+	}
+	return counts
+}
+
+// tiersWithoutStorageClass returns the subset of tiers that do not map to
+// exactly one StorageClass in classCounts.
+func tiersWithoutStorageClass(tiers []string, classCounts map[string]int) []string {
+	var out []string
+	for _, tier := range tiers {
+		if classCounts[tier] != 1 {
+			out = append(out, tier)
+		}
+	}
+	return out
+}
+
+// tenantStorageClassesAuthoritative reports whether the StorageReconciler
+// manages this tenant's storage, making Tenant.status.storageClasses the only
+// StorageClass source for provisioning. A requested tier missing from status
+// can then only be served by JIT provisioning, which needs the tier catalog.
+// Tenants without storage status use the target-cluster StorageClass lookup.
+func tenantStorageClassesAuthoritative(tenant *v1alpha1.Tenant) bool {
+	if len(tenant.Status.StorageClasses) > 0 ||
+		tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady) != nil ||
+		tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady) != nil {
+		return true
+	}
+	sbCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+	return sbCond != nil && sbCond.Reason == "TierResolutionFailed"
 }
 
 // filterStorageClassesToRequestedTiers returns the subset of scs with a

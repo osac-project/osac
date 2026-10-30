@@ -275,7 +275,7 @@ Platform 4.22.6 in September 2026 are listed in
 | Configured certificate issuer (default: `default-ca` `ClusterIssuer`) | Not applicable | Cluster-scoped for `ClusterIssuer`; OSAC release namespace for `Issuer` | All services |
 | Keycloak and the `osac` realm | Not applicable | Provider-defined | All services |
 | [Red Hat Ansible Automation Platform Operator](https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.6/html/installing_on_openshift_container_platform/index) | `stable-2.6-cluster-scoped` | `ansible-aap` | All services |
-| [Streams for Apache Kafka](https://access.redhat.com/articles/6644711) | `stable` | `osac-kafka` | Fulfillment events and metering; see [Kafka configuration](kafka-configuration.md) for external broker requirements. |
+| [Streams for Apache Kafka](https://access.redhat.com/articles/6644711) | `stable` | Provider-defined | Fulfillment events and metering; see [Kafka configuration](kafka-configuration.md) for external broker requirements. |
 | [OpenShift Virtualization](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/installing) | `stable` | `openshift-cnv` | VMaaS |
 | [LVM Storage](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/storage/index#persistent-storage-using-lvms) | `stable-<cluster_minor>` | `openshift-storage` | VMaaS |
 | [MetalLB Operator](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/networking_operators/metallb-operator) | `stable` | `metallb-system` | CaaS |

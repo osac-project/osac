@@ -667,8 +667,10 @@ The phase-2 values that mount that Secret are in the
 `my-infra-values.yaml`, enable `cnv` and `lvms`. Enable `evpn` when that
 cluster uses CUDN EVPN, as described in
 [EVPN host networking (VMaaS)](#evpn-host-networking-vmaas). Disable the other
-phase-1 toggles, including `certManager`, `aapOperator`, `keycloak`, `mce`,
-and `kafka`. Run
+phase-1 toggles. Set `certManager.enabled`, `trustManager.enabled`, and
+`caIssuer.enabled` to `false`; the latter two remain enabled by default even
+when `certManager` is disabled. Also disable `aapOperator`, `keycloak`,
+`mce`, and `kafka`. Run
 [Phase 1a](#phase-1a-install-prerequisite-operators) and
 [Phase 1b](#phase-1b-install-shared-infrastructure) against that kubeconfig.
 Do not install the `osac` chart on this cluster.

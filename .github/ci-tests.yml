@@ -50,6 +50,11 @@
   kind: it-osac-operator
   timeout: 45  # ginkgo --timeout 30m (Makefile) + ~15m for install, setup and log collection
   filters: [code, integration-tests-osac-operator]
+- id: Integration test (osac-operator multicluster)
+  group: integration
+  kind: it-osac-operator-multicluster
+  timeout: 75  # ginkgo --timeout 30m + ~20m AWX install + ~15m fulfillment+storage + ~10m infra/setup/logs
+  filters: [code, integration-tests-osac-operator]
 - id: Integration test (bare-metal-fulfillment-operator)
   group: integration
   kind: it-bare-metal-fulfillment-operator

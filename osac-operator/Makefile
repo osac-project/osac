@@ -92,6 +92,14 @@ helm-validate: helm-lint ## Lint and template-render Helm charts.
 integration-tests: manifests generate helm-crds ## Run integration tests against a Kind cluster.
 	ginkgo run --timeout 30m -v test/integration
 
+# Run multi-cluster integration tests (VMaaS dedicated/separate workload cluster).
+# Requires a pre-existing Kind cluster with the operator deployed. The test
+# suite itself creates a second Kind cluster, patches the operator with a
+# remote-cluster kubeconfig, and validates split-cluster reconciliation.
+.PHONY: integration-tests-multicluster
+integration-tests-multicluster: manifests generate helm-crds ## Run VMaaS split-cluster integration tests.
+	ginkgo run --timeout 30m -v test/integration/multicluster
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	$(GOLANGCI_LINT) run

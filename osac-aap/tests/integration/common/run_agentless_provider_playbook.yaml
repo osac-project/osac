@@ -1,0 +1,61 @@
+---
+- name: Invoke an AgentlessNet provider playbook
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
+      - -i
+      - localhost,
+      - "{{ playbook_dir }}/../../../../../playbook_osac_{{ agentless_provider_playbook }}.yml"
+      - -e
+      - "{{ {'osac_job_vars': agentless_provider_job_vars} | to_json }}"
+      - -e
+      - >-
+        {{ {'ansible_connection': 'local', 'ansible_become': false,
+            'ansible_python_interpreter': ansible_playbook_python} | to_json }}
+  args:
+    chdir: "{{ playbook_dir }}/../../../../../"
+  environment: >-
+    {{
+      {
+        'AGENTLESS_NET_VN_INVENTORY': agentless_provider_inventory | to_json,
+        'AGENTLESS_NET_STATE_FILE': agentless_provider_state_file,
+        'AGENTLESS_NET_SSH_PRIVATE_KEY': '',
+        'ANSIBLE_CONFIG': playbook_dir ~ '/../../../../../ansible.cfg',
+        'ANSIBLE_COLLECTIONS_PATH': playbook_dir ~ '/../../../../../collections:' ~ playbook_dir ~ '/../../../../../vendor',
+        'ANSIBLE_STDOUT_CALLBACK': 'ansible.posix.json',
+        'ANSIBLE_SHOW_CUSTOM_STATS': 'true',
+        'PYTHONPATH': playbook_dir ~ '/../files/python',
+        'KUBECONFIG': agentless_provider_kubeconfig,
+        'K8S_AUTH_KUBECONFIG': agentless_provider_kubeconfig,
+        'K8S_AUTH_HOST': 'https://127.0.0.1:1'
+      }
+      | combine(agentless_provider_extra_environment)
+    }}
+  register: agentless_provider_playbook_result
+  changed_when: false
+  failed_when: false
+
+- name: Check the AgentlessNet provider playbook outcome
+  ansible.builtin.assert:
+    that:
+      - (agentless_provider_playbook_result.rc == 0) == (agentless_provider_should_succeed | bool)
+    fail_msg: >-
+      child playbook outcome was unexpected (rc={{ agentless_provider_playbook_result.rc }}):
+      {{ agentless_provider_playbook_result.stderr | default('') }}
+      {{ agentless_provider_playbook_result.stdout[-1200:] | default('') }}
+
+- name: Read the AgentlessNet provider result artifact
+  ansible.builtin.set_fact:
+    agentless_provider_result: >-
+      {{ ((agentless_provider_playbook_result.stdout | from_json).global_custom_stats | default({})).osac_result | default({}) }}
+  when: agentless_provider_should_succeed | bool
+
+- name: Validate the AgentlessNet provider result envelope
+  ansible.builtin.assert:
+    that:
+      - agentless_provider_result.schemaVersion == 'v1'
+      - agentless_provider_result.operation == agentless_provider_operation
+      - agentless_provider_result.resourceUID == agentless_provider_resource.metadata.uid
+      - agentless_provider_result.observedGeneration | int == agentless_provider_resource.metadata.generation | int
+      - agentless_provider_result.data == {}
+  when: agentless_provider_should_succeed | bool

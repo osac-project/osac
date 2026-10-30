@@ -1,6 +1,8 @@
 package provisioning
 
 import (
+	"errors"
+
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
@@ -59,6 +61,34 @@ func NeedsProvisionJob(latestJob *v1alpha1.JobStatus) bool {
 // Returns nil if no job of that type exists.
 func FindLatestJobByType(jobs []v1alpha1.JobStatus, jobType v1alpha1.JobType) *v1alpha1.JobStatus {
 	return FindLatestJobByTypeAndTarget(jobs, jobType, "")
+}
+
+// ValidateProviderJobResult checks the common identity, success-state, and
+// desired-configuration guarantees for a provider result.
+func ValidateProviderJobResult(
+	jobs []v1alpha1.JobStatus,
+	jobType v1alpha1.JobType,
+	status ProvisionStatusWithExtraVars,
+	desiredConfigVersions ...string,
+) error {
+	job := FindLatestJobByType(jobs, jobType)
+	if job == nil || job.JobID != status.JobID {
+		return errors.New("provider result does not match the latest job")
+	}
+	if status.State != v1alpha1.JobStateSucceeded {
+		return errors.New("provider job did not succeed")
+	}
+	if jobType == v1alpha1.JobTypeProvision {
+		if job.ConfigVersion == "" || len(desiredConfigVersions) == 0 {
+			return errors.New("provider job does not match the desired configuration")
+		}
+		for _, version := range desiredConfigVersions {
+			if job.ConfigVersion != version {
+				return errors.New("provider job does not match the desired configuration")
+			}
+		}
+	}
+	return nil
 }
 
 // FindLatestJobByTypeAndTarget finds the most recent job of the specified type

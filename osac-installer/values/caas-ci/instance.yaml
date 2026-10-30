@@ -195,6 +195,14 @@ aap:
 validation:
   enabled: true
 
+# --- Install preflight ---
+# vmaas is enabled above only for the DiskImages API; this profile's cluster
+# has no OpenShift Virtualization (infra.yaml: cnv.enabled=false), so the
+# VMaaS prerequisite check cannot pass here.
+preflight:
+  skip:
+    kubevirt-crds: "caas-ci enables vmaas for the DiskImages API only; no VMs are provisioned"
+
 # --- Bare Metal Fulfillment Operator ---
 bmf:
   image:

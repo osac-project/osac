@@ -112,7 +112,6 @@ netris-relevant:
 # (no test-file exclusions).
 e2e-code:
   - '**'
-  - '!**/OWNERS'
   - '!**/LICENSE'
   - '!**/*.md'
   - '!**/docs/**'
@@ -185,7 +184,6 @@ vmaas-outside-known-safe:
   - '**'
   - '!**/*.md'
   - '!**/docs/**'
-  - '!**/OWNERS'
   - '!**/LICENSE'
   - '!**/.claude/**'
   - '!**/.cursor/**'
@@ -203,7 +201,6 @@ caas-outside-known-safe:
   - '**'
   - '!**/*.md'
   - '!**/docs/**'
-  - '!**/OWNERS'
   - '!**/LICENSE'
   - '!**/.claude/**'
   - '!**/.cursor/**'
@@ -219,7 +216,6 @@ bmaas-outside-known-safe:
   - '**'
   - '!**/*.md'
   - '!**/docs/**'
-  - '!**/OWNERS'
   - '!**/LICENSE'
   - '!**/.claude/**'
   - '!**/.cursor/**'
@@ -245,7 +241,6 @@ bmaas-outside-known-safe:
 # falling through to "nothing matched, skip everything".
 code:
   - '**'
-  - '!**/OWNERS'
   - '!**/LICENSE'
   - '!**/*.md'
   - '!**/docs/**'
@@ -285,7 +280,6 @@ proto-check:
 # Gates check-pull-request.yaml.
 fulfillment-service-checks:
   - '{fulfillment-service/**,.github/workflows/check-pull-request.yaml}'
-  - '!fulfillment-service/OWNERS'
   - '!fulfillment-service/LICENSE'
   - '!fulfillment-service/**/*.md'
   - '!fulfillment-service/docs/**'
@@ -293,7 +287,6 @@ fulfillment-service-checks:
 # Gates build-image.yaml.
 build-osac-operator:
   - '{osac-operator/**,.github/workflows/build-image.yaml}'
-  - '!osac-operator/OWNERS'
   - '!osac-operator/LICENSE'
   - '!osac-operator/**/*.md'
   - '!osac-operator/docs/**'
@@ -304,7 +297,6 @@ build-osac-operator:
 # bare-metal-fulfillment-operator/** and the workflow file).
 build-bare-metal-fulfillment-operator:
   - '{bare-metal-fulfillment-operator/**,.github/workflows/build-bmf-image.yaml}'
-  - '!bare-metal-fulfillment-operator/OWNERS'
   - '!bare-metal-fulfillment-operator/LICENSE'
   - '!bare-metal-fulfillment-operator/**/*.md'
   - '!bare-metal-fulfillment-operator/docs/**'
@@ -312,7 +304,6 @@ build-bare-metal-fulfillment-operator:
 # Gates ansible-lint.yml.
 ansible-osac-aap:
   - '{osac-aap/**,.github/workflows/ansible-lint.yml}'
-  - '!osac-aap/OWNERS'
   - '!osac-aap/LICENSE'
   - '!osac-aap/**/*.md'
   - '!osac-aap/docs/**'
@@ -344,6 +335,10 @@ unit-tests-osac-metering-adapters:
   - '{osac-metering/adapters/**,osac-metering/schema/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 unit-tests-osac-metering-schema:
   - '{osac-metering/schema/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
+# The osac chart's helm-unittest suites and the offline preflight render script. The script also renders the osac-aap
+# and osac-csi-driver hook Jobs, so changes to those charts rerun it.
+unit-tests-osac-installer:
+  - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/test-preflight-render.py,osac-aap/charts/**,osac-csi-driver/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
 
 # Integration test legs. osac-installer/** is included on the
 # first three: their jobs all run setup/tests via `make -C osac-installer
@@ -365,6 +360,9 @@ integration-tests-bare-metal-fulfillment-operator:
   - '{bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 integration-tests-osac-aap:
   - '{osac-aap/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
+# The install preflight Kind test (a preflight-only copy of the osac chart, not the full stack).
+integration-tests-osac-installer-preflight:
+  - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/test-preflight-kind.py,osac-aap/charts/**,osac-csi-driver/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
 
 # Claude/Codex component-hook smoke coverage. Keep this scoped to the shared
 # component hooks, their registrations, the Codex adapter, and the smoke test

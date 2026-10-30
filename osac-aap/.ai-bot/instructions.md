@@ -81,7 +81,6 @@ Commits must be signed-off (`-s`). Include the Jira ticket key.
 - `collections/ansible_collections/massopencloud/` -- third-party
 - `execution-environment/requirements.txt` -- generated; update the
   `execution-environment.yaml` instead
-- `OWNERS` -- repo ownership; requires admin approval
 - `LICENSE` -- do not change
 - `.ai-bot/` -- bot configuration; changes require human review
 - `.ansible-lint-ignore` -- lint suppressions; additions require human approval

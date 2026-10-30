@@ -237,17 +237,14 @@ func validateCurrentExternalIPJob(
 	if jobType == v1alpha1.JobTypeDeprovision && latest.DeletionTimestamp.IsZero() {
 		return fmt.Errorf("ExternalIP is not terminating")
 	}
-	job := provisioning.FindLatestJobByType(latest.Status.ProvisioningJobs, jobType)
-	if job == nil || job.JobID != status.JobID {
-		return fmt.Errorf("ExternalIP provider result does not match the current job")
-	}
-	if jobType == v1alpha1.JobTypeProvision &&
-		(job.ConfigVersion == "" || job.ConfigVersion != latest.Status.DesiredConfigVersion ||
-			job.ConfigVersion != expected.Status.DesiredConfigVersion) {
-		return fmt.Errorf("ExternalIP allocation job does not match the current configuration")
-	}
-	if status.State != v1alpha1.JobStateSucceeded {
-		return fmt.Errorf("ExternalIP provider job did not succeed")
+	if err := provisioning.ValidateProviderJobResult(
+		latest.Status.ProvisioningJobs,
+		jobType,
+		status,
+		latest.Status.DesiredConfigVersion,
+		expected.Status.DesiredConfigVersion,
+	); err != nil {
+		return fmt.Errorf("ExternalIP provider result is invalid: %w", err)
 	}
 	if (jobType == v1alpha1.JobTypeProvision && operation != "external_ip.allocate") ||
 		(jobType == v1alpha1.JobTypeDeprovision && operation != "external_ip.release") {

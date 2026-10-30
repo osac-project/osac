@@ -1,2 +1,4 @@
 ---
 bm_host_openstack_external_network: "external"
+# TODO(OSAC-4576): Replace this minimum when the required image size is agreed.
+bm_host_root_disk_min_gib: 4

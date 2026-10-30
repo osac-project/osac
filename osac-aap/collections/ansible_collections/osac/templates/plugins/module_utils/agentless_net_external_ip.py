@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 import re
 import shlex
 from typing import Any
@@ -29,15 +28,14 @@ def _run(command: list[str], *, check: bool = True):
 
 
 def _ipv4(value: Any, context: str) -> str:
-    if not isinstance(value, str):
-        raise ExternalIPProviderError(f"{context} must be IPv4")
-    try:
-        address = ipaddress.ip_address(value)
-    except ValueError as error:
-        raise ExternalIPProviderError(f"{context} must be IPv4") from error
-    if not isinstance(address, ipaddress.IPv4Address) or address.is_unspecified or str(address) != value:
-        raise ExternalIPProviderError(f"{context} must be canonical IPv4")
-    return value
+    return str(
+        network.validate_ipv4_address(
+            value,
+            context,
+            reject_unspecified=True,
+            error_type=ExternalIPProviderError,
+        )
+    )
 
 
 def _interface(value: Any, context: str) -> str:
@@ -53,18 +51,14 @@ def _owner(uid: str) -> str:
 
 
 def _ensure_iptables_rule(table: str, chain: str, rule: list[str], *, insert: bool) -> bool:
-    prefix = ["iptables", "-w", "-t", table]
-    check = _run([*prefix, "-C", chain, *rule], check=False)
-    if check.returncode == 0:
-        return False
-    action = "-I" if insert else "-A"
-    command = [*prefix, action, chain]
-    if insert:
-        command.append("1")
-    _run([*command, *rule])
-    if _run([*prefix, "-C", chain, *rule], check=False).returncode != 0:
-        raise ExternalIPProviderError(f"owned iptables rule did not converge in {chain}")
-    return True
+    return network.ensure_iptables_rule(
+        _run,
+        table,
+        chain,
+        rule,
+        insert=insert,
+        error_type=ExternalIPProviderError,
+    )
 
 
 def _delete_iptables_rule(
@@ -74,28 +68,19 @@ def _delete_iptables_rule(
     *,
     namespace: str | None = None,
 ) -> bool:
-    prefix = ["iptables", "-w", "-t", table]
-    if namespace is not None:
-        prefix = ["ip", "netns", "exec", namespace, *prefix]
-    return network.remove_repeated_rule(
+    return network.delete_iptables_rule(
         _run,
-        [*prefix, "-C", chain, *rule],
-        [*prefix, "-D", chain, *rule],
+        table,
+        chain,
+        rule,
+        namespace=namespace,
         error_message="too many duplicate owned iptables rules",
         error_type=ExternalIPProviderError,
     )
 
 
 def _chain_rules() -> list[list[str]]:
-    result = _run(["iptables", "-w", "-t", "filter", "-S", EXTERNAL_FORWARD_CHAIN], check=False)
-    if result.returncode != 0:
-        return []
-    rules: list[list[str]] = []
-    for line in result.stdout.splitlines():
-        parts = shlex.split(line)
-        if parts[:2] == ["-A", EXTERNAL_FORWARD_CHAIN]:
-            rules.append(parts[2:])
-    return rules
+    return network.iptables_chain_rules(_run, "filter", EXTERNAL_FORWARD_CHAIN)
 
 
 def _forwarding_rule_signature(rule: list[str]) -> tuple[list[tuple[str, str]], list[str]]:

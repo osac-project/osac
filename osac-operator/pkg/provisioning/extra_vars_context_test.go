@@ -87,6 +87,29 @@ var _ = Describe("ExtraVarsContext", func() {
 		})
 	})
 
+	Describe("NATGatewayContext", func() {
+		It("round-trips the controller-resolved dependency snapshot", func() {
+			value := provisioning.NATGatewayContext{
+				ExternalIP: provisioning.NATGatewayExternalIPContext{
+					Name: "egress-ip", Namespace: "networking", FulfillmentID: "eip-id",
+					KubernetesUID: "eip-uid", TenantID: "tenant-a", Address: "198.51.100.10",
+					State: "Allocated", Phase: "Ready",
+				},
+				VirtualNetwork: provisioning.NATGatewayVirtualNetworkContext{
+					Name: "network", Namespace: "networking", FulfillmentID: "vn-id",
+					KubernetesUID: "vn-uid", TenantID: "tenant-a", IPv4CIDR: "10.0.0.0/16",
+					Phase: "Ready",
+				},
+			}
+			ctx := provisioning.WithNATGatewayContext(context.Background(), value)
+			Expect(provisioning.NATGatewayContextFromContext(ctx)).To(Equal(value))
+		})
+
+		It("returns the zero value when context is absent", func() {
+			Expect(provisioning.NATGatewayContextFromContext(context.Background())).To(BeZero())
+		})
+	})
+
 	Describe("AdminKubeconfig", func() {
 		It("should round-trip a kubeconfig value", func() {
 			ctx := context.Background()

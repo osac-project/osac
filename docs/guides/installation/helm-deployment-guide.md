@@ -533,8 +533,8 @@ mce:          { enabled: false }
 
 ### How Toggles Affect Operands
 
-- Even with `certManager.enabled: false`, the pre-installation validation hook
-  requires the `certificates.cert-manager.io` CRD. Any cert-manager
+- Even with `certManager.enabled: false`, the `osac` chart's install preflight
+  (check `cert-manager-crds`) requires the `certificates.cert-manager.io` CRD. Any cert-manager
   distribution satisfies it.
 - Disabling `cnv.enabled` skips the `HyperConverged` custom resource.
   Disabling `lvms.enabled` skips an `LVMCluster` custom resource that uses

@@ -1,58 +1,24 @@
 ---
-- name: Invoke an AgentlessNet ExternalIPAttachment playbook
-  ansible.builtin.command:
-    argv:
-      - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
-      - -i
-      - localhost,
-      - "{{ playbook_dir }}/../../../../../playbook_osac_{{ agentless_eia_playbook }}.yml"
-      - -e
-      - "{{ {'osac_job_vars': agentless_eia_job_vars} | to_json }}"
-      - -e
-      - >-
-        {{ {'ansible_connection': 'local', 'ansible_become': false,
-            'ansible_python_interpreter': ansible_playbook_python} | to_json }}
-  args:
-    chdir: "{{ playbook_dir }}/../../../../../"
-  environment:
-    AGENTLESS_NET_VN_INVENTORY: "{{ agentless_eia_inventory | to_json }}"
-    AGENTLESS_NET_STATE_FILE: "{{ agentless_eia_state_file }}"
-    AGENTLESS_NET_SSH_PRIVATE_KEY: ""
-    ANSIBLE_CONFIG: "{{ playbook_dir }}/../../../../../ansible.cfg"
-    ANSIBLE_COLLECTIONS_PATH: "{{ playbook_dir }}/../../../../../collections:{{ playbook_dir }}/../../../../../vendor"
-    ANSIBLE_STDOUT_CALLBACK: ansible.posix.json
-    ANSIBLE_SHOW_CUSTOM_STATS: "true"
-    PYTHONPATH: "{{ playbook_dir }}/../files/python"
-    OSAC_AGENTLESS_EIA_TEST_MODE: "true"
-    OSAC_AGENTLESS_EIA_FAIL_DETACH: "{{ agentless_eia_fail_detach | default(false) | ternary('true', 'false') }}"
-    KUBECONFIG: /tmp/osac-agentless-eia-no-kubeconfig
-    K8S_AUTH_KUBECONFIG: /tmp/osac-agentless-eia-no-kubeconfig
-    K8S_AUTH_HOST: https://127.0.0.1:1
-  register: agentless_eia_playbook_result
-  changed_when: false
-  failed_when: false
+- name: Run and validate the ExternalIPAttachment provider playbook
+  block:
+    - name: Run shared AgentlessNet provider playbook checks
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/../../../common/run_agentless_provider_playbook.yaml"
 
-- name: Check the AgentlessNet ExternalIPAttachment playbook outcome
-  ansible.builtin.assert:
-    that:
-      - (agentless_eia_playbook_result.rc == 0) == (agentless_eia_should_succeed | bool)
-    fail_msg: >-
-      child playbook outcome was unexpected (rc={{ agentless_eia_playbook_result.rc }}):
-      {{ agentless_eia_playbook_result.stderr | default('') }}
-      {{ agentless_eia_playbook_result.stdout[-1200:] | default('') }}
-
-- name: Read the ExternalIPAttachment result artifact
-  ansible.builtin.set_fact:
-    agentless_eia_result: >-
-      {{ ((agentless_eia_playbook_result.stdout | from_json).global_custom_stats | default({})).osac_result | default({}) }}
-  when: agentless_eia_should_succeed | bool
-
-- name: Validate the ExternalIPAttachment result envelope
-  ansible.builtin.assert:
-    that:
-      - agentless_eia_result.schemaVersion == 'v1'
-      - agentless_eia_result.operation == agentless_eia_operation
-      - agentless_eia_result.resourceUID == agentless_eia_attachment.metadata.uid
-      - agentless_eia_result.observedGeneration | int == agentless_eia_attachment.metadata.generation | int
-      - agentless_eia_result.data == {}
-  when: agentless_eia_should_succeed | bool
+    - name: Expose ExternalIPAttachment result for scenario assertions
+      ansible.builtin.set_fact:
+        agentless_eia_result: "{{ agentless_provider_result }}"
+      when: agentless_eia_should_succeed | bool
+  vars:
+    agentless_provider_playbook: "{{ agentless_eia_playbook }}"
+    agentless_provider_job_vars: "{{ agentless_eia_job_vars }}"
+    agentless_provider_inventory: "{{ agentless_eia_inventory }}"
+    agentless_provider_state_file: "{{ agentless_eia_state_file }}"
+    agentless_provider_kubeconfig: /tmp/osac-agentless-eia-no-kubeconfig
+    agentless_provider_extra_environment:
+      OSAC_AGENTLESS_EIA_TEST_MODE: "true"
+      OSAC_AGENTLESS_EIA_FAIL_DETACH: >-
+        {{ agentless_eia_fail_detach | default(false) | ternary('true', 'false') }}
+    agentless_provider_should_succeed: "{{ agentless_eia_should_succeed }}"
+    agentless_provider_operation: "{{ agentless_eia_operation }}"
+    agentless_provider_resource: "{{ agentless_eia_attachment }}"

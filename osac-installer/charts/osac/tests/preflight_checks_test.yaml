@@ -1,0 +1,804 @@
+suite: "preflight checks: one pass and one fail per check"
+templates:
+  - templates/preflight/report.yaml
+values:
+  - ../ci/default-values.yaml
+release:
+  name: osac
+  namespace: osac
+  revision: 1
+capabilities:
+  apiVersions:
+    - apiextensions.k8s.io/v1/CustomResourceDefinition
+
+# Shared fixtures: a healthy OpenShift cluster, plus the variants the cases
+# swap in. Each case lists the objects of its cluster explicitly.
+x-fixtures:
+  scheme: &scheme
+    "v1/Namespace": {gvr: {version: v1, resource: namespaces}, namespaced: false}
+    "v1/Node": {gvr: {version: v1, resource: nodes}, namespaced: false}
+    "v1/Secret": {gvr: {version: v1, resource: secrets}, namespaced: true}
+    "v1/ConfigMap": {gvr: {version: v1, resource: configmaps}, namespaced: true}
+    "storage.k8s.io/v1/StorageClass": {gvr: {group: storage.k8s.io, version: v1, resource: storageclasses}, namespaced: false}
+    "apiextensions.k8s.io/v1/CustomResourceDefinition": {gvr: {group: apiextensions.k8s.io, version: v1, resource: customresourcedefinitions}, namespaced: false}
+    "config.openshift.io/v1/ClusterVersion": {gvr: {group: config.openshift.io, version: v1, resource: clusterversions}, namespaced: false}
+    "cert-manager.io/v1/ClusterIssuer": {gvr: {group: cert-manager.io, version: v1, resource: clusterissuers}, namespaced: false}
+    "kafka.strimzi.io/v1/Kafka": {gvr: {group: kafka.strimzi.io, version: v1, resource: kafkas}, namespaced: true}
+    "discovery.k8s.io/v1/EndpointSlice": {gvr: {group: discovery.k8s.io, version: v1, resource: endpointslices}, namespaced: true}
+    "metal3.io/v1alpha1/Provisioning": {gvr: {group: metal3.io, version: v1alpha1, resource: provisionings}, namespaced: false}
+  ns_kube: &ns_kube {kind: Namespace, apiVersion: v1, metadata: {name: kube-system}}
+  ns_osac: &ns_osac {kind: Namespace, apiVersion: v1, metadata: {name: osac}, status: {phase: Active}}
+  ns_infra: &ns_infra {kind: Namespace, apiVersion: v1, metadata: {name: osac-infra}, status: {phase: Active}}
+  ns_osac_terminating: &ns_osac_terminating {kind: Namespace, apiVersion: v1, metadata: {name: osac}, status: {phase: Terminating}}
+  node_ok: &node_ok {kind: Node, apiVersion: v1, metadata: {name: n1}, status: {conditions: [{type: Ready, status: "True"}]}}
+  node_notready: &node_notready {kind: Node, apiVersion: v1, metadata: {name: n1}, status: {conditions: [{type: Ready, status: "False"}]}}
+  node_cordoned: &node_cordoned {kind: Node, apiVersion: v1, metadata: {name: n1}, spec: {unschedulable: true}, status: {conditions: [{type: Ready, status: "True"}]}}
+  node_tainted: &node_tainted {kind: Node, apiVersion: v1, metadata: {name: n1}, spec: {taints: [{key: node-role.kubernetes.io/control-plane, effect: NoSchedule}]}, status: {conditions: [{type: Ready, status: "True"}]}}
+  sc_default: &sc_default {kind: StorageClass, apiVersion: storage.k8s.io/v1, metadata: {name: fast, annotations: {storageclass.kubernetes.io/is-default-class: "true"}}}
+  sc_plain: &sc_plain {kind: StorageClass, apiVersion: storage.k8s.io/v1, metadata: {name: slow}}
+  crd_certmgr: &crd_certmgr {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: certificates.cert-manager.io}}
+  crd_kubevirt: &crd_kubevirt {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: kubevirts.kubevirt.io}}
+  crd_mce: &crd_mce {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: multiclusterengines.multicluster.openshift.io}}
+  crd_acm: &crd_acm {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: multiclusterhubs.operator.open-cluster-management.io}}
+  crd_aap: &crd_aap {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: ansibleautomationplatforms.aap.ansible.com}, status: {conditions: [{type: Established, status: "True"}]}}
+  crd_aap_pending: &crd_aap_pending {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: ansibleautomationplatforms.aap.ansible.com}, status: {conditions: [{type: Established, status: "False", reason: Installing}]}}
+  crd_bmh: &crd_bmh {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: baremetalhosts.metal3.io}}
+  prov_watch_all: &prov_watch_all {kind: Provisioning, apiVersion: metal3.io/v1alpha1, metadata: {name: provisioning-configuration}, spec: {watchAllNamespaces: true}}
+  prov_watch_ns: &prov_watch_ns {kind: Provisioning, apiVersion: metal3.io/v1alpha1, metadata: {name: provisioning-configuration}, spec: {watchAllNamespaces: false}}
+  cv_ok: &cv_ok {kind: ClusterVersion, apiVersion: config.openshift.io/v1, metadata: {name: version}, status: {desired: {version: 4.22.5}}}
+  cv_old: &cv_old {kind: ClusterVersion, apiVersion: config.openshift.io/v1, metadata: {name: version}, status: {desired: {version: 4.21.3}}}
+  issuer_ok: &issuer_ok {kind: ClusterIssuer, apiVersion: cert-manager.io/v1, metadata: {name: default-ca}, status: {conditions: [{type: Ready, status: "True"}]}}
+  issuer_notready: &issuer_notready {kind: ClusterIssuer, apiVersion: cert-manager.io/v1, metadata: {name: default-ca}, status: {conditions: [{type: Ready, status: "False", reason: ErrGetKeyPair}]}}
+  cm_cabundle: &cm_cabundle {kind: ConfigMap, apiVersion: v1, metadata: {name: ca-bundle, namespace: osac}}
+  kafka_ok: &kafka_ok {kind: Kafka, apiVersion: kafka.strimzi.io/v1, metadata: {name: osac-kafka, namespace: osac-kafka}, status: {conditions: [{type: Ready, status: "True"}]}}
+  kafka_notready: &kafka_notready {kind: Kafka, apiVersion: kafka.strimzi.io/v1, metadata: {name: osac-kafka, namespace: osac-kafka}, status: {conditions: [{type: Ready, status: "False"}]}}
+  eps_postgres: &eps_postgres {kind: EndpointSlice, apiVersion: discovery.k8s.io/v1, metadata: {name: postgres-abc, namespace: osac-infra, labels: {kubernetes.io/service-name: postgres}}, endpoints: [{addresses: ["10.0.0.5"], conditions: {ready: true}}]}
+  eps_postgres_notready: &eps_postgres_notready {kind: EndpointSlice, apiVersion: discovery.k8s.io/v1, metadata: {name: postgres-abc, namespace: osac-infra, labels: {kubernetes.io/service-name: postgres}}, endpoints: [{addresses: ["10.0.0.5"], conditions: {ready: false}}]}
+  sec_ctrl: &sec_ctrl {kind: Secret, apiVersion: v1, metadata: {name: fulfillment-controller-credentials, namespace: osac}, data: {client-id: YQ==, client-secret: Yg==}}
+  sec_ctrl_partial: &sec_ctrl_partial {kind: Secret, apiVersion: v1, metadata: {name: fulfillment-controller-credentials, namespace: osac}, data: {client-id: YQ==}}
+  sec_vault: &sec_vault {kind: Secret, apiVersion: v1, metadata: {name: vault-credentials, namespace: osac}, data: {client-secret: Yg==}}
+  sec_license: &sec_license {kind: Secret, apiVersion: v1, metadata: {name: config-as-code-manifest-ig, namespace: osac, labels: {osac.openshift.io/project: osac-aap}}, data: {license.zip: Yg==}}
+  sec_license_nolabel: &sec_license_nolabel {kind: Secret, apiVersion: v1, metadata: {name: config-as-code-manifest-ig, namespace: osac}, data: {license.zip: Yg==}}
+  # url: postgres://svc:S3cr3tPw@db.example.com:5432/osac?sslmode=require
+  sec_mydb: &sec_mydb {kind: Secret, apiVersion: v1, metadata: {name: my-db, namespace: osac}, data: {url: cG9zdGdyZXM6Ly9zdmM6UzNjcjN0UHdAZGIuZXhhbXBsZS5jb206NTQzMi9vc2FjP3NzbG1vZGU9cmVxdWlyZQ==}}
+  sec_mydb_bad: &sec_mydb_bad {kind: Secret, apiVersion: v1, metadata: {name: my-db, namespace: osac}, data: {url: bm90LWEtdXJs}}
+  eps_other: &eps_other {kind: EndpointSlice, apiVersion: discovery.k8s.io/v1, metadata: {name: other-abc, namespace: osac-infra, labels: {kubernetes.io/service-name: other}}, endpoints: [{addresses: ["10.0.0.9"], conditions: {ready: true}}]}
+  crd_clusterissuers: &crd_clusterissuers {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: clusterissuers.cert-manager.io}, status: {conditions: [{type: Established, status: "True"}]}}
+  crd_kafkas: &crd_kafkas {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: kafkas.kafka.strimzi.io}, status: {conditions: [{type: Established, status: "True"}]}}
+  crd_clusterversions: &crd_clusterversions {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: clusterversions.config.openshift.io}, status: {conditions: [{type: Established, status: "True"}]}}
+  crd_scc: &crd_scc {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: securitycontextconstraints.security.openshift.io}, status: {conditions: [{type: Established, status: "True"}]}}
+  rel_v1_deployed: &rel_v1_deployed {kind: Secret, apiVersion: v1, metadata: {name: sh.helm.release.v1.osac.v1, namespace: osac, labels: {name: osac, owner: helm, status: deployed, version: "1"}}}
+  rel_v1_failed: &rel_v1_failed {kind: Secret, apiVersion: v1, metadata: {name: sh.helm.release.v1.osac.v1, namespace: osac, labels: {name: osac, owner: helm, status: failed, version: "1"}}}
+tests:
+  - it: "install-namespace-active: a missing namespace is one root cause; namespaced checks are unknown"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *kafka_ok, *eps_postgres]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: '"summary":\{"blocking":1,'
+      - failedTemplate:
+          errorPattern: 'install-namespace-active: Namespace osac does not exist'
+      - failedTemplate:
+          errorPattern: 'Fix: Create the namespace and its prerequisites first'
+  - it: "install-namespace-active: a terminating namespace fails"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac_terminating, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'install-namespace-active: Namespace osac is Terminating'
+  - it: "nodes-schedulable: NotReady, cordoned and control-plane-tainted nodes do not count"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_tainted, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodes-schedulable: no node can run new pods \(1 node\(s\): 0 not Ready, 0 cordoned, 1 tainted\)'
+  - it: "nodes-schedulable: a NotReady cluster fails"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_notready, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodes-schedulable: no node can run new pods \(1 node\(s\): 1 not Ready, 0 cordoned, 0 tainted\)'
+  - it: "default-storageclass: a StorageClass that is not the default fails when AAP is enabled"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_plain, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'default-storageclass: no default StorageClass is set \(1 StorageClass\(es\) exist\)'
+  - it: "default-storageclass: without the AAP instance and CaaS a missing default is only a warning"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_plain, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      aap.aap.instance.enabled: false
+      global.services.caas.enabled: false
+      global.services.maas.enabled: false
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"default-storageclass","message":"no default StorageClass is set \(1 StorageClass\(es\) exist\)'
+  - it: "default-storageclass: CaaS alone also needs a default StorageClass: hosted control planes provision etcd volumes from it"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_plain, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      aap.aap.instance.enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: 'default-storageclass: no default StorageClass is set'
+  - it: "cert-manager-crds: absent cert-manager fails"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'cert-manager-crds: CustomResourceDefinition certificates\.cert-manager\.io not found'
+      - failedTemplate:
+          errorPattern: 'Install the cert-manager Operator'
+  - it: "cert-issuer-ready: an issuer that is not Ready fails and names the reason"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_notready, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'cert-issuer-ready: ClusterIssuer default-ca is not Ready \(ErrGetKeyPair\)'
+  - it: "cert-issuer-ready: a missing issuer fails"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'cert-issuer-ready: ClusterIssuer default-ca not found'
+  - it: "ca-bundle-present: a missing CA bundle ConfigMap fails"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'ca-bundle-present: ConfigMap ca-bundle not found'
+  - it: "db-secrets: the Secrets this release creates (osac-db-config) are not required to exist"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"db-secrets","message":"no Secret is referenced that this release does not create itself'
+  - it: "db-secrets: the release-created Secrets keep their fixed names when the release is not called osac"
+    release:
+      name: prod
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"db-secrets","message":"no Secret is referenced that this release does not create itself'
+  - it: "db-secrets: the Secrets the release's own Certificates produce are not required to exist either"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      service.database.connection:
+        - secret:
+            name: osac-db-config
+            items:
+              - {key: url, param: url}
+        - secret:
+            name: osac-db-client-cert
+            items:
+              - {key: tls.crt, param: sslcert}
+              - {key: tls.key, param: sslkey}
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"db-secrets","message":"no Secret is referenced that this release does not create itself'
+  - it: "db-secrets: a referenced Secret that does not exist fails"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      service.database.connection:
+        - secret:
+            name: my-db
+            items:
+              - {key: url, param: url}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'db-secrets: Secret my-db not found'
+  - it: "db-init-host-endpoints: a Service that exists but is not ready yet only warns, because the db-init hook retries"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres_notready, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"db-init-host-endpoints","message":"Service postgres in namespace osac-infra has no ready endpoints yet; the db-init hook retries for up to 5 minutes"'
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"status":"warn","title":"The in-cluster PostgreSQL Service has ready endpoints"'
+  - it: "db-init-host-endpoints: a missing Service fails"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *sec_ctrl, *sec_vault, *sec_license, *eps_other]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'db-init-host-endpoints: Service postgres in namespace osac-infra not found'
+  - it: "db-init-host-endpoints: a host outside the cluster is skipped"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *sec_ctrl, *sec_vault, *sec_license, *eps_other]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      dbInit.host: db.example.com
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"db-init-host-endpoints","message":"dbInit\.host is outside the cluster; reachability is not checked at render time'
+  - it: "db-init-host-endpoints: a blank dbInit.host is checked against the host db-init falls back to"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres_notready, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      dbInit.host: ""
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"db-init-host-endpoints","message":"Service postgres in namespace osac-infra has no ready endpoints yet; the db-init hook retries for up to 5 minutes"'
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"status":"warn","title":"The in-cluster PostgreSQL Service has ready endpoints"'
+  - it: "db-init-host-endpoints: a <service>.<namespace> host is an in-cluster Service when the namespace exists"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *ns_infra, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres_notready, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      dbInit.host: postgres.osac-infra
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"db-init-host-endpoints","message":"Service postgres in namespace osac-infra has no ready endpoints yet; the db-init hook retries for up to 5 minutes"'
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"status":"warn","title":"The in-cluster PostgreSQL Service has ready endpoints"'
+  - it: "db-init-host-endpoints: a two-label name that is not a namespace is outside the cluster"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *ns_infra, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres_notready, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      dbInit.host: db.corp
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"db-init-host-endpoints","message":"dbInit\.host is outside the cluster'
+  - it: "kafka-access: a Kafka that is not Ready fails"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_notready, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'kafka-access: Kafka osac-kafka is not Ready'
+  - it: "kafka-access: an external Kafka needs the referenced Secrets"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      kafka.enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: 'kafka-access: Secret fulfillment-service-kafka not found'
+  - it: "controller-credentials: a Secret missing a key fails and names the key"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl_partial, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'controller-credentials: Secret fulfillment-controller-credentials is missing key\(s\) client-secret'
+  - it: "vault-config: a missing credentials Secret fails"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'vault-config: Secret vault-credentials not found'
+  - it: "vault-config: Vault integration disabled (empty endpoint) is skipped"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      service.vault.endpoint: ""
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"vault-config","message":"service\.vault\.endpoint is not set'
+  - it: "aap-operator-ready: a CRD that is not Established fails"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap_pending, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'aap-operator-ready: CustomResourceDefinition ansibleautomationplatforms\.aap\.ansible\.com is not Established \(Installing\)'
+  - it: "aap-license-secret: a Secret without the project label fails"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license_nolabel]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'aap-license-secret: Secret config-as-code-manifest-ig lacks label osac\.openshift\.io/project=osac-aap'
+  - it: "aap-license-secret: a missing Secret fails with the create command"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'aap-license-secret: Secret config-as-code-manifest-ig not found'
+      - failedTemplate:
+          errorPattern: 'oc create secret generic config-as-code-manifest-ig'
+  - it: "aap-license-secret: skipped when the AAP chart creates the manifest itself"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      aap.configAsCode.manifest.create: true
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"aap-license-secret","message":"aap\.configAsCode\.manifest\.create is set, so this release creates the resource itself'
+  - it: "kubevirt-crds: VMaaS without OpenShift Virtualization fails"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'kubevirt-crds: CustomResourceDefinition kubevirts\.kubevirt\.io not found'
+  - it: "mce-or-acm-crds: either multicluster engine or RHACM satisfies CaaS"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license, *crd_acm]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"mce-or-acm-crds","message":"found multiclusterhubs\.operator\.open-cluster-management\.io'
+  - it: "mce-or-acm-crds: neither fails"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'mce-or-acm-crds: CustomResourceDefinition multiclusterengines\.multicluster\.openshift\.io or multiclusterhubs\.operator\.open-cluster-management\.io not found'
+  - it: "metal3-bmh-crd: Metal3 without the BareMetalHost CRD fails"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      bmf.metal3.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metal3-bmh-crd: CustomResourceDefinition baremetalhosts\.metal3\.io not found'
+      - failedTemplate:
+          errorPattern: 'Install the BareMetalOperator'
+  - it: "metal3-watch-all-namespaces: unknown while the BareMetalHost CRD is missing, not a second root cause"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license, *prov_watch_all]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      bmf.metal3.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: '"summary":\{"blocking":1,'
+      - failedTemplate:
+          errorPattern: 'metal3-bmh-crd: CustomResourceDefinition baremetalhosts\.metal3\.io not found'
+  - it: "metal3-watch-all-namespaces: watchAllNamespaces=false fails with the patch command"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license, *crd_bmh, *prov_watch_ns]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      bmf.metal3.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metal3-watch-all-namespaces: Provisioning provisioning-configuration has spec\.watchAllNamespaces=false, expected true'
+      - failedTemplate:
+          errorPattern: 'oc patch provisioning provisioning-configuration'
+  - it: "metal3: both checks pass when the CRD exists and watchAllNamespaces is true"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license, *crd_bmh, *prov_watch_all]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      bmf.metal3.enabled: true
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"metal3-bmh-crd","message":"found baremetalhosts\.metal3\.io'
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"metal3-watch-all-namespaces","message":"Provisioning provisioning-configuration has spec\.watchAllNamespaces=true'
+  - it: "metal3: NetBox alone also needs the BareMetalHost CRD"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      bmf.metal3.enabled: false
+      bmf.netbox.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metal3-bmh-crd: CustomResourceDefinition baremetalhosts\.metal3\.io not found'
+  - it: "metal3: neither Metal3 nor NetBox enabled skips both checks"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      bmf.metal3.enabled: false
+      bmf.netbox.enabled: false
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"metal3-bmh-crd","message":"none of bmf\.metal3\.enabled, bmf\.netbox\.enabled is set"'
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"metal3-watch-all-namespaces","message":"none of bmf\.metal3\.enabled, bmf\.netbox\.enabled is set"'
+  - it: "ocp-version: 4.22.0 is accepted; there is no upper bound"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, {kind: ClusterVersion, apiVersion: config.openshift.io/v1, metadata: {name: version}, status: {desired: {version: 4.22.0}}}, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"ocp-version","message":"OpenShift 4\.22\.0 is 4\.22\.0 or later'
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"summary":\{"blocking":0,"fail":0,"pass":15,"skipped":3,"unknown":0,"warn":0\}'
+  - it: "ocp-version: 4.22.14 is accepted; there is no upper bound"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, {kind: ClusterVersion, apiVersion: config.openshift.io/v1, metadata: {name: version}, status: {desired: {version: 4.22.14}}}, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"ocp-version","message":"OpenShift 4\.22\.14 is 4\.22\.0 or later'
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"summary":\{"blocking":0,"fail":0,"pass":15,"skipped":3,"unknown":0,"warn":0\}'
+  - it: "ocp-version: 4.23.1 is accepted; there is no upper bound"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, {kind: ClusterVersion, apiVersion: config.openshift.io/v1, metadata: {name: version}, status: {desired: {version: 4.23.1}}}, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"ocp-version","message":"OpenShift 4\.23\.1 is 4\.22\.0 or later'
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"summary":\{"blocking":0,"fail":0,"pass":15,"skipped":3,"unknown":0,"warn":0\}'
+  - it: "ocp-version: 4.21.9 is below the 4.22 minimum; there is no upper bound"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, {kind: ClusterVersion, apiVersion: config.openshift.io/v1, metadata: {name: version}, status: {desired: {version: 4.21.9}}}, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"ocp-version","message":"OpenShift 4\.21\.9 is not 4\.22\.0 or later'
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"summary":\{"blocking":0,"fail":0,"pass":14,"skipped":3,"unknown":0,"warn":1\}'

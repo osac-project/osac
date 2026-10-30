@@ -1,0 +1,272 @@
+# Install preflight catalog: one entry per check, read by
+# templates/preflight/_engine.tpl. Data only; the logic for each `kind` lives in
+# the engine, so external tools can read this file to learn what is checked.
+#
+# Fields
+#   id             Stable identifier, used in reports and `preflight.skip.<id>`.
+#   kind           Handler in _engine.tpl (osac.preflight.kind.<kind>).
+#   severity       required | warning. A failing `required` check blocks the
+#                  install; a failing `warning` check is reported only.
+#   severityUpgrade  Overrides `severity` when a deployed revision of this
+#                  release already exists (an upgrade).
+#   requiredWhenAny  Values paths. When none is set/true, `severity` drops to
+#                  warning.
+#   requiredWhen   Values path. When set and false, `severity` drops to
+#                  warning.
+#   category       operators | storage | hardware | network | cluster | secrets
+#   requiredFor    core | vmaas | caas | bmaas | metering. Skipped unless one of
+#                  the listed services is enabled.
+#   when           Values path that must be set/true, else the check is skipped.
+#   whenAny        Values paths; the check is skipped unless at least one is set/true.
+#   unless         Values path that, when set/true, skips the check.
+#   platforms      [openshift] limits the check to OpenShift clusters.
+#   dependsOn      Check ids. If one of them did not pass, this check is
+#                  `unknown` (not counted as a second root cause).
+#   params         Arguments for the kind handler.
+#   title, remediation, docsURL   Human text shown in the report.
+#
+# Messages never carry Secret data: Secret names and keys only.
+
+- id: install-namespace-active
+  kind: namespace-active
+  severity: required
+  category: cluster
+  requiredFor: [core]
+  title: "The release namespace exists and is active"
+  remediation: "Create the namespace and its prerequisites first: oc create namespace <namespace>, then the Secrets in guide section 4.1."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#41-preparing-the-cluster"
+
+- id: ocp-version
+  kind: version-range
+  severity: warning
+  category: cluster
+  requiredFor: [core]
+  platforms: [openshift]
+  title: "OpenShift version is 4.22 or later"
+  params:
+    min: "4.22.0"
+  remediation: "Use OpenShift Container Platform 4.22 or later (guide section 2.1), or accept the risk and continue."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#21-cluster-and-access"
+
+- id: nodes-schedulable
+  kind: nodes-schedulable
+  severity: required
+  severityUpgrade: warning
+  category: hardware
+  requiredFor: [core]
+  title: "At least one node can run new pods"
+  remediation: "Uncordon a node (oc adm uncordon <node>), add a worker, or resolve NotReady and pressure conditions. Pods stay Pending until then."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#21-cluster-and-access"
+
+- id: default-storageclass
+  kind: storageclass-usable
+  severity: required
+  severityUpgrade: warning
+  requiredWhenAny: [aap.aap.instance.enabled, global.services.caas.enabled]
+  category: storage
+  requiredFor: [core]
+  title: "A default StorageClass exists"
+  remediation: "Mark a StorageClass as default: oc patch storageclass <name> -p '{\"metadata\":{\"annotations\":{\"storageclass.kubernetes.io/is-default-class\":\"true\"}}}'. Persistent volume claims stay Pending without one."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#21-cluster-and-access"
+
+- id: cert-manager-crds
+  kind: crd-exists
+  severity: required
+  category: operators
+  requiredFor: [core]
+  title: "cert-manager is installed"
+  params:
+    crds: [certificates.cert-manager.io]
+  remediation: "Install the cert-manager Operator for Red Hat OpenShift (or an upstream cert-manager) before installing OSAC."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#23-platform-operators-and-components"
+
+- id: cert-issuer-ready
+  kind: condition-true
+  severity: required
+  severityUpgrade: warning
+  category: operators
+  requiredFor: [core]
+  dependsOn: [cert-manager-crds, install-namespace-active]
+  title: "The certificate issuer exists and is Ready"
+  params:
+    apiVersion: cert-manager.io/v1
+    kindFrom: service.certs.issuerRef.kind
+    nameFrom: service.certs.issuerRef.name
+    clusterScopedKinds: [ClusterIssuer]
+    condition: Ready
+  remediation: "Create the issuer named by service.certs.issuerRef (default: ClusterIssuer default-ca) and wait for it to be Ready. Certificates never become Ready without it."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#116-certificates-never-become-ready"
+
+- id: ca-bundle-present
+  kind: configmap-keys
+  severity: required
+  category: secrets
+  requiredFor: [core]
+  dependsOn: [install-namespace-active]
+  title: "The CA bundle ConfigMap exists in the release namespace"
+  params:
+    configmaps:
+      - nameFrom: service.certs.caBundle.configMap
+  remediation: "Create the ca-bundle ConfigMap in the release namespace (trust-manager distributes it) or point service.certs.caBundle.configMap at yours."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#43-installing-osac"
+
+- id: db-secrets
+  kind: secret-keys
+  severity: required
+  category: secrets
+  requiredFor: [core]
+  dependsOn: [install-namespace-active]
+  title: "Database connection Secrets referenced by the values exist"
+  params:
+    connections: [service.database.connection]
+    urlParam: url
+  remediation: "Create the Secret named in service.database.connection with the listed keys (url must be a postgres:// URL). Secrets this release creates itself (osac-db-config) are not checked."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#41-preparing-the-cluster"
+
+- id: db-init-host-endpoints
+  kind: service-has-endpoints
+  severity: required
+  category: network
+  requiredFor: [core]
+  dependsOn: [install-namespace-active]
+  title: "The in-cluster PostgreSQL Service has ready endpoints"
+  params:
+    hostFrom: dbInit.host
+    hostHelper: osac.dbInit.host
+  remediation: "Create the PostgreSQL Service that dbInit.host names, or point dbInit.host at a running server. A Service that is only starting is a warning: the db-init hook retries for up to 5 minutes."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#115-the-osac-db-init-hook-fails"
+
+- id: kafka-access
+  kind: kafka-access
+  severity: required
+  severityUpgrade: warning
+  category: network
+  requiredFor: [core]
+  dependsOn: [install-namespace-active]
+  title: "Kafka is available to the Fulfillment Service"
+  remediation: "Install Streams for Apache Kafka and create the Kafka cluster named by kafka.clusterName, or set kafka.enabled=false and point service.kafka.connection at an external cluster."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/kafka-configuration.md"
+
+- id: controller-credentials
+  kind: secret-keys
+  severity: required
+  category: secrets
+  requiredFor: [core]
+  when: operator.enabled
+  dependsOn: [install-namespace-active]
+  title: "Fulfillment controller credential Secrets exist"
+  params:
+    connections: [service.auth.controllerCredentials]
+    secrets:
+      - nameFrom: operator.fulfillment.credentials.secretName
+        keysFrom:
+          - operator.fulfillment.credentials.clientIdKey
+          - operator.fulfillment.credentials.clientSecretKey
+  remediation: "Create the controller credential Secret (Keycloak client id and secret) in the release namespace; the prerequisite infrastructure normally does this."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#1110-the-fulfillment--pods-are-in-crashloopbackoff"
+
+- id: vault-config
+  kind: secret-keys
+  severity: required
+  category: secrets
+  requiredFor: [core]
+  when: service.vault.endpoint
+  dependsOn: [install-namespace-active]
+  title: "Vault credentials and CA bundle referenced by the values exist"
+  params:
+    connections: [service.vault.credentials]
+    configmaps:
+      - nameFrom: service.vault.caBundle.configMap
+        optional: true
+  remediation: "Create the Vault credential Secret and CA bundle ConfigMap named in service.vault, or clear service.vault.endpoint to disable Vault integration."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/secrets-management-configuration.md"
+
+- id: aap-operator-ready
+  kind: condition-true
+  severity: required
+  severityUpgrade: warning
+  category: operators
+  requiredFor: [core]
+  when: aap.aap.instance.enabled
+  platforms: [openshift]
+  title: "The Ansible Automation Platform operator is installed and established"
+  params:
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    scope: cluster
+    name: ansibleautomationplatforms.aap.ansible.com
+    condition: Established
+  remediation: "Install the Red Hat Ansible Automation Platform Operator (channel stable-2.6-cluster-scoped) and wait for its CRD to be established."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#117-the-aap-instance-does-not-start"
+
+- id: aap-license-secret
+  kind: secret-keys
+  severity: required
+  category: secrets
+  requiredFor: [core]
+  when: aap.bootstrap.enabled
+  unless: aap.configAsCode.manifest.create
+  platforms: [openshift]
+  dependsOn: [install-namespace-active]
+  title: "The AAP subscription manifest Secret exists"
+  params:
+    secrets:
+      - nameFrom: aap.configAsCode.manifestSecret
+        keys: [license.zip]
+        labels:
+          osac.openshift.io/project: osac-aap
+  remediation: "Create the Secret from license.zip and label it: oc create secret generic config-as-code-manifest-ig --from-file=license.zip=<path> -n <namespace>; oc label secret config-as-code-manifest-ig osac.openshift.io/project=osac-aap -n <namespace>."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#41-preparing-the-cluster"
+
+- id: metal3-bmh-crd
+  kind: crd-exists
+  severity: required
+  category: operators
+  requiredFor: [bmaas]
+  whenAny: [bmf.metal3.enabled, bmf.netbox.enabled]
+  title: "The Metal3 BareMetalHost CRD exists"
+  params:
+    crds: [baremetalhosts.metal3.io]
+  remediation: "Install the BareMetalOperator before deploying OSAC with the Metal3 backend, or set bmf.metal3.enabled=false."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#24-credentials-and-external-services"
+
+- id: metal3-watch-all-namespaces
+  kind: resource-field-equals
+  severity: required
+  category: operators
+  requiredFor: [bmaas]
+  whenAny: [bmf.metal3.enabled, bmf.netbox.enabled]
+  dependsOn: [metal3-bmh-crd]
+  title: "The Provisioning resource watches all namespaces"
+  params:
+    apiVersion: metal3.io/v1alpha1
+    kind: Provisioning
+    scope: cluster
+    field: spec.watchAllNamespaces
+    equals: true
+  remediation: "oc patch provisioning provisioning-configuration --type merge -p '{\"spec\":{\"watchAllNamespaces\": true}}'"
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#111-the-install-preflight-stops-the-installation"
+
+- id: kubevirt-crds
+  kind: crd-exists
+  severity: required
+  category: operators
+  requiredFor: [vmaas]
+  title: "OpenShift Virtualization is installed"
+  params:
+    crds: [kubevirts.kubevirt.io]
+  remediation: "Install OpenShift Virtualization (and create its HyperConverged resource), or disable VMaaS with global.services.vmaas.enabled=false."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#25-requirements-by-service"
+
+- id: mce-or-acm-crds
+  kind: crd-exists
+  severity: required
+  category: operators
+  requiredFor: [caas]
+  title: "multicluster engine or RHACM is installed"
+  params:
+    anyCrds:
+      - multiclusterengines.multicluster.openshift.io
+      - multiclusterhubs.operator.open-cluster-management.io
+  remediation: "Install the multicluster engine for Kubernetes Operator (or RHACM), or disable CaaS with global.services.caas.enabled=false."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#25-requirements-by-service"

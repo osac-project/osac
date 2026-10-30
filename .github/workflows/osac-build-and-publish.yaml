@@ -1814,19 +1814,12 @@ jobs:
         uv run --no-project --with pyyaml==6.0.3 python .github/scripts/umbrella_release.py
 
   # -------------------------------------------------------------------
-  # Notify release success — the one and only "this run is genuinely
-  # done and everything published" signal, deliberately separate from
-  # tag above. Waits on create-component-releases/publish-fulfillment-
-  # service-binaries/publish-fulfillment-service-proto and the umbrella
-  # chart release in addition to tag itself (release-only work is tolerated
-  # as skipped when it doesn't apply) so a failure is never contradicted by
-  # an already-sent "Published" message -- confirmed live: before this
-  # job existed, tag-and-notify posted success immediately after
-  # tagging, so a subsequent publish-proto failure produced both a green
-  # success and a red failure message in Slack for the same run.
+  # Announce GHCR/GitHub publication after those jobs finish. In release
+  # mode this is an intermediate status: Konflux is reported separately by
+  # notify-konflux after every image/chart staging job has finished.
   # -------------------------------------------------------------------
   notify-release:
-    name: Notify release success
+    name: Notify GHCR publication
     needs: [prepare, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto, create-umbrella-release]
     runs-on: osac-ci
     timeout-minutes: 10
@@ -1839,13 +1832,15 @@ jobs:
       (needs.create-umbrella-release.result == 'success' ||
        (inputs.mode == 'nightly' && needs.create-umbrella-release.result == 'skipped'))
     permissions:
-      # Look up the package version URL for the Slack notification
-      packages: read
-      # Download chart-sources.txt from the publish-umbrella job
-      actions: read
+      contents: read  # Checkout notification helpers and Vault action
+      actions: read  # Download the exact published umbrella package
+    outputs:
+      skipped-tests: ${{ steps.notify.outputs.skipped-tests }}
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       MODE: ${{ inputs.mode }}
+      COMPONENT_VERSIONS: ${{ needs.prepare.outputs.component-versions }}
+      PACKAGE: nightly-artifacts/osac-installer/osac-${{ needs.prepare.outputs.version }}.tgz
 
     steps:
     - name: Checkout repository
@@ -1854,6 +1849,10 @@ jobs:
       # is pushed from this job, so the default read-only GITHUB_TOKEN is
       # enough (unlike tag, which needs a separate PAT for that).
       uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        persist-credentials: false
+
+    - uses: ./.github/actions/setup-python
 
     - name: Download chart manifest
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
@@ -1866,13 +1865,12 @@ jobs:
       uses: ./.github/actions/vault-slack-webhook
 
     - name: Notify Slack on success
+      id: notify
       env:
         SLACK_WEBHOOK_URL: ${{ steps.vault.outputs.webhook-url }}
         SERVER_URL: ${{ github.server_url }}
         REPOSITORY: ${{ github.repository }}
         RUN_ID: ${{ github.run_id }}
-        REPO_OWNER: ${{ github.repository_owner }}
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SKIP_E2E: ${{ inputs.skip_e2e }}
         SKIP_INTEGRATION: ${{ inputs.skip_integration }}
         SKIP_UNIT: ${{ inputs.skip_unit }}
@@ -1881,9 +1879,13 @@ jobs:
         source osac-installer/scripts/nightly-charts.sh
 
         WORKFLOW_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
-        SUMMARY_TEXT=$(build_slack_charts_published_summary nightly-artifacts/chart-sources.txt "${REPO_OWNER}")
+        SUMMARY_TEXT=$(uv run --no-project --with pyyaml==6.0.3 python .github/scripts/umbrella_release.py --slack-summary)
         IMAGES_TEXT=$(build_slack_images_published_summary nightly-artifacts/images.txt)
         SKIPPED_DEPS_TEXT=$(build_slack_skipped_umbrella_dependencies_summary nightly-artifacts/skipped-umbrella-dependencies.txt)
+        STATUS_TEXT=$'*GHCR publication:* complete.\n*Konflux staging:* not run for nightly builds.'
+        if [[ "${MODE}" == "release" ]]; then
+          STATUS_TEXT=$'*GHCR / GitHub Release:* published.\n*Konflux staging:* pending; a final status follows after image and chart staging finish.'
+        fi
 
         RUN_KIND="Nightly Build"
         [[ "${MODE}" == "release" ]] && RUN_KIND="Release"
@@ -1898,14 +1900,16 @@ jobs:
         [[ "${SKIP_INTEGRATION}" == "true" ]] && SKIPPED+=("integration")
         [[ "${SKIP_UNIT}" == "true" ]] && SKIPPED+=("unit")
 
-        HEADER_TEXT=":white_check_mark: ${RUN_KIND} ${VERSION} - Published"
+        HEADER_TEXT=":white_check_mark: ${RUN_KIND} ${VERSION} - GHCR published"
         if [[ "${#SKIPPED[@]}" -gt 0 ]]; then
           SKIPPED_LIST=$(IFS=', '; echo "${SKIPPED[*]}")
-          HEADER_TEXT=":warning: ${RUN_KIND} ${VERSION} - Published (${SKIPPED_LIST} SKIPPED)"
+          HEADER_TEXT=":warning: ${RUN_KIND} ${VERSION} - GHCR published (${SKIPPED_LIST} SKIPPED)"
         fi
+        echo "skipped-tests=${SKIPPED_LIST:-}" >> "$GITHUB_OUTPUT"
 
         jq -n \
           --arg header "${HEADER_TEXT}" \
+          --arg status "${STATUS_TEXT}" \
           --arg summary "${SUMMARY_TEXT}" \
           --arg images "${IMAGES_TEXT}" \
           --arg skipped_deps "${SKIPPED_DEPS_TEXT}" \
@@ -1916,6 +1920,10 @@ jobs:
                 {
                   "type": "header",
                   "text": {"type": "plain_text", "text": $header}
+                },
+                {
+                  "type": "section",
+                  "text": {"type": "mrkdwn", "text": $status}
                 },
                 {
                   "type": "section",
@@ -3262,6 +3270,10 @@ jobs:
   trigger-konflux-chart-staging-release:
     name: Trigger Konflux chart staging release
     continue-on-error: true
+    # The job result hides failures under continue-on-error. Expose the
+    # actual release step outcome so Slack cannot announce false success.
+    outputs:
+      release-outcome: ${{ steps.release.outcome }}
     needs: [prepare, tag, wait-for-konflux-chart-build]
     if: |
       always() && !cancelled() && inputs.mode == 'release' &&
@@ -3296,6 +3308,7 @@ jobs:
     # collide in the same osac-tenant namespace. See that job's own
     # comments for the full rationale.
     - name: Assemble chart override Snapshot and create staging Release
+      id: release
       env:
         RUN_ATTEMPT: ${{ github.run_attempt }}
       run: |
@@ -3518,9 +3531,89 @@ jobs:
             sys.exit(1)
         PYEOF
 
+  # Report Konflux only after all image/chart jobs finish, including failures
+  # and skips. Nightly builds do not run Konflux and send no second message.
+  notify-konflux:
+    name: Notify final Konflux status
+    needs:
+      - prepare
+      - tag
+      - notify-release
+      - wait-for-konflux-build
+      - trigger-konflux-staging-release
+      - stamp-and-release-charts
+      - wait-for-konflux-chart-build
+      - trigger-konflux-chart-staging-release
+    if: |
+      always() && !cancelled() && inputs.mode == 'release' &&
+      needs.tag.result == 'success' && needs.notify-release.result == 'success'
+    runs-on: osac-ci
+    timeout-minutes: 10
+    permissions:
+      contents: read  # Checkout the Vault action only
+
+    steps:
+    - name: Checkout notification action
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        persist-credentials: false
+
+    - name: Retrieve Slack webhook from Vault
+      id: vault
+      uses: ./.github/actions/vault-slack-webhook
+
+    - name: Notify Slack of Konflux outcome
+      env:
+        SLACK_WEBHOOK_URL: ${{ steps.vault.outputs.webhook-url }}
+        VERSION: ${{ needs.prepare.outputs.version }}
+        SKIPPED_TESTS: ${{ needs.notify-release.outputs.skipped-tests }}
+        IMAGE_BUILDS: ${{ needs.wait-for-konflux-build.result }}
+        IMAGE_RELEASE: ${{ needs.trigger-konflux-staging-release.result }}
+        CHART_TAG_PUSHED: ${{ needs.stamp-and-release-charts.outputs.tag-pushed }}
+        CHART_RELEASE: ${{ needs.trigger-konflux-chart-staging-release.outputs.release-outcome || 'not completed' }}
+        WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        HEADER_TEXT=":warning: Release ${VERSION} - Konflux staging incomplete"
+        if [[ "${IMAGE_RELEASE}" == 'success' && "${CHART_RELEASE}" == 'success' ]]; then
+          HEADER_TEXT=":white_check_mark: Release ${VERSION} - Complete"
+          if [[ -n "${SKIPPED_TESTS}" ]]; then
+            HEADER_TEXT=":warning: Release ${VERSION} - Complete (${SKIPPED_TESTS} SKIPPED)"
+          fi
+        elif [[ "${IMAGE_RELEASE}" == 'failure' || "${IMAGE_BUILDS}" == 'failure' || "${CHART_RELEASE}" == 'failure' ]]; then
+          HEADER_TEXT=":x: Release ${VERSION} - Konflux staging failed"
+        fi
+
+        PAYLOAD=$(mktemp)
+        trap 'rm -f "$PAYLOAD"' EXIT
+        jq -n \
+          --arg header "${HEADER_TEXT}" \
+          --arg image_builds "${IMAGE_BUILDS}" \
+          --arg image_release "${IMAGE_RELEASE}" \
+          --arg chart_tag "${CHART_TAG_PUSHED:-false}" \
+          --arg chart_release "${CHART_RELEASE}" \
+          --arg workflow_url "${WORKFLOW_URL}" \
+          '{blocks: [
+            {type: "header", text: {type: "plain_text", text: $header}},
+            {type: "section", text: {type: "mrkdwn", text: (
+              "*GHCR / GitHub Release:* published\n" +
+              "*Konflux image builds:* " + $image_builds + "\n" +
+              "*Konflux image staging:* " + $image_release + "\n" +
+              "*Konflux chart build tag pushed:* " + $chart_tag + "\n" +
+              "*Konflux chart staging:* " + $chart_release
+            )}},
+            {type: "actions", elements: [
+              {type: "button", text: {type: "plain_text", text: "View Run"}, url: $workflow_url}
+            ]}
+          ]}' > "$PAYLOAD"
+
+        curl -sf --max-time 15 -X POST "${SLACK_WEBHOOK_URL}" \
+          -H "Content-Type: application/json" \
+          -d @"$PAYLOAD"
+
   cleanup:
     name: Cleanup temp branch
-    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, promote-and-publish, publish-umbrella, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto, notify-release, notify-failure, wait-for-konflux-build, trigger-konflux-staging-release, stamp-and-release-charts, wait-for-konflux-chart-build, trigger-konflux-chart-staging-release]
+    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, promote-and-publish, publish-umbrella, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto, notify-release, notify-failure, wait-for-konflux-build, trigger-konflux-staging-release, stamp-and-release-charts, wait-for-konflux-chart-build, trigger-konflux-chart-staging-release, notify-konflux]
     runs-on: ubuntu-latest
     # notify-failure (and now notify-release, create-component-releases,
     # publish-fulfillment-service-binaries/-proto) are routinely skipped

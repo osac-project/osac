@@ -23,6 +23,21 @@ components to the same cluster. In a multi-hub architecture, the
 fulfillment service (with its database and identity provider) would
 run separately from the hub components (operator + AAP).
 
+{{- $preflight := include "osac.preflight.run" . | fromJson }}
+{{- if gt (int $preflight.summary.warn) 0 }}
+
+Preflight warnings (the install went ahead):
+{{- range $preflight.results }}
+{{- if eq .status "warn" }}
+  - {{ .id }}: {{ .message }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+Preflight report (JSON), written before the install started:
+
+  kubectl get configmap {{ include "osac.fullname" . }}-preflight-report -n {{ .Release.Namespace }} -o jsonpath='{.data.render\.json}'
+
 To check the status of the deployment:
 
   helm status {{ .Release.Name }} -n {{ .Release.Namespace }}

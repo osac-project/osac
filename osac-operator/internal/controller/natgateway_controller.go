@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -35,6 +36,7 @@ import (
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
+	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
@@ -131,7 +133,7 @@ func (r *NATGatewayReconciler) Reconcile(ctx context.Context, req mcreconcile.Re
 		hadFinalizer && !controllerutil.ContainsFinalizer(natgw, osacNATGatewayFinalizer)
 	if !statusPersistedBeforeFinalizerRemoval && !equality.Semantic.DeepEqual(natgw.Status, *oldstatus) {
 		log.Info("status requires update")
-		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(natgw), natgw.Status); err != nil {
+		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(natgw), string(natgw.UID), natgw.Generation, natgw.Status); err != nil {
 			return res, err
 		}
 	}
@@ -141,11 +143,14 @@ func (r *NATGatewayReconciler) Reconcile(ctx context.Context, req mcreconcile.Re
 }
 
 // updateStatusWithRetry updates the NATGateway status with retry on conflict.
-func (r *NATGatewayReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.NATGatewayStatus) error {
+func (r *NATGatewayReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, expectedUID string, expectedGeneration int64, newStatus v1alpha1.NATGatewayStatus) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		latest := &v1alpha1.NATGateway{}
 		if err := r.Get(ctx, key, latest); err != nil {
 			return err
+		}
+		if string(latest.UID) != expectedUID || latest.Generation != expectedGeneration {
+			return fmt.Errorf("NATGateway changed while status was being updated")
 		}
 		latest.Status = newStatus
 		return r.Status().Update(ctx, latest)
@@ -160,6 +165,94 @@ func (r *NATGatewayReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(false)).
 		Complete(r)
+}
+
+func (r *NATGatewayReconciler) resolveNATGatewayUpdateDependencies(
+	ctx context.Context,
+	natgw *v1alpha1.NATGateway,
+) (*natGatewayUpdateDependencies, ctrl.Result, error) {
+	log := ctrllog.FromContext(ctx)
+	vnetList := &v1alpha1.VirtualNetworkList{}
+	if err := r.List(ctx, vnetList,
+		client.InNamespace(natgw.Namespace),
+		client.MatchingLabels{osacVirtualNetworkIDLabel: natgw.Spec.VirtualNetwork},
+	); err != nil {
+		return nil, ctrl.Result{}, err
+	}
+	if len(vnetList.Items) == 0 {
+		log.Info("parent VirtualNetwork not found, requeueing", "uuid", natgw.Spec.VirtualNetwork)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+	if len(vnetList.Items) != 1 {
+		return nil, ctrl.Result{}, fmt.Errorf("expected exactly one parent VirtualNetwork with uuid %q but found %d", natgw.Spec.VirtualNetwork, len(vnetList.Items))
+	}
+	vnet := &vnetList.Items[0]
+	if vnet.Status.Phase != v1alpha1.VirtualNetworkPhaseReady {
+		log.Info("parent VirtualNetwork not Ready yet, requeueing",
+			"virtualNetwork", vnet.Name, "phase", vnet.Status.Phase)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+
+	externalIPList := &v1alpha1.ExternalIPList{}
+	if err := r.List(ctx, externalIPList,
+		client.InNamespace(natgw.Namespace),
+		client.MatchingLabels{osacExternalIPIDLabel: natgw.Spec.ExternalIP},
+	); err != nil {
+		return nil, ctrl.Result{}, err
+	}
+	if len(externalIPList.Items) == 0 {
+		log.Info("ExternalIP not found, requeueing", "uuid", natgw.Spec.ExternalIP)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+	if len(externalIPList.Items) != 1 {
+		return nil, ctrl.Result{}, fmt.Errorf("expected exactly one ExternalIP with uuid %q but found %d", natgw.Spec.ExternalIP, len(externalIPList.Items))
+	}
+	externalIP := &externalIPList.Items[0]
+	if externalIP.Status.Address == "" {
+		log.Info("ExternalIP address not allocated yet, requeueing", "externalIP", externalIP.Name)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+
+	implementationStrategy, contractVersion, err := resolveNATGatewayManager(
+		ctx,
+		r.Resolver,
+		vnet.Spec.NetworkClass,
+		vnet.Annotations[osacImplementationStrategyAnnotation],
+		natgw.Annotations[osacImplementationStrategyAnnotation],
+		natgw.Annotations[osacNATGatewayContractVersionAnnotation],
+	)
+	if err != nil {
+		if errors.Is(err, errNATGatewayContract) {
+			setNATGatewayPhase(&natgw.Status, v1alpha1.NATGatewayPhaseFailed)
+			setReadyConditionFailed(&natgw.Status.Conditions, err.Error())
+			return nil, ctrl.Result{}, nil
+		}
+		return nil, ctrl.Result{}, err
+	}
+	if implementationStrategy == "" {
+		log.Info("implementation strategy not set on parent VirtualNetwork, requeueing", "virtualNetwork", vnet.Name)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+
+	dependencies := &natGatewayUpdateDependencies{
+		virtualNetwork:         vnet,
+		externalIP:             externalIP,
+		implementationStrategy: implementationStrategy,
+		contractVersion:        contractVersion,
+	}
+	if contractVersion == networkmanager.NATGatewayContractVersionV1 {
+		natGatewayContext, pending, err := buildNATGatewayContext(natgw, vnet, externalIP)
+		if err != nil {
+			setNATGatewayPhase(&natgw.Status, v1alpha1.NATGatewayPhaseFailed)
+			setReadyConditionFailed(&natgw.Status.Conditions, err.Error())
+			return nil, ctrl.Result{}, nil
+		}
+		if pending {
+			return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		}
+		dependencies.context = natGatewayContext
+	}
+	return dependencies, ctrl.Result{}, nil
 }
 
 func (r *NATGatewayReconciler) handleUpdate(ctx context.Context, natgw *v1alpha1.NATGateway) (ctrl.Result, error) {
@@ -185,54 +278,18 @@ func (r *NATGatewayReconciler) handleUpdate(ctx context.Context, natgw *v1alpha1
 		return ctrl.Result{}, nil
 	}
 
-	// Get parent VirtualNetwork by UUID label to read implementation strategy
-	vnetList := &v1alpha1.VirtualNetworkList{}
-	err := r.List(ctx, vnetList,
-		client.InNamespace(natgw.Namespace),
-		client.MatchingLabels{osacVirtualNetworkIDLabel: natgw.Spec.VirtualNetwork},
-	)
-	if err != nil {
-		return ctrl.Result{}, err
+	dependencies, result, err := r.resolveNATGatewayUpdateDependencies(ctx, natgw)
+	if err != nil || result.RequeueAfter > 0 {
+		return result, err
 	}
-	if len(vnetList.Items) == 0 {
-		log.Info("parent VirtualNetwork not found, requeueing", "uuid", natgw.Spec.VirtualNetwork)
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	if dependencies == nil {
+		return ctrl.Result{}, nil
 	}
-	vnet := &vnetList.Items[0]
-
-	if vnet.Status.Phase != v1alpha1.VirtualNetworkPhaseReady {
-		log.Info("parent VirtualNetwork not Ready yet, requeueing",
-			"virtualNetwork", vnet.Name, "phase", vnet.Status.Phase)
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-	}
-
-	// Read implementation strategy from the annotation the parent VirtualNetwork's own
-	// controller has already resolved and written onto it.
-	implementationStrategy := vnet.Annotations[osacImplementationStrategyAnnotation]
-	if implementationStrategy == "" {
-		log.Info("implementation strategy not set on parent VirtualNetwork, requeueing", "virtualNetwork", vnet.Name)
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-	}
-
-	// Resolve the ExternalIP CR (by UUID label) for the SNAT source address; the AAP
-	// role reads its allocated address from the ExternalIP CR by name.
-	eipList := &v1alpha1.ExternalIPList{}
-	if err := r.List(ctx, eipList,
-		client.InNamespace(natgw.Namespace),
-		client.MatchingLabels{osacExternalIPIDLabel: natgw.Spec.ExternalIP},
-	); err != nil {
-		return ctrl.Result{}, err
-	}
-	if len(eipList.Items) == 0 {
-		log.Info("ExternalIP not found, requeueing", "uuid", natgw.Spec.ExternalIP)
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-	}
-	externalIP := &eipList.Items[0]
-
-	if externalIP.Status.Address == "" {
-		log.Info("ExternalIP address not allocated yet, requeueing", "externalIP", externalIP.Name)
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-	}
+	vnet := dependencies.virtualNetwork
+	externalIP := dependencies.externalIP
+	implementationStrategy := dependencies.implementationStrategy
+	contractVersion := dependencies.contractVersion
+	natGatewayContext := dependencies.context
 
 	// Add implementation-strategy annotation if not present or different
 	if natgw.Annotations == nil {
@@ -244,21 +301,25 @@ func (r *NATGatewayReconciler) handleUpdate(ctx context.Context, natgw *v1alpha1
 		log.Info("setting implementation-strategy annotation", "strategy", implementationStrategy)
 		annotationsChanged = true
 	}
-	// Pass the tenant VirtualNetwork name so the provisioning role creates the SNAT
-	// rule in the correct tenant network scope.
-	if natgw.Annotations[osacVirtualNetworkNameAnnotation] != vnet.Name {
-		natgw.Annotations[osacVirtualNetworkNameAnnotation] = vnet.Name
-		annotationsChanged = true
-	}
-	// Pass the ExternalIP CR name (SNAT source address is read from it) and the VN
-	// IPv4 CIDR (the SNAT rule's source network) for the AAP role.
-	if natgw.Annotations[osacExternalIPNameAnnotation] != externalIP.Name {
-		natgw.Annotations[osacExternalIPNameAnnotation] = externalIP.Name
-		annotationsChanged = true
-	}
-	if natgw.Annotations[osacVNIPv4CIDRAnnotation] != vnet.Spec.IPv4CIDR {
-		natgw.Annotations[osacVNIPv4CIDRAnnotation] = vnet.Spec.IPv4CIDR
-		annotationsChanged = true
+	if contractVersion == networkmanager.NATGatewayContractVersionV1 {
+		if natgw.Annotations[osacNATGatewayContractVersionAnnotation] != contractVersion {
+			natgw.Annotations[osacNATGatewayContractVersionAnnotation] = contractVersion
+			annotationsChanged = true
+		}
+	} else {
+		// The unversioned manager contract uses these legacy resource annotations.
+		if natgw.Annotations[osacVirtualNetworkNameAnnotation] != vnet.Name {
+			natgw.Annotations[osacVirtualNetworkNameAnnotation] = vnet.Name
+			annotationsChanged = true
+		}
+		if natgw.Annotations[osacExternalIPNameAnnotation] != externalIP.Name {
+			natgw.Annotations[osacExternalIPNameAnnotation] = externalIP.Name
+			annotationsChanged = true
+		}
+		if natgw.Annotations[osacVNIPv4CIDRAnnotation] != vnet.Spec.IPv4CIDR {
+			natgw.Annotations[osacVNIPv4CIDRAnnotation] = vnet.Spec.IPv4CIDR
+			annotationsChanged = true
+		}
 	}
 	if annotationsChanged {
 		if err := r.Update(ctx, natgw); err != nil {
@@ -267,11 +328,21 @@ func (r *NATGatewayReconciler) handleUpdate(ctx context.Context, natgw *v1alpha1
 		return ctrl.Result{}, nil
 	}
 
-	// Compute desired config version from spec and inherited implementation strategy
-	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(struct {
-		Spec                   v1alpha1.NATGatewaySpec
-		ImplementationStrategy string
-	}{natgw.Spec, implementationStrategy})
+	var desiredVersion string
+	if contractVersion == networkmanager.NATGatewayContractVersionV1 {
+		ctx = provisioning.WithNATGatewayContext(ctx, natGatewayContext)
+		desiredVersion, err = provisioning.ComputeDesiredConfigVersion(struct {
+			Spec                   v1alpha1.NATGatewaySpec
+			ImplementationStrategy string
+			ContractVersion        string
+			Context                provisioning.NATGatewayContext
+		}{natgw.Spec, implementationStrategy, contractVersion, natGatewayContext})
+	} else {
+		desiredVersion, err = provisioning.ComputeDesiredConfigVersion(struct {
+			Spec                   v1alpha1.NATGatewaySpec
+			ImplementationStrategy string
+		}{natgw.Spec, implementationStrategy})
+	}
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to compute desired config version: %w", err)
 	}
@@ -335,26 +406,37 @@ func (r *NATGatewayReconciler) handleProvisioning(ctx context.Context, natgw *v1
 		return ctrl.Result{}, nil
 	}
 
+	callbacks := &provisioning.PollCallbacks{
+		OnFailed: func(message string) {
+			setNATGatewayPhase(&natgw.Status, v1alpha1.NATGatewayPhaseFailed)
+			setReadyConditionFailed(&natgw.Status.Conditions, message)
+		},
+		OnSuccess: func(_ provisioning.ProvisionStatus) {
+			setNATGatewayPhase(&natgw.Status, v1alpha1.NATGatewayPhaseReady)
+			setReadyConditionTrue(&natgw.Status.Conditions)
+		},
+	}
+	if natgw.Annotations[osacNATGatewayContractVersionAnnotation] == networkmanager.NATGatewayContractVersionV1 {
+		expectedContext := provisioning.NATGatewayContextFromContext(ctx)
+		callbacks.OnSuccessWithExtraVars = func(status provisioning.ProvisionStatusWithExtraVars) error {
+			return r.validateNATGatewayProvisionResult(ctx, natgw, expectedContext, status)
+		}
+		callbacks.OnOutputError = func(message string) {
+			failNATGatewayProvisionAttempt(natgw, message)
+		}
+	}
+
 	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, natgw,
 		&provisioning.State{Jobs: &natgw.Status.ProvisioningJobs, DesiredConfigVersion: natgw.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
-		&provisioning.PollCallbacks{
-			OnFailed: func(message string) {
-				setNATGatewayPhase(&natgw.Status, v1alpha1.NATGatewayPhaseFailed)
-				setReadyConditionFailed(&natgw.Status.Conditions, message)
-			},
-			OnSuccess: func(_ provisioning.ProvisionStatus) {
-				setNATGatewayPhase(&natgw.Status, v1alpha1.NATGatewayPhaseReady)
-				setReadyConditionTrue(&natgw.Status.Conditions)
-			},
-		},
+		callbacks,
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(natgw), &v1alpha1.NATGateway{}, func(obj client.Object) []v1alpha1.JobStatus {
 				return obj.(*v1alpha1.NATGateway).Status.ProvisioningJobs
 			})
 		},
 		func() error {
-			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(natgw), natgw.Status)
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(natgw), string(natgw.UID), natgw.Generation, natgw.Status)
 		},
 	)
 }
@@ -368,6 +450,12 @@ func (r *NATGatewayReconciler) handleDeprovisioning(ctx context.Context, natgw *
 		&natgw.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
 	if err != nil || !done {
 		return result, err
+	}
+	if natgw.Annotations[osacNATGatewayContractVersionAnnotation] == networkmanager.NATGatewayContractVersionV1 {
+		if err := r.validateNATGatewayDeprovisionResult(ctx, natgw); err != nil {
+			failNATGatewayDeprovisionAttempt(natgw, err.Error())
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
 	}
 	return ctrl.Result{}, nil
 }

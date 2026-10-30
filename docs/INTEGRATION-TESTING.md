@@ -9,6 +9,7 @@ component's directory unless explicitly marked as repository-root commands.
 
 - [Shared tiers and boundaries](#shared-tiers-and-boundaries)
 - [Planning evidence](#planning-evidence)
+- [Release automation](#release-automation)
 - [fulfillment-service](#fulfillment-service)
 - [osac-installer](#osac-installer)
 - [osac-operator](#osac-operator)
@@ -199,6 +200,30 @@ the intentional negative scenario separately. Missing production execution or
 profiling evidence remains an acceptance gap under
 [OSAC-6172](https://redhat.atlassian.net/browse/OSAC-6172).
 
+## Release automation
+
+Touched-area requirements: [workflow guide](../.github/AGENTS.md#release-safety).
+
+Run from the repository root with PyYAML 6.0.3, Bash, and jq installed:
+
+```sh
+python3 -m unittest discover -s .github/scripts -p test_umbrella_release.py -v
+```
+
+This is **[DEV] Unit** coverage. Synthetic Helm archives exercise the package
+inventory and release-note helpers. The tests execute the workflow's actual
+notification Bash with GitHub CLI and Slack requests captured by local fakes;
+the `uv` fake uses the current Python interpreter without fetching dependencies.
+Cases cover reused subchart versions, CRDs, standalone CSI charts, fallback
+metadata, failed publication, nightly/skip/cancellation conditions, and the
+actual chart release step outcome when its job allows errors. Existing release
+tests also cover stable Latest selection and check that the workflow retains
+its immutable-version guard.
+
+These tests do not validate hosted GitHub scheduling, real Slack delivery or
+rendering, or Konflux build/policy/staging operations. Those boundaries require
+an authorized hosted run; local mocks do not establish that coverage.
+
 ## fulfillment-service
 
 Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#integration-tests).
@@ -363,6 +388,61 @@ the certificate. The Kind
 `SUITE=fulfillment` target exercises deployed startup and API behavior, subject
 to the profile's configured CA and enabled services.
 
+### Install preflight (OSAC-6561)
+
+The `osac` chart checks prerequisites while Helm renders it (`templates/preflight/`,
+`files/preflight/catalog.yaml`) and publishes the result as JSON
+(`files/preflight/report.schema.json`). CI runs the unit and Helm contract tiers
+as the `Unit tests (osac-installer)` leg and the Kind tier as the three
+`Integration test (osac-installer preflight, Helm …)` legs (3.18.0, 3.22.0 and
+4.2.2), all registered in `.github/ci-tests.yml` and run by
+`.github/workflows/tests.yml`, so the
+scheduled and nightly integration runs include them. None of them goes through
+a Makefile target.
+
+| Tier | Command | Real | Faked or not covered |
+|---|---|---|---|
+| Unit, [DEV] OSAC-6566 | `helm unittest charts/osac` from `osac-installer/` (plugin pinned in the workflow) | Helm rendering of the real chart, the engine, catalog, report and failure message | The cluster: `lookup`, capabilities and the release revision are mocked. The plugin's fake client rejects a LIST of a kind with no objects, so empty-list branches are not covered here. |
+| Helm contract, [DEV] OSAC-6562, OSAC-6566 | `uv run --script scripts/test-preflight-render.py` from `osac-installer/` | Offline `helm template` of the umbrella and CSI charts; report schema validation; catalog consistency; the packaged chart archive | No cluster. Asserts the log policy on every hook Job, the CSI hook deadlines, that an offline render never blocks, that `preflight.*` values are closed by the schema, and that `helm package` ships the catalog, schema and preflight templates and no unit tests. |
+| Component integration, [DEV] OSAC-6566 | `uv run --script scripts/test-preflight-kind.py` against a Kind context | Helm 3.18.0, 3.22.0 and 4.2.2, a real API server, real `lookup`, release Secrets, hooks and failed-hook logs | A preflight-only copy of the chart (no workloads); the prerequisites are stub CRDs, a Service with an EndpointSlice and Secrets; OpenShift-only checks run as `skipped: not OpenShift`. |
+
+The Kind test covers a healthy install, an unchanged upgrade, a faulted upgrade
+that leaves the deployed revision and the last passing report intact, the
+install-versus-upgrade severity split, redaction of a database URL, a missing
+namespace, four independent faults reported once on a fresh install, and a
+failing hook that prints its pod log (with a control without the annotation).
+It also covers:
+
+- an installer that cannot read the cluster: with `validation.enabled=false`
+  no cluster read happens and the install works; with validation on, Helm's
+  own `forbidden` error stops the render before anything is installed;
+- the first upgrade of a release made by a chart that had no preflight, with
+  `--reuse-values` (the old chart is a stand-in with its own pre-install hook
+  and the full defaults minus `preflight`; it is not the published chart);
+- installing from the packaged chart archive;
+- the report ConfigMap outliving `helm uninstall`, a reinstall next to it, and
+  the removal command from the customer guide;
+- `--no-hooks`, `--atomic` and `helm rollback`: the render-time gate still
+  applies, writes no report without hooks, adds no rollback revision, and a
+  rollback does not run it.
+
+It refuses to run on a context that is not a Kind cluster.
+
+Coverage gaps:
+
+- The OpenShift-only checks (`ocp-version`, `aap-operator-ready`,
+  `aap-license-secret`) run against a real OpenShift API only in the deployed
+  OpenShift lanes. Owner: [OSAC-6568](https://redhat.atlassian.net/browse/OSAC-6568).
+- Resource shortage and image-pull failures are not detected before the
+  installation starts; they surface at `--wait` time. Later slices of
+  [OSAC-6561](https://redhat.atlassian.net/browse/OSAC-6561) cover them.
+- Helm 4 `--dry-run=server` (and `helm install --dry-run=server` on Helm 3)
+  cannot print a report on a cluster that lacks a CRD the chart renders, even
+  in report mode, because Helm maps every rendered kind first. On Helm 3 the
+  `helm template --dry-run=server -s templates/preflight/report.yaml` form
+  works anywhere; on Helm 4 the failing render's JSON line is the portable
+  channel.
+
 ### OSAC-5343 deployed enablement coverage
 
 The release E2E path adds these assertions to existing user journeys. The
@@ -447,6 +527,7 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
 - **AgentlessNet Subnet parent context:** `internal/controller/subnet_controller_test.go` follows reconciliation through provider dispatch and verifies the parent Fulfillment UUID, Kubernetes UID, tenant, and phase are passed to AAP provisioning. It does not exercise the AAP job itself.
 - **AgentlessNet ExternalIP v1 allocation/release ([DEV] OSAC-6307):** `internal/controller/externalip_contract_envtest_test.go` drives public ExternalIP Reconcile against Envtest. It covers allocation result validation and status publication without an allocation annotation, rejection of a stale submitted pool snapshot, release finalizer retention for mismatched submitted inputs, successful release retry, and a terminating ExternalIPAttachment delaying provider release. The suite uses a local manager with real API-server storage and test indexes for attachment and NATGateway references. `externalip_contract_test.go` covers artifact envelope, submitted resource and pool identity, lifecycle, address, and release validation. The provider is fixture-driven; AAP job input and artifact transport against a deployed AAP server remains an E2E boundary gap under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 - **AgentlessNet ExternalIPAttachment v1 ([DEV] OSAC-6308):** Controller unit tests validate the BMaaS dependency snapshot, reject a result after the target address changes, mark Ready only for a matching successful AAP artifact, and retain the detach finalizer when the artifact is invalid. `osac-aap` unit and component-integration tests exercise the schema-v1 attachment reservation and production attach/detach playbooks with provider commands replaced by fixtures. These tests do not establish a deployed AAP boundary or packet delivery; the VLAN lab E2E owns client reachability.
+- **AgentlessNet NATGateway v1 ([DEV] OSAC-6202):** `natgateway_contract_test.go` and `natgateway_contract_envtest_test.go` cover manager version registration, the controller-supplied dependency snapshot, same-job input/result validation, changed dependency rejection, and desired-configuration stability when a same-VN Subnet is created or deleted. AAP unit tests cover VN-wide SNAT, the saved transit exemption, constant rule count/order, duplicate repair, legacy-payload rejection, cross-consumer ExternalIP exclusivity, deletion guards, and provider command ownership/order. `tests/integration/targets/agentless_net_nat_gateway/tasks/baseline.yml` runs the production NATGateway ensure/delete playbooks with zero Subnets, temporary SQLite, result artifacts, retry, and failed-cleanup retention; provider commands are fixture-backed and the child job receives unusable Kubernetes credentials. No AAP server, external routing, BGP peer convergence, or packet delivery is exercised. QE coverage remains under [OSAC-5533](https://redhat.atlassian.net/browse/OSAC-5533).
 - **LVMS Volume lifecycle:** `lvms_vendor_provisioner_envtest_test.go` covers
   RWO/RWOP provisioning, generated names, persisted UID resumes, terminating
   resource replacement and deletion. Stale parent snapshots and conflicts in
@@ -662,7 +743,7 @@ applicable integration tests separately to validate workflow behavior.
 ### Coverage notes
 
 - **Filters, variable transforms, and isolated plugin logic:** Include invalid input and default handling.
-- **AgentlessNet VirtualNetwork/Subnet state and command helpers:** Unit coverage proves the current v1 schema initialization, fail-closed rejection of incompatible v1/v2 databases, internal allocation and exhaustion, exclusion parsing for bridge memberships and NVUE reserved ranges, parent-lock serialization, retry retention, VLAN interfaces, derived DHCP-manager selection, DHCP rendering/service lifecycle, lease preservation, and diagnostics with mocked provider commands. OSAC-6306 pool unit cases prove immutable identity and idempotent identity-checked deletion. OSAC-6308 attachment unit cases prove the schema-v1 attachment row, identity/retry/target-replacement behavior, dependency deletion guards, and owner-scoped DNAT, forwarding, route, and conntrack cleanup commands. The existing ExternalIPPool operator controller test verifies pool deprovision waits until child ExternalIP CRs are removed. The operator envtest verifies Subnet parent-context construction; the Kind pool target verifies the ExternalIPPool CR's Kubernetes UID, Fulfillment label, tenant, family, and CIDR reach saved state through the existing playbooks. AAP/Kind service-readiness checks do not prove client leases or traffic delivery.
+- **AgentlessNet VirtualNetwork/Subnet state and command helpers:** Unit coverage proves the current v1 schema initialization, additive recognition of the earlier v1 consumer-table layouts, fail-closed rejection of incompatible v1/v2 databases, internal allocation and exhaustion, exclusion parsing for bridge memberships and NVUE reserved ranges, parent-lock serialization, retry retention, VLAN interfaces, derived DHCP-manager selection, DHCP rendering/service lifecycle, lease preservation, and diagnostics with mocked provider commands. OSAC-6306 pool unit cases prove immutable identity and idempotent identity-checked deletion. OSAC-6308 attachment unit cases prove the schema-v1 attachment row, identity/retry/target-replacement behavior, dependency deletion guards, and owner-scoped DNAT, forwarding, route, and conntrack cleanup commands. OSAC-6202 NATGateway unit cases prove VN-wide SNAT, transit exemption/order, constant rule count, zero-Subnet readiness, Subnet independence, cleanup retention, explicit SNAT and UID-scoped forwarding/bypass/route cleanup. The existing ExternalIPPool operator controller test verifies pool deprovision waits until child ExternalIP CRs are removed. The operator envtest verifies Subnet parent-context construction and NATGateway desired-configuration stability; the Kind pool target verifies the ExternalIPPool CR's Kubernetes UID, Fulfillment label, tenant, family, and CIDR reach saved state through the existing playbooks. AAP/Kind service-readiness checks do not prove client leases or traffic delivery.
 - **Ansible roles, workflow tasks, hooks, leases, finalizers, or Kubernetes resources:** The test must exercise the role/playbook through Ansible against Kind.
 - **Netris tenant networking idempotency (OSAC-4923, [DEV]):** Unit tests cover the idempotency filters and response normalization. The `tests/integration/targets/netris_idempotency/tasks/baseline.yml` component target runs the real top-level Netris playbooks against Kind and a stateful local Netris HTTP fixture. It covers create/rerun, immutable drift and unverifiable fields, partial-operation recovery, ownership-checked deletion, ExternalIP pool membership, default-resource guards, attachment move retries, and sanitized AAP failure output.
   The fixture proves caller-side playbook behavior; it does not confirm response contracts against a live Netris controller. See `osac-aap/docs/netris-idempotency-inventory.md` for the operation matrix. SecurityGroup stale ACL pruning remains OSAC-4888; broader live-provider coverage remains under OSAC-4843.

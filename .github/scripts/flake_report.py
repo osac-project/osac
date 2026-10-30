@@ -3,6 +3,7 @@
 import argparse
 import html
 import json
+import math
 import re
 from collections import Counter
 from datetime import UTC, datetime
@@ -202,6 +203,14 @@ def result_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def format_overall_failure_risk(report: dict[str, Any]) -> str:
+    """Combine complete suite failure rates, assuming independent outcomes."""
+    if report["status"] == "incomplete" or not result_summary(report["suites"])["complete"]:
+        return "Unavailable"
+    risk = 1 - math.prod(1 - suite["failed"] / (suite["passed"] + suite["failed"]) for suite in report["suites"])
+    return f"{risk:.1%}"
+
+
 def format_failure_rate(summary: dict[str, Any], *, compact: bool = False) -> str:
     if not summary["executions"]:
         return "unknown"
@@ -383,6 +392,8 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines = [
         "# Weekly Test Stability Report",
         "",
+        f"**Overall failure risk: {format_overall_failure_risk(report)}**",
+        "",
         f"{icon} **{report_status(report)}** | {campaign_date(run, full_month=True)}",
         "",
         f"**Commit:** {commit_link(run)}  ",
@@ -392,6 +403,12 @@ def render_markdown(report: dict[str, Any]) -> str:
         *render_suite_table(report),
         "",
         *render_execution_tables(report),
+        "",
+        "## How risk is calculated",
+        "",
+        "Overall failure risk is calculated from observed suite failure rates using "
+        "`1 - product(1 - suite failure rate)`, assuming independent suite outcomes. "
+        "Zero observed failures do not establish zero future risk.",
     ]
     if report["issues"]:
         lines.extend(["", f"## {INCOMPLETE_ICON} Reporting notes", *[f"- {issue}" for issue in report["issues"]]])
@@ -449,7 +466,7 @@ def slack_summary_sections(report: dict[str, Any]) -> list[str]:
     groups = [slack_group_summary(title, suites) for title, suites in grouped_suites(report)]
     run = report["run"]
     links = f"Commit: {commit_link(run, slack=True)} · <{run['url']}|Campaign>"
-    return [status, *groups, links]
+    return [f"*Overall failure risk: {format_overall_failure_risk(report)}*", status, *groups, links]
 
 
 def render_slack(report: dict[str, Any]) -> dict[str, Any]:

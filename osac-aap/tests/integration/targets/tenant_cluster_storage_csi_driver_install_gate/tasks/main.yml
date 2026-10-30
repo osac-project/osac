@@ -5,6 +5,8 @@
 # sends a Tenant) and CaaS/guest-cluster storage (handleCaaSUpdate, sends a ClusterOrder).
 # csi_driver_install must fire for the Tenant (hub) case and NEVER for the ClusterOrder
 # (guest-cluster) case, since it always targets the hub's default kubeconfig context.
+# Legacy ClusterOrder VAST tiers still use the VAST provider's installer on the guest
+# cluster until OSAC CSI support for CaaS is complete.
 #
 # Verifies the playbook's when: osac_job_vars.resource.kind == 'Tenant' gate by stubbing
 # the real Helm install via csi_driver_install_override (same override mechanism
@@ -41,6 +43,98 @@
 # and "Stage 2: Cluster storage provisioning" contexts), which drive
 # handleBackendReadiness against a real envtest control plane. The
 # csi_driver_install_override stub in both cases below is therefore intentional.
+
+- name: Verify isolated Kind cluster before creating native CSI fixtures
+  hosts: localhost
+  gather_facts: false
+  any_errors_fatal: true
+
+  tasks:
+    - name: Read the active Kubernetes context
+      ansible.builtin.command: kubectl config current-context
+      register: _native_csi_fixture_context
+      changed_when: false
+
+    - name: Read available Kind clusters
+      ansible.builtin.command: kind get clusters
+      register: _native_csi_fixture_clusters
+      changed_when: false
+
+    - name: Require the dedicated osac-test Kind cluster
+      ansible.builtin.assert:
+        that:
+          - _native_csi_fixture_context.stdout == 'kind-osac-test'
+          - "'osac-test' in _native_csi_fixture_clusters.stdout_lines"
+        fail_msg: >-
+          This integration target creates and removes cluster-scoped CSI/OLM fixtures.
+          Run it only against the dedicated kind-osac-test cluster.
+
+    - name: Read existing OLM Subscriptions
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+      register: _native_csi_fixture_subscriptions
+
+    - name: Read any pre-existing Trident CSIDriver fixture
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.trident.netapp.io
+      register: _native_csi_fixture_trident_driver
+
+    - name: Read any pre-existing VAST NFS CSIDriver fixture
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.vastdata.com
+      register: _native_csi_fixture_vast_driver
+      # setup_test_env.sh seeds this registration to isolate unrelated VAST tests.
+      # The ClusterOrder scenario temporarily removes and then restores it below.
+
+    - name: Read any pre-existing TridentBackendConfig CRD fixture
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: tridentbackendconfigs.trident.netapp.io
+      register: _native_csi_fixture_trident_crd
+
+    - name: Read existing Trident OperatorGroups
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1
+        kind: OperatorGroup
+      register: _native_csi_fixture_operator_groups
+
+    - name: Read any pre-existing marketplace namespace fixture
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: openshift-marketplace
+      register: _native_csi_fixture_marketplace_namespace
+
+    - name: Require clean OLM and Trident fixtures before mutation
+      ansible.builtin.assert:
+        that:
+          - >-
+            _native_csi_fixture_subscriptions.resources
+            | selectattr('metadata.name', 'equalto', 'trident-operator')
+            | selectattr('metadata.namespace', 'equalto', 'trident-operator')
+            | list | length == 0
+          - >-
+            _native_csi_fixture_subscriptions.resources
+            | selectattr('metadata.name', 'equalto', 'vast-csi-operator')
+            | selectattr('metadata.namespace', 'equalto', 'vast-csi-system')
+            | list | length == 0
+          - >-
+            _native_csi_fixture_operator_groups.resources
+            | selectattr('metadata.name', 'equalto', 'trident-operator-group')
+            | selectattr('metadata.namespace', 'equalto', 'trident-operator')
+            | list | length == 0
+          - _native_csi_fixture_trident_crd.resources | length == 0
+          - _native_csi_fixture_trident_driver.resources | length == 0
+          - _native_csi_fixture_marketplace_namespace.resources | length == 0
+        fail_msg: >-
+          Native CSI fixture resources already exist in osac-test. Clean the
+          dedicated test cluster before rerunning this target.
 
 # ── Positive case: Tenant kind -- csi_driver_install must fire ──
 - name: "Tenant Cluster Storage CSI Driver Install Gate - Setup (Tenant case)"
@@ -158,6 +252,9 @@
         # file-level comment above.
         _cluster_name: "test-cluster"
         csi_driver_install_override:
+          name: osac.test_overrides.csi_driver_install_hooks
+          tasks_from: install.yaml
+        vast_storage_csi_operator_install_override:
           name: osac.test_overrides.csi_driver_install_hooks
           tasks_from: install.yaml
 
@@ -501,6 +598,16 @@
         csi_driver_install_override:
           name: osac.test_overrides.csi_driver_install_hooks
           tasks_from: install.yaml
+        vast_storage_csi_operator_install_override:
+          name: osac.test_overrides.csi_driver_install_hooks
+          tasks_from: install.yaml
+
+    - name: Remove the setup VAST registration so legacy CaaS install is exercised
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.vastdata.com
 
 - name: Run tenant cluster storage playbook with a ClusterOrder dispatch (negative case)
   ansible.builtin.import_playbook: ../../../../../playbook_osac_create_tenant_cluster_storage.yml
@@ -522,12 +629,39 @@
     - name: "Assert csi_driver_install's override did NOT fire for the ClusterOrder (guest-cluster) dispatch"
       ansible.builtin.assert:
         that:
-          - "'csi_driver_install' not in _override_log_co"
+          - "'| csi_driver_install |' not in _override_log_co"
         fail_msg: >-
           csi_driver_install override fired for a ClusterOrder dispatch -- it must only ever
           target the hub's default kubeconfig context and must never run for CaaS/guest-cluster
           storage. Log: {{ _override_log_co }}
         success_msg: "csi_driver_install correctly skipped for the ClusterOrder (guest-cluster) dispatch"
+
+    - name: Assert legacy VAST CSI installation remains enabled for ClusterOrder
+      ansible.builtin.assert:
+        that:
+          - "'native_csi_driver_install' in _override_log_co"
+          - "'drivers=[\"csi.vastdata.com\"]' in _override_log_co"
+          - "'package=vast-csi-operator' in _override_log_co"
+          - "'providers=[\"vast\"]' in _override_log_co"
+        fail_msg: >-
+          The legacy CaaS VAST install must use the provider-native VAST installer
+          without invoking the generic Tenant/VMaaS csi_driver_install path.
+          Log: {{ _override_log_co }}
+        success_msg: "Legacy VAST CSI installation ran for the CaaS ClusterOrder guest cluster"
+
+    - name: Read the VAST NFS CSI driver created by the legacy installer override
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.vastdata.com
+      register: _co_vast_csi_driver
+
+    - name: Assert legacy VAST installation registered the CSI driver
+      ansible.builtin.assert:
+        that:
+          - _co_vast_csi_driver.resources | length == 1
+        fail_msg: "The legacy CaaS VAST installer did not register csi.vastdata.com"
+        success_msg: "The legacy CaaS VAST CSI driver is registered on the guest cluster"
 
     - name: Read StorageClass created by the real storage_provider dispatch that still ran
       kubernetes.core.k8s_info:
@@ -569,6 +703,26 @@
         namespace: "openshift-osac-storage"
       failed_when: false
 
+    - name: Delete the VAST NFS CSI driver fixture
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.vastdata.com
+      failed_when: false
+
+    - name: Restore the VAST NFS CSI driver fixture from test setup
+      when: _native_csi_fixture_vast_driver.resources | length > 0
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: CSIDriver
+          metadata:
+            name: csi.vastdata.com
+          spec:
+            attachRequired: false
+
     - name: Delete hub Secret
       kubernetes.core.k8s:
         state: absent
@@ -582,3 +736,1055 @@
       ansible.builtin.file:
         path: /tmp/osac_test_overrides.log
         state: absent
+
+# ── Native CSI action: provider selection, install, and idempotency ──
+- name: "Native CSI Driver Ensure - Setup (clean slate)"
+  hosts: localhost
+  gather_facts: true
+
+  tasks:
+    - name: Create provider Subscription namespaces
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ item }}"
+      loop:
+        - trident-operator
+        - vast-csi-system
+
+    - name: Delete provider Subscription fixtures
+      kubernetes.core.k8s:
+        state: absent
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace }}"
+      loop:
+        - {name: trident-operator, namespace: trident-operator}
+        - {name: vast-csi-operator, namespace: vast-csi-system}
+      failed_when: false
+
+    - name: Delete provider CSIDriver fixtures
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: "{{ item }}"
+      loop:
+        - csi.trident.netapp.io
+        - csi.vastdata.com
+        - block.csi.vastdata.com
+      failed_when: false
+
+    - name: Delete TridentBackendConfig CRD fixture
+      kubernetes.core.k8s:
+        state: absent
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: tridentbackendconfigs.trident.netapp.io
+        wait: true
+      failed_when: false
+
+    - name: Delete Trident operand namespace fixture
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: trident
+        wait: true
+      failed_when: false
+
+    - name: Clear override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent
+
+    - name: Create empty override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: touch
+        mode: "0600"
+
+    - name: Set provider action inputs for NetApp, VAST, LVMS, and OSAC CSI tiers
+      ansible.builtin.set_fact:
+        _native_csi_test_tiers:
+          - name: fast-block
+            protocol: block
+            provider: netapp
+            backend_id: be-netapp
+          - name: legacy-nfs
+            protocol: nfs
+            provider: vast
+            backend_id: be-vast
+          - name: shared-block
+            protocol: block
+            provider: vast
+            backend_id: be-vast
+          - name: local
+            protocol: block
+            provider: lvms
+          - name: osac-csi-block
+            protocol: block
+            provider: osac-csi
+        _native_csi_test_target_kubeconfig: >-
+          {{ lookup('env', 'KUBECONFIG') | default(lookup('env', 'HOME') + '/.kube/config', true) }}
+        storage_provider_netapp_trident_install_override:
+          name: osac.test_overrides.csi_driver_install_hooks
+          tasks_from: install.yaml
+        vast_storage_csi_operator_install_override:
+          name: osac.test_overrides.csi_driver_install_hooks
+          tasks_from: install.yaml
+
+- name: "Native CSI Driver Ensure - Install missing NetApp and VAST drivers"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: test-native-csi
+    tenant_namespace: osac-system
+
+  tasks:
+    - name: Ensure native drivers from resolved provider tiers
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_csi_driver
+        storage_provider_tiers: "{{ _native_csi_test_tiers }}"
+        storage_provider_target_kubeconfig: "{{ _native_csi_test_target_kubeconfig }}"
+        storage_provider_target_kubeconfig_insecure: false
+
+    - name: Read native CSI driver installation lease after ensure
+      kubernetes.core.k8s_info:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: provider-native-csi-install-lock
+        namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+      register: _native_csi_install_lease
+
+    - name: Assert native CSI driver installation lease was released
+      ansible.builtin.assert:
+        that:
+          - _native_csi_install_lease.resources | length == 0
+        fail_msg: "Native CSI driver installation left its cluster-wide Lease behind"
+        success_msg: "Native CSI driver installation Lease was released"
+
+- name: "Native CSI Driver Ensure - Verify install and readiness"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Read Trident installer override log
+      ansible.builtin.slurp:
+        path: /tmp/osac_test_overrides.log
+      register: _native_csi_install_log_content
+
+    - name: Parse Trident installer override log
+      ansible.builtin.set_fact:
+        _native_csi_install_log: "{{ _native_csi_install_log_content.content | b64decode }}"
+
+    - name: Assert NetApp and VAST selected their stable Manual OLM subscriptions
+      ansible.builtin.assert:
+        that:
+          - "'native_csi_driver_install' in _native_csi_install_log"
+          - "'drivers=[\"csi.trident.netapp.io\"]' in _native_csi_install_log"
+          - "'package=trident-operator' in _native_csi_install_log"
+          - "'channel=stable' in _native_csi_install_log"
+          - "'install-plan-approval=Manual' in _native_csi_install_log"
+          - "'providers=[\"netapp\"]' in _native_csi_install_log"
+          - "'drivers=[\"block.csi.vastdata.com\", \"csi.vastdata.com\"]' in _native_csi_install_log"
+          - "'package=vast-csi-operator' in _native_csi_install_log"
+        fail_msg: "Native provider installers did not use the stable Manual OLM policy: {{ _native_csi_install_log }}"
+        success_msg: "Native provider installers selected the latest stable bundle with Manual initial approval"
+
+    - name: Read Trident CSIDriver registration
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.trident.netapp.io
+      register: _native_csi_trident_driver
+
+    - name: Read the Trident AllNamespaces OperatorGroup
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1
+        kind: OperatorGroup
+        name: trident-operator-group
+        namespace: trident-operator
+      register: _native_csi_trident_operator_group
+
+    - name: Assert Trident uses an isolated AllNamespaces OperatorGroup
+      ansible.builtin.assert:
+        that:
+          - _native_csi_trident_operator_group.resources | length == 1
+          - _native_csi_trident_operator_group.resources[0].spec.targetNamespaces | default([]) | length == 0
+          - _native_csi_trident_operator_group.resources[0].spec.selector | default({}) | length == 0
+        fail_msg: "Trident must use an AllNamespaces OperatorGroup in its dedicated namespace"
+        success_msg: "Trident uses an isolated AllNamespaces OperatorGroup"
+
+    - name: Read Trident operand namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: trident
+      register: _native_csi_trident_namespace
+
+    - name: Assert the driver ensure action created the Trident operand namespace
+      ansible.builtin.assert:
+        that:
+          - _native_csi_trident_namespace.resources | length == 1
+        fail_msg: "The Trident operand namespace was not created before installation"
+        success_msg: "The Trident operand namespace exists"
+
+    - name: Assert Trident registered its CSI driver
+      ansible.builtin.assert:
+        that:
+          - _native_csi_trident_driver.resources | length == 1
+        fail_msg: "The native Trident install override did not register csi.trident.netapp.io"
+        success_msg: "Trident CSIDriver is registered"
+
+    - name: Read TridentBackendConfig CRD
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: tridentbackendconfigs.trident.netapp.io
+      register: _native_csi_tbc_crd
+
+    - name: Assert TridentBackendConfig API is ready for the following provider action
+      ansible.builtin.assert:
+        that:
+          - _native_csi_tbc_crd.resources | length == 1
+        fail_msg: "The TridentBackendConfig API was not made available by driver installation"
+        success_msg: "TridentBackendConfig CRD is available"
+
+    - name: Read VAST NFS CSIDriver registration
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.vastdata.com
+      register: _native_csi_vast_nfs_driver
+
+    - name: Read VAST block CSIDriver registration
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: block.csi.vastdata.com
+      register: _native_csi_vast_block_driver
+
+    - name: Assert VAST registered both required protocols
+      ansible.builtin.assert:
+        that:
+          - _native_csi_vast_nfs_driver.resources | length == 1
+          - _native_csi_vast_block_driver.resources | length == 1
+        fail_msg: "VAST did not register both required CSI protocols"
+        success_msg: "VAST NFS and block drivers are registered"
+
+    - name: Read Trident controller Deployment
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: trident-controller
+        namespace: trident
+      register: _native_csi_trident_controller
+
+    - name: Read Trident node DaemonSet
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: DaemonSet
+        name: trident-node-linux
+        namespace: trident
+      register: _native_csi_trident_node
+
+    - name: Assert Trident controller and node workloads are ready
+      ansible.builtin.assert:
+        that:
+          - _native_csi_trident_controller.resources | length == 1
+          - _native_csi_trident_controller.resources[0].status.availableReplicas | default(0) | int > 0
+          - _native_csi_trident_node.resources | length == 1
+          - _native_csi_trident_node.resources[0].status.desiredNumberScheduled | default(0) | int > 0
+          - >-
+            (_native_csi_trident_node.resources[0].status.numberReady | default(0) | int)
+            >=
+            (_native_csi_trident_node.resources[0].status.desiredNumberScheduled | default(0) | int)
+        fail_msg: "Trident controller or node workload is not ready"
+        success_msg: "Trident controller and node workloads are ready"
+
+- name: "Native CSI Driver Ensure - Verify existing driver skips installation"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: test-native-csi
+    tenant_namespace: osac-system
+
+  tasks:
+    - name: Clear override log before the idempotent rerun
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent
+
+    - name: Create empty override log for the idempotent rerun
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: touch
+        mode: "0600"
+
+    - name: Re-run driver ensure with Trident already present
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_csi_driver
+        storage_provider_tiers: "{{ _native_csi_test_tiers }}"
+        storage_provider_target_kubeconfig: "{{ _native_csi_test_target_kubeconfig }}"
+        storage_provider_target_kubeconfig_insecure: false
+
+    - name: Read installer log after the idempotent rerun
+      ansible.builtin.slurp:
+        path: /tmp/osac_test_overrides.log
+      register: _native_csi_rerun_log_content
+
+    - name: Assert the existing Trident driver skips installation
+      ansible.builtin.assert:
+        that:
+          - "'native_csi_driver_install' not in (_native_csi_rerun_log_content.content | b64decode)"
+        fail_msg: "The native Trident installer ran even though the CSIDriver already exists"
+        success_msg: "The existing Trident CSIDriver skipped installation"
+
+- name: "Native CSI Driver Ensure - Skip unsupported providers and reject NetApp NFS"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: test-native-csi
+    tenant_namespace: osac-system
+
+  tasks:
+    - name: Skip provider without a native CSI handler
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_csi_driver
+        storage_provider_tiers:
+          - name: unsupported
+            protocol: block
+            provider: pure
+
+    - name: Assert provider without a native CSI handler was skipped
+      ansible.builtin.assert:
+        that:
+          - _native_csi_driver_unknown_providers == ['pure']
+
+    - name: Reject NetApp NFS
+      block:
+        - name: Call driver ensure for a NetApp NFS tier
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: ensure_csi_driver
+            storage_provider_tiers:
+              - name: nfs
+                protocol: nfs
+                provider: netapp
+
+        - name: Fail if NetApp NFS was accepted
+          ansible.builtin.fail:
+            msg: "The driver ensure action accepted NetApp NFS"
+      rescue:
+        - name: Assert NetApp NFS failure is actionable
+          ansible.builtin.assert:
+            that:
+              - >-
+                'NetApp native CSI setup supports protocol' in
+                (ansible_failed_result.results | default([]) | selectattr('msg', 'defined') | map(attribute='msg') | join(' | '))
+            fail_msg: >-
+              Role failed but with unexpected message:
+              {{ ansible_failed_result.results | default(ansible_failed_result.msg) | default('unknown') }}
+
+- name: "Native CSI Driver Ensure - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete provider Subscription fixtures
+      kubernetes.core.k8s:
+        state: absent
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace }}"
+      loop:
+        - {name: trident-operator, namespace: trident-operator}
+        - {name: vast-csi-operator, namespace: vast-csi-system}
+      failed_when: false
+
+    - name: Delete the Trident OperatorGroup fixture
+      kubernetes.core.k8s:
+        state: absent
+        api_version: operators.coreos.com/v1
+        kind: OperatorGroup
+        name: trident-operator-group
+        namespace: trident-operator
+      failed_when: false
+
+    - name: Delete Trident CSIDriver fixture
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.trident.netapp.io
+      failed_when: false
+
+    - name: Delete VAST CSIDriver fixtures
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: "{{ item }}"
+      loop:
+        - csi.vastdata.com
+        - block.csi.vastdata.com
+      failed_when: false
+
+    - name: Delete TridentBackendConfig CRD fixture
+      kubernetes.core.k8s:
+        state: absent
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: tridentbackendconfigs.trident.netapp.io
+        wait: true
+      failed_when: false
+
+    - name: Delete Trident namespace fixture
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: trident
+        wait: true
+      failed_when: false
+
+    - name: Delete Trident operator namespace fixture
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: trident-operator
+        wait: true
+      failed_when: false
+
+    - name: Delete native driver override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent
+
+- name: Prepare isolated host for existing-driver no-op verification
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Add local host without the earlier test override facts
+      ansible.builtin.add_host:
+        name: native-csi-reconcile
+        groups: native_csi_reconcile
+        ansible_connection: local
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+
+- name: "Native CSI Driver Ensure - Setup registered drivers and customer Subscriptions"
+  hosts: native_csi_reconcile
+  gather_facts: true
+
+  tasks:
+    - name: Create the Trident operator Subscription namespace fixture
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: trident-operator
+
+    - name: Create the Trident operand namespace fixture
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: trident
+
+    - name: Seed the existing Trident CSIDriver without an operator fixture
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: CSIDriver
+          metadata:
+            name: csi.trident.netapp.io
+          spec:
+            attachRequired: false
+
+    - name: Seed an existing Trident Subscription with nonconforming settings
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: trident-operator
+            namespace: trident-operator
+          spec:
+            channel: preview
+            installPlanApproval: Automatic
+            name: wrong-package
+            source: community-operators
+            sourceNamespace: openshift-marketplace
+            startingCSV: trident-operator.v25.10.0
+
+    - name: Delete existing VAST CSIDriver fixtures
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: "{{ item }}"
+      loop:
+        - csi.vastdata.com
+        - block.csi.vastdata.com
+
+    - name: Create VAST NFS CSIDriver fixture
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: CSIDriver
+          metadata:
+            name: csi.vastdata.com
+          spec:
+            attachRequired: false
+
+    - name: Create VAST block CSIDriver fixture
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: CSIDriver
+          metadata:
+            name: block.csi.vastdata.com
+          spec:
+            attachRequired: false
+
+    - name: Create namespace for the VAST Subscription fixture
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: vast-csi-system
+
+    - name: Seed an existing VAST Subscription with nonconforming settings
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: vast-csi-operator
+            namespace: vast-csi-system
+          spec:
+            channel: preview
+            installPlanApproval: Automatic
+            name: wrong-package
+            source: community-operators
+            sourceNamespace: openshift-marketplace
+            startingCSV: vast-csi-operator.v2.5.0
+
+    - name: Reset native driver override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent
+
+    - name: Set the selected test target kubeconfig
+      ansible.builtin.set_fact:
+        _vast_native_csi_target_kubeconfig: >-
+          {{ lookup('env', 'KUBECONFIG') | default(lookup('env', 'HOME') + '/.kube/config', true) }}
+
+- name: "Native CSI Driver Ensure - Leave existing drivers and Subscriptions unchanged"
+  hosts: native_csi_reconcile
+  gather_facts: false
+
+  vars:
+    tenant_name: test-vast-native-csi
+    tenant_namespace: osac-system
+
+  tasks:
+    - name: Ensure NetApp and VAST CSI drivers and clean fixtures on failure
+      block:
+        - name: Ensure NetApp and VAST CSI drivers from the resolved protocol tiers
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: ensure_csi_driver
+            storage_provider_tiers:
+              - name: trident-block
+                protocol: block
+                provider: netapp
+              - name: shared-files
+                protocol: nfs
+                provider: vast
+                backend_id: be-vast
+              - name: fast-block
+                protocol: block
+                provider: vast
+                backend_id: be-vast
+            storage_provider_target_kubeconfig: "{{ _vast_native_csi_target_kubeconfig }}"
+            storage_provider_target_kubeconfig_insecure: false
+      rescue:
+        - name: Delete the Trident Subscription after a failed initial reconcile
+          kubernetes.core.k8s:
+            state: absent
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: trident-operator
+            namespace: trident-operator
+          failed_when: false
+
+        - name: Delete the VAST Subscription after a failed initial reconcile
+          kubernetes.core.k8s:
+            state: absent
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: vast-csi-operator
+            namespace: vast-csi-system
+          failed_when: false
+
+        - name: Delete CSI driver fixtures after a failed initial reconcile
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: CSIDriver
+            name: "{{ item }}"
+          loop:
+            - csi.trident.netapp.io
+            - csi.vastdata.com
+            - block.csi.vastdata.com
+          failed_when: false
+
+        - name: Delete TridentBackendConfig CRD after a failed initial reconcile
+          kubernetes.core.k8s:
+            state: absent
+            api_version: apiextensions.k8s.io/v1
+            kind: CustomResourceDefinition
+            name: tridentbackendconfigs.trident.netapp.io
+            wait: true
+          failed_when: false
+
+        - name: Delete the Trident OperatorGroup after a failed initial reconcile
+          kubernetes.core.k8s:
+            state: absent
+            api_version: operators.coreos.com/v1
+            kind: OperatorGroup
+            name: trident-operator-group
+            namespace: trident-operator
+          failed_when: false
+
+        - name: Delete operator namespaces after a failed initial reconcile
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: "{{ item }}"
+            wait: true
+          loop:
+            - trident
+            - trident-operator
+            - vast-csi-system
+          failed_when: false
+
+        - name: Delete native driver override log after a failed initial reconcile
+          ansible.builtin.file:
+            path: /tmp/osac_test_overrides.log
+            state: absent
+          failed_when: false
+
+        - name: Fail after cleaning fixtures for the failed native CSI reconcile
+          ansible.builtin.fail:
+            msg: >-
+              Native CSI driver ensure failed. Test fixtures were cleaned up;
+              see the original task output above.
+
+- name: "Native CSI Driver Ensure - Verify installed drivers skip OLM install"
+  hosts: native_csi_reconcile
+  gather_facts: false
+
+  vars:
+    tenant_name: test-vast-native-csi
+    tenant_namespace: osac-system
+
+  tasks:
+    - name: Verify native CSI drivers and always clean up fixtures
+      block:
+        - name: Read VAST NFS CSIDriver
+          kubernetes.core.k8s_info:
+            api_version: storage.k8s.io/v1
+            kind: CSIDriver
+            name: csi.vastdata.com
+          register: _vast_native_nfs_driver
+
+        - name: Read VAST block CSIDriver
+          kubernetes.core.k8s_info:
+            api_version: storage.k8s.io/v1
+            kind: CSIDriver
+            name: block.csi.vastdata.com
+          register: _vast_native_block_driver
+
+        - name: Read the existing VAST Subscription
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: vast-csi-operator
+            namespace: vast-csi-system
+          register: _vast_native_csi_subscription
+
+        - name: Read the existing Trident Subscription
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: trident-operator
+            namespace: trident-operator
+          register: _trident_native_csi_subscription
+
+        - name: Assert existing provider Subscriptions are unchanged
+          ansible.builtin.assert:
+            that:
+              - item.resources | length == 1
+              - item.resources[0].spec.channel == 'preview'
+              - item.resources[0].spec.installPlanApproval == 'Automatic'
+              - item.resources[0].spec.name == 'wrong-package'
+              - item.resources[0].spec.source == 'community-operators'
+              - item.resources[0].spec.sourceNamespace == 'openshift-marketplace'
+              - item.resources[0].spec.startingCSV == item.starting_csv
+            fail_msg: "{{ item.name }} Subscription changed despite its CSI driver already being registered"
+            success_msg: "Existing {{ item.name }} Subscription was left unchanged"
+          loop:
+            - name: trident-operator
+              starting_csv: trident-operator.v25.10.0
+              resources: "{{ _trident_native_csi_subscription.resources }}"
+            - name: vast-csi-operator
+              starting_csv: vast-csi-operator.v2.5.0
+              resources: "{{ _vast_native_csi_subscription.resources }}"
+          loop_control:
+            label: "{{ item.name }}"
+
+        - name: Assert VAST NFS/block driver mappings
+          ansible.builtin.assert:
+            that:
+              - _vast_native_nfs_driver.resources | length == 1
+              - _vast_native_block_driver.resources | length == 1
+            fail_msg: "VAST NFS/block protocol mapping did not match the configured CSI drivers"
+            success_msg: "VAST NFS/block mappings use the configured CSI drivers"
+
+        - name: Clear native driver override log
+          ansible.builtin.file:
+            path: /tmp/osac_test_overrides.log
+            state: absent
+
+        - name: Create empty native driver override log
+          ansible.builtin.file:
+            path: /tmp/osac_test_overrides.log
+            state: touch
+            mode: "0600"
+
+        - name: Re-run provider driver ensure with ambient context and all drivers present
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: ensure_csi_driver
+            storage_provider_tiers:
+              - name: trident-block
+                protocol: block
+                provider: netapp
+              - name: shared-files
+                protocol: nfs
+                provider: vast
+                backend_id: be-vast
+              - name: fast-block
+                protocol: block
+                provider: vast
+                backend_id: be-vast
+            storage_provider_target_kubeconfig_insecure: false
+
+        - name: Read native CSI install Lease after ensuring already-registered drivers
+          kubernetes.core.k8s_info:
+            api_version: coordination.k8s.io/v1
+            kind: Lease
+            name: provider-native-csi-install-lock
+            namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+          register: _vast_native_csi_noop_lease
+
+        - name: Assert already-registered drivers do not acquire the install Lease
+          ansible.builtin.assert:
+            that:
+              - not (_native_csi_driver_install_lock_acquired | bool)
+              - _vast_native_csi_noop_lease.resources | length == 0
+            fail_msg: >-
+              The native CSI install Lease was acquired or remains present even
+              though all required drivers exist
+            success_msg: "Already-registered native CSI drivers skipped the install Lease"
+
+        - name: Read override log after VAST idempotent rerun
+          ansible.builtin.slurp:
+            path: /tmp/osac_test_overrides.log
+          register: _vast_native_csi_rerun_log_content
+
+        - name: Assert existing Trident and VAST drivers skip installer invocation
+          ansible.builtin.assert:
+            that:
+              - "'native_csi_driver_install' not in (_vast_native_csi_rerun_log_content.content | b64decode)"
+            fail_msg: "A native CSI installer ran even though all required drivers already exist"
+            success_msg: "Existing Trident and VAST drivers skipped installation"
+
+        - name: Clear installer log before rejecting an installed unmanaged Subscription
+          ansible.builtin.file:
+            path: /tmp/osac_test_overrides.log
+            state: absent
+
+        - name: Create an empty installer log for the unmanaged Subscription case
+          ansible.builtin.file:
+            path: /tmp/osac_test_overrides.log
+            state: touch
+            mode: "0600"
+
+        - name: Remove VAST block CSIDriver to exercise Subscription reconciliation
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: CSIDriver
+            name: block.csi.vastdata.com
+
+        - name: Create marketplace namespace for the OLM policy fixture
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: openshift-marketplace
+
+        - name: Create a certified CatalogSource fixture for Subscription policy checks
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: operators.coreos.com/v1alpha1
+              kind: CatalogSource
+              metadata:
+                name: certified-operators
+                namespace: openshift-marketplace
+              spec:
+                sourceType: grpc
+                image: registry.invalid/osac-test/certified-operators:latest
+                displayName: OSAC test certified operators
+                publisher: OSAC test
+
+        - name: Set installedCSV on the existing unmanaged VAST Subscription
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - --kubeconfig
+              - "{{ _vast_native_csi_target_kubeconfig }}"
+              - patch
+              - subscription
+              - vast-csi-operator
+              - --namespace
+              - vast-csi-system
+              - --subresource=status
+              - --type=merge
+              - --patch
+              - >-
+                {"status":{"installedCSV":"vast-csi-operator.v2.5.0",
+                "lastUpdated":"2024-01-01T00:00:00Z"}}
+          changed_when: true
+
+        - name: Reject an installed unmanaged VAST Subscription
+          block:
+            - name: Attempt to ensure a VAST driver with an unmanaged installed Subscription
+              ansible.builtin.include_role:
+                name: osac.service.storage_provider
+              vars:
+                storage_provider_action: ensure_csi_driver
+                storage_provider_tiers:
+                  - name: fast-block
+                    protocol: block
+                    provider: vast
+                    backend_id: be-vast
+                storage_provider_target_kubeconfig: "{{ _vast_native_csi_target_kubeconfig }}"
+                storage_provider_target_kubeconfig_insecure: false
+
+            - name: Fail if the installed unmanaged Subscription was accepted
+              ansible.builtin.fail:
+                msg: "The native CSI ensure action accepted an installed unmanaged Subscription"
+          rescue:
+            - name: Assert installed unmanaged Subscription was rejected safely
+              ansible.builtin.assert:
+                that:
+                  - >-
+                    'must be pending and match the required stable Manual policy' in
+                    ((ansible_failed_result.msg | default('')) ~ ' ' ~
+                     (ansible_failed_result.results | default([]) | selectattr('msg', 'defined')
+                      | map(attribute='msg') | join(' ')))
+                fail_msg: >-
+                  The installed unmanaged Subscription failed for an unexpected reason:
+                  {{ ansible_failed_result.msg | default('unknown error') }}
+                success_msg: "The installed unmanaged Subscription was rejected without patching it"
+
+        - name: Read the VAST Subscription after rejecting the installed unmanaged object
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: vast-csi-operator
+            namespace: vast-csi-system
+          register: _vast_native_installed_subscription
+
+        - name: Assert the installed unmanaged Subscription remains unchanged
+          ansible.builtin.assert:
+            that:
+              - _vast_native_installed_subscription.resources | length == 1
+              - _vast_native_installed_subscription.resources[0].status.installedCSV == 'vast-csi-operator.v2.5.0'
+              - _vast_native_installed_subscription.resources[0].spec.channel == 'preview'
+              - _vast_native_installed_subscription.resources[0].spec.installPlanApproval == 'Automatic'
+              - _vast_native_installed_subscription.resources[0].spec.name == 'wrong-package'
+              - _vast_native_installed_subscription.resources[0].spec.source == 'community-operators'
+              - _vast_native_installed_subscription.resources[0].spec.sourceNamespace == 'openshift-marketplace'
+              - _vast_native_installed_subscription.resources[0].spec.startingCSV == 'vast-csi-operator.v2.5.0'
+            fail_msg: "The installed unmanaged VAST Subscription was mutated"
+            success_msg: "The installed unmanaged VAST Subscription remained unchanged"
+
+        - name: Assert the failed reconcile did not invoke the installer
+          ansible.builtin.slurp:
+            path: /tmp/osac_test_overrides.log
+          register: _vast_native_installed_subscription_log
+
+        - name: Verify the installed unmanaged Subscription stopped before installation
+          ansible.builtin.assert:
+            that:
+              - "'native_csi_driver_install' not in (_vast_native_installed_subscription_log.content | b64decode)"
+            fail_msg: "A native CSI installer ran for an installed unmanaged Subscription"
+            success_msg: "The installed unmanaged Subscription was rejected before installer invocation"
+      always:
+        - name: Delete the Trident Subscription fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: trident-operator
+            namespace: trident-operator
+          failed_when: false
+
+        - name: Delete the Trident OperatorGroup fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: operators.coreos.com/v1
+            kind: OperatorGroup
+            name: trident-operator-group
+            namespace: trident-operator
+          failed_when: false
+
+        - name: Delete the Trident CSIDriver fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: CSIDriver
+            name: csi.trident.netapp.io
+          failed_when: false
+
+        - name: Delete the TridentBackendConfig CRD fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: apiextensions.k8s.io/v1
+            kind: CustomResourceDefinition
+            name: tridentbackendconfigs.trident.netapp.io
+            wait: true
+          failed_when: false
+
+        - name: Delete the Trident operand namespace fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: trident
+            wait: true
+          failed_when: false
+
+        - name: Delete the Trident operator namespace fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: trident-operator
+            wait: true
+          failed_when: false
+
+        - name: Delete the VAST Subscription fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: vast-csi-operator
+            namespace: vast-csi-system
+          failed_when: false
+
+        - name: Delete VAST CSIDriver fixtures
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: CSIDriver
+            name: "{{ item }}"
+          loop:
+            - csi.vastdata.com
+            - block.csi.vastdata.com
+          failed_when: false
+
+        - name: Restore the VAST NFS CSI driver fixture from test setup
+          when: hostvars['localhost']._native_csi_fixture_vast_driver.resources | length > 0
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: storage.k8s.io/v1
+              kind: CSIDriver
+              metadata:
+                name: csi.vastdata.com
+              spec:
+                attachRequired: false
+
+        - name: Delete the VAST operator namespace fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: vast-csi-system
+            wait: true
+          failed_when: false
+
+        - name: Delete the test certified CatalogSource fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: operators.coreos.com/v1alpha1
+            kind: CatalogSource
+            name: certified-operators
+            namespace: openshift-marketplace
+          failed_when: false
+
+        - name: Delete the marketplace namespace fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: openshift-marketplace
+            wait: true
+          failed_when: false
+
+        - name: Delete native driver override log
+          ansible.builtin.file:
+            path: /tmp/osac_test_overrides.log
+            state: absent
+          failed_when: false

@@ -19,6 +19,23 @@
   ansible.builtin.set_fact:
     _vast_required_protocols: "{{ _provider_tiers | map(attribute='protocol') | unique | sort | list }}"
 
+# Existing CaaS ClusterOrders with provider: vast still need the VAST CSI
+# operator until OSAC CSI support for CaaS is complete. Keep this compatibility
+# install in the provider role, separate from the new Tenant/VMaaS installer
+# action. The provider dispatcher supplies the ClusterOrder guest kubeconfig via
+# module_defaults, and ensure_csi_operator.yaml leaves already-registered drivers
+# untouched.
+- name: Ensure the legacy CaaS VAST CSI driver when requested
+  when: storage_provider_caas_legacy_vast_csi_install_enabled | default(false) | bool
+  ansible.builtin.include_tasks: ensure_csi_operator.yaml
+  vars:
+    vast_storage_csi_operator_namespace: "{{ storage_provider_csi_driver_matrix.vast.installer.namespace }}"
+    vast_storage_csi_operator_package: "{{ storage_provider_csi_driver_matrix.vast.installer.package }}"
+    vast_storage_csi_operator_channel: "{{ storage_provider_csi_driver_matrix.vast.installer.channel }}"
+    vast_storage_csi_operator_approval: "{{ storage_provider_csi_driver_matrix.vast.installer.install_plan_approval }}"
+    vast_storage_csi_operator_catalog_source: "{{ storage_provider_csi_driver_matrix.vast.installer.catalog_source }}"
+    vast_storage_csi_operator_catalog_namespace: "{{ storage_provider_csi_driver_matrix.vast.installer.catalog_namespace }}"
+
 - name: Build expected StorageClass entries per tier
   ansible.builtin.set_fact:
     _vast_expected_sc_entries: >-
@@ -98,9 +115,6 @@
 
     - name: Read per-tenant credentials and config from hub Secret
       ansible.builtin.include_tasks: read_tenant_credentials.yaml
-
-    - name: Ensure VAST CSI Operator is installed
-      ansible.builtin.include_tasks: ensure_csi_operator.yaml
 
     # ── Ensure per-tier VMS resources exist (views, QoS, view policies) ──
     # These are created here (not just in setup) so JIT tiers get their backing

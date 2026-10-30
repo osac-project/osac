@@ -1,0 +1,11 @@
+---
+- name: Validate the test-only CSI installer override
+  when:
+    - lookup('env', 'OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES', default='false') | bool
+    - csi_driver_install_override is defined
+  ansible.builtin.assert:
+    that:
+      - csi_driver_install_override is mapping
+      - csi_driver_install_override.name is defined
+      - csi_driver_install_override.tasks_from is defined
+    fail_msg: "The test-only CSI installer override must provide a role name and tasks_from"

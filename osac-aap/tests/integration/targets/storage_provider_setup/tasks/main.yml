@@ -198,8 +198,11 @@
     - name: Assert VIP pool was created
       ansible.builtin.assert:
         that:
-          - _call_log | selectattr('path', 'search', 'vippools') | selectattr('method', 'equalto', 'POST') | list | length > 0
-            or _call_log | selectattr('path', 'search', 'vippools') | selectattr('method', 'equalto', 'GET') | list | length > 0
+          - >-
+            _call_log | selectattr('path', 'search', 'vippools')
+            | selectattr('method', 'equalto', 'POST') | list | length > 0
+            or _call_log | selectattr('path', 'search', 'vippools')
+            | selectattr('method', 'equalto', 'GET') | list | length > 0
         fail_msg: "No VIP pool API call found in mock call log"
         success_msg: "VIP pool API call detected"
 

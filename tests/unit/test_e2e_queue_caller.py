@@ -28,9 +28,19 @@ def test_one_job_looks_after_the_entry_and_the_old_finish_job_is_gone() -> None:
         "branch": "${{ github.event.merge_group.base_ref }}",
         "plan-result": "${{ needs.plan.result }}",
         "suites": "${{ needs.plan.outputs.suites }}",
+        "fast-track": "${{ needs.plan.outputs.fast-track }}",
     }
     assert result["secrets"] == {"OSAC_CI_APP_PRIVATE_KEY": "${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}"}
     assert "e2e-queue-result.yml@" in result["uses"]
+
+
+def test_the_plan_job_may_read_the_pull_request_and_its_checks_to_find_a_fast_track() -> None:
+    assert jobs()["plan"]["permissions"] == {
+        "contents": "read",
+        "actions": "write",
+        "pull-requests": "read",
+        "checks": "read",
+    }
 
 
 def test_no_suite_waits_for_the_job_that_watches_them() -> None:

@@ -41,6 +41,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#bare-met
 |---|---|---|
 | Pure inventory, selection, validation, or client logic | Unit | `make test` |
 | Reconciliation, finalizers, allocation, or status transitions | Envtest | `make test` |
+| Metal3 BMH allocation, error projection, power intent, credential-reference reuse, or pool readiness | Envtest ([DEV] OSAC-4844) | `internal/controller/baremetalinstance_metal3_envtest_test.go` and `baremetalpool_metal3_envtest_test.go`; `make test`. BMH status is test-driven; BMO, Ironic, BMC, and hardware are not run. |
 | Controller deployment, CRDs, pool flows, or Kubernetes wiring | Component integration | Deploy current image/manifests, then `make integration-tests`; [installer alternative](../docs/INTEGRATION-TESTING.md#bare-metal-fulfillment-operator) |
 | BareMetalInstance host teardown waits for OSAC networking cleanup, then leaves network resources untouched (NET-CLEAN-08) | Kind component integration — DEV | Isolated installer run and coverage boundary: [NET-CLEAN-08](../docs/INTEGRATION-TESTING.md#net-clean-08-deployed-bmf-ownership-boundary) |
 | Metal3, BCM, Ironic, BMC, power, or hardware semantics | Contract or real-provider integration | Follow the owning [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) task |

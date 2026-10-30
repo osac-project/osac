@@ -62,6 +62,7 @@ ROLE_TESTS=(
   "finalizer"
   "fulfillment_trust_sync"
   "lease"
+  "bm_host_provisioning_patch"
   "agentless_net_stub"
   "agentless_net_external_ip_pool"
   "agentless_net_external_ip"
@@ -82,6 +83,7 @@ ROLE_SCENARIO_TESTS=(
   "cluster_working_namespace:test_predefined"
   "cluster_working_namespace:test_found"
   "compute_instance_create:sysprep_secret_copy"
+  "bm_host_provisioning_patch:metal3_lifecycle"
 )
 
 echo "=== Running Workflow Integration Tests ==="

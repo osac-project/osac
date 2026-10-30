@@ -120,6 +120,17 @@ var _ = Describe("Metal3 Management Backend", func() {
 			Expect(status.IsTransitioning).To(BeTrue())
 		})
 
+		It("returns an error when Metal3 reports an operational error", func() {
+			bmh := newBMHForManagement("host-error", false, false)
+			bmh.Status.OperationalStatus = metal3api.OperationalStatusError
+			bmh.Status.ErrorMessage = "Ironic could not reach the BMC"
+			m := newMetal3ManagementClient(bmh)
+
+			status, err := m.GetPowerState(ctx, metal3TestNamespace+"/host-error")
+			Expect(status).To(BeNil())
+			Expect(err).To(MatchError(ContainSubstring("has error status")))
+		})
+
 		It("returns error for missing host", func() {
 			m := newMetal3ManagementClient()
 

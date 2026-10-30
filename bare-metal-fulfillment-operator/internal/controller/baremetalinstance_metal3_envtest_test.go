@@ -411,6 +411,113 @@ var _ = Describe("BareMetalInstance Metal3 Integration", func() {
 			Expect(updatedBMH.Spec.ConsumerRef).NotTo(BeNil())
 			Expect(updatedBMH.Spec.ConsumerRef.Name).To(Equal(string(bmi.UID)))
 		})
+
+		It("retries allocation until an inspecting BMH becomes available", func() {
+			createMetal3BMH(bmhName, map[string]string{
+				inventory.Metal3HostTypeLabel: "gpu-node",
+			}, metal3api.OperationalStatusOK, metal3api.StateInspecting)
+
+			bmi := &v1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: bmiName, Namespace: metal3TestNS},
+				Spec: v1alpha1.BareMetalInstanceSpec{
+					Selector: v1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"type": "gpu-node"},
+					},
+					TemplateID: shared.OsacNoopTemplate,
+				},
+			}
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+
+			reconciler := newMetal3Reconciler()
+			reconcileN(reconciler, bmiName, 1) // inventory finalizer
+			result := reconcileN(reconciler, bmiName, 1)
+			Expect(result.RequeueAfter).To(Equal(DefaultNoFreeHostsPollIntervalDuration))
+			bmi = getBMI(bmiName)
+			Expect(bmi.Spec.ExternalHostID).To(BeEmpty())
+
+			bmh := getBMH(bmhName)
+			bmh.Status.Provisioning.State = metal3api.StateAvailable
+			Expect(k8sClient.Status().Update(ctx, bmh)).To(Succeed())
+
+			reconcileN(reconciler, bmiName, 2)
+			bmi = getBMI(bmiName)
+			Expect(bmi.Spec.ExternalHostID).To(Equal(metal3TestNS + "/" + bmhName))
+			Expect(bmi.Spec.HostClass).To(Equal(metal3HostClass))
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+		})
+
+		It("continues reconciling when an assigned BMH unexpectedly deprovisions", func() {
+			createMetal3BMH(bmhName, map[string]string{
+				inventory.Metal3HostTypeLabel: "gpu-node",
+			}, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+
+			bmi := &v1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: bmiName, Namespace: metal3TestNS},
+				Spec: v1alpha1.BareMetalInstanceSpec{
+					Selector: v1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"type": "gpu-node"},
+					},
+					TemplateID: shared.OsacNoopTemplate,
+				},
+			}
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+
+			reconciler := newMetal3Reconciler()
+			reconcileN(reconciler, bmiName, 2)
+			bmi = getBMI(bmiName)
+			Expect(bmi.Spec.ExternalHostID).To(Equal(metal3TestNS + "/" + bmhName))
+
+			bmh := getBMH(bmhName)
+			bmh.Status.Provisioning.State = metal3api.StateDeprovisioning
+			Expect(k8sClient.Status().Update(ctx, bmh)).To(Succeed())
+
+			// Assignment remains idempotent for the same consumer, and management
+			// reconciliation can complete instead of waiting forever on inventory.
+			reconcileN(reconciler, bmiName, 3)
+			bmi = getBMI(bmiName)
+			Expect(bmi.Spec.HostClass).To(Equal(metal3HostClass))
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseReady))
+		})
+
+		It("allocates a BMH whose referenced BMC credential Secret already exists", func() {
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: "existing-bmc-credentials", Namespace: metal3TestNS},
+				Data: map[string][]byte{
+					"username": []byte("test-user"),
+					"password": []byte("test-value"),
+				},
+			}
+			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, secret))).To(Succeed())
+			})
+
+			bmh := createMetal3BMH(bmhName, map[string]string{
+				inventory.Metal3HostTypeLabel: "gpu-node",
+			}, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+			bmh.Spec.BMC.CredentialsName = secret.Name
+			Expect(k8sClient.Update(ctx, bmh)).To(Succeed())
+
+			bmi := &v1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: bmiName, Namespace: metal3TestNS},
+				Spec: v1alpha1.BareMetalInstanceSpec{
+					Selector: v1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"type": "gpu-node"},
+					},
+					TemplateID: shared.OsacNoopTemplate,
+				},
+			}
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+
+			reconciler := newMetal3Reconciler()
+			reconcileN(reconciler, bmiName, 5)
+			bmi = getBMI(bmiName)
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseReady))
+
+			persistedSecret := &corev1.Secret{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(secret), persistedSecret)).To(Succeed())
+			Expect(persistedSecret.Data).To(Equal(secret.Data))
+		})
 	})
 
 	Describe("Provisioning retry flow", func() {
@@ -596,6 +703,91 @@ var _ = Describe("BareMetalInstance Metal3 Integration", func() {
 			Expect(condition).NotTo(BeNil())
 			Expect(condition.Status).To(Equal(metav1.ConditionTrue))
 			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerOn))
+		})
+
+		It("keeps a halted host powered off and transitions directly to Ready", func() {
+			createMetal3BMH(bmhName, map[string]string{
+				inventory.Metal3HostTypeLabel: "compute",
+			}, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+
+			bmi := &v1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: bmiName, Namespace: metal3TestNS},
+				Spec: v1alpha1.BareMetalInstanceSpec{
+					Selector: v1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"type": "compute"},
+					},
+					TemplateID:  shared.OsacNoopTemplate,
+					RunStrategy: v1alpha1.RunStrategyHalted,
+				},
+			}
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+
+			reconciler := newMetal3Reconciler()
+			reconcileN(reconciler, bmiName, 5)
+
+			bmi = getBMI(bmiName)
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseReady))
+			Expect(bmi.Status.RunStrategy).To(Equal(v1alpha1.RunStrategyHalted))
+
+			bmh := getBMH(bmhName)
+			Expect(bmh.Spec.Online).To(BeFalse())
+			condition := bmi.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerOff))
+		})
+	})
+
+	Describe("Metal3 error propagation", func() {
+		const bmiName = "metal3-error-bmi"
+		const bmhName = "metal3-error-bmh"
+
+		AfterEach(func() {
+			cleanupBMI(bmiName)
+			cleanupBMH(bmhName)
+		})
+
+		It("marks a progressing instance failed when its BMH enters an error state", func() {
+			createMetal3BMH(bmhName, map[string]string{
+				inventory.Metal3HostTypeLabel: "error-node",
+			}, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+
+			bmi := &v1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: bmiName, Namespace: metal3TestNS},
+				Spec: v1alpha1.BareMetalInstanceSpec{
+					Selector: v1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"type": "error-node"},
+					},
+					TemplateID: shared.OsacNoopTemplate,
+				},
+			}
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+
+			reconciler := newMetal3Reconciler()
+			// Allocate the host and add the management finalizer. The instance is
+			// Progressing while Metal3 still reports a healthy, available host.
+			reconcileN(reconciler, bmiName, 4)
+			bmi = getBMI(bmiName)
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+
+			// Simulate BMO/Ironic reporting a terminal host error through the BMH
+			// status subresource before power reconciliation completes.
+			bmh := getBMH(bmhName)
+			bmh.Status.OperationalStatus = metal3api.OperationalStatusError
+			bmh.Status.ErrorMessage = "Ironic could not reach the BMC"
+			Expect(k8sClient.Status().Update(ctx, bmh)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: bmiName, Namespace: metal3TestNS},
+			})
+			Expect(err).To(HaveOccurred())
+
+			bmi = getBMI(bmiName)
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+			condition := bmi.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonIronicAPIFailure))
 		})
 	})
 

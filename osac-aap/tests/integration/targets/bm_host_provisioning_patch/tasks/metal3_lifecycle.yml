@@ -1,0 +1,219 @@
+---
+- name: Metal3 provisioning lifecycle against Kind
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_namespace: bm-host-provisioning-test
+    test_bmh_name: test-bmh
+    test_image_url: oci://registry.example.test/osac/test-image:latest
+    bare_metal_instance:
+      metadata:
+        name: test-instance
+        namespace: "{{ test_namespace }}"
+      spec:
+        externalHostID: "{{ test_namespace }}/{{ test_bmh_name }}"
+    template_params:
+      imageURL: "{{ test_image_url }}"
+      userDataSecret: source-user-data
+      sshPublicKey: ssh-ed25519 TESTKEY osac-test
+      networkData: |
+        links:
+          - id: test-interface
+            type: phy
+  tasks:
+    - name: Run Metal3 create and delete lifecycle
+      block:
+        - name: Install the static BareMetalHost CRD fixture
+          kubernetes.core.k8s:
+            state: present
+            definition: >-
+              {{ lookup(
+                   'file',
+                   playbook_dir ~ '/../../../../../../bare-metal-fulfillment-operator/test/crds/metal3.io_baremetalhosts.yaml'
+                 ) | from_yaml }}
+
+        - name: Create Metal3 lifecycle test namespace
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: "{{ test_namespace }}"
+
+        - name: Create source user-data Secret
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: source-user-data
+                namespace: "{{ test_namespace }}"
+              data:
+                userdata: I2Nsb3VkLWNvbmZpZwo=
+
+        - name: Create available BareMetalHost fixture
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: metal3.io/v1alpha1
+              kind: BareMetalHost
+              metadata:
+                name: "{{ test_bmh_name }}"
+                namespace: "{{ test_namespace }}"
+              spec:
+                online: false
+
+        - name: Mark BareMetalHost initially available through its status subresource
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - patch
+              - baremetalhost
+              - "{{ test_bmh_name }}"
+              - --namespace
+              - "{{ test_namespace }}"
+              - --subresource=status
+              - --type=merge
+              - --patch
+              - >-
+                {"status":{"errorCount":0,"errorMessage":"","operationalStatus":"OK",
+                "poweredOn":false,"provisioning":{"ID":"test-id","state":"available"}}}
+          changed_when: true
+
+        - name: Drive BareMetalHost to provisioned after the role patches its image
+          ansible.builtin.shell: |
+            set -euo pipefail
+            until [ "$(kubectl get baremetalhost "{{ test_bmh_name }}" \
+              --namespace "{{ test_namespace }}" \
+              -o jsonpath='{.spec.image.url}')" = "{{ test_image_url }}" ]; do
+              sleep 0.2
+            done
+            kubectl patch baremetalhost "{{ test_bmh_name }}" \
+              --namespace "{{ test_namespace }}" \
+              --subresource=status --type=merge \
+              --patch '{"status":{"operationalStatus":"OK","provisioning":{"state":"provisioned","image":{"url":"{{ test_image_url }}"}}}}'
+          args:
+            executable: /bin/bash
+          async: 60
+          poll: 0
+          changed_when: true
+          register: provision_status_driver
+
+        - name: Execute the real Metal3 create tasks
+          ansible.builtin.include_role:
+            name: osac.templates.bm_host_provisioning
+            tasks_from: create_metal3.yaml
+
+        - name: Confirm the provision status driver completed
+          ansible.builtin.async_status:
+            jid: "{{ provision_status_driver.ansible_job_id }}"
+          register: provision_status_result
+          until: provision_status_result.finished
+          retries: 10
+          delay: 1
+
+        - name: Read provisioned BareMetalHost
+          kubernetes.core.k8s_info:
+            api_version: metal3.io/v1alpha1
+            kind: BareMetalHost
+            namespace: "{{ test_namespace }}"
+            name: "{{ test_bmh_name }}"
+          register: provisioned_bmh
+
+        - name: Read generated Metal3 Secrets
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            namespace: "{{ test_namespace }}"
+          register: provisioned_secrets
+
+        - name: Assert happy-path create patched BMH and generated Secrets
+          ansible.builtin.assert:
+            that:
+              - provisioned_bmh.resources[0].spec.image.url == test_image_url
+              - provisioned_bmh.resources[0].status.provisioning.state == 'provisioned'
+              - provisioned_bmh.resources[0].spec.online | bool
+              - provisioned_bmh.resources[0].spec.userData.name == test_bmh_name ~ '-user-data'
+              - provisioned_bmh.resources[0].spec.metaData.name == test_bmh_name ~ '-meta-data'
+              - provisioned_bmh.resources[0].spec.networkData.name == test_bmh_name ~ '-network-data'
+              - >-
+                provisioned_secrets.resources
+                | selectattr('metadata.name', 'equalto', test_bmh_name ~ '-user-data')
+                | list | length == 1
+              - >-
+                provisioned_secrets.resources
+                | selectattr('metadata.name', 'equalto', test_bmh_name ~ '-meta-data')
+                | list | length == 1
+              - >-
+                provisioned_secrets.resources
+                | selectattr('metadata.name', 'equalto', test_bmh_name ~ '-network-data')
+                | list | length == 1
+
+        - name: Drive BareMetalHost to available after the role clears its image
+          ansible.builtin.shell: |
+            set -euo pipefail
+            until [ -z "$(kubectl get baremetalhost "{{ test_bmh_name }}" \
+              --namespace "{{ test_namespace }}" \
+              -o jsonpath='{.spec.image.url}')" ]; do
+              sleep 0.2
+            done
+            kubectl patch baremetalhost "{{ test_bmh_name }}" \
+              --namespace "{{ test_namespace }}" \
+              --subresource=status --type=merge \
+              --patch '{"status":{"operationalStatus":"OK","provisioning":{"state":"available"}}}'
+          args:
+            executable: /bin/bash
+          async: 60
+          poll: 0
+          changed_when: true
+          register: deprovision_status_driver
+
+        - name: Execute the real Metal3 delete tasks
+          ansible.builtin.include_role:
+            name: osac.templates.bm_host_provisioning
+            tasks_from: delete_metal3.yaml
+
+        - name: Confirm the deprovision status driver completed
+          ansible.builtin.async_status:
+            jid: "{{ deprovision_status_driver.ansible_job_id }}"
+          register: deprovision_status_result
+          until: deprovision_status_result.finished
+          retries: 10
+          delay: 1
+
+        - name: Read deprovisioned BareMetalHost
+          kubernetes.core.k8s_info:
+            api_version: metal3.io/v1alpha1
+            kind: BareMetalHost
+            namespace: "{{ test_namespace }}"
+            name: "{{ test_bmh_name }}"
+          register: deprovisioned_bmh
+
+        - name: Read generated Secrets after delete
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            namespace: "{{ test_namespace }}"
+          register: remaining_secrets
+
+        - name: Assert happy-path delete cleared BMH and generated Secrets
+          ansible.builtin.assert:
+            that:
+              - >-
+                deprovisioned_bmh.resources[0].spec.image is not defined
+                or deprovisioned_bmh.resources[0].spec.image is none
+              - deprovisioned_bmh.resources[0].status.provisioning.state == 'available'
+              - >-
+                remaining_secrets.resources
+                | rejectattr('metadata.name', 'equalto', 'source-user-data')
+                | list | length == 0
+      always:
+        - name: Remove Metal3 lifecycle test namespace
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: "{{ test_namespace }}"
+            wait: true

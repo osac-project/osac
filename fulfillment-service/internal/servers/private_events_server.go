@@ -648,7 +648,9 @@ func (s *privateEventsServerSubscription) runGroup() error {
 	stop := func() {
 		if cancel != nil {
 			cancel()
-			<-done //nolint:errcheck // restarts and shutdown discard the cancelled consumer's result
+			if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+				s.logger.DebugContext(s.ctx, "Stopped Kafka consumer group", slog.Any("error", err))
+			}
 			cancel = nil
 			done = nil
 		}

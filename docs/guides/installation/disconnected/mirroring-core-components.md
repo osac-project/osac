@@ -16,7 +16,6 @@
     - [Step 3 - Deliver the OCI Helm chart to the disconnected site](#step-3---deliver-the-oci-helm-chart-to-the-disconnected-site)
     - [Step 4 - Continue to disconnected prerequisites and installation](#step-4---continue-to-disconnected-prerequisites-and-installation)
   - [Mirror Validation Commands](#mirror-validation-commands)
-  - [Troubleshooting](#troubleshooting)
   - [Known Gaps / Limitations](#known-gaps--limitations)
 
 ## Aim
@@ -192,20 +191,19 @@ which `oc-mirror` does not yet support for Helm:
 - No values passthrough for Helm charts ([RFE-8748][rfe-8748])
 
 Until RFE-8713 is resolved, use an internet-connected workstation
-(bastion laptop) to pull OCI charts from `ghcr.io` and deploy via
-SSH tunnel.
+(bastion laptop) to pull OCI charts from `ghcr.io` for delivery to
+the disconnected site.
+
+<!-- Moved to installation.md §4.1 Preparing the cluster. See docs/guides/installation/disconnected/installation.md -->
 
 [rfe-8713]: https://issues.redhat.com/browse/RFE-8713
 [rfe-8748]: https://issues.redhat.com/browse/RFE-8748
 
 ```text
-┌──────────────────┐     SSH tunnel     ┌───────────────┐     internal     ┌─────────────────────┐
-│ Workstation      │ ──────────────────> │ Bastion Host  │ ──────────────> │ Disconnected OCP    │
-│ (Internet)       │                    │ (DMZ)         │                 │ + Mirror Registry   │
-│ • helm CLI       │                    │               │                 │                     │
-│ • kubeconfig     │                    │               │                 │                     │
-└──────────────────┘                    └───────────────┘                 └─────────────────────┘
+Connected workstation (OCI chart) --> approved artifact transfer --> disconnected chart staging
 ```
+
+<!-- Moved to installation.md §4.1 Preparing the cluster. See docs/guides/installation/disconnected/installation.md -->
 
 ### Step 4 - Continue to disconnected prerequisites and installation
 
@@ -221,29 +219,18 @@ mirroring page.
 # 1. Verify generated mirror policy resources are applied
 oc get imagedigestmirrorset
 oc get imagetagmirrorset
-
-# 2. Verify a representative dependency image resolves through the mirror
-oc debug node/<node-name> -- chroot /host \
-  crictl pull quay.io/jetstack/trust-manager:v0.20.0
-
-# 3. Check for image pull errors across all namespaces
-oc get events -A --field-selector reason=Failed \
-  -o custom-columns='NAMESPACE:.metadata.namespace,MESSAGE:.message' \
-  | grep -i "pull"
 ```
+
+<!-- Moved to prereqs.md §3. Registry access and bounded configuration. See docs/guides/installation/disconnected/prereqs.md -->
+
+<!-- Moved to installation.md §11.2 Other installation failures. See docs/guides/installation/disconnected/installation.md -->
 
 Installed services, OSAC Deployments, and Helm releases are verified in
 [installation.md](installation.md), not in Doc 1.
 
-## Troubleshooting
-
-| Symptom | Likely cause | Resolution |
-| ------- | ------------ | ---------- |
-| `ImagePullBackOff` on dependency pods | IDMS/ITMS not applied or image tag mismatch | Verify `oc get itms -o yaml` includes the image; re-run `oc-mirror` |
-| Helm install fails with `connection refused` | SSH tunnel not established to cluster API | Verify sshuttle/SSH tunnel; check `oc cluster-info` from workstation |
-| `origin-cli` image not found | `cliImage` Helm value not overridden | Pass `--set cliImage=<mirror-registry>:8443/openshift/origin-cli:4.20.0` |
-| Phase 1b hooks fail with `CRD not found` | Phase 1a operators not fully ready | Wait for all to reach `Succeeded` before creating the Phase 1b CRD instances |
-| Keycloak pod in CrashLoopBackOff | PostgreSQL not ready or CA bundle not synced | Check trust-manager Bundle status; verify PostgreSQL StatefulSet |
+<!-- Moved to installation.md §11.2 Other installation failures. See docs/guides/installation/disconnected/installation.md -->
+<!-- Moved to operators.md §6. Completion, Troubleshooting and Day 2. See docs/guides/installation/disconnected/operators.md -->
+<!-- Moved to installation.md §11.2 Other installation failures. See docs/guides/installation/disconnected/installation.md -->
 
 ## Known Gaps / Limitations
 

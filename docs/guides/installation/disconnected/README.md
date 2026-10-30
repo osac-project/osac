@@ -31,7 +31,7 @@ Operator and OSAC installation begin in separate documents.
 Each category page contains image discovery, inventory
 composition, mirror execution, generated mirror-resource application,
 and handoff evidence. It must not install operators or operands, mutate
-runtime custom resources, create service instances, or post-install acceptance checklist.
+runtime custom resources, create service instances, or run a post-install acceptance checklist.
 
 ## Three-Phase Architecture
 

@@ -54,7 +54,8 @@ A bastion or node result alone does not establish importer-network access.
 
 Containerdisk images are OCI container images that embed a virtual machine
 disk (qcow2) as a layer.  They are referenced as `additionalImages` in the
-`ImageSetConfiguration` and resolved via ITMS on the cluster.
+`ImageSetConfiguration` and resolved via ITMS (tags) or IDMS (digests)
+for node image pulls on the cluster.
 
 ### Image Reference
 
@@ -97,6 +98,15 @@ The CLI accepts `registry` as the source-type input; the stored
 resource uses the protobuf enum `SOURCE_TYPE_REGISTRY`, which is
 the value used in programmatic jq filters.
 
+Before mirroring, obtain a complete deployment-specific inventory of
+upstream image references, including full tags or digests, from an
+upstream-backed catalog or the approved deployment configuration. A fresh
+installation does not require a running OSAC API. A catalog already using
+mirror URLs is not an upstream inventory: retain the original upstream
+references alongside their mirror destinations. Add every selected
+upstream reference to `additionalImages` and archive this inventory with
+the ISC and workspace as `selected-diskimage-images.txt`.
+
 <!-- Moved to operators.md §Selected DiskImage inventory export. See docs/guides/installation/disconnected/operators.md -->
 
 ## Execution Steps
@@ -124,10 +134,13 @@ Run the canonical mirror command from
 ### Step 3 — Apply updated ITMS (disconnected cluster)
 
 > **Note**: Adding new digest-only IDMS entries does not trigger node
-> drain or restart.  Modifying or deleting existing IDMS/ITMS entries
-> may cause MachineConfig rollouts that drain and reboot worker nodes.
-> If modifying entries, schedule the change during a maintenance
-> window and wait for MCPs to converge after applying
+> drain or restart. On OpenShift 4.22, creating an ITMS or adding tag-based
+> entries can drain nodes under the default `Special` disruption policy
+> for `/etc/containers/registries.conf`; modifying or deleting mirror
+> entries can also cause drains. Mirror-only changes do not normally
+> require a reboot. Check the effective node disruption policy, schedule
+> a maintenance window when drains are required, and wait for MCPs to
+> converge after applying
 > (`oc wait mcp --all --for=condition=Updated --timeout=30m`).
 
 Containerdisk images are typically referenced by tag, so they require an
@@ -146,21 +159,25 @@ oc get itms -o yaml | grep -A2 "containerdisk\|rhel-guest"
 
 #### Enforce NeverContactSource (recommended)
 
-Consume the approved H7 selected-source input for this mirror run as
-`selected-diskimage-sources.txt`: one upstream repository reference per
-line, derived from the approved selected image inventory. Preserve that
-original inventory, including full tags or digests, with the ISC and
-workspace; this repository-only policy-check input does not replace it.
+Use `selected-diskimage-images.txt` from the approved upstream inventory:
+one full tagged or digest-pinned image reference per line, not mirror
+destinations. Derive the tag-only repository input below for ITMS policy
+enforcement. Digest-pinned entries are checked against IDMS separately;
+ensure their generated IDMS entries also use `NeverContactSource` before
+applying them through Category A's mirror-resource application step.
 A first mirror does not require a running OSAC API or installed CDI.
 
 <!-- Moved to operators.md §Selected DiskImage inventory export. See docs/guides/installation/disconnected/operators.md -->
 
 ```bash
 
-test -s selected-diskimage-sources.txt || {
+test -s selected-diskimage-images.txt || {
   echo "ERROR: no selected registry DiskImage sources found" >&2
   exit 1
 }
+
+sed '/@/d; s/:[^/:]*$//' selected-diskimage-images.txt | \
+  sort -u > selected-diskimage-sources.txt
 
 jq -Rn '[inputs] | map(select(length > 0))' \
   < selected-diskimage-sources.txt > selected-diskimage-sources.json
@@ -180,10 +197,7 @@ done
 Verify every selected source exists and is fail-closed:
 
 ```bash
-# ----- ITMS NeverContactSource enforcement -----
-# Validates that every selected source has at least one EXACT-match
-# ITMS entry with mirrorSourcePolicy: NeverContactSource and non-empty
-# mirrors.
+# ----- ITMS/IDMS NeverContactSource enforcement -----
 #
 # Intentionally stricter than prefix matching — avoids false positives:
 #   Negative fixture 1: source "quay.io/team/disk" must NOT cover
@@ -195,17 +209,33 @@ ITMS_JSON=$(oc get itms -o json) || {
   echo "ERROR: cannot retrieve ImageTagMirrorSet resources" >&2
   exit 1
 }
+IDMS_JSON=$(oc get idms -o json) || {
+  echo "ERROR: cannot retrieve ImageDigestMirrorSet resources" >&2
+  exit 1
+}
 
 fail=0
-while IFS= read -r img; do
-  [ -n "$img" ] || continue
+while IFS= read -r image_ref; do
+  [ -n "$image_ref" ] || continue
+  if [[ "$image_ref" == *@* ]]; then
+    img=${image_ref%@*}
+    img=$(printf '%s\n' "$img" | sed 's/:[^/:]*$//')
+    policy_kind=IDMS
+    policy_field=imageDigestMirrors
+    policy_json=$IDMS_JSON
+  else
+    img=${image_ref%:*}
+    policy_kind=ITMS
+    policy_field=imageTagMirrors
+    policy_json=$ITMS_JSON
+  fi
 
   # Require at least one EXACT source match (not prefix)
-  exact_count=$(echo "$ITMS_JSON" | jq -r \
-    --arg img "$img" \
-    '[.items[].spec.imageTagMirrors[]? | select(.source == $img)] | length')
+  exact_count=$(echo "$policy_json" | jq -r \
+    --arg img "$img" --arg field "$policy_field" \
+    '[.items[].spec[$field][]? | select(.source == $img)] | length')
   if [ "$exact_count" -eq 0 ]; then
-    echo "FAIL: no exact ITMS entry for $img" >&2
+    echo "FAIL: no exact $policy_kind entry for $img" >&2
     fail=1
     continue
   fi
@@ -213,23 +243,23 @@ while IFS= read -r img; do
   # ALL exact-match entries must have NeverContactSource and
   # non-empty mirrors — a safe broad parent cannot hide an unsafe
   # more-specific child rule
-  unsafe=$(echo "$ITMS_JSON" | jq -r \
-    --arg img "$img" \
-    '[.items[].spec.imageTagMirrors[]? |
+  unsafe=$(echo "$policy_json" | jq -r \
+    --arg img "$img" --arg field "$policy_field" \
+    '[.items[].spec[$field][]? |
       select(.source == $img) |
       select(.mirrorSourcePolicy != "NeverContactSource" or
              ((.mirrors // []) | length) == 0)] | length')
   if [ "$unsafe" -ne 0 ]; then
-    echo "FAIL: $img has $unsafe ITMS entries without" \
+    echo "FAIL: $img has $unsafe $policy_kind entries without" \
       "NeverContactSource or with empty mirrors" >&2
     fail=1
   fi
-done < selected-diskimage-sources.txt
+done < selected-diskimage-images.txt
 
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi
-echo "PASS: all selected sources have enforced ITMS NeverContactSource"
+echo "PASS: all selected sources have enforced ITMS/IDMS NeverContactSource"
 ```
 
 ## Consumer handoff constraints

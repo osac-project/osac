@@ -128,7 +128,7 @@ def test_hosted_cluster_uses_controller_projection_only() -> None:
     for name in ["create_hosted_cluster.yaml", "delete_hosted_cluster.yaml"]:
         text = (SERVICE / "roles/hosted_cluster/tasks" / name).read_text()
         assert ".dockerconfigjson" not in text
-        assert "pullscret-cluster-" not in text
+        assert "pullsecret-cluster-" not in text
     settings = (SERVICE / "roles/cluster_settings/tasks/main.yml").read_text()
     assert "kubernetes.core." not in settings
     assert "b64decode" not in settings

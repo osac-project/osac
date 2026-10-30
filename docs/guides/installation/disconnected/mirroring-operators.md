@@ -96,16 +96,14 @@ export BASTION_AUTHFILE="${XDG_RUNTIME_DIR}/containers/auth.json"
 | OpenShift cluster is in a disconnected or restricted-network state | `oc get proxy/cluster -o jsonpath='{.spec}'` |
 | Latest available `oc-mirror` v2 binary on the bastion | `oc-mirror version` |
 | Mirror registry certificate validates from the bastion | `curl -sS -o /dev/null -w '%{http_code}\n' https://<registry>:8443/v2/` (no `-k`; HTTP `200` or `401` proves TLS validation and reachability) |
-| Mirror registry certificate validates from every cluster node | Approved H6 evidence: every node returned HTTP `200` or `401` without `-k`; consume the prerequisite diagnostic result, not a new probe here |
+| Cluster-node mirror transport | Run the [shared node transport checkpoint](prereqs.md#pre-handoff-node-transport-checkpoint) at Step 2c, after the full mirror and owner-prepared node access; it is not a prerequisite for inventory composition, dry run or full mirroring, and HTTP `200`/`401` is not authentication proof |
 | **Bastion authfile** contains source read + mirror write credentials | `jq -e '.auths \| has("registry.redhat.io")' "${BASTION_AUTHFILE}"` |
 | **Bastion authfile** includes mirror registry write credentials | `jq -e '.auths \| has("<registry>:8443")' "${BASTION_AUTHFILE}"` |
-| **Cluster pull secret** contains mirror read-only credentials | `oc get secret/pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' \| base64 -d \| jq '.auths \| keys'` |
+| Approved cluster mirror-read credential binding | Keep the read-only credential input protected and separate from the bastion authfile; prepare its cluster binding in Step 2c before node/catalog consumers need it |
 | At least 400 GiB free disk on the bastion | `df -h $(pwd)` |
 | Cluster admin access | `oc auth can-i create catalogsource -n openshift-marketplace` |
 
-<!-- Moved to prereqs.md §3 diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
-
-<!-- Moved to prereqs.md §3 diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
+The node HTTP diagnostic is defined once in the [shared checkpoint](prereqs.md#pre-handoff-node-transport-checkpoint) and called only at Step 2c. The representative original-image pull and generic Pod-network diagnostics in `prereqs.md` §3 remain after the completed Doc 1 handoff; actual importer-client acceptance remains in `installation.md`. Do not start the full preparation guide to manufacture pre-mirror evidence.
 
 ### Credential Separation
 
@@ -280,9 +278,7 @@ for cc in openshift-redhat-operators openshift-certified-operators \
 done
 ```
 
-Verification: `oc get clustercatalog` shows the default catalogs with
-`SERVING=False` while the generated `cc-*` catalog remains
-`Serving=True`.
+At this step, verify only that the default catalogs are unavailable. The generated `cc-*` catalog is applied in Step 2d; check its `Serving=True` state in the handoff verification after application and affected-pool convergence, not before it exists.
 
 #### 2b. Verify the generated CatalogSource name
 
@@ -302,9 +298,9 @@ apply. Never apply both the generated name and `redhat-operators`.
 
 #### 2c. Merge read-only pull credentials
 
-Ensure the cluster pull secret contains mirror registry
-**read-only** credentials so that nodes can pull mirrored
-images (see [Credential Separation](#credential-separation)).
+Ensure the cluster pull secret contains the approved mirror registry **read-only** credentials before node/catalog consumers need them (see [Credential Separation](#credential-separation)). The authorized trust/access owners must prepare the exact node/debug-image clients' approved trust and credential bindings independently of the later Doc 2 handoff. Preserve unrelated entries and use reviewed server-enforced identity/version preconditions for any shared mutation; wait for the owner-identified affected changes to settle before the diagnostic. An unresolved consumer contract stops here; this paragraph selects no CA/proxy/CDI mechanism or insecure fallback.
+
+After the full mirror contains the approved direct-mirror debug image, invoke only the [pre-handoff node transport checkpoint](prereqs.md#pre-handoff-node-transport-checkpoint). Use an approved existing diagnostic namespace, not a future operator/OSAC namespace. Do not require §2, later §3 diagnostics, CatalogSource/package readiness or applied IDMS/ITMS to run this direct-reference checkpoint. If it fails, stop the dependent catalog step with the responsible access/trust owner. HTTP `200`/`401` observes node transport/TLS only; it is not selected-image authentication or importer readiness. Then continue to Step 2d and the normal handoff checks.
 
 #### 2d. Apply generated artifacts
 
@@ -331,10 +327,7 @@ oc wait mcp --all --for=condition=Updated --timeout=30m
 
 ## Handoff Verification (Doc 1 gate)
 
-The following read-only checks gate the transition to Doc 2.
-**Any failure returns ownership to the mirror operator; Doc 2
-must not begin.**  Preserve the ISC and workspace metadata for
-re-runs.
+The following read-only checks gate entry into `prereqs.md` §2 and the remaining Doc 2 preparation. The earlier call to the named shared node transport checkpoint at Step 2c is not that entry and does not waive any handoff requirement. Any failed handoff check stops its dependent preparation and returns to its owning mirror/access/trust boundary. Preserve the ISC and workspace metadata for re-runs.
 
 ```bash
 # 1. disableAllDefaultSources is true

@@ -2,9 +2,12 @@
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class CacheContracts(unittest.TestCase):
-    def test_fingerprint_covers_all_workspace_inputs(self):
+    def test_fingerprint_covers_all_workspace_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for relative in cache.input_paths(ROOT):
@@ -34,14 +37,19 @@ class CacheContracts(unittest.TestCase):
             for field in ("builder", "platform", "toolchain", "build_flags", "schema"):
                 self.assertNotEqual(original, cache.fingerprint(root, settings | {field: "changed"}))
 
-    def test_workspace_inputs_include_every_current_module(self):
+    def test_workspace_inputs_include_every_current_module(self) -> None:
         inputs = {str(path) for path in cache.input_paths(ROOT)}
         for module in (ROOT / "go.work").read_text().splitlines():
             if module.strip().startswith("./"):
                 for manifest in ("go.mod", "go.sum"):
                     self.assertIn(f"{module.strip()[2:]}/{manifest}", inputs)
+        for component in cache.COMPONENTS:
+            containerfile = (ROOT / component / "Containerfile").read_text()
+            copies = "\n".join(line for line in containerfile.splitlines() if line.startswith("COPY "))
+            for manifest in re.findall(r"(?:^|\s)([^\s]+/(?:go.mod|go.sum))(?=\s)", copies):
+                self.assertIn(manifest, inputs)
 
-    def test_payload_allows_only_bounded_regular_module_and_build_data(self):
+    def test_payload_allows_only_bounded_regular_module_and_build_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             payload = Path(temporary)
             for name in ("pkg", "build"):
@@ -58,7 +66,7 @@ class CacheContracts(unittest.TestCase):
             with self.assertRaises(ValueError):
                 cache.payload_size(payload)
 
-    def test_incomplete_and_hardlinked_payloads_are_rejected(self):
+    def test_incomplete_and_hardlinked_payloads_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             payload = Path(temporary)
             (payload / "pkg").mkdir()
@@ -70,7 +78,7 @@ class CacheContracts(unittest.TestCase):
             with self.assertRaises(ValueError):
                 cache.payload_size(payload)
 
-    def test_transport_uses_exact_named_mounts_and_default_builder(self):
+    def test_transport_uses_exact_named_mounts_and_default_builder(self) -> None:
         for operation in ("inject", "extract", "clear"):
             dockerfile = cache.transport_file(ROOT, "example.invalid/toolset@sha256:" + "a" * 64, operation)
             for mount in cache.MOUNTS.values():
@@ -78,7 +86,7 @@ class CacheContracts(unittest.TestCase):
             self.assertNotIn("type=secret", dockerfile)
         self.assertIn("go mod verify", cache.transport_file(ROOT, "toolset", "verify"))
 
-    def test_actual_installer_macro_is_invoked_without_cluster_targets(self):
+    def test_actual_installer_macro_is_invoked_without_cluster_targets(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             docker = directory / "docker"
@@ -98,7 +106,7 @@ class CacheContracts(unittest.TestCase):
             self.assertIn("localhost/fulfillment-service:it", arguments)
             self.assertEqual("..", arguments[-1])
 
-    def test_trust_requires_public_default_branch_and_manual_context(self):
+    def test_trust_requires_public_default_branch_and_manual_context(self) -> None:
         trusted = {"event": "workflow_dispatch", "ref": "refs/heads/main", "default_branch": "main", "private": False}
         self.assertTrue(cache.trusted_save(trusted))
         for change in (
@@ -109,7 +117,7 @@ class CacheContracts(unittest.TestCase):
         ):
             self.assertFalse(cache.trusted_save(trusted | change))
 
-    def test_workflow_defaults_and_trial_budget(self):
+    def test_workflow_defaults_and_trial_budget(self) -> None:
         workflows = ROOT / ".github/workflows"
         for filename in ("nightly-build.yaml", "osac-build-and-publish.yaml", "integration-tests.yml", "tests.yml"):
             workflow = yaml.safe_load((workflows / filename).read_text())
@@ -126,7 +134,7 @@ class CacheContracts(unittest.TestCase):
         self.assertEqual(20, sample["jobs"]["sample"]["timeout-minutes"])
         self.assertEqual("ubuntu-24.04", sample["jobs"]["sample"]["runs-on"])
 
-    def test_build_observations_do_not_equate_restore_to_consumption(self):
+    def test_build_observations_do_not_equate_restore_to_consumption(self) -> None:
         observations = cache.observe(
             "#1 go: downloading example.org/m v1.0\n#2 OSAC_IMAGE_CACHE_BEFORE pkg=7 build=2\n"
         )
@@ -135,11 +143,11 @@ class CacheContracts(unittest.TestCase):
         self.assertEqual(["#2 OSAC_IMAGE_CACHE_BEFORE pkg=7 build=2"], observations["image_build_observations"])
         self.assertNotIn("cache_hit", observations)
 
-    def test_dockerfile_instruction_text_is_not_consumption_evidence(self):
+    def test_dockerfile_instruction_text_is_not_consumption_evidence(self) -> None:
         log = "#1 RUN echo OSAC_IMAGE_CACHE_VERIFIED\n#2 0.1 OSAC_IMAGE_CACHE_VERIFIED\n"
         self.assertEqual(["#2 0.1 OSAC_IMAGE_CACHE_VERIFIED"], cache.observe(log)["image_build_observations"])
 
-    def test_missing_and_malformed_restore_fall_back_without_injection(self):
+    def test_missing_and_malformed_restore_fall_back_without_injection(self) -> None:
         for malformed in (False, True):
             with self.subTest(malformed=malformed), tempfile.TemporaryDirectory() as temporary:
                 state = Path(temporary)
@@ -152,7 +160,7 @@ class CacheContracts(unittest.TestCase):
                 docker_boundary.assert_not_called()
                 self.assertEqual("cold-fallback", json.loads((state / "state.json").read_text())["injection"])
 
-    def test_verification_failure_does_not_inject_payload(self):
+    def test_verification_failure_does_not_inject_payload(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state = Path(temporary)
             (state / "state.json").write_text(json.dumps({"restore_started": 0}))
@@ -163,7 +171,31 @@ class CacheContracts(unittest.TestCase):
             self.assertEqual(["verify"], [call.args[2] for call in boundary.call_args_list])
             self.assertEqual("cold-fallback", json.loads((state / "state.json").read_text())["injection"])
 
-    def test_checksum_payload_must_match_committed_sums(self):
+    def test_optional_transport_cli_failures_disable_cache_without_failing_build(self) -> None:
+        for operation in ("prepare", "inject", "extract"):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as temporary:
+                state = Path(temporary)
+                output = state / "outputs"
+                with (
+                    patch("sys.argv", ["image_go_cache.py", operation, "--state", str(state)]),
+                    patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}),
+                    patch.object(cache, operation, side_effect=ValueError("unavailable or oversized payload")),
+                    redirect_stdout(StringIO()) as warning,
+                ):
+                    cache.main()
+                self.assertIn("normal build retained", warning.getvalue())
+                self.assertEqual("ready=false\n", output.read_text())
+
+    def test_sample_cli_does_not_swallow_build_failure(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch("sys.argv", ["image_go_cache.py", "sample", "--state", temporary]),
+            patch.object(cache, "sample", side_effect=subprocess.CalledProcessError(23, "consumer")),
+            self.assertRaises(subprocess.CalledProcessError),
+        ):
+            cache.main()
+
+    def test_checksum_payload_must_match_committed_sums(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             payload = Path(temporary)
             module, version, checksum = next(
@@ -179,7 +211,18 @@ class CacheContracts(unittest.TestCase):
             with self.assertRaises(ValueError):
                 cache.check_ziphashes(ROOT, payload)
 
-    def test_sample_preserves_real_build_failures_and_records_measurements(self):
+    def test_cached_module_manifest_is_checked_not_just_ziphash(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = Path(temporary)
+            manifest = payload / "pkg/mod/cache/download/github.com/google/uuid/@v/v1.6.0.mod"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("module github.com/google/uuid\n")
+            cache.check_ziphashes(ROOT, payload)
+            manifest.write_text("module example.invalid/poison\n")
+            with self.assertRaises(ValueError):
+                cache.check_ziphashes(ROOT, payload)
+
+    def test_sample_preserves_real_build_failures_and_records_measurements(self) -> None:
         source = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
         for exit_code in (0, 19):
             with self.subTest(exit_code=exit_code), tempfile.TemporaryDirectory() as temporary:
@@ -189,6 +232,7 @@ class CacheContracts(unittest.TestCase):
                     '#!/bin/sh\nif [ "$1" = "image" ]; then\n'
                     'case "$5" in *Labels*) echo dev ;; *) echo sha256:fixture ;; esac\nexit 0\nfi\n'
                     'echo "#1 0.1 OSAC_IMAGE_CACHE_BEFORE phase=compile pkg=7 build=2"\n'
+                    'echo "#1 0.1 OSAC_IMAGE_CACHE_BEFORE phase=download pkg=7 build=2"\n'
                     'echo "#1 0.2 OSAC_IMAGE_CACHE_VERIFIED"\n'
                     'echo "#1 0.3 OSAC_IMAGE_CACHE_COMPILED"\n'
                     'echo "#1 0.4 OSAC_IMAGE_CACHE_VARIANT_DOWNLOADED"\n'
@@ -212,7 +256,22 @@ class CacheContracts(unittest.TestCase):
                 self.assertGreaterEqual(report["build_seconds"], 0)
                 self.assertTrue((state / "build.log").is_file())
 
-    def test_sample_checks_frozen_revision_and_rerun_budget_before_build(self):
+    def test_sample_bounds_logs_without_masking_real_build_failure(self) -> None:
+        source = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            command = ["sh", "-c", "printf 'a long build log that exceeds the limit'; exit 23"]
+            with (
+                patch.object(cache, "consumer_command", return_value=command),
+                patch.object(cache, "LOG_LIMIT", 8),
+                self.assertRaises(subprocess.CalledProcessError) as failure,
+            ):
+                cache.sample(ROOT, state, "baseline", source)
+            self.assertEqual(23, failure.exception.returncode)
+            self.assertEqual(8, (state / "build.log").stat().st_size)
+            self.assertTrue(json.loads((state / "measurement.json").read_text())["log_truncated"])
+
+    def test_sample_checks_frozen_revision_and_rerun_budget_before_build(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaises(ValueError):
                 cache.sample(ROOT, Path(temporary), "baseline", "main")
@@ -220,7 +279,7 @@ class CacheContracts(unittest.TestCase):
             with patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "2"}), self.assertRaises(ValueError):
                 cache.sample(ROOT, Path(temporary), "baseline", source)
 
-    def test_sample_instruments_both_real_mount_consumers(self):
+    def test_sample_instruments_both_real_mount_consumers(self) -> None:
         observed = cache.observed_containerfile(ROOT, "invalidation")
         self.assertIn("phase=%s pkg=%s build=%s", observed)
         self.assertIn("build=%s\\n' download", observed)
@@ -228,8 +287,11 @@ class CacheContracts(unittest.TestCase):
         self.assertIn('test ! -f "$(go env GOMODCACHE)/cache/download/rsc.io/binaryregexp/@v/v0.2.0.zip"', observed)
         self.assertIn("OSAC_IMAGE_CACHE_VARIANT_DOWNLOADED", observed)
         self.assertIn("sha256sum -c /tmp/osac-sums", observed)
+        self.assertIn('test "$(go env GOMODCACHE)" = /opt/app-root/src/go/pkg/mod', observed)
+        self.assertIn('test "$(go env GOCACHE)" = /opt/app-root/src/.cache/go-build', observed)
+        self.assertIn('test "$(id -u):$(id -g)" = 1001:0', observed)
 
-    def test_trial_chain_has_no_parallel_or_seventh_runner(self):
+    def test_trial_chain_has_no_parallel_or_seventh_runner(self) -> None:
         workflow = yaml.safe_load((ROOT / ".github/workflows/image-go-cache-trial.yaml").read_text())
         previous = None
         for name, job in workflow["jobs"].items():
@@ -242,7 +304,7 @@ class CacheContracts(unittest.TestCase):
         self.assertEqual(1, len(sample["jobs"]))
         self.assertIn("github.run_attempt == 1", sample["jobs"]["sample"]["if"])
 
-    def test_action_save_trust_and_default_builder_do_not_expand_permissions(self):
+    def test_action_save_trust_and_default_builder_do_not_expand_permissions(self) -> None:
         action = yaml.safe_load((ROOT / ".github/actions/go-image-cache/action.yaml").read_text())
         restore = next(step for step in action["runs"]["steps"] if step.get("id") == "restore")
         self.assertNotIn("restore-keys", restore["with"])
@@ -252,7 +314,7 @@ class CacheContracts(unittest.TestCase):
         shared = yaml.safe_load((ROOT / ".github/workflows/osac-build-and-publish.yaml").read_text())
         self.assertIn("inputs.mode == 'nightly'", shared["jobs"]["integration-tests"]["with"]["image_go_cache"])
 
-    def test_prepare_uses_stable_default_builder_identity_and_rejects_other_drivers(self):
+    def test_prepare_uses_stable_default_builder_identity_and_rejects_other_drivers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             docker = directory / "docker"

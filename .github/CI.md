@@ -111,8 +111,9 @@ Makefile, helper/action, resolved base images, builder/engine versions,
 platform and build settings. Keys have no partial restore prefixes. Missing,
 unsupported, malformed or oversized cache data warns and leaves the normal
 build enabled; an actual compilation or test failure still fails. Imported
-module zip checksums must match committed sums and `go mod verify` runs before
-import. Extraction is capped at 3 GiB and verified again before saving.
+module zip checksums and cached `.mod` content hashes must match committed sums,
+and `go mod verify` runs before import. Extraction is capped at 3 GiB and
+verified again before saving.
 
 Only successful manual builds in a public repository may save: the default
 branch, or the isolated `trial-RUN_ID` namespace on a manually dispatched branch.
@@ -156,7 +157,11 @@ image-build consumption. They include frozen source/input identities, actual
 builder and toolset digests, cache bytes, operation overhead, build duration,
 download/error log observations, checksum verification, image identity and exit
 status. Download log counts are lower bounds, **not** total network requests;
-total build time is not dependency-download time. Read the raw logs when
+build logs retain at most 16 MiB per job and record whether truncated. Truncated
+logs cannot establish absent downloads/errors; missing required observations
+fail the sample. Samples assert the Go cache paths and UID/GID actually match
+the mounted directories, and warm modules must be visible before downloading.
+Total build time is not dependency-download time. Read the raw logs when
 classifying failures. A cache hit is neither a connectivity fix nor evidence
 of a lower failure rate. Two baseline/two warm observations are descriptive,
 not statistically conclusive. Runner-image drift and cache overhead can dominate.

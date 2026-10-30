@@ -1,6 +1,7 @@
 """Disposable, opt-in transport for the default Docker builder's Go mounts."""
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ from pathlib import Path
 
 SCHEMA = "osac-image-go-v1"
 LIMIT = 3 * 1024**3
+LOG_LIMIT = 16 * 1024**2
 COMPONENTS = ("fulfillment-service", "osac-metering/metering-service", "osac-operator")
 MOUNTS = {
     "pkg": ("osac-go-pkg", "/opt/app-root/src/go/pkg"),
@@ -22,7 +24,7 @@ MOUNTS = {
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def input_paths(root):
+def input_paths(root: Path) -> list[Path]:
     paths = {
         Path("go.work"),
         Path("osac-installer/Makefile"),
@@ -40,14 +42,14 @@ def input_paths(root):
     return sorted(paths)
 
 
-def fingerprint(root, settings):
+def fingerprint(root: Path, settings: dict[str, object]) -> str:
     digest = hashlib.sha256(json.dumps({"schema": SCHEMA, **settings}, sort_keys=True).encode())
     for relative in input_paths(root):
         digest.update(str(relative).encode() + b"\0" + (root / relative).read_bytes())
     return digest.hexdigest()
 
 
-def payload_size(payload, limit=LIMIT):
+def payload_size(payload: Path, limit: int = LIMIT) -> int:
     if payload.is_symlink() or not payload.is_dir() or {entry.name for entry in payload.iterdir()} != set(MOUNTS):
         raise ValueError("payload must contain only pkg/ and build/")
     size = 0
@@ -68,36 +70,49 @@ def payload_size(payload, limit=LIMIT):
     return size
 
 
-def check_ziphashes(root, payload):
+def check_ziphashes(root: Path, payload: Path) -> None:
     expected = {}
     for relative in input_paths(root):
         if relative.name == "go.sum":
             for line in (root / relative).read_text().splitlines():
                 module, version, checksum = line.split()
                 escaped = re.sub(r"[A-Z]", lambda match: "!" + match[0].lower(), module)
-                expected[f"{escaped}/@v/{version}.ziphash"] = checksum
+                escaped_version = re.sub(r"[A-Z]", lambda match: "!" + match[0].lower(), version)
+                filename = (
+                    escaped_version.removesuffix("/go.mod") + ".mod"
+                    if version.endswith("/go.mod")
+                    else escaped_version + ".ziphash"
+                )
+                expected[f"{escaped}/@v/{filename}"] = checksum
     downloads = payload / "pkg/mod/cache/download"
     if downloads.is_dir():
-        for path in downloads.rglob("*.ziphash"):
-            if expected.get(path.relative_to(downloads).as_posix()) != path.read_text().strip():
+        for path in downloads.rglob("*"):
+            if path.suffix == ".ziphash":
+                checksum = path.read_text().strip()
+            elif path.suffix == ".mod":
+                summary = hashlib.sha256(path.read_bytes()).hexdigest() + "  go.mod\n"
+                checksum = "h1:" + base64.b64encode(hashlib.sha256(summary.encode()).digest()).decode()
+            else:
+                continue
+            if expected.get(path.relative_to(downloads).as_posix()) != checksum:
                 raise ValueError("download checksum is not in committed workspace sums")
 
 
-def trusted_save(context):
+def trusted_save(context: dict[str, object]) -> bool:
     branch = context["ref"] == f"refs/heads/{context['default_branch']}"
     trial = context.get("trial", False) and context["ref"].startswith("refs/heads/")
     return context["event"] == "workflow_dispatch" and not context["private"] and (branch or trial)
 
 
-def run(arguments, **kwargs):
+def run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
     return subprocess.run(arguments, check=True, text=True, **kwargs)
 
 
-def capture(arguments):
+def capture(arguments: list[str]) -> str:
     return run(arguments, stdout=subprocess.PIPE).stdout.strip()
 
 
-def transport_file(root, image, operation):
+def transport_file(root: Path, image: str, operation: str) -> str:
     mounts = " ".join(
         f"--mount=type=cache,id={identity},target={target},uid=1001,gid=0" for identity, target in MOUNTS.values()
     )
@@ -132,7 +147,7 @@ def transport_file(root, image, operation):
     return result
 
 
-def transport(root, state, operation):
+def transport(root: Path, state: Path, operation: str) -> None:
     with tempfile.TemporaryDirectory(prefix="osac-transfer-") as temporary:
         context = Path(temporary)
         if operation in ("verify", "inject"):
@@ -153,13 +168,13 @@ def transport(root, state, operation):
         run([*command, str(context)])
 
 
-def output(name, value):
+def output(name: str, value: str) -> None:
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
             stream.write(f"{name}={value}\n")
 
 
-def prepare(root, state, namespace):
+def prepare(root: Path, state: Path, namespace: str) -> None:
     state.mkdir(parents=True, exist_ok=True)
     if not re.fullmatch(r"[a-zA-Z0-9-]{1,100}", namespace):
         raise ValueError("invalid namespace")
@@ -205,7 +220,7 @@ def prepare(root, state, namespace):
             os.environ.get("RUNNER_ARCH"),
             os.environ.get("DOCKER_DEFAULT_PLATFORM", "native"),
         ],
-        "runner_image": [os.environ.get("ImageOS"), os.environ.get("ImageVersion")],
+        "runner_image": [os.environ.get(name) for name in ("ImageOS", "ImageVersion")],
         "build_environment_sha256": hashlib.sha256(os.environ.get("GODEBUG", "http2client=0").encode()).hexdigest(),
         "build_flags": "integration-dev GODEBUG=http2client=0 VERSION=default DEBUG=false TARGETOS/ARCH=default",
     }
@@ -227,7 +242,7 @@ def prepare(root, state, namespace):
     output("ready", "true")
 
 
-def inject(root, state):
+def inject(root: Path, state: Path) -> None:
     metadata = json.loads((state / "state.json").read_text())
     metadata["restore_seconds"] = time.time() - metadata["restore_started"]
     metadata["restore"] = {
@@ -246,7 +261,7 @@ def inject(root, state):
     (state / "state.json").write_text(json.dumps(metadata, indent=2) + "\n")
 
 
-def extract(root, state):
+def extract(root: Path, state: Path) -> None:
     metadata = json.loads((state / "state.json").read_text())
     if os.environ.get("GITHUB_ACTIONS") == "true":
         context = {
@@ -269,7 +284,7 @@ def extract(root, state):
     output("ready", "true")
 
 
-def consumer_command(root, containerfile):
+def consumer_command(root: Path, containerfile: Path) -> list[str]:
     target = (
         "image-cache-trial: ; $(call kind-container-build,--no-cache --progress=plain "
         "--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f $(CACHE_TRIAL_CONTAINERFILE) ..)"
@@ -289,7 +304,7 @@ def consumer_command(root, containerfile):
     ]
 
 
-def observe(log):
+def observe(log: str) -> dict[str, object]:
     lines = log.splitlines()
     return {
         "observed_download_lines": sum("go: downloading " in line for line in lines),
@@ -309,7 +324,7 @@ def observe(log):
     }
 
 
-def frozen_source(root, source_sha):
+def frozen_source(root: Path, source_sha: str) -> None:
     if (
         not re.fullmatch(r"[0-9a-f]{40}", source_sha)
         or capture(["git", "-C", str(root), "rev-parse", "HEAD"]) != source_sha
@@ -319,7 +334,7 @@ def frozen_source(root, source_sha):
         raise ValueError("reruns exceed the approved fresh-job budget")
 
 
-def dependency_variant(root, state, source_sha):
+def dependency_variant(root: Path, state: Path, source_sha: str) -> None:
     frozen_source(root, source_sha)
     metadata = json.loads((state / "state.json").read_text())
     if any(
@@ -356,7 +371,7 @@ def dependency_variant(root, state, source_sha):
     )
 
 
-def observed_containerfile(root, kind):
+def observed_containerfile(root: Path, kind: str) -> str:
     original = (root / "fulfillment-service/Containerfile").read_text()
     before = (
         "printf 'OSAC_IMAGE_CACHE_BEFORE phase=%s pkg=%s build=%s\\n' PHASE "
@@ -366,6 +381,9 @@ def observed_containerfile(root, kind):
     variant = "$(go env GOMODCACHE)/cache/download/rsc.io/binaryregexp/@v/v0.2.0.zip"
     instrumentation = (
         before.replace("PHASE", "download") + "go env GOPATH GOMODCACHE GOCACHE GOVERSION; "
+        'test "$(go env GOMODCACHE)" = /opt/app-root/src/go/pkg/mod; '
+        'test "$(go env GOCACHE)" = /opt/app-root/src/.cache/go-build; '
+        'test "$(id -u):$(id -g)" = 1001:0; '
         "find /opt/app-root/src -name go.sum -exec sha256sum {} + > /tmp/osac-sums; "
         + (f'test ! -f "{variant}"; ' if kind == "invalidation" else "")
         + "GODEBUG=http2client=0 go mod download; go mod verify; sha256sum -c /tmp/osac-sums; "
@@ -382,7 +400,7 @@ def observed_containerfile(root, kind):
     return observed.replace("./cmd/osac\n", "./cmd/osac; echo OSAC_IMAGE_CACHE_COMPILED\n", 1)
 
 
-def sample(root, state, kind, source_sha):
+def sample(root: Path, state: Path, kind: str, source_sha: str) -> None:
     frozen_source(root, source_sha)
     state.mkdir(parents=True, exist_ok=True)
     sums = {
@@ -394,22 +412,33 @@ def sample(root, state, kind, source_sha):
     containerfile.write_text(observed_containerfile(root, kind))
     command = consumer_command(root, containerfile)
     started = time.monotonic()
-    with open(state / "build.log", "w") as stream:
-        result = subprocess.run(
+    logged_bytes = 0
+    log_truncated = False
+    with (
+        open(state / "build.log", "wb") as stream,
+        subprocess.Popen(
             command,
-            stdout=stream,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             env=os.environ | {"DOCKER_BUILDKIT": "1", "BUILDX_BUILDER": "default"},
-        )
+        ) as result,
+    ):
+        while chunk := result.stdout.read(65536):
+            retained = chunk[: max(0, LOG_LIMIT - logged_bytes)]
+            stream.write(retained)
+            logged_bytes += len(retained)
+            log_truncated |= len(retained) != len(chunk)
+        result.wait()
     report = {
         "source_sha": source_sha,
         "consumer_argv": command,
         "sample": kind,
         "build_seconds": time.monotonic() - started,
         "exit_code": result.returncode,
+        "log_truncated": log_truncated,
         "sum_sha256": sums,
         "input_fingerprint": fingerprint(root, {}),
-        **observe((state / "build.log").read_text()),
+        **observe((state / "build.log").read_text(errors="replace")),
     }
     if result.returncode == 0:
         report["image_id"] = capture(
@@ -436,11 +465,13 @@ def sample(root, state, kind, source_sha):
         raise ValueError("no verified image-build execution")
     if kind == "warm" and not re.search(r"phase=compile pkg=[1-9]\d* build=[1-9]\d*", observations):
         raise ValueError("warm payload was not observed inside the image compilation")
+    if kind == "warm" and not re.search(r"phase=download pkg=[1-9]\d*", observations):
+        raise ValueError("warm modules were not observed before the image download step")
     if kind == "invalidation" and "OSAC_IMAGE_CACHE_VARIANT_DOWNLOADED" not in observations:
         raise ValueError("new dependency download was not observed")
 
 
-def compatibility(root, state):
+def compatibility(root: Path, state: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="osac-gate-") as temporary:
         context = Path(temporary)
         for name in MOUNTS:
@@ -480,7 +511,7 @@ def compatibility(root, state):
             shutil.rmtree(state / "payload", ignore_errors=True)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "operation", choices=("prepare", "inject", "extract", "sample", "invalidation", "compatibility")

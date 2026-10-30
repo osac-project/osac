@@ -82,37 +82,20 @@
                 "poweredOn":false,"provisioning":{"ID":"test-id","state":"available"}}}
           changed_when: true
 
-        - name: Drive BareMetalHost to provisioned after the role patches its image
-          ansible.builtin.shell: |
-            set -euo pipefail
-            until [ "$(kubectl get baremetalhost "{{ test_bmh_name }}" \
-              --namespace "{{ test_namespace }}" \
-              -o jsonpath='{.spec.image.url}')" = "{{ test_image_url }}" ]; do
-              sleep 0.2
-            done
-            kubectl patch baremetalhost "{{ test_bmh_name }}" \
-              --namespace "{{ test_namespace }}" \
-              --subresource=status --type=merge \
-              --patch '{"status":{"operationalStatus":"OK","provisioning":{"state":"provisioned","image":{"url":"{{ test_image_url }}"}}}}'
-          args:
-            executable: /bin/bash
-          async: 60
-          poll: 0
-          changed_when: true
-          register: provision_status_driver
+        - name: Start the driver moving the BareMetalHost to provisioned once the role sets its image
+          ansible.builtin.include_tasks: ../drive_bmh_status.yml
+          vars:
+            bmh_expected_image_url: "{{ test_image_url }}"
+            bmh_status_state: provisioned
+            bmh_status_image_url: "{{ test_image_url }}"
 
         - name: Execute the real Metal3 create tasks
           ansible.builtin.include_role:
             name: osac.templates.bm_host_provisioning
             tasks_from: create_metal3.yaml
 
-        - name: Confirm the provision status driver completed
-          ansible.builtin.async_status:
-            jid: "{{ provision_status_driver.ansible_job_id }}"
-          register: provision_status_result
-          until: provision_status_result.finished
-          retries: 10
-          delay: 1
+        - name: Confirm the provisioned-status driver completed
+          ansible.builtin.include_tasks: ../check_bmh_status_driver.yml
 
         - name: Read provisioned BareMetalHost
           kubernetes.core.k8s_info:
@@ -151,37 +134,20 @@
                 | selectattr('metadata.name', 'equalto', test_bmh_name ~ '-network-data')
                 | list | length == 1
 
-        - name: Drive BareMetalHost to available after the role clears its image
-          ansible.builtin.shell: |
-            set -euo pipefail
-            until [ -z "$(kubectl get baremetalhost "{{ test_bmh_name }}" \
-              --namespace "{{ test_namespace }}" \
-              -o jsonpath='{.spec.image.url}')" ]; do
-              sleep 0.2
-            done
-            kubectl patch baremetalhost "{{ test_bmh_name }}" \
-              --namespace "{{ test_namespace }}" \
-              --subresource=status --type=merge \
-              --patch '{"status":{"operationalStatus":"OK","provisioning":{"state":"available"}}}'
-          args:
-            executable: /bin/bash
-          async: 60
-          poll: 0
-          changed_when: true
-          register: deprovision_status_driver
+        - name: Start the driver moving the BareMetalHost to available once the role clears its image
+          ansible.builtin.include_tasks: ../drive_bmh_status.yml
+          vars:
+            bmh_expected_image_url: ""
+            bmh_status_state: available
+            bmh_status_image_url: ""
 
         - name: Execute the real Metal3 delete tasks
           ansible.builtin.include_role:
             name: osac.templates.bm_host_provisioning
             tasks_from: delete_metal3.yaml
 
-        - name: Confirm the deprovision status driver completed
-          ansible.builtin.async_status:
-            jid: "{{ deprovision_status_driver.ansible_job_id }}"
-          register: deprovision_status_result
-          until: deprovision_status_result.finished
-          retries: 10
-          delay: 1
+        - name: Confirm the available-status driver completed
+          ansible.builtin.include_tasks: ../check_bmh_status_driver.yml
 
         - name: Read deprovisioned BareMetalHost
           kubernetes.core.k8s_info:

@@ -20,7 +20,7 @@
       - [2a. Disable default catalog sources](#2a-disable-default-catalog-sources)
       - [2b. Verify the generated CatalogSource name](#2b-verify-the-generated-catalogsource-name)
       - [2c. Merge read-only pull credentials](#2c-merge-read-only-pull-credentials)
-      - [2d. Apply all five generated artifacts](#2d-apply-all-five-generated-artifacts)
+      - [2d. Apply generated artifacts](#2d-apply-generated-artifacts)
       - [2e. Wait for MCPs to converge](#2e-wait-for-mcps-to-converge)
   - [Handoff Verification (Doc 1 gate)](#handoff-verification-doc-1-gate)
   - [Troubleshooting](#troubleshooting)
@@ -306,11 +306,13 @@ Ensure the cluster pull secret contains mirror registry
 **read-only** credentials so that nodes can pull mirrored
 images (see [Credential Separation](#credential-separation)).
 
-#### 2d. Apply all five generated artifacts
+#### 2d. Apply generated artifacts
 
 ```bash
 oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml
-oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml
+if [ -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml ]; then
+  oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml
+fi
 oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/cs-redhat-operator-index-v4-22.yaml
 oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/cc-redhat-operator-index-v4-22.yaml
 oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/signature-configmap.yaml

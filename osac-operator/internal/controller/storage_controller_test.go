@@ -324,6 +324,27 @@ func newTestCSPManagedBackendGetResponse(provider string) *privatev1.StorageBack
 	}.Build()
 }
 
+// newTestCSPManagedBackendWithCredentialsGetResponse builds a
+// StorageBackendsGetResponse fixture for a CSP-managed backend that also carries
+// an endpoint, inline credentials, and a password_secret reference. None of it
+// may be resolved or forwarded for a CSP-managed backend.
+func newTestCSPManagedBackendWithCredentialsGetResponse(provider, secretID string) *privatev1.StorageBackendsGetResponse {
+	return privatev1.StorageBackendsGetResponse_builder{
+		Object: privatev1.StorageBackend_builder{
+			Spec: privatev1.StorageBackendSpec_builder{
+				Provider:   provider,
+				CspManaged: true,
+				Endpoint:   "https://" + provider + ".example.com",
+				Credentials: privatev1.StorageBackendCredentials_builder{
+					Username:       testBackendUsername,
+					Password:       testBackendPassword,
+					PasswordSecret: privatev1.SecretLocalReference_builder{Id: secretID}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build(),
+	}.Build()
+}
+
 // configureTwoProviderReadinessClients wires tier and backend API responses for
 // readiness tests that exercise two registered storage providers.
 func configureTwoProviderReadinessClients(r *StorageReconciler, registeredBackendCount int32) {

@@ -64,8 +64,12 @@ The files in this directory are read in this order:
    the mirroring workflow.
 2. [`prereqs.md`](prereqs.md) validates cluster access to mirrored
    content and prepares production prerequisites and customer values.
-3. [`installation.md`](installation.md) performs state-changing operator,
-   operand, and OSAC installation.
+3. [`aap-git-source.md`](aap-git-source.md) prepares the internal AAP Git
+   source handoff.
+4. [`operators.md`](operators.md) prepares selected operators and shared
+   infrastructure.
+5. [`installation.md`](installation.md) installs the OSAC Helm release
+   and owns post-install acceptance.
 
 This guide covers mirroring only; installation begins in separate documents.
 
@@ -113,9 +117,11 @@ Mirror OSAC dependency and core component images:
 - **Metering adapter** (1 image, optional): m360-adapter — mirror only if
   enabling M360 integration (disabled by default)
 - **BMaaS** (BMaaS-conditional only): bare-metal-fulfillment-operator
-- Bastion laptop workflow for Helm chart deployment
+- Mirror inventory and handoff; OCI Helm chart artifact delivery
 - Disconnected Helm value: `cliImage`; CatalogSource naming
   requirement (all Subscriptions hard-code `redhat-operators`)
+
+<!-- Moved to installation.md §4. Installing OSAC. See docs/guides/installation/disconnected/installation.md -->
 
 ### [Category C: Mirroring VMaaS Images](mirroring-vmaas.md)
 
@@ -152,9 +158,11 @@ flowchart TD
     FULL --> APPLY[Apply five generated resources]
     APPLY --> MCP[Wait for MCP convergence]
     MCP --> GATE{Doc 1 acceptance gate}
-    GATE -->|pass| PRE[Doc 2a: prerequisites]
+    GATE -->|pass| PRE["Doc 2: prereqs.md"]
     GATE -->|fail| ISC
-    PRE --> INST[Doc 2b: installation]
+    PRE --> GIT["Doc 2: aap-git-source.md"]
+    GIT --> OPS["Doc 2: operators.md"]
+    OPS --> INST["Doc 2: installation.md"]
 ```
 
 ## Key Principles
@@ -180,7 +188,9 @@ flowchart TD
    `mirror.helm` for local or repository-index charts, but cannot
    pull OCI-format charts from a registry (RFE-8713) or pass Helm
    values (RFE-8748).  Use an internet-connected workstation to pull
-   OSAC's OCI charts from `ghcr.io` and deploy via SSH tunnel.
+   OSAC's OCI charts from `ghcr.io` for delivery to the disconnected site.
+
+   <!-- Moved to installation.md §4.1 Preparing the cluster. See docs/guides/installation/disconnected/installation.md -->
 
 5. **Three-tier operator model** — Three core operators are always
    required. Add three VMaaS operators when

@@ -149,10 +149,10 @@ digest-only inventory:
 
 ```bash
 oc apply -f \
-  oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml
+  oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml || exit 1
 if [ -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml ]; then
   oc apply -f \
-    oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml
+    oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml || exit 1
 fi
 ```
 

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ValidationError } from 'yup';
 
 import type { ComputeInstanceCatalogItem } from '@osac/types';
-import { ComputeInstanceTemplateReferenceSchema } from '@osac/types';
+import { ComputeInstanceTemplateReferenceSchema, GuestOSFamily } from '@osac/types';
 import { tIdentity } from '@osac/ui-components/test-utils/i18n';
 
 import type { ComputeInstanceWizardValues } from './fields';
@@ -41,6 +41,7 @@ const emptyValues: ComputeInstanceWizardValues = {
   metadata: { name: '', project: '' },
   spec: {
     sshKey: provisioningFieldValue(''),
+    guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
     diskImage: provisioningFieldValue(emptyResourceSelectValue()),
     instanceType: provisioningFieldValue(''),
     userDataSource: provisioningFieldValue('inline'),
@@ -114,10 +115,7 @@ describe('buildComputeInstanceStepSchema', () => {
       ...emptyValues,
       catalogItemReference: { name: vmCatalogItem.title, id: vmCatalogItem.id },
       metadata: { name: '', project: '' },
-      spec: {
-        ...emptyValues.spec,
-        diskImage: provisioningFieldValue({ id: 'disk-image-rhel', name: 'rhel' }),
-      },
+      spec: { ...emptyValues.spec },
     });
     expect(errors).toEqual({ metadata: { name: 'Name is required' } });
   });
@@ -127,10 +125,7 @@ describe('buildComputeInstanceStepSchema', () => {
       ...emptyValues,
       catalogItemReference: { name: vmCatalogItem.title, id: vmCatalogItem.id },
       metadata: { name: 'MyVM', project: '' },
-      spec: {
-        ...emptyValues.spec,
-        diskImage: provisioningFieldValue({ id: 'disk-image-rhel', name: 'rhel' }),
-      },
+      spec: { ...emptyValues.spec },
     });
     expect(errors).toEqual({
       metadata: {
@@ -144,19 +139,20 @@ describe('buildComputeInstanceStepSchema', () => {
       ...emptyValues,
       catalogItemReference: { name: vmCatalogItem.title, id: vmCatalogItem.id },
       metadata: { name: 'my-vm', project: '' },
-      spec: {
-        ...emptyValues.spec,
-        diskImage: provisioningFieldValue({ id: 'disk-image-rhel', name: 'rhel' }),
-      },
+      spec: { ...emptyValues.spec },
     });
     expect(errors).toEqual({});
   });
 
-  it('requires a disk image on general step', async () => {
-    const errors = await validateStep('general', {
+  it('requires a disk image on configuration step', async () => {
+    const errors = await validateStep('configuration', {
       ...emptyValues,
       catalogItemReference: { name: vmCatalogItem.title, id: vmCatalogItem.id },
       metadata: { name: 'my-vm', project: '' },
+      spec: {
+        ...emptyValues.spec,
+        instanceType: provisioningFieldValue('standard-4-8'),
+      },
     });
     expect(errors).toEqual({
       spec: { diskImage: { value: { id: 'Disk image is required' } } },
@@ -189,6 +185,7 @@ describe('buildComputeInstanceStepSchema', () => {
       spec: {
         ...emptyValues.spec,
         instanceType: provisioningFieldValue('standard-4-8'),
+        diskImage: provisioningFieldValue({ id: 'disk-image-rhel', name: 'rhel' }),
         bootDisk: {
           sizeGib: provisioningFieldValue('not-a-number'),
           storageTier: provisioningFieldValue(emptyResourceSelectValue()),
@@ -233,6 +230,7 @@ describe('buildComputeInstanceStepSchema', () => {
       metadata: { name: 'web-01', project: '' },
       spec: {
         ...emptyValues.spec,
+        diskImage: provisioningFieldValue({ id: 'disk-image-rhel', name: 'rhel' }),
       },
     });
     expect(errors).toEqual({
@@ -432,6 +430,7 @@ describe('buildComputeInstanceStepSchema', () => {
       metadata: { name: 'web-01', project: '' },
       spec: {
         ...emptyValues.spec,
+        diskImage: provisioningFieldValue({ id: 'disk-image-rhel', name: 'rhel' }),
         instanceType: provisioningFieldValue('standard-4-8'),
         additionalDisks: provisioningFieldValue([
           { sizeGib: '100', storageTier: emptyResourceSelectValue() },

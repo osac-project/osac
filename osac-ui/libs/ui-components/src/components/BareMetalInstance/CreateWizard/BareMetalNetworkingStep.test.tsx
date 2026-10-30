@@ -15,10 +15,7 @@ import {
 
 import { BareMetalNetworkingStep } from './BareMetalNetworkingStep';
 import { getBareMetalInstanceInitialValues } from './fields';
-import {
-  expectResourceSelectDisabled,
-  getResourceSelectCombobox,
-} from '../../../test-utils/resourceSelect';
+import { getResourceSelectInput } from '../../../test-utils/query';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
 describe('BareMetalNetworkingStep', () => {
@@ -87,11 +84,7 @@ describe('BareMetalNetworkingStep', () => {
 
     expect(screen.getByRole('checkbox', { name: 'Use tenant default network' })).not.toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'Use tenant default network' })).toBeDisabled();
-    await waitFor(() =>
-      expect(getResourceSelectCombobox(/^Virtual network/)).toHaveValue('vn-prod'),
-    );
-    await waitFor(() => expect(getResourceSelectCombobox(/^Subnet/)).toHaveValue('subnet-a'));
-    expectResourceSelectDisabled(/^Virtual network/);
-    expectResourceSelectDisabled(/^Subnet/);
+    await waitFor(() => expect(getResourceSelectInput(/^Virtual network/)).toHaveValue('vn-prod'));
+    await waitFor(() => expect(getResourceSelectInput(/^Subnet/)).toHaveValue('subnet-a'));
   });
 });

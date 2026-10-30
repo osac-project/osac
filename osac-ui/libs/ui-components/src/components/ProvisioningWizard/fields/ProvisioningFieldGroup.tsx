@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { FormFieldGroup, FormFieldGroupHeader } from '@patternfly/react-core';
+import { Flex, FlexItem, FormSection, Title } from '@patternfly/react-core';
 
 interface ProvisioningFieldGroupProps {
   title: string;
@@ -14,11 +14,26 @@ const ProvisioningFieldGroup = ({
   actions,
   children,
 }: ProvisioningFieldGroupProps) => (
-  <FormFieldGroup
-    header={<FormFieldGroupHeader titleText={{ text: title, id: titleId }} actions={actions} />}
-  >
-    {children}
-  </FormFieldGroup>
+  <>
+    <FormSection
+      aria-labelledby={titleId}
+      title={
+        <Flex
+          alignItems={{ default: 'alignItemsCenter' }}
+          justifyContent={{ default: 'justifyContentSpaceBetween' }}
+        >
+          <FlexItem>
+            <Title headingLevel="h2" size="md" id={titleId}>
+              {title}
+            </Title>
+          </FlexItem>
+          {actions ? <FlexItem>{actions}</FlexItem> : null}
+        </Flex>
+      }
+    >
+      {children}
+    </FormSection>
+  </>
 );
 
 export default ProvisioningFieldGroup;

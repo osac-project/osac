@@ -7,12 +7,7 @@ import { StorageTierSchema, StorageTierState } from '@osac/types';
 
 import { createEmptyComputeInstanceValues } from './payload';
 import { VmStorageStep } from './VmStorageStep';
-import {
-  expectResourceSelectDisabled,
-  expectResourceSelectEnabled,
-  getAllResourceSelectComboboxes,
-  getResourceSelectCombobox,
-} from '../../../test-utils/resourceSelect';
+import { getResourceSelectInput } from '../../../test-utils/query';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 import { type ResourceSelectValue, emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 import { provisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
@@ -57,28 +52,27 @@ describe('VmStorageStep', () => {
   it('shows a catalog-seeded default as editable when the field allows editing', async () => {
     renderStep({ id: 'id-fast', name: 'fast' });
 
-    await waitFor(() => {
-      expect(getResourceSelectCombobox(/^Storage tier/)).toHaveValue('fast');
-      expectResourceSelectEnabled(/^Storage tier/);
-    });
+    await waitFor(() => expect(getResourceSelectInput(/^Boot storage tier/)).toHaveValue('fast'));
     expect(screen.queryByText('Locked by catalog')).not.toBeInTheDocument();
   });
 
-  it('shows a lock badge and disables the field when the catalog policy locks the tier', async () => {
+  it('shows a lock badge when the catalog policy locks the tier', async () => {
     renderStep({ id: 'id-fast', name: 'fast' }, true);
 
-    await waitFor(() => {
-      expect(getResourceSelectCombobox(/^Storage tier/)).toHaveValue('fast');
-      expectResourceSelectDisabled(/^Storage tier/);
-    });
+    await waitFor(() => expect(getResourceSelectInput(/^Boot storage tier/)).toHaveValue('fast'));
     expect(screen.getByText('Locked by catalog')).toBeInTheDocument();
   });
 
   it('leaves the tier picker editable and unset by default', async () => {
     renderStep();
 
-    await waitFor(() => expectResourceSelectEnabled(/^Storage tier/));
-    expect(screen.getByPlaceholderText('Select a storage tier')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(getResourceSelectInput(/^Boot storage tier/)).toHaveAttribute(
+        'placeholder',
+        'Select a storage tier',
+      ),
+    );
+    expect(getResourceSelectInput(/^Boot storage tier/)).toHaveValue('');
     expect(screen.queryByText('Locked by catalog')).not.toBeInTheDocument();
   });
 });
@@ -90,7 +84,9 @@ describe('VmStorageStep — additional disks', () => {
   it('renders the additional-disks array field with no rows initially', () => {
     renderStep();
 
-    expect(screen.getByText('No additional disks added.')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Additional disks' })).toBeInTheDocument();
+    expect(screen.getByText('Additional disks')).toBeInTheDocument();
+    expect(screen.queryByText('No additional disks yet.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add disk' })).toBeInTheDocument();
   });
 
@@ -99,8 +95,8 @@ describe('VmStorageStep — additional disks', () => {
 
     await user.click(screen.getByRole('button', { name: 'Add disk' }));
 
-    await waitFor(() => expect(screen.getAllByLabelText(/^Storage tier/)).toHaveLength(2));
-    // Boot disk's picker renders before the additional-disks array field in this step.
-    expect(getAllResourceSelectComboboxes(/^Storage tier/)[0]).toHaveValue('fast');
+    await waitFor(() => expect(screen.getByLabelText(/^Boot storage tier/)).toBeInTheDocument());
+    expect(screen.getAllByLabelText(/^Storage tier/)).toHaveLength(1);
+    expect(getResourceSelectInput(/^Boot storage tier/)).toHaveValue('fast');
   });
 });

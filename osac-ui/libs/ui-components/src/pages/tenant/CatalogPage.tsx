@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Button,
@@ -16,11 +16,17 @@ import {
 } from '@patternfly/react-core';
 import type { TFunction } from 'i18next';
 
-import { ServiceTier } from '@osac/types';
+import {
+  BareMetalInstanceCatalogItems,
+  ClusterCatalogItems,
+  ComputeInstanceCatalogItems,
+  ServiceTier,
+} from '@osac/types';
 import { type CatalogListFilterCriteria } from '@osac/ui-components/api/v1/catalog-item-list-filter';
 import CatalogItemCard from '@osac/ui-components/components/catalog/CatalogItemCard';
 import {
-  CatalogItemKind,
+  type CatalogItemKind,
+  isCatalogItemKind,
   isCatalogPublishedFilter,
 } from '@osac/ui-components/components/catalog/catalogItemDisplay';
 import { useCatalogItemResourceLookups } from '@osac/ui-components/components/catalog/catalogItemResourceLookups';
@@ -31,13 +37,11 @@ import CatalogTenantFilter from '@osac/ui-components/components/catalog/CatalogT
 import ListPage from '@osac/ui-components/components/Page/ListPage';
 import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
 import ListPageToolbar from '@osac/ui-components/components/Page/ListPageToolbar';
+import CreateButton from '@osac/ui-components/components/Primitives/CreateButton';
 import ViewSwitcher from '@osac/ui-components/components/Primitives/ViewSwitcher';
 import { useCatalogItems } from '@osac/ui-components/hooks/use-catalog-items';
-import {
-  SEARCH_PARAM,
-  useArrayPageFilter,
-  usePageFilter,
-} from '@osac/ui-components/hooks/use-page-filter';
+import { SEARCH_PARAM, usePageFilter } from '@osac/ui-components/hooks/use-page-filter';
+import type { ServiceWithMethod } from '@osac/ui-components/hooks/use-permissions';
 import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useViewType } from '@osac/ui-components/hooks/use-view-type';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
@@ -129,10 +133,11 @@ const getPageDescription = (t: TFunction, enabledServices: ServiceTier[], role: 
 
 const TYPE_FILTER_PARAM = 'types';
 
-const CATALOG_SERVICE_TIERS: ServiceTier[] = [
-  ServiceTier.VMAAS,
-  ServiceTier.CAAS,
+// Priority order for the default resource type when the URL has none selected.
+const CATALOG_SERVICE_TIER_PRIORITY: ServiceTier[] = [
   ServiceTier.BMAAS,
+  ServiceTier.CAAS,
+  ServiceTier.VMAAS,
 ];
 
 const catalogKindForServiceTier = (tier: ServiceTier): CatalogItemKind | undefined => {
@@ -145,6 +150,19 @@ const catalogKindForServiceTier = (tier: ServiceTier): CatalogItemKind | undefin
       return 'vm';
     default:
       return undefined;
+  }
+};
+
+const catalogServiceForKind = (
+  kind: CatalogItemKind | undefined,
+): ServiceWithMethod<'create'> | undefined => {
+  switch (kind) {
+    case 'bm':
+      return BareMetalInstanceCatalogItems;
+    case 'cluster':
+      return ClusterCatalogItems;
+    case 'vm':
+      return ComputeInstanceCatalogItems;
   }
 };
 
@@ -167,14 +185,7 @@ const TENANT_FILTER_PARAM = 'tenant';
 const CatalogPage = () => {
   const { enabledServices, role } = useSession();
   const { t } = useTranslation();
-  const typeFilterGuard = useCallback(
-    (value: string | undefined): value is CatalogItemKind => {
-      const serviceTier = serviceTierForFilter(value);
-      return serviceTier ? enabledServices.includes(serviceTier) : false;
-    },
-    [enabledServices],
-  );
-  const [typeFilter, setTypeFilter] = useArrayPageFilter(TYPE_FILTER_PARAM, typeFilterGuard);
+  const [typeFilterParam, setTypeFilterParam] = usePageFilter(TYPE_FILTER_PARAM);
   const [, setSearchParams] = useSearchParams();
   const [publishedFilterParam, setPublishedFilterParam] = usePageFilter(PUBLISHED_FILTER_PARAM);
   const [tenantFilter, setTenantFilter] = usePageFilter(TENANT_FILTER_PARAM);
@@ -182,9 +193,36 @@ const CatalogPage = () => {
   const publishedFilter = isCatalogPublishedFilter(publishedFilterParam)
     ? publishedFilterParam
     : undefined;
-  const isFiltered = Boolean(publishedFilter || typeFilter?.length || tenantFilter || searchFilter);
-  const [typeFilterChanged, setTypeFilterChanged] = useState<boolean>(false);
+  const isFiltered = Boolean(publishedFilter || tenantFilter || searchFilter);
   const [viewType] = useViewType(CATALOG_ITEMS_VIEW_KEY);
+
+  // The URL may carry several comma-separated kinds from an older multi-select
+  // link; keep the first one that is both a valid kind and currently enabled.
+  const requestedKind = useMemo<CatalogItemKind | undefined>(() => {
+    for (const raw of typeFilterParam.split(',')) {
+      const trimmed = raw.trim();
+      if (!isCatalogItemKind(trimmed)) {
+        continue;
+      }
+      const tier = serviceTierForFilter(trimmed);
+      if (tier && enabledServices.includes(tier)) {
+        return trimmed;
+      }
+    }
+    return undefined;
+  }, [typeFilterParam, enabledServices]);
+
+  const defaultKind = useMemo<CatalogItemKind | undefined>(() => {
+    for (const tier of CATALOG_SERVICE_TIER_PRIORITY) {
+      if (enabledServices.includes(tier)) {
+        return catalogKindForServiceTier(tier);
+      }
+    }
+    return undefined;
+  }, [enabledServices]);
+
+  const selectedKind = requestedKind ?? defaultKind;
+  const selectedServiceTier = selectedKind ? serviceTierForFilter(selectedKind) : undefined;
 
   const filterCriteria = useMemo<CatalogListFilterCriteria>(
     () => ({
@@ -196,15 +234,8 @@ const CatalogPage = () => {
   );
 
   const serviceTierFilter: ServiceTier[] = useMemo(
-    () =>
-      typeFilter.reduce<ServiceTier[]>((acc, filter) => {
-        const serviceTier = serviceTierForFilter(filter);
-        if (serviceTier) {
-          acc.push(serviceTier);
-        }
-        return acc;
-      }, []),
-    [typeFilter],
+    () => (selectedServiceTier ? [selectedServiceTier] : []),
+    [selectedServiceTier],
   );
 
   const {
@@ -216,15 +247,22 @@ const CatalogPage = () => {
     hasSuccessfulQuery,
     typeCounts,
     unfilteredTotalItems,
-  } = useCatalogItems(filterCriteria, serviceTierFilter, !typeFilter?.length && !typeFilterChanged);
+  } = useCatalogItems(filterCriteria, serviceTierFilter, false);
 
   const data = [...vms, ...clusters, ...bms];
 
+  const shouldLoadResourceLookups =
+    data.length > 0 && !isLoading && !error && (viewType === 'cards' || selectedKind !== 'vm');
+
   const resourceLookups = useCatalogItemResourceLookups({
-    enabled: data.length > 0 && !isLoading && !error,
+    enabled: shouldLoadResourceLookups,
   });
 
   const pageDescription = getPageDescription(t, enabledServices, role);
+
+  const catalogCreateService = catalogServiceForKind(selectedKind);
+  const canCreateCatalogItem =
+    (role === 'admin' || role === 'tenant-admin') && !!catalogCreateService;
 
   // react-router's setSearchParams does not compose across synchronous calls;
   // each updater receives the render-captured params. Clear every filter in one
@@ -241,18 +279,7 @@ const CatalogPage = () => {
       },
       { replace: true },
     );
-    setTypeFilterChanged(false);
   };
-
-  const selectedTypeOptions: ServiceTier[] = useMemo(() => {
-    if (typeFilter?.length || typeFilterChanged) {
-      return typeFilter
-        .map((filter) => serviceTierForFilter(filter))
-        .filter((tier): tier is ServiceTier => tier !== undefined);
-    }
-
-    return CATALOG_SERVICE_TIERS.filter((tier) => typeCounts[tier] > 0);
-  }, [typeCounts, typeFilter, typeFilterChanged]);
 
   const filteredText =
     data.length === unfilteredTotalItems
@@ -262,28 +289,19 @@ const CatalogPage = () => {
           count: unfilteredTotalItems,
         });
 
-  const toggleTypeFilter = useCallback(
-    (serviceTier: ServiceTier) => {
-      const kind = catalogKindForServiceTier(serviceTier);
-      if (kind) {
-        setTypeFilter(kind);
-      }
-
-      if (!typeFilter?.length && !typeFilterChanged) {
-        selectedTypeOptions.forEach((option) => {
-          const optionKind = catalogKindForServiceTier(option);
-          if (optionKind) {
-            setTypeFilter(optionKind);
-          }
-        });
-        setTypeFilterChanged(true);
-      }
-    },
-    [setTypeFilter, typeFilter?.length, typeFilterChanged, selectedTypeOptions],
-  );
-
   return (
-    <ListPage title={t('Catalog')} description={pageDescription} error={error}>
+    <ListPage
+      title={t('Catalog')}
+      description={pageDescription}
+      error={error}
+      actions={
+        canCreateCatalogItem ? (
+          <CreateButton service={catalogCreateService} to={`/catalog/${selectedKind}/create`}>
+            {t('Create catalog item')}
+          </CreateButton>
+        ) : null
+      }
+    >
       <Stack hasGutter>
         <StackItem>
           <ListPageToolbar
@@ -295,9 +313,14 @@ const CatalogPage = () => {
               <ToolbarContent>
                 <ToolbarItem>
                   <CatalogServiceTierFilter
-                    selectedTypeOptions={selectedTypeOptions}
+                    selected={selectedServiceTier}
                     typeCounts={typeCounts}
-                    toggleTypeFilter={toggleTypeFilter}
+                    onSelect={(tier) => {
+                      const kind = catalogKindForServiceTier(tier);
+                      if (kind) {
+                        setTypeFilterParam(kind);
+                      }
+                    }}
                   />
                 </ToolbarItem>
                 {role === 'admin' || role === 'tenant-admin' ? (

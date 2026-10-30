@@ -1,5 +1,6 @@
-import type { ComputeInstanceCatalogItem } from '@osac/types';
+import { type ComputeInstanceCatalogItem, GuestOSFamily } from '@osac/types';
 
+import { catalogUserDataValuesFromPolicy } from '../../catalog/authoring/catalogUserData';
 import { type ResourceSelectValue, emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 import {
   type NetworkAttachmentFormFields,
@@ -39,6 +40,7 @@ export interface ComputeInstanceWizardValues {
   };
   spec: {
     sshKey: ProvisioningFieldValue<string>;
+    guestOsFamily: GuestOSFamily;
     diskImage: ProvisioningFieldValue<ResourceSelectValue>;
     instanceType: ProvisioningFieldValue<string>;
     userDataSource: ProvisioningFieldValue<UserDataSource>;
@@ -58,6 +60,7 @@ export const createEmptyComputeInstanceValues = (): ComputeInstanceWizardValues 
   metadata: { name: '', project: '' },
   spec: {
     sshKey: provisioningFieldValue(''),
+    guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
     diskImage: provisioningFieldValue(emptyResourceSelectValue()),
     instanceType: provisioningFieldValue(''),
     userDataSource: provisioningFieldValue('inline'),
@@ -106,10 +109,7 @@ export const getComputeInstanceInitialValues = (
     },
     spec: {
       ...values.spec,
-      userData: {
-        locked: false,
-        value: '',
-      },
+      ...catalogUserDataValuesFromPolicy(catalogItem.fields?.userDataSource),
       sshKey: (() => {
         const field = getFieldFromCatalogItemPolicy<{ name: string }>(catalogItem.fields?.sshKey, {
           name: '',

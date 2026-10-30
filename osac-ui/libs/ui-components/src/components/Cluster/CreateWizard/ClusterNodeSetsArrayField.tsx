@@ -11,18 +11,30 @@ import { type ClusterNodeSetRow, createEmptyNodeSetRow } from './fields';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
 import ClusterPoolSizeField from '../../Form/ClusterPoolSizeField';
+import { getVisibleFieldError } from '../../Form/fieldError';
+import { useShowFieldValidationErrors } from '../../Form/FieldValidationContext';
+import { FormFieldHelper } from '../../Form/FormFieldHelper';
 import NameField from '../../Form/NameField';
 import { SelectField } from '../../Form/SelectField';
 import ProvisioningFieldGroup from '../../ProvisioningWizard/fields/ProvisioningFieldGroup';
 import type { ProvisioningFieldControlProps } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
+interface ClusterNodeSetsArrayFieldProps extends ProvisioningFieldControlProps {
+  /** OSAC-6054: catalog policies may omit node sets; provisioning requires one row. */
+  allowEmpty?: boolean;
+}
+
 const ClusterNodeSetsArrayField = ({
   name = '',
   isDisabled = false,
-}: ProvisioningFieldControlProps) => {
+  isRequired = false,
+  allowEmpty = false,
+}: ClusterNodeSetsArrayFieldProps) => {
   const { t } = useTranslation();
   const { setFieldValue } = useFormikContext();
-  const [field, , helpers] = useField<ClusterNodeSetRow[]>(name);
+  const [field, meta, helpers] = useField<ClusterNodeSetRow[]>(name);
+  const showValidationErrors = useShowFieldValidationErrors();
+  const error = getVisibleFieldError(meta, showValidationErrors);
   const rows = useMemo(() => field.value ?? [], [field.value]);
   const {
     data: hostTypes,
@@ -38,6 +50,10 @@ const ClusterNodeSetsArrayField = ({
   }));
 
   useEffect(() => {
+    if (isRequired && rows.length === 0) {
+      void helpers.setValue([createEmptyNodeSetRow()]);
+      return;
+    }
     if (hostTypesLoading || hostTypeItems.length === 0) {
       return;
     }
@@ -59,7 +75,7 @@ const ClusterNodeSetsArrayField = ({
     if (changed) {
       void setFieldValue(name, nextRows, false);
     }
-  }, [hostTypeItems, hostTypesLoading, name, rows, setFieldValue]);
+  }, [helpers, hostTypeItems, hostTypesLoading, isRequired, name, rows, setFieldValue]);
 
   const addRow = () => {
     void helpers.setValue([...rows, createEmptyNodeSetRow()]);
@@ -81,6 +97,11 @@ const ClusterNodeSetsArrayField = ({
           </Alert>
         </StackItem>
       ) : null}
+      {error ? (
+        <StackItem>
+          <FormFieldHelper error={error} fieldId={`${name}-error`} />
+        </StackItem>
+      ) : null}
       {rows.length === 0 ? <StackItem>{t('No node sets added yet.')}</StackItem> : null}
       {rows.map((row, rowIndex) => (
         <StackItem key={row.rowId}>
@@ -88,11 +109,12 @@ const ClusterNodeSetsArrayField = ({
             title={t('Node set {{number}}', { number: rowIndex + 1 })}
             titleId={`cluster-node-set-group-${row.rowId}`}
             actions={
-              !isDisabled && rowIndex > 0 ? (
+              !isDisabled && (allowEmpty || rowIndex > 0) ? (
                 <Button
                   variant="plain"
                   aria-label={t('Remove node set')}
                   onClick={() => removeRow(rowIndex)}
+                  isDisabled={isRequired && rows.length === 1}
                   icon={<MinusCircleIcon />}
                 />
               ) : undefined

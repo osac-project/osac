@@ -12,12 +12,12 @@ describe('buildCatalogListFilter', () => {
     [
       'search only',
       { search: 'fedora' },
-      '(this.metadata.name.contains("fedora") || this.title.contains("fedora") || this.description.contains("fedora"))',
+      '(this.metadata.name.contains("fedora") || this.title.contains("fedora"))',
     ],
     [
       'search escapes quotes and backslashes',
       { search: 'a"b\\c' },
-      '(this.metadata.name.contains("a\\"b\\\\c") || this.title.contains("a\\"b\\\\c") || this.description.contains("a\\"b\\\\c"))',
+      '(this.metadata.name.contains("a\\"b\\\\c") || this.title.contains("a\\"b\\\\c"))',
     ],
     ['published only', { published: 'published' as const }, 'this.published == true'],
     ['unpublished only', { published: 'unpublished' as const }, 'this.published == false'],
@@ -29,7 +29,7 @@ describe('buildCatalogListFilter', () => {
     [
       'multiple dimensions combine with &&',
       { search: 'rhel', published: 'published' as const, tenant: 'acme' },
-      '(this.metadata.name.contains("rhel") || this.title.contains("rhel") || this.description.contains("rhel")) && this.published == true && (this.metadata.tenant == "shared" || this.metadata.tenant == "acme")',
+      '(this.metadata.name.contains("rhel") || this.title.contains("rhel")) && this.published == true && (this.metadata.tenant == "shared" || this.metadata.tenant == "acme")',
     ],
   ])('%s', (_name, criteria, expected) => {
     expect(buildCatalogListFilter(criteria)).toBe(expected);
@@ -40,7 +40,6 @@ describe('catalogItemMatchesListFilter', () => {
   const item: CatalogListFilterableItem = {
     metadata: { name: 'catalog-rhel-9', tenant: 'shared' },
     title: 'RHEL 9 catalog',
-    description: 'RHEL 9 base image',
     published: true,
   };
 
@@ -48,8 +47,8 @@ describe('catalogItemMatchesListFilter', () => {
     expect(catalogItemMatchesListFilter(item, undefined)).toBe(true);
   });
 
-  it('matches search terms against name, title, and description', () => {
-    const filter = buildCatalogListFilter({ search: 'base image' });
+  it('matches search terms against name and title', () => {
+    const filter = buildCatalogListFilter({ search: 'RHEL 9' });
     expect(catalogItemMatchesListFilter(item, filter)).toBe(true);
     expect(catalogItemMatchesListFilter(item, buildCatalogListFilter({ search: 'missing' }))).toBe(
       false,

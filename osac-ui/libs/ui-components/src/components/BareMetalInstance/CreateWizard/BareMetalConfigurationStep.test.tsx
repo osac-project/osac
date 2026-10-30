@@ -13,10 +13,6 @@ import {
 
 import BareMetalConfigurationStep from './BareMetalConfigurationStep';
 import { createEmptyBareMetalInstanceValues, getBareMetalInstanceInitialValues } from './fields';
-import {
-  expectResourceSelectDisabled,
-  getResourceSelectCombobox,
-} from '../../../test-utils/resourceSelect';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 import { provisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
@@ -47,15 +43,18 @@ describe('BareMetalConfigurationStep', () => {
       },
     );
 
-    const diskImageSelect = await screen.findByLabelText(/^Disk image/);
-    await user.click(diskImageSelect);
+    const diskImageToggle = await screen.findByRole('button', {
+      name: 'Select the image reference',
+    });
+    const diskImageSelect = screen.getByRole('combobox');
+    await user.click(diskImageToggle);
 
     expect(screen.getByRole('option', { name: /fedora/ })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /rhel/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole('option', { name: /rhel/ }));
 
-    await waitFor(() => expect(getResourceSelectCombobox(/^Disk image/)).toHaveValue('rhel'));
+    await waitFor(() => expect(diskImageSelect).toHaveValue('rhel'));
   });
 
   it('shows the catalog item disk image when the wizard opens', async () => {
@@ -86,14 +85,27 @@ describe('BareMetalConfigurationStep', () => {
       },
     );
 
-    await screen.findByLabelText(/^Disk image/);
-    await waitFor(() => expect(getResourceSelectCombobox(/^Disk image/)).toHaveValue('rhel'));
-    expectResourceSelectDisabled(/^Disk image/);
+    const diskImageSelect = await screen.findByRole('combobox');
+    await waitFor(() => expect(diskImageSelect).toHaveValue('rhel'));
   });
 
   it('disables instance type selection when the catalog item locks its value', async () => {
+    const catalogItem = create(BareMetalInstanceCatalogItemSchema, {
+      fields: {
+        instanceType: {
+          behavior: {
+            case: 'locked',
+            value: { name: 'worker' },
+          },
+        },
+      },
+    });
+
     renderWithProviders(
-      <Formik initialValues={createEmptyBareMetalInstanceValues()} onSubmit={() => undefined}>
+      <Formik
+        initialValues={getBareMetalInstanceInitialValues(catalogItem)}
+        onSubmit={() => undefined}
+      >
         <BareMetalConfigurationStep />
       </Formik>,
       {
@@ -104,8 +116,10 @@ describe('BareMetalConfigurationStep', () => {
       },
     );
 
-    await screen.findByLabelText('Instance type');
-    expectResourceSelectDisabled('Instance type');
+    const instanceTypeSelect = await screen.findByRole('button', {
+      name: 'Instance type',
+    });
+    expect(instanceTypeSelect).toBeDisabled();
   });
 
   it('lets the user switch between inline user data and a USER_DATA Secret', async () => {

@@ -1,0 +1,70 @@
+import { type BareMetalInstanceCatalogItem, GuestOSFamily } from '@osac/types';
+
+import {
+  type ResourceSelectValue,
+  emptyResourceSelectValue,
+} from '../../../Form/resourceSelectValue';
+import {
+  type ProvisioningFieldValue,
+  provisioningFieldValue,
+} from '../../../ProvisioningWizard/fields/provisioningFieldValue';
+import {
+  type CatalogGeneralValues,
+  catalogGeneralValues,
+  catalogGeneralValuesFromItem,
+} from '../CatalogGeneralStep';
+import { catalogValueFromPolicy } from '../catalogItemPolicy';
+import { catalogUserDataValuesFromPolicy } from '../catalogUserData';
+
+export interface BareMetalCatalogItemValues extends CatalogGeneralValues {
+  guestOsFamily: GuestOSFamily;
+  instanceType: ProvisioningFieldValue<string>;
+  diskImage: ProvisioningFieldValue<ResourceSelectValue>;
+  userDataSource: ProvisioningFieldValue<'inline' | 'secret'>;
+  userData: ProvisioningFieldValue<string>;
+  userDataSecret: ProvisioningFieldValue<string>;
+}
+
+const readInstanceTypeValue = (value: unknown): string => {
+  const reference = value as { id?: string; name?: string } | undefined;
+  return reference?.name?.trim() || reference?.id?.trim() || '';
+};
+
+const readResourceReference = (value: unknown): ResourceSelectValue => {
+  const reference = value as { id?: string; name?: string } | undefined;
+  return reference?.id || reference?.name
+    ? { id: reference.id ?? '', name: reference.name ?? '' }
+    : emptyResourceSelectValue();
+};
+
+export const emptyBareMetalCatalogItemValues = (): BareMetalCatalogItemValues => ({
+  ...catalogGeneralValues(),
+  guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
+  instanceType: provisioningFieldValue(''),
+  diskImage: provisioningFieldValue(emptyResourceSelectValue()),
+  userDataSource: provisioningFieldValue('inline'),
+  userData: provisioningFieldValue(''),
+  userDataSecret: provisioningFieldValue(''),
+});
+
+export const getBareMetalCatalogItemInitialValues = (
+  item?: BareMetalInstanceCatalogItem,
+): BareMetalCatalogItemValues => {
+  if (!item) {
+    return emptyBareMetalCatalogItemValues();
+  }
+
+  const fields = item.fields;
+
+  return {
+    ...catalogGeneralValuesFromItem(item),
+    guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
+    instanceType: catalogValueFromPolicy(fields?.instanceType, readInstanceTypeValue, ''),
+    diskImage: catalogValueFromPolicy(
+      fields?.diskImage,
+      readResourceReference,
+      emptyResourceSelectValue(),
+    ),
+    ...catalogUserDataValuesFromPolicy(fields?.userDataSource),
+  };
+};

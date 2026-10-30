@@ -1,16 +1,13 @@
-import { type ReactNode, useEffect, useMemo } from 'react';
-import { Alert, Content, FormGroup } from '@patternfly/react-core';
-import { TypeaheadSelect } from '@patternfly/react-templates';
-import { useField } from 'formik';
+import { type ReactElement, type ReactNode, useCallback, useEffect, useMemo } from 'react';
+import { Alert, Content } from '@patternfly/react-core';
+import { getIn, setIn, useFormikContext } from 'formik';
 
 import type { ListParams } from '@osac/ui-components/api/types';
 import { useListResource } from '@osac/ui-components/api/use-resource';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
-import { getVisibleFieldError } from './fieldError';
-import { useShowFieldValidationErrors } from './FieldValidationContext';
-import { FormFieldHelper } from './FormFieldHelper';
-import { type ResourceSelectValue } from './resourceSelectValue';
+import { type ResourceSelectValue, emptyResourceSelectValue } from './resourceSelectValue';
+import { TypeaheadSelectField } from './TypeaheadSelectField';
 
 type ListService = Parameters<typeof useListResource>[0];
 
@@ -19,10 +16,10 @@ export { emptyResourceSelectValue } from './resourceSelectValue';
 
 export interface ResourceListItem {
   id: string;
-  metadata?: { name?: string };
+  metadata?: { name?: string; description?: string };
 }
 
-export interface ResourceSelectFieldProps {
+export interface ResourceSelectFieldProps<TResource extends ResourceListItem = ResourceListItem> {
   name: string;
   label: string;
   fieldId: string;
@@ -31,28 +28,27 @@ export interface ResourceSelectFieldProps {
   isRequired?: boolean;
   isDisabled?: boolean;
   labelInfo?: ReactNode;
+  labelHelp?: ReactElement;
+  description?: string;
   placeholder?: string;
   loadingPlaceholder?: string;
   autoSelectSingleOption?: boolean;
   loadErrorTitle?: string;
   emptyTitle?: string;
   emptyDescription?: string;
-  /** Called after a new resource is selected. Use to trigger cascade resets. */
-  onSelectResource?: (value: ResourceSelectValue) => void;
+  autoSelectFirstOption?: boolean;
+  showOptionDescriptions?: boolean;
+  /** Called after a new resource is selected or the field is cleared. Use to trigger cascade resets. */
+  onSelectResource?: (value: ResourceSelectValue, resource?: TResource) => void;
   /** Client-side filter applied after the list response (e.g. GPU-class). */
-  filterItems?: (item: ResourceListItem) => boolean;
+  filterItems?: (item: TResource) => boolean;
   /** Label for options and the closed toggle. Defaults to metadata.name. */
-  formatOptionLabel?: (item: ResourceListItem) => string;
+  formatOptionLabel?: (item: TResource) => string;
 }
-
-const resourceFromItem = (item: ResourceListItem): ResourceSelectValue => ({
-  id: item.id,
-  name: item.metadata?.name ?? '',
-});
 
 const defaultOptionLabel = (item: ResourceListItem): string => item.metadata?.name ?? item.id;
 
-export const ResourceSelectField = ({
+export const ResourceSelectField = <TResource extends ResourceListItem = ResourceListItem>({
   name,
   label,
   fieldId,
@@ -61,22 +57,26 @@ export const ResourceSelectField = ({
   isRequired = false,
   isDisabled = false,
   labelInfo,
+  labelHelp,
+  description,
   placeholder = '',
   loadingPlaceholder = 'Loading...',
   autoSelectSingleOption = false,
   loadErrorTitle,
   emptyTitle,
   emptyDescription,
+  autoSelectFirstOption = false,
+  showOptionDescriptions = true,
   onSelectResource,
   filterItems,
   formatOptionLabel = defaultOptionLabel,
-}: ResourceSelectFieldProps) => {
-  const [field, meta, helpers] = useField<ResourceSelectValue>(name);
-  const showValidationErrors = useShowFieldValidationErrors();
-  const error = getVisibleFieldError(meta, showValidationErrors);
+}: ResourceSelectFieldProps<TResource>) => {
+  const idFieldName = `${name}.id`;
+  const nameFieldName = `${name}.name`;
+  const { dirty, resetForm, values, setFieldValue } = useFormikContext<Record<string, unknown>>();
   const { data, isLoading, error: loadError } = useListResource(service, request);
   const items = useMemo(() => {
-    const listed = ((data as { items?: ResourceListItem[] } | undefined)?.items ?? []).filter(
+    const listed = ((data as { items?: TResource[] } | undefined)?.items ?? []).filter(
       (item) => item.id,
     );
     return filterItems ? listed.filter(filterItems) : listed;
@@ -86,18 +86,39 @@ export const ResourceSelectField = ({
   const listEmpty = !isLoading && !listFailed && items.length === 0;
   const controlDisabled = isDisabled || isLoading || listFailed || listEmpty;
   const effectivePlaceholder = isLoading ? loadingPlaceholder : placeholder;
-  const selectedId = field.value?.id ?? '';
-  const validated = error ? 'error' : 'default';
 
-  const typeaheadOptions = useMemo(
-    () =>
-      items.map((item) => ({
-        value: item.id,
-        content: formatOptionLabel(item),
-        selected: item.id === selectedId,
-      })),
-    [formatOptionLabel, items, selectedId],
+  const selectedId = (getIn(values, idFieldName) as string | undefined) ?? '';
+
+  const notifyResourceSelection = useCallback(
+    (resourceId: string) => {
+      const item = items.find((resource) => resource.id === resourceId);
+      const resourceName = item?.metadata?.name ?? '';
+      void setFieldValue(nameFieldName, resourceName, false);
+      onSelectResource?.(
+        resourceId ? { id: resourceId, name: resourceName } : emptyResourceSelectValue(),
+        item,
+      );
+    },
+    [items, nameFieldName, onSelectResource, setFieldValue],
   );
+
+  // Keep the resource's name in sync with its id, including when a resource list
+  // finishes loading after an initial id was provided.
+  useEffect(() => {
+    const item = items.find((resource) => resource.id === selectedId);
+    if (selectedId && !item) {
+      return;
+    }
+    const resourceName = item?.metadata?.name ?? '';
+    if (getIn(values, nameFieldName) !== resourceName) {
+      const nextValues = setIn(values, nameFieldName, resourceName) as Record<string, unknown>;
+      if (dirty) {
+        void setFieldValue(nameFieldName, resourceName, false);
+      } else {
+        resetForm({ values: nextValues });
+      }
+    }
+  }, [dirty, items, nameFieldName, resetForm, selectedId, setFieldValue, values]);
 
   useEffect(() => {
     if (
@@ -109,15 +130,51 @@ export const ResourceSelectField = ({
     ) {
       return;
     }
-    void helpers.setValue(resourceFromItem(items[0]), false);
-  }, [autoSelectSingleOption, controlDisabled, helpers, isLoading, items, selectedId]);
+    void setFieldValue(idFieldName, items[0].id, false);
+    notifyResourceSelection(items[0].id);
+  }, [
+    autoSelectSingleOption,
+    controlDisabled,
+    idFieldName,
+    isLoading,
+    items,
+    notifyResourceSelection,
+    selectedId,
+    setFieldValue,
+  ]);
 
-  const applySelection = (item: ResourceListItem) => {
-    const resourceValue = resourceFromItem(item);
-    void helpers.setValue(resourceValue, true);
-    void helpers.setTouched(true, false);
-    onSelectResource?.(resourceValue);
-  };
+  useEffect(() => {
+    if (
+      !autoSelectFirstOption ||
+      isLoading ||
+      controlDisabled ||
+      items.length === 0 ||
+      selectedId !== ''
+    ) {
+      return;
+    }
+    void setFieldValue(idFieldName, items[0].id, true);
+    notifyResourceSelection(items[0].id);
+  }, [
+    autoSelectFirstOption,
+    controlDisabled,
+    idFieldName,
+    isLoading,
+    items,
+    notifyResourceSelection,
+    selectedId,
+    setFieldValue,
+  ]);
+
+  const options = useMemo(
+    () =>
+      items.map((item) => ({
+        value: item.id,
+        content: formatOptionLabel(item),
+        description: showOptionDescriptions ? item.metadata?.description : undefined,
+      })),
+    [formatOptionLabel, items, showOptionDescriptions],
+  );
 
   return (
     <>
@@ -131,35 +188,19 @@ export const ResourceSelectField = ({
           {emptyDescription ? <Content component="p">{emptyDescription}</Content> : null}
         </Alert>
       ) : null}
-      <FormGroup label={label} fieldId={fieldId} isRequired={isRequired} labelInfo={labelInfo}>
-        <TypeaheadSelect
-          id={`${fieldId}-select`}
-          initialOptions={typeaheadOptions}
-          isDisabled={controlDisabled}
-          placeholder={effectivePlaceholder}
-          onSelect={(_event, value) => {
-            const item = items.find((resource) => resource.id === value);
-            if (!item) {
-              return;
-            }
-            applySelection(item);
-          }}
-          onClearSelection={() => {
-            void helpers.setValue({ id: '', name: '' }, true);
-          }}
-          toggleProps={{
-            id: fieldId,
-            'aria-label': label,
-            isDisabled: controlDisabled,
-            isFullWidth: true,
-            status: validated === 'error' ? 'danger' : undefined,
-            'aria-invalid': error ? true : undefined,
-            'aria-describedby': error ? `${fieldId}-helper-error` : undefined,
-            'aria-busy': isLoading || undefined,
-          }}
-        />
-        <FormFieldHelper error={error} fieldId={fieldId} />
-      </FormGroup>
+      <TypeaheadSelectField
+        name={idFieldName}
+        label={label}
+        fieldId={fieldId}
+        options={options}
+        isRequired={isRequired}
+        isDisabled={controlDisabled}
+        labelInfo={labelInfo}
+        labelHelp={labelHelp}
+        description={description}
+        placeholder={effectivePlaceholder}
+        onSelectionChange={notifyResourceSelection}
+      />
     </>
   );
 };

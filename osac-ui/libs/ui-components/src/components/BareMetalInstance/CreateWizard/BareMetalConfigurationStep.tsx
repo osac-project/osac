@@ -29,7 +29,11 @@ const BareMetalConfigurationStep = () => {
           </ProvisioningField>
           <ProvisioningField name={BM_DISK_IMAGE_FORM_PATH}>
             {({ valueName, isDisabled }) => (
-              <DiskImageField name={valueName} isDisabled={isDisabled} />
+              <DiskImageField
+                name={valueName}
+                guestOsFamilyName="spec.guestOsFamily"
+                isDisabled={isDisabled}
+              />
             )}
           </ProvisioningField>
           <ProvisioningField name={BM_USER_DATA_FORM_PATH}>

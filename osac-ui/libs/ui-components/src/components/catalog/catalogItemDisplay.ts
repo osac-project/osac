@@ -58,11 +58,7 @@ export const catalogItemMetadataLabelEntries = (
 export const searchableCatalogItemText = (item: CatalogItem): string => {
   const labels = item.metadata?.labels ?? {};
 
-  return [
-    item.description,
-    item.metadata?.name,
-    ...Object.entries(labels).map(([key, value]) => `${key} ${value}`),
-  ]
+  return [item.metadata?.name, ...Object.entries(labels).map(([key, value]) => `${key} ${value}`)]
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
@@ -108,3 +104,17 @@ export const catalogItemDetailsPath = (item: CatalogItem): string => {
       return '#';
   }
 };
+
+export const catalogItemKind = (item: CatalogItem): CatalogItemKind => {
+  switch (item.$typeName) {
+    case 'osac.public.v1.ComputeInstanceCatalogItem':
+      return 'vm';
+    case 'osac.public.v1.BareMetalInstanceCatalogItem':
+      return 'bm';
+    case 'osac.public.v1.ClusterCatalogItem':
+      return 'cluster';
+  }
+};
+
+export const catalogItemEditPath = (item: CatalogItem): string =>
+  `/catalog/${catalogItemKind(item)}/${item.id}/edit`;

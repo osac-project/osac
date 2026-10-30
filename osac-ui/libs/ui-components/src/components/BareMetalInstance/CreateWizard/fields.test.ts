@@ -46,6 +46,33 @@ describe('getBareMetalInstanceInitialValues', () => {
     });
   });
 
+  it('loads an editable catalog user-data default into the wizard', () => {
+    const catalogItem = create(BareMetalInstanceCatalogItemSchema, {
+      id: 'catalog-bm-1',
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: {
+              defaultValue: {
+                source: { case: 'inline', value: '#cloud-config\nruncmd: []' },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const values = getBareMetalInstanceInitialValues(catalogItem);
+
+    expect(values.spec.userDataSource).toEqual({ value: 'inline', locked: false });
+    expect(values.spec.userData).toEqual({
+      value: '#cloud-config\nruncmd: []',
+      locked: false,
+    });
+    expect(values.spec.userDataSecret).toEqual({ value: '', locked: false });
+  });
+
   it('loads locked catalog network attachments into the wizard', () => {
     const catalogItem = create(BareMetalInstanceCatalogItemSchema, {
       id: 'catalog-bm-1',

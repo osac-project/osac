@@ -1,5 +1,6 @@
-import type { BareMetalInstanceCatalogItem } from '@osac/types';
+import { type BareMetalInstanceCatalogItem, GuestOSFamily } from '@osac/types';
 
+import { catalogUserDataValuesFromPolicy } from '../../catalog/authoring/catalogUserData';
 import { bareMetalDiskImageReferenceFromPolicy } from '../../catalog/bareMetalCatalogItemResourceDisplay';
 import { catalogFieldPolicyLocked } from '../../catalog/catalogFieldPolicyDisplay';
 import type { ResourceSelectValue } from '../../Form/resourceSelectValue';
@@ -33,6 +34,7 @@ export interface BareMetalInstanceWizardValues {
   };
   spec: {
     sshKey: ProvisioningFieldValue<string>;
+    guestOsFamily: GuestOSFamily;
     userDataSource: ProvisioningFieldValue<'inline' | 'secret'>;
     userData: ProvisioningFieldValue<string>;
     userDataSecret: ProvisioningFieldValue<string>;
@@ -61,6 +63,7 @@ export const createEmptyBareMetalInstanceValues = (): BareMetalInstanceWizardVal
   metadata: { name: '', project: '' },
   spec: {
     sshKey: provisioningFieldValue(''),
+    guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
     userDataSource: provisioningFieldValue('inline'),
     userData: provisioningFieldValue(''),
     userDataSecret: provisioningFieldValue(''),
@@ -97,10 +100,7 @@ export const getBareMetalInstanceInitialValues = (
     spec: {
       ...values.spec,
       sshKey: getFieldFromCatalogItemPolicy(catalogItem.fields?.sshPublicKey, ''),
-      userData: {
-        locked: false,
-        value: '',
-      },
+      ...catalogUserDataValuesFromPolicy(catalogItem.fields?.userDataSource),
       instanceType: (() => {
         const field = getFieldFromCatalogItemPolicy(catalogItem.fields?.instanceType, undefined);
         const reference = field.value as { id?: string; name?: string } | undefined;

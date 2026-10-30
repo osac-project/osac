@@ -67,7 +67,7 @@ The independent `cliImage` and `aap.bootstrap.cliImage` settings both default to
 
 The AAP EE must support the selected Git/probe operations. Resolve and verify its exact image before any storage or source probe uses it.
 
-**Entry gate** — bind the prerequisite record, selection file, chart tree, namespace, cluster, original values digest, and approved post-Git values checkpoint. Consume the same-run Git handoff and recheck endpoint/ref readiness before resource creation. Missing or changed evidence stops this guide.
+**Entry review** — use the existing prerequisite record and approved post-Git values checkpoint to identify the intended selections, chart, namespace and cluster. Retain the original values digest and record each applicable input comparison separately; these observations do not bind live resources into one consistent snapshot. Consume the same-run Git handoff and recheck endpoint/ref readiness before resource creation. Missing inputs or unreviewed changes stop the dependent operation.
 
 **Catalog gate** — compare exact source identity and image with the archived generated CatalogSource, not a hostname substring.
 
@@ -93,9 +93,9 @@ Doc 1 owns IDMS/ITMS, ClusterCatalog/signatures and image availability. Prerequi
 
 ### Resume
 
-Resume from the retained run, not a new directory. Verify the same chart tree, cluster, namespace, prerequisite record, selection and content-addressed approved values snapshot.
+Resume from the retained run, not a new directory. Review the recorded chart, cluster, namespace, prerequisite inputs and selections separately. Compare the local values bytes with the approved snapshot digest; that comparison restores input context, not a common live-resource snapshot.
 
-Evidence result: `checkpoint: pass`. A changed values digest requires private full-diff, fresh-render and image/Secret-contract review before an explicitly approved checkpoint update.
+A changed values digest requires private full-diff, fresh-render and image/Secret-contract review before an explicitly approved checkpoint update.
 
 Missing/corrupt state is not authorization to initialize over it. A valid checkpoint restores context only: recheck live readiness and ownership before continuing the first unverified stage.
 
@@ -267,7 +267,7 @@ Both exact images require Doc 1 proof. The generic static-manifest installation 
 
 **Release-manifest gate**:
 
-Evidence result: `trust-release: pass`, including approved Git blob and image-coverage identities.
+Record the owner-approved Git blob identity and the separate image observations in the existing protected inputs; neither observation alone certifies complete release provenance or image coverage.
 
 **Serving-certificate gate**:
 
@@ -306,7 +306,7 @@ Expected: `true`. This proves only that CA data is present, not that the webhook
 1. Bind the live `trust.cert-manager.io` entry in `ValidatingWebhookConfiguration/trust-manager` to the approved release or owner-approved adopted configuration. The release Service is `cert-manager/trust-manager`, port `443` to `6443`, with path `/validate-trust-cert-manager-io-v1alpha1-bundle`; its expected certificate DNS SAN is `trust-manager.cert-manager.svc`. Retain the approved matching rules and fail-closed admission configuration; never switch to `Ignore`, exclude requests, or bypass admission to pass this gate.
 2. Privately decode that entry's exact current `clientConfig.caBundle` and parse its PEM certificates. Bind its trust anchors and issuing chain to the approved service CA references and owner evidence, not merely matching issuer names. The [pinned release](https://github.com/cert-manager/trust-manager/blob/v0.20.0/deploy/charts/trust-manager/templates/certificate.yaml) uses the self-signed `Issuer/cert-manager/trust-manager` for `Certificate/cert-manager/trust-manager`; its approved self-signed serving anchor is distinct from the OSAC distribution CA below. Do not substitute `default-ca` or an unrelated system trust store.
 3. Through approved service access, obtain the certificate chain currently served by **each** ready backend selected by the Service; require a nonempty ready-backend set. Bind each to the approved Certificate, Secret `cert-manager/trust-manager-tls` and Deployment `/tls` mount. Inspect only public certificates, never `tls.key`. A Secret's `tls.crt`, Certificate `Ready`, or rollout alone does not prove which certificate is currently served. Using **only the exact live webhook CA bundle** as trust anchors, verify signatures/chain, current validity, TLS server-authentication purpose and the actual Service DNS SAN above (not CN-only fallback or SNI alone). Disable default trust-path/store fallback and require verification errors to produce nonzero failure; for example, OpenSSL `s_client` requires `-verify_return_error`, not just printed verification warnings. Follow the approved client's [certificate verification semantics](https://docs.openssl.org/3.5/man1/openssl-verification-options/).
-4. Keep the owner-reviewed identity, exact bundle/served-chain binding and successful verification evidence in existing protected service evidence; export only already-allowlisted outcomes. A pass requires all checks against the current approved material. Missing, malformed, stale, unapproved, mismatched or unverifiable evidence blocks Bundle creation/adoption and final acceptance. After rotation, repeat verification rather than reusing the old pass. Do not regenerate a CA or weaken validation to repair a failure.
+4. Keep the owner-reviewed identity, exact bundle/served-chain binding and successful verification evidence in existing protected service evidence; export only already-allowlisted outcomes. Record the named certificate-check results separately against the current approved material; do not convert them into a whole-stage pass or an unchanged cross-resource snapshot. Missing, malformed, stale, unapproved, mismatched or unverifiable evidence blocks Bundle creation/adoption and final acceptance. After rotation, repeat the applicable verification rather than reusing old observations. Do not regenerate a CA or weaken validation to repair a failure.
 
 This read-only certificate verification is not an admission probe or proof of API-server network reachability. A successful dry-run that skips a webhook or ignores its failure is not substitute evidence; retain [Kubernetes webhook matching and TLS requirements](https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/).
 
@@ -393,9 +393,9 @@ oc --request-timeout=30s get bundle ca-bundle -o json | jq -e '.metadata.generat
 
 Expected: `true`.
 
-**Trust-set gate** — exact approved/distributed certificate-fingerprint-set equality plus actual selected-signer membership, with unchanged issuer/Secret/target identities during verification.
+**Trust-set observations** — use the approved owner procedure to check exact equality of the approved/distributed certificate-fingerprint sets and selected-signer membership. Record each result with the issuer/Secret/target identities actually observed; separate reads do not prove those resources remained unchanged throughout verification.
 
-Evidence result: `signer-bundle: pass`; missing or unapproved certificates block consumers. PEM presence alone is not acceptance.
+A failed set-equality or signer-membership check, or missing or unapproved certificates, blocks the affected consumers. PEM presence alone is not acceptance; retain the separate comparison and signer observations rather than a compound `signer-bundle: pass`.
 
 ### Runtime Secret and ConfigMap contracts
 
@@ -422,9 +422,9 @@ Examples below use release name/namespace `osac`. The actual chart plus approved
 
 The operator's Fulfillment connection uses `operator.fulfillment.tokenFile`, `serverAddress` and its configured CA, not an invented operator OIDC credential-array key.
 
-**Consumer gate** — scan the current render and verify every required external name/key, optional reference and Phase 2 writer collision.
+**Consumer review** — use the current render and the table above to review each required external name/key, optional reference and potential Phase 2 writer collision separately. Stop the dependent operation on a missing required input or unresolved ownership conflict; this review is not an exhaustive certificate of the complete consumer graph.
 
-Evidence result: `secret-contracts: pass`; required external inputs verified, chart-generated outputs explicitly `deferred-phase2`. Do not create an unused standard Secret to satisfy a guessed name.
+Record the individual input observations and leave chart-generated outputs explicitly `deferred-phase2`. Do not create an unused standard Secret to satisfy a guessed name.
 
 Existing credentials require owner-approved adoption/rotation; do not overwrite a newer live credential from an old local file. Verify protected bytes without printing them. Do not change global Certificate garbage-collection policy merely to satisfy a verifier.
 
@@ -442,15 +442,15 @@ Use the canonical guides rather than duplicating service provisioning:
 
 **Identity gate** — exact HTTPS issuer and approved endpoint hostnames, discovery/JWKS, governed client authentication, role mapping and namespace-workload connectivity.
 
-Evidence result: `identity: pass`; cleanup of temporary token inputs is required on failure as well as success. A token alone does not prove authorization.
+Record each applicable canonical identity observation separately; cleanup of temporary token inputs is required on failure as well as success. A token alone does not prove authorization.
 
 **Database gate** — confirm rendered `dbInit.host`, database names, subjects and signer, including bootstrap `postgres` authorization and verify-full TLS.
 
-Evidence result: `database-contract: pass`. If the provider disallows the unconditional bootstrap, stop with chart/database owners; pre-provisioning an application database does not remove the hook.
+Record the rendered database-field observations separately from the database owner's compatibility and bootstrap-authorization decision; a field check is not functional database acceptance. If the provider disallows the unconditional bootstrap, stop with chart/database owners; pre-provisioning an application database does not remove the hook.
 
 **Vault handoff gate**:
 
-Evidence result: `vault-handoff: pass`; canonical service-owner evidence plus actual rendered credential/CA references, not merely a nonempty evidence file.
+Record the canonical service-owner handoff and each rendered credential/CA-reference observation separately. A nonempty evidence file is not owner verification, and these records do not prove the future OSAC client's successful Vault connection.
 
 ### Kafka
 
@@ -474,7 +474,7 @@ Expected: `true`.
 
 **Kafka functional gate** — selected-provider DNS, bootstrap and advertised-broker TLS, SCRAM authentication, canonical topic/group authorization and reviewed execution context.
 
-Evidence result: `kafka: pass`. Operator CSV readiness alone is not broker or client readiness. For in-cluster Kafka, retire only the recorded temporary probe identity through owner-approved UID-preconditioned cleanup.
+Record each applicable canonical Kafka check separately, including its selected provider and execution context; do not combine them into a whole-stage Kafka-readiness certificate. Operator CSV readiness alone is not broker or client readiness. For in-cluster Kafka, retire only the recorded temporary probe identity through owner-approved UID-preconditioned cleanup.
 
 ### AAP Git source handoff
 
@@ -504,7 +504,7 @@ The string `"false"` is deliberate for the 0.0.62 template. The shipped default 
 
 **AAP input gate** — exact approved ZIP, Secret ownership/label, pinned operator/API, Git source and rendered explicit HTTPS/verification settings.
 
-Evidence result: `aap-inputs: pass`. Phase 2 must additionally prove the actual operator-to-AAP HTTPS request validates hostname and serving chain, plus bootstrap/project-sync revision. An unavailable trust mechanism blocks that acceptance; do not restore skip-verification.
+Record the listed AAP input observations separately; they are not an aggregate delivery or runtime-readiness result. Phase 2 must additionally prove the actual operator-to-AAP HTTPS request validates hostname and serving chain, plus bootstrap/project-sync revision. An unavailable trust mechanism blocks that acceptance; do not restore skip-verification.
 
 ## 5. Optional VMaaS Operands
 
@@ -646,15 +646,15 @@ These are manual responsibilities, not Jobs to install from the reference charts
 | 17 | `create-creds` | Governed controller credential identity, keys and authentication |
 | 19 | `create-ui-backend-creds` | Governed backend credential identity/keys and identity-owner approval |
 
-Classify each inventory entry as `guide-created`, `adopted` or `temporary`. Record the exact UID for each Kubernetes object entry; for direct administrator actions, use the existing run identity or protected owner-evidence reference instead. A missing/failed active responsibility blocks completion. Do not fabricate Job identities or UIDs for direct administrator actions.
+Classify each inventory entry as `guide-created`, `adopted` or `temporary`. Record the exact UID for each Kubernetes object entry; for direct administrator actions, use the existing run identity or protected owner-evidence reference instead. Record any missing or failed active responsibility and stop its dependent work, including Phase 2 when that responsibility is a prerequisite; do not treat the ledger as an all-or-nothing completion certificate. Do not fabricate Job identities or UIDs for direct administrator actions.
 
-**Final gate** — repeats live selected-resource checks, nonempty owned-workload rollouts, original Manual-plan identities, trust, source, latest values/render/image/Secret contracts and the complete responsibility ledger. Require the recorded security-owner acknowledged exception for the pinned AAP CSV and its verified CSV-to-image mapping, and, for in-cluster Kafka, the recorded AMQ resolved-CSV/v1 compatibility decision plus all three served-v1 API checks. Missing or no-longer-applicable evidence blocks final acceptance, including for adopted installations.
+**End-of-preparation review** — review the selected-resource observations, owned-workload rollouts, original Manual-plan identities, trust/source observations, latest values/render/image/Secret reviews and responsibility entries separately. Recheck the live object needed by the next dependent operation; these checks do not establish a common snapshot or one combined final result. Require the recorded security-owner acknowledged exception for the pinned AAP CSV and its verified CSV-to-image mapping, and, for in-cluster Kafka, the recorded AMQ resolved-CSV/v1 compatibility decision plus all three served-v1 API checks. Missing or no-longer-applicable evidence stops the dependent operation, including for adopted installations.
 
-Evidence result: `final: pass`; readiness is not inferred from file existence, namespace-wide counts or old replicas alone.
+Do not infer readiness from file existence, namespace-wide counts or old replicas alone, and do not issue a whole-stage `final: pass`.
 
-**Completion** — after change-owner review, publish validated private handoff and separate allowlisted audit atomically.
+**Handoff** — after change-owner review, retain the existing private inputs and responsibility records; keep allowlisted check metadata separate. Their retention/publication is not an atomic unit and has no new generation-marker requirement.
 
-Evidence result: `complete: pass`; no final completion artifact on failed reads, missing inputs, unresolved placeholders or failed active gates. Checkpoint, inventories and sensitive runtime inputs stay private through Phase 2 and the approved retry window.
+Record failed reads, missing inputs, unresolved placeholders and failed active checks without relabeling them as success. An interruption may leave completed operations alongside incomplete records; review the retained context and recheck the next dependency before resuming. Checkpoint, inventories and sensitive runtime inputs stay private through Phase 2 and the approved retry window.
 
 ### Worked flow and failure recovery
 

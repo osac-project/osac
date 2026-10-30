@@ -38,7 +38,7 @@ Keep values, endpoint identities, discovery documents, renders, credentials, and
 
 ### Evidence contract
 
-Validation is manual and evidence-based. Record the exact inputs, observed identities, and pass/fail result for every gate in protected runtime evidence. The actual **0.0.62** chart, its schema, and the commands in this guide are the validation surface; no companion toolkit is used. Missing, stale, ambiguous, or malformed evidence is failure, not a skip. No gate creates an operator, approves an InstallPlan, or repairs Doc 1.
+Validation is manual and evidence-based. Record the exact inputs, observed identities, and result of each printed check separately in protected runtime evidence. A result covers only that observation; it does not certify the whole preparation workflow or a consistent snapshot across resources. The actual **0.0.62** chart, its schema, and the commands in this guide are the validation surface; no companion toolkit is used. Missing, stale, ambiguous, or malformed evidence is failure, not a skip. No gate creates an operator, approves an InstallPlan, or repairs Doc 1.
 
 | Private input | Required value or source |
 | --- | --- |
@@ -74,13 +74,13 @@ oc get operatorhub cluster -o json | jq -e '.spec.disableAllDefaultSources == tr
 
 Expected local result: `true`. An online default source is not a substitute for missing mirror content.
 
-Check complete identity, content, policy, and lineage binding:
+Review the handed-off resource identities and record the adjacent observations separately:
 
-Evidence result: `doc1: pass`. Require both mirror-set types, the exact CatalogSource name/namespace/image with `READY`, each generated ClusterCatalog `Serving=True` with reason `Available`, and the generated signature handoff. OLM Classic PackageManifest visibility does not prove ClusterCatalog readiness or vice versa.
+Retain both generated mirror-set types and the generated signature handoff. For the corresponding dependent steps, require the exact CatalogSource name/namespace/image and its `READY` state, and each generated ClusterCatalog's `Serving=True` condition with reason `Available`, using separate resource checks. OLM Classic PackageManifest visibility does not prove ClusterCatalog readiness or vice versa. These observations do not produce a combined Doc 1 identity/content/policy/lineage certificate.
 
 Check affected-pool convergence:
 
-Evidence result: `machineconfig: pass`: every affected pool unpaused, observedGeneration=current generation, Updated=True, updatedMachineCount=machineCount, unavailable/degraded counts zero, and Degraded=False. Creating an IDMS does not drain or reboot nodes; modifying or deleting an IDMS can cause node disruption. ITMS changes can drain nodes. See the [OpenShift 4.22 mirror-set behavior](https://docs.openshift.com/it/documentation/openshift_container_platform/4.22/html/disconnected_environments/updating-a-cluster-in-a-disconnected-environment). Consume the completed rollout; do not reapply policies here.
+For each affected pool, record its current state separately: unpaused, observedGeneration=current generation, Updated=True, updatedMachineCount=machineCount, unavailable/degraded counts zero, and Degraded=False. Creating an IDMS does not drain or reboot nodes; modifying or deleting an IDMS can cause node disruption. ITMS changes can drain nodes. See the [OpenShift 4.22 mirror-set behavior](https://docs.openshift.com/it/documentation/openshift_container_platform/4.22/html/disconnected_environments/updating-a-cluster-in-a-disconnected-environment). Consume the completed rollout; do not reapply policies here.
 
 | Package visibility | Required channel | Selection |
 | --- | --- | --- |
@@ -91,7 +91,7 @@ Evidence result: `machineconfig: pass`: every affected pool unpaused, observedGe
 
 Check the selected packages and channels:
 
-Evidence result: `packages: pass`. Every selected PackageManifest must match both `status.catalogSource=redhat-operators` and `status.catalogSourceNamespace=openshift-marketplace`. Operator namespaces, scopes, CSV pins, and Manual approval belong to the single product table in `operators.md`, not a second table here.
+Record the source observation for each selected PackageManifest separately. Each must match both `status.catalogSource=redhat-operators` and `status.catalogSourceNamespace=openshift-marketplace`. Operator namespaces, scopes, CSV pins, and Manual approval belong to the single product table in `operators.md`, not a second table here.
 
 ## 3. Registry access and bounded configuration
 
@@ -211,11 +211,11 @@ No passwords, tokens, private keys, or credential-bearing URLs belong in selecti
 
 Check selection consistency and applicable production contracts:
 
-Evidence result: `providers: pass`. Only the explicit in-cluster Kafka/LVMS/MetalLB live gates may be deferred to `operators.md`; external dependencies must already pass their canonical contracts. Deferred is not ready, and file existence alone is not owner verification. Storage Pending/WaitForFirstConsumer is not successful provisioning.
+Record the provider selections and each applicable canonical check result separately. Only the explicit in-cluster Kafka/LVMS/MetalLB live gates may be deferred to `operators.md`; external dependencies must already pass their canonical contracts. Deferred is not ready, and file existence alone is not owner verification. Storage Pending/WaitForFirstConsumer is not successful provisioning.
 
 Check identity without sending credentials to unapproved endpoints:
 
-Evidence result: `identity: pass`. Approve HTTPS scheme and exact hosts before discovery/JWKS requests or credential POST; reject userinfo, unexpected query/fragment and redirects. Match the same approved issuer across the OSAC clients and Vault contract. Missing roles/claims return to the identity/service owner, not a demonstration fixture.
+Record each applicable canonical identity check separately; a single observation does not establish the complete identity-service contract. Approve HTTPS scheme and exact hosts before discovery/JWKS requests or credential POST; reject userinfo, unexpected query/fragment and redirects. Match the same approved issuer across the OSAC clients and Vault contract. Missing roles/claims return to the identity/service owner, not a demonstration fixture.
 
 ## 5. Prepare the release chart and values
 
@@ -263,22 +263,22 @@ helm template osac ./osac --namespace "$OSAC_NAMESPACE" --values "$VALUES_FILE" 
 
 Expected: protected nonempty render. Do not require global server-side dry-run: operator APIs/webhooks do not yet exist, and Phase 2 installs additional CRDs.
 
-Evidence result: `render: pass`: no unresolved placeholders or embedded credentials; actual consumers match selected services; every exact image has archived inventory membership, correct tag/ITMS or digest/IDMS mapping, specificity-resolved policy, exact mirror authority and available destination manifest. VMaaS selected sources require effective `NeverContactSource`; the separate CDI import path remains a later VMaaS acceptance gate. A broad registry prefix is not image availability proof. Any direct-mirror override, including CLI, needs its own exact lineage proof.
+Review the rendered consumers against the selected services and approved values, including unresolved placeholders and embedded credentials, and record those observations separately. Stop the dependent step on an unresolved placeholder, embedded credential or selected-consumer mismatch. Use Doc 1's selected inventory, intended tag/ITMS or digest/IDMS mappings and exact mirror references when reviewing each image. Return an observed missing image, mapping discrepancy or unavailable destination to the mirror owner with the exact reference; a render or registry-prefix observation does not certify exhaustive inventory, policy specificity, availability or provenance. Retain the selected VMaaS `NeverContactSource` requirement; the separate CDI import path remains a later VMaaS acceptance gate. Record each direct-mirror override, including CLI, with its approved original and mirror references in the private inputs. These narrower observations do not waive approved image/source provenance or mirror-only requirements.
 
 ## 6. Handoff and worked flow
 
-Evidence result: `complete: pass` only after all applicable checks and change-owner review. Stage a consistent private record set, then atomically publish its final generation marker; failure/interruption must leave the last valid generation or no completion, never partial success. Recheck live state at the next boundary; a past record is not continuing readiness or authorization.
+Review the individual check results and outstanding work with the change owner. Retain the existing private inputs and keep allowlisted check metadata separate; do not turn them into an installation-wide success receipt or require an atomic generation marker. A failure or interruption can leave work and records incomplete: record what was observed, stop the dependent step and recheck live state before resuming. A past record is not continuing readiness or authorization.
 
 | Artifact | Consumer and boundary |
 | --- | --- |
 | `prerequisite-selection.env` | Protected, data-only selections; retain explicit fields and consistent approved inputs |
 | `prereqs-completion.txt` | Private `profile`, `enable_vmaas`, `with_lvms`, `with_metallb`, `kafka_provider`, `storage_class`, `chart_version=0.0.62`, original `values_sha256` |
-| `prereqs-artifacts.sha256` and private input state | Bind original values/render, complete chart, protected `OSAC_CHART_DIR` path (consume unchanged in `aap-git-source.md`), Doc 1 lineage, provider evidence and resource identities; available for owner verification/resume, not audit export |
+| `prereqs-artifacts.sha256` and private input state | Retain the original values/render, approved chart identity and protected `OSAC_CHART_DIR` path (consume unchanged in `aap-git-source.md`), plus Doc 1 lineage and owner/resource references for review and resume, not audit export. A checksum comparison observes local bytes against an already approved record; it is not provenance, live-readiness or cross-resource consistency proof. |
 | Fresh prerequisite audit directory | Only schema-versioned allowlisted outcomes, timestamp, release/selections and approved configuration checksums; never endpoints, raw logs, source paths, credential-derived hashes or private input files |
 
 For Core + VMaaS with enterprise storage/network and external Kafka, select `core-vmaas`, `enable_vmaas=true`, both `with_*` fields false, the approved storage class, and `kafka_provider=external`. The administrator sees each fixed gate result and retains exact private bindings; the record agrees with values before `operators.md` begins.
 
-If the workload PVC cannot bind or write, `providers` fails and no completion record is published. The storage owner corrects the existing provider, or approves an explicit with-LVMS selection change and its deferred live test. Regenerate affected selection/render checks; never install both providers opportunistically. If a rendered image is missing, return to Doc 1's same lineage rather than substituting a public image. If another administrator changes trust/pull credentials, the stale write must fail and be re-reviewed.
+If the workload PVC cannot bind or write, record the failed storage observation and stop its dependent work; do not mark that check successful. The storage owner corrects the existing provider, or approves an explicit with-LVMS selection change and its deferred live test. Regenerate affected selection/render checks; never install both providers opportunistically. If a rendered image is missing, return to Doc 1's same lineage rather than substituting a public image. If another administrator changes trust/pull credentials, the stale write must fail and be re-reviewed.
 
 Remove only this run's approved temporary objects using recorded UID/ownership preconditions; never delete a shared namespace or adopted resource. Retain private runtime inputs through Phase 2 and the approved retry window, then dispose under the site's secret-media policy. Continue to [AAP Git source handoff](aap-git-source.md) with the reviewed prerequisite handoff, then to [operators and shared infrastructure](operators.md) with its validated Git handoff; deliberate later values edits preserve the original prerequisite digest and require a new approved checkpoint, not an overwritten past record.
 

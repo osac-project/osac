@@ -648,7 +648,7 @@ func (s *privateEventsServerSubscription) runGroup() error {
 	stop := func() {
 		if cancel != nil {
 			cancel()
-			<-done
+			<-done //nolint:errcheck // restarts and shutdown discard the cancelled consumer's result
 			cancel = nil
 			done = nil
 		}

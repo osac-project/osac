@@ -142,7 +142,7 @@ const (
 	// Tenant configuration
 	envTenantNamespace = "OSAC_TENANT_NAMESPACE"
 
-	// Remote cluster (tenant and compute-instance controllers)
+	// Remote cluster (tenant, compute-instance, storage, and networking controllers)
 	envRemoteClusterKubeconfig = "OSAC_REMOTE_CLUSTER_KUBECONFIG"
 
 	// Controller enable flags (defaults when flag is not set)
@@ -233,15 +233,34 @@ func (f *controllerFlags) validate() error {
 	return nil
 }
 
+// validateRemoteCluster verifies that no controllers incompatible with
+// remote-cluster kubeconfig mode are enabled when a kubeconfig path is set,
+// and rejects whitespace-only kubeconfig paths before trimming.
+func (f *controllerFlags) validateRemoteCluster(remoteClusterKubeconfig string) error {
+	if remoteClusterKubeconfig == "" {
+		return nil
+	}
+	if strings.TrimSpace(remoteClusterKubeconfig) == "" {
+		return fmt.Errorf("remote cluster kubeconfig path is empty")
+	}
+	if f.Cluster {
+		return fmt.Errorf("remote cluster kubeconfig option is not supported along with cluster controller")
+	}
+	if f.BareMetalInstance {
+		return fmt.Errorf("remote cluster kubeconfig option is not supported along with bare metal instance controller")
+	}
+	return nil
+}
+
 // addSchemesForLocalControllers registers only the API schemes required by the enabled controllers.
 // Must be called before creating the manager.
 func addSchemesForLocalControllers(
 	localScheme *runtime.Scheme,
-	enableCluster, enableComputeInstance, enableTenant, enableNetworking, enableBareMetalInstance bool,
+	enableCluster, enableComputeInstance, enableTenant, enableStorage, enableNetworking, enableBareMetalInstance bool,
 ) {
 	utilruntime.Must(clientgoscheme.AddToScheme(localScheme))
 	utilruntime.Must(v1alpha1.AddToScheme(localScheme))
-	if enableCluster {
+	if enableCluster || enableStorage {
 		utilruntime.Must(hypershiftv1beta1.AddToScheme(localScheme))
 	}
 	if enableComputeInstance {
@@ -261,10 +280,16 @@ func addSchemesForLocalControllers(
 func addSchemesForRemoteControllers(
 	localScheme *runtime.Scheme,
 	remoteScheme *runtime.Scheme,
-	enableComputeInstance, enableTenant bool,
+	enableComputeInstance, enableTenant, enableStorage, enableNetworking bool,
 ) {
 	utilruntime.Must(clientgoscheme.AddToScheme(localScheme))
 	utilruntime.Must(v1alpha1.AddToScheme(localScheme))
+	if enableStorage {
+		utilruntime.Must(hypershiftv1beta1.AddToScheme(localScheme))
+	}
+	if enableNetworking {
+		utilruntime.Must(bmfov1alpha1.AddToScheme(localScheme))
+	}
 
 	utilruntime.Must(clientgoscheme.AddToScheme(remoteScheme))
 	if enableComputeInstance {
@@ -280,6 +305,9 @@ func addSchemesForRemoteControllers(
 // The cluster uses the given scheme for type resolution. The caller is responsible for
 // starting the cluster (e.g. in a goroutine with cl.Start(ctx)) so it runs with the manager.
 func newClusterFromKubeconfig(kubeconfigPath string, scheme *runtime.Scheme) (cluster.Cluster, error) {
+	if strings.TrimSpace(kubeconfigPath) == "" {
+		return nil, fmt.Errorf("remote cluster kubeconfig path is empty")
+	}
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("build config from kubeconfig %q: %w", kubeconfigPath, err)
@@ -1348,7 +1376,7 @@ func main() {
 		&remoteClusterKubeconfig,
 		"remote-cluster-kubeconfig",
 		os.Getenv(envRemoteClusterKubeconfig),
-		"Path to the kubeconfig for the remote cluster (supported by tenant and compute-instance controllers only).",
+		"Path to the kubeconfig for the remote cluster (not supported with cluster or baremetal-instance controllers).",
 	)
 
 	// Controller enable flags. Defaults from env; if none are set (flag or env), all controllers are enabled.
@@ -1367,12 +1395,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	if remoteClusterKubeconfig != "" && ctrlFlags.Cluster {
-		setupLog.Error(nil, "remote cluster kubeconfig option is not supported along with cluster controller")
-		os.Exit(1)
-	}
-	if remoteClusterKubeconfig != "" && ctrlFlags.BareMetalInstance {
-		setupLog.Error(nil, "remote cluster kubeconfig option is not supported along with bare metal instance controller")
+	if err := ctrlFlags.validateRemoteCluster(remoteClusterKubeconfig); err != nil {
+		setupLog.Error(err, err.Error())
 		os.Exit(1)
 	}
 
@@ -1431,6 +1455,7 @@ func main() {
 			ctrlFlags.Cluster,
 			ctrlFlags.ComputeInstance,
 			ctrlFlags.Tenant,
+			ctrlFlags.Storage,
 			ctrlFlags.Networking,
 			ctrlFlags.BareMetalInstance,
 		)
@@ -1444,6 +1469,8 @@ func main() {
 		addSchemesForRemoteControllers(localScheme, remoteScheme,
 			ctrlFlags.ComputeInstance,
 			ctrlFlags.Tenant,
+			ctrlFlags.Storage,
+			ctrlFlags.Networking,
 		)
 		remoteCluster, err = newClusterFromKubeconfig(remoteClusterKubeconfig, remoteScheme)
 		if err != nil {
@@ -1463,20 +1490,13 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "95f7e044.openshift.io",
-		LeaseDuration:          ptr.To(35 * time.Second),
-		RenewDeadline:          ptr.To(25 * time.Second),
-		RetryPeriod:            ptr.To(5 * time.Second),
-		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
-		// when the Manager ends. This requires the binary to immediately end when the
-		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
-		// speeds up voluntary leader transitions as the new leader don't have to wait
-		// LeaseDuration time first.
-		//
-		// In the default scaffold provided, the program ends immediately after
-		// the manager stops, so would be fine to enable this option. However,
-		// if you are doing or is intended to do any operation such as perform cleanups
-		// after the manager stops then its usage might be unsafe.
-		// LeaderElectionReleaseOnCancel: true,
+		// main() exits immediately after startComponentsWithRemoteKubeconfigWatch returns,
+		// so releasing the lease on context cancellation is safe and avoids waiting
+		// LeaseDuration (35s) during rollouts and watchRemoteKubeconfig restarts.
+		LeaderElectionReleaseOnCancel: true,
+		LeaseDuration:                 ptr.To(35 * time.Second),
+		RenewDeadline:                 ptr.To(25 * time.Second),
+		RetryPeriod:                   ptr.To(5 * time.Second),
 	}
 	if helpers.GetEnvWithDefault(envEnableFulfillmentTrust, false) && ctrlFlags.Cluster {
 		sourceNamespace := os.Getenv(envClusterOrderNamespace)

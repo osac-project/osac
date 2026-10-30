@@ -90,8 +90,9 @@ Networking controllers derive template names from the prefix:
 ### Remote cluster
 
 - `OSAC_REMOTE_CLUSTER_KUBECONFIG` — path to kubeconfig for the remote cluster
-  used by Tenant and ComputeInstance controllers (optional). Not supported when
-  ClusterOrder controller is enabled.
+  used by Tenant, ComputeInstance, Storage, and Networking controllers
+  (optional). Not supported when the ClusterOrder or BareMetalInstance
+  controller is enabled.
 
 ### Job history
 
@@ -161,8 +162,12 @@ enabled.
 - `OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER` — enable ComputeInstance controller
   (truthy/falsy).
 - `OSAC_ENABLE_TENANT_CONTROLLER` — enable Tenant controller (truthy/falsy).
+- `OSAC_ENABLE_STORAGE_CONTROLLER` — enable Storage controller (truthy/falsy).
+- `OSAC_ENABLE_VOLUME_CONTROLLER` — enable Volume controller (truthy/falsy).
 - `OSAC_ENABLE_NETWORKING_CONTROLLER` — enable networking controllers
   (VirtualNetwork, Subnet, SecurityGroup) (truthy/falsy).
+- `OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER` — enable BareMetalInstance
+  controller (truthy/falsy).
 
 ### Fulfillment trust reconciliation
 

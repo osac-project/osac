@@ -5,8 +5,7 @@
 .list-page-card__icon {
     border-radius: var(--pf-t--global--border--radius--medium);
     background-color: var(--pf-t--global--background--color--secondary--default);
-    width: 2.75rem;
-    height: 2.75rem;
+    padding: var(--pf-t--global--spacer--sm);
     justify-content: center;
     align-items: center;
     display: inline-flex;

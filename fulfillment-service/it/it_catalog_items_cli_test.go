@@ -102,7 +102,8 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 		bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 		version := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
 		template := createCatalogItemClusterTemplateFixture(ctx, privatev1.ClusterTemplateSpecDefaults_builder{
-			Version: privatev1.ClusterVersionReference_builder{Id: version}.Build(),
+			PullSecretSecret: clusterPullSecretDefaultsFixture(ctx).GetPullSecretSecret(),
+			Version:          privatev1.ClusterVersionReference_builder{Id: version}.Build(),
 		}.Build(), nil)
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{

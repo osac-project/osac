@@ -93,9 +93,10 @@ var _ = Describe("Public clusters", func() {
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("test-tmpl-%s", uuid.New()[24:32]),
 				}.Build(),
-				Id:          templateId,
-				Title:       "My template %s",
-				Description: "My template.",
+				Id:           templateId,
+				Title:        "My template %s",
+				Description:  "My template.",
+				SpecDefaults: clusterPullSecretDefaultsFixture(ctx),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

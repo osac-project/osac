@@ -85,8 +85,10 @@ var _ = Describe("Reader API access", func() {
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 
 		createdName := "reader-create-denied-" + uuid.New()[24:]
+		deniedObject := readerTestClusterObject(createdName, usersGroup, assets)
+		deniedObject.GetSpec().SetPullSecretSecret(proto.Clone(readerCluster.GetSpec().GetPullSecretSecret()).(*publicv1.SecretLocalReference))
 		createResponse, err := readerClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
-			Object: readerTestClusterObject(createdName, usersGroup, assets),
+			Object: deniedObject,
 		}.Build())
 		if err == nil {
 			Expect(createResponse).ToNot(BeNil())
@@ -193,7 +195,9 @@ func createReaderTestCluster(
 ) *publicv1.Cluster {
 	GinkgoHelper()
 	client := publicv1.NewClustersClient(conn)
-	response, err := client.Create(ctx, readerTestClusterCreateRequest(name, tenant, assets))
+	request := readerTestClusterCreateRequest(name, tenant, assets)
+	request.GetObject().GetSpec().SetPullSecretSecret(clusterPullSecretReferenceFixture(ctx, conn, tenant))
+	response, err := client.Create(ctx, request)
 	Expect(err).ToNot(HaveOccurred())
 	cluster := response.GetObject()
 	deferClusterDeletion(cluster.GetId(), tool.InternalView().AdminConn())

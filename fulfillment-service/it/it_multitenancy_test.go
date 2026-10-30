@@ -180,14 +180,16 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 					Expect(err).ToNot(HaveOccurred())
 
 					clustersClient := publicv1.NewClustersClient(conn)
+					pullSecret := clusterPullSecretReferenceFixture(ctx, conn, tenant)
 					createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 						Object: publicv1.Cluster_builder{
 							Metadata: publicv1.Metadata_builder{
 								Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
-								Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-								NodeSets: testClusterNodeSets(clusterBMIT, 3),
+								Template:         publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+								PullSecretSecret: pullSecret,
+								NodeSets:         testClusterNodeSets(clusterBMIT, 3),
 							}.Build(),
 						}.Build(),
 					}.Build())

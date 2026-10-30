@@ -315,7 +315,9 @@ var _ = Describe("Role binding reconciler", func() {
 			}
 
 			createdName := "role-sync-new-token-create-" + uuid.New()[24:]
-			createResponse, err := newClient.Create(ctx, readerTestClusterCreateRequest(createdName, tenant, assets))
+			deniedRequest := readerTestClusterCreateRequest(createdName, tenant, assets)
+			deniedRequest.GetObject().GetSpec().SetPullSecretSecret(proto.Clone(original.GetSpec().GetPullSecretSecret()).(*publicv1.SecretLocalReference))
+			createResponse, err := newClient.Create(ctx, deniedRequest)
 			if err == nil {
 				Expect(createResponse).ToNot(BeNil())
 				Expect(createResponse.GetObject()).ToNot(BeNil())

@@ -104,8 +104,9 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 		templateId = fmt.Sprintf("my-template-%s", uuid.New())
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
-				Id:    templateId,
-				Title: "My template",
+				SpecDefaults: clusterPullSecretDefaultsFixture(ctx),
+				Id:           templateId,
+				Title:        "My template",
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("test-tmpl-%s", uuid.New()[24:32]),
 				}.Build(),

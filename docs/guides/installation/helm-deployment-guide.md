@@ -496,9 +496,13 @@ this release. Use this layout with provider networking disabled.
 
 Add a node by adding it to `evpn.nodes` and rerunning the phase 1b
 `helm upgrade --install osac-infra` command. Remove a node by deleting its
-entry and rerunning that command. The chart deletes that node's NNCP and
-FRRConfigurations. Deleting the NNCP does not remove its interface addresses
-from the node, so remove stale addresses separately when needed.
+entry and rerunning that command when at least one configured node remains.
+The chart deletes that node's NNCP and FRRConfigurations. To remove the final
+configured node, set `evpn.enabled: false` and `evpn.nodes: []`, then rerun the
+phase 1b command. That upgrade does not run the EVPN cleanup hook, so run the
+labeled EVPN deletion commands below after the upgrade succeeds. Deleting
+the NNCP does not remove its interface addresses from the node, so remove
+stale addresses separately when needed.
 
 Uninstalling `osac-infra` does not remove the EVPN resources or revert the
 cluster network operator patch. Helm removes the configure-EVPN ServiceAccount
@@ -577,7 +581,7 @@ The phase-2 values that mount that Secret are in the
 [customer install guide](customer-install-guide.md#64-installing-vmaas-on-a-separate-workload-cluster).
 
 **Workload cluster.** Point `KUBECONFIG` at the workload cluster. In
-`my-infra-values.yaml`, enable `cnv` and `lvms`. Enable `evpn` when that
+`my-workload-infra-values.yaml`, enable `cnv` and `lvms`. Enable `evpn` when that
 cluster uses CUDN EVPN, as described in
 [EVPN host networking (VMaaS)](#evpn-host-networking-vmaas). Disable the other
 phase-1 toggles. Set `certManager.enabled`, `trustManager.enabled`, and
@@ -585,22 +589,32 @@ phase-1 toggles. Set `certManager.enabled`, `trustManager.enabled`, and
 when `certManager` is disabled. Also disable `aapOperator`, `keycloak`,
 `mce`, `kafka`, and `bundledVault`. Run
 [Phase 1a](#phase-1a-install-prerequisite-operators) and
-[Phase 1b](#phase-1b-install-shared-infrastructure) against that kubeconfig.
+[Phase 1b](#phase-1b-install-shared-infrastructure) against that kubeconfig,
+replacing `-f my-infra-values.yaml` with `-f my-workload-infra-values.yaml`
+in both commands.
 Do not install the `osac` chart on this cluster.
 
-**Management cluster.** Point `KUBECONFIG` at the management cluster. Keep
-OpenShift Virtualization and EVPN off in `my-infra-values.yaml`:
+**Management cluster.** Point `KUBECONFIG` at the management cluster. Create
+a separate `my-management-infra-values.yaml` for its prerequisites. Keep the
+certificate stack enabled and OpenShift Virtualization and EVPN disabled:
 
 ```yaml
+certManager:
+  enabled: true
+trustManager:
+  enabled: true
+caIssuer:
+  enabled: true
 cnv:
   enabled: false
 evpn:
   enabled: false
 ```
 
-Run phase 1a and phase 1b with that file, then phase 2 with the remote
-kubeconfig values from the customer install guide. The Secret must exist in
-the OSAC namespace before `helm upgrade --install osac`. Keep
+Run phase 1a and phase 1b, replacing `-f my-infra-values.yaml` with
+`-f my-management-infra-values.yaml` in both commands. Then run phase 2 with
+the remote kubeconfig values from the customer install guide. The Secret must
+exist in the OSAC namespace before `helm upgrade --install osac`. Keep
 `lvms.enabled: true` in the phase-2 `my-values.yaml` to register the workload
 cluster's local StorageBackend and StorageTier in fulfillment. Installing
 LVMS through phase 1 alone does not perform that registration.

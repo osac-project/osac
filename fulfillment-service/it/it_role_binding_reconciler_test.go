@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -25,6 +26,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
@@ -82,62 +84,7 @@ var _ = Describe("Role binding reconciler", func() {
 			_, _, _ = tool.KeycloakAdminRequest(ctx, "DELETE", fmt.Sprintf("/roles/%s", testRoleName), nil)
 		})
 
-		// Create a test user in Keycloak
-		testUserPayload := map[string]any{
-			"username":      "my-user",
-			"enabled":       true,
-			"email":         "my-user@test.local",
-			"emailVerified": true,
-			"firstName":     "My",
-			"lastName":      "Test",
-			"credentials": []map[string]any{{
-				"type":      "password",
-				"value":     usersPassword,
-				"temporary": false,
-			}},
-		}
-		code, _, err = tool.KeycloakAdminRequest(ctx, "POST", "/users", testUserPayload)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(code).To(Equal(201)) // HTTP 201 Created
-
-		// Get the user ID (UUID) from Keycloak
-		getUserCode, getUserBody, err := tool.KeycloakAdminRequest(ctx, "GET", "/users?username=my-user&exact=true", nil)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(getUserCode).To(Equal(200))
-		var users []map[string]any
-		err = json.Unmarshal(getUserBody, &users)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(users).To(HaveLen(1))
-		var ok bool
-		testKeycloakID, ok = users[0]["id"].(string)
-		Expect(ok).To(BeTrue())
-		Expect(testKeycloakID).ToNot(BeEmpty())
-
-		// Clean up the Keycloak user after the test
-		DeferCleanup(func() {
-			_, _, _ = tool.KeycloakAdminRequest(ctx, "DELETE", fmt.Sprintf("/users/%s", testKeycloakID), nil)
-		})
-
-		// Create a User object in OSAC with the Keycloak ID in status
-		userResponse, err := usersClient.Create(ctx, privatev1.UsersCreateRequest_builder{
-			Object: privatev1.User_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("my-user-%s", uuid.New()[24:32]),
-				}.Build(),
-				Status: privatev1.UserStatus_builder{
-					KeycloakUserId: testKeycloakID,
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		testUserID = userResponse.GetObject().GetId()
-
-		// Clean up the OSAC user after the test
-		DeferCleanup(func() {
-			_, _ = usersClient.Delete(ctx, privatev1.UsersDeleteRequest_builder{
-				Id: testUserID,
-			}.Build())
-		})
+		testUserID, testKeycloakID = createRoleBindingTestUser(ctx, usersClient, "my-user", nil)
 	})
 
 	It("Adds the finalizer and sets the default state when a role binding is created", func() {
@@ -195,6 +142,78 @@ var _ = Describe("Role binding reconciler", func() {
 			time.Minute,
 			time.Second,
 		).Should(Succeed())
+	})
+
+	It("updates Keycloak role mappings when users on an existing binding change", func() {
+		testCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		defer cancel()
+
+		userBName := fmt.Sprintf("my-user-b-%s", uuid.New()[24:])
+		userBID, userBKeycloakID := createRoleBindingTestUser(testCtx, usersClient, userBName, nil)
+		bindingID := createReaderRoleBinding(testCtx, testUserID, testRoleName)
+
+		Eventually(func(g Gomega) {
+			userAMappings, err := keycloakRealmRoleMappings(testCtx, testKeycloakID)
+			if err != nil {
+				g.Expect(err).ToNot(HaveOccurred())
+				return
+			}
+			userBMappings, err := keycloakRealmRoleMappings(testCtx, userBKeycloakID)
+			if err != nil {
+				g.Expect(err).ToNot(HaveOccurred())
+				return
+			}
+
+			g.Expect(userAMappings).To(ContainElement(HaveKeyWithValue("name", testRoleName)))
+			g.Expect(userBMappings).ToNot(ContainElement(HaveKeyWithValue("name", testRoleName)))
+		}, time.Minute, time.Second).Should(Succeed())
+
+		_, err := client.Update(testCtx, privatev1.RoleBindingsUpdateRequest_builder{
+			Object: privatev1.RoleBinding_builder{
+				Id: bindingID,
+				Spec: privatev1.RoleBindingSpec_builder{
+					Users: []*privatev1.UserReference{
+						privatev1.UserReference_builder{Id: userBID}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.users"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		Eventually(func(g Gomega) {
+			bindingResponse, err := client.Get(testCtx, privatev1.RoleBindingsGetRequest_builder{
+				Id: bindingID,
+			}.Build())
+			if err != nil {
+				g.Expect(err).ToNot(HaveOccurred())
+				return
+			}
+			binding := bindingResponse.GetObject()
+			g.Expect(binding.GetStatus().GetState()).To(
+				Equal(privatev1.RoleBindingState_ROLE_BINDING_STATE_READY),
+				"role binding status message: %s", binding.GetStatus().GetMessage(),
+			)
+			g.Expect(binding.GetStatus().GetUsers()).To(HaveLen(1))
+			if len(binding.GetStatus().GetUsers()) != 1 {
+				return
+			}
+			g.Expect(binding.GetStatus().GetUsers()[0].GetId()).To(Equal(userBID))
+
+			userAMappings, err := keycloakRealmRoleMappings(testCtx, testKeycloakID)
+			if err != nil {
+				g.Expect(err).ToNot(HaveOccurred())
+				return
+			}
+			userBMappings, err := keycloakRealmRoleMappings(testCtx, userBKeycloakID)
+			if err != nil {
+				g.Expect(err).ToNot(HaveOccurred())
+				return
+			}
+
+			g.Expect(userAMappings).ToNot(ContainElement(HaveKeyWithValue("name", testRoleName)))
+			g.Expect(userBMappings).To(ContainElement(HaveKeyWithValue("name", testRoleName)))
+		}, time.Minute, time.Second).Should(Succeed())
 	})
 
 	It("Removes the finalizer and deletes the role binding when it is deleted", func() {
@@ -482,3 +501,130 @@ var _ = Describe("RoleBinding references", func() {
 		Expect(response.GetObject().GetSpec().GetRole().GetId()).ToNot(BeEmpty())
 	})
 })
+
+func createRoleBindingTestUser(
+	ctx context.Context,
+	usersClient privatev1.UsersClient,
+	username string,
+	metadata *privatev1.Metadata,
+) (userID, keycloakUserID string) {
+	GinkgoHelper()
+	fixtureCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if metadata == nil {
+		metadata = privatev1.Metadata_builder{
+			Name: fmt.Sprintf("%s-%s", username, uuid.New()[24:32]),
+		}.Build()
+	}
+
+	userPayload := map[string]any{
+		"username":      username,
+		"enabled":       true,
+		"email":         fmt.Sprintf("%s@test.local", username),
+		"emailVerified": true,
+		"firstName":     "My",
+		"lastName":      "Test",
+		"credentials": []map[string]any{{
+			"type":      "password",
+			"value":     usersPassword,
+			"temporary": false,
+		}},
+	}
+	code, _, err := tool.KeycloakAdminRequest(fixtureCtx, http.MethodPost, "/users", userPayload)
+	Expect(err).ToNot(HaveOccurred())
+	Expect(code).To(Equal(http.StatusCreated))
+
+	DeferCleanup(func(cleanupCtx context.Context) {
+		requestCtx, cancel := context.WithTimeout(cleanupCtx, 10*time.Second)
+		defer cancel()
+		if keycloakUserID == "" {
+			getUserCode, getUserBody, err := tool.KeycloakAdminRequest(
+				requestCtx, http.MethodGet, fmt.Sprintf("/users?username=%s&exact=true", username), nil,
+			)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getUserCode).To(Equal(http.StatusOK))
+			var users []map[string]any
+			Expect(json.Unmarshal(getUserBody, &users)).To(Succeed())
+			if len(users) == 0 {
+				return
+			}
+			Expect(users).To(HaveLen(1))
+			var ok bool
+			keycloakUserID, ok = users[0]["id"].(string)
+			Expect(ok).To(BeTrue())
+			Expect(keycloakUserID).ToNot(BeEmpty())
+		}
+
+		code, _, err := tool.KeycloakAdminRequest(
+			requestCtx, http.MethodDelete, fmt.Sprintf("/users/%s", keycloakUserID), nil,
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(code).To(Or(Equal(http.StatusNoContent), Equal(http.StatusNotFound)))
+	})
+
+	getUserCode, getUserBody, err := tool.KeycloakAdminRequest(
+		fixtureCtx, http.MethodGet, fmt.Sprintf("/users?username=%s&exact=true", username), nil,
+	)
+	Expect(err).ToNot(HaveOccurred())
+	Expect(getUserCode).To(Equal(http.StatusOK))
+	var users []map[string]any
+	Expect(json.Unmarshal(getUserBody, &users)).To(Succeed())
+	Expect(users).To(HaveLen(1))
+	var ok bool
+	keycloakUserID, ok = users[0]["id"].(string)
+	Expect(ok).To(BeTrue())
+	Expect(keycloakUserID).ToNot(BeEmpty())
+
+	userResponse, err := usersClient.Create(fixtureCtx, privatev1.UsersCreateRequest_builder{
+		Object: privatev1.User_builder{
+			Metadata: metadata,
+			Status: privatev1.UserStatus_builder{
+				KeycloakUserId: keycloakUserID,
+			}.Build(),
+		}.Build(),
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+	userID = userResponse.GetObject().GetId()
+
+	DeferCleanup(func(cleanupCtx context.Context) {
+		_, err := usersClient.Delete(cleanupCtx, privatev1.UsersDeleteRequest_builder{
+			Id: userID,
+		}.Build())
+		if grpcstatus.Code(err) == grpccodes.NotFound {
+			return
+		}
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(func(g Gomega) {
+			_, err := usersClient.Get(cleanupCtx, privatev1.UsersGetRequest_builder{
+				Id: userID,
+			}.Build())
+			g.Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+		}, time.Minute, time.Second).Should(Succeed())
+	})
+
+	return userID, keycloakUserID
+}
+
+func keycloakRealmRoleMappings(ctx context.Context, keycloakUserID string) ([]map[string]any, error) {
+	GinkgoHelper()
+	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	code, body, err := tool.KeycloakAdminRequest(
+		requestCtx,
+		http.MethodGet,
+		fmt.Sprintf("/users/%s/role-mappings/realm", keycloakUserID),
+		nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("read realm role mappings for Keycloak user %s: %w", keycloakUserID, err)
+	}
+	if code != http.StatusOK {
+		return nil, fmt.Errorf("read realm role mappings for Keycloak user %s: unexpected status %d", keycloakUserID, code)
+	}
+	var mappings []map[string]any
+	if err := json.Unmarshal(body, &mappings); err != nil {
+		return nil, fmt.Errorf("decode realm role mappings for Keycloak user %s: %w", keycloakUserID, err)
+	}
+	return mappings, nil
+}

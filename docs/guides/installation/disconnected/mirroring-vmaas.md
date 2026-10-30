@@ -143,12 +143,17 @@ Run the canonical mirror command from
 > converge after applying
 > (`oc wait mcp --all --for=condition=Updated --timeout=30m`).
 
-Containerdisk images are typically referenced by tag, so they require an
-**ImageTagMirrorSet** (ITMS) for resolution:
+Tagged containerdisk images require an **ImageTagMirrorSet** (ITMS), while
+digest-pinned images use IDMS. The generated ITMS file may be absent for a
+digest-only inventory:
 
 ```bash
 oc apply -f \
-  oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml
+  oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml
+if [ -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml ]; then
+  oc apply -f \
+    oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml
+fi
 ```
 
 Verify the ITMS includes containerdisk entries:
@@ -176,7 +181,7 @@ grep -q '[^[:space:]]' selected-diskimage-images.txt || {
   exit 1
 }
 
-sed '/@/d; s/:[^/:]*$//' selected-diskimage-images.txt | \
+sed 's|^docker://||; /@/d; s/:[^/:]*$//' selected-diskimage-images.txt | \
   sort -u > selected-diskimage-sources.txt
 
 jq -Rn '[inputs] | map(select(length > 0))' \
@@ -222,6 +227,7 @@ IDMS_JSON=$(oc get idms -o json) || {
 fail=0
 while IFS= read -r image_ref || [ -n "$image_ref" ]; do
   [ -n "$image_ref" ] || continue
+  image_ref=${image_ref#docker://}
   if [[ "$image_ref" == *@* ]]; then
     img=${image_ref%@*}
     img=$(printf '%s\n' "$img" | sed 's/:[^/:]*$//')

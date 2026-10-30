@@ -196,6 +196,11 @@ mirror:
             - name: stable-2.17
 ```
 
+For a Core-only profile, remove the entire VMaaS and BMaaS package blocks
+from the example ISC. Keep the VMaaS block only when VMaaS is selected,
+and the BMaaS block only when BMaaS is selected. Make these selections
+before the dry run.
+
 > **Dry-run gate**: after constructing the ISC, run `oc mirror`
 > with `--dry-run` (see
 > [Canonical mirror execution](#step-1--dry-run-connected-bastion))
@@ -390,7 +395,10 @@ if [ "${#cluster_catalogs[@]}" -eq 0 ]; then
   exit 1
 fi
 for catalog in "${cluster_catalogs[@]}"; do
-  oc wait "$catalog" --for=condition=Serving --timeout=10m
+  oc wait "$catalog" --for=condition=Serving --timeout=10m || {
+    echo "ERROR: ClusterCatalog $catalog is not serving" >&2
+    exit 1
+  }
 done
 
 # 6. At least one release-signature ConfigMap is present.
@@ -409,7 +417,10 @@ fi
 printf '%s\n' "$signature_configmaps"
 
 # 7. MCPs converged
-oc wait mcp --all --for=condition=Updated --timeout=0
+oc wait mcp --all --for=condition=Updated --timeout=0 || {
+  echo "ERROR: MachineConfigPools have not converged" >&2
+  exit 1
+}
 
 # 8. Package Manifests
 # 8a. Core package manifests are always required

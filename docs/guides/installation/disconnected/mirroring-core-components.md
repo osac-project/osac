@@ -35,10 +35,10 @@ are in [installation.md](installation.md).
 | Check | Command / evidence |
 | ----- | ------------------ |
 | Category A handoff complete for the selected profile | Selected-tier package manifests are visible; installation.md later verifies selected-tier CSVs (Core=3, Core+VMaaS=6, Full-stack=7) |
-| Mirror registry reachable from bastion and cluster nodes | `curl -sSf https://<registry>:8443/v2/ -k` |
+| Mirror registry reachable and TLS-trusted from bastion | `status=$(curl -sS -o /dev/null -w '%{http_code}' https://<registry>:8443/v2/) && { [ "$status" = 200 ] \|\| [ "$status" = 401 ]; }` |
 | `oc-mirror` v2 available on bastion | `oc-mirror version` |
 | `helm` CLI available on workstation (bastion laptop) | `helm version` |
-| Workstation has internet access to `ghcr.io` | `curl -sSf https://ghcr.io/v2/` |
+| Workstation has internet access to `ghcr.io` | `status=$(curl -sS -o /dev/null -w '%{http_code}' https://ghcr.io/v2/) && { [ "$status" = 200 ] \|\| [ "$status" = 401 ]; }` |
 | SSH tunnel or sshuttle VPN from workstation to cluster API | `oc cluster-info` succeeds from workstation |
 | `kubeconfig` configured for the disconnected cluster | `oc whoami --show-server` |
 

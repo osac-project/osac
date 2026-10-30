@@ -6,13 +6,15 @@ including IP, MAC, or network-attachment data on any provisioned resource.
 ## Authoritative sources and implementation status
 
 This summary was checked against the accepted designs on `enhancement-proposals`
-`main` on 2026-09-30. Read the applicable full designs before finalizing scope:
+`main` on 2026-09-30 and updated with the managed OOB model proposed by OSAC-6121 on
+2026-10-19. Read the applicable full designs before finalizing scope:
 
 - [Unified networking, OSAC-1433](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-unified-networking/design.md)
 - [Default networking, OSAC-1433](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-default-networking/design.md)
 - [VMaaS networking, OSAC-1435](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1435-vmaas-networking/design.md)
 - [CaaS networking, OSAC-1436](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1436-caas-networking/design.md)
 - [BMaaS networking, OSAC-1437](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md)
+- [VMaaS multi-NIC capability proposal, OSAC-6121](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-6121-vmaas-multi-nic/design.md) (proposed extension; check acceptance status before treating it as shipped)
 
 A bootstrap-created `enhancement-proposals/enhancements/` checkout can provide
 these documents locally; verify its revision before relying on it. They remain
@@ -60,9 +62,17 @@ superseded or extended design explicitly.
    unchanged. This is a scoped extension to the immutable target contract in
    the OSAC-1433 unified networking design. Provider-side rule reconciliation
    limitations remain tracked separately in OSAC-4888.
-7. **One tenant attachment:** Each VM, bare-metal instance, or cluster has at most
-   one tenant network attachment. Its networking is fixed at creation. Preserve
-   the resource-specific message types and compatibility rules below.
+7. **Workload attachments:** Bare-metal instances and clusters retain at most
+   one tenant attachment. VMaaS retains the single-NIC limit when the
+   provider NetworkClass supports_multi_nic capability is false or unset.
+   Proposed OSAC-6121 allows up to eight VM attachments when enabled, with
+   exactly one primary on multi-attachment VMs. Its managed first-cut path
+   permits the primary workload VirtualNetwork plus the deployment's one
+   provider-managed shared OOB VirtualNetwork; arbitrary cross-VirtualNetwork
+   requests remain unsupported. The provider creates the networks and VM, and
+   the tenant consumes the VM. Attachment membership, Subnet references,
+   primary selection, and OOB static address are fixed at creation. Existing
+   SecurityGroup update behavior remains.
 8. **DHCP and discovery:** Workloads receive tenant-network addresses through
    DHCP. Discover assigned addresses through the service-specific status and
    feedback paths. BMaaS queries fabric DHCP leases by NIC MAC; CaaS delegates
@@ -86,21 +96,50 @@ superseded or extended design explicitly.
 
 | Resource | Attachment field and type | Accepted cardinality and primary behavior |
 |----------|---------------------------|-------------------------------------------|
-| ComputeInstance | `network_attachments`, ComputeNetworkAttachment: subnet, security groups | Plural field retained for compatibility, maximum one entry; no primary field |
+| ComputeInstance | network_attachments, ComputeNetworkAttachment: subnet, security groups, optional primary, optional static IPv4 for provider-managed OOB | False/unset capability: maximum one, implicitly primary. Proposed true capability: maximum eight, exactly one explicit primary for multiple entries; managed OOB uses the configured primary role and the one shared OOB role. |
 | Cluster | `network_attachment`, ClusterNetworkAttachment: subnet, security groups | Singular; no primary field |
 | BaremetalInstance | `network_attachments`, BareMetalNetworkAttachment: subnet, security groups, interface, optional primary | Maximum one entry; primary omitted or true accepted, false rejected |
 
 VMaaS reports per-attachment Subnet and assigned IPv4 details through
 `ComputeInstanceStatus.compute_network_attachment_statuses`, with `subnet_ref`
-and `ip_address`. The current single-attachment boundary permits at most one
-status entry; KubeVirt feedback population is tracked by
+and `ip_address`. The proposed OSAC-6121 extension reports one entry per
+attached Subnet and includes the provider-configured OOB address. KubeVirt
+feedback population is tracked by
 [OSAC-2479](https://redhat.atlassian.net/browse/OSAC-2479).
 
-An omitted attachment requests tenant defaults; a supplied attachment resolves
-missing fields individually. Consult the unified/default designs for validation
-of tenant ownership, subnet/security-group VirtualNetwork alignment, readiness,
-and BMaaS interface selection. Do not interchange these message types.
+For ordinary tenant VM creation, an omitted attachment requests tenant defaults;
+a supplied attachment resolves missing fields individually. The managed OOB flow
+is provider-created and supplies its complete primary and OOB attachment set.
+Consult the unified/default designs for validation of tenant ownership,
+Subnet/SecurityGroup alignment, readiness, and BMaaS interface selection. Do not
+interchange these message types.
 
+For the proposed VMaaS extension, the provider-managed path has one primary
+workload VirtualNetwork and may attach the deployment's single shared OOB
+VirtualNetwork as a secondary. This is the only supported cross-VN case in the
+increment. The primary role resolves to the CUDN plus EVPN path; the OOB role
+resolves to a localnet K8s manager through NetworkClass network_types. The
+provider creates both VirtualNetworks, their Subnets, and the ComputeInstance.
+Tenants consume the VM and cannot choose another provider network.
+
+The primary attachment controls VM placement, default route, and inbound
+ExternalIPAttachment DNAT target (its discovered IP). NATGateway egress remains
+scoped to the primary VirtualNetwork. The OOB attachment has a provider-reserved
+static IPv4 address injected into the guest and does not replace the primary
+default route. The operator's existing eight-entry ceiling is retained, and
+all attachments are create-time-only.
+
+The localnet K8s manager creates the Localnet CUDN and namespace-local NAD from
+SubnetNetworkBinding. The VM reconciler consumes the generic binding contract
+and does not branch on manager names. After the fabric manager configures the
+switch VLAN, it publishes versioned output through the existing OSAC-4291
+fabric-output ConfigMap pattern; the localnet manager consumes the validated
+physical-network name, VLAN ID, and optional MTU before creating the CUDN. The
+shared OOB CUDN selects only VM namespaces carrying the binding's OOB label.
+The manager capability remains false until this handoff, NAD reachability,
+static-IP template path, and per-attachment feedback are deployed and tested.
+See the [OSAC-6121 design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-6121-vmaas-multi-nic/design.md)
+and the [OpenShift 4.19 multiple networks guide](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html-single/multiple_networks/multiple_networks).
 ## Auto-created resource deletion
 
 Use phased reconciliation with a wait between dependent removals:

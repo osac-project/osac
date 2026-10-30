@@ -1,0 +1,13 @@
+---
+- name: Exercise Metal3 delete tasks with a controlled Kubernetes boundary
+  hosts: localhost
+  gather_facts: false
+  environment:
+    OSAC_BM_HOST_PROVISIONING_STATE: "{{ bm_test_state_file }}"
+  vars:
+    bare_metal_instance: "{{ bm_test_bare_metal_instance }}"
+  tasks:
+    - name: Run the real Metal3 delete tasks
+      ansible.builtin.include_role:
+        name: osac.templates.bm_host_provisioning
+        tasks_from: delete_metal3.yaml

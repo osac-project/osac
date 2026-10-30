@@ -115,6 +115,9 @@ func (m *Metal3Client) GetPowerState(ctx context.Context, hostID string) (*Power
 	if err != nil {
 		return nil, err
 	}
+	if bmh.Status.OperationalStatus == metal3api.OperationalStatusError {
+		return nil, fmt.Errorf("BareMetalHost %s has error status: %s", hostID, bmh.Status.ErrorMessage)
+	}
 
 	var state PowerState
 	if bmh.Status.PoweredOn {

@@ -1,0 +1,14 @@
+---
+- name: Exercise Metal3 create tasks with a controlled Kubernetes boundary
+  hosts: localhost
+  gather_facts: false
+  environment:
+    OSAC_BM_HOST_PROVISIONING_STATE: "{{ bm_test_state_file }}"
+  vars:
+    bare_metal_instance: "{{ bm_test_bare_metal_instance }}"
+    template_params: "{{ bm_test_template_params }}"
+  tasks:
+    - name: Run the real Metal3 create tasks
+      ansible.builtin.include_role:
+        name: osac.templates.bm_host_provisioning
+        tasks_from: create_metal3.yaml

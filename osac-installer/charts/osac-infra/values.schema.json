@@ -125,9 +125,9 @@
           "description": "Pod-level securityContext for the OpenBao deployment. Defaults to {runAsNonRoot: true} with seccompProfile RuntimeDefault — no hardcoded UID, so OpenShift's restricted-v2 SCC can allocate from the namespace UID range. Any non-nil value here FULLY REPLACES the template default — partial overrides must include every key you want rendered.",
           "properties": {
             "runAsNonRoot": { "type": "boolean" },
-            "runAsUser": { "type": "integer" },
-            "runAsGroup": { "type": "integer" },
-            "fsGroup": { "type": "integer" }
+            "runAsUser": { "type": "integer", "minimum": 0 },
+            "runAsGroup": { "type": "integer", "minimum": 0 },
+            "fsGroup": { "type": "integer", "minimum": 0 }
           }
         },
         "resources": {

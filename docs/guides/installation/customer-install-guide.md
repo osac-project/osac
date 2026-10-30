@@ -255,11 +255,9 @@ Installing the published `osac` chart requires only `oc` and `helm`.
 ### 2.3 Platform Operators and components
 
 OSAC relies on the Operators and components in
-[Table 2.1](#table-21-platform-operators-and-components). These are typically
-installed by your platform administrators before you install OSAC. To
-install an Operator yourself, use OperatorHub in the web console, or apply a `Subscription` and `OperatorGroup` from the
-`redhat-operators` catalog. For more information, see
-[Adding Operators to a cluster](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/operators/user-tasks).
+[Table 2.1](#table-21-platform-operators-and-components). Ask your platform
+administrators to prepare the required Operators and components before you
+install OSAC.
 
 The Channel column lists the reference update channels for prerequisite
 Operators. Their resolved `ClusterServiceVersion` (CSV) versions change as
@@ -1709,8 +1707,6 @@ manager names select the EVPN/Netris combination. Setting only
 The operator subchart supplies the Netris registration defaults. It has no
 built-in `cudn_evpn` registration, so the example supplies `capabilities`
 explicitly. An empty capabilities list is rejected; `description` is optional.
-The [EVPN/Netris reference profile](../../../osac-installer/values/cudn-evpn-netris-test/instance.yaml)
-shows the same networking configuration with additional development settings.
 
 ### 6.2 Installing OSAC for CaaS
 
@@ -2742,8 +2738,8 @@ oc get packagemanifest | wc -l
 `packagemanifest` list, indicates that the cluster pull secret cannot
 authenticate to `registry.redhat.io`. Refresh `openshift-config/pull-secret`
 (see [Section 2.1](#21-cluster-and-access)) and delete the failed marketplace
-pods. The Streams for Apache Kafka `Subscription` uses a manual install plan;
-approve its `InstallPlan` in the `osac-kafka` namespace.
+pods. If your Kafka Operator's `Subscription` uses a manual install plan,
+approve its `InstallPlan` in the Operator's namespace.
 
 ### 11.4 An OCI pull fails
 

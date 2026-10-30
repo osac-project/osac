@@ -106,6 +106,39 @@ wait_for_resource() {
     oc wait --for="${condition}" "${resource}" ${ns_args[@]+"${ns_args[@]}"} --timeout="${timeout}s"
 }
 
+# Wait for what the osac-infra release leaves starting when its
+# `helm upgrade --install --wait-for-jobs` returns. That flag waits for hook
+# Jobs, not for Deployments, so the bundled PostgreSQL pod (it needs its server
+# certificate first) and the default CA issuer can still be coming up when the
+# next step starts. Each resource is waited for only if the profile created it.
+# Usage: wait_for_infra_ready <cli> [timeout_seconds]
+wait_for_infra_ready() {
+    local cli="$1"
+    local timeout="${2:-300}"
+    local entry resource namespace condition
+    local -a ns_args
+    local -a targets=(
+        "clusterissuer/default-ca||condition=Ready"
+        "deployment/postgres|osac-infra|condition=Available"
+        "kafka/osac-kafka|osac-kafka|condition=Ready"
+    )
+
+    for entry in "${targets[@]}"; do
+        IFS='|' read -r resource namespace condition <<<"${entry}"
+        ns_args=()
+        [[ -n "${namespace}" ]] && ns_args=(-n "${namespace}")
+
+        if [[ -z "$("${cli}" get "${resource}" "${ns_args[@]+"${ns_args[@]}"}" --ignore-not-found -o name 2>/dev/null)" ]]; then
+            continue
+        fi
+        echo "Waiting for ${resource} (${condition}, up to ${timeout}s)..."
+        "${cli}" wait --for="${condition}" "${resource}" "${ns_args[@]+"${ns_args[@]}"}" --timeout="${timeout}s" || {
+            echo "ERROR: ${resource} did not reach ${condition} within ${timeout}s" >&2
+            return 1
+        }
+    done
+}
+
 # Retry a command until it succeeds or times out.
 # All output (stdout/stderr) is preserved on every attempt.
 # Usage: retry_command <timeout_seconds> <interval_seconds> <command> [args...]

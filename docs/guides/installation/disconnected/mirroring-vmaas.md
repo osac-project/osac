@@ -171,7 +171,7 @@ A first mirror does not require a running OSAC API or installed CDI.
 
 ```bash
 
-test -s selected-diskimage-images.txt || {
+grep -q '[^[:space:]]' selected-diskimage-images.txt || {
   echo "ERROR: no selected registry DiskImage sources found" >&2
   exit 1
 }
@@ -205,6 +205,11 @@ Verify every selected source exists and is fail-closed:
 #   Negative fixture 2: a safe broad parent must NOT hide an unsafe
 #     more-specific child rule
 
+grep -q '[^[:space:]]' selected-diskimage-images.txt || {
+  echo "ERROR: no selected registry DiskImage sources found" >&2
+  exit 1
+}
+
 ITMS_JSON=$(oc get itms -o json) || {
   echo "ERROR: cannot retrieve ImageTagMirrorSet resources" >&2
   exit 1
@@ -215,7 +220,7 @@ IDMS_JSON=$(oc get idms -o json) || {
 }
 
 fail=0
-while IFS= read -r image_ref; do
+while IFS= read -r image_ref || [ -n "$image_ref" ]; do
   [ -n "$image_ref" ] || continue
   if [[ "$image_ref" == *@* ]]; then
     img=${image_ref%@*}
@@ -233,7 +238,10 @@ while IFS= read -r image_ref; do
   # Require at least one EXACT source match (not prefix)
   exact_count=$(echo "$policy_json" | jq -r \
     --arg img "$img" --arg field "$policy_field" \
-    '[.items[].spec[$field][]? | select(.source == $img)] | length')
+    '[.items[].spec[$field][]? | select(.source == $img)] | length') || {
+    echo "ERROR: cannot inspect $policy_kind entries for $img" >&2
+    exit 1
+  }
   if [ "$exact_count" -eq 0 ]; then
     echo "FAIL: no exact $policy_kind entry for $img" >&2
     fail=1
@@ -248,7 +256,10 @@ while IFS= read -r image_ref; do
     '[.items[].spec[$field][]? |
       select(.source == $img) |
       select(.mirrorSourcePolicy != "NeverContactSource" or
-             ((.mirrors // []) | length) == 0)] | length')
+             ((.mirrors // []) | length) == 0)] | length') || {
+    echo "ERROR: cannot inspect $policy_kind safety for $img" >&2
+    exit 1
+  }
   if [ "$unsafe" -ne 0 ]; then
     echo "FAIL: $img has $unsafe $policy_kind entries without" \
       "NeverContactSource or with empty mirrors" >&2

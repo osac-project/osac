@@ -356,8 +356,6 @@ func computeInstancePublicUpdateMask(
 	permittedMetadata := []string{
 		"metadata.labels",
 		"metadata.annotations",
-		"metadata.display_name",
-		"metadata.description",
 	}
 	paths := []string{}
 	if mask != nil {

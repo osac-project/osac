@@ -413,8 +413,6 @@ missing AAP provisioning or CRD installation fails the install visibly.
     install. Rootless Podman, including the socket started by
     `systemctl --user start podman.socket`, cannot provide the TopoLVM loop device
     and volume group used by this profile.
-  - **Linux + Distrobox** — the rootful podman host socket (`/run/podman/podman.sock`);
-    install the drop-in at `scripts/dev-full/manifests/podman-socket-rootful.conf`
   - **macOS** — Docker Desktop or Podman Desktop. For Podman, start its machine and
     verify `podman info` succeeds before installing.
 - **`/dev/kvm`** present (Linux), **`fs.inotify.max_user_instances >= 256`**, and

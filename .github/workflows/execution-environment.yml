@@ -14,7 +14,6 @@ on:
       - main
     paths:
       - 'osac-aap/**'
-      - '!osac-aap/OWNERS'
       - '!osac-aap/LICENSE'
       - '!osac-aap/**/*.md'
       - '!osac-aap/docs/**'

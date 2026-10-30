@@ -1,9 +1,14 @@
+import hmac
 import importlib.util
 import io
 import json
 import sys
+from email.message import Message
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.request import Request
+from urllib.response import addinfourl
 
 import pytest
 
@@ -316,9 +321,11 @@ def test_release_module_returns_empty_address(monkeypatch, capsys):
 
 
 def test_transport_configuration_is_passed_to_fetch_url(monkeypatch):
+    """Preserve session, redirect isolation, and caller transport settings."""
     captured = {}
 
     def fake_fetch_url(module, url, **kwargs):
+        """Capture transport arguments while returning an empty provider list."""
         captured["url"] = url
         captured["module"] = module
         captured.update(kwargs)
@@ -342,16 +349,26 @@ def test_transport_configuration_is_passed_to_fetch_url(monkeypatch):
 
     assert records == []
     assert captured["url"] == "https://netris.example/api/v2/ipam/subnets"
-    assert captured["unredirected_headers"]["Cookie"] == f"connect.sid={TEST_COOKIE}"
+    cookie_matches = hmac.compare_digest(
+        captured["headers"].get("Cookie", "").encode("utf-8"),
+        f"connect.sid={TEST_COOKIE}".encode("utf-8"),
+    )
+    assert cookie_matches
+    assert captured["unredirected_headers"] == ["Cookie"]
+    assert "Content-Type" not in captured["headers"]
     assert captured["timeout"] == 45
     assert captured["ca_path"] == "/tmp/netris-ca.pem"
+    assert captured["use_proxy"] is True
+    assert captured["force"] is True
     assert module_stub.params["validate_certs"] is False
 
 
-def test_session_cookie_never_follows_redirects(monkeypatch):
+def test_session_cookie_is_marked_unredirected(monkeypatch):
+    """Pass only the Cookie header name to Ansible's redirect exclusion."""
     captured = {}
 
     def fake_fetch_url(module, url, **kwargs):
+        """Record redirect-exclusion arguments without sending a request."""
         captured.update(kwargs)
         return (io.BytesIO(json.dumps({"data": []}).encode()), {"status": 200})
 
@@ -362,7 +379,45 @@ def test_session_cookie_never_follows_redirects(monkeypatch):
 
     client.list_subnets()
 
-    assert captured["unredirected_headers"]["Cookie"] == f"connect.sid={TEST_COOKIE}"
+    assert captured["unredirected_headers"] == ["Cookie"]
+
+
+def test_requests_reject_response_cookies_with_fresh_jars(monkeypatch):
+    """Reject provider cookies and never reuse mutable jar state across calls."""
+    jars = []
+
+    def fake_fetch_url(module, url, **kwargs):
+        """Capture the real jar without replacing its cookie policy behavior."""
+        jars.append(kwargs["cookies"])
+        return (io.BytesIO(json.dumps({"data": []}).encode()), {"status": 200})
+
+    def extract_cookies(jar, url):
+        """Present synthetic response cookies through the public CookieJar API."""
+        headers = Message()
+        headers.add_header("Set-Cookie", "connect.sid=synthetic-response; Path=/")
+        headers.add_header("Set-Cookie", "probe=synthetic-response; Path=/")
+        with addinfourl(io.BytesIO(b""), headers, url, 200) as response:
+            jar.extract_cookies(response, Request(url))
+
+    monkeypatch.setattr(netris_eip, "fetch_url", fake_fetch_url)
+    client = netris_eip.NetrisSubnetClient(
+        SimpleNamespace(params={}), "https://netris.example", TEST_COOKIE
+    )
+    client.list_subnets()
+    first_jar = jars[0]
+    assert isinstance(first_jar, CookieJar)
+    for url in ("https://netris.example/", "https://other.example/", "http://127.0.0.1/"):
+        extract_cookies(first_jar, url)
+        assert not list(first_jar)
+    first_jar.set_policy(DefaultCookiePolicy())
+    extract_cookies(first_jar, "https://netris.example/")
+    assert len(first_jar) == 2
+
+    client.list_subnets()
+    assert jars[1] is not first_jar
+    assert not list(jars[1])
+    extract_cookies(jars[1], "https://netris.example/")
+    assert not list(jars[1])
 
 
 def _client_with_response(monkeypatch, status, payload=b""):

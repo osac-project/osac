@@ -46,6 +46,22 @@
 - name: Provision BMH
   when: not (already_provisioned | bool)
   block:
+    - name: Read inspected hardware when root device hints are absent
+      when: not (bmh_info.spec.rootDeviceHints | default({}))
+      kubernetes.core.k8s_info:
+        api_version: metal3.io/v1alpha1
+        kind: HardwareData
+        namespace: "{{ bmh_namespace }}"
+        name: "{{ bmh_name }}"
+      register: hardware_data_result
+
+    - name: Select fallback root disk
+      when: not (bmh_info.spec.rootDeviceHints | default({}))
+      ansible.builtin.set_fact:
+        fallback_root_disk: >-
+          {{ hardware_data_result.resources
+             | osac.templates.smallest_root_disk(bmh_info, bm_host_root_disk_min_gib) }}
+
     - name: Build userData content
       when: user_data_secret_ref | length > 0
       block:

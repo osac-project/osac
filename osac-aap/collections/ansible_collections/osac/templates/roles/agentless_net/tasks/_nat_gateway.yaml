@@ -1,0 +1,109 @@
+---
+- name: Apply AgentlessNet NATGateway provider state
+  block:
+    - name: Identify the NATGateway lifecycle operation from its deletion state
+      ansible.builtin.set_fact:
+        _agentless_net_nat_gateway_action: >-
+          {{ 'delete_nat_gateway'
+             if nat_gateway.metadata.get('deletionTimestamp') | default(none) is not none
+             else 'ensure_nat_gateway' }}
+        _agentless_net_nat_gateway_operation: >-
+          {{ 'nat_gateway.delete'
+             if nat_gateway.metadata.get('deletionTimestamp') | default(none) is not none
+             else 'nat_gateway.ensure' }}
+      no_log: true
+
+    - name: Read the controller-resolved NATGateway context
+      ansible.builtin.set_fact:
+        _agentless_net_nat_gateway_context: >-
+          {{ (osac_job_vars | default({})).get('nat_gateway_context', {}) }}
+      no_log: true
+
+    - name: Validate AgentlessNet NATGateway v1 inputs
+      ansible.builtin.assert:
+        that:
+          - nat_gateway.metadata.uid is string
+          - nat_gateway.metadata.uid | length > 0
+          - nat_gateway.metadata.generation is number
+          - nat_gateway.metadata.labels['osac.openshift.io/natgateway-uuid'] is string
+          - nat_gateway.metadata.labels['osac.openshift.io/natgateway-uuid'] | length > 0
+          - nat_gateway.metadata.annotations['osac.openshift.io/tenant'] is string
+          - nat_gateway.metadata.annotations['osac.openshift.io/natgateway-contract-version'] == 'v1'
+          - _agentless_net_nat_gateway_action == 'delete_nat_gateway' or nat_gateway.metadata.get('deletionTimestamp') | default(none) is none
+          - >-
+            _agentless_net_nat_gateway_action != 'delete_nat_gateway'
+            or nat_gateway.metadata.get('deletionTimestamp') | default(none) is not none
+          - >-
+            _agentless_net_nat_gateway_action != 'ensure_nat_gateway'
+            or nat_gateway.spec.virtualNetwork == _agentless_net_nat_gateway_context.virtual_network.fulfillment_id
+          - >-
+            _agentless_net_nat_gateway_action != 'ensure_nat_gateway'
+            or nat_gateway.spec.externalIP == _agentless_net_nat_gateway_context.external_ip.fulfillment_id
+          - >-
+            _agentless_net_nat_gateway_action != 'ensure_nat_gateway'
+            or _agentless_net_nat_gateway_context.external_ip.state == 'Allocated'
+          - >-
+            _agentless_net_nat_gateway_action != 'ensure_nat_gateway'
+            or _agentless_net_nat_gateway_context.external_ip.phase == 'Ready'
+          - >-
+            _agentless_net_nat_gateway_action != 'ensure_nat_gateway'
+            or _agentless_net_nat_gateway_context.virtual_network.phase == 'Ready'
+          - >-
+            _agentless_net_nat_gateway_action != 'ensure_nat_gateway'
+            or _agentless_net_nat_gateway_context.external_ip.tenant_id == nat_gateway.metadata.annotations['osac.openshift.io/tenant']
+          - >-
+            _agentless_net_nat_gateway_action != 'ensure_nat_gateway'
+            or _agentless_net_nat_gateway_context.virtual_network.tenant_id == nat_gateway.metadata.annotations['osac.openshift.io/tenant']
+          - >-
+            _agentless_net_nat_gateway_action != 'ensure_nat_gateway'
+            or _agentless_net_nat_gateway_context.external_ip.namespace == nat_gateway.metadata.namespace
+          - >-
+            _agentless_net_nat_gateway_action != 'ensure_nat_gateway'
+            or _agentless_net_nat_gateway_context.virtual_network.namespace == nat_gateway.metadata.namespace
+          - >-
+            _agentless_net_nat_gateway_action != 'ensure_nat_gateway'
+            or _agentless_net_nat_gateway_context.external_ip.address is string
+          - >-
+            _agentless_net_nat_gateway_action != 'ensure_nat_gateway'
+            or _agentless_net_nat_gateway_context.virtual_network.ipv4_cidr is string
+        fail_msg: >-
+          AgentlessNet NATGateway jobs require a v1 contract, stable resource
+          identity, and a current controller-supplied ExternalIP and
+          VirtualNetwork snapshot for ensure operations.
+      no_log: true
+
+    - name: Load AgentlessNet network-node inventory
+      ansible.builtin.include_tasks: _load_network_node_inventory.yaml
+      vars:
+        agentless_net_require_switches: false
+
+    - name: Reconcile or delete AgentlessNet NATGateway state
+      osac.templates.agentless_net_state:
+        action: "{{ _agentless_net_nat_gateway_action }}"
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ nat_gateway.metadata.uid }}"
+        fulfillment_id: >-
+          {{ nat_gateway.metadata.labels['osac.openshift.io/natgateway-uuid'] }}
+        tenant_id: >-
+          {{ nat_gateway.metadata.annotations['osac.openshift.io/tenant'] }}
+        nat_gateway_context: "{{ _agentless_net_nat_gateway_context }}"
+        external_interface: "{{ agentless_net_external_interface }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      no_log: true
+
+    - name: Report successful AgentlessNet NATGateway operation
+      ansible.builtin.set_stats:
+        data:
+          osac_result:
+            schemaVersion: v1
+            operation: "{{ _agentless_net_nat_gateway_operation }}"
+            resourceUID: "{{ nat_gateway.metadata.uid }}"
+            observedGeneration: "{{ nat_gateway.metadata.generation | int }}"
+            data: {}
+        per_host: false
+        aggregate: false
+      when: not ansible_check_mode
+  always:
+    - name: Remove the temporary AgentlessNet SSH key file
+      ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

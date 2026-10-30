@@ -10,8 +10,10 @@ description: >-
   saved Subnet VLANs, and DHCP discovery reports active leases by NIC MAC.
   The v1 ExternalIPAttachment path installs whole-address DNAT and scoped host
   forwarding, then announces the saved ExternalIP /32 through local FRR. Netris
-  route peers remain deployment-managed; SecurityGroups and NATGateway SNAT
-  remain unsupported.
+  route peers remain deployment-managed. NATGateway v1 translates the immutable
+  VirtualNetwork CIDR with a saved transit /31 exemption, explicit namespace
+  SNAT, scoped host forwarding, NAT bypass and the saved ExternalIP /32 route;
+  Subnet lifecycle is independent. SecurityGroups remain unsupported.
 
 template_type: network
 fabric_manager: agentless_net

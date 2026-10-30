@@ -35,7 +35,7 @@
 /.github/ci-tests.yml @osac-project/wg-infra
 /.pre-commit-config.yaml @osac-project/wg-infra
 # The osac-ui lint and typecheck workflows run on pull_request, use no secret and report no required check, so the osac-ui
-# maintainers (approvers in osac-ui/OWNERS) may approve them as well.
+# working group may approve them as well.
 /.github/workflows/osac-ui-lint.yaml @osac-project/wg-infra @osac-project/wg-ui
 /.github/workflows/osac-ui-typecheck.yaml @osac-project/wg-infra @osac-project/wg-ui
 # Markdown inside those folders (a README) cannot change a check: a rule with no owner clears ownership.

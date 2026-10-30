@@ -33,6 +33,7 @@ metadata:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-output-log-policy": hook-failed
 spec:
   backoffLimit: 6
   activeDeadlineSeconds: 300
@@ -96,7 +97,7 @@ spec:
         - name: PGSSLROOTCERT
           value: /certs/ca.crt
         - name: PGHOST
-          value: {{ .Values.dbInit.host | default "postgres.osac-infra.svc.cluster.local" }}
+          value: {{ include "osac.dbInit.host" . }}
         - name: PGPORT
           value: "5432"
         - name: PGUSER

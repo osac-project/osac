@@ -1,0 +1,225 @@
+---
+- name: Verify AgentlessNet NATGateway v1 inputs, artifacts, and cleanup
+  hosts: localhost
+  gather_facts: false
+  vars:
+    tenant_id: agentless-natgw-test
+    nat_gateway_id: "10000000-0000-4000-8000-000000000010"
+    nat_gateway_uid: "10000000-0000-4000-8000-000000000011"
+    virtual_network_id: "10000000-0000-4000-8000-000000000002"
+    virtual_network_uid: "10000000-0000-4000-8000-000000000003"
+    external_ip_id: "10000000-0000-4000-8000-000000000006"
+    external_ip_uid: "10000000-0000-4000-8000-000000000005"
+    agentless_natgw_inventory:
+      all:
+        children:
+          net_nodes:
+            hosts:
+              network-node:
+                ansible_host: 127.0.0.1
+                ansible_user: natgateway-test
+  tasks:
+    - name: Run NATGateway lifecycle scenarios
+      block:
+        - name: Create isolated state storage
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: osac-agentless-natgw-
+          register: agentless_natgw_tempdir
+
+        - name: Save the fixture state path
+          ansible.builtin.set_fact:
+            agentless_natgw_state_file: "{{ agentless_natgw_tempdir.path }}/network.sqlite3"
+
+        - name: Prepare schema-v1 NATGateway dependencies
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - python
+              - "{{ playbook_dir }}/../files/prepare_state.py"
+              - "{{ agentless_natgw_state_file }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          changed_when: true
+
+        - name: Build the controller-shaped NATGateway resource and context
+          ansible.builtin.set_fact:
+            agentless_natgw_resource:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: NATGateway
+              metadata:
+                name: agentless-natgw-gateway
+                namespace: agentless-natgw-test
+                uid: "{{ nat_gateway_uid }}"
+                generation: 3
+                labels:
+                  osac.openshift.io/natgateway-uuid: "{{ nat_gateway_id }}"
+                annotations:
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+                  osac.openshift.io/implementation-strategy: agentless_net
+                  osac.openshift.io/natgateway-contract-version: v1
+              spec:
+                virtualNetwork: "{{ virtual_network_id }}"
+                externalIP: "{{ external_ip_id }}"
+            agentless_natgw_context:
+              external_ip:
+                name: agentless-natgw-ip
+                namespace: agentless-natgw-test
+                fulfillment_id: "{{ external_ip_id }}"
+                kubernetes_uid: "{{ external_ip_uid }}"
+                tenant_id: "{{ tenant_id }}"
+                address: 198.51.100.1
+                state: Allocated
+                phase: Ready
+              virtual_network:
+                name: agentless-natgw-network
+                namespace: agentless-natgw-test
+                fulfillment_id: "{{ virtual_network_id }}"
+                kubernetes_uid: "{{ virtual_network_uid }}"
+                tenant_id: "{{ tenant_id }}"
+                ipv4_cidr: 10.20.0.0/16
+                phase: Ready
+
+        - name: Set ensure operation inputs
+          ansible.builtin.set_fact:
+            agentless_natgw_playbook: create_nat_gateway
+            agentless_natgw_operation: nat_gateway.ensure
+            agentless_natgw_should_succeed: true
+            agentless_natgw_job_vars:
+              resource: "{{ agentless_natgw_resource }}"
+              nat_gateway_context: "{{ agentless_natgw_context }}"
+
+        - name: Run the production NATGateway ensure playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Inspect saved NATGateway provider state after ensure
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - python
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_natgw_state_file }}"
+              - "{{ nat_gateway_uid }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_natgw_ensured_state
+          changed_when: false
+
+        - name: Confirm ensure saved one Ready NATGateway provider reservation
+          ansible.builtin.assert:
+            that:
+              - (agentless_natgw_ensured_state.stdout | from_json).present
+              - (agentless_natgw_ensured_state.stdout | from_json).phase == 'ready'
+              - (agentless_natgw_ensured_state.stdout | from_json).nat_gateway.context == agentless_natgw_context
+              - >-
+                (agentless_natgw_ensured_state.stdout | from_json).nat_gateway.keys() | list | sort ==
+                ['context', 'external_address', 'external_ip_uid', 'fulfillment_id', 'phase', 'provider',
+                 'tenant_id', 'uid', 'virtual_network_uid']
+              - (agentless_natgw_ensured_state.stdout | from_json).nat_gateway.source_cidrs is not defined
+              - (agentless_natgw_ensured_state.stdout | from_json).nat_gateway.source_revision is not defined
+              - (agentless_natgw_ensured_state.stdout | from_json).nat_gateway.applied_source_cidrs is not defined
+              - (agentless_natgw_ensured_state.stdout | from_json).nat_gateway.applied_revision is not defined
+              - (agentless_natgw_ensured_state.stdout | from_json).nat_gateway.cleanup_source_cidrs is not defined
+
+        - name: Save the complete Ready payload before ensure retry
+          ansible.builtin.set_fact:
+            agentless_natgw_payload_before_retry: "{{ (agentless_natgw_ensured_state.stdout | from_json).nat_gateway }}"
+
+        - name: Retry the production ensure playbook with the same snapshot
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Inspect saved NATGateway provider state after ensure retry
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - python
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_natgw_state_file }}"
+              - "{{ nat_gateway_uid }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_natgw_retried_state
+          changed_when: false
+
+        - name: Confirm ensure retry preserves the complete Ready payload
+          ansible.builtin.assert:
+            that:
+              - (agentless_natgw_retried_state.stdout | from_json).nat_gateway == agentless_natgw_payload_before_retry
+
+        - name: Build the deleting NATGateway resource
+          ansible.builtin.set_fact:
+            agentless_natgw_resource_deleting: >-
+              {{ agentless_natgw_resource | combine({'metadata':
+                 agentless_natgw_resource.metadata | combine({'deletionTimestamp': '2026-10-21T00:00:00Z'})}, recursive=true) }}
+
+        - name: Set a failed delete attempt
+          ansible.builtin.set_fact:
+            agentless_natgw_playbook: delete_nat_gateway
+            agentless_natgw_operation: nat_gateway.delete
+            agentless_natgw_fail_delete: true
+            agentless_natgw_should_succeed: false
+            agentless_natgw_job_vars:
+              resource: "{{ agentless_natgw_resource_deleting }}"
+
+        - name: Confirm failed cleanup keeps NATGateway saved state
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Inspect state after failed cleanup
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - python
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_natgw_state_file }}"
+              - "{{ nat_gateway_uid }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_natgw_failed_delete_state
+          changed_when: false
+
+        - name: Confirm failed cleanup retains deleting provider state
+          ansible.builtin.assert:
+            that:
+              - (agentless_natgw_failed_delete_state.stdout | from_json).present
+              - (agentless_natgw_failed_delete_state.stdout | from_json).phase == 'deleting'
+              - (agentless_natgw_failed_delete_state.stdout | from_json).nat_gateway.external_ip_uid == external_ip_uid
+
+        - name: Retry cleanup after provider withdrawal recovers
+          ansible.builtin.set_fact:
+            agentless_natgw_fail_delete: false
+            agentless_natgw_should_succeed: true
+
+        - name: Run successful production NATGateway delete playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Confirm NATGateway provider state is absent after cleanup
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - python
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_natgw_state_file }}"
+              - "{{ nat_gateway_uid }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_natgw_deleted_state
+          changed_when: false
+
+        - name: Assert NATGateway provider state is absent
+          ansible.builtin.assert:
+            that:
+              - not (agentless_natgw_deleted_state.stdout | from_json).present
+
+        - name: Retry delete after saved provider state is absent
+          ansible.builtin.include_tasks: run_playbook.yaml
+      always:
+        - name: Remove NATGateway test state
+          ansible.builtin.file:
+            path: "{{ agentless_natgw_tempdir.path }}"
+            state: absent
+          when: agentless_natgw_tempdir is defined

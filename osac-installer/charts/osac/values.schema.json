@@ -561,6 +561,12 @@
                     "description": "ExternalIPAttachment input/result contract supported by this manager. Empty uses the unversioned flow.",
                     "enum": ["", "v1"],
                     "default": ""
+                  },
+                  "natGatewayContractVersion": {
+                    "type": "string",
+                    "description": "NATGateway input/result contract supported by this manager. Empty uses the unversioned flow.",
+                    "enum": ["", "v1"],
+                    "default": ""
                   }
                 },
                 "additionalProperties": false
@@ -600,6 +606,12 @@
                   "externalIPAttachmentContractVersion": {
                     "type": "string",
                     "description": "ExternalIPAttachment input/result contract supported by this manager. Empty uses the unversioned flow.",
+                    "enum": ["", "v1"],
+                    "default": ""
+                  },
+                  "natGatewayContractVersion": {
+                    "type": "string",
+                    "description": "NATGateway input/result contract supported by this manager. Empty uses the unversioned flow.",
                     "enum": ["", "v1"],
                     "default": ""
                   }
@@ -2350,12 +2362,34 @@
     },
     "validation": {
       "type": "object",
-      "description": "Pre-install validation hook",
+      "description": "Install preflight switch. When false every preflight check is skipped and recorded as skipped in the report.",
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Run pre-install validation checks",
+          "description": "Run the install preflight checks",
           "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "preflight": {
+      "type": "object",
+      "description": "Install preflight settings. Installer and CLI setting: it is not part of the OSAC configuration the Enclave Wizard collects.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["enforce", "report", "strict"],
+          "description": "enforce: blocking findings stop the install before anything is created. report: findings are recorded in the report but never stop the install (use with helm --dry-run=server). strict: warnings stop the install too.",
+          "default": "enforce"
+        },
+        "skip": {
+          "type": "object",
+          "description": "Checks to skip, keyed by check id (see files/preflight/catalog.yaml), each with the reason it is safe to skip. The reason is recorded in the report.",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": {}
         }
       },
       "additionalProperties": false

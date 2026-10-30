@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://osac-project.github.io/schemas/preflight.osac.openshift.io/v1alpha1/report.schema.json",
+  "title": "OSAC install preflight report",
+  "description": "Result of the OSAC install preflight. Published as the ConfigMap key render.json (the last render that passed), as the OSAC-PREFLIGHT-JSON v1 line on stderr (a failed render), and in the hooks[] of `helm install --dry-run=server -o json`. apiVersion is v1alpha1: fields may change until the first external tool binds to it; every change is listed in the changelog below.",
+  "$comment": "Changelog. v1alpha1: initial version. Reports never contain Secret data: Secret names and keys only, and URLs reduced to scheme, host, port and database. In the stderr line the colons of generatedAt are written as the JSON escape \\u003a; parsers decode it to the same string.",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind",
+    "phase",
+    "tier",
+    "mode",
+    "generatedAt",
+    "helmVersion",
+    "kubeVersion",
+    "chart",
+    "release",
+    "summary",
+    "results"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "preflight.osac.openshift.io/v1alpha1"
+    },
+    "kind": {
+      "const": "PreflightReport"
+    },
+    "phase": {
+      "description": "When the checks ran. Later phases (install progress, post-install) reuse this schema.",
+      "enum": ["pre-install", "install", "post-install"]
+    },
+    "tier": {
+      "description": "render: evaluated while Helm renders the chart. runtime: evaluated by an in-cluster hook.",
+      "enum": ["render", "runtime"]
+    },
+    "mode": {
+      "description": "The preflight.mode that was in effect.",
+      "enum": ["enforce", "report", "strict"]
+    },
+    "generatedAt": {
+      "description": "RFC 3339 time in UTC when the report was produced.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "helmVersion": {
+      "description": "Version of the Helm client that rendered the chart.",
+      "type": "string",
+      "minLength": 1
+    },
+    "kubeVersion": {
+      "description": "Kubernetes version of the cluster, or null when the render had no cluster access.",
+      "type": ["string", "null"]
+    },
+    "chart": {
+      "type": "object",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1}
+      }
+    },
+    "release": {
+      "type": "object",
+      "required": ["name", "namespace", "revision", "action"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "namespace": {"type": "string", "minLength": 1},
+        "revision": {
+          "description": "Helm revision being rendered. Compare with the deployed revision to tell whether the report is current.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "action": {
+          "description": "upgrade when a deployed revision of this release already exists, else install.",
+          "enum": ["install", "upgrade"]
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["pass", "fail", "warn", "unknown", "skipped", "blocking"],
+      "additionalProperties": false,
+      "properties": {
+        "pass": {"type": "integer", "minimum": 0},
+        "fail": {"type": "integer", "minimum": 0},
+        "warn": {"type": "integer", "minimum": 0},
+        "unknown": {"type": "integer", "minimum": 0},
+        "skipped": {"type": "integer", "minimum": 0},
+        "blocking": {
+          "description": "Number of results that stop the install in this mode.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/result"}
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "category",
+        "severity",
+        "requiredFor",
+        "status",
+        "message",
+        "remediation",
+        "docsURL",
+        "observed",
+        "skipReason",
+        "blocking"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "Stable check identifier; the key of preflight.skip.",
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        },
+        "title": {"type": "string", "minLength": 1},
+        "category": {
+          "enum": ["operators", "storage", "hardware", "network", "cluster", "secrets"]
+        },
+        "severity": {
+          "description": "required checks block when they fail; warning checks only warn (they block in strict mode).",
+          "enum": ["required", "warning"]
+        },
+        "requiredFor": {
+          "description": "Services that need this check. core is always needed.",
+          "type": "array",
+          "minItems": 1,
+          "items": {"enum": ["core", "vmaas", "caas", "bmaas", "maas", "metering"]}
+        },
+        "status": {
+          "description": "pass; fail (a required check failed); warn (a warning check failed); unknown (could not be determined, including offline); skipped (not applicable or skipped on purpose, see skipReason).",
+          "enum": ["pass", "fail", "warn", "unknown", "skipped"]
+        },
+        "message": {"type": "string"},
+        "remediation": {
+          "description": "What to do about a failure. Shown for every status; relevant when status is fail, warn or unknown.",
+          "type": "string"
+        },
+        "docsURL": {"type": "string"},
+        "observed": {
+          "description": "What was found. Names and keys only, never Secret data.",
+          "type": "object"
+        },
+        "skipReason": {
+          "description": "Why the check did not run; empty unless status is skipped.",
+          "type": "string"
+        },
+        "blocking": {
+          "description": "Whether this result stops the install in the mode that was in effect.",
+          "type": "boolean"
+        },
+        "dependsOn": {
+          "description": "Present when the result is unknown because these checks did not pass; it is not counted as a second root cause.",
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"}
+        }
+      }
+    }
+  }
+}

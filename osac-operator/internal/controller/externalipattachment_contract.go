@@ -433,16 +433,13 @@ func validateSubmittedAttachmentIdentity(
 	if jobType == v1alpha1.JobTypeDeprovision && (latest.DeletionTimestamp.IsZero() || !submitted.deleting) {
 		return fmt.Errorf("ExternalIPAttachment is not deleting")
 	}
-	job := provisioning.FindLatestJobByType(latest.Status.ProvisioningJobs, jobType)
-	if job == nil || job.JobID != status.JobID {
-		return fmt.Errorf("ExternalIPAttachment result does not match the latest job")
-	}
-	if status.State != v1alpha1.JobStateSucceeded {
-		return fmt.Errorf("ExternalIPAttachment provider job did not succeed")
-	}
-	if jobType == v1alpha1.JobTypeProvision &&
-		(job.ConfigVersion == "" || job.ConfigVersion != latest.Status.DesiredConfigVersion) {
-		return fmt.Errorf("ExternalIPAttachment job does not match the current configuration")
+	if err := provisioning.ValidateProviderJobResult(
+		latest.Status.ProvisioningJobs,
+		jobType,
+		status,
+		latest.Status.DesiredConfigVersion,
+	); err != nil {
+		return fmt.Errorf("ExternalIPAttachment provider result is invalid: %w", err)
 	}
 	return nil
 }

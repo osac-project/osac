@@ -48,8 +48,8 @@ plus a native approval on the head commit, and the merge queue.
   number).
 - Changes to the files that define the checks (`.github/workflows`, `actions`, `scripts`, `filters`, `e2e-policy.yml`,
   `CODEOWNERS`, `.pre-commit-config.yaml`; Markdown in them excepted) need an approval from `@osac-project/wg-infra`
-  (see `CODEOWNERS`). Only the osac-ui lint and typecheck workflows are also approvable by the osac-ui maintainers
-  (`osac-ui/OWNERS`); every other workflow reports a required check, uses secrets or publishes an image, so it stays with
+  (see `CODEOWNERS`). Only the osac-ui lint and typecheck workflows are also approvable by the UI working group
+  (`@osac-project/wg-ui`); every other workflow reports a required check, uses secrets or publishes an image, so it stays with
   wg-infra.
 
 ## CaaS suite selection and coverage
@@ -94,3 +94,9 @@ workflow would silently never run even though the tag exists.
 Whatever creates such a tag must also verify each of that component's
 downstream publish workflows actually started and succeeded before reporting
 success; a tag existing is not evidence its publish happened.
+
+| Touched area | Required coverage | Repository-root command | Boundary |
+| --- | --- | --- | --- |
+| Umbrella release notes, package inventory, Latest selection, and Slack publication/staging notifications | [DEV] Unit | `python3 -m unittest discover -s .github/scripts -p test_umbrella_release.py -v` (requires PyYAML 6.0.3, Bash, and jq) | Runs the actual Python helpers and notification shell with synthetic chart archives and captured GitHub/Slack operations; no live publication or Konflux cluster. |
+
+See [release automation test boundaries](../docs/INTEGRATION-TESTING.md#release-automation).

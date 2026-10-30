@@ -19,7 +19,8 @@ on:  # yamllint disable-line rule:truthy
       kind:
         description: >-
           Which tests: go-unit, ui-unit, it-fulfillment-service, it-osac-operator, it-bare-metal-fulfillment-operator,
-          it-osac-aap or it-osac-installer
+          it-osac-aap, it-osac-installer, helm-unit or
+          it-osac-installer-preflight-helm3/-helm322/-helm4
         required: true
         type: string
       dir:
@@ -498,3 +499,72 @@ jobs:
           --set metering.image.repository=localhost/metering-service
           --set metering.image.tag=it
           --set metering.image.pullPolicy=Never"
+
+      # --- unit tests of the osac chart: helm-unittest (mocked cluster) and the offline preflight render script
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'helm-unit'
+        with:
+          persist-credentials: false
+      - name: Set up Helm
+        if: inputs.kind == 'helm-unit'
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v3.22.0
+      - uses: ./.github/actions/setup-python
+        if: inputs.kind == 'helm-unit'
+      - name: Build chart dependencies
+        if: inputs.kind == 'helm-unit'
+        working-directory: osac-installer
+        run: |
+          make helm-infra-deps
+          helm dependency build charts/osac/
+      # The suites mock the cluster (lookup, capabilities) to cover every check and the outcome table. The plugin is
+      # the v1.2.1 release archive for linux/amd64, checked against its SHA-256 and unpacked into the Helm plugin
+      # directory, so there is no movable Git tag and no install script.
+      - name: Unit test the chart (helm-unittest)
+        if: inputs.kind == 'helm-unit'
+        working-directory: osac-installer
+        env:
+          UNITTEST_URL: https://github.com/helm-unittest/helm-unittest/releases/download/v1.2.1/helm-unittest-linux-amd64-1.2.1.tgz
+          UNITTEST_SHA256: 48e86ecc1467b009630e5954375e5d8494139f73b466df5fe8c04fa45b634939
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/helm-unittest.tgz"
+          curl -fsSL -o "${archive}" "${UNITTEST_URL}"
+          echo "${UNITTEST_SHA256}  ${archive}" | sha256sum --check --strict -
+          plugin_dir="$(helm env HELM_PLUGINS)/unittest"
+          mkdir -p "${plugin_dir}"
+          tar -xzf "${archive}" -C "${plugin_dir}"
+          helm unittest charts/osac
+      - name: Test preflight rendering
+        if: inputs.kind == 'helm-unit'
+        working-directory: osac-installer
+        run: uv run --script scripts/test-preflight-render.py
+
+      # --- integration test: osac-installer install preflight on Kind. Helm 3.18.0 is the oldest Helm that prints a
+      # failed hook's log (helm.sh/hook-output-log-policy); 4.2.2 is the Helm 4 line.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: startsWith(inputs.kind, 'it-osac-installer-preflight')
+        with:
+          persist-credentials: false
+      - name: Set up Helm
+        if: startsWith(inputs.kind, 'it-osac-installer-preflight')
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: ${{ inputs.kind == 'it-osac-installer-preflight-helm4' && 'v4.2.2' || inputs.kind == 'it-osac-installer-preflight-helm322' && 'v3.22.0' || 'v3.18.0' }}
+      - uses: ./.github/actions/setup-python
+        if: startsWith(inputs.kind, 'it-osac-installer-preflight')
+      - name: Create Kind cluster
+        if: startsWith(inputs.kind, 'it-osac-installer-preflight')
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
+      # The failed-hook case renders the real db-init Job, which needs the chart's subchart archives (not committed).
+      - name: Build chart dependencies
+        if: startsWith(inputs.kind, 'it-osac-installer-preflight')
+        working-directory: osac-installer
+        run: |
+          make helm-infra-deps
+          helm dependency build charts/osac/
+      - name: Test the install preflight
+        if: startsWith(inputs.kind, 'it-osac-installer-preflight')
+        working-directory: osac-installer
+        run: uv run --script scripts/test-preflight-kind.py

@@ -17,6 +17,7 @@ limitations under the License.
 package networkmanager
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -50,7 +51,13 @@ const (
 	ExternalIPContractVersionV1                = "v1"
 	DataKeyExternalIPAttachmentContractVersion = "externalIPAttachmentContractVersion"
 	ExternalIPAttachmentContractVersionV1      = "v1"
+	DataKeyNATGatewayContractVersion           = "natGatewayContractVersion"
+	NATGatewayContractVersionV1                = "v1"
 )
+
+// ErrUnsupportedNATGatewayContractVersion indicates that a manager registration
+// advertises a NATGateway contract this operator cannot handle.
+var ErrUnsupportedNATGatewayContractVersion = errors.New("unsupported NATGateway contract version")
 
 // ManagerType distinguishes fabric managers from k8s managers.
 type ManagerType string
@@ -97,6 +104,9 @@ type Manager struct {
 	// ExternalIPAttachmentContractVersion declares the ExternalIPAttachment job
 	// input/result contract supported by this manager.
 	ExternalIPAttachmentContractVersion string
+	// NATGatewayContractVersion declares the NATGateway job input/result contract
+	// supported by this manager.
+	NATGatewayContractVersion string
 
 	// Type indicates whether this is a fabric or k8s manager.
 	Type ManagerType
@@ -143,6 +153,11 @@ func ParseConfigMap(cm *corev1.ConfigMap, managerType ManagerType) (*Manager, er
 		return nil, fmt.Errorf("ConfigMap %s/%s: unsupported ExternalIPAttachment contract version %q",
 			cm.Namespace, cm.Name, attachmentContractVersion)
 	}
+	natGatewayContractVersion := strings.TrimSpace(cm.Data[DataKeyNATGatewayContractVersion])
+	if natGatewayContractVersion != "" && natGatewayContractVersion != NATGatewayContractVersionV1 {
+		return nil, fmt.Errorf("ConfigMap %s/%s: %w %q",
+			cm.Namespace, cm.Name, ErrUnsupportedNATGatewayContractVersion, natGatewayContractVersion)
+	}
 
 	return &Manager{
 		Name:                                strings.TrimSpace(name),
@@ -150,6 +165,7 @@ func ParseConfigMap(cm *corev1.ConfigMap, managerType ManagerType) (*Manager, er
 		Capabilities:                        caps,
 		ExternalIPContractVersion:           contractVersion,
 		ExternalIPAttachmentContractVersion: attachmentContractVersion,
+		NATGatewayContractVersion:           natGatewayContractVersion,
 		Type:                                managerType,
 		ConfigMapRef: types.NamespacedName{
 			Namespace: cm.Namespace,

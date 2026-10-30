@@ -63,8 +63,9 @@ performance tier for its boot disk and an archival tier for its data disk.
 
 This section covers selecting an available storage tier for a ComputeInstance.
 Creating and activating `StorageTier` resources and making them available
-through a tenant's resolved StorageClasses are provider administration tasks
-outside this guide.
+through a tenant's resolved StorageClasses are provider administration tasks;
+see the [storage documentation](../../storage/README.md) for the storage
+concepts, ownership models, and tenant onboarding flow.
 
 The setting is per disk. In the API, `storage_tier` is a
 `StorageTierReference`; examples use the tier's `name`.

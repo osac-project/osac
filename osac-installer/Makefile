@@ -190,6 +190,13 @@ DEVSTACK_DEP_REPOS := $(shell awk '/^dependencies:/ {deps = 1; next} deps && /^ 
 # The osac chart only has local file:// dependencies; ignore user Helm repos.
 LOCAL_HELM_REPOSITORY_CONFIG := /dev/null
 
+# Browser-facing hostname of the OSAC UI Route. The osac-ui chart names its
+# Route "osac-ui" in the instance namespace, so OpenShift would auto-assign
+# exactly this host; pinning it makes the value knowable at install-infra time,
+# where Keycloak needs it for the osac-ui client's redirectUris (OSAC-3884).
+# Recursively expanded on purpose -- DOMAIN is $(eval)'d inside the recipes.
+UI_HOSTNAME     = osac-ui-$(NS).$(DOMAIN)
+
 # Values file selection: kind uses kind-specific files, OpenShift uses profile files.
 # dev-full reuses the dev control-plane values, plus an overlay that disables
 # AAP-based networking provisioning and enables its local TopoLVM StorageClass.
@@ -439,6 +446,7 @@ else
 		--set lvms.channel=stable-$(OCP_VERSION) \
 		--set keycloak.hostname=https://keycloak-keycloak.$(DOMAIN) \
 		--set keycloak.route.hostname=keycloak-keycloak.$(DOMAIN) \
+		--set keycloak.uiUrl=https://$(UI_HOSTNAME) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
 		--timeout "$${helm_timeout_seconds}s" --wait-for-jobs \
 	|| { \
@@ -548,7 +556,7 @@ endif
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) --create-namespace \
 		--set-string global.osacDeploymentId=$(NS)/osac \
-		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac) \
+		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac --set ui.externalHostname=$(UI_HOSTNAME)) \
 		$(INSTANCE_HELM_ARGS) \
 		$(EXTRA_HELM_ARGS) $(OSAC_HELM_FORCE_CONFLICTS) "$${remote_cluster_helm_args[@]}" \
 		--wait --timeout 40m
@@ -626,13 +634,14 @@ else
 		--set lvms.channel=stable-$(DRY_RUN_OCP_VERSION) \
 		--set keycloak.hostname=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
 		--set keycloak.route.hostname=keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
+		--set keycloak.uiUrl=https://osac-ui-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac"
 endif
 	helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
-		$(if $(filter openshift,$(PLATFORM)),--set service.externalHostname=fulfillment-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) --set global.clusterDomain=$(DRY_RUN_CLUSTER_DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac) \
+		$(if $(filter openshift,$(PLATFORM)),--set service.externalHostname=fulfillment-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) --set global.clusterDomain=$(DRY_RUN_CLUSTER_DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac --set ui.externalHostname=osac-ui-$(NS).$(DRY_RUN_CLUSTER_DOMAIN)) \
 		$(EXTRA_HELM_ARGS)
 ifeq ($(PROFILE),dev-full)
 	helm dependency build charts/osac-devstack
@@ -945,6 +954,7 @@ helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-
 	helm template osac-infra $(INFRA_CHART) --values values/dev/kind-infra.yaml
 	./scripts/validate-keycloak-credentials.sh
 	./scripts/validate-hub-access-rbac.sh
+	./scripts/validate-keycloak-ui-redirect-uris.py
 	@echo "Validation passed."
 
 .PHONY: helm-networking-test

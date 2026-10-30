@@ -47,6 +47,7 @@ metadata:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "25"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-output-log-policy": hook-failed
 spec:
   backoffLimit: 5
   activeDeadlineSeconds: 900

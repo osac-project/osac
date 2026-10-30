@@ -134,7 +134,7 @@ Use only the service selected during preparation; retain the limits in [Section 
 
 ### 6.1 Installing OSAC for VMaaS
 
-Follow the [VMaaS workflow](../customer-install-guide.md#61-installing-osac-for-vmaas) with the prepared storage/LoadBalancer providers, network settings, mirrored disk images, internal AAP Git source and EE. Keep the required compute templates and storage-tier registration; do not enable an unselected provider.
+Follow the [VMaaS workflow](../customer-install-guide.md#61-installing-osac-for-vmaas) with the prepared storage/LoadBalancer providers, network settings, mirrored disk images, internal AAP Git source and EE. Keep the required compute templates and storage-tier registration; do not enable an unselected provider. A complete Core + VMaaS sample for this chart version is [`osac-0.0.62-core-vmaas-values.yaml`](osac-0.0.62-core-vmaas-values.yaml); replace site values, credentials and mirror references before use.
 
 **Execution order:** select the prepared Core + VMaaS values → install once through Section 4 → pass the platform checks in Section 7 steps 1–9 → prepare the selected mirror-backed DiskImage and resolved CDI consumer contract in Sections 6.1.1–6.1.2 → complete the one VMaaS acceptance procedure in Section 7.1 → record the selected-service result in Section 7 step 10 → record mandatory metering functional acceptance in step 11 using Section 7.2's approved contract. If that contract uses this service test as its stimulus, arrange its baseline before the test rather than requiring a metering pass first. Do not require all of Section 7 to be complete before the first test VM, and do not treat ready Pods alone as VM acceptance.
 

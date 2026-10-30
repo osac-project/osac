@@ -31,10 +31,10 @@ pnpm --filter @osac/playwright exec playwright install chromium
 
 Environment variables:
 
-| Variable           | Description                                                                                       |
-| ------------------ | ------------------------------------------------------------------------------------------------- |
-| `OSAC_UI_BASE_URL` | Full URL of the `osac-ui` deployment to test, e.g. `https://osac-ui-<namespace>.<cluster-domain>` |
-| `OSAC_ADMIN_USERNAME` | Username of the Keycloak admin test user on that deployment's realm                              |
+| Variable              | Description                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------- |
+| `OSAC_UI_BASE_URL`    | Full URL of the `osac-ui` deployment to test, e.g. `https://osac-ui-<namespace>.<cluster-domain>` |
+| `OSAC_ADMIN_USERNAME` | Username of the Keycloak admin test user on that deployment's realm                               |
 | `OSAC_ADMIN_PASSWORD` | Password for the admin test user                                                                  |
 
 ```bash
@@ -104,6 +104,25 @@ pnpm --filter @osac/playwright exec playwright test \
 pnpm --filter @osac/playwright exec playwright test \
   delete.tenant.spec.ts --project=vmaas-delete --no-deps
 ```
+
+### Full VMaaS setup flow
+
+The `vmaas-full-flow-launch` project runs the setup journeys and starts the
+tenant VM flow: instance type, disk image, storage tier (including its
+storage-backend readiness check), catalog item, tenant creation and login,
+published catalog item selection, and `Launch instance`. The setup project
+has a teardown chain that first deletes the VM through the tenant UI and then
+removes the other resources created by the flow after the launch test
+completes. Run it with:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-full-flow-launch
+```
+
+The flow uses the same values from `apps/e2e-tests/extravars.yaml` as the
+individual create projects. The catalog item therefore continues to use the
+configured existing template, instance type, and disk image references.
 
 ### Storage tier flow tests
 
@@ -194,6 +213,7 @@ Each run appends a unique suffix to `disk_image.name`, and the full name appears
 in the test title. To clean up an interrupted run, set
 `OSAC_DISK_IMAGE_TEST_RUN_ID` to that run's suffix when invoking the delete
 project.
+
 ### Instance type flow tests
 
 The instance type tests read their hard-coded test data from

@@ -389,6 +389,27 @@ the certificate. The Kind
 `SUITE=fulfillment` target exercises deployed startup and API behavior, subject
 to the profile's configured CA and enabled services.
 
+### Input validation gate (OSAC-7050)
+
+Every installation target (`install`, `install-infra`, `install-osac`,
+`install-devstack`, `install-multicluster`) runs `make validate-inputs`
+first: an offline `helm template` of every applicable chart with the exact
+merged values the installation would use (profile files, `EXTRA_HELM_ARGS`,
+and read-only OpenShift lookups for the cluster domain and version). Invalid
+inputs abort the install before any cluster mutation or readiness wait. The
+gate validates static values only; prerequisites that must already exist are
+the render-time preflight's concern, and resources the installer creates are
+allowed to become ready. `scripts/test-input-validation.sh`
+(`make input-validation-test`, part of `make helm-validate`) proves the
+wiring with stubbed `helm`/`oc`/`kubectl`/`kind` and the schema rejections
+with a real Helm render; CI runs it as a step of the `Lint Helm charts
+(osac-installer)` job.
+
+| Tier | Command | Real | Faked or not covered |
+|---|---|---|---|
+| Unit with command stubs, [DEV] OSAC-7050 | `make input-validation-test` from `osac-installer/` | The Makefile's target graph and recipe expansion for every installation entry point, serial and `make -j`, against a throwaway copy of the installer | The cluster and Helm itself: `helm`, `oc`, `kubectl` and `kind` are stubs, so schema evaluation, chart rendering and the deployed install are not covered here. |
+| Helm contract, [DEV] OSAC-7050 | `./scripts/test-input-validation.sh` section B (same target) | Offline `helm template` of the umbrella and infra charts with CI values; the exact schema-rejection messages (field and constraint) for the non-negative bounds and closed objects; valid boundary and default renders | No cluster; the gate's OpenShift values assembly (domain/version lookups) runs only in the stubbed section. |
+
 ### Install preflight (OSAC-6561)
 
 The `osac` chart checks prerequisites while Helm renders it (`templates/preflight/`,

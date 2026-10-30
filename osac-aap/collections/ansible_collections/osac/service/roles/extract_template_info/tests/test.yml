@@ -32,7 +32,7 @@
         cluster_order:
           spec:
             templateID: "osac.templates.ocp_small"
-            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa AAAA"}'
+            templateParameters: '{"ssh_public_key": "ssh-rsa AAAA"}'
             nodeRequests:
               - nodeSet: workers
                 numberOfNodes: 2
@@ -59,7 +59,6 @@
         that:
           - template_parameters is defined
           - template_parameters is mapping
-          - template_parameters.pull_secret == "test-secret"
           - template_parameters.ssh_public_key == "ssh-rsa AAAA"
         fail_msg: "template_parameters not parsed correctly: {{ template_parameters | default('undefined') }}"
         success_msg: "template_parameters parsed: {{ template_parameters | length }} key(s)"

@@ -14,7 +14,20 @@ import (
 
 	api "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/internal/controller/baremetalworker"
+	"github.com/osac-project/osac/osac-operator/pkg/pullsecret"
 )
+
+// createWorkerClusterOrderFixture supplies the same owned reference as fulfillment.
+func createWorkerClusterOrderFixture(order *api.ClusterOrder) error {
+	if err := k8sClient.Create(ctx, order); err != nil {
+		return err
+	}
+	fixturePayload := `{"auths":{}}`
+	if err := pullsecret.Ensure(ctx, k8sClient, order, &fixturePayload); err != nil {
+		return err
+	}
+	return k8sClient.Update(ctx, order)
+}
 
 // driveWorkerCheckpoints migrates legacy stage fixtures to explicit, finite
 // public reconciles. Only durable one-second checkpoints are advanced: errors

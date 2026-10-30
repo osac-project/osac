@@ -122,8 +122,8 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
+				TemplateID: "test",
+
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes:   1,
@@ -155,7 +155,7 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 
 	create := func(co *osacv1alpha1.ClusterOrder) {
 		GinkgoHelper()
-		Expect(k8sClient.Create(ctx, co)).To(Succeed())
+		Expect(createWorkerClusterOrderFixture(co)).To(Succeed())
 		DeferCleanup(func() {
 			latest := &osacv1alpha1.ClusterOrder{}
 			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(co), latest); err != nil {
@@ -408,7 +408,7 @@ var _ = Describe("BareMetalWorkerReconciler direct shared worker template", Labe
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID: "test",
-				PullSecret: "{\"auths\":{}}",
+
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes: 1,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
@@ -452,7 +452,7 @@ var _ = Describe("BareMetalWorkerReconciler direct shared worker template", Labe
 	create := func(co *osacv1alpha1.ClusterOrder) {
 		GinkgoHelper()
 		preloadDiskImageChain()
-		Expect(k8sClient.Create(ctx, co)).To(Succeed())
+		Expect(createWorkerClusterOrderFixture(co)).To(Succeed())
 		DeferCleanup(func() {
 			latest := &osacv1alpha1.ClusterOrder{}
 			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(co), latest); err != nil {
@@ -565,8 +565,8 @@ var _ = Describe("BareMetalWorkerReconciler resolveDiskImage", Label("baremetalw
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
+				TemplateID: "test",
+
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes:   1,
@@ -598,7 +598,7 @@ var _ = Describe("BareMetalWorkerReconciler resolveDiskImage", Label("baremetalw
 
 	create := func(co *osacv1alpha1.ClusterOrder) {
 		GinkgoHelper()
-		Expect(k8sClient.Create(ctx, co)).To(Succeed())
+		Expect(createWorkerClusterOrderFixture(co)).To(Succeed())
 		DeferCleanup(func() {
 			latest := &osacv1alpha1.ClusterOrder{}
 			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(co), latest); err != nil {
@@ -822,8 +822,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
+				TemplateID: "test",
+
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes:   numWorkers,
@@ -856,7 +856,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 
 	create := func(co *osacv1alpha1.ClusterOrder) {
 		GinkgoHelper()
-		Expect(k8sClient.Create(ctx, co)).To(Succeed())
+		Expect(createWorkerClusterOrderFixture(co)).To(Succeed())
 		DeferCleanup(func() {
 			latest := &osacv1alpha1.ClusterOrder{}
 			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(co), latest); err != nil {
@@ -1334,8 +1334,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
+				TemplateID: "test",
+
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{
 					{NodeSet: "bm-standard",
@@ -1379,8 +1379,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
+				TemplateID: "test",
+
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes: 1,
@@ -1464,8 +1464,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileAgent", Label("baremetalwor
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
+				TemplateID: "test",
+
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes:   numWorkers,
@@ -1497,7 +1497,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileAgent", Label("baremetalwor
 
 	create := func(co *osacv1alpha1.ClusterOrder) {
 		GinkgoHelper()
-		Expect(k8sClient.Create(ctx, co)).To(Succeed())
+		Expect(createWorkerClusterOrderFixture(co)).To(Succeed())
 		DeferCleanup(func() {
 			latest := &osacv1alpha1.ClusterOrder{}
 			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(co), latest); err != nil {
@@ -2154,8 +2154,8 @@ var _ = Describe("BareMetalWorkerReconciler workerRetry", Label("baremetalworker
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
+				TemplateID: "test",
+
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes:   1,
@@ -2187,7 +2187,7 @@ var _ = Describe("BareMetalWorkerReconciler workerRetry", Label("baremetalworker
 
 	create := func(co *osacv1alpha1.ClusterOrder) {
 		GinkgoHelper()
-		Expect(k8sClient.Create(ctx, co)).To(Succeed())
+		Expect(createWorkerClusterOrderFixture(co)).To(Succeed())
 		DeferCleanup(func() {
 			latest := &osacv1alpha1.ClusterOrder{}
 			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(co), latest); err != nil {
@@ -2445,8 +2445,8 @@ var _ = Describe("BareMetalWorkerReconciler scale-up", Label("baremetalworker"),
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
+				TemplateID: "test",
+
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes:   numWorkers,
@@ -2478,7 +2478,7 @@ var _ = Describe("BareMetalWorkerReconciler scale-up", Label("baremetalworker"),
 
 	create := func(co *osacv1alpha1.ClusterOrder) {
 		GinkgoHelper()
-		Expect(k8sClient.Create(ctx, co)).To(Succeed())
+		Expect(createWorkerClusterOrderFixture(co)).To(Succeed())
 		DeferCleanup(func() {
 			latest := &osacv1alpha1.ClusterOrder{}
 			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(co), latest); err != nil {
@@ -2756,8 +2756,8 @@ var _ = Describe("BareMetalWorkerReconciler stale ignition", Label("baremetalwor
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
+				TemplateID: "test",
+
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes:   1,
@@ -2789,7 +2789,7 @@ var _ = Describe("BareMetalWorkerReconciler stale ignition", Label("baremetalwor
 
 	create := func(co *osacv1alpha1.ClusterOrder) {
 		GinkgoHelper()
-		Expect(k8sClient.Create(ctx, co)).To(Succeed())
+		Expect(createWorkerClusterOrderFixture(co)).To(Succeed())
 		DeferCleanup(func() {
 			latest := &osacv1alpha1.ClusterOrder{}
 			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(co), latest); err != nil {
@@ -3053,8 +3053,8 @@ var _ = Describe("BareMetalWorkerReconciler scale-down", Label("baremetalworker"
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
+				TemplateID: "test",
+
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes:   numWorkers,
@@ -3086,7 +3086,7 @@ var _ = Describe("BareMetalWorkerReconciler scale-down", Label("baremetalworker"
 
 	create := func(co *osacv1alpha1.ClusterOrder) {
 		GinkgoHelper()
-		Expect(k8sClient.Create(ctx, co)).To(Succeed())
+		Expect(createWorkerClusterOrderFixture(co)).To(Succeed())
 		DeferCleanup(func() {
 			latest := &osacv1alpha1.ClusterOrder{}
 			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(co), latest); err != nil {
@@ -3484,8 +3484,8 @@ var _ = Describe("BareMetalWorkerReconciler cluster deletion", Label("baremetalw
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
+				TemplateID: "test",
+
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes:   numWorkers,
@@ -3517,7 +3517,7 @@ var _ = Describe("BareMetalWorkerReconciler cluster deletion", Label("baremetalw
 
 	create := func(co *osacv1alpha1.ClusterOrder) {
 		GinkgoHelper()
-		Expect(k8sClient.Create(ctx, co)).To(Succeed())
+		Expect(createWorkerClusterOrderFixture(co)).To(Succeed())
 		DeferCleanup(func() {
 			latest := &osacv1alpha1.ClusterOrder{}
 			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(co), latest); err != nil {

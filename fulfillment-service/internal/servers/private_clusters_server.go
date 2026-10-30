@@ -514,6 +514,9 @@ func (s *PrivateClustersServer) initializeAddedNodeSetVersions(ctx context.Conte
 
 func (s *PrivateClustersServer) validateUpdatedClusterSpec(current, candidate *privatev1.Cluster,
 	mask *fieldmaskpb.FieldMask) error {
+	if _, exists := candidate.GetSpec().GetTemplateParameters()["pull_secret"]; exists {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "inline pull_secret is unsupported; use a pull-secret reference")
+	}
 	if updateIncludesField(mask, "spec.ssh_public_key") {
 		if key := candidate.GetSpec().GetSshPublicKey(); key != "" {
 			if err := validateOpenSSHPublicKey(key); err != nil {
@@ -680,7 +683,7 @@ func (s *PrivateClustersServer) validatePullSecretSecret(
 ) error {
 	ref := cluster.GetSpec().GetPullSecretSecret()
 	if ref == nil {
-		return nil
+		return grpcstatus.Error(grpccodes.InvalidArgument, "a pull-secret reference or template spec default is required")
 	}
 	if ref.GetId() == "" && ref.GetName() == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "pull_secret_secret must specify id or name")
@@ -1325,11 +1328,17 @@ func (s *PrivateClustersServer) applyClusterTemplate(
 	cluster *privatev1.Cluster,
 	template *privatev1.ClusterTemplate,
 ) (*privatev1.ClusterVersion, error) {
+	if _, exists := cluster.GetSpec().GetTemplateParameters()["pull_secret"]; exists {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "inline pull_secret is unsupported; use a pull-secret reference")
+	}
 	actualClusterParameters, err := utils.ApplyTemplateParameterDefaultsAndValidate(
 		utils.ClusterTemplateAdapter{ClusterTemplate: template}, cluster.GetSpec().GetTemplateParameters(),
 	)
 	if err != nil {
 		return nil, err
+	}
+	if _, exists := actualClusterParameters["pull_secret"]; exists {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "inline pull_secret defaults are unsupported; use a pull-secret reference")
 	}
 	cluster.GetSpec().SetTemplateParameters(actualClusterParameters)
 

@@ -1,50 +1,25 @@
 ---
-- name: Get template parameters from cluster order
+- name: Get noncredential template parameters from cluster order
   ansible.builtin.set_fact:
     cluster_settings_template_parameters: "{{ cluster_order.spec.templateParameters | default('{}') | from_json }}"
   no_log: true
 
-# Resolve pull_secret: explicit CR field > templateParameters > provider default Secret
-# The second argument (true) ensures empty strings and nulls also fall through.
-- name: Resolve pull_secret from explicit field or template parameters
-  ansible.builtin.set_fact:
-    cluster_settings_pull_secret: >-
-      {{ cluster_order.spec.pullSecret
-         | default(cluster_settings_template_parameters.pull_secret | default('', true), true) }}
+- name: Require a reference and reject inline pull-secret inputs
+  ansible.builtin.assert:
+    that:
+      - cluster_order.spec.pullSecretRef.name | default('') | length > 0
+      - cluster_order.spec.pullSecret | default('') | length == 0
+      - "'pull_secret' not in cluster_settings_template_parameters"
+    fail_msg: Cluster provisioning requires an API pull-secret reference; inline credentials are unsupported
   no_log: true
 
-- name: Resolve referenced pull secret at provisioning runtime
-  when: cluster_order.spec.pullSecretRef is defined
-  block:
-    - name: Read namespace-local pull secret
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Secret
-        namespace: "{{ cluster_order.metadata.namespace }}"
-        name: "{{ cluster_order.spec.pullSecretRef.name }}"
-      register: cluster_settings_referenced_secret
-      no_log: true
-
-    - name: Validate and decode referenced pull secret
-      ansible.builtin.set_fact:
-        cluster_settings_pull_secret: >-
-          {{ cluster_settings_referenced_secret.resources
-             | osac.service.cluster_pull_secret(cluster_order) | from_json | to_json }}
-      no_log: true
-  rescue:
-    - name: Fail closed on unavailable explicit reference
-      ansible.builtin.fail:
-        msg: Referenced cluster pull secret is unavailable or invalid
-
-# Resolve ssh_public_key: explicit CR field > templateParameters > provider default Secret
-- name: Resolve ssh_public_key from explicit field or template parameters
+- name: Resolve public SSH key from API fields or template parameters
   ansible.builtin.set_fact:
     cluster_settings_ssh_public_key: >-
       {{ cluster_order.spec.sshPublicKey
          | default(cluster_settings_template_parameters.ssh_public_key | default('', true), true) }}
 
-# Resolve release_image: explicit CR field > templateParameters > template default
-- name: Resolve release_image from explicit field or template parameters
+- name: Resolve release image from API fields or template parameters
   when: >-
     (cluster_order.spec.releaseImage | default('', true) | length > 0)
     or (cluster_settings_template_parameters.release_image | default('', true) | length > 0)
@@ -53,67 +28,18 @@
       {{ cluster_order.spec.releaseImage
          | default(cluster_settings_template_parameters.release_image | default('', true), true) }}
 
-# Resolve networking CIDRs: explicit CR field > role defaults
-- name: Resolve pod_cidr from explicit field
+- name: Resolve pod CIDR from explicit field
   when: ((cluster_order.spec.network | default({}, true)).podCIDR | default('') | length > 0)
   ansible.builtin.set_fact:
     cluster_settings_pod_cidr: "{{ cluster_order.spec.network.podCIDR }}"
 
-- name: Resolve service_cidr from explicit field
+- name: Resolve service CIDR from explicit field
   when: ((cluster_order.spec.network | default({}, true)).serviceCIDR | default('') | length > 0)
   ansible.builtin.set_fact:
     cluster_settings_service_cidr: "{{ cluster_order.spec.network.serviceCIDR }}"
 
-# Fall back to provider default Secret if pull_secret or ssh_public_key still empty
-- name: Get default pull-secret and ssh-key from provider Secret
-  when: >-
-    not cluster_settings_pull_secret
-    or not cluster_settings_ssh_public_key
-  kubernetes.core.k8s_info:
-    api_version: v1
-    kind: Secret
-    name: "{{ cluster_settings_default_credentials_secret_name }}"
-    namespace: "{{ cluster_settings_default_credentials_secret_namespace }}"
-  failed_when: false
-  register: default_cluster_credentials
-  no_log: true
-
-- name: Apply provider defaults for missing credentials
-  when: (default_cluster_credentials.resources | default([]) | length > 0)
-  block:
-    - name: Set pull_secret from provider default
-      when: not cluster_settings_pull_secret
-      ansible.builtin.set_fact:
-        cluster_settings_pull_secret: "{{ default_cluster_credentials.resources[0].data.pull_secret | b64decode }}"
-      no_log: true
-
-    - name: Set ssh_public_key from provider default
-      when: not cluster_settings_ssh_public_key
-      ansible.builtin.set_fact:
-        cluster_settings_ssh_public_key: "{{ default_cluster_credentials.resources[0].data.ssh_public_key | b64decode }}"
-
-- name: Fail if pull_secret could not be resolved
-  ansible.builtin.fail:
-    msg: >-
-      pull_secret is empty after checking all sources
-      (spec.pullSecret, templateParameters, and the provider default Secret
-      '{{ cluster_settings_default_credentials_secret_name }}'
-      in namespace '{{ cluster_settings_default_credentials_secret_namespace }}').
-      Supply a pull secret via an OSAC Secret referenced by --pull-secret, or
-      configure the provider default Secret.
-  when: not cluster_settings_pull_secret
-
-# Write resolved values back into template_parameters for backward compatibility
-- name: Merge resolved credentials into template parameters
+- name: Set reference-only template settings
   ansible.builtin.set_fact:
-    cluster_settings_template_parameters: >-
-      {{ cluster_settings_template_parameters | combine({
-        'pull_secret': cluster_settings_pull_secret,
-        'ssh_public_key': cluster_settings_ssh_public_key
-      }) }}
-  no_log: true
-
-- name: Set runtime template parameters without modifying cluster order
-  ansible.builtin.set_fact:
-    template_parameters: "{{ cluster_settings_template_parameters }}"
-  no_log: true
+    cluster_settings_pull_secret_name: "pullsecret-cluster-{{ cluster_order.metadata.name }}"
+    template_parameters: >-
+      {{ cluster_settings_template_parameters | combine({'ssh_public_key': cluster_settings_ssh_public_key}) }}

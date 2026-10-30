@@ -157,9 +157,9 @@ spec:
                   type: object
                 type: array
               pullSecret:
-                description: PullSecret is deprecated and accepted only for migration
-                  to PullSecretRef.
-                maxLength: 262144
+                description: PullSecret is retained only to reject unsupported inline
+                  credential inputs.
+                maxLength: 0
                 type: string
               pullSecretRef:
                 description: PullSecretRef selects an owned dockerconfigjson Secret
@@ -190,7 +190,7 @@ spec:
               sshPublicKey:
                 description: |-
                   SSHPublicKey is an SSH public key installed on cluster worker nodes.
-                  If not provided, the provider's default SSH key is used.
+                  Defaults are resolved through the API's cluster template spec defaults.
                 maxLength: 16384
                 type: string
               templateID:

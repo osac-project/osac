@@ -1,208 +1,194 @@
-package pullsecret
+package pullsecret_test
 
 import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	. "github.com/osac-project/osac/osac-operator/pkg/pullsecret"
 )
 
-const syntheticFirst = `{"auths":{"registry.invalid":{"username":"OSAC7034_SYNTHETIC_FIRST"}}}`
-const syntheticRotated = `{"auths":{"registry.invalid":{"username":"OSAC7034_SYNTHETIC_ROTATED"}}}`
+const fixtureFirst = `{"auths":{"registry.invalid":{"username":"OSAC7034_SYNTHETIC_FIRST"}}}`
+const fixtureRotated = `{"auths":{"registry.invalid":{"username":"OSAC7034_SYNTHETIC_ROTATED"}}}`
 
-func fixture(test *testing.T) (*v1alpha1.ClusterOrder, client.WithWatch) {
-	test.Helper()
-	scheme := runtime.NewScheme()
-	if err := corev1.AddToScheme(scheme); err != nil {
-		test.Fatal(err)
-	}
-	if err := v1alpha1.AddToScheme(scheme); err != nil {
-		test.Fatal(err)
-	}
-	order := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{
-		Name: "fixture", Namespace: "hub", UID: "fixture-uid",
-		Annotations: map[string]string{TenantAnnotation: "tenant-a", LastAppliedAnnotation: syntheticFirst},
-	}, Spec: v1alpha1.ClusterOrderSpec{TemplateParameters: `{}`}}
-	return order, fake.NewClientBuilder().WithScheme(scheme).WithObjects(order).Build()
+func TestPullSecret(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Pull Secret Projection Suite")
 }
 
-func assertClean(test *testing.T, order *v1alpha1.ClusterOrder) {
-	test.Helper()
-	encoded, err := json.Marshal(order)
-	if err != nil || strings.Contains(string(encoded), "OSAC7034_SYNTHETIC") {
-		test.Fatal("persisted order contains synthetic credential material or cannot be serialized")
+var _ = Describe("Same-hub pull-secret projections", func() {
+	var order *v1alpha1.ClusterOrder
+	var kube client.WithWatch
+	var namespace *corev1.Namespace
+	ctx := context.Background()
+
+	BeforeEach(func() {
+		scheme := runtime.NewScheme()
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		order = &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "fixture", Namespace: "hub", UID: "order-uid",
+			Annotations: map[string]string{TenantAnnotation: "tenant-a", LastAppliedAnnotation: fixtureFirst}},
+			Spec: v1alpha1.ClusterOrderSpec{TemplateParameters: `{}`}}
+		kube = fake.NewClientBuilder().WithScheme(scheme).WithObjects(order).Build()
+		namespace = &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "hub-fixture"}}
+		Expect(BindNamespace(order, namespace)).To(Succeed())
+		namespace.UID = "namespace-uid"
+		Expect(kube.Create(ctx, namespace)).To(Succeed())
+	})
+
+	project := func() {
+		fixturePayload := fixtureFirst
+		Expect(Ensure(ctx, kube, order, &fixturePayload)).To(Succeed())
+		Expect(kube.Update(ctx, order)).To(Succeed())
 	}
-	for _, payload := range []string{syntheticFirst, syntheticRotated} {
-		if strings.Contains(string(encoded), base64.StdEncoding.EncodeToString([]byte(payload))) {
-			test.Fatal("persisted order contains encoded synthetic credential material")
+
+	assertClean := func() {
+		persisted := &v1alpha1.ClusterOrder{}
+		Expect(kube.Get(ctx, client.ObjectKeyFromObject(order), persisted)).To(Succeed())
+		encoded, err := json.Marshal(persisted)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(encoded)).NotTo(ContainSubstring("OSAC7034_SYNTHETIC"))
+		for _, fixturePayload := range []string{fixtureFirst, fixtureRotated} {
+			Expect(string(encoded)).NotTo(ContainSubstring(base64.StdEncoding.EncodeToString([]byte(fixturePayload))))
 		}
 	}
-}
 
-func TestMigrationRetriesAfterOrderWriteFailure(test *testing.T) {
-	ctx := context.Background()
-	order, kube := fixture(test)
-	before := order.DeepCopy()
-	order.Spec.PullSecret = syntheticFirst
-	if err := kube.Patch(ctx, order, client.MergeFrom(before)); err != nil {
-		test.Fatal(err)
-	}
-	failing := interceptor.NewClient(kube, interceptor.Funcs{
-		Patch: func(ctx context.Context, underlying client.WithWatch, object client.Object, patch client.Patch, options ...client.PatchOption) error {
-			if _, isOrder := object.(*v1alpha1.ClusterOrder); isOrder {
-				return errors.New("OSAC7034_SYNTHETIC_WRITE_FAILURE")
-			}
-			return underlying.Patch(ctx, object, patch, options...)
-		},
+	It("persists references only and updates both projections without changing stable revisions", func() {
+		project()
+		assertClean()
+		firstRevision := order.Spec.PullSecretRevision
+		Expect(EnsureHosted(ctx, kube, order, namespace)).To(Succeed())
+		target := &corev1.Secret{}
+		key := client.ObjectKey{Namespace: namespace.Name, Name: HostedName(order)}
+		Expect(kube.Get(ctx, key, target)).To(Succeed())
+		Expect(metav1.IsControlledBy(target, namespace)).To(BeTrue())
+		Expect(metav1.IsControlledBy(target, order)).To(BeFalse())
+		Expect(string(target.Data[corev1.DockerConfigJsonKey])).To(Equal(fixtureFirst))
+		fixturePayload := fixtureFirst
+		Expect(Ensure(ctx, kube, order, &fixturePayload)).To(Succeed())
+		Expect(order.Spec.PullSecretRevision).To(Equal(firstRevision))
+		fixturePayload = fixtureRotated
+		Expect(Ensure(ctx, kube, order, &fixturePayload)).To(Succeed())
+		Expect(order.Spec.PullSecretRevision).NotTo(Equal(firstRevision))
+		Expect(kube.Update(ctx, order)).To(Succeed())
+		Expect(EnsureHosted(ctx, kube, order, namespace)).To(Succeed())
+		Expect(kube.Get(ctx, key, target)).To(Succeed())
+		Expect(string(target.Data[corev1.DockerConfigJsonKey])).To(Equal(fixtureRotated))
+		version := target.ResourceVersion
+		Expect(EnsureHosted(ctx, kube, order, namespace)).To(Succeed())
+		Expect(kube.Get(ctx, key, target)).To(Succeed())
+		Expect(target.ResourceVersion).To(Equal(version))
+		assertClean()
 	})
-	if changed, err := Migrate(ctx, failing, order); changed || !errors.Is(err, ErrInvalid) {
-		test.Fatal("failed order write did not fail closed safely")
-	}
-	secret, err := Read(ctx, kube, order)
-	if err != nil {
-		test.Fatal(err)
-	}
-	revision := secret.Annotations[revisionAnnotation]
-	if err := kube.Get(ctx, client.ObjectKeyFromObject(order), order); err != nil {
-		test.Fatal(err)
-	}
-	if order.Spec.PullSecret != syntheticFirst || order.Spec.PullSecretRef != nil {
-		test.Fatal("failed order write partially changed persisted order")
-	}
-	if changed, err := Migrate(ctx, kube, order); !changed || err != nil {
-		test.Fatal("retry did not finish migration")
-	}
-	if order.Spec.PullSecretRevision != revision {
-		test.Fatal("retry changed an unchanged projection revision")
-	}
-	if err := kube.Get(ctx, client.ObjectKeyFromObject(order), order); err != nil {
-		test.Fatal(err)
-	}
-	assertClean(test, order)
-}
 
-func TestMigrationAndRotation(test *testing.T) {
-	for _, mode := range []string{"inline", "parameters"} {
-		test.Run(mode, func(test *testing.T) {
-			ctx := context.Background()
-			order, kube := fixture(test)
-			before := order.DeepCopy()
-			if mode == "inline" {
-				order.Spec.PullSecret = syntheticFirst
+	DescribeTable("rejects fresh inline inputs without converting them", func(parameters string, inline string) {
+		order.Spec.TemplateParameters, order.Spec.PullSecret = parameters, inline
+		fixturePayload := fixtureFirst
+		Expect(Ensure(ctx, kube, order, &fixturePayload)).To(MatchError(ErrInvalid))
+		secrets := &corev1.SecretList{}
+		Expect(kube.List(ctx, secrets)).To(Succeed())
+		Expect(secrets.Items).To(BeEmpty())
+	}, Entry("inline field", `{}`, fixtureFirst), Entry("template parameter", `{"pull_secret":"fixture"}`, ""), Entry("malformed parameters", `[]`, ""))
+
+	DescribeTable("fails closed on invalid source references", func(mode string) {
+		project()
+		source, err := Read(ctx, kube, order)
+		Expect(err).NotTo(HaveOccurred())
+		switch mode {
+		case "missing":
+			Expect(kube.Delete(ctx, source)).To(Succeed())
+		case "malformed":
+			source.Data[corev1.DockerConfigJsonKey] = []byte("fixture-invalid-json")
+		case "type":
+			source.Type = corev1.SecretTypeOpaque
+		case "tenant":
+			source.Annotations[TenantAnnotation] = "tenant-b"
+		case "project":
+			source.Annotations[ProjectAnnotation] = "project-b"
+		case "owner":
+			source.OwnerReferences[0].UID = "other-order"
+		case "stale":
+			order.Spec.PullSecretRevision = "stale-revision"
+		case "forbidden":
+			kube = interceptor.NewClient(kube, interceptor.Funcs{Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+				return errors.New("fixture forbidden")
+			}})
+		}
+		if mode != "missing" && mode != "forbidden" {
+			Expect(kube.Update(ctx, source)).To(Succeed())
+		}
+		Expect(EnsureHosted(ctx, kube, order, namespace)).To(MatchError(ErrInvalid))
+	}, Entry("missing", "missing"), Entry("malformed", "malformed"), Entry("wrong type", "type"), Entry("foreign tenant", "tenant"), Entry("foreign project", "project"), Entry("foreign owner", "owner"), Entry("unpublished revision", "stale"), Entry("forbidden", "forbidden"))
+
+	DescribeTable("rejects namespace and target collisions", func(mode string) {
+		project()
+		Expect(EnsureHosted(ctx, kube, order, namespace)).To(Succeed())
+		switch mode {
+		case "namespace-owner":
+			namespace.Annotations[OrderUIDAnnotation] = "other-order"
+		case "namespace-tenant":
+			namespace.Annotations[TenantAnnotation] = "tenant-b"
+		case "namespace-name":
+			namespace.Name = "unrelated"
+		case "namespace-deleting":
+			now := metav1.Now()
+			namespace.DeletionTimestamp = &now
+		default:
+			target := &corev1.Secret{}
+			Expect(kube.Get(ctx, client.ObjectKey{Namespace: namespace.Name, Name: HostedName(order)}, target)).To(Succeed())
+			if mode == "namespace-reused" {
+				namespace.UID = types.UID("replacement-namespace")
 			} else {
-				encoded, err := json.Marshal(map[string]string{"pull_secret": syntheticFirst, "unrelated": "keep"})
-				if err != nil {
-					test.Fatal(err)
-				}
-				order.Spec.TemplateParameters = string(encoded)
+				target.OwnerReferences = nil
+				Expect(kube.Update(ctx, target)).To(Succeed())
 			}
-			if err := kube.Patch(ctx, order, client.MergeFrom(before)); err != nil {
-				test.Fatal(err)
-			}
-			if changed, err := Migrate(ctx, kube, order); err != nil || !changed {
-				test.Fatal("migration did not succeed")
-			}
-			persisted := &v1alpha1.ClusterOrder{}
-			if err := kube.Get(ctx, client.ObjectKeyFromObject(order), persisted); err != nil {
-				test.Fatal(err)
-			}
-			assertClean(test, persisted)
-			if mode == "parameters" && !strings.Contains(order.Spec.TemplateParameters, "unrelated") {
-				test.Fatal("migration lost unrelated parameters")
-			}
-			firstRevision := order.Spec.PullSecretRevision
-			secret, err := Read(ctx, kube, order)
-			if err != nil || firstRevision == "" || string(secret.Data[corev1.DockerConfigJsonKey]) != syntheticFirst {
-				test.Fatal("invalid projection")
-			}
-			if !metav1.IsControlledBy(secret, order) {
-				test.Fatal("projection is not garbage-collectable with its order")
-			}
-			first := syntheticFirst
-			if err := Ensure(ctx, kube, order, &first); err != nil || order.Spec.PullSecretRevision != firstRevision {
-				test.Fatal("unchanged payload changed scheduling revision")
-			}
-			rotated := syntheticRotated
-			if err := Ensure(ctx, kube, order, &rotated); err != nil || order.Spec.PullSecretRevision == firstRevision {
-				test.Fatal("rotation did not change scheduling revision")
-			}
-			order.Spec.PullSecret = syntheticFirst
-			if err := Ensure(ctx, kube, order, nil); err != nil {
-				test.Fatal(err)
-			}
-			secret, err = Read(ctx, kube, order)
-			if err != nil || string(secret.Data[corev1.DockerConfigJsonKey]) != syntheticRotated {
-				test.Fatal("stale inline value replaced authoritative reference")
-			}
-			assertClean(test, order)
-			if err := kube.Patch(ctx, order, client.MergeFrom(persisted)); err != nil {
-				test.Fatal(err)
-			}
-			if changed, err := Migrate(ctx, kube, order); err != nil || changed {
-				test.Fatal("migration was not idempotent")
-			}
-		})
-	}
-}
+		}
+		Expect(EnsureHosted(ctx, kube, order, namespace)).To(MatchError(ErrInvalid))
+	}, Entry("foreign namespace owner", "namespace-owner"), Entry("foreign namespace tenant", "namespace-tenant"), Entry("foreign namespace name", "namespace-name"), Entry("deleting namespace", "namespace-deleting"), Entry("reused namespace", "namespace-reused"), Entry("foreign target", "target-owner"))
 
-func TestReferenceFailuresAndCollisions(test *testing.T) {
-	for _, failure := range []string{"missing", "foreign-owner", "foreign-tenant", "wrong-type", "missing-key", "malformed", "forbidden"} {
-		test.Run(failure, func(test *testing.T) {
-			ctx := context.Background()
-			order, kube := fixture(test)
-			payload := syntheticFirst
-			if err := Ensure(ctx, kube, order, &payload); err != nil {
-				test.Fatal(err)
-			}
-			secret, err := Read(ctx, kube, order)
-			if err != nil {
-				test.Fatal(err)
-			}
-			switch failure {
-			case "missing":
-				if err := kube.Delete(ctx, secret); err != nil {
-					test.Fatal(err)
-				}
-			case "foreign-owner":
-				secret.OwnerReferences[0].UID = "other-order"
-			case "foreign-tenant":
-				secret.Annotations[TenantAnnotation] = "tenant-b"
-			case "wrong-type":
-				secret.Type = corev1.SecretTypeOpaque
-			case "missing-key":
-				secret.Data = nil
-			case "malformed":
-				secret.Data[corev1.DockerConfigJsonKey] = []byte("OSAC7034_SYNTHETIC_INVALID")
-			case "forbidden":
-				kube = interceptor.NewClient(kube, interceptor.Funcs{Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
-					return errors.New("OSAC7034_SYNTHETIC_FORBIDDEN")
-				}})
-			}
-			if failure != "missing" && failure != "forbidden" {
-				if err := kube.Update(ctx, secret); err != nil {
-					test.Fatal(err)
-				}
-			}
-			order.Spec.PullSecret = syntheticFirst
-			if err := Ensure(ctx, kube, order, nil); !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), "SYNTHETIC") {
-				test.Fatal("explicit reference failure did not fail closed safely")
-			}
-			if failure == "foreign-owner" || failure == "foreign-tenant" || failure == "wrong-type" {
-				if err := Ensure(ctx, kube, order, &payload); !errors.Is(err, ErrInvalid) {
-					test.Fatal("projection overwrote a foreign secret")
-				}
-			}
-		})
-	}
-}
+	It("does not adopt an existing unmarked namespace or source Secret", func() {
+		namespace.Annotations = nil
+		Expect(BindNamespace(order, namespace)).To(MatchError(ErrInvalid))
+		foreign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: order.Name + "-pull-secret", Namespace: order.Namespace}, Type: corev1.SecretTypeDockerConfigJson}
+		Expect(kube.Create(ctx, foreign)).To(Succeed())
+		fixturePayload := fixtureFirst
+		Expect(Ensure(ctx, kube, order, &fixturePayload)).To(MatchError(ErrInvalid))
+	})
+
+	It("retries partial projection updates without changing the opaque revision", func() {
+		project()
+		fixturePayload := fixtureRotated
+		persisted := order.DeepCopy()
+		Expect(Ensure(ctx, kube, order, &fixturePayload)).To(Succeed())
+		revision := order.Spec.PullSecretRevision
+		Expect(EnsureHosted(ctx, kube, persisted, namespace)).To(MatchError(ErrInvalid))
+		Expect(Ensure(ctx, kube, persisted, &fixturePayload)).To(Succeed())
+		Expect(persisted.Spec.PullSecretRevision).To(Equal(revision))
+		Expect(EnsureHosted(ctx, kube, persisted, namespace)).To(Succeed())
+	})
+
+	It("fails safely when a target patch is forbidden and succeeds on retry", func() {
+		project()
+		Expect(EnsureHosted(ctx, kube, order, namespace)).To(Succeed())
+		fixturePayload := fixtureRotated
+		Expect(Ensure(ctx, kube, order, &fixturePayload)).To(Succeed())
+		failing := interceptor.NewClient(kube, interceptor.Funcs{Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
+			return errors.New("fixture forbidden patch")
+		}})
+		Expect(EnsureHosted(ctx, failing, order, namespace)).To(MatchError(ErrInvalid))
+		Expect(EnsureHosted(ctx, kube, order, namespace)).To(Succeed())
+	})
+})

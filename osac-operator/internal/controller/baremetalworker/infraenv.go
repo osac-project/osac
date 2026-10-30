@@ -260,11 +260,8 @@ func (r *Reconciler) fetchDiscoveryIgnition(
 	return ignition, ctrl.Result{}, nil
 }
 
-// ensurePullSecret migrates legacy orders before selecting the namespace-local Secret.
+// ensurePullSecret validates the owned source without moving credentials through AAP.
 func (r *Reconciler) ensurePullSecret(ctx context.Context, co *v1alpha1.ClusterOrder) error {
-	if _, err := pullsecret.Migrate(ctx, r.Client, co); err != nil {
-		return err
-	}
 	_, err := pullsecret.Read(ctx, r.Client, co)
 	return err
 }

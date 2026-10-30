@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/pullsecret"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -364,7 +365,7 @@ var _ = It("binds an Agent while another worker waits for its retry", func() {
 	failed.NextRetryTime = &future
 	binding := newWorkerStatus("standard", "standard", "binding-bmi", "binding-id", workerPhaseBinding)
 	co.Spec.NodeRequests[0].NumberOfNodes = 2
-	co.Spec.PullSecret = `{"auths":{}}`
+	setWorkerPullSecretFixture(r, co)
 	Expect(r.Update(ctx, co)).To(Succeed())
 	co.Status.Workers = []v1alpha1.WorkerStatus{failed, binding}
 	Expect(r.Status().Update(ctx, co)).To(Succeed())
@@ -419,7 +420,7 @@ var _ = It("makes independent progress across mixed worker states", func() {
 	pending.NextRetryTime = &future
 	waiting := newWorkerStatus("standard", "standard", "waiting-bmi", "waiting-id", workerPhaseWaitingForAgent)
 	co.Spec.NodeRequests[0].NumberOfNodes = 3
-	co.Spec.PullSecret = `{"auths":{}}`
+	setWorkerPullSecretFixture(r, co)
 	Expect(r.Update(ctx, co)).To(Succeed())
 	co.Status.Workers = []v1alpha1.WorkerStatus{healthy, pending, waiting}
 	Expect(r.Status().Update(ctx, co)).To(Succeed())
@@ -475,7 +476,7 @@ var _ = It("persists the worker summary before checking Create prerequisites", f
 	// The worker was already demoted, but its aggregate summary is stale. A
 	// scale-up makes the create gate due even though no slot needs a create yet.
 	stale := int32(1)
-	co.Spec.PullSecret = `{"auths":{}}`
+	setWorkerPullSecretFixture(r, co)
 	co.Spec.NodeRequests[0].NumberOfNodes = 2
 	Expect(r.Update(ctx, co)).To(Succeed())
 	co.Status.ReadyWorkers = &stale
@@ -570,7 +571,7 @@ func r07Harness(phase string) (*Reconciler, *workerReadClient, *v1alpha1.Cluster
 	GinkgoHelper()
 	ctx := context.Background()
 	r, fc, co := workerReadHarness()
-	co.Spec.PullSecret = `{"auths":{}}`
+	setWorkerPullSecretFixture(r, co)
 	Expect(r.Update(ctx, co)).To(Succeed())
 	co.Status.Workers[0].Phase = phase
 	Expect(r.Status().Update(ctx, co)).To(Succeed())
@@ -828,7 +829,7 @@ func r07CreateHarness() (*Reconciler, *workerReadClient, *v1alpha1.ClusterOrder)
 	GinkgoHelper()
 	ctx := context.Background()
 	r, fc, co := workerReadHarness()
-	co.Spec.PullSecret = `{"auths":{}}`
+	setWorkerPullSecretFixture(r, co)
 	Expect(r.Update(ctx, co)).To(Succeed())
 	co.Status.Workers = nil
 	Expect(r.Status().Update(ctx, co)).To(Succeed())
@@ -935,7 +936,7 @@ var _ = It("avoids status writes for a stable Ready order", func() {
 var _ = It("keeps the old InfraEnv UID when stale-ignition persistence fails", func() {
 	ctx := context.Background()
 	r, fc, co := workerReadHarness()
-	co.Spec.PullSecret = `{"auths":{}}`
+	setWorkerPullSecretFixture(r, co)
 	co.Annotations[infraEnvUIDAnnotation] = "old"
 	Expect(r.Update(ctx, co)).To(Succeed())
 	co.SetStatusCondition(v1alpha1.ConditionInfraEnvReady, metav1.ConditionTrue, "ready", reasonInfraEnvReady)
@@ -1108,3 +1109,9 @@ var _ = It("counts capacity independently for each logical NodeSet", func() {
 	persistWorkerSummary(r, co, workers)
 	assertWorkerCounts(co, 2, 1, 1)
 })
+
+func setWorkerPullSecretFixture(r *Reconciler, co *v1alpha1.ClusterOrder) {
+	GinkgoHelper()
+	fixturePayload := `{"auths":{}}`
+	Expect(pullsecret.Ensure(context.Background(), r.Client, co, &fixturePayload)).To(Succeed())
+}

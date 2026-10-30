@@ -1,0 +1,15 @@
+---
+name: authorino
+title: Authorino Operator
+description: >
+  Installs the Authorino Operator.
+template_type: addon_operator
+min_ocp_version: ""
+max_ocp_version: ""
+exclusions: []
+dependencies: []
+package_name: authorino-operator
+channel: tech-preview-v1
+catalog_source: redhat-operators
+catalog_source_namespace: openshift-marketplace
+subscription_namespace: openshift-operators

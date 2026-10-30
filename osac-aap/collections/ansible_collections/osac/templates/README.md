@@ -40,6 +40,21 @@ ansible-galaxy collection install osac-templates-*.tar.gz
 
 ## Available Templates
 
+### Add-on Operator Templates
+
+The collection publishes the OpenShift AI operator bundle and its supported
+operator dependencies for HyperShift clusters:
+
+- `openshift_ai`, `authorino`, `pipelines`, `serverless`, and `servicemesh`
+- `amd_gpu` and `nvidia_gpu`, with their Node Feature Discovery and KMM dependencies
+- `node_feature_discovery`, `kmm`, and `lso`
+
+These roles create the operator namespace, any required OperatorGroup, and the
+OLM Subscription, then wait for the InstallPlan and ClusterServiceVersion to
+complete successfully. ClusterCatalogItems can compose the published templates
+into the desired operator set. Operator-specific configuration resources are not
+created by this phase.
+
 ### Cluster Templates
 
 #### `ocp_small`

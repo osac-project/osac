@@ -1,0 +1,19 @@
+---
+name: nvidia-gpu
+title: NVIDIA GPU Operator
+description: >
+  Installs the NVIDIA GPU Operator.
+template_type: addon_operator
+min_ocp_version: ""
+max_ocp_version: ""
+exclusions: []
+dependencies:
+  - node-feature-discovery
+package_name: gpu-operator-certified
+channel: stable
+catalog_source: certified-operators
+catalog_source_namespace: openshift-marketplace
+subscription_namespace: nvidia-gpu-operator
+operator_group_name: gpu-operator-certified
+operator_group_target_namespaces:
+  - nvidia-gpu-operator

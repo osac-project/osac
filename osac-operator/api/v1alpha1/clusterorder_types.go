@@ -19,6 +19,7 @@ package v1alpha1
 // Important: Run "make" to regenerate code after modifying this file
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -63,11 +64,16 @@ type ClusterOrderSpec struct {
 	// +kubebuilder:validation:items:Pattern=`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`
 	AddOnOperators []string `json:"addOnOperators,omitempty"`
 
-	// PullSecret contains credentials for authenticating to container image repositories.
-	// If not provided, the provider's default pull secret is used.
+	// PullSecret is deprecated and accepted only for migration to PullSecretRef.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxLength=262144
 	PullSecret string `json:"pullSecret,omitempty"`
+	// PullSecretRef selects an owned dockerconfigjson Secret in this order's namespace.
+	// +kubebuilder:validation:Optional
+	PullSecretRef *corev1.LocalObjectReference `json:"pullSecretRef,omitempty"`
+	// PullSecretRevision changes only when projected credentials change.
+	// +kubebuilder:validation:Optional
+	PullSecretRevision string `json:"pullSecretRevision,omitempty"`
 	// SSHPublicKey is an SSH public key installed on cluster worker nodes.
 	// If not provided, the provider's default SSH key is used.
 	// +kubebuilder:validation:Optional

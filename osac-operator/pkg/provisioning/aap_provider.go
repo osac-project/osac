@@ -347,6 +347,9 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 		return "", fmt.Errorf("failed to extract extra vars: %w", err)
 	}
 	extraVars = mergeExtraVars(extraVars, inheritedExtraVars)
+	if err := protectClusterOrderLaunch(resource, extraVars); err != nil {
+		return "", err
+	}
 	sensitive := adminKubeconfigInExtraVars(extraVars)
 
 	var jobID int

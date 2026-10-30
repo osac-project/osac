@@ -2,6 +2,7 @@
 - name: Get template parameters from cluster order
   ansible.builtin.set_fact:
     cluster_settings_template_parameters: "{{ cluster_order.spec.templateParameters | default('{}') | from_json }}"
+  no_log: true
 
 # Resolve pull_secret: explicit CR field > templateParameters > provider default Secret
 # The second argument (true) ensures empty strings and nulls also fall through.
@@ -11,6 +12,29 @@
       {{ cluster_order.spec.pullSecret
          | default(cluster_settings_template_parameters.pull_secret | default('', true), true) }}
   no_log: true
+
+- name: Resolve referenced pull secret at provisioning runtime
+  when: cluster_order.spec.pullSecretRef is defined
+  block:
+    - name: Read namespace-local pull secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: "{{ cluster_order.metadata.namespace }}"
+        name: "{{ cluster_order.spec.pullSecretRef.name }}"
+      register: cluster_settings_referenced_secret
+      no_log: true
+
+    - name: Validate and decode referenced pull secret
+      ansible.builtin.set_fact:
+        cluster_settings_pull_secret: >-
+          {{ cluster_settings_referenced_secret.resources
+             | osac.service.cluster_pull_secret(cluster_order) | from_json | to_json }}
+      no_log: true
+  rescue:
+    - name: Fail closed on unavailable explicit reference
+      ansible.builtin.fail:
+        msg: Referenced cluster pull secret is unavailable or invalid
 
 # Resolve ssh_public_key: explicit CR field > templateParameters > provider default Secret
 - name: Resolve ssh_public_key from explicit field or template parameters
@@ -52,6 +76,7 @@
     namespace: "{{ cluster_settings_default_credentials_secret_namespace }}"
   failed_when: false
   register: default_cluster_credentials
+  no_log: true
 
 - name: Apply provider defaults for missing credentials
   when: (default_cluster_credentials.resources | default([]) | length > 0)
@@ -88,14 +113,7 @@
       }) }}
   no_log: true
 
-- name: Update template parameters in cluster order
+- name: Set runtime template parameters without modifying cluster order
   ansible.builtin.set_fact:
-    cluster_order: >-
-      {{
-      cluster_order | combine({
-        "spec": {
-          "templateParameters": cluster_settings_template_parameters | to_json,
-        }
-      }, recursive=true)
-      }}
+    template_parameters: "{{ cluster_settings_template_parameters }}"
   no_log: true

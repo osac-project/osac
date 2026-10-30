@@ -15,6 +15,7 @@
     template_parameters is not defined
   ansible.builtin.set_fact:
     template_parameters: "{{ cluster_order.spec.templateParameters | from_json }}"
+  no_log: true
 
 - name: Extract node requests
   when: >-

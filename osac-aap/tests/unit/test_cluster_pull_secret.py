@@ -1,5 +1,6 @@
+"""Exercise reference-only CaaS settings without any Kubernetes Secret access."""
+
 import base64
-import copy
 import json
 import os
 import subprocess
@@ -7,146 +8,114 @@ import sys
 from pathlib import Path
 
 import pytest
-from ansible.errors import AnsibleFilterError
-
-from cluster_pull_secret import cluster_pull_secret
+import yaml
 
 OSAC_AAP = Path(__file__).resolve().parents[2]
-MARKER = "OSAC7034_SYNTHETIC_RUNTIME"
-PAYLOAD = json.dumps({"auths": {"registry.invalid": {"auth": MARKER}}})
+SERVICE = OSAC_AAP / "collections/ansible_collections/osac/service"
+TEMPLATES = OSAC_AAP / "collections/ansible_collections/osac/templates"
+FIXTURE_MARKER = "OSAC7034_SYNTHETIC_REJECTED_INPUT"
 
 
-def fixture():
+@pytest.mark.parametrize("failure", [None, "missing-reference", "inline", "parameters"])
+def test_reference_only_settings_and_extraction(tmp_path: Path, failure: str | None) -> None:
+    """Run the real settings/extraction consumers; no Kubernetes module is provided."""
     order = {
-        "metadata": {
-            "name": "fixture-order",
-            "namespace": "fixture-hub",
-            "uid": "fixture-uid",
-            "annotations": {"osac.openshift.io/tenant": "tenant-a"},
-        },
+        "metadata": {"name": "fixture", "namespace": "hub", "uid": "fixture-uid"},
         "spec": {
-            "templateID": "fixture",
-            "templateParameters": '{"unrelated":"keep"}',
+            "templateID": "ocp_small",
             "nodeRequests": [],
-            "sshPublicKey": "synthetic-public-key",
-            "pullSecretRef": {"name": "owned-secret"},
+            "pullSecretRef": {"name": "owned-source"},
+            "sshPublicKey": "fixture-public-key",
+            "templateParameters": '{"unrelated":"keep"}',
         },
     }
-    secret = {
-        "metadata": {
-            "name": "owned-secret",
-            "namespace": "fixture-hub",
-            "annotations": {"osac.openshift.io/tenant": "tenant-a"},
-            "ownerReferences": [
-                {
-                    "apiVersion": "osac.openshift.io/v1alpha1",
-                    "kind": "ClusterOrder",
-                    "name": "fixture-order",
-                    "uid": "fixture-uid",
-                    "controller": True,
-                }
-            ],
-        },
-        "type": "kubernetes.io/dockerconfigjson",
-        "data": {".dockerconfigjson": base64.b64encode(PAYLOAD.encode()).decode()},
-    }
-    return order, secret
+    if failure == "missing-reference":
+        del order["spec"]["pullSecretRef"]
+    elif failure == "inline":
+        order["spec"]["pullSecret"] = FIXTURE_MARKER
+    elif failure == "parameters":
+        order["spec"]["templateParameters"] = json.dumps({"pull_secret": FIXTURE_MARKER})
 
-
-@pytest.mark.parametrize(
-    "failure",
-    [None, "missing", "owner", "tenant", "namespace", "type", "key", "malformed", "terminating"],
-)
-def test_runtime_reference_validation(failure):
-    order, secret = fixture()
-    resources = [secret]
-    if failure == "missing":
-        resources = []
-    elif failure == "owner":
-        secret["metadata"]["ownerReferences"][0]["uid"] = "other-uid"
-    elif failure == "tenant":
-        secret["metadata"]["annotations"]["osac.openshift.io/tenant"] = "tenant-b"
-    elif failure == "namespace":
-        secret["metadata"]["namespace"] = "other-namespace"
-    elif failure == "type":
-        secret["type"] = "Opaque"
-    elif failure == "key":
-        secret["data"] = {}
-    elif failure == "malformed":
-        secret["data"][".dockerconfigjson"] = MARKER
-    elif failure == "terminating":
-        secret["metadata"]["deletionTimestamp"] = "2026-01-01T00:00:00Z"
-    before = copy.deepcopy(order)
-    if failure:
-        with pytest.raises(AnsibleFilterError) as caught:
-            cluster_pull_secret(resources, order)
-        assert MARKER not in str(caught.value)
-    else:
-        assert cluster_pull_secret(resources, order) == PAYLOAD
-    assert order == before
-
-
-@pytest.mark.parametrize("failure", [None, "missing", "forbidden", "malformed"])
-def test_settings_and_extraction_runtime_contract(tmp_path, failure):
-    order, secret = fixture()
-    resources = [] if failure == "missing" else [secret]
-    if failure == "malformed":
-        secret["data"][".dockerconfigjson"] = MARKER
-    module_dir = tmp_path / "ansible_collections/kubernetes/core/plugins/modules"
-    module_dir.mkdir(parents=True)
-    module = f"""from ansible.module_utils.basic import AnsibleModule
-module = AnsibleModule(argument_spec={{key: dict(type='str') for key in ['api_version', 'kind', 'namespace', 'name']}})
-if module.params['namespace'] != 'fixture-hub' or module.params['name'] != 'owned-secret':
-    module.fail_json(msg='Unexpected Secret lookup')
-if {failure == 'forbidden'!r}:
-    module.fail_json(msg='Synthetic forbidden lookup')
-module.exit_json(changed=False, resources={resources!r})
-"""
-    (module_dir / "k8s_info.py").write_text(module)
     tasks = [
-        {"name": "Resolve runtime settings", "ansible.builtin.include_role": {"name": "osac.service.cluster_settings"}},
-        {"name": "Extract template inputs", "ansible.builtin.include_role": {"name": "osac.service.extract_template_info"}},
+        {"name": "Apply settings", "ansible.builtin.include_role": {"name": "osac.service.cluster_settings"}},
+        {"name": "Extract inputs", "ansible.builtin.include_role": {"name": "osac.service.extract_template_info"}},
         {
-            "name": "Verify protected runtime values",
+            "name": "Assert reference-only runtime state",
             "ansible.builtin.assert": {
                 "that": [
-                    "template_parameters.pull_secret == synthetic_expected",
+                    "cluster_settings_pull_secret_name == 'pullsecret-cluster-fixture'",
                     "template_parameters.unrelated == 'keep'",
+                    "template_parameters.ssh_public_key == 'fixture-public-key'",
+                    "'pull_secret' not in template_parameters",
+                    "cluster_settings_pull_secret is not defined",
+                    "default_cluster_credentials is not defined",
+                    "cluster_settings_referenced_secret is not defined",
                     "cluster_order == original_order",
                 ]
             },
-            "no_log": True,
         },
-        {"name": "Inspect safe order fact", "ansible.builtin.debug": {"var": "cluster_order"}},
     ]
-    play = [{
-        "name": "Protected cluster runtime",
-        "hosts": "localhost",
-        "gather_facts": False,
-        "vars": {
-            "cluster_order": order,
-            "original_order": order,
-            "synthetic_expected": PAYLOAD,
-            "ansible_python_interpreter": sys.executable,
-            "ansible_connection": "local",
-        },
-        "tasks": tasks,
-    }]
+    play = [
+        {
+            "name": "Reference-only runtime",
+            "hosts": "localhost",
+            "gather_facts": False,
+            "vars": {
+                "cluster_order": order,
+                "original_order": order,
+                "ansible_connection": "local",
+                "ansible_python_interpreter": sys.executable,
+            },
+            "tasks": tasks,
+        }
+    ]
     playbook = tmp_path / "runtime.json"
     playbook.write_text(json.dumps(play))
     environment = os.environ.copy()
-    environment.update({
-        "ANSIBLE_COLLECTIONS_PATH": f"{tmp_path}:{OSAC_AAP / 'collections'}:{OSAC_AAP / 'vendor'}",
-        "ANSIBLE_FORCE_COLOR": "false",
-        "ANSIBLE_STDOUT_CALLBACK": "default",
-    })
+    environment.update(
+        {
+            "ANSIBLE_COLLECTIONS_PATH": f"{OSAC_AAP / 'collections'}:{OSAC_AAP / 'vendor'}",
+            "ANSIBLE_FORCE_COLOR": "false",
+            "ANSIBLE_STDOUT_CALLBACK": "default",
+        }
+    )
     result = subprocess.run(
         ["ansible-playbook", "-i", "localhost,", str(playbook)],
-        cwd=OSAC_AAP, env=environment, capture_output=True, text=True, timeout=45, check=False,
+        cwd=OSAC_AAP,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=45,
+        check=False,
     )
     output = result.stdout + result.stderr
     assert (result.returncode == 0) == (failure is None), output
-    assert MARKER not in output
-    assert base64.b64encode(PAYLOAD.encode()).decode() not in output
-    if failure:
-        assert "Referenced cluster pull secret is unavailable or invalid" in output
+    assert FIXTURE_MARKER not in output
+    assert base64.b64encode(FIXTURE_MARKER.encode()).decode() not in output
+
+
+def test_hosted_cluster_uses_controller_projection_only() -> None:
+    """The actual provider definition references a name; Ansible never copies credentials."""
+    create = yaml.safe_load((SERVICE / "roles/hosted_cluster/tasks/create_hosted_cluster.yaml").read_text())
+    definition = next(task for task in create if task["name"] == "Build HostedCluster definition")
+    hosted = definition["ansible.builtin.set_fact"]["hosted_cluster_definition"]
+    assert hosted["spec"]["pullSecret"]["name"] == "{{ hosted_cluster_settings.pull_secret_name }}"
+    for name in ["create_hosted_cluster.yaml", "delete_hosted_cluster.yaml"]:
+        text = (SERVICE / "roles/hosted_cluster/tasks" / name).read_text()
+        assert ".dockerconfigjson" not in text
+        assert "pullscret-cluster-" not in text
+    settings = (SERVICE / "roles/cluster_settings/tasks/main.yml").read_text()
+    assert "kubernetes.core." not in settings
+    assert "b64decode" not in settings
+
+
+@pytest.mark.parametrize("role", ["ocp_small", "ocp_ci_small"])
+@pytest.mark.parametrize("phase", ["install", "delete"])
+def test_template_adapters_pass_names_only(role: str, phase: str) -> None:
+    """Cover both direct adapters; NICo and AI MaaS delegate to ocp_small."""
+    tasks = yaml.safe_load((TEMPLATES / "roles" / role / "tasks" / f"{phase}.yaml").read_text())
+    settings = next(
+        task["vars"]["hosted_cluster_settings"] for task in tasks if "hosted_cluster_settings" in task.get("vars", {})
+    )
+    assert "pull_secret_name" in settings
+    assert "pull_secret" not in settings

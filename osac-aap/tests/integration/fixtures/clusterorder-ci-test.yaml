@@ -6,9 +6,11 @@ metadata:
   namespace: osac-system
 spec:
   templateID: osac.templates.ocp_ci_small
+  pullSecretRef:
+    name: fixture-source
+  pullSecretRevision: fixture-revision
   templateParameters: |
     {
-      "pull_secret": "test-pull-secret-content",
       "ssh_public_key": "ssh-rsa test-key test@example.com"
     }
   nodeRequests:

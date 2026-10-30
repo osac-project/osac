@@ -51,6 +51,31 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+var _ = Describe("reference-only producer inputs", func() {
+	const fixtureRejected = "OSAC7034_SYNTHETIC_REJECTED"
+	DescribeTable("rejects unsupported inline credentials", func(parameters string, inline string) {
+		fixturePayload := `{"auths":{}}`
+		secrets := NewMockSecretsClient(gomock.NewController(GinkgoT()))
+		secrets.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).Return(privatev1.SecretsGetResponse_builder{Object: privatev1.Secret_builder{
+			Metadata: privatev1.Metadata_builder{Tenant: "fixture-tenant"}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_PULL_SECRET, Data: map[string][]byte{dockerConfigJSONKey: []byte(fixturePayload)},
+		}.Build()}.Build(), nil).AnyTimes()
+		task := &task{r: &function{secretsClient: secrets}, cluster: privatev1.Cluster_builder{
+			Metadata: privatev1.Metadata_builder{Tenant: "fixture-tenant"}.Build(),
+			Spec:     privatev1.ClusterSpec_builder{PullSecretSecret: privatev1.SecretLocalReference_builder{Id: "fixture-source"}.Build()}.Build(),
+		}.Build()}
+		spec := &osacv1alpha1.ClusterOrderSpec{TemplateParameters: parameters, PullSecret: inline}
+		err := task.addExplicitFields(context.Background(), spec)
+		Expect(err).To(MatchError(errPullSecretResolution))
+		Expect(err.Error()).NotTo(ContainSubstring("OSAC7034_SYNTHETIC"))
+	}, Entry("template parameters", `{"pull_secret":"`+fixtureRejected+`"}`, ""), Entry("inline field", `{}`, fixtureRejected))
+
+	It("requires an API reference instead of selecting provider defaults", func() {
+		task := &task{cluster: privatev1.Cluster_builder{Spec: privatev1.ClusterSpec_builder{}.Build()}.Build()}
+		Expect(task.addExplicitFields(context.Background(), &osacv1alpha1.ClusterOrderSpec{})).To(MatchError(errPullSecretResolution))
+	})
+})
+
 var _ = Describe("upgrade attempt projection", func() {
 	It("projects independent current component IDs", func() {
 		spec := &privatev1.ClusterSpec{}
@@ -130,8 +155,9 @@ var _ = Describe("update tenant annotation", func() {
 	It("creates a new ClusterOrder with tenant identity and no trust opt-in annotation", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 
@@ -167,7 +193,7 @@ var _ = Describe("update tenant annotation", func() {
 			cluster: cluster,
 		}
 
-		err := t.update(ctx)
+		err := updateClusterWithFixtureReference(ctx, t)
 		Expect(err).ToNot(HaveOccurred())
 
 		// Verify the ClusterOrder CR was created with the tenant annotation
@@ -191,6 +217,7 @@ var _ = Describe("update tenant annotation", func() {
 		// Create an existing ClusterOrder with size 3:
 		existingOrder := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
+				UID:       "fixture-order-uid",
 				Name:      "order-abc",
 				Namespace: hubNamespace,
 				Labels: map[string]string{
@@ -201,7 +228,8 @@ var _ = Describe("update tenant annotation", func() {
 				},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID: "test-template",
+				PullSecretRef: &corev1.LocalObjectReference{Name: "fixture-source"},
+				TemplateID:    "test-template",
 				NodeRequests: []osacv1alpha1.NodeRequest{
 					{NodeSet: "gpu-gb200",
 						BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "gpu.gb200"},
@@ -213,8 +241,9 @@ var _ = Describe("update tenant annotation", func() {
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			WithObjects(existingOrder).
 			Build()
@@ -258,7 +287,7 @@ var _ = Describe("update tenant annotation", func() {
 			cluster: cluster,
 		}
 
-		err := t.update(ctx)
+		err := updateClusterWithFixtureReference(ctx, t)
 		Expect(err).ToNot(HaveOccurred())
 
 		// Verify the ClusterOrder was patched with the new size:
@@ -280,6 +309,7 @@ var _ = Describe("update tenant annotation", func() {
 		}
 		existingOrder := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
+				UID:       "fixture-order-uid",
 				Name:      "order-network-immutable",
 				Namespace: hubNamespace,
 				Labels:    map[string]string{labels.ClusterOrderUuid: clusterID},
@@ -288,6 +318,7 @@ var _ = Describe("update tenant annotation", func() {
 				},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
+				PullSecretRef:     &corev1.LocalObjectReference{Name: "fixture-source"},
 				TemplateID:        "test-template",
 				NetworkAttachment: storedAttachment,
 				NodeRequests: []osacv1alpha1.NodeRequest{{
@@ -299,7 +330,8 @@ var _ = Describe("update tenant annotation", func() {
 		}
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
-		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existingOrder).Build()
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		fakeClient := fixtureClusterClientBuilder().WithScheme(scheme).WithObjects(existingOrder).Build()
 		var logOutput bytes.Buffer
 		t := &task{
 			r: &function{
@@ -332,7 +364,7 @@ var _ = Describe("update tenant annotation", func() {
 			}.Build(),
 		}
 
-		Expect(t.update(ctx)).To(Succeed())
+		Expect(updateClusterWithFixtureReference(ctx, t)).To(Succeed())
 		updatedOrder := &osacv1alpha1.ClusterOrder{}
 		Expect(fakeClient.Get(ctx, clnt.ObjectKeyFromObject(existingOrder), updatedOrder)).To(Succeed())
 		Expect(updatedOrder.Spec.NetworkAttachment).To(Equal(storedAttachment))
@@ -347,6 +379,7 @@ var _ = Describe("update tenant annotation", func() {
 		// Create an existing ClusterOrder with size 3:
 		existingOrder := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
+				UID:       "fixture-order-uid",
 				Name:      "order-abc",
 				Namespace: hubNamespace,
 				Labels: map[string]string{
@@ -357,7 +390,8 @@ var _ = Describe("update tenant annotation", func() {
 				},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID: "test-template",
+				PullSecretRef: &corev1.LocalObjectReference{Name: "fixture-source"},
+				TemplateID:    "test-template",
 				NodeRequests: []osacv1alpha1.NodeRequest{
 					{NodeSet: "gpu-gb200",
 						BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "gpu.gb200"},
@@ -369,8 +403,9 @@ var _ = Describe("update tenant annotation", func() {
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			WithObjects(existingOrder).
 			Build()
@@ -414,7 +449,7 @@ var _ = Describe("update tenant annotation", func() {
 			cluster: cluster,
 		}
 
-		err := t.update(ctx)
+		err := updateClusterWithFixtureReference(ctx, t)
 		Expect(err).ToNot(HaveOccurred())
 
 		// Verify the ClusterOrder was patched with the new size:
@@ -433,6 +468,7 @@ var _ = Describe("update tenant annotation", func() {
 		// Create an existing ClusterOrder with size 3:
 		existingOrder := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
+				UID:       "fixture-order-uid",
 				Name:      "order-abc",
 				Namespace: hubNamespace,
 				Labels: map[string]string{
@@ -443,7 +479,8 @@ var _ = Describe("update tenant annotation", func() {
 				},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID: "test-template",
+				PullSecretRef: &corev1.LocalObjectReference{Name: "fixture-source"},
+				TemplateID:    "test-template",
 				NodeRequests: []osacv1alpha1.NodeRequest{
 					{NodeSet: "gpu-gb200",
 						BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "gpu.gb200"},
@@ -455,8 +492,9 @@ var _ = Describe("update tenant annotation", func() {
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			WithObjects(existingOrder).
 			Build()
@@ -494,7 +532,7 @@ var _ = Describe("update tenant annotation", func() {
 			cluster: cluster,
 		}
 
-		err := t.update(ctx)
+		err := updateClusterWithFixtureReference(ctx, t)
 		Expect(err).ToNot(HaveOccurred())
 
 		// Verify the ClusterOrder was NOT patched — size should still be 3:
@@ -511,8 +549,9 @@ var _ = Describe("update tenant annotation", func() {
 	It("should map explicit cluster fields to ClusterOrder CR spec", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 
@@ -583,7 +622,7 @@ var _ = Describe("update tenant annotation", func() {
 			cluster: cluster,
 		}
 
-		err := t.update(ctx)
+		err := updateClusterWithFixtureReference(ctx, t)
 		Expect(err).ToNot(HaveOccurred())
 
 		// Verify the ClusterOrder CR spec contains the explicit fields
@@ -605,8 +644,9 @@ var _ = Describe("update tenant annotation", func() {
 	It("should map network_attachment to ClusterOrder networkAttachment", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 
@@ -643,7 +683,7 @@ var _ = Describe("update tenant annotation", func() {
 			cluster: cluster,
 		}
 
-		err := t.update(ctx)
+		err := updateClusterWithFixtureReference(ctx, t)
 		Expect(err).ToNot(HaveOccurred())
 
 		list := &osacv1alpha1.ClusterOrderList{}
@@ -660,8 +700,9 @@ var _ = Describe("update tenant annotation", func() {
 	It("should use GetName() not ID for SubnetRef and SecurityGroupRefs when both are set", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 
@@ -705,7 +746,7 @@ var _ = Describe("update tenant annotation", func() {
 			cluster: cluster,
 		}
 
-		err := t.update(ctx)
+		err := updateClusterWithFixtureReference(ctx, t)
 		Expect(err).ToNot(HaveOccurred())
 
 		list := &osacv1alpha1.ClusterOrderList{}
@@ -723,8 +764,9 @@ var _ = Describe("update tenant annotation", func() {
 	It("should leave ClusterOrder networkAttachment nil when network_attachment is absent", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 
@@ -761,7 +803,7 @@ var _ = Describe("update tenant annotation", func() {
 			cluster: cluster,
 		}
 
-		err := t.update(ctx)
+		err := updateClusterWithFixtureReference(ctx, t)
 		Expect(err).ToNot(HaveOccurred())
 
 		list := &osacv1alpha1.ClusterOrderList{}
@@ -778,7 +820,7 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			WithInterceptorFuncs(interceptor.Funcs{Create: func(ctx context.Context, kube clnt.WithWatch, object clnt.Object, options ...clnt.CreateOption) error {
 				if _, ok := object.(*osacv1alpha1.ClusterOrder); ok {
@@ -796,8 +838,8 @@ var _ = Describe("update tenant annotation", func() {
 				Client:    fakeClient,
 			}, nil).AnyTimes()
 
-		resolvedPullSecret := `{"auths":{"registry.invalid":{"username":"OSAC7034_SYNTHETIC_PRODUCER"}}}`
-		secretData := map[string][]byte{dockerConfigJSONKey: []byte(resolvedPullSecret)}
+		fixturePullSecret := `{"auths":{"registry.invalid":{"username":"OSAC7034_SYNTHETIC_PRODUCER"}}}`
+		secretData := map[string][]byte{dockerConfigJSONKey: []byte(fixturePullSecret)}
 		secretsClient := NewMockSecretsClient(ctrl)
 		secretsClient.EXPECT().
 			Get(gomock.Any(), gomock.Any(), gomock.Any()).
@@ -838,7 +880,7 @@ var _ = Describe("update tenant annotation", func() {
 			cluster: cluster,
 		}
 
-		err := t.update(ctx)
+		err := updateClusterWithFixtureReference(ctx, t)
 		Expect(err).ToNot(HaveOccurred())
 
 		list := &osacv1alpha1.ClusterOrderList{}
@@ -851,47 +893,24 @@ var _ = Describe("update tenant annotation", func() {
 		encoded, marshalErr := json.Marshal(list.Items[0])
 		Expect(marshalErr).ToNot(HaveOccurred())
 		Expect(string(encoded)).ToNot(ContainSubstring("OSAC7034_SYNTHETIC"))
-		Expect(string(encoded)).ToNot(ContainSubstring(base64.StdEncoding.EncodeToString([]byte(resolvedPullSecret))))
+		Expect(string(encoded)).ToNot(ContainSubstring(base64.StdEncoding.EncodeToString([]byte(fixturePullSecret))))
 		projected := &corev1.Secret{}
 		Expect(fakeClient.Get(ctx, clnt.ObjectKey{Namespace: hubNamespace, Name: list.Items[0].Spec.PullSecretRef.Name}, projected)).To(Succeed())
-		Expect(string(projected.Data[corev1.DockerConfigJsonKey])).To(Equal(resolvedPullSecret))
+		Expect(string(projected.Data[corev1.DockerConfigJsonKey])).To(Equal(fixturePullSecret))
 		Expect(metav1.IsControlledBy(projected, &list.Items[0])).To(BeTrue())
 		firstRevision := list.Items[0].Spec.PullSecretRevision
-		Expect(t.update(ctx)).To(Succeed())
+		Expect(updateClusterWithFixtureReference(ctx, t)).To(Succeed())
 		Expect(fakeClient.List(ctx, list)).To(Succeed())
 		Expect(list.Items[0].Spec.PullSecretRevision).To(Equal(firstRevision))
-		secretData[dockerConfigJSONKey] = []byte(`{"auths":{"registry.invalid":{"username":"OSAC7034_SYNTHETIC_ROTATED"}}}`)
-		Expect(t.update(ctx)).To(Succeed())
+		fixtureRotated := `{"auths":{"registry.invalid":{"username":"OSAC7034_SYNTHETIC_ROTATED"}}}`
+		secretData[dockerConfigJSONKey] = []byte(fixtureRotated)
+		Expect(updateClusterWithFixtureReference(ctx, t)).To(Succeed())
 		Expect(fakeClient.List(ctx, list)).To(Succeed())
 		Expect(list.Items[0].Spec.PullSecretRevision).ToNot(Equal(firstRevision))
 		encoded, marshalErr = json.Marshal(list.Items[0])
 		Expect(marshalErr).ToNot(HaveOccurred())
 		Expect(string(encoded)).ToNot(ContainSubstring("OSAC7034_SYNTHETIC"))
-		legacy := list.Items[0].DeepCopy()
-		legacySecretName := legacy.Name + "-pull-secret"
-		legacySecret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: legacySecretName, Namespace: hubNamespace,
-				OwnerReferences: projected.OwnerReferences,
-			},
-			Type: corev1.SecretTypeDockerConfigJson,
-			Data: map[string][]byte{dockerConfigJSONKey: []byte(resolvedPullSecret)},
-		}
-		Expect(fakeClient.Create(ctx, legacySecret)).To(Succeed())
-		legacy.Spec.PullSecretRef = nil
-		legacy.Spec.PullSecretRevision = ""
-		legacy.Spec.PullSecret = resolvedPullSecret
-		legacy.Annotations["kubectl.kubernetes.io/last-applied-configuration"] = resolvedPullSecret
-		Expect(fakeClient.Update(ctx, legacy)).To(Succeed())
-		Expect(t.update(ctx)).To(Succeed())
-		Expect(fakeClient.List(ctx, list)).To(Succeed())
-		Expect(list.Items[0].Spec.PullSecretRef.Name).To(Equal(legacySecretName))
-		Expect(fakeClient.Get(ctx, clnt.ObjectKeyFromObject(legacySecret), legacySecret)).To(Succeed())
-		Expect(legacySecret.Data[dockerConfigJSONKey]).To(Equal(secretData[dockerConfigJSONKey]))
-		encoded, marshalErr = json.Marshal(list.Items[0])
-		Expect(marshalErr).ToNot(HaveOccurred())
-		Expect(string(encoded)).ToNot(ContainSubstring("OSAC7034_SYNTHETIC"))
-		Expect(string(encoded)).ToNot(ContainSubstring(base64.StdEncoding.EncodeToString([]byte(resolvedPullSecret))))
+
 	})
 
 	It("should resolve ReleaseImage via ClusterVersion on every reconcile", func() {
@@ -901,6 +920,7 @@ var _ = Describe("update tenant annotation", func() {
 		// Existing ClusterOrder has size 3 and a previously resolved ReleaseImage:
 		existingOrder := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
+				UID:       "fixture-order-uid",
 				Name:      "order-abc",
 				Namespace: hubNamespace,
 				Labels: map[string]string{
@@ -911,8 +931,9 @@ var _ = Describe("update tenant annotation", func() {
 				},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test-template",
-				ReleaseImage: resolvedImage,
+				PullSecretRef: &corev1.LocalObjectReference{Name: "fixture-source"},
+				TemplateID:    "test-template",
+				ReleaseImage:  resolvedImage,
 				NodeRequests: []osacv1alpha1.NodeRequest{
 					{NodeSet: "gpu-gb200",
 						BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "gpu.gb200"},
@@ -924,8 +945,9 @@ var _ = Describe("update tenant annotation", func() {
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			WithObjects(existingOrder).
 			Build()
@@ -986,7 +1008,7 @@ var _ = Describe("update tenant annotation", func() {
 			cluster: cluster,
 		}
 
-		err := t.update(ctx)
+		err := updateClusterWithFixtureReference(ctx, t)
 		Expect(err).ToNot(HaveOccurred())
 
 		list := &osacv1alpha1.ClusterOrderList{}
@@ -1010,6 +1032,7 @@ var _ = Describe("update tenant annotation", func() {
 		// Existing ClusterOrder was created with the old version:
 		existingOrder := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
+				UID:       "fixture-order-uid",
 				Name:      "order-abc",
 				Namespace: hubNamespace,
 				Labels: map[string]string{
@@ -1020,8 +1043,9 @@ var _ = Describe("update tenant annotation", func() {
 				},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test-template",
-				ReleaseImage: oldImage,
+				PullSecretRef: &corev1.LocalObjectReference{Name: "fixture-source"},
+				TemplateID:    "test-template",
+				ReleaseImage:  oldImage,
 				NodeRequests: []osacv1alpha1.NodeRequest{
 					{NodeSet: "gpu-gb200",
 						BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "gpu.gb200"},
@@ -1033,8 +1057,9 @@ var _ = Describe("update tenant annotation", func() {
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			WithObjects(existingOrder).
 			Build()
@@ -1114,7 +1139,7 @@ var _ = Describe("update tenant annotation", func() {
 			cluster: cluster,
 		}
 
-		err := t.update(ctx)
+		err := updateClusterWithFixtureReference(ctx, t)
 		Expect(err).ToNot(HaveOccurred())
 
 		list := &osacv1alpha1.ClusterOrderList{}
@@ -1205,8 +1230,9 @@ var _ = Describe("update version resolution failure", func() {
 	It("should set ResourcesUnavailable condition when cluster version is not found", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 
@@ -1255,7 +1281,7 @@ var _ = Describe("update version resolution failure", func() {
 			maskCalculator:        nil,
 		}
 
-		err := f.run(ctx, cluster)
+		err := runClusterWithFixtureReference(ctx, f, cluster)
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(updateReq).ToNot(BeNil(), "Update should have been called")
@@ -1316,8 +1342,9 @@ var _ = Describe("update pull secret resolution failure", func() {
 	runWithSecretError := func(getErr error, getResp *privatev1.SecretsGetResponse) *privatev1.ClustersUpdateRequest {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 
@@ -1411,14 +1438,14 @@ var _ = Describe("update pull secret resolution failure", func() {
 		Entry("another tenant", "other-tenant", "", privatev1.SecretType_SECRET_TYPE_PULL_SECRET, `{"auths":{}}`),
 		Entry("another project", tenantName, "other-project", privatev1.SecretType_SECRET_TYPE_PULL_SECRET, `{"auths":{}}`),
 		Entry("wrong type", tenantName, "", privatev1.SecretType_SECRET_TYPE_OPAQUE, `{"auths":{}}`),
-		Entry("malformed data", tenantName, "", privatev1.SecretType_SECRET_TYPE_PULL_SECRET, "OSAC7034_"+"SYNTHETIC_INVALID"),
+		Entry("malformed data", tenantName, "", privatev1.SecretType_SECRET_TYPE_PULL_SECRET, "fixture-invalid-json"),
 	)
 	It("accepts an authorized shared-template pull secret without changing its source", func() {
-		payload := []byte(`{"auths":{"registry.invalid":{"username":"OSAC7034_SYNTHETIC_SHARED"}}}`)
+		fixturePayload := []byte(`{"auths":{"registry.invalid":{"username":"OSAC7034_SYNTHETIC_SHARED"}}}`)
 		secret := privatev1.Secret_builder{
 			Id: secretID, Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
 			Type: privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
-			Data: map[string][]byte{dockerConfigJSONKey: payload},
+			Data: map[string][]byte{dockerConfigJSONKey: fixturePayload},
 		}.Build()
 		before := proto.Clone(secret)
 		secretsClient := NewMockSecretsClient(ctrl)
@@ -1427,7 +1454,7 @@ var _ = Describe("update pull secret resolution failure", func() {
 		task := &task{r: &function{secretsClient: secretsClient}, cluster: setupCluster()}
 		resolved, err := task.resolvePullSecret(ctx, task.cluster.GetSpec().GetPullSecretSecret())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(resolved).To(Equal(string(payload)))
+		Expect(resolved).To(Equal(string(fixturePayload)))
 		Expect(proto.Equal(secret, before)).To(BeTrue())
 	})
 })
@@ -1503,15 +1530,17 @@ var _ = Describe("delete", func() {
 	It("should retain the Cluster until the ClusterOrder finalizers finish cleanup", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 		order := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
+				UID:        "fixture-order-uid",
 				Name:       "order-delete-id",
 				Namespace:  "test-ns",
 				Labels:     map[string]string{labels.ClusterOrderUuid: clusterID},
 				Finalizers: []string{"osac.openshift.io/baremetalworker-finalizer"},
 			},
 		}
-		hubClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(order).Build()
+		hubClient := fixtureClusterClientBuilder().WithScheme(scheme).WithObjects(order).Build()
 		hubCache := controllers.NewMockHubCache(ctrl)
 		hubCache.EXPECT().Get(gomock.Any(), hubID).AnyTimes().Return(&controllers.HubEntry{
 			Namespace: "test-ns",
@@ -1551,7 +1580,8 @@ var _ = Describe("delete", func() {
 	It("should retain the finalizer and retry Secret cleanup after the order disappears", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
-		hubClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		hubClient := fixtureClusterClientBuilder().WithScheme(scheme).Build()
 		hubCache := controllers.NewMockHubCache(ctrl)
 		hubCache.EXPECT().Get(gomock.Any(), hubID).AnyTimes().Return(&controllers.HubEntry{
 			Namespace: "test-ns", Client: hubClient,
@@ -1586,9 +1616,10 @@ var _ = Describe("delete", func() {
 	It("should clean up Secrets when the ClusterOrder is already absent", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 		hubCache := controllers.NewMockHubCache(ctrl)
 		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(&controllers.HubEntry{
-			Namespace: "test-ns", Client: fake.NewClientBuilder().WithScheme(scheme).Build(),
+			Namespace: "test-ns", Client: fixtureClusterClientBuilder().WithScheme(scheme).Build(),
 		}, nil)
 		t := newTaskForDelete(clusterID, hubID, hubCache)
 		t.cluster.GetStatus().SetKubeconfigSecret(&privatev1.SecretLocalReference{Id: "kubeconfig-id"})
@@ -1611,9 +1642,10 @@ var _ = Describe("delete", func() {
 	It("should retain the finalizer while automatic networking resources are terminating", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 		hubCache := controllers.NewMockHubCache(ctrl)
 		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(&controllers.HubEntry{
-			Namespace: "test-ns", Client: fake.NewClientBuilder().WithScheme(scheme).Build(),
+			Namespace: "test-ns", Client: fixtureClusterClientBuilder().WithScheme(scheme).Build(),
 		}, nil)
 		t := newTaskForDelete(clusterID, hubID, hubCache)
 		cleanup := &fakeWorkloadNetworkingCleanup{}
@@ -1832,8 +1864,9 @@ var _ = Describe("hub persistence", func() {
 	It("should select hub and return without creating ClusterOrder", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 
@@ -1887,7 +1920,7 @@ var _ = Describe("hub persistence", func() {
 			maskCalculator: nil,
 		}
 
-		err := f.run(ctx, cluster)
+		err := runClusterWithFixtureReference(ctx, f, cluster)
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(cluster.GetStatus().GetHub()).To(Equal(hubID))
@@ -1901,8 +1934,9 @@ var _ = Describe("hub persistence", func() {
 	It("should skip hub selection if already set", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 
@@ -1949,7 +1983,7 @@ var _ = Describe("hub persistence", func() {
 			maskCalculator: nil,
 		}
 
-		err := f.run(ctx, cluster)
+		err := runClusterWithFixtureReference(ctx, f, cluster)
 		Expect(err).ToNot(HaveOccurred())
 
 		list := &osacv1alpha1.ClusterOrderList{}
@@ -1962,8 +1996,9 @@ var _ = Describe("hub persistence", func() {
 	It("should create ClusterOrder on second reconcile after hub is persisted", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 
@@ -2016,7 +2051,7 @@ var _ = Describe("hub persistence", func() {
 			}.Build(),
 		}.Build()
 
-		err := f.run(ctx, cluster1)
+		err := runClusterWithFixtureReference(ctx, f, cluster1)
 		Expect(err).ToNot(HaveOccurred())
 
 		list := &osacv1alpha1.ClusterOrderList{}
@@ -2040,7 +2075,7 @@ var _ = Describe("hub persistence", func() {
 			}.Build(),
 		}.Build()
 
-		err = f.run(ctx, cluster2)
+		err = runClusterWithFixtureReference(ctx, f, cluster2)
 		Expect(err).ToNot(HaveOccurred())
 
 		err = fakeClient.List(ctx, list)
@@ -2052,8 +2087,9 @@ var _ = Describe("hub persistence", func() {
 	It("should set ResourcesUnavailable condition when no hubs are available", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 
@@ -2099,7 +2135,7 @@ var _ = Describe("hub persistence", func() {
 			maskCalculator: nil,
 		}
 
-		err := f.run(ctx, cluster)
+		err := runClusterWithFixtureReference(ctx, f, cluster)
 		Expect(err).ToNot(HaveOccurred())
 
 		conditions := cluster.GetStatus().GetConditions()
@@ -2117,8 +2153,9 @@ var _ = Describe("hub persistence", func() {
 	It("should handle cluster with no status without panicking", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+		fakeClient := fixtureClusterClientBuilder().WithScheme(scheme).Build()
 
 		hubCache := controllers.NewMockHubCache(ctrl)
 		hubCache.EXPECT().
@@ -2162,7 +2199,7 @@ var _ = Describe("hub persistence", func() {
 			maskCalculator: nil,
 		}
 
-		Expect(func() { f.run(ctx, cluster) }).ToNot(Panic())
+		Expect(func() { runClusterWithFixtureReference(ctx, f, cluster) }).ToNot(Panic())
 	})
 })
 
@@ -2181,8 +2218,9 @@ var _ = Describe("Kubernetes validation error handling", func() {
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			WithInterceptorFuncs(interceptor.Funcs{
 				Create: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.CreateOption) error {
@@ -2230,7 +2268,7 @@ var _ = Describe("Kubernetes validation error handling", func() {
 			maskCalculator: masks.NewCalculator().Build(),
 		}
 
-		err := f.run(ctx, cluster)
+		err := runClusterWithFixtureReference(ctx, f, cluster)
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(cluster.GetStatus().GetState()).To(
@@ -2324,6 +2362,7 @@ var _ = Describe("ensureClusterSecrets", func() {
 	makeOrder := func(withRef bool) *osacv1alpha1.ClusterOrder {
 		order := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
+				UID:       "fixture-order-uid",
 				Name:      "order-abc",
 				Namespace: hubNamespace,
 				Labels: map[string]string{
@@ -2334,7 +2373,8 @@ var _ = Describe("ensureClusterSecrets", func() {
 				},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID: "test-template",
+				PullSecretRef: &corev1.LocalObjectReference{Name: "fixture-source"},
+				TemplateID:    "test-template",
 			},
 		}
 		if withRef {
@@ -2352,8 +2392,9 @@ var _ = Describe("ensureClusterSecrets", func() {
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			WithObjects(existingOrder).
 			Build()
@@ -2425,8 +2466,9 @@ var _ = Describe("ensureClusterSecrets", func() {
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			WithObjects(existingOrder).
 			Build()
@@ -2451,7 +2493,7 @@ var _ = Describe("ensureClusterSecrets", func() {
 			cluster: cluster,
 		}
 
-		err := t.update(ctx)
+		err := updateClusterWithFixtureReference(ctx, t)
 		Expect(err).ToNot(HaveOccurred())
 	})
 
@@ -2461,8 +2503,9 @@ var _ = Describe("ensureClusterSecrets", func() {
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			WithObjects(existingOrder).
 			Build()
@@ -2546,8 +2589,9 @@ var _ = Describe("ensureClusterSecrets", func() {
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 
@@ -2575,8 +2619,9 @@ var _ = Describe("ensureClusterSecrets", func() {
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 		Expect(fakeClient.Create(ctx, hc)).To(Succeed())
@@ -2607,8 +2652,9 @@ var _ = Describe("ensureClusterSecrets", func() {
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 		Expect(fakeClient.Create(ctx, hc)).To(Succeed())
@@ -2652,8 +2698,9 @@ var _ = Describe("ensureClusterSecrets", func() {
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 		Expect(fakeClient.Create(ctx, hc)).To(Succeed())
@@ -2697,8 +2744,9 @@ var _ = Describe("ensureClusterSecrets", func() {
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 		Expect(fakeClient.Create(ctx, hc)).To(Succeed())
@@ -2739,8 +2787,9 @@ var _ = Describe("ensureClusterSecrets", func() {
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
-		fakeClient := fake.NewClientBuilder().
+		fakeClient := fixtureClusterClientBuilder().
 			WithScheme(scheme).
 			Build()
 		Expect(fakeClient.Create(ctx, hc)).To(Succeed())
@@ -2850,3 +2899,45 @@ var _ = Describe("ensureClusterSecrets", func() {
 		Expect(nrs[0].NumberOfNodes).To(Equal(3))
 	})
 })
+
+// fixtureClusterClientBuilder models the UID assigned by the Kubernetes API.
+func fixtureClusterClientBuilder() *fake.ClientBuilder {
+	return fake.NewClientBuilder().WithInterceptorFuncs(interceptor.Funcs{Create: func(ctx context.Context, kube clnt.WithWatch, object clnt.Object, options ...clnt.CreateOption) error {
+		if _, ok := object.(*osacv1alpha1.ClusterOrder); ok && object.GetUID() == "" {
+			object.SetUID("fixture-order-uid")
+		}
+		return kube.Create(ctx, object, options...)
+	}})
+}
+
+// configureClusterFixture supplies authorized references to otherwise unrelated specs.
+func configureClusterFixture(function *function, cluster *privatev1.Cluster) {
+	if cluster.GetSpec() == nil {
+		return
+	}
+	if !cluster.GetSpec().HasPullSecretSecret() {
+		cluster.GetSpec().SetPullSecretSecret(privatev1.SecretLocalReference_builder{Id: "fixture-secret"}.Build())
+	}
+	if function.secretsClient == nil {
+		function.secretsClient = NewMockSecretsClient(gomock.NewController(GinkgoT()))
+	}
+	if secrets, ok := function.secretsClient.(*MockSecretsClient); ok {
+		fixturePayload := `{"auths":{}}`
+		secrets.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).Return(privatev1.SecretsGetResponse_builder{Object: privatev1.Secret_builder{
+			Metadata: privatev1.Metadata_builder{Tenant: cluster.GetMetadata().GetTenant(), Project: cluster.GetMetadata().GetProject()}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_PULL_SECRET, Data: map[string][]byte{dockerConfigJSONKey: []byte(fixturePayload)},
+		}.Build()}.Build(), nil).AnyTimes()
+	}
+}
+
+// updateClusterWithFixtureReference runs unrelated specs with a valid API reference.
+func updateClusterWithFixtureReference(ctx context.Context, task *task) error {
+	configureClusterFixture(task.r, task.cluster)
+	return task.update(ctx)
+}
+
+// runClusterWithFixtureReference preserves normal authorization in lifecycle fixtures.
+func runClusterWithFixtureReference(ctx context.Context, function *function, cluster *privatev1.Cluster) error {
+	configureClusterFixture(function, cluster)
+	return function.run(ctx, cluster)
+}

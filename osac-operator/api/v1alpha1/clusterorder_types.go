@@ -64,9 +64,9 @@ type ClusterOrderSpec struct {
 	// +kubebuilder:validation:items:Pattern=`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`
 	AddOnOperators []string `json:"addOnOperators,omitempty"`
 
-	// PullSecret is deprecated and accepted only for migration to PullSecretRef.
+	// PullSecret is retained only to reject unsupported inline credential inputs.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxLength=262144
+	// +kubebuilder:validation:MaxLength=0
 	PullSecret string `json:"pullSecret,omitempty"`
 	// PullSecretRef selects an owned dockerconfigjson Secret in this order's namespace.
 	// +kubebuilder:validation:Optional
@@ -75,7 +75,7 @@ type ClusterOrderSpec struct {
 	// +kubebuilder:validation:Optional
 	PullSecretRevision string `json:"pullSecretRevision,omitempty"`
 	// SSHPublicKey is an SSH public key installed on cluster worker nodes.
-	// If not provided, the provider's default SSH key is used.
+	// Defaults are resolved through the API's cluster template spec defaults.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxLength=16384
 	SSHPublicKey string `json:"sshPublicKey,omitempty"`

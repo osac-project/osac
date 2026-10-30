@@ -1,4 +1,4 @@
-package provisioning
+package provisioning_test
 
 import (
 	"context"
@@ -8,96 +8,111 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"testing"
 
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/aap"
+	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	"github.com/osac-project/osac/osac-operator/pkg/pullsecret"
 )
 
-func TestClusterOrderSerializedLaunch(test *testing.T) {
+const fixtureLaunchMarker = "OSAC7034_SYNTHETIC_LAUNCH"
+const fixtureAAPToken = "fixture-aap-auth"
+
+var _ = Describe("ClusterOrder final serialized launch", func() {
 	for _, workflow := range []bool{false, true} {
-		name := "job"
+		variant := "job"
 		if workflow {
-			name = "workflow"
+			variant = "workflow"
 		}
-		test.Run(name, func(test *testing.T) {
-			for _, mode := range []string{"reference", "inline", "parameters", "inherited-override", "context-override", "inherited-runtime-parameters", "context-runtime-parameters", "inherited-order-override", "context-order-override", "runtime-scalar", "unrelated-parameters"} {
-				test.Run(mode, func(test *testing.T) {
-					launched := false
-					server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-						writer.Header().Set("Content-Type", "application/json")
-						if request.Method == http.MethodGet {
-							if workflow && strings.Contains(request.URL.Path, "/job_templates/") {
-								_, _ = io.WriteString(writer, `{"count":0,"results":[]}`)
-							} else {
-								_, _ = io.WriteString(writer, `{"count":1,"results":[{"id":1,"name":"fixture"}]}`)
-							}
-							return
+		for _, mode := range []string{"reference", "inline", "parameters", "inherited-override", "context-override", "inherited-runtime-parameters", "context-runtime-parameters", "runtime-scalar", "target-name", "settings-target-name", "nested-scalar", "nested-parameters", "nested-settings", "nested-target-name", "nested-resource-override", "unrelated-parameters"} {
+			It("protects "+variant+" launches with "+mode, func() {
+				launched := false
+				var body []byte
+				var readErr error
+				var launchPath string
+				server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+					writer.Header().Set("Content-Type", "application/json")
+					if request.Method == http.MethodGet {
+						if workflow && strings.Contains(request.URL.Path, "/job_templates/") {
+							_, _ = io.WriteString(writer, `{"count":0,"results":[]}`)
+						} else {
+							_, _ = io.WriteString(writer, `{"count":1,"results":[{"id":1,"name":"fixture"}]}`)
 						}
-						launched = true
-						body, err := io.ReadAll(request.Body)
-						if err != nil || strings.Contains(string(body), "OSAC7034_SYNTHETIC") ||
-							strings.Contains(string(body), base64.StdEncoding.EncodeToString([]byte("OSAC7034_SYNTHETIC_OLD_ANNOTATION"))) {
-							test.Error("serialized launch contains credential material or is unreadable")
-						}
-						var payload map[string]any
-						if json.Unmarshal(body, &payload) != nil || !strings.Contains(string(body), "pullSecretRef") {
-							test.Error("launch lost its reference")
-						}
-						if workflow != strings.Contains(request.URL.Path, "/workflow_job_templates/") {
-							test.Error("wrong launch variant")
-						}
-						_, _ = io.WriteString(writer, `{"id":42}`)
-					}))
-					defer server.Close()
-					order := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{
-						Name: "fixture", Namespace: "hub", UID: "fixture-uid",
-						Annotations: map[string]string{pullsecret.LastAppliedAnnotation: base64.StdEncoding.EncodeToString([]byte("OSAC7034_SYNTHETIC_OLD_ANNOTATION"))},
-					}, Spec: v1alpha1.ClusterOrderSpec{
-						TemplateParameters: `{}`, PullSecretRef: &corev1.LocalObjectReference{Name: "owned-secret"}, PullSecretRevision: "revision",
-					}}
-					ctx := context.Background()
-					var inherited map[string]any
-					switch mode {
-					case "inline":
-						order.Spec.PullSecret = "OSAC7034_SYNTHETIC_INLINE"
-					case "parameters":
-						order.Spec.TemplateParameters = `{"pull_secret":"OSAC7034_SYNTHETIC_PARAMETERS"}`
-					case "inherited-override":
-						inherited = map[string]any{"osac_job_vars": map[string]any{"resource": map[string]any{"spec": map[string]any{"pullSecret": "OSAC7034_SYNTHETIC_OVERRIDE"}}}}
-					case "context-override":
-						ctx = WithAAPExtraVars(ctx, map[string]any{"osac_job_vars": map[string]any{"resource": "OSAC7034_SYNTHETIC_CONTEXT"}})
-					case "inherited-runtime-parameters":
-						inherited = map[string]any{"template_parameters": map[string]any{"pull_secret": "OSAC7034_SYNTHETIC_PARAMETERS"}}
-					case "context-runtime-parameters":
-						ctx = WithAAPExtraVars(ctx, map[string]any{"cluster_settings_template_parameters": map[string]any{"pull_secret": "OSAC7034_SYNTHETIC_PARAMETERS"}})
-					case "inherited-order-override":
-						inherited = map[string]any{"cluster_order": map[string]any{"spec": map[string]any{"pullSecret": "OSAC7034_SYNTHETIC_OVERRIDE"}}}
-					case "context-order-override":
-						ctx = WithAAPExtraVars(ctx, map[string]any{"cluster_order": map[string]any{"spec": map[string]any{"pullSecret": "OSAC7034_SYNTHETIC_OVERRIDE"}}})
-					case "runtime-scalar":
-						inherited = map[string]any{"cluster_settings_pull_secret": "OSAC7034_SYNTHETIC_PARAMETERS"}
-					case "unrelated-parameters":
-						inherited = map[string]any{"template_parameters": map[string]any{"unrelated": "keep"}}
+						return
 					}
-					provider := NewAAPProvider(aap.NewClient(server.URL, "synthetic-test-token", false), "fixture", "fixture")
-					_, err := provider.TriggerProvisionWithExtraVars(ctx, order, inherited)
+					launched = true
+					body, readErr = io.ReadAll(request.Body)
+					launchPath = request.URL.Path
+					_, _ = io.WriteString(writer, `{"id":42}`)
+				}))
+				DeferCleanup(server.Close)
+				order := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "fixture", Namespace: "hub", UID: "fixture-uid",
+					Annotations: map[string]string{pullsecret.LastAppliedAnnotation: fixtureLaunchMarker + base64.StdEncoding.EncodeToString([]byte(fixtureLaunchMarker))}},
+					Spec: v1alpha1.ClusterOrderSpec{TemplateParameters: `{}`, PullSecretRef: &corev1.LocalObjectReference{Name: "owned-secret"}, PullSecretRevision: "revision"}}
+				ctx := context.Background()
+				var inherited map[string]any
+				switch mode {
+				case "inline":
+					order.Spec.PullSecret = fixtureLaunchMarker
+				case "parameters":
+					order.Spec.TemplateParameters = `{"pull_secret":"` + fixtureLaunchMarker + `"}`
+				case "inherited-override":
+					inherited = map[string]any{"osac_job_vars": map[string]any{"resource": fixtureLaunchMarker}}
+				case "context-override":
+					ctx = provisioning.WithAAPExtraVars(ctx, map[string]any{"cluster_order": fixtureLaunchMarker})
+				case "inherited-runtime-parameters":
+					inherited = map[string]any{"template_parameters": map[string]any{"pull_secret": fixtureLaunchMarker}}
+				case "context-runtime-parameters":
+					ctx = provisioning.WithAAPExtraVars(ctx, map[string]any{"cluster_settings_template_parameters": map[string]any{"pull_secret": fixtureLaunchMarker}})
+				case "runtime-scalar":
+					inherited = map[string]any{"cluster_settings_pull_secret": fixtureLaunchMarker}
+				case "target-name":
+					inherited = map[string]any{"cluster_settings_pull_secret_name": fixtureLaunchMarker}
+				case "settings-target-name":
+					inherited = map[string]any{"hosted_cluster_settings": map[string]any{"pull_secret_name": fixtureLaunchMarker}}
+				case "nested-scalar", "nested-parameters", "nested-settings", "nested-target-name", "nested-resource-override":
+					encoded, err := json.Marshal(order)
+					Expect(err).NotTo(HaveOccurred())
+					var resource map[string]any
+					Expect(json.Unmarshal(encoded, &resource)).To(Succeed())
+					jobVars := map[string]any{"resource": resource}
 					switch mode {
-					case "reference", "context-override", "unrelated-parameters":
-						if err != nil || !launched {
-							test.Fatalf("reference launch failed: %v", err)
-						}
+					case "nested-scalar":
+						jobVars["pull_secret"] = fixtureLaunchMarker
+					case "nested-parameters":
+						jobVars["template_parameters"] = map[string]any{"pull_secret": fixtureLaunchMarker}
+					case "nested-target-name":
+						jobVars["cluster_settings_pull_secret_name"] = fixtureLaunchMarker
+					case "nested-resource-override":
+						jobVars["resource"] = map[string]any{"spec": map[string]any{"pullSecret": fixtureLaunchMarker}}
 					default:
-						if err == nil || launched || strings.Contains(err.Error(), "OSAC7034_SYNTHETIC") {
-							test.Fatal("unsafe input was not rejected before launch")
-						}
+						jobVars["hosted_cluster_settings"] = map[string]any{"pull_secret": fixtureLaunchMarker}
 					}
-				})
-			}
-		})
+					inherited = map[string]any{"osac_job_vars": jobVars}
+				case "unrelated-parameters":
+					inherited = map[string]any{"template_parameters": map[string]any{"unrelated": map[string]any{"keep": true}}}
+				}
+				provider := provisioning.NewAAPProvider(aap.NewClient(server.URL, fixtureAAPToken, false), "fixture", "fixture")
+				_, err := provider.TriggerProvisionWithExtraVars(ctx, order, inherited)
+				if mode == "reference" || mode == "unrelated-parameters" {
+					Expect(err).NotTo(HaveOccurred())
+					Expect(launched).To(BeTrue())
+					Expect(readErr).NotTo(HaveOccurred())
+					Expect(string(body)).To(ContainSubstring("pullSecretRef"))
+					Expect(string(body)).NotTo(ContainSubstring(fixtureLaunchMarker))
+					Expect(string(body)).NotTo(ContainSubstring(base64.StdEncoding.EncodeToString([]byte(fixtureLaunchMarker))))
+					Expect(strings.Contains(launchPath, "/workflow_job_templates/")).To(Equal(workflow))
+				} else {
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).NotTo(ContainSubstring(fixtureLaunchMarker))
+					Expect(launched).To(BeFalse())
+				}
+			})
+		}
 	}
-}
+})

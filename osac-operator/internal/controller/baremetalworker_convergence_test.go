@@ -190,7 +190,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 	}
 	BeforeEach(func() {
 		name := "unified-" + uuid.NewString()
-		co = &api.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace, Labels: map[string]string{"osac.openshift.io/clusterorder-uuid": "cluster"}, Annotations: map[string]string{"osac.openshift.io/tenant": tenant}}, Spec: api.ClusterOrderSpec{TemplateID: "test", PullSecret: `{"auths":{}}`, NodeRequests: []api.NodeRequest{{NodeSet: "standard", NumberOfNodes: 1, BareMetal: &api.BareMetalNodeSpec{InstanceType: "standard"}}}}}
+		co = &api.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace, Labels: map[string]string{"osac.openshift.io/clusterorder-uuid": "cluster"}, Annotations: map[string]string{"osac.openshift.io/tenant": tenant}}, Spec: api.ClusterOrderSpec{TemplateID: "test", NodeRequests: []api.NodeRequest{{NodeSet: "standard", NumberOfNodes: 1, BareMetal: &api.BareMetalNodeSpec{InstanceType: "standard"}}}}}
 		fc = newWorkerFulfillmentStub()
 		recorder = events.NewFakeRecorder(100)
 		provider = fc
@@ -201,7 +201,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		fc.AddDiskImage(privatev1.DiskImage_builder{Id: "image", Metadata: privatev1.Metadata_builder{Name: "image"}.Build()}.Build())
 		fc.AddBareMetalInstanceType(newInstanceType("standard", "data-0"))
 		r = buildReconciler(k8sClient)
-		Expect(k8sClient.Create(ctx, co)).To(Succeed())
+		Expect(createWorkerClusterOrderFixture(co)).To(Succeed())
 		DeferCleanup(func() {
 			ignition.Close()
 			latest := &api.ClusterOrder{}

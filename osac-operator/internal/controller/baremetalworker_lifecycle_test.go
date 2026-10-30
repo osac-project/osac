@@ -128,8 +128,8 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
+				TemplateID: "test",
+
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes:   2,
@@ -142,7 +142,7 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 				},
 			},
 		}
-		Expect(k8sClient.Create(ctx, co)).To(Succeed())
+		Expect(createWorkerClusterOrderFixture(co)).To(Succeed())
 		DeferCleanup(func() {
 			latest := &osacv1alpha1.ClusterOrder{}
 			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(co), latest); err != nil {
@@ -321,8 +321,8 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 				Finalizers:  []string{"baremetalworker.osac.openshift.io/finalizer"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
+				TemplateID: "test",
+
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes:   2,
@@ -337,7 +337,7 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 				},
 			},
 		}
-		Expect(k8sClient.Create(ctx, co)).To(Succeed())
+		Expect(createWorkerClusterOrderFixture(co)).To(Succeed())
 		DeferCleanup(func() {
 			latest := &osacv1alpha1.ClusterOrder{}
 			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(co), latest); err != nil {

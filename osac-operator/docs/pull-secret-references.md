@@ -1,78 +1,76 @@
-# ClusterOrder pull-secret references
+# Cluster pull-secret references
 
-The public Cluster API continues to accept `pull_secret_secret`, with the
-existing tenant/project authorization and shared-template default rules.
-Fulfillment resolves that authorized API Secret and projects its data into a
-namespace-local `kubernetes.io/dockerconfigjson` Secret. The Secret is controlled
-by the ClusterOrder UID and carries the order's tenant annotation. Existing
-objects with conflicting ownership, tenant or type are not adopted or overwritten.
+## Fresh-install contract
 
-ClusterOrder stores `spec.pullSecretRef.name` and an opaque
-`spec.pullSecretRevision`, never the projected credential value. The revision is
-generated when the projection's bytes change, not on every reconciliation. It is
-not a credential digest. As before, fulfillment's existing periodic sync discovers
-API credential changes; no Secret event watch or shorter polling interval is added.
-The revision participates in the existing desired-configuration calculation, so
-credential changes still schedule provisioning through the existing lifecycle.
+Cluster creation requires an existing API pull-secret reference, supplied directly
+or inherited through `spec_defaults.pull_secret_secret`. API tenant/project and
+shared-template reference authorization remains enforced. Public protobuf fields
+do not change. Inline `pull_secret` parameters and `spec.pullSecret` values are
+unsupported and rejected, not converted. There is no migration of existing
+clusters and no AAP provider-default credential Secret fallback. Public SSH keys
+remain available through explicit API fields, template spec defaults and public
+template parameters; AAP no longer reads a combined SSH/pull-secret Secret.
 
-InfraEnv references the same namespace-local Secret instead of an independent
-create-only copy. AAP reads and validates the reference during protected runtime
-execution, then writes the HostedCluster namespace Secret through its existing
-provisioning role. An explicit unavailable or invalid reference fails closed;
-provider defaults are used only when there is no explicit reference. Runtime
-template variables retain the legacy template interface, but credential values
-are not written back into the ClusterOrder fact.
+## Same-hub projections
 
-## Upgrade and legacy orders
+Fulfillment projects authorized API bytes into an owned
+`kubernetes.io/dockerconfigjson` Secret in the ClusterOrder namespace. The order
+stores only `spec.pullSecretRef.name` and `spec.pullSecretRevision`. The source
+Secret has a ClusterOrder controller owner reference and matching tenant/project
+annotations. InfraEnv uses this namespace-local source directly.
 
-Deploy the updated CRDs and compatible operator/AAP consumers before enabling
-the updated fulfillment producer. The operator migrates known inline
-`spec.pullSecret` and `spec.templateParameters.pull_secret` values to an owned
-Secret before provisioning or deprovisioning. It removes those fields and the
-ClusterOrder's last-applied annotation. When a reference already exists it wins
-over stale inline fields; an invalid reference does not fall back to inline or
-provider credentials. Fulfillment updates retain an existing projection reference
-or reuse the legacy order-name-based Secret, so an existing InfraEnv continues
-to select the updated projection. An owned legacy Secret is updated rather than
-silently reused with stale data. Unrelated template parameters are retained.
-The representation change updates the desired spec and can cause one provisioning
-pass through the existing configuration-change lifecycle; subsequent unchanged
-syncs do not change the projection revision.
+The cluster controller creates a working namespace named
+`<order-namespace>-<order-name>`, stamping the order UID, order namespace,
+tenant and project. Existing namespaces must match this provenance; deleting
+namespaces and foreign same-name Secrets cannot be adopted for credential copies.
+Before provisioning, the controller copies the validated source to
+`pullsecret-cluster-<order-name>` in that working namespace. This Secret has a
+Namespace controller owner reference, not an invalid cross-namespace ClusterOrder
+owner reference, and records order/tenant/project provenance.
 
-The deprecated inline field remains readable for migration; this is not a promise
-that direct writers can continue passing credentials in launch variables. Both
-job-template and workflow-template launches reject unmigrated orders and resource
-overrides after inherited/context variables have been merged. The safe launch
-copy excludes the last-applied annotation. No unrelated resource is sanitized.
-Known runtime credential variables and alternate `cluster_order` overrides are
-also rejected at this boundary; unrelated template parameters remain supported.
+AAP passes only that target Secret name to HostedCluster. It never looks up,
+decodes, copies or stores pull-secret data in facts. The checked-in `ocp_small`
+and `ocp_ci_small` adapters use names; NICo and AI MaaS delegate to `ocp_small`.
+The cluster controller uses its existing local hub client. Off-hub management
+clusters and external AAP target credentials are not supported by this flow.
 
-Creation can briefly publish a reference before its owned Secret exists because
-the order UID is required for ownership. Consumers retry rather than provisioning
-with default credentials. Projection write errors are reported without payloads.
-Owned projections are garbage-collected with their order; API source Secrets are
-not owned or deleted by this mechanism. Removing a reference does not revoke
-credentials already installed in a running cluster.
+## Rotation, failures and teardown
 
-Rollback must retain reference-capable consumers while references remain in use;
-do not restore plaintext propagation. Historical AAP job records, audit records,
-backups, artifact sanitization and actual credential rotation are outside this
-change. The launch invariant concerns pull-secret data, not every credential in
-all provisioning flows (some other flows carry admin kubeconfig).
+Opaque UUID revisions change only when projected credential bytes change.
+Private SHA-256 digests are compared in constant time and are never persisted as
+revisions. Fulfillment's existing synchronization discovers API Secret changes;
+there is no new Secret event watch or shorter polling interval. Revision changes
+participate in the established configuration-change provisioning lifecycle.
 
-## Local regression boundaries
+Source and order writes are separate: a source may temporarily precede the
+published order revision. Consumers fail closed until they agree. Failed target
+writes retry before launch; missing, malformed, unauthorized, wrong-owner or
+wrong-tenant/project references do not fall back to other credentials. Errors
+do not contain credential values. Unchanged retries do not rotate the revision.
 
-Synthetic fulfillment and helper tests cover projection, migration, unrelated
-parameter preservation, ownership, collision rejection, authorization failures,
-rotation and idempotence. Provider tests inspect complete HTTP launch bodies for
-both AAP template variants after merges. AAP filter and subprocess tests exercise
-settings plus extraction using a synthetic Kubernetes module, including missing,
-malformed and forbidden references, and check that output contains no marker.
-These tests do not establish real AAP permissions or Kubernetes garbage collection.
+Deletion does not resolve source credentials. The existing lifecycle waits for
+HostedCluster teardown before deleting the provenance-checked working namespace,
+which garbage-collects its target Secret. The source is garbage-collected with
+its ClusterOrder. API source Secrets are neither adopted nor deleted. Manual and
+no-provider deletion paths do not gain a credential-read prerequisite.
 
-Generate with `make manifests generate helm-crds` in `osac-operator/`. Run the
-affected Go tests and `make test` for the operator's unit/envtest boundary. In
-`osac-aap/`, run `uv run pytest tests/unit/test_cluster_pull_secret.py` and
-`uv run ansible-lint .`. Full component integration and deployed cross-component
-create/update/delete validation remain required before publication; no live
-deployment is changed by the implementation phase.
+## Launch boundary and validation
+
+Both final serialized AAP job and workflow requests are checked after inherited
+and context merges. Recognized credential slots are rejected at the top level
+and inside `osac_job_vars`; resource overrides must match the supplied order.
+The launch copy omits the last-applied annotation. Other resource kinds and
+unrelated nested template parameters are not broadly sanitized.
+
+Synthetic Ginkgo tests cover ownership, namespace collisions, partial updates,
+rotation and fail-closed resolution. Launch tests inspect actual HTTP bodies for
+raw and encoded fixture markers. AAP tests run the settings/extraction roles
+without Secret modules and inspect all direct template adapters. These isolated
+checks do not establish deployed permissions or Kubernetes garbage collection.
+
+Generate from `osac-operator/` with `make manifests generate helm-crds`, then
+verify with `make check-helm-crds`. Run the affected Go suites and `make test`;
+run `uv run pytest tests/unit` and `make lint` from `osac-aap/`. Full image builds
+and deployed component integration remain separate required validation phases.
+Historical records, artifact sanitization, backups and real credential rotation
+are outside this change.

@@ -307,7 +307,8 @@ func (t *task) update(ctx context.Context) error {
 	// Create or update the Kubernetes object:
 	if object == nil {
 		orderAnnotations := map[string]string{
-			annotations.Tenant: t.cluster.GetMetadata().GetTenant(),
+			annotations.Tenant:  t.cluster.GetMetadata().GetTenant(),
+			annotations.Project: t.cluster.GetMetadata().GetProject(),
 		}
 		if err := setUpgradeAttemptAnnotations(orderAnnotations, t.cluster.GetSpec()); err != nil {
 			return err
@@ -345,7 +346,7 @@ func (t *task) update(ctx context.Context) error {
 			if object.Spec.PullSecretRef != nil {
 				update.Spec.PullSecretRef = object.Spec.PullSecretRef.DeepCopy()
 			} else {
-				update.Spec.PullSecretRef = &corev1.LocalObjectReference{Name: object.Name + "-pull-secret"}
+				return errPullSecretResolution
 			}
 			if err := pullsecret.Ensure(ctx, t.hubClient, update, t.pullSecret); err != nil {
 				return errPullSecretResolution
@@ -355,6 +356,7 @@ func (t *task) update(ctx context.Context) error {
 		if update.Annotations == nil {
 			update.Annotations = map[string]string{}
 		}
+		update.Annotations[annotations.Project] = t.cluster.GetMetadata().GetProject()
 		if err := setUpgradeAttemptAnnotations(update.Annotations, t.cluster.GetSpec()); err != nil {
 			return err
 		}
@@ -519,20 +521,11 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Cluster
 			return err
 		}
 		t.pullSecret = &pullSecret
-	} else if raw, exists := parameters["pull_secret"]; exists {
-		var payload string
-		if json.Unmarshal(raw, &payload) != nil || pullsecret.Validate([]byte(payload)) != nil {
-			return errPullSecretResolution
-		}
-		t.pullSecret = &payload
+	} else {
+		return errPullSecretResolution
 	}
-	if _, exists := parameters["pull_secret"]; exists {
-		delete(parameters, "pull_secret")
-		encoded, err := json.Marshal(parameters)
-		if err != nil {
-			return errPullSecretResolution
-		}
-		spec.TemplateParameters = string(encoded)
+	if _, exists := parameters["pull_secret"]; exists || spec.PullSecret != "" {
+		return errPullSecretResolution
 	}
 	if t.pullSecret != nil {
 		spec.PullSecretRef = &corev1.LocalObjectReference{Name: "cluster-" + t.cluster.GetId() + "-pull-secret"}

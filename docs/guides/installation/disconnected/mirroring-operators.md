@@ -255,6 +255,30 @@ oc patch operatorhub cluster --type merge \
   -p '{"spec":{"disableAllDefaultSources":true}}'
 ```
 
+> **OLM v1 default ClusterCatalogs**: `disableAllDefaultSources` only
+> disables the OLM *classic* default CatalogSources. On OpenShift 4.22
+> the `cluster-olm-operator` also reconciles default **ClusterCatalog**
+> resources (`openshift-certified-operators`,
+> `openshift-community-operators`, `openshift-redhat-operators`) as
+> required manifests: deleting them is reverted within seconds, and
+> neither `disableAllDefaultSources` nor per-source
+> `spec.sources[].disabled` stops the recreation. In a disconnected
+> cluster these catalogs can never serve (their images are upstream),
+> so set their availability mode to `Unavailable` instead of deleting
+> them:
+
+```bash
+for cc in openshift-redhat-operators openshift-certified-operators \
+          openshift-community-operators; do
+  oc patch clustercatalog "$cc" --type=merge \
+    -p '{"spec":{"availabilityMode":"Unavailable"}}'
+done
+```
+
+Verification: `oc get clustercatalog` shows the default catalogs with
+`SERVING=False` while the generated `cc-*` catalog remains
+`Serving=True`.
+
 #### 2b. Verify the generated CatalogSource name
 
 The ISC sets `targetCatalog: redhat-operators`. Verify the generated
@@ -356,20 +380,26 @@ if [ "$catalog_state" != "READY" ]; then
 fi
 printf 'OK: CatalogSource redhat-operators state=%s\n' "$catalog_state"
 
-# 5. Every generated ClusterCatalog exists and is serving
-mapfile -t cluster_catalogs < <(oc get clustercatalog -o name)
+# 5. Every generated ClusterCatalog exists and is serving.
+# Default openshift-* ClusterCatalogs are set availabilityMode:
+# Unavailable in disconnected clusters (see Step 2a) and are
+# expected SERVING=False; only the generated cc-* catalogs must serve.
+mapfile -t cluster_catalogs < <(oc get clustercatalog -o name | grep '^clustercatalog.olm.operatorframework.io/cc-')
 if [ "${#cluster_catalogs[@]}" -eq 0 ]; then
-  echo "ERROR: no ClusterCatalog resources found" >&2
+  echo "ERROR: no generated ClusterCatalog resources found" >&2
   exit 1
 fi
 for catalog in "${cluster_catalogs[@]}"; do
   oc wait "$catalog" --for=condition=Serving --timeout=10m
 done
 
-# 6. At least one managed signature ConfigMap is present
+# 6. At least one release-signature ConfigMap is present.
+# oc-mirror v2 labels the generated ConfigMap
+# release.openshift.io/verification-signatures, not
+# operator.openshift.io/managed=true.
 signature_configmaps="$(
   oc get configmap -n openshift-config-managed \
-    -l operator.openshift.io/managed=true \
+    -l release.openshift.io/verification-signatures \
     -o name 2>/dev/null
 )"
 if [ -z "$signature_configmaps" ]; then
@@ -478,7 +508,7 @@ See [Step 2b](#2b-verify-the-generated-catalogsource-name) above.
 3. **AAP version pinning** — The AAP operator `maxVersion`
    contains a build-metadata suffix (`+0.1787258256`).  This is
    intentional and documented in
-   [cve-2026-75884-security-exception.md](../cve-2026-75884-security-exception.md).
+   [cve-2026-75884-security-exception.md](../../../../osac-installer/docs/cve-2026-75884-security-exception.md).
 
 4. **Fixed Subscription source** — The documented Subscription
    manifests reference `source: redhat-operators` literally.  A

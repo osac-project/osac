@@ -115,7 +115,7 @@ Use the [OpenShift operator installation procedure](https://docs.redhat.com/en/d
 
 5. Approve only the reviewed plan using server-enforced UID/resourceVersion preconditions. Preserve the original reviewed UID through all later reads and waits; a name alone is insufficient.
 
-6. Require that same plan to reach `Complete`, then its intended installed CSV to reach `Succeeded`, followed by the required served APIs and operand gates.
+6. Require that same plan to reach `Complete`, then its intended installed CSV to reach `Succeeded`, followed by the APIs required to be served and operand gates.
 
 7. An already completed adopted Manual plan is recorded and verified, not approved again. A different plan at final acceptance stays unapproved pending a separate lifecycle review.
 

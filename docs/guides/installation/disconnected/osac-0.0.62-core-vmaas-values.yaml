@@ -31,9 +31,8 @@ operator:
   replicaCount: 1
   aap:
     # Dev-lab-only override: the 0.0.62 chart has no AAP CA-bundle input
-    # (operator.aap supports url/token/tokenSecret only), so certificate
-    # verification against the AAP route cannot be enabled here. Do not
-    # copy this into a production profile.
+    # , so certificate verification against the AAP route cannot be enabled here.
+    #  Do not copy this into a production profile.
     insecureSkipVerify: "true"
   hubAccess:
     enabled: true

@@ -16,6 +16,8 @@ package cluster
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -27,6 +29,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -37,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
@@ -769,12 +773,19 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(createdCR.Spec.NetworkAttachment).To(BeNil())
 	})
 
-	It("should resolve pull_secret_secret into ClusterOrder spec.pullSecret", func() {
+	It("projects a referenced pull secret without persisting credential bytes in the order", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
 		fakeClient := fake.NewClientBuilder().
 			WithScheme(scheme).
+			WithInterceptorFuncs(interceptor.Funcs{Create: func(ctx context.Context, kube clnt.WithWatch, object clnt.Object, options ...clnt.CreateOption) error {
+				if _, ok := object.(*osacv1alpha1.ClusterOrder); ok {
+					object.SetUID("fixture-order-uid")
+				}
+				return kube.Create(ctx, object, options...)
+			}}).
 			Build()
 
 		hubCache := controllers.NewMockHubCache(ctrl)
@@ -783,20 +794,21 @@ var _ = Describe("update tenant annotation", func() {
 			Return(&controllers.HubEntry{
 				Namespace: hubNamespace,
 				Client:    fakeClient,
-			}, nil)
+			}, nil).AnyTimes()
 
-		resolvedPullSecret := `{"auths":{"quay.io":{"auth":"dXNlcjpwYXNz"}}}`
+		resolvedPullSecret := `{"auths":{"registry.invalid":{"username":"OSAC7034_SYNTHETIC_PRODUCER"}}}`
+		secretData := map[string][]byte{dockerConfigJSONKey: []byte(resolvedPullSecret)}
 		secretsClient := NewMockSecretsClient(ctrl)
 		secretsClient.EXPECT().
 			Get(gomock.Any(), gomock.Any(), gomock.Any()).
 			Return(privatev1.SecretsGetResponse_builder{
 				Object: privatev1.Secret_builder{
-					Id: "pull-secret-id",
-					Data: map[string][]byte{
-						dockerConfigJSONKey: []byte(resolvedPullSecret),
-					},
+					Id:       "pull-secret-id",
+					Metadata: privatev1.Metadata_builder{Tenant: tenantName}.Build(),
+					Type:     privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
+					Data:     secretData,
 				}.Build(),
-			}.Build(), nil)
+			}.Build(), nil).AnyTimes()
 
 		cluster := privatev1.Cluster_builder{
 			Id: clusterID,
@@ -833,7 +845,53 @@ var _ = Describe("update tenant annotation", func() {
 		err = fakeClient.List(ctx, list)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(list.Items).To(HaveLen(1))
-		Expect(list.Items[0].Spec.PullSecret).To(Equal(resolvedPullSecret))
+		Expect(list.Items[0].Spec.PullSecret).To(BeEmpty())
+		Expect(list.Items[0].Spec.PullSecretRef).ToNot(BeNil())
+		Expect(list.Items[0].Spec.PullSecretRevision).ToNot(BeEmpty())
+		encoded, marshalErr := json.Marshal(list.Items[0])
+		Expect(marshalErr).ToNot(HaveOccurred())
+		Expect(string(encoded)).ToNot(ContainSubstring("OSAC7034_SYNTHETIC"))
+		Expect(string(encoded)).ToNot(ContainSubstring(base64.StdEncoding.EncodeToString([]byte(resolvedPullSecret))))
+		projected := &corev1.Secret{}
+		Expect(fakeClient.Get(ctx, clnt.ObjectKey{Namespace: hubNamespace, Name: list.Items[0].Spec.PullSecretRef.Name}, projected)).To(Succeed())
+		Expect(string(projected.Data[corev1.DockerConfigJsonKey])).To(Equal(resolvedPullSecret))
+		Expect(metav1.IsControlledBy(projected, &list.Items[0])).To(BeTrue())
+		firstRevision := list.Items[0].Spec.PullSecretRevision
+		Expect(t.update(ctx)).To(Succeed())
+		Expect(fakeClient.List(ctx, list)).To(Succeed())
+		Expect(list.Items[0].Spec.PullSecretRevision).To(Equal(firstRevision))
+		secretData[dockerConfigJSONKey] = []byte(`{"auths":{"registry.invalid":{"username":"OSAC7034_SYNTHETIC_ROTATED"}}}`)
+		Expect(t.update(ctx)).To(Succeed())
+		Expect(fakeClient.List(ctx, list)).To(Succeed())
+		Expect(list.Items[0].Spec.PullSecretRevision).ToNot(Equal(firstRevision))
+		encoded, marshalErr = json.Marshal(list.Items[0])
+		Expect(marshalErr).ToNot(HaveOccurred())
+		Expect(string(encoded)).ToNot(ContainSubstring("OSAC7034_SYNTHETIC"))
+		legacy := list.Items[0].DeepCopy()
+		legacySecretName := legacy.Name + "-pull-secret"
+		legacySecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: legacySecretName, Namespace: hubNamespace,
+				OwnerReferences: projected.OwnerReferences,
+			},
+			Type: corev1.SecretTypeDockerConfigJson,
+			Data: map[string][]byte{dockerConfigJSONKey: []byte(resolvedPullSecret)},
+		}
+		Expect(fakeClient.Create(ctx, legacySecret)).To(Succeed())
+		legacy.Spec.PullSecretRef = nil
+		legacy.Spec.PullSecretRevision = ""
+		legacy.Spec.PullSecret = resolvedPullSecret
+		legacy.Annotations["kubectl.kubernetes.io/last-applied-configuration"] = resolvedPullSecret
+		Expect(fakeClient.Update(ctx, legacy)).To(Succeed())
+		Expect(t.update(ctx)).To(Succeed())
+		Expect(fakeClient.List(ctx, list)).To(Succeed())
+		Expect(list.Items[0].Spec.PullSecretRef.Name).To(Equal(legacySecretName))
+		Expect(fakeClient.Get(ctx, clnt.ObjectKeyFromObject(legacySecret), legacySecret)).To(Succeed())
+		Expect(legacySecret.Data[dockerConfigJSONKey]).To(Equal(secretData[dockerConfigJSONKey]))
+		encoded, marshalErr = json.Marshal(list.Items[0])
+		Expect(marshalErr).ToNot(HaveOccurred())
+		Expect(string(encoded)).ToNot(ContainSubstring("OSAC7034_SYNTHETIC"))
+		Expect(string(encoded)).ToNot(ContainSubstring(base64.StdEncoding.EncodeToString([]byte(resolvedPullSecret))))
 	})
 
 	It("should resolve ReleaseImage via ClusterVersion on every reconcile", func() {
@@ -1330,11 +1388,47 @@ var _ = Describe("update pull secret resolution failure", func() {
 	It("should set SecretResolutionFailed when secret is missing .dockerconfigjson", func() {
 		updateReq := runWithSecretError(nil, privatev1.SecretsGetResponse_builder{
 			Object: privatev1.Secret_builder{
-				Id:   secretID,
-				Data: map[string][]byte{"other": []byte("value")},
+				Id:       secretID,
+				Metadata: privatev1.Metadata_builder{Tenant: tenantName}.Build(),
+				Type:     privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
+				Data:     map[string][]byte{"other": []byte("value")},
 			}.Build(),
 		}.Build())
 		assertSecretResolutionFailed(updateReq, dockerConfigJSONKey)
+	})
+	DescribeTable("rejects invalid or out-of-scope API secrets without disclosing data",
+		func(tenant, project string, secretType privatev1.SecretType, payload string) {
+			updateReq := runWithSecretError(nil, privatev1.SecretsGetResponse_builder{
+				Object: privatev1.Secret_builder{
+					Id:       secretID,
+					Metadata: privatev1.Metadata_builder{Tenant: tenant, Project: project}.Build(),
+					Type:     secretType,
+					Data:     map[string][]byte{dockerConfigJSONKey: []byte(payload)},
+				}.Build(),
+			}.Build())
+			assertSecretResolutionFailed(updateReq, "failed to resolve pull secret reference")
+		},
+		Entry("another tenant", "other-tenant", "", privatev1.SecretType_SECRET_TYPE_PULL_SECRET, `{"auths":{}}`),
+		Entry("another project", tenantName, "other-project", privatev1.SecretType_SECRET_TYPE_PULL_SECRET, `{"auths":{}}`),
+		Entry("wrong type", tenantName, "", privatev1.SecretType_SECRET_TYPE_OPAQUE, `{"auths":{}}`),
+		Entry("malformed data", tenantName, "", privatev1.SecretType_SECRET_TYPE_PULL_SECRET, "OSAC7034_"+"SYNTHETIC_INVALID"),
+	)
+	It("accepts an authorized shared-template pull secret without changing its source", func() {
+		payload := []byte(`{"auths":{"registry.invalid":{"username":"OSAC7034_SYNTHETIC_SHARED"}}}`)
+		secret := privatev1.Secret_builder{
+			Id: secretID, Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+			Type: privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
+			Data: map[string][]byte{dockerConfigJSONKey: payload},
+		}.Build()
+		before := proto.Clone(secret)
+		secretsClient := NewMockSecretsClient(ctrl)
+		secretsClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(privatev1.SecretsGetResponse_builder{Object: secret}.Build(), nil)
+		task := &task{r: &function{secretsClient: secretsClient}, cluster: setupCluster()}
+		resolved, err := task.resolvePullSecret(ctx, task.cluster.GetSpec().GetPullSecretSecret())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(resolved).To(Equal(string(payload)))
+		Expect(proto.Equal(secret, before)).To(BeTrue())
 	})
 })
 

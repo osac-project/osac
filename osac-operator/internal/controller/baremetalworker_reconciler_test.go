@@ -1097,7 +1097,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 
 	It("skips creation when BMI already exists (list-before-create)", func() {
 		preloadDiskImageChain()
-		co := newBareMetalClusterOrder("bmw-idem", 1)
+		co := newBareMetalClusterOrder("bmw-existing", 1)
 		create(co)
 
 		// Pre-create the BMI in the fake BEFORE makeInfraEnvReady, because the second
@@ -1105,28 +1105,28 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 		_, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
 			Metadata: privatev1.Metadata_builder{
 				Tenant:      "tenant1",
-				Name:        "bmw-idem-worker-0",
-				Labels:      map[string]string{"osac.openshift.io/cluster-order": "bmw-idem"},
-				Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/bmw-idem"},
+				Name:        "bmw-existing-worker-0",
+				Labels:      map[string]string{"osac.openshift.io/cluster-order": "bmw-existing"},
+				Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/bmw-existing"},
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		reserveExistingWorker(co, "bmw-idem-worker-0")
-		makeInfraEnvReady("bmw-idem")
+		reserveExistingWorker(co, "bmw-existing-worker-0")
+		makeInfraEnvReady("bmw-existing")
 
 		// makeInfraEnvReady's second reconcile and subsequent reconciles all skip
 		// creation because list-before-create finds the pre-existing BMI.
 		createCallsBefore := len(fc.CreateCalls())
 
-		_, err = runReconcile("bmw-idem")
+		_, err = runReconcile("bmw-existing")
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(fc.CreateCalls()).To(HaveLen(createCallsBefore))
 
-		co = getClusterOrder("bmw-idem")
+		co = getClusterOrder("bmw-existing")
 		Expect(co.Status.Workers).To(HaveLen(1))
-		Expect(co.Status.Workers[0].Name).To(Equal("bmw-idem-worker-0"))
+		Expect(co.Status.Workers[0].Name).To(Equal("bmw-existing-worker-0"))
 		Expect(co.Status.Workers[0].Phase).To(Equal("WaitingForAgent"))
 	})
 

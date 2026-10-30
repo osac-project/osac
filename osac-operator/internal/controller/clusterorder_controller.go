@@ -23,6 +23,8 @@ import (
 	"math"
 	"time"
 
+	"github.com/osac-project/osac/osac-operator/pkg/pullsecret"
+
 	"github.com/go-logr/logr"
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"google.golang.org/grpc/codes"
@@ -505,6 +507,11 @@ func (r *ClusterOrderReconciler) mapObjectToCluster(ctx context.Context, obj cli
 
 func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
+	if changed, err := pullsecret.Migrate(ctx, r.Client, instance); err != nil {
+		return ctrl.Result{}, err
+	} else if changed {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
 
 	r.initializeStatusConditions(instance)
 	if instance.Status.Phase == "" {
@@ -1115,6 +1122,11 @@ func (r *ClusterOrderReconciler) findNamespace(ctx context.Context, instance *v1
 }
 
 func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
+	if changed, err := pullsecret.Migrate(ctx, r.Client, instance); err != nil {
+		return ctrl.Result{}, err
+	} else if changed {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
 	log := ctrllog.FromContext(ctx)
 	log.Info("deleting clusterorder")
 

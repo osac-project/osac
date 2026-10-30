@@ -1,6 +1,6 @@
 # Installing OSAC on OpenShift Container Platform (WIP)
 
-**Last Updated**: 2026-10-29
+**Last Updated**: 2026-10-30
 **Audience**: Cloud administrators
 **Status**: WIP — see the TBD note in [Section 10](#10-uninstalling-osac) for what's still open
 
@@ -8,10 +8,9 @@
 
 Deploy OSAC (Open Sovereign AI Cloud) onto an existing Red Hat OpenShift
 Container Platform cluster by using the OpenShift CLI (`oc`) and Helm. This
-guide assumes the prerequisite Operators and infrastructure layer already
-exist on the cluster. If you need to set those up yourself, see the
-[Helm Deployment Guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/helm-deployment-guide.md)
-first. The guide covers the VMaaS, CaaS, and BMaaS services.
+guide covers the VMaaS, CaaS, and BMaaS services and assumes that your
+platform administrators have prepared the prerequisite Operators and external
+services listed in [Section 2](#2-prerequisites).
 
 ## Contents
 
@@ -79,46 +78,20 @@ first. The guide covers the VMaaS, CaaS, and BMaaS services.
 
 ## 1. OSAC installation architecture
 
-OSAC installs as three ordered Helm releases. Each release is a plain
-`helm upgrade --install` command.
+Install the published `osac` Helm chart into your namespace with
+`helm upgrade --install`. The chart deploys the OSAC Operator and its CRDs,
+the Fulfillment Service with an Envoy sidecar, an Ansible Automation
+Platform (AAP) instance and its bootstrap job, the OSAC web console, metering,
+and the Bare Metal Fulfillment Operator (BMaaS only).
 
-**Phase 1a: `osac-deps`.** Installs Operator Lifecycle Manager (OLM)
-`Subscription` resources for the platform Operators in their own namespaces:
-cert-manager and Ansible Automation Platform (AAP) by default, and standalone
-multicluster engine, LVM Storage, MetalLB, OpenShift Virtualization, and Streams
-for Apache Kafka when enabled, and the NMState Operator when EVPN host
-networking is enabled (`evpn.enabled` and `evpn.nmstate.install`). Every
-Operator is gated by a toggle — see
-[Table 2.1](#table-21-platform-operators-and-components). Post-installation hooks wait for the cert-manager and AAP
-`ClusterServiceVersion` (CSV) resources to reach `Succeeded`.
-
-**Phase 1b: `osac-infra`.** Installs the shared, cluster-scoped resources: the
-`default-ca` `ClusterIssuer`, trust-manager, the CA bundle `ConfigMap`,
-Keycloak and the `osac` realm in the `keycloak` namespace, and the operand
-custom resources (CRs) `HyperConverged`, `LVMCluster`, the MetalLB
-`IPAddressPool`, and the Kafka CR. The `configure-*` hooks wait for each
-remaining Operator CSV to reach `Succeeded` before applying its operand. For
-testing, this phase can also deploy bundled PostgreSQL database and OpenBao.
-With `evpn.enabled`, its `osac-infra-configure-evpn` hook also configures the
-OpenShift side of EVPN for VMaaS: FRR and route advertisements in the cluster
-network, per-node uplink and VTEP addresses, the `tenant-vtep` VTEP, and BGP
-sessions to the provider's fabric (see
-[Section 2.6](#26-evpn-host-networking-for-vmaas)).
-
-**Phase 2: `osac`.** Installs the platform into your namespace: the OSAC
-Operator and its CRDs, the Fulfillment Service with an Envoy sidecar, an AAP
-instance and its bootstrap job, the OSAC web console, metering, the CSI driver,
-and the Bare Metal Fulfillment Operator (BMaaS only). It connects to the
-bundled OpenBao or the external secret store configured for the deployment.
-
-This guide installs only phase 2. Phase 1a and phase 1b are set up ahead of
-time by whoever prepares the cluster — see the
-[Helm Deployment Guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/helm-deployment-guide.md)
-if that's you.
+The chart connects to the certificate issuer, CA bundle, Keycloak realm,
+PostgreSQL database, and Vault-compatible secret store supplied by your
+platform administrators. These services and the required platform Operators
+must be ready before you install OSAC. See [Section 2](#2-prerequisites).
 
 ### 1.1 What is released
 
-The OSAC platform chart (phase 2) is published as an OCI artifact at
+The OSAC platform chart is published as an OCI artifact at
 `oci://ghcr.io/osac-project/charts/osac`. Find the latest umbrella version on
 the [OSAC releases page](https://github.com/osac-project/osac/releases) by
 selecting a release with an `osac-release/vX.Y.Z` tag. The repository also lists
@@ -277,41 +250,40 @@ To install with provider networking, see
 - `curl` and `jq`, for the private API calls that set up networking (see
   [Section 4.4](#44-installing-with-provider-networking)).
 
-Installing the published phase-2 chart requires only `oc` and `helm`.
+Installing the published `osac` chart requires only `oc` and `helm`.
 
 ### 2.3 Platform Operators and components
 
 OSAC relies on the Operators and components in
 [Table 2.1](#table-21-platform-operators-and-components). These are typically
-installed by whoever prepares the cluster, ahead of your install — see the
-[Helm Deployment Guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/helm-deployment-guide.md)
-if that's you. To install an Operator yourself, use OperatorHub in the web
-console, or apply a `Subscription` and `OperatorGroup` from the
+installed by your platform administrators before you install OSAC. To
+install an Operator yourself, use OperatorHub in the web console, or apply a `Subscription` and `OperatorGroup` from the
 `redhat-operators` catalog. For more information, see
 [Adding Operators to a cluster](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/operators/user-tasks).
 
-The Channel column lists the update channel that OSAC subscribes to. The
-resolved CSV versions float as the channels publish updates; the versions
-observed on OpenShift Container Platform 4.22.6 in September 2026 are listed in
+The Channel column lists the reference update channels for prerequisite
+Operators. Their resolved `ClusterServiceVersion` (CSV) versions change as
+the channels publish updates. The versions observed on OpenShift Container
+Platform 4.22.6 in September 2026 are listed in
 [Section 3](#3-osac-component-versions).
 
 <a id="table-21-platform-operators-and-components"></a>
 **Table 2.1. Platform Operators and components**
 
-| Component | Channel | Namespace | Toggle | Required for |
-|---|---|---|---|---|
-| [cert-manager Operator for Red Hat OpenShift](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/security_and_compliance/cert-manager-operator-for-red-hat-openshift) | `stable-v1` | `cert-manager-operator` | `certManager.enabled` | All services |
-| trust-manager | `v0.20.0` (fixed) | `cert-manager` | `trustManager.enabled` | All services |
-| `default-ca` `ClusterIssuer` | Not applicable | Cluster-scoped | `caIssuer.enabled` | All services |
-| Keycloak and the `osac` realm | Not applicable | `keycloak` | `keycloak.enabled` | All services |
-| [Red Hat Ansible Automation Platform Operator](https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.6/html/installing_on_openshift_container_platform/index) | `stable-2.6-cluster-scoped` | `ansible-aap` | `aapOperator.enabled` | All services |
-| [Streams for Apache Kafka](https://access.redhat.com/articles/6644711) | `stable` | `osac-kafka` | `kafka.enabled` | Fulfillment events and metering; see [Kafka configuration](kafka-configuration.md) for external broker requirements. |
-| [OpenShift Virtualization](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/installing) | `stable` | `openshift-cnv` | `cnv.enabled` | VMaaS |
-| [LVM Storage](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/storage/index#persistent-storage-using-lvms) | `stable-<cluster_minor>` | `openshift-storage` | `lvms.enabled` | VMaaS |
-| [MetalLB Operator](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/networking_operators/metallb-operator) | `stable` | `metallb-system` | `metallb.enabled` | CaaS |
-| [multicluster engine for Kubernetes Operator](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.13/html/clusters/cluster_mce_overview) | `stable-2.17` | `multicluster-engine` | `mce.enabled` | CaaS |
-| Kubernetes NMState Operator | `stable` (`evpn.nmstate.channel`) | `openshift-nmstate` | `evpn.enabled` and `evpn.nmstate.install` | VMaaS with provider networking |
-| EVPN host networking (FRR, `tenant-vtep`, BGP to the fabric) | Not applicable | `openshift-frr-k8s`, cluster-scoped | `evpn.enabled` | VMaaS with provider networking |
+| Component | Channel | Namespace | Required for |
+|---|---|---|---|
+| [cert-manager Operator for Red Hat OpenShift](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/security_and_compliance/cert-manager-operator-for-red-hat-openshift) | `stable-v1` | `cert-manager-operator` | All services |
+| trust-manager | `v0.20.0` (fixed) | `cert-manager` | All services |
+| Configured certificate issuer (default: `default-ca` `ClusterIssuer`) | Not applicable | Cluster-scoped for `ClusterIssuer`; OSAC release namespace for `Issuer` | All services |
+| Keycloak and the `osac` realm | Not applicable | Provider-defined | All services |
+| [Red Hat Ansible Automation Platform Operator](https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.6/html/installing_on_openshift_container_platform/index) | `stable-2.6-cluster-scoped` | `ansible-aap` | All services |
+| [Streams for Apache Kafka](https://access.redhat.com/articles/6644711) | `stable` | `osac-kafka` | Fulfillment events and metering; see [Kafka configuration](kafka-configuration.md) for external broker requirements. |
+| [OpenShift Virtualization](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/installing) | `stable` | `openshift-cnv` | VMaaS |
+| [LVM Storage](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/storage/index#persistent-storage-using-lvms) | `stable-<cluster_minor>` | `openshift-storage` | VMaaS |
+| [MetalLB Operator](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/networking_operators/metallb-operator) | `stable` | `metallb-system` | CaaS |
+| [multicluster engine for Kubernetes Operator](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.13/html/clusters/cluster_mce_overview) | `stable-2.17` | `multicluster-engine` | CaaS |
+| Kubernetes NMState Operator | `stable` | `openshift-nmstate` | VMaaS with provider networking |
+| EVPN host networking (FRR, `tenant-vtep`, BGP to the fabric) | Not applicable | `openshift-frr-k8s`, cluster-scoped | VMaaS with provider networking |
 
 Notes on individual components:
 
@@ -319,49 +291,34 @@ Notes on individual components:
   `cert-manager-operator` namespace and creates its operands in the
   `cert-manager` namespace. The `certificates.cert-manager.io` CRD is a
   mandatory install preflight check.
-- **trust-manager** distributes the CA bundle. To use an existing
-  trust-manager installation, set `trustManager.upstream.enabled=true`.
-- **`default-ca` `ClusterIssuer`** is the default for `service.certs.issuerRef`.
-  You can select another issuer independently of `caIssuer.enabled`.
-  If you disable `caIssuer.enabled`, provide your own issuer.
-- **Keycloak** provides OIDC for the API and web console. This is a custom
-  deployment, not the Red Hat build of Keycloak Operator.
+- **trust-manager** distributes the CA bundle. Ensure the CA-bundle
+  `ConfigMap` named by `service.certs.caBundle.configMap` exists in the OSAC
+  release namespace.
+- **Certificate issuer:** `service.certs.issuerRef` defaults to the
+  `default-ca` `ClusterIssuer`. Select an existing, ready `Issuer` or
+  `ClusterIssuer` for your deployment.
+- **Keycloak** provides OIDC for the API and web console. Prepare the `osac`
+  realm, clients, roles, and credential Secrets before installing OSAC.
 - **Red Hat Ansible Automation Platform Operator** installs the Operator only.
   The `osac` chart creates the AAP instance. You supply the subscription
   manifest. See [Section 2.4](#24-credentials-and-external-services).
-- **Streams for Apache Kafka** (formerly AMQ Streams) uses a manual install
-  plan. Approve the install plan in the `osac-kafka` namespace if it does not
-  progress.
+- **Streams for Apache Kafka** (formerly AMQ Streams) provides the
+  Strimzi resources used by OSAC. Confirm the Operator and Kafka cluster
+  are ready with your Kafka administrators.
 - **OpenShift Virtualization** was formerly named Container-native
   Virtualization (CNV).
 - **LVM Storage** uses a channel that tracks the OpenShift Container Platform
-  minor version; the installation sets it. Any dynamic storage class works if
-  you disable `lvms.enabled`.
-- **MetalLB Operator** provides a `LoadBalancer`-class implementation. CaaS
-  uses it on the hub to give each hosted cluster's API its management VIP.
-  Only CaaS needs it. Any solution that provides one works if you disable
-  `metallb.enabled`. With `metallb.enabled`, the installation creates the
-  address pool `caas-address-pool` and sets it to addresses `.240` to `.250`
-  of the first node's network. It keeps the first three octets of that node's
-  `InternalIP`, so it assumes a /24. It resets the pool to that range on every
-  install and upgrade of the infrastructure chart. Before the first Cluster,
-  make sure that range is free and routable on your management network, and
-  add a CIDR that covers it to `global.networking.excludedIpv4Cidrs`, for
-  example `<prefix>.240/28`: a Cluster keeps its VIP for its whole life. To
-  use a different range, patch the `IPAddressPool` after the installation and
-  again after every infrastructure upgrade, add a CIDR that covers that range
-  to `global.networking.excludedIpv4Cidrs`, and check the pool before you
-  create Clusters.
-- **multicluster engine for Kubernetes Operator** is required for
-  agent-based cluster provisioning but is disabled by default. Set
-  `mce.enabled=true` when this installation owns standalone MCE; the `caas-ci`
-  infrastructure profile does so explicitly. Leave it `false` when Red Hat
-  Advanced Cluster Management for Kubernetes (RHACM) or another MCE
-  installation already owns it. The disabled state also prevents the phase-1
-  chart from applying its temporary Assisted image override `ConfigMap` and
-  compatibility RBAC.
+  minor version. Another dynamic storage class can satisfy the VMaaS storage
+  prerequisite.
+- **MetalLB Operator** provides the CaaS API management VIPs on the hub. Ask
+  your platform administrators for the reserved, free, routable address range
+  and add a covering CIDR to `global.networking.excludedIpv4Cidrs` before
+  creating Clusters. Another load-balancer implementation can provide them.
+- **multicluster engine for Kubernetes Operator** is required for agent-based
+  cluster provisioning. An existing standalone installation or Red Hat
+  Advanced Cluster Management for Kubernetes (RHACM) can provide it.
 - **Kubernetes NMState Operator** sets the uplink and VTEP addresses of the
-  VMaaS nodes. Set `evpn.nmstate.install: false` when it is already installed.
+  VMaaS nodes. Your platform administrators prepare it for EVPN networking.
 - **EVPN host networking** needs OVN-Kubernetes and OpenShift Container
   Platform 4.22 or later. See
   [Section 2.6](#26-evpn-host-networking-for-vmaas).
@@ -742,8 +699,8 @@ operator settings separately if the cluster no longer needs them.
 
 ## 3. OSAC component versions
 
-OSAC subscribes to a specific update channel for each platform Operator. The
-channel-tracked versions float as the channels publish updates.
+Your platform administrators manage the prerequisite Operator subscriptions.
+Channel-tracked versions change as the channels publish updates.
 [Table 3.1](#table-31-component-versions) lists each channel and the CSV version
 that channel resolved to on OpenShift Container Platform 4.22.6 in September
 2026. Treat the observed versions as indicative.
@@ -751,24 +708,24 @@ that channel resolved to on OpenShift Container Platform 4.22.6 in September
 <a id="table-31-component-versions"></a>
 **Table 3.1. Component versions**
 
-| Component | Channel or fixed version | Observed on OCP 4.22.6 | Defined in |
-|---|---|---|---|
-| OpenShift Container Platform | `stable-4.22` | 4.22.4 to 4.22.6 | Validated range |
-| `osac` umbrella chart | Selected in [Section 1.1](#11-what-is-released) | Release-specific | `oci://ghcr.io/osac-project/charts/osac` |
-| cert-manager Operator for Red Hat OpenShift | `stable-v1` | `v1.20.0` | `charts/osac-deps/values.yaml` |
-| Red Hat Ansible Automation Platform | `stable-2.6-cluster-scoped` | `v2.6.0` | `charts/osac-deps/values.yaml` |
-| LVM Storage | `stable-<cluster_minor>` | `v4.22.0` | `charts/osac-deps/values.yaml` |
-| MetalLB | `stable` | `v4.22.0` | `charts/osac-deps/values.yaml` |
-| Kubernetes NMState Operator | `stable` (`evpn.nmstate.channel`) | Not recorded | `charts/osac-deps/values.yaml` and `charts/osac-infra/values.yaml` |
-| OpenShift Virtualization | `stable` | `v4.22.6` | `charts/osac-deps/values.yaml` |
-| multicluster engine | `stable-2.17` | `v2.17.2` | `charts/osac-deps/values.yaml` |
-| Streams for Apache Kafka | `stable` | `v3.2.1-10` | `charts/osac-deps/values.yaml` |
-| trust-manager | `v0.20.0` (fixed) | `v0.20.0` | `charts/osac-infra/templates/trust-manager.yaml` |
-| Envoy (Fulfillment Service sidecar) | `v1.33.0` (fixed) | `v1.33.0` | `values/*/instance.yaml` |
-| OpenBao (bundled secret store) | `2.6.2` (fixed) | `2.6.2` | `charts/osac-infra/values.yaml` |
-| Keycloak (bundled) | Not applicable | `26.6.4` | `charts/osac-infra/` |
-| OSAC web console chart | Pinned by the selected umbrella chart | Release-specific | `charts/osac/Chart.yaml` |
-| PostgreSQL | 18 or later | `18` (Keycloak database) | `fulfillment-service/docs/INSTALL.md` |
+| Component | Channel or fixed version | Observed on OCP 4.22.6 |
+|---|---|---|
+| OpenShift Container Platform | `stable-4.22` | 4.22.4 to 4.22.6 |
+| `osac` umbrella chart | Selected in [Section 1.1](#11-what-is-released) | Release-specific |
+| cert-manager Operator for Red Hat OpenShift | `stable-v1` | `v1.20.0` |
+| Red Hat Ansible Automation Platform | `stable-2.6-cluster-scoped` | `v2.6.0` |
+| LVM Storage | `stable-<cluster_minor>` | `v4.22.0` |
+| MetalLB | `stable` | `v4.22.0` |
+| OpenShift Virtualization | `stable` | `v4.22.6` |
+| multicluster engine | `stable-2.17` | `v2.17.2` |
+| Streams for Apache Kafka | `stable` | `v3.2.1-10` |
+| trust-manager | `v0.20.0` (fixed) | `v0.20.0` |
+| Envoy (Fulfillment Service sidecar) | `v1.33.0` (fixed) | `v1.33.0` |
+| OpenBao (secret store) | `2.6.2` | `2.6.2` |
+| Keycloak | Not applicable | `26.6.4` |
+| OSAC web console chart | Pinned by the selected umbrella chart | Release-specific |
+| PostgreSQL | 18 or later | `18` (Keycloak database) |
+| Kubernetes NMState Operator | `stable` (`evpn.nmstate.channel`) | Not recorded |
 
 The selected `osac` chart pins its subcharts through its `Chart.lock` file.
 Consult the release's dependency inventory for their exact versions. You can
@@ -885,23 +842,9 @@ You create one values file for the `osac` chart, `my-values.yaml`.
    configures both the initialization hook and the chart-generated database
    connection URLs for the Fulfillment Service and metering.
 
-3. Add the following hardening to `my-values.yaml`:
-   ```yaml
-   bundledPostgres:
-     enabled: false
-   ```
-
-   Add the following to the `osac-infra` values. The `osac` chart schema rejects
-   these keys:
-   ```yaml
-   keycloak:
-     devFixtures:
-       enabled: false
-     adminUsername: <admin_user>
-     adminPassword: <strong_password>
-   bundledVault:
-     enabled: false
-   ```
+3. Confirm with your platform administrators that Keycloak uses production
+   credentials and that the database and secret store meet the production
+   prerequisites in [Section 2.4](#24-credentials-and-external-services).
 
 4. For a production deployment, add `service.vault` to `my-values.yaml` using
    the [secrets management configuration guide](secrets-management-configuration.md#configure-the-osac-instance).
@@ -928,9 +871,9 @@ Use this procedure when the cluster already meets the prerequisites.
 - The issuer configured by `service.certs.issuerRef`, trust-manager, the
   `ConfigMap` named by `service.certs.caBundle.configMap`, Keycloak with the
   `osac` realm, and the credential Secrets exist. The `ConfigMap` is required
-  even when the API certificates use public trust. When `osac-infra` creates
-  the bundle, its `certs.caBundle.configMap` must match the phase-2
-  `service.certs.caBundle.configMap` value; see step 4 of
+  even when the API certificates use public trust. Set
+  `service.certs.caBundle.configMap` to the existing ConfigMap name in the
+  OSAC release namespace; see step 4 of
   [Section 7](#7-verifying-the-installation).
 - For a production deployment, the external PostgreSQL server is ready for
   the chart's client-certificate authentication, and `dbInit.host` is set
@@ -1470,7 +1413,7 @@ subchart's own `values.yaml` file.
 | `operator.replicaCount`, `operator.resources.*` | schema | Operator sizing. |
 | `operator.aap.url`, `operator.aap.token`, `operator.aap.insecureSkipVerify`, `operator.aap.statusPollInterval`, `operator.aap.templatePrefix` | schema | How the Operator reaches AAP. Set `insecureSkipVerify: "true"` for self-signed AAP routes. |
 | `operator.fulfillment.serverAddress` | schema | Fulfillment gRPC endpoint. When configured, the Operator uses it to verify the saved installation networking setting before reconciliation; it can be empty for standalone runs. |
-| `operator.fulfillment.credentials.secretName`, `clientIdKey`, `clientSecretKey` | schema | Name and keys of the Kubernetes Secret holding the `osac-controller` Keycloak service-account credentials. `osac-infra` provisions it for bundled Keycloak; external Keycloak deployments must provide an equivalent Secret. The OSAC chart only references it. |
+| `operator.fulfillment.credentials.secretName`, `clientIdKey`, `clientSecretKey` | schema | Name and keys of the Kubernetes Secret holding the `osac-controller` Keycloak service-account credentials. Provide this Secret before installation; the OSAC chart only references it. |
 | `operator.controllers.tenant`, `operator.controllers.networking`, `operator.controllers.storage` | schema | Enable or disable individual reconcilers. Which services run is driven by `global.services.*`. |
 | `operator.controllers.volume` | subchart | Enables the Volume reconciler. |
 | `operator.configSecret.name`, `operator.configSecret.optional` | schema | Additional Operator configuration Secret. |
@@ -1516,13 +1459,13 @@ as shown in [Section 6.1](#cudn-evpn-with-netris).
 | `service.variant` | `openshift` or `kind`. Use `openshift`. |
 | `service.images.service`, `service.images.envoy` | Fulfillment Service and Envoy sidecar images. |
 | `service.certs.issuerRef.kind`, `service.certs.issuerRef.name` | cert-manager issuer for the service certificates. |
-| `service.certs.caBundle.configMap` | Existing CA-bundle `ConfigMap` mounted by the OSAC hooks. This value does not create or rename the ConfigMap. For OSAC-managed trust, match `certs.caBundle.configMap` in the phase-1 `osac-infra` values. Both default to `ca-bundle`; see step 4 of [Section 7](#7-verifying-the-installation). |
+| `service.certs.caBundle.configMap` | Existing CA-bundle `ConfigMap` mounted by the OSAC hooks. This value does not create or rename the ConfigMap. Set it to the existing ConfigMap name in the OSAC release namespace. Defaults to `ca-bundle`; see step 4 of [Section 7](#7-verifying-the-installation). |
 | `service.auth.issuerUrl` | OIDC issuer. Templated from `global.clusterDomain` by default. |
 | `service.auth.controllerCredentials[]` | Volume sources for the controller OIDC client credentials. |
 | `service.idp.provider`, `service.idp.url`, `service.idp.credentials[]` | Identity provider for user and role management. Only `keycloak` is supported. |
 | `service.database.connection[]` | Volume sources for the database URL and client certificate, for example `osac-db-config` and `osac-db-client-cert`. |
 | `service.log.level`, `service.log.headers`, `service.log.bodies` | Log verbosity. Keep `headers` and `bodies` set to `false` in production. |
-| `service.vault.endpoint` | Vault-compatible API URL. Defaults to the bundled OpenBao service in `osac-infra`. Set it to your external Vault or OpenBao URL when `bundledVault.enabled` is `false`; the Fulfillment chart requires a nonempty endpoint. See the [secrets management configuration guide](secrets-management-configuration.md). |
+| `service.vault.endpoint` | Vault-compatible API URL. Set it to your existing Vault or OpenBao URL; the Fulfillment chart requires a nonempty endpoint. See the [secrets management configuration guide](secrets-management-configuration.md). |
 | `service.vault.namespace`, `service.vault.kvMountPath`, `service.vault.lifecycleRole`, `service.vault.lifecycleMountPath`, `service.vault.keycloakClientId`, `service.vault.keycloakIssuerUrl`, `service.vault.keycloakAudience`, `service.vault.caBundle`, `service.vault.credentials` | Vault namespace, mount paths, JWT role, Keycloak client and audience, CA bundle, and client credentials. Configure these for an external store as described in the [secrets management configuration guide](secrets-management-configuration.md). |
 
 **Table 5.5. AAP (`aap.*`, all `schema`)**
@@ -1571,10 +1514,8 @@ as shown in [Section 6.1](#cudn-evpn-with-netris).
 | `validation.enabled` | schema | Runs the install preflight. When `false`, every check is skipped and recorded as skipped in the report. | `true` |
 | `preflight.mode` | schema | `enforce` stops the installation on a blocking problem. `report` records problems without stopping. `strict` also stops on warnings. See [Section 11.1](#111-the-install-preflight-stops-the-installation). | `enforce` |
 | `preflight.skip.<check_id>` | schema | Skips one preflight check. The value is the reason, which the report records. | `{}` |
-| `bundledVault.enabled`, `bundledVault.image` | `osac-infra` | In-cluster OpenBao for testing and CI. Not intended for production. | `false` and `ghcr.io/openbao/openbao:2.6.2` |
 | `hubAccess.enabled` | schema | Creates hub-access RBAC and registers the local cluster as its own hub. Single-cluster development only. | `false` |
-| `bundledPostgres.enabled` | schema | Bundled PostgreSQL for testing only; not intended for production. | `false` |
-| `dbInit.host` | schema | Host that the `db-init` pre-installation hook connects to, to create the databases. Set it to your external PostgreSQL host for a production deployment. | `postgres.osac-infra.svc.cluster.local` |
+| `dbInit.host` | schema | Host that the `db-init` pre-installation hook connects to, to create the databases. Set it to your external PostgreSQL host for a production deployment. | Development default; override for production |
 | `clusterVersions.enabled`, `clusterVersions.versions[]` | schema | OpenShift Container Platform release images offered to hosted clusters. Each entry has `version`, `image`, and an optional `default`. An entry with `default: true` also needs `diskImage`. | `false` and `[]` |
 
 ### 5.1 Values set on the command line
@@ -1596,8 +1537,8 @@ extra `--set` flags.
 
 ## 6. Installation workflows by service
 
-Each workflow gives the phase-2 (`my-values.yaml`) values to add for that
-service. It assumes the phase-1 prerequisites for that service (see
+Each workflow gives the `my-values.yaml` values to add for that service.
+It assumes the prerequisites for that service (see
 [Table 2.1](#table-21-platform-operators-and-components)) already exist on
 the cluster. Every workflow also needs the networking values and steps of
 [Section 4.4](#44-installing-with-provider-networking). Then follow
@@ -1671,8 +1612,8 @@ the cluster. Every workflow also needs the networking values and steps of
    services, see
    [Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster).
 
-2. Add the `service.*`, `aap.configAsCode.*`, and database Secret settings to
-   `my-values.yaml`, and the Keycloak hardening to the `osac-infra` values, from [Section 4.2](#42-configuring-the-helm-values).
+2. Add the shared service, database, and secret store settings from
+   [Section 4.2](#42-configuring-the-helm-values).
 
 3. Install OSAC. See [Section 4.3](#43-installing-osac).
 
@@ -1696,10 +1637,10 @@ the cluster. Every workflow also needs the networking values and steps of
 
 #### CUDN EVPN with Netris
 
-Configure host networking in the infra values file as described in
-[EVPN host networking](helm-deployment-guide.md#evpn-host-networking-vmaas).
-For phase 2, replace the service-specific block in step 1 with the following
-values. Keep the shared settings from [Section 4.2](#42-configuring-the-helm-values).
+Your platform administrators must prepare the EVPN host networking before
+installation. Replace the service-specific block in step 1 with the following
+`my-values.yaml` values. Keep the shared settings from
+[Section 4.2](#42-configuring-the-helm-values).
 Set the Netris URL, user, site, and tenant to your deployment's values:
 
 ```yaml
@@ -1973,18 +1914,19 @@ and virtual machines run on another. Disable CaaS and BMaaS: the operator
 refuses to start when either the cluster controller or the bare-metal-instance
 controller is enabled with a remote kubeconfig.
 
-Prepare the two clusters with Helm as described in
-[Separate VMaaS workload cluster](helm-deployment-guide.md#separate-vmaas-workload-cluster).
+Your platform administrators must prepare the management cluster with the
+OSAC prerequisites and the workload cluster with OpenShift Virtualization,
+dynamic storage, and a `LoadBalancer`-class implementation as described in
+[Section 2](#2-prerequisites).
 Create the workload kubeconfig Secret on the management cluster, including
 the console-proxy label, as described in
 [VMaaS dedicated cluster](https://github.com/osac-project/osac/blob/main/osac-operator/docs/vmaas-dedicated-cluster/README.md).
 
 Start with the VMaaS values from [Section 6.1](#61-installing-osac-for-vmaas),
 including the storage registration and networking settings. For the LVMS
-workload cluster prepared above, keep `lvms.enabled: true` in the phase-2
-`my-values.yaml` on the management cluster. This registers the `local`
-StorageBackend and StorageTier in fulfillment; enabling LVMS only in the
-phase-1 infra values file does not register them.
+workload cluster, keep `lvms.enabled: true` in `my-values.yaml` on the
+management cluster. This registers the `local` StorageBackend and StorageTier
+in fulfillment; installing LVM Storage alone does not register them.
 
 Merge these values into `my-values.yaml` to enable VMaaS only and point the
 operator and AAP at the Secret:
@@ -2043,7 +1985,8 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    says what to review. See
    [Section 11.1](#111-the-install-preflight-stops-the-installation).
 
-3. Check the phase-1 Operators enabled for this deployment. Each expected CSV
+3. Check the prerequisite Operators required by your enabled services in
+   [Table 2.1](#table-21-platform-operators-and-components). Each expected CSV
    must be `Succeeded`:
 
    ```console
@@ -2053,76 +1996,46 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    ```
 
    The AAP CSV is named `aap-operator` and can appear in multiple namespaces.
-   `kubevirt-hyperconverged-operator`,
-   `lvms-operator`, and `metallb-operator` are expected only when the matching
-   `cnv.enabled`, `lvms.enabled`, and `metallb.enabled` values are `true`.
-   These values default to `false`. MCE may be provided by RHACM or an existing
-   installation; expect the `multicluster-engine` CSV when `mce.enabled` is
-   `true`, and use the provider's health checks when it is externally managed.
-   With `evpn.enabled` and `evpn.nmstate.install` true, also expect the
-   `kubernetes-nmstate-operator` CSV in `openshift-nmstate`.
+   Check the OpenShift Virtualization CSV for VMaaS and the LVM Storage and
+   MetalLB CSVs if those providers satisfy your storage and load-balancer
+   prerequisites. For CaaS, check standalone MCE or the health of the MCE
+   installation provided by RHACM.
+   For EVPN host networking, also check the Kubernetes NMState Operator CSV.
 
-   When `kafka.enabled` is `true` in `osac-deps`, also check the CSV installed
-   by its `amq-streams` Subscription. It must be `Succeeded`:
+   Also check the CSV installed by your Kafka Operator's Subscription.
+   Replace the placeholders with the namespace and Subscription name supplied
+   by your Kafka administrators. The CSV must be `Succeeded`:
 
    ```console
-   KAFKA_CSV=$(oc get subscription amq-streams -n osac-kafka -o jsonpath='{.status.installedCSV}')
-   oc get csv "$KAFKA_CSV" -n osac-kafka
+   KAFKA_CSV=$(oc get subscription <kafka_subscription> -n <kafka_namespace> -o jsonpath='{.status.installedCSV}')
+   oc get csv "$KAFKA_CSV" -n <kafka_namespace>
    ```
 
-   The `osac-deps` toggle defaults to `false`. If another team manages the
-   Kafka Operator, use that installation's namespace and Subscription.
+4. Verify the configured certificate issuer and CA bundle.
 
-4. Check the phase-1 operands used by this deployment. OSAC creates the
-   `HyperConverged`, `LVMCluster`, and `IPAddressPool` resources only when their
-   matching `cnv.enabled`, `lvms.enabled`, and `metallb.enabled` values are
-   `true`. Run these checks when enabled; when disabled, an absent OSAC-managed
-   resource is expected. A platform-managed resource may still exist.
-
-   ```console
-   # When caIssuer.enabled is true in osac-infra
-   oc get clusterissuer default-ca
-   # When cnv.enabled is true
-   oc get hyperconverged -n openshift-cnv
-   # When lvms.enabled is true
-   oc get lvmcluster -n openshift-storage
-   # When metallb.enabled is true
-   oc get ipaddresspool -n metallb-system
-   ```
+   Check the issuer selected by `service.certs.issuerRef`. For
+   `kind: ClusterIssuer`, run `oc get clusterissuer <issuer_name>`; for
+   `kind: Issuer`, run `oc get issuer <issuer_name> -n <namespace>`. Use the
+   configured `service.certs.issuerRef.name` and the OSAC release namespace.
+   The issuer must report `Ready: True`.
 
    Verify the trust bundle separately from the certificate issuer. For every
-   deployment, including customer-managed bundles and upstream trust-manager
-   installations, check the CA-bundle `ConfigMap` in the OSAC release
-   namespace.
+   deployment, including deployments with publicly trusted API certificates,
+   the CA-bundle `ConfigMap` must already exist in the OSAC release namespace.
+   Set `service.certs.caBundle.configMap` in `my-values.yaml` to its name;
+   the default is `ca-bundle`. This value only references the ConfigMap and
+   does not create or rename it.
 
-   For OSAC-managed trust, `certs.caBundle.configMap` in the phase-1
-   `my-infra-values.yaml` names the trust-manager `Bundle` and the
-   ConfigMaps it distributes. The hook targets the infrastructure release
-   namespace and the phase-2 namespace configured by `osacNamespace`.
-   Set `service.certs.caBundle.configMap` in the phase-2 `my-values.yaml`
-   to the same name. Both default to `ca-bundle`. Changing only the phase-2
-   value does not create or rename a ConfigMap; the OSAC hooks would mount
-   a ConfigMap that does not exist. For customer-managed trust, ensure that
-   the configured ConfigMap already exists in the OSAC release namespace.
-
-   Replace `<ca_bundle_configmap>` below with that shared name and
-   `<namespace>` with the phase-2 OSAC release namespace:
+   Replace `<ca_bundle_configmap>` below with the configured name and
+   `<namespace>` with the OSAC release namespace:
 
    ```console
    oc get configmap <ca_bundle_configmap> -n <namespace> -o yaml
    ```
 
-   For OSAC-managed trust, also check the fully qualified trust-manager
-   `Bundle` resource. It is cluster-scoped and needs no namespace flag;
-   the hook Job that creates it runs in the infrastructure namespace:
-
-   ```console
-   oc get bundles.trust.cert-manager.io <ca_bundle_configmap>
-   ```
-
    Extract the bundle once for the client checks below. The example reads
-   the OSAC-managed `bundle.pem` key; adjust the JSONPath if your
-   customer-managed ConfigMap uses a different PEM key:
+   the `bundle.pem` key; adjust the JSONPath if your ConfigMap uses a different
+   PEM key:
 
    ```console
    oc get configmap <ca_bundle_configmap> -n <namespace> \
@@ -2135,76 +2048,34 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    uses a different CA, obtain the matching PEM bundle from its
    administrator and use that file for that endpoint.
 
-   When `kafka.enabled` is `true` in `osac-infra`, also check that the
-   bundled Kafka resource is `Ready`:
+5. Check the prerequisite services with your platform administrators:
 
-   ```console
-   oc get kafka osac-kafka -n osac-kafka
-   oc wait kafka/osac-kafka -n osac-kafka --for=condition=Ready --timeout=10m
-   ```
-
-   When that toggle is `false`, an absent OSAC-managed Kafka resource is
-   expected. For an externally managed Kafka cluster, use its provider's
-   health checks and the [Kafka configuration guide](kafka-configuration.md).
-
-   Always verify the issuer selected by `service.certs.issuerRef`,
-   independently of `caIssuer.enabled`. For `kind: ClusterIssuer`, run
-   `oc get clusterissuer <issuer_name>`; for `kind: Issuer`, run
-   `oc get issuer <issuer_name> -n <namespace>`. Use the configured
-   `service.certs.issuerRef.name` and the OSAC release namespace. The configured
-   issuer must report `Ready: True`. The separate `default-ca` check above
-   applies only when `caIssuer.enabled` is `true`.
-
-5. VMaaS with provider networking: check EVPN host networking
-   ([Section 2.6](#26-evpn-host-networking-for-vmaas)). Each node's BGP
-   sessions must be `Established`, the `tenant-vtep` VTEP must be `Accepted`
-   with reason `Allocated`, and each `NodeNetworkConfigurationPolicy` must be
-   `Available`:
-
-   ```console
-   oc get bgpsessionstates.frrk8s.metallb.io -n openshift-frr-k8s
-   oc get vtep.k8s.ovn.org tenant-vtep -o jsonpath='{.status.conditions}'
-   oc get nncp -l osac.openshift.io/evpn=true
-   ```
-
-   The `RouteAdvertisements` `osac-evpn` can show `ConfigurationPending` until
-   OSAC creates the first CUDN; that is expected.
-
-6. Check the infrastructure layer in `osac-infra`. With
-   `bundledVault.enabled: true`, expect a `Running` pod with the
-   `app=openbao` label in this namespace;
-   no bundled OpenBao pod is expected when the value is `false`.
-
-   ```console
-   oc get pods -n osac-infra -l app=openbao
-   ```
-
-   If `keycloak.enabled` is `true`, also check that the `keycloak-service` and
-   `keycloak-database` pods are `Running`. Skip this check for an external
-   Keycloak.
-
-   ```console
-   oc get pods -n keycloak
-   ```
+   - PostgreSQL must be reachable at `dbInit.host` and accept the configured
+     client-certificate authentication.
+   - Vault or OpenBao must be reachable at `service.vault.endpoint` and ready
+     for tenant namespace creation. See the
+     [secrets management configuration guide](secrets-management-configuration.md).
+   - Kafka must be ready at the configured broker addresses with the required
+     credentials, TLS trust, and permissions. Use your Kafka provider's health
+     checks and the [Kafka configuration guide](kafka-configuration.md).
+   - OpenShift Virtualization and the configured storage and load-balancer
+     providers must be ready on the workload cluster for VMaaS.
 
 7. Confirm that the configured OIDC issuer responds. Set
    `OSAC_OIDC_ISSUER_URL` to the fully resolved `service.auth.issuerUrl`,
-   including the realm path. With the default bundled Keycloak route this
-   is `https://keycloak-keycloak.$DOMAIN/realms/osac`. For an external
-   Keycloak or a custom `keycloak.route.hostname`, use its configured issuer
-   URL.
+   including the realm path. Use the issuer URL supplied by your Keycloak
+   administrator.
 
-   For the bundled Keycloak, use the shared trust bundle extracted in
-   step 4 of [this section](#7-verifying-the-installation):
+   If the issuer certificate is signed by a CA in the trust bundle extracted
+   in step 4 of [this section](#7-verifying-the-installation), use that file:
 
    ```console
    export OSAC_OIDC_CA_FILE="osac-ca-bundle.pem"
    ```
 
-   For an external Keycloak or a route with a different ingress certificate,
-   set `OSAC_OIDC_CA_FILE` to the CA bundle that signs the issuer's
-   certificate. For the bundled Keycloak or an issuer with a custom CA,
-   run:
+   If the issuer uses a different CA, set `OSAC_OIDC_CA_FILE` to the
+   matching PEM bundle supplied by its administrator. For an issuer with
+   a custom CA, run:
 
    ```console
    export OSAC_OIDC_ISSUER_URL="<oidc_issuer_url>"
@@ -2222,7 +2093,7 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
      "${OSAC_OIDC_ISSUER_URL%/}/.well-known/openid-configuration"
    ```
 
-8. Check the phase-2 pods. All pods must be `Running` or `Completed`, with no
+7. Check the OSAC pods. All pods must be `Running` or `Completed`, with no
    pods in `CrashLoopBackOff` or `ImagePullBackOff`:
 
    ```console
@@ -2239,9 +2110,7 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    - VMaaS: `fulfillment-console-proxy`.
    - BMaaS: the Bare Metal Fulfillment Operator pod.
 
-   The bundled OpenBao pod is in `osac-infra` and is checked in step 6.
-
-9. Check that every `Certificate` is `Ready`:
+8. Check that every `Certificate` is `Ready`:
 
    ```console
    oc get certificate -n <namespace>
@@ -2260,8 +2129,8 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
     oc logs -f job/osac-aap-bootstrap -n <namespace>
     ```
 
-11. Check API reachability and log in with the `osac` CLI. For the bundled
-    CA or a custom CA, use the API trust bundle prepared in step 4 of
+10. Check API reachability and log in with the `osac` CLI. For a custom CA,
+    use the API trust bundle prepared in step 4 of
     [this section](#7-verifying-the-installation) for both commands:
 
     ```console
@@ -2364,22 +2233,20 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
 
 ### 8.1 Accessing the OSAC consoles
 
-OSAC exposes four consoles as OpenShift Container Platform `Route` resources.
 The OSAC web console, Fulfillment API, and AAP routes are in the install
-namespace; the Keycloak route is in the `keycloak` namespace. Host names are
-auto-assigned as `<route>-<namespace>.<cluster_domain>` unless you set
-`ui.externalHostname`, `service.externalHostname`, or `keycloak.route.hostname`.
+namespace. Host names are auto-assigned as
+`<route>-<namespace>.<cluster_domain>` unless you set `ui.externalHostname`
+or `service.externalHostname`. Obtain the Keycloak console URL from your
+identity provider administrator.
 
 ```console
 oc get route -n <namespace>
-oc get route -n keycloak
 ```
 
 - **OSAC web console.** Deployed whenever `ui.enabled` is `true`, which is the
   default. The route uses edge TLS termination and redirects HTTP to HTTPS. Log
-  in through Keycloak SSO against the `osac` realm. With the bundled Keycloak,
-  use the `keycloak.adminUsername` and `keycloak.adminPassword` values that you
-  set. Production deployments use realm users or a federated identity provider.
+  in through Keycloak SSO against the `osac` realm, using a realm user or
+  a federated identity provider configured by your Keycloak administrator.
 - **Fulfillment API.** Authenticate with an OIDC token or with `osac login`, as
   described in step 11 of [Section 7](#7-verifying-the-installation).
 - **AAP.** Log in as `admin`. To retrieve the password, run the following
@@ -2389,8 +2256,8 @@ oc get route -n keycloak
   oc extract secret/osac-aap-admin-password -n <namespace> --to -
   ```
 
-- **Keycloak admin console.** Log in with the `keycloak.adminUsername` and
-  `keycloak.adminPassword` values.
+- **Keycloak admin console.** Use the URL and administrator credentials
+  supplied by your identity provider administrator.
 
 ### 8.2 Installing the `osac` CLI
 
@@ -2469,8 +2336,8 @@ local hub is not already registered.
 
 1. Log in to the Fulfillment Service through `fulfillment-internal-api`.
    Hub registration uses the private API, so run this procedure from an
-   administrator host that can reach the internal route. For the bundled CA
-   or a custom CA, use the API trust bundle prepared in step 4 of
+   administrator host that can reach the internal route. For a custom CA,
+   use the API trust bundle prepared in step 4 of
    [Section 7](#7-verifying-the-installation):
 
    ```console
@@ -2606,9 +2473,8 @@ reconciles the `ConfigMap` from those values.
 - The published `osac` chart at a stable tagged release. The chart
   `values-example.yaml` file documents the Production block: an external
   PostgreSQL database, an external Keycloak, and pinned image tags.
-- Prerequisite Operators and infrastructure already present on the cluster —
-  installed by whoever prepares the cluster using the
-  [Helm Deployment Guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/helm-deployment-guide.md).
+- Prerequisite Operators and external services prepared by your platform
+  administrators before installing OSAC.
 - An external PostgreSQL 18 or later server configured for the chart's
   client-certificate authentication and selected through `dbInit.host`. See
   [Section 2.4](#24-credentials-and-external-services).
@@ -2628,18 +2494,14 @@ reconciles the `ConfigMap` from those values.
 
 ### 9.2 Evaluation only
 
-- The bundled PostgreSQL database (`bundledPostgres.enabled: true`) is for
-  testing only and is not intended for production.
-- The bundled OpenBao secret store (`bundledVault.enabled: true`). It is for
-  testing and CI, not production.
-- `keycloak.devFixtures.enabled: true` and the default `admin` Keycloak
-  credentials.
+- Bundled PostgreSQL and OpenBao instances supplied for testing or CI.
+- Keycloak test fixtures and default administrator credentials.
 - Development or CI reference values files and `main`/`latest` image tags.
 
 ### 9.3 Not covered by this guide
 
-- Setting up the phase-1 prerequisites yourself. See the
-  [Helm Deployment Guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/helm-deployment-guide.md).
+- Installing and operating the prerequisite Operators and external services.
+  Coordinate their setup with your platform administrators.
 - Detailed configuration of an external Keycloak. The chart accepts an external
   Keycloak through `service.auth` and `service.idp`, but realm and client
   provisioning is out of scope. See
@@ -2725,36 +2587,21 @@ reconciles the `ConfigMap` from those values.
    $ oc delete configmap -n "$NS" -l osac.openshift.io/preflight-report=true
    ```
 
-If your platform team also installed the phase-1 prerequisites for this
-deployment and they need to come down too, see "Uninstall" in the
-[Helm Deployment Guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/helm-deployment-guide.md#uninstall).
-Do not remove shared prerequisites on a cluster used by other deployments.
+Prerequisite Operators and external services have their own lifecycle.
+Coordinate their removal with your platform administrators. Do not remove
+shared prerequisites on a cluster used by other deployments.
 
 ---
 
 ## 11. Troubleshooting
 
 Most successful hook Jobs are deleted by Helm. Failed Jobs are normally
-retained for inspection, but some infrastructure Jobs have a cleanup timer.
-If installation or upgrade fails during a phase-2 hook, list the retained
-Jobs in the `osac` release namespace:
+retained for inspection. If installation or upgrade fails during an OSAC
+hook, list the retained Jobs in the `osac` release namespace:
 
 ```console
 oc get jobs -n <namespace> | grep -E 'db-init|publish-templates|bootstrap|network-class|create-hub'
 ```
-
-When `keycloak.enabled`, `keycloak.route.publicIngress`, and
-`caIssuer.enabled` are all `true` in `osac-infra`, also check its
-route-patching hook. Use the infrastructure release's namespace if it
-differs from `osac-infra`:
-
-```console
-oc get jobs -n osac-infra | grep -E 'patch-keycloak-route'
-```
-
-Check the Job's status for a failure. This hook's completed and failed Jobs
-are eligible for cleanup one hour after they finish, so collect failure
-logs promptly.
 
 With Helm 3.18 or later, or Helm 4, Helm prints the log of a failed hook job in
 its own output, so the cause is usually already on your screen.
@@ -2952,16 +2799,13 @@ oc logs job/osac-db-init -n <namespace> -c psql
 
 ```console
 oc get certificate,certificaterequest -n <namespace>
-# When caIssuer.enabled is true in osac-infra
-oc get clusterissuer default-ca
 oc logs -n cert-manager deploy/cert-manager
 ```
 
 Always check the `Issuer` or `ClusterIssuer` selected by
 `service.certs.issuerRef` as described in step 4 of
-[Section 7](#7-verifying-the-installation), independently of
-`caIssuer.enabled`. It must exist and report `Ready: True`. Check `default-ca`
-separately only when `caIssuer.enabled` is `true`.
+[Section 7](#7-verifying-the-installation). It must exist and report
+`Ready: True`.
 
 ### 11.7 The AAP instance does not start
 
@@ -3045,9 +2889,10 @@ oc logs deploy/fulfillment-controller -n <namespace>
 
 - `issuer URL '...' is not trusted`: the `--auth-issuer-url` and `--idp-url`
   values of the service do not match the external host name of Keycloak. These
-  values derive from `global.clusterDomain`; confirm that it was set at
-  installation and matches `keycloak.route.hostname`. To check the value the
-  running container actually received:
+  values default to URLs derived from `global.clusterDomain`. For an
+  existing Keycloak, set `service.auth.issuerUrl` to its realm issuer URL and
+  `service.idp.url` to its server base URL. To check the values the running
+  container actually received:
 
   ```console
   oc get deploy fulfillment-grpc-server -n <namespace> -o jsonpath='{.spec.template.spec.containers[0].args}' | tr ',' '\n' | grep -E 'issuer|idp'
@@ -3057,11 +2902,12 @@ oc logs deploy/fulfillment-controller -n <namespace>
   during installation. For missing database client-certificate Secrets,
   check their Certificate resources and the configured issuer; see
   [Section 11.6](#116-certificates-never-become-ready).
-- Missing controller-credential Secrets: check the phase-1 Keycloak
-  configuration or the credentials supplied for an external Keycloak.
+- Missing controller-credential Secrets: verify the credentials supplied
+  by your Keycloak administrator and the Secret name and keys configured in
+  `operator.fulfillment.credentials`.
 - `lookup openbao.<namespace>.svc ... no such host` or
-  `Failed to provision vault namespace`: `bundledVault.enabled` is `false` but
-  `service.vault.endpoint` still points at the in-cluster OpenBao, or the
+  `Failed to provision vault namespace`: `service.vault.endpoint` does not
+  point at your reachable Vault or OpenBao instance, or the
   external store's namespace, policy, JWT role, or credentials are incorrect.
   Check the endpoint and follow the
   [secrets management configuration guide](secrets-management-configuration.md#troubleshooting).
@@ -3074,11 +2920,10 @@ oc logs deploy/fulfillment-controller -n <namespace>
 
 ### 11.11 Web console login loops with an `issuer not trusted` error
 
-This has the same root cause as the Fulfillment Service issuer error: a
-`global.clusterDomain` mismatch between the web console OIDC configuration, the
-Fulfillment Service, and the Keycloak `KC_HOSTNAME`. Confirm that all three
-resolve to `keycloak-keycloak.<cluster_domain>` and run `helm upgrade` again
-with the correct `global.clusterDomain`.
+Confirm that the web console OIDC configuration and the Fulfillment
+Service use the issuer URL supplied by your Keycloak administrator. The
+issuer must match the `iss` claim in Keycloak tokens. Correct the OSAC
+values and run `helm upgrade` again.
 
 ### 11.12 The first provisioning request fails while the pods are healthy
 
@@ -3174,18 +3019,12 @@ with the correct `global.clusterDomain`.
 
 ## 12. Glossary
 
-- **Phases** — Phase 1 is the prerequisite Operators (`osac-deps`) and the
-  infrastructure layer (`osac-infra`). Phase 2 is the OSAC platform (`osac`
-  chart). This guide installs phase 2 only.
-- **`osac-deps`, `osac-infra`, `osac`** — The three Helm charts. The `osac`
-  chart is published as an OCI artifact; the other two are only in the monorepo.
-- **Published-chart install** — Installing only the published `osac` chart
-  (phase 2) onto a cluster where the prerequisites already exist. See the
-  [Helm Deployment Guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/helm-deployment-guide.md)
-  if you need to set up the prerequisites yourself.
+- **`osac` chart** — The OSAC platform Helm chart, published as an OCI artifact.
+- **Published-chart install** — Installing the published `osac` chart onto a
+  cluster where the prerequisite Operators and external services already exist.
 - **Operand** — The custom resource that an Operator reconciles, for example
   `HyperConverged` for OpenShift Virtualization, `LVMCluster` for LVM Storage,
-  or `IPAddressPool` for MetalLB. The `osac-infra` chart creates these.
+  or `IPAddressPool` for MetalLB.
 - **ClusterServiceVersion (CSV)** — The OLM record of an installed Operator
   version. A status of `Succeeded` means that the Operator is running.
 - **Hub** — The OpenShift Container Platform cluster that the OSAC Operator and

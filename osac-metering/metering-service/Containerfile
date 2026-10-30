@@ -27,6 +27,7 @@ COPY --chown=1001:0 proto/go.mod proto/go.sum proto/
 COPY --chown=1001:0 osac-operator/go.mod osac-operator/go.sum osac-operator/
 COPY --chown=1001:0 osac-operator/api/go.mod osac-operator/api/go.sum osac-operator/api/
 COPY --chown=1001:0 bare-metal-fulfillment-operator/go.mod bare-metal-fulfillment-operator/go.sum bare-metal-fulfillment-operator/
+COPY --chown=1001:0 bare-metal-fulfillment-operator/api/go.mod bare-metal-fulfillment-operator/api/go.sum bare-metal-fulfillment-operator/api/
 COPY --chown=1001:0 fulfillment-service/go.mod fulfillment-service/go.sum fulfillment-service/
 COPY --chown=1001:0 osac-csi-driver/go.mod osac-csi-driver/go.sum osac-csi-driver/
 COPY --chown=1001:0 osac-metering/adapters/go.mod osac-metering/adapters/go.sum osac-metering/adapters/

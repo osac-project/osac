@@ -1,0 +1,61 @@
+name: Opt-in image Go cache trial
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character commit of this workflow ref; six build-only jobs, no reruns
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-go-cache-trial
+  cancel-in-progress: false
+
+jobs:
+  baseline-1:
+    uses: ./.github/workflows/image-go-cache-sample.yaml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      sample: baseline
+      label: baseline-1
+      compatibility_gate: true
+  baseline-2:
+    needs: baseline-1
+    uses: ./.github/workflows/image-go-cache-sample.yaml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      sample: baseline
+      label: baseline-2
+  cold:
+    needs: baseline-2
+    uses: ./.github/workflows/image-go-cache-sample.yaml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      sample: cold
+      label: cold
+  warm-1:
+    needs: cold
+    uses: ./.github/workflows/image-go-cache-sample.yaml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      sample: warm
+      label: warm-1
+  warm-2:
+    needs: warm-1
+    uses: ./.github/workflows/image-go-cache-sample.yaml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      sample: warm
+      label: warm-2
+  invalidation:
+    needs: [baseline-1, warm-2]
+    uses: ./.github/workflows/image-go-cache-sample.yaml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      sample: invalidation
+      label: invalidation
+      original_key: ${{ needs.baseline-1.outputs.key }}

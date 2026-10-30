@@ -88,6 +88,93 @@ Netris `full` suite also includes this test.
 
 ## Which tests a directory needs
 
+### Opt-in integration image Go cache
+
+The manual Nightly Build `image_go_cache` input defaults to false. It reaches
+only the fulfillment integration leg, whose installer `kind-container-build`
+macro uses ordinary `docker build`. Schedules, releases, Konflux, other legs
+and standalone image publication are unchanged. Do not start a full nightly
+deployment merely to measure this cache. This is distinct from Buildx layer
+caching in `publish-image.yaml`.
+
+The local `go-image-cache` action imports/exports only `osac-go-pkg` and
+`osac-go-build` through the existing **default Docker driver**, selecting that
+same builder for the consumer. It does not use a separate docker-container
+driver. No Docker storage, registry authentication or runtime directory is
+persisted. The toolset image is resolved to a digest; no additional utility
+image or third-party transport action is required. Actions cache v5 and the
+checkout/artifact actions use the same SHA pins as the existing workflows.
+
+Schema `osac-image-go-v1` fingerprints all workspace module manifests/sums,
+`go.work`, the three integration Containerfiles, Docker ignore rules, installer
+Makefile, helper/action, resolved base images, builder/engine versions,
+platform and build settings. Keys have no partial restore prefixes. Missing,
+unsupported, malformed or oversized cache data warns and leaves the normal
+build enabled; an actual compilation or test failure still fails. Imported
+module zip checksums must match committed sums and `go mod verify` runs before
+import. Extraction is capped at 3 GiB and verified again before saving.
+
+Only successful manual builds in a public repository may save: the default
+branch, or the isolated `trial-RUN_ID` namespace on a manually dispatched branch.
+Fork runs use their own repository/ref scope; no token grants cross-repository
+cache access. Base-branch caches may be readable by fork PRs, so never enable
+this trial for private dependencies. Non-public proxy/private-module settings
+are rejected. Cache data is disposable input, never provenance or a reason to
+skip the build. Per-job reuse across the fulfillment, metering and operator
+images uses their existing shared mount IDs.
+
+Run helper contracts with:
+
+```sh
+uv run --no-project --with pyyaml==6.0.3 python -m unittest discover -s .github/scripts -p test_image_go_cache.py -v
+```
+
+#### Bounded manual measurements
+
+After publication and dispatch-capability confirmation, dispatch
+`image-go-cache-trial.yaml` once with the same exact 40-character commit as its
+workflow ref. The serial chain has **six fresh ubuntu-24.04 jobs, 20 minutes
+each**: baseline twice, cold once, warm twice, valid dependency-invalidation
+once. No clusters, registry pushes, signing or releases run. Reruns are refused;
+do not launch a second campaign without a new budget approval. The first
+baseline includes the compatibility gate (not an extra seventh job): inject
+markers through Buildx's default Docker driver, consume them with ordinary
+Docker build, export them, then clear both mounts before the baseline. Any
+failure stops downstream jobs. The job cap includes compatibility/setup time.
+
+Each build invokes the installer's existing build macro through an ephemeral
+build-only Make target, with `--no-cache` to execute RUN instructions. A temporary
+copy of the production fulfillment Containerfile adds Go environment, mount
+file counts and checksum-verification observations; production sources are
+not edited. The last sample uses Go tooling in the matching toolset to add
+public `rsc.io/binaryregexp@v0.2.0` (a module with no dependencies) in the disposable checkout, with valid generated
+checksums; its variant diff and changed key are recorded. It must miss, and the
+two warm samples must restore the exact key and inject successfully.
+
+Artifacts separate restore hit/matched-key and injection state from observed
+image-build consumption. They include frozen source/input identities, actual
+builder and toolset digests, cache bytes, operation overhead, build duration,
+download/error log observations, checksum verification, image identity and exit
+status. Download log counts are lower bounds, **not** total network requests;
+total build time is not dependency-download time. Read the raw logs when
+classifying failures. A cache hit is neither a connectivity fix nor evidence
+of a lower failure rate. Two baseline/two warm observations are descriptive,
+not statistically conclusive. Runner-image drift and cache overhead can dominate.
+
+Keep opt-in only if cross-job consumption and checksum/source integrity are
+proven and observed warm benefit exceeds overhead; revise for incompatibility,
+payload or key problems; drop if safe persistence is not worthwhile. Standard
+public hosted runner minutes are normally free, but confirm repository policy
+and storage billing before dispatch. The maximum is 120 runner-minutes and a
+single <=3 GiB payload; logs expire after seven days. Clean up only that trial's
+cache namespace after analysis, subject to permissions. Local Podman probes
+are not Docker/Go/GitHub compatibility evidence, and no results are assumed.
+
+Before promising automated execution, confirm dispatch permissions and that the
+workflow is registered on the repository's default branch. Publishing a workflow
+on a feature branch alone does not guarantee that it can be dispatched. No
+external measurements are implied by the presence of these workflow files.
+
 A change under a directory runs the parts below, and a part that applies has to pass before `CI` does: there is no way
 to merge around it (only an organization admin bypassing the rule). Everything else shows as skipped inside the run. Every
 change also runs `pre-commit` and `dependency-review`. `ci-tests.yml` and `filters/ci-filters.yml` are the source.

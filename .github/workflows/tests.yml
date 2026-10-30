@@ -11,6 +11,10 @@ name: Tests
 on:  # yamllint disable-line rule:truthy
   workflow_call:
     inputs:
+      image_go_cache:
+        description: Opt-in fulfillment integration image Go cache
+        type: boolean
+        default: false
       # Every checkout uses this commit; empty keeps the caller's default.
       commit:
         description: Commit to check out; empty uses the triggering commit
@@ -124,6 +128,11 @@ jobs:
         env:
           CONTAINER_TOOL: docker
         run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+      - name: Restore integration image Go mounts
+        if: inputs.kind == 'it-fulfillment-service' && inputs.image_go_cache && github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/go-image-cache
+        with:
+          phase: restore
       - name: Run integration tests
         if: inputs.kind == 'it-fulfillment-service'
         env:
@@ -136,6 +145,11 @@ jobs:
           echo '127.0.0.1 keycloak.keycloak.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
           echo '127.0.0.1 mcp.osac.localhost' | sudo tee -a /etc/hosts >/dev/null
           make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
+      - name: Save integration image Go mounts
+        if: inputs.kind == 'it-fulfillment-service' && inputs.image_go_cache && github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/go-image-cache
+        with:
+          phase: save
       - name: Collect diagnostic logs
         if: inputs.kind == 'it-fulfillment-service' && always()
         run: |

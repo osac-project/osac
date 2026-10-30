@@ -6,6 +6,10 @@ on:
     - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
+      image_go_cache:
+        description: Opt in to the fulfillment integration image Go cache trial
+        type: boolean
+        default: false
       skip_e2e:
         description: >-
           Skip e2e validation (vmaas/caas/bmaas) and publish anyway if
@@ -71,6 +75,7 @@ jobs:
       KONFLUX_SA_TOKEN: ${{ secrets.KONFLUX_SA_TOKEN }}
     with:
       mode: nightly
+      image_go_cache: ${{ github.event_name == 'workflow_dispatch' && inputs.image_go_cache == true }}
       skip_e2e: ${{ github.event.inputs.skip_e2e == 'true' }}
       skip_integration: ${{ github.event.inputs.skip_integration == 'true' }}
       skip_unit: ${{ github.event.inputs.skip_unit == 'true' }}

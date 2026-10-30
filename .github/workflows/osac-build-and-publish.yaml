@@ -21,6 +21,10 @@ name: OSAC Build and Publish
 on:
   workflow_call:
     inputs:
+      image_go_cache:
+        description: Opt-in fulfillment integration image Go cache; nightly manual runs only
+        type: boolean
+        default: false
       mode:
         description: "nightly | release"
         type: string
@@ -807,6 +811,8 @@ jobs:
     # succeeded.
     if: inputs.skip_integration != true
     uses: ./.github/workflows/integration-tests.yml
+    with:
+      image_go_cache: ${{ inputs.mode == 'nightly' && github.event_name == 'workflow_dispatch' && inputs.image_go_cache }}
 
   security-tests:
     name: Security tests (CodeQL)

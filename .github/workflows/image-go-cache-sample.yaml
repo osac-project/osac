@@ -1,0 +1,123 @@
+name: Image Go cache sample
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Frozen 40-character implementation commit
+        required: true
+        type: string
+      sample:
+        description: baseline, cold, warm or invalidation
+        required: true
+        type: string
+      label:
+        description: Unique sample label
+        required: true
+        type: string
+      compatibility_gate:
+        description: Run the compatibility gate inside the first sample's budget
+        type: boolean
+        default: false
+      original_key:
+        description: Unchanged-input key for invalidation comparison
+        type: string
+        default: ''
+    outputs:
+      key:
+        description: Unchanged-input cache key
+        value: ${{ jobs.sample.outputs.key }}
+
+permissions:
+  contents: read
+
+jobs:
+  sample:
+    if: github.run_attempt == 1 && github.event_name == 'workflow_dispatch' && inputs.source_sha == github.sha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      key: ${{ steps.prepare.outputs.key }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Validate fixed source and sample
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SAMPLE: ${{ inputs.sample }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$SOURCE_SHA" ]]
+          test -z "$(git status --porcelain)"
+          case "$SAMPLE" in baseline|cold|warm|invalidation) ;; *) exit 1 ;; esac
+      - name: Record runner and default-builder inputs
+        id: prepare
+        env:
+          CACHE_NAMESPACE: trial-${{ github.run_id }}
+        run: |
+          python3 .github/scripts/image_go_cache.py prepare --state "$RUNNER_TEMP/osac-go-image-cache" --namespace "$CACHE_NAMESPACE"
+          test -f "$RUNNER_TEMP/osac-go-image-cache/state.json"
+      - name: Gate ordinary Docker build compatibility
+        if: inputs.compatibility_gate
+        run: python3 .github/scripts/image_go_cache.py compatibility --state "$RUNNER_TEMP/osac-go-image-cache"
+      - name: Generate valid public dependency-input variant
+        if: inputs.sample == 'invalidation'
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: python3 .github/scripts/image_go_cache.py invalidation --state "$RUNNER_TEMP/osac-go-image-cache" --source-sha "$SOURCE_SHA"
+      - name: Restore exact mount payload
+        id: mounts
+        if: inputs.sample != 'baseline'
+        uses: ./.github/actions/go-image-cache
+        with:
+          phase: restore
+          namespace: trial-${{ github.run_id }}
+      - name: Check expected restore separately from consumption
+        if: inputs.sample != 'baseline'
+        env:
+          SAMPLE: ${{ inputs.sample }}
+          ORIGINAL_KEY: ${{ inputs.original_key }}
+          CURRENT_KEY: ${{ steps.mounts.outputs.key }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          state = json.loads((Path(os.environ['RUNNER_TEMP']) / 'osac-go-image-cache/state.json').read_text())
+          sample = os.environ['SAMPLE']
+          restore = state['restore']
+          if sample == 'warm':
+              assert restore['cache_hit'] == 'true', 'warm sample did not restore the exact key'
+              assert state['injection'] == 'verified-and-injected', 'restore did not reach the default builder'
+          else:
+              assert not restore['matched_key'], 'expected a genuine cold/invalidation miss'
+          if sample == 'invalidation':
+              assert os.environ['CURRENT_KEY'] != os.environ['ORIGINAL_KEY'], 'dependency variant did not invalidate key'
+          PY
+      - name: Build through the installer macro without deploying
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SAMPLE: ${{ inputs.sample }}
+        run: python3 .github/scripts/image_go_cache.py sample --state "$RUNNER_TEMP/osac-go-image-cache" --sample "$SAMPLE" --source-sha "$SOURCE_SHA"
+      - name: Save cold sample payload
+        if: inputs.sample == 'cold'
+        uses: ./.github/actions/go-image-cache
+        with:
+          phase: save
+          namespace: trial-${{ github.run_id }}
+      - name: Upload measurements, not cache contents
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: image-go-cache-${{ inputs.label }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/osac-go-image-cache/*.json
+            ${{ runner.temp }}/osac-go-image-cache/*.jsonl
+            ${{ runner.temp }}/osac-go-image-cache/*.log
+            ${{ runner.temp }}/osac-go-image-cache/*.diff

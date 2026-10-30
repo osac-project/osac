@@ -1,0 +1,301 @@
+"""Exercise the opt-in image-cache boundary without a container daemon."""
+
+import json
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import image_go_cache as cache
+import yaml
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class CacheContracts(unittest.TestCase):
+    def test_fingerprint_covers_all_workspace_inputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for relative in cache.input_paths(ROOT):
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT / relative).read_bytes())
+            settings = {"builder": "docker-default-1", "platform": "linux/amd64"}
+            original = cache.fingerprint(root, settings)
+            for relative in cache.input_paths(root):
+                target = root / relative
+                content = target.read_bytes()
+                target.write_bytes(content + b"\n")
+                self.assertNotEqual(original, cache.fingerprint(root, settings), str(relative))
+                target.write_bytes(content)
+            self.assertEqual(original, cache.fingerprint(root, settings))
+            for field in ("builder", "platform", "toolchain", "build_flags", "schema"):
+                self.assertNotEqual(original, cache.fingerprint(root, settings | {field: "changed"}))
+
+    def test_workspace_inputs_include_every_current_module(self):
+        inputs = {str(path) for path in cache.input_paths(ROOT)}
+        for module in (ROOT / "go.work").read_text().splitlines():
+            if module.strip().startswith("./"):
+                for manifest in ("go.mod", "go.sum"):
+                    self.assertIn(f"{module.strip()[2:]}/{manifest}", inputs)
+
+    def test_payload_allows_only_bounded_regular_module_and_build_data(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = Path(temporary)
+            for name in ("pkg", "build"):
+                (payload / name).mkdir()
+            (payload / "pkg" / "checksum").write_bytes(b"valid")
+            self.assertEqual(5, cache.payload_size(payload))
+            with self.assertRaises(ValueError):
+                cache.payload_size(payload, limit=4)
+            (payload / "auth.json").touch()
+            with self.assertRaises(ValueError):
+                cache.payload_size(payload)
+            (payload / "auth.json").unlink()
+            (payload / "pkg" / "escape").symlink_to("/etc/passwd")
+            with self.assertRaises(ValueError):
+                cache.payload_size(payload)
+
+    def test_incomplete_and_hardlinked_payloads_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = Path(temporary)
+            (payload / "pkg").mkdir()
+            with self.assertRaises(ValueError):
+                cache.payload_size(payload)
+            (payload / "build").mkdir()
+            (payload / "pkg" / "first").touch()
+            os.link(payload / "pkg" / "first", payload / "build" / "second")
+            with self.assertRaises(ValueError):
+                cache.payload_size(payload)
+
+    def test_transport_uses_exact_named_mounts_and_default_builder(self):
+        for operation in ("inject", "extract", "clear"):
+            dockerfile = cache.transport_file(ROOT, "example.invalid/toolset@sha256:" + "a" * 64, operation)
+            for mount in cache.MOUNTS.values():
+                self.assertIn(f"id={mount[0]},target={mount[1]},uid=1001,gid=0", dockerfile)
+            self.assertNotIn("type=secret", dockerfile)
+        self.assertIn("go mod verify", cache.transport_file(ROOT, "toolset", "verify"))
+
+    def test_actual_installer_macro_is_invoked_without_cluster_targets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            docker = directory / "docker"
+            docker.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" > "$CAPTURE"\nexit 17\n')
+            docker.chmod(0o755)
+            environment = os.environ | {"PATH": f"{directory}:{os.environ['PATH']}", "CAPTURE": str(directory / "args")}
+            result = subprocess.run(
+                cache.consumer_command(ROOT, directory / "Containerfile"),
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(0, result.returncode)
+            arguments = (directory / "args").read_text().splitlines()
+            self.assertEqual("build", arguments[0])
+            self.assertIn("--no-cache", arguments)
+            self.assertIn("localhost/fulfillment-service:it", arguments)
+            self.assertEqual("..", arguments[-1])
+
+    def test_trust_requires_public_default_branch_and_manual_context(self):
+        trusted = {"event": "workflow_dispatch", "ref": "refs/heads/main", "default_branch": "main", "private": False}
+        self.assertTrue(cache.trusted_save(trusted))
+        for change in (
+            {"event": "pull_request"},
+            {"event": "pull_request_target"},
+            {"ref": "refs/pull/1/merge"},
+            {"private": True},
+        ):
+            self.assertFalse(cache.trusted_save(trusted | change))
+
+    def test_workflow_defaults_and_trial_budget(self):
+        workflows = ROOT / ".github/workflows"
+        for filename in ("nightly-build.yaml", "osac-build-and-publish.yaml", "integration-tests.yml", "tests.yml"):
+            workflow = yaml.safe_load((workflows / filename).read_text())
+            triggers = workflow.get("on", workflow.get(True))
+            trigger = "workflow_dispatch" if filename == "nightly-build.yaml" else "workflow_call"
+            self.assertIs(False, triggers[trigger]["inputs"]["image_go_cache"]["default"])
+        trial = yaml.safe_load((workflows / "image-go-cache-trial.yaml").read_text())
+        self.assertEqual(6, len(trial["jobs"]))
+        self.assertEqual(
+            ["baseline", "baseline", "cold", "warm", "warm", "invalidation"],
+            [job["with"]["sample"] for job in trial["jobs"].values()],
+        )
+        sample = yaml.safe_load((workflows / "image-go-cache-sample.yaml").read_text())
+        self.assertEqual(20, sample["jobs"]["sample"]["timeout-minutes"])
+        self.assertEqual("ubuntu-24.04", sample["jobs"]["sample"]["runs-on"])
+
+    def test_build_observations_do_not_equate_restore_to_consumption(self):
+        observations = cache.observe(
+            "#1 go: downloading example.org/m v1.0\n#2 OSAC_IMAGE_CACHE_BEFORE pkg=7 build=2\n"
+        )
+        self.assertEqual(1, observations["observed_download_lines"])
+        self.assertEqual(0, observations["observed_dependency_error_lines"])
+        self.assertEqual(["#2 OSAC_IMAGE_CACHE_BEFORE pkg=7 build=2"], observations["image_build_observations"])
+        self.assertNotIn("cache_hit", observations)
+
+    def test_dockerfile_instruction_text_is_not_consumption_evidence(self):
+        log = "#1 RUN echo OSAC_IMAGE_CACHE_VERIFIED\n#2 0.1 OSAC_IMAGE_CACHE_VERIFIED\n"
+        self.assertEqual(["#2 0.1 OSAC_IMAGE_CACHE_VERIFIED"], cache.observe(log)["image_build_observations"])
+
+    def test_missing_and_malformed_restore_fall_back_without_injection(self):
+        for malformed in (False, True):
+            with self.subTest(malformed=malformed), tempfile.TemporaryDirectory() as temporary:
+                state = Path(temporary)
+                (state / "state.json").write_text(json.dumps({"restore_started": 0}))
+                if malformed:
+                    (state / "payload").mkdir()
+                    (state / "payload/auth.json").touch()
+                with patch.object(cache, "transport") as docker_boundary:
+                    cache.inject(ROOT, state)
+                docker_boundary.assert_not_called()
+                self.assertEqual("cold-fallback", json.loads((state / "state.json").read_text())["injection"])
+
+    def test_verification_failure_does_not_inject_payload(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            (state / "state.json").write_text(json.dumps({"restore_started": 0}))
+            for name in cache.MOUNTS:
+                (state / "payload" / name).mkdir(parents=True)
+            with patch.object(cache, "transport", side_effect=subprocess.CalledProcessError(1, "docker")) as boundary:
+                cache.inject(ROOT, state)
+            self.assertEqual(["verify"], [call.args[2] for call in boundary.call_args_list])
+            self.assertEqual("cold-fallback", json.loads((state / "state.json").read_text())["injection"])
+
+    def test_checksum_payload_must_match_committed_sums(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = Path(temporary)
+            module, version, checksum = next(
+                line.split()
+                for line in (ROOT / "fulfillment-service/go.sum").read_text().splitlines()
+                if line.startswith("github.com/google/uuid ") and "/go.mod" not in line
+            )
+            ziphash = payload / "pkg/mod/cache/download" / module / "@v" / f"{version}.ziphash"
+            ziphash.parent.mkdir(parents=True)
+            ziphash.write_text(checksum)
+            cache.check_ziphashes(ROOT, payload)
+            ziphash.write_text("h1:wrong")
+            with self.assertRaises(ValueError):
+                cache.check_ziphashes(ROOT, payload)
+
+    def test_sample_preserves_real_build_failures_and_records_measurements(self):
+        source = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
+        for exit_code in (0, 19):
+            with self.subTest(exit_code=exit_code), tempfile.TemporaryDirectory() as temporary:
+                state = Path(temporary)
+                docker = state / "docker"
+                docker.write_text(
+                    '#!/bin/sh\nif [ "$1" = "image" ]; then\n'
+                    'case "$5" in *Labels*) echo dev ;; *) echo sha256:fixture ;; esac\nexit 0\nfi\n'
+                    'echo "#1 0.1 OSAC_IMAGE_CACHE_BEFORE phase=compile pkg=7 build=2"\n'
+                    'echo "#1 0.2 OSAC_IMAGE_CACHE_VERIFIED"\n'
+                    'echo "#1 0.3 OSAC_IMAGE_CACHE_COMPILED"\n'
+                    'echo "#1 0.4 OSAC_IMAGE_CACHE_VARIANT_DOWNLOADED"\n'
+                    f"exit {exit_code}\n"
+                )
+                docker.chmod(0o755)
+                environment = {"PATH": f"{state}:{os.environ['PATH']}", "GITHUB_RUN_ATTEMPT": "1"}
+                with patch.dict(os.environ, environment):
+                    if exit_code:
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            cache.sample(ROOT, state, "warm", source)
+                    else:
+                        cache.sample(ROOT, state, "invalidation", source)
+                report = json.loads((state / "measurement.json").read_text())
+                self.assertEqual(exit_code != 0, report["exit_code"] != 0)
+                self.assertEqual(source, report["source_sha"])
+                self.assertIn("image-cache-trial", report["consumer_argv"])
+                if not exit_code:
+                    self.assertEqual("dev", report["image_version"])
+                    self.assertEqual("sha256:fixture", report["image_id"])
+                self.assertGreaterEqual(report["build_seconds"], 0)
+                self.assertTrue((state / "build.log").is_file())
+
+    def test_sample_checks_frozen_revision_and_rerun_budget_before_build(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(ValueError):
+                cache.sample(ROOT, Path(temporary), "baseline", "main")
+            source = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
+            with patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "2"}), self.assertRaises(ValueError):
+                cache.sample(ROOT, Path(temporary), "baseline", source)
+
+    def test_sample_instruments_both_real_mount_consumers(self):
+        observed = cache.observed_containerfile(ROOT, "invalidation")
+        self.assertIn("phase=%s pkg=%s build=%s", observed)
+        self.assertIn("build=%s\\n' download", observed)
+        self.assertIn("build=%s\\n' compile", observed)
+        self.assertIn('test ! -f "$(go env GOMODCACHE)/cache/download/rsc.io/binaryregexp/@v/v0.2.0.zip"', observed)
+        self.assertIn("OSAC_IMAGE_CACHE_VARIANT_DOWNLOADED", observed)
+        self.assertIn("sha256sum -c /tmp/osac-sums", observed)
+
+    def test_trial_chain_has_no_parallel_or_seventh_runner(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/image-go-cache-trial.yaml").read_text())
+        previous = None
+        for name, job in workflow["jobs"].items():
+            if previous:
+                dependencies = job["needs"]
+                self.assertIn(previous, [dependencies] if isinstance(dependencies, str) else dependencies)
+            previous = name
+            self.assertNotIn("runs-on", job)
+        sample = yaml.safe_load((ROOT / ".github/workflows/image-go-cache-sample.yaml").read_text())
+        self.assertEqual(1, len(sample["jobs"]))
+        self.assertIn("github.run_attempt == 1", sample["jobs"]["sample"]["if"])
+
+    def test_action_save_trust_and_default_builder_do_not_expand_permissions(self):
+        action = yaml.safe_load((ROOT / ".github/actions/go-image-cache/action.yaml").read_text())
+        restore = next(step for step in action["runs"]["steps"] if step.get("id") == "restore")
+        self.assertNotIn("restore-keys", restore["with"])
+        export = next(step for step in action["runs"]["steps"] if step.get("id") == "export")
+        self.assertIn("!github.event.repository.private", export["if"])
+        self.assertIn("github.event_name == 'workflow_dispatch'", export["if"])
+        shared = yaml.safe_load((ROOT / ".github/workflows/osac-build-and-publish.yaml").read_text())
+        self.assertIn("inputs.mode == 'nightly'", shared["jobs"]["integration-tests"]["with"]["image_go_cache"])
+
+    def test_prepare_uses_stable_default_builder_identity_and_rejects_other_drivers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            docker = directory / "docker"
+            image = json.dumps(
+                [
+                    {
+                        "Config": {"Env": ["GOPROXY=https://proxy.golang.org", "GOSUMDB=sum.golang.org"]},
+                        "RepoDigests": ["example.invalid/toolset@sha256:" + "a" * 64],
+                    }
+                ]
+            )
+            docker.write_text(
+                '#!/bin/sh\ncase "$1 $2" in\n'
+                '"context show") echo default ;;\n'
+                '"buildx inspect") printf "Driver: %s\\nBuildKit version: v0.20.2\\n'
+                'Platforms: linux/amd64\\nLast Activity: %s\\n" "$DRIVER" "$ACTIVITY" ;;\n'
+                '"buildx version") echo buildx-v0.38.1 ;;\n'
+                f"\"image inspect\") echo '{image}' ;;\n"
+                '"version --format") echo engine-v28 ;;\n'
+                '"pull "*) exit 0 ;;\n*) exit 1 ;;\nesac\n'
+            )
+            docker.chmod(0o755)
+            environment = {
+                "PATH": f"{directory}:{os.environ['PATH']}",
+                "DRIVER": "docker",
+                "ACTIVITY": "first",
+                "GITHUB_ENV": str(directory / "env"),
+                "GITHUB_OUTPUT": str(directory / "output"),
+                "GOPRIVATE": "",
+                "GONOSUMDB": "",
+                "GONOPROXY": "",
+            }
+            with patch.dict(os.environ, environment):
+                cache.prepare(ROOT, directory / "state", "fixture")
+                first = json.loads((directory / "state/state.json").read_text())["key"]
+                os.environ["ACTIVITY"] = "second"
+                cache.prepare(ROOT, directory / "state", "fixture")
+                self.assertEqual(first, json.loads((directory / "state/state.json").read_text())["key"])
+                self.assertIn("BUILDX_BUILDER=default", (directory / "env").read_text())
+                os.environ["DRIVER"] = "docker-container"
+                with self.assertRaises(ValueError):
+                    cache.prepare(ROOT, directory / "state", "fixture")
+
+
+if __name__ == "__main__":
+    unittest.main()

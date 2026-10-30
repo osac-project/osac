@@ -17,6 +17,10 @@ on:  # yamllint disable-line rule:truthy
     # Flake detection passes a fixed commit and a label appended to saved log names.
     # Empty defaults keep other callers' checkout and log names unchanged.
     inputs:
+      image_go_cache:
+        description: Opt-in fulfillment integration image Go cache
+        type: boolean
+        default: false
       commit:
         description: Commit to check out; empty uses the triggering commit
         type: string
@@ -62,6 +66,7 @@ jobs:
     uses: ./.github/workflows/tests.yml
     with:
       commit: ${{ inputs.commit || '' }}
+      image_go_cache: ${{ inputs.image_go_cache == true && matrix.kind == 'it-fulfillment-service' }}
       kind: ${{ matrix.kind }}
       dir: ${{ matrix.dir || '' }}
       cmd: ${{ matrix.cmd || '' }}

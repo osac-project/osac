@@ -664,7 +664,7 @@ The phase-2 values that mount that Secret are in the
 [customer install guide](customer-install-guide.md#64-installing-vmaas-on-a-separate-workload-cluster).
 
 **Workload cluster.** Point `KUBECONFIG` at the workload cluster. In
-`my-infra-values.yaml`, enable `cnv` and `lvms`. Enable `evpn` when that
+`my-workload-infra-values.yaml`, enable `cnv` and `lvms`. Enable `evpn` when that
 cluster uses CUDN EVPN, as described in
 [EVPN host networking (VMaaS)](#evpn-host-networking-vmaas). Disable the other
 phase-1 toggles. Set `certManager.enabled`, `trustManager.enabled`, and
@@ -672,22 +672,32 @@ phase-1 toggles. Set `certManager.enabled`, `trustManager.enabled`, and
 when `certManager` is disabled. Also disable `aapOperator`, `keycloak`,
 `mce`, and `kafka`. Run
 [Phase 1a](#phase-1a-install-prerequisite-operators) and
-[Phase 1b](#phase-1b-install-shared-infrastructure) against that kubeconfig.
+[Phase 1b](#phase-1b-install-shared-infrastructure) against that kubeconfig,
+replacing `-f my-infra-values.yaml` with `-f my-workload-infra-values.yaml`
+in both commands.
 Do not install the `osac` chart on this cluster.
 
-**Management cluster.** Point `KUBECONFIG` at the management cluster. Keep
-OpenShift Virtualization and EVPN off in `my-infra-values.yaml`:
+**Management cluster.** Point `KUBECONFIG` at the management cluster. Create
+a separate `my-management-infra-values.yaml` for its prerequisites. Keep the
+certificate stack enabled and OpenShift Virtualization and EVPN disabled:
 
 ```yaml
+certManager:
+  enabled: true
+trustManager:
+  enabled: true
+caIssuer:
+  enabled: true
 cnv:
   enabled: false
 evpn:
   enabled: false
 ```
 
-Run phase 1a and phase 1b with that file, then phase 2 with the remote
-kubeconfig values from the customer install guide. The Secret must exist in
-the OSAC namespace before `helm upgrade --install osac`. Keep
+Run phase 1a and phase 1b, replacing `-f my-infra-values.yaml` with
+`-f my-management-infra-values.yaml` in both commands. Then run phase 2 with
+the remote kubeconfig values from the customer install guide. The Secret must
+exist in the OSAC namespace before `helm upgrade --install osac`. Keep
 `lvms.enabled: true` in the phase-2 `my-values.yaml` to register the workload
 cluster's local StorageBackend and StorageTier in fulfillment. Installing
 LVMS through phase 1 alone does not perform that registration.

@@ -115,7 +115,7 @@ wait_for_resource() {
 wait_for_infra_ready() {
     local cli="$1"
     local timeout="${2:-300}"
-    local entry resource namespace condition
+    local entry resource namespace condition found rc message lookup_err
     local -a ns_args
     local -a targets=(
         "clusterissuer/default-ca||condition=Ready"
@@ -128,9 +128,22 @@ wait_for_infra_ready() {
         ns_args=()
         [[ -n "${namespace}" ]] && ns_args=(-n "${namespace}")
 
-        if [[ -z "$("${cli}" get "${resource}" "${ns_args[@]+"${ns_args[@]}"}" --ignore-not-found -o name 2>/dev/null)" ]]; then
-            continue
+        # A resource the profile did not create is skipped: the object is absent
+        # (empty output) or its CRD is not installed. Any other failure (API
+        # unreachable, forbidden, timed out) is an error and not "absent".
+        lookup_err="$(mktemp)"
+        rc=0
+        found="$("${cli}" get "${resource}" "${ns_args[@]+"${ns_args[@]}"}" --ignore-not-found -o name --request-timeout=15s 2>"${lookup_err}")" || rc=$?
+        message="$(<"${lookup_err}")"
+        rm -f "${lookup_err}"
+        if (( rc != 0 )); then
+            if [[ "${message}" == *"the server doesn't have a resource type"* ]]; then
+                continue
+            fi
+            echo "ERROR: could not look up ${resource}: ${message}" >&2
+            return 1
         fi
+        [[ -n "${found}" ]] || continue
         echo "Waiting for ${resource} (${condition}, up to ${timeout}s)..."
         "${cli}" wait --for="${condition}" "${resource}" "${ns_args[@]+"${ns_args[@]}"}" --timeout="${timeout}s" || {
             echo "ERROR: ${resource} did not reach ${condition} within ${timeout}s" >&2

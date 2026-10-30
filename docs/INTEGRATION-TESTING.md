@@ -347,6 +347,7 @@ installer command in the tier table remains the component-integration check.
 - **FabricDomain to Netris lifecycle:** The complete BMaaS E2E journey is tracked by [OSAC-4786](https://redhat.atlassian.net/browse/OSAC-4786). It requires reserved real Netris hosts and owned cleanup; API-only integration cases are not substitutes.
 - **Catalog Items:** `it/` checks creation and update behavior, publication visibility, CLI creation, and the ClusterOrder release image written by Fulfillment. Catalog-backed provisioning journeys that exercise other components remain in the CaaS, VMaaS, BMaaS, and reference E2E suites.
 - **ComputeInstance additional-disk defaults:** the VMaaS regression test `test_compute_instance_empty_additional_disks_disables_catalog_item_default` covers the API contract for omitted and explicitly empty disk lists through provisioning and the resulting operator resource.
+- **Billing provider status ([DEV] [OSAC-6879](https://redhat.atlassian.net/browse/OSAC-6879), [OSAC-6881](https://redhat.atlassian.net/browse/OSAC-6881)):** `internal/servers/billing_provider_statuses_server_test.go` covers the statuses servers against a counting adapter double: one bounded probe per read, the shared last successful check, and failure reasons; authorization (admin group, service accounts, tenant-role denial on the public and private Get) is covered by `internal/auth/authorization_evaluator_test.go` at Unit tier. `it/it_billing_provider_status_test.go` targets the deployed CLI/gRPC boundary in disabled (`NOT_CONFIGURED`) mode only, because the dev deployment configures no billing provider; its sole execution path is the CI leg Integration test (fulfillment-service) (`ci-tests.yml`, run by `workflows/tests.yml`), which runs the Fulfillment installer target on Kind, and no locally executed run is recorded for this branch, so the deployed tier is planned rather than executed locally. The REST gateway routes have no route-level test — only handler-list membership in `start_rest_gateway_cmd_test.go` and a simulated gateway error-mapping case in the guard spec. Configured-provider states (AVAILABLE/UNAVAILABLE probes, `lastSuccessfulCheck` retention, provider failure messages), the REST routes, and deployed non-admin denial have no deployed-tier coverage. No owning follow-up ticket exists yet, so these gaps are unresolved.
 
 ## osac-installer
 
@@ -386,6 +387,33 @@ it does not start the hooks or prove a deployed fulfillment endpoint accepts
 the certificate. The Kind
 `SUITE=fulfillment` target exercises deployed startup and API behavior, subject
 to the profile's configured CA and enabled services.
+
+The `make billing-render-test` Helm contract renders the umbrella chart with
+and without `global.billing.provider`. It asserts the credential Secret is
+mounted only when configured, that no credential value is rendered, and that
+the schema and template checks reject partial, second-provider, out-of-range
+and inverted tuning values. It checks rendered manifests only; it does not
+install against a provider (the fulfillment install test is design-doc
+Story 1.05; no Jira ticket exists yet) and does not cover how metering
+consumes the block; no Jira ticket exists yet for that gap.
+
+The new `global.billing` block extends `values.schema.json`, which the
+Enclave Wizard pipeline renders automatically. Verify that the consuming
+Enclave plugin version picks up the changed schema and that the Wizard
+renders and validates the billing fields before declaring the feature
+available there; that pipeline is outside this repository's chart-render
+tests and is not verified by them; no Jira ticket exists yet for that gap.
+
+The chart hands the block to the fulfillment gRPC server as `OSAC_BILLING_*`
+environment variables. `OSAC_BILLING_PROVIDER`, `_BASE_URL`, `_API_VERSION`
+and `_CREDENTIAL_FILE` are consumed by the fulfillment loader
+`billing.LoadConfig`. The tuning variables `_ITEM_TIMEOUT_SECONDS`,
+`_LIST_DEADLINE_SECONDS`, `_CACHE_FRESH_TTL_SECONDS`,
+`_CACHE_STALE_TTL_SECONDS`, `_CACHE_MAX_ENTRIES`, `_RETRY_COUNT`,
+`_PRICING_BREAKER_FAILURE_THRESHOLD`, `_PRICING_BREAKER_FAILURE_WINDOW_SECONDS`
+and `_PRICING_BREAKER_OPEN_SECONDS` have no Go consumer yet; design-doc
+stories 5.02 and 7.01 will consume them, and no Jira tickets exist for
+them yet. Renaming a variable breaks that contract on both sides.
 
 ### Install preflight (OSAC-6561)
 

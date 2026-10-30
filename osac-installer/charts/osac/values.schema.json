@@ -23,6 +23,121 @@
           },
           "additionalProperties": false
         },
+        "billing": {
+          "type": "object",
+          "description": "Optional billing provider connection shared with the fulfillment service and metering. Omit provider to run with billing disabled. The chart carries no service, dimension, unit, currency, or account-status mapping.",
+          "properties": {
+            "provider": {
+              "type": ["object", "null"],
+              "description": "The single billing provider endpoint. Null disables billing and renders no provider Secret mount.",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "Provider adapter key",
+                  "enum": ["m360"]
+                },
+                "baseUrl": {
+                  "type": "string",
+                  "description": "Provider base URL, http or https, without query or fragment",
+                  "pattern": "^https?://[^/?#\\s]+(/[^?#\\s]*)?$"
+                },
+                "apiVersion": {
+                  "type": "string",
+                  "description": "Provider API version",
+                  "minLength": 1
+                },
+                "credentialSecret": {
+                  "type": "object",
+                  "description": "Existing Secret holding the provider credential. The credential value is never part of Helm values.",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "key": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["name", "key"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["key", "baseUrl", "apiVersion", "credentialSecret"],
+              "additionalProperties": false
+            },
+            "tuning": {
+              "type": "object",
+              "description": "Catalog-pricing tuning consumed by the fulfillment service when a provider is configured",
+              "properties": {
+                "itemTimeoutSeconds": {
+                  "type": "integer",
+                  "description": "Per-item provider call timeout",
+                  "minimum": 1,
+                  "default": 2
+                },
+                "listDeadlineSeconds": {
+                  "type": "integer",
+                  "description": "Deadline for pricing a whole catalog list; must not be shorter than itemTimeoutSeconds",
+                  "minimum": 1,
+                  "default": 5
+                },
+                "cacheFreshTtlSeconds": {
+                  "type": "integer",
+                  "description": "How long a cached price is fresh",
+                  "minimum": 1,
+                  "default": 300
+                },
+                "cacheStaleTtlSeconds": {
+                  "type": "integer",
+                  "description": "How long a cached price is retained and may be served as STALE; must not be shorter than cacheFreshTtlSeconds",
+                  "minimum": 1,
+                  "default": 3600
+                },
+                "cacheMaxEntries": {
+                  "type": "integer",
+                  "description": "Maximum number of cached prices",
+                  "minimum": 1,
+                  "default": 10000
+                },
+                "retryCount": {
+                  "type": "integer",
+                  "description": "Provider retries after the first attempt (default 3 means four attempts in total)",
+                  "minimum": 0,
+                  "maximum": 3,
+                  "default": 3
+                },
+                "pricingBreaker": {
+                  "type": "object",
+                  "description": "Pricing circuit breaker",
+                  "properties": {
+                    "failureThreshold": {
+                      "type": "integer",
+                      "description": "Failed pricing requests within the window that open the circuit",
+                      "minimum": 1,
+                      "default": 5
+                    },
+                    "failureWindowSeconds": {
+                      "type": "integer",
+                      "description": "Window in which failed pricing requests are counted toward failureThreshold",
+                      "minimum": 1,
+                      "default": 30
+                    },
+                    "openSeconds": {
+                      "type": "integer",
+                      "description": "Time the circuit stays open before one probe is allowed",
+                      "minimum": 1,
+                      "default": 30
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
         "fulfillmentTrust": {
           "type": "object",
           "description": "Cross-cluster fulfillment trust configuration shared with tenant-cluster workloads",

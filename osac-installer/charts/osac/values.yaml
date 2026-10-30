@@ -20,6 +20,28 @@ global:
   # <service.externalHostname>:443 for OpenShift.
   fulfillment:
     endpoint: ""
+  # Optional billing provider. Leave provider null to disable billing. The
+  # credential lives in an existing Secret that is mounted into the fulfillment
+  # gRPC server; never put it in values. Metering can consume the same block.
+  billing:
+    provider: null
+    # Example:
+    #   provider:
+    #     key: m360
+    #     baseUrl: https://billing.example.com/api
+    #     apiVersion: v1
+    #     credentialSecret: {name: billing-token, key: api-token}
+    tuning:
+      itemTimeoutSeconds: 2
+      listDeadlineSeconds: 5
+      cacheFreshTtlSeconds: 300
+      cacheStaleTtlSeconds: 3600
+      cacheMaxEntries: 10000
+      retryCount: 3
+      pricingBreaker:
+        failureThreshold: 5
+        failureWindowSeconds: 30
+        openSeconds: 30
   fulfillmentTrust:
     # Enables trust reconciliation for tenant-scoped ClusterOrders.
     # Enable only when tenant CSI trust support is deployed.

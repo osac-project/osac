@@ -6,3 +6,10 @@
 {{- fail "bmf.secretAPI.issuerUrl must match service.auth.issuerUrl when bmf.netbox.enabled is true" }}
 {{- end }}
 {{- end }}
+{{- $tuning := (.Values.global.billing | default dict).tuning | default dict }}
+{{- if lt (int $tuning.cacheStaleTtlSeconds) (int $tuning.cacheFreshTtlSeconds) }}
+{{- fail "global.billing.tuning.cacheStaleTtlSeconds must not be shorter than cacheFreshTtlSeconds" }}
+{{- end }}
+{{- if lt (int $tuning.listDeadlineSeconds) (int $tuning.itemTimeoutSeconds) }}
+{{- fail "global.billing.tuning.listDeadlineSeconds must not be shorter than itemTimeoutSeconds" }}
+{{- end }}

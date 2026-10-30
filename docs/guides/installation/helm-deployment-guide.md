@@ -583,7 +583,7 @@ cluster uses CUDN EVPN, as described in
 phase-1 toggles. Set `certManager.enabled`, `trustManager.enabled`, and
 `caIssuer.enabled` to `false`; the latter two remain enabled by default even
 when `certManager` is disabled. Also disable `aapOperator`, `keycloak`,
-`mce`, and `kafka`. Run
+`mce`, `kafka`, and `bundledVault`. Run
 [Phase 1a](#phase-1a-install-prerequisite-operators) and
 [Phase 1b](#phase-1b-install-shared-infrastructure) against that kubeconfig.
 Do not install the `osac` chart on this cluster.

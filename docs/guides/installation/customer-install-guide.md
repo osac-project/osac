@@ -126,10 +126,10 @@ export OSAC_RELEASE_VERSION="0.0.63"
 > [Section 11.1](#111-the-install-preflight-stops-the-installation) is in
 > charts built after 30 October 2026: releases after
 > `osac-release/v0.0.63` and nightly builds from after that date. Earlier
-> charts, including the 0.0.62 release and the 27 October nightly in the
-> examples here, run a shell validation hook instead and do not behave as
-> described there. To evaluate the preflight, choose a nightly from the
-> workflow above that was built after 30 October 2026; its chart contains
+> charts, including the `0.0.63` example above, run a shell validation hook
+> instead and do not behave as described there. To evaluate the preflight,
+> choose a nightly from the workflow above that was built after 30 October
+> 2026; its chart contains
 > `templates/preflight/_engine.tpl`.
 >
 > Provider networking also needs a newer chart. The `osac-release/v0.0.62` and

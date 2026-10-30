@@ -396,7 +396,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(direct.GetSpec().HasCatalogItem()).To(BeFalse())
 			Expect(direct.GetSpec().GetVersion().GetId()).To(Equal(version))
 			By("falling back to the system version without an authored default")
-			systemTemplate := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
+			systemTemplate := createCatalogItemClusterTemplateFixture(ctx, clusterPullSecretDefaultsFixture(ctx), nil)
 			system, e := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
 				Template:          publicv1.ClusterTemplateReference_builder{Id: systemTemplate}.Build(),
 				NetworkAttachment: network.clusterAttachment(),

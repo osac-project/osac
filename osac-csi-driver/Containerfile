@@ -31,7 +31,7 @@ COPY --chown=1001:1001 proto/ proto/
 COPY --chown=1001:1001 osac-csi-driver/ osac-csi-driver/
 
 WORKDIR /opt/app-root/src/osac-csi-driver
-ARG VERSION=0.1.0
+ARG VERSION=0.0.27-nightly.20261030.453ed04.144.1
 ARG GIT_COMMIT=unknown
 RUN --mount=type=cache,id=osac-go-pkg,target=/opt/app-root/src/go/pkg,uid=1001,gid=0 \
     --mount=type=cache,id=osac-go-build,target=/opt/app-root/src/.cache/go-build,uid=1001,gid=0 \
@@ -48,7 +48,7 @@ FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
 # falling back to the base image's own inherited version label.
 # Separate from the main.version ldflags above (that one is baked into
 # the binary; this is the registry/OCI-level label).
-ARG VERSION=0.1.0
+ARG VERSION=0.0.27-nightly.20261030.453ed04.144.1
 LABEL name="cloud-extensions/osac-csi-driver-rhel10"
 LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
 LABEL org.opencontainers.image.version="${VERSION}"

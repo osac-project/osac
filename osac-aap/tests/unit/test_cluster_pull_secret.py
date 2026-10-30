@@ -19,7 +19,10 @@ ACCEPTED_FIXTURE_MARKER = "OSAC7034_SYNTHETIC_ACCEPTED_PARAMETER"
 
 @pytest.mark.parametrize("failure", [None, "missing-reference", "inline", "parameters"])
 @pytest.mark.parametrize("verbosity", [0, 2])
-def test_reference_only_settings_and_extraction(tmp_path: Path, failure: str | None, verbosity: int) -> None:
+@pytest.mark.parametrize("parameter_source", ["other", "ssh_public_key", "release_image"])
+def test_reference_only_settings_and_extraction(
+    tmp_path: Path, failure: str | None, verbosity: int, parameter_source: str
+) -> None:
     """Run the real settings/extraction consumers; no Kubernetes module is provided."""
     order = {
         "metadata": {"name": "fixture", "namespace": "hub", "uid": "fixture-uid"},
@@ -33,6 +36,14 @@ def test_reference_only_settings_and_extraction(tmp_path: Path, failure: str | N
             ),
         },
     }
+    expected_public_key = "fixture-public-key"
+    if parameter_source != "other":
+        parameters = json.loads(order["spec"]["templateParameters"])
+        parameters[parameter_source] = ACCEPTED_FIXTURE_MARKER
+        order["spec"]["templateParameters"] = json.dumps(parameters)
+        if parameter_source == "ssh_public_key":
+            order["spec"]["sshPublicKey"] = ""
+            expected_public_key = ACCEPTED_FIXTURE_MARKER
     if failure == "missing-reference":
         del order["spec"]["pullSecretRef"]
     elif failure == "inline":
@@ -51,7 +62,8 @@ def test_reference_only_settings_and_extraction(tmp_path: Path, failure: str | N
                     "template_parameters.unrelated == 'keep'",
                     "template_parameters.synthetic_sensitive_parameter == "
                     "(cluster_order.spec.templateParameters | from_json).synthetic_sensitive_parameter",
-                    "template_parameters.ssh_public_key == 'fixture-public-key'",
+                    "template_parameters.ssh_public_key == expected_public_key",
+                    "cluster_settings_ssh_public_key == expected_public_key",
                     "'pull_secret' not in template_parameters",
                     "cluster_settings_pull_secret is not defined",
                     "default_cluster_credentials is not defined",
@@ -61,6 +73,10 @@ def test_reference_only_settings_and_extraction(tmp_path: Path, failure: str | N
             },
         },
     ]
+    if parameter_source == "release_image":
+        tasks[-1]["ansible.builtin.assert"]["that"].append(
+            "ocp_release_image == (cluster_order.spec.templateParameters | from_json).release_image"
+        )
     play = [
         {
             "name": "Reference-only runtime",
@@ -69,6 +85,7 @@ def test_reference_only_settings_and_extraction(tmp_path: Path, failure: str | N
             "vars": {
                 "cluster_order": order,
                 "original_order": order,
+                "expected_public_key": expected_public_key,
                 "ansible_connection": "local",
                 "ansible_python_interpreter": sys.executable,
             },

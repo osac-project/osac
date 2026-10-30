@@ -309,9 +309,9 @@ images (see [Credential Separation](#credential-separation)).
 #### 2d. Apply generated artifacts
 
 ```bash
-oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml
+oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml || exit 1
 if [ -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml ]; then
-  oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml
+  oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml || exit 1
 fi
 oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/cs-redhat-operator-index-v4-22.yaml
 oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/cc-redhat-operator-index-v4-22.yaml

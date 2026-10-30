@@ -21,7 +21,7 @@ import os
 from uuid import uuid4
 
 from tests.e2e.core.fulfillment_trust import assert_cluster_trust
-from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import (
     unique_name,
     wait_for_cluster_deletion,
@@ -37,7 +37,6 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
-from tests.e2e.storage.conftest import NAMESPACE_MANIFEST, TENANT_MANIFEST
 
 logger = logging.getLogger(__name__)
 
@@ -58,14 +57,12 @@ def test_caas_cluster_storage_lifecycle(
     storage entries.
     """
     tenant_name: str = f"test-caas-storage-{uuid4().hex[:8]}"
-    namespace: str = k8s_hub_client.namespace
     co_name: str | None = None
     cluster_uuid: str | None = None
 
     try:
-        # --- Setup: create Tenant and its namespace ---
-        k8s_hub_client.apply(manifest=NAMESPACE_MANIFEST.format(name=tenant_name))
-        k8s_hub_client.apply(manifest=TENANT_MANIFEST.format(name=tenant_name, namespace=namespace))
+        # OSAC-6286: let Fulfillment create the Tenant and its namespace.
+        private_grpc.ensure_tenant(name=tenant_name)
         wait_for_tenant_cr(k8s=k8s_hub_client, name=tenant_name)
 
         # --- VMaaS storage stages must complete before CaaS path runs ---
@@ -123,17 +120,12 @@ def test_caas_cluster_storage_lifecycle(
                 logger.warning("ClusterOrder teardown verification failed")
 
         try:
-            if k8s_hub_client.is_present(resource="tenant", name=tenant_name):
-                k8s_hub_client.delete(resource="tenant", name=tenant_name, wait=False)
+            tenant_id = private_grpc.find_tenant_id(name=tenant_name)
+            if tenant_id:
+                private_grpc.call(service=f"{PRIVATE_API}.Tenants/Delete", data={"id": tenant_id})
                 wait_for_tenant_deletion(k8s=k8s_hub_client, name=tenant_name)
         except Exception:
             logger.warning("Tenant teardown failed")
-
-        try:
-            if k8s_hub_client.is_present(resource="namespace", name=tenant_name):
-                k8s_hub_client.delete(resource="namespace", name=tenant_name, wait=False)
-        except Exception:
-            logger.warning("Namespace teardown failed")
 
         if teardown_assertion_error is not None:
             raise teardown_assertion_error

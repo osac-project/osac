@@ -40,20 +40,25 @@ var _ = Describe("ClusterOrder final serialized launch", func() {
 					var body []byte
 					var readErr error
 					var launchPath string
+					writeErrors := make(chan error, 8)
 					server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+						writeResponse := func(response string) {
+							_, writeErr := io.WriteString(writer, response)
+							writeErrors <- writeErr
+						}
 						writer.Header().Set("Content-Type", "application/json")
 						if request.Method == http.MethodGet {
 							if workflow && strings.Contains(request.URL.Path, "/job_templates/") {
-								_, _ = io.WriteString(writer, `{"count":0,"results":[]}`)
+								writeResponse(`{"count":0,"results":[]}`)
 							} else {
-								_, _ = io.WriteString(writer, `{"count":1,"results":[{"id":1,"name":"fixture"}]}`)
+								writeResponse(`{"count":1,"results":[{"id":1,"name":"fixture"}]}`)
 							}
 							return
 						}
 						launched = true
 						body, readErr = io.ReadAll(request.Body)
 						launchPath = request.URL.Path
-						_, _ = io.WriteString(writer, `{"id":42}`)
+						writeResponse(`{"id":42}`)
 					}))
 					DeferCleanup(server.Close)
 					order := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "fixture", Namespace: "hub", UID: "fixture-uid",
@@ -116,14 +121,26 @@ var _ = Describe("ClusterOrder final serialized launch", func() {
 					} else {
 						_, err = provider.TriggerProvisionWithExtraVars(ctx, order, inherited)
 					}
+					server.Close()
+					close(writeErrors)
+					for writeErr := range writeErrors {
+						Expect(writeErr).NotTo(HaveOccurred())
+					}
 					ignoredContextOverride := deprovision && (mode == "inherited-override" || strings.HasPrefix(mode, "nested-"))
 					if mode == "reference" || mode == "unrelated-parameters" || ignoredContextOverride || deprovision && (mode == "missing-reference" || mode == "missing-revision") {
 						Expect(err).NotTo(HaveOccurred())
 						Expect(launched).To(BeTrue())
 						Expect(readErr).NotTo(HaveOccurred())
-						if mode != "missing-reference" {
-							Expect(string(body)).To(ContainSubstring("pullSecretRef"))
+						var submitted struct {
+							ExtraVars struct {
+								JobVars struct {
+									Resource v1alpha1.ClusterOrder `json:"resource"`
+								} `json:"osac_job_vars"`
+							} `json:"extra_vars"`
 						}
+						Expect(json.Unmarshal(body, &submitted)).To(Succeed())
+						Expect(submitted.ExtraVars.JobVars.Resource.Spec.PullSecretRef).To(Equal(order.Spec.PullSecretRef))
+						Expect(submitted.ExtraVars.JobVars.Resource.Spec.PullSecretRevision).To(Equal(order.Spec.PullSecretRevision))
 						Expect(string(body)).NotTo(ContainSubstring(fixtureLaunchMarker))
 						Expect(string(body)).NotTo(ContainSubstring(base64.StdEncoding.EncodeToString([]byte(fixtureLaunchMarker))))
 						Expect(strings.Contains(launchPath, "/workflow_job_templates/")).To(Equal(workflow))

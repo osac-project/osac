@@ -167,21 +167,21 @@ func TestResolveVendorSocket(t *testing.T) {
 // --- volumeBackends map ---
 
 func TestBackendMapLifecycle(t *testing.T) {
-	ns := NewNodeServer("node", proxy.NewManager(nil), map[string]string{"ceph": "/sockets/ceph.sock"})
+	ns := NewNodeServer("node", proxy.NewManager(nil), map[string]string{"netapp": "/sockets/netapp.sock"})
 
 	t.Run("record and lookup", func(t *testing.T) {
-		ns.recordBackend("vol-1", map[string]string{"osac.backend": "ceph"})
+		ns.recordBackend("vol-1", map[string]string{"osac.backend": "netapp"})
 		sock, err := ns.lookupBackendSocket("vol-1")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if sock != "/sockets/ceph.sock" {
-			t.Errorf("expected /sockets/ceph.sock, got %s", sock)
+		if sock != "/sockets/netapp.sock" {
+			t.Errorf("expected /sockets/netapp.sock, got %s", sock)
 		}
 	})
 
 	t.Run("forget removes entry", func(t *testing.T) {
-		ns.recordBackend("vol-2", map[string]string{"osac.backend": "ceph"})
+		ns.recordBackend("vol-2", map[string]string{"osac.backend": "netapp"})
 		ns.forgetBackend("vol-2")
 		_, err := ns.lookupBackendSocket("vol-2")
 		assertGRPCCode(t, err, codes.FailedPrecondition)

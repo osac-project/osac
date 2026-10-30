@@ -123,7 +123,7 @@ var _ = Describe("MCP server", func() {
 			Object: privatev1.StorageBackend_builder{
 				Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("mcp-storage-backend-%s", uuid.New()[24:32])}.Build(),
 				Spec: privatev1.StorageBackendSpec_builder{
-					Provider:    "test",
+					Provider:    "vast",
 					Description: "Storage backend for MCP compute instance integration testing",
 					Endpoint:    "https://test-backend.example.com",
 					Credentials: privatev1.StorageBackendCredentials_builder{

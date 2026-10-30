@@ -419,6 +419,93 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			Entry("rejects a default over the limit", false, 64*1024+1, true),
 		)
 
+		It("canonicalizes BMaaS SSH-key catalog policies as full SecretReferences", func() {
+			secrets, err := dao.NewGenericDAO[*privatev1.Secret]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			secret, err := secrets.Create().SetObject(privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   "catalog-shared-ssh-key",
+					Tenant: auth.SharedTenant,
+				}.Build(),
+				Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{Name: "catalog-full-ssh-key"}.Build(),
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+						SshKey: privatev1.FullSecretReferenceFieldPolicy_builder{
+							Locked: privatev1.SecretReference_builder{
+								Id:     secret.GetObject().GetId(),
+								Name:   secret.GetObject().GetMetadata().GetName(),
+								Shared: true,
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument),
+				"a shared locked key could never be consumed by an instance")
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("must be tenant-scoped"))
+
+			projects, err := dao.NewGenericDAO[*privatev1.Project]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = projects.Create().SetObject(privatev1.Project_builder{
+				Id: "catalog-ssh-key-project",
+				Metadata: privatev1.Metadata_builder{
+					Name:   "catalog-ssh-key-project",
+					Tenant: testTenant,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			projectSecret, err := secrets.Create().SetObject(privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    "catalog-project-ssh-key",
+					Tenant:  testTenant,
+					Project: "catalog-ssh-key-project",
+				}.Build(),
+				Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			projectResponse, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{Name: "catalog-project-full-ssh-key"}.Build(),
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+						SshKey: privatev1.FullSecretReferenceFieldPolicy_builder{Locked: privatev1.SecretReference_builder{
+							Id: projectSecret.GetObject().GetId(), Project: "catalog-ssh-key-project",
+						}.Build()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			projectStored := projectResponse.GetObject().GetFields().GetSshKey().GetLocked()
+			Expect(projectStored.GetId()).To(Equal(projectSecret.GetObject().GetId()))
+			Expect(projectStored.GetName()).To(Equal("catalog-project-ssh-key"))
+			Expect(projectStored.GetProject()).To(Equal("catalog-ssh-key-project"))
+			Expect(projectStored.GetShared()).To(BeFalse())
+		})
+
+		DescribeTable("rejects invalid BMaaS SSH-key catalog references", func(reference *privatev1.SecretReference, expected grpccodes.Code) {
+			_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("catalog-invalid-ssh-key-%s", uuid.NewString()[:8])}.Build(),
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+						SshKey: privatev1.FullSecretReferenceFieldPolicy_builder{Locked: reference}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(expected))
+		},
+			Entry("missing", privatev1.SecretReference_builder{Name: "missing-catalog-key"}.Build(), grpccodes.NotFound),
+			Entry("missing id and name pair", privatev1.SecretReference_builder{Id: "missing-id", Name: "different-name"}.Build(), grpccodes.NotFound),
+		)
+
 		DescribeTable("validates SSH public key policy on Create", func(policy *privatev1.StringFieldPolicy, invalid bool) {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{

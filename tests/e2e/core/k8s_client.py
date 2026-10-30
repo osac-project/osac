@@ -746,6 +746,12 @@ class K8sClient:
     def get_baremetal_instance_external_host_id(self, *, name: str) -> str:
         return self.get_jsonpath(resource="baremetalinstance", name=name, jsonpath="{.spec.externalHostID}")
 
+    def get_baremetal_instance_ssh_public_key(self, *, name: str) -> str:
+        """Return the sshPublicKey value materialized into the BMFO CR template parameters."""
+        return self.get_jsonpath(
+            resource="baremetalinstance", name=name, jsonpath="{.spec.templateParameters.sshPublicKey}"
+        )
+
     def get_bmi_hardware_nics(self, *, name: str) -> list[str]:
         """Return lowercased MAC addresses from BareMetalInstance CR status.hardware.nics."""
         output, rc = self._get(

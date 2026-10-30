@@ -33,6 +33,8 @@ import (
 // BMI Create network attachments are resolved by the private handler after tenant
 // assignment; resolving their names here can pick another tenant's same-named
 // default subnet/security group before the handler can enforce owner scope.
+// BMI ssh_key references are resolved by the private handler using the same
+// tenant-scoped project selection as ComputeInstance; shared Secrets are rejected.
 // Other references continue through the interceptor's registered lookups.
 func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, registerer prometheus.Registerer) (*references.ReferenceValidator, error) {
 	validator, err := references.NewReferenceValidator().SetLogger(logger).SetMetricsRegisterer(registerer).
@@ -42,6 +44,7 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 		SetExcludedReferencePaths(computeInstanceSSHKeyMethods(), "object.spec.ssh_key").
 		SetExcludedReferencePaths(clusterAddOnOperatorMethods(), "object.spec.add_on_operators").
 		SetExcludedReferencePaths(bareMetalInstanceCreationMethods(), "object.spec.network_attachments").
+		SetExcludedReferencePaths(bareMetalInstanceSSHKeyMethods(), "object.spec.ssh_key").
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reference validator: %w", err)
@@ -56,6 +59,19 @@ func bareMetalInstanceCreationMethods() []string {
 	return []string{
 		publicv1.BareMetalInstances_Create_FullMethodName,
 		privatev1.BareMetalInstances_Create_FullMethodName,
+	}
+}
+
+// bareMetalInstanceSSHKeyMethods covers the request fields whose SSH-key Secret
+// references are resolved by the private handler under tenant-scoped project selection.
+// Updates are included so the handler's immutability check answers changes to
+// the immutable ssh_key field instead of an interceptor lookup.
+func bareMetalInstanceSSHKeyMethods() []string {
+	return []string{
+		publicv1.BareMetalInstances_Create_FullMethodName,
+		privatev1.BareMetalInstances_Create_FullMethodName,
+		publicv1.BareMetalInstances_Update_FullMethodName,
+		privatev1.BareMetalInstances_Update_FullMethodName,
 	}
 }
 

@@ -139,6 +139,57 @@ func TestInsertFactsLastValueWithinOneSecondWins(t *testing.T) {
 	}
 }
 
+// TestLatestFactValuePrefersLaterEventOffset pins current billing identity to Kafka
+// order. An older event published later has a smaller since and a larger offset; the
+// query must return that later offset, not the later timestamp.
+func TestLatestFactValuePrefersLaterEventOffset(t *testing.T) {
+	ctx := context.Background()
+	_, pool := startDatabase(t)
+	store := database.NewStore(pool)
+	const tenant = "acme"
+	if err := store.EnsureProgress(ctx, tenant); err != nil {
+		t.Fatalf("ensure progress: %v", err)
+	}
+
+	earlier := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	later := earlier.Add(time.Minute)
+	write := func(since time.Time, value string, offset int64) {
+		t.Helper()
+		tx, err := store.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		facts := []database.Fact{{
+			ResourceType: database.BillingResourceType,
+			ResourceID:   tenant,
+			Field:        database.BillingField,
+			Since:        since,
+			Value:        value,
+		}}
+		if err := database.InsertFacts(ctx, tx, tenant, facts, offset); err != nil {
+			t.Fatalf("insert facts: %v", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+	}
+	write(later, "acct-2", 10)
+	write(earlier, "acct-1", 11)
+
+	value, ok, err := database.LatestFactValue(
+		ctx, pool, tenant, database.BillingResourceType, tenant, database.BillingField,
+	)
+	if err != nil {
+		t.Fatalf("latest fact: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected a billing fact")
+	}
+	if value != "acct-1" {
+		t.Fatalf("latest billing id = %q, want acct-1", value)
+	}
+}
+
 // TestStoreLastRoundTime pins the query startup uses as the billing position: the
 // latest round any tenant completed, and the zero time when no tenant has rounded.
 func TestStoreLastRoundTime(t *testing.T) {

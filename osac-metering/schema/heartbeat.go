@@ -41,6 +41,9 @@ type HeartbeatData struct {
 
 	// RulesRevision is the revision whose rules produced the heartbeat.
 	RulesRevision string `json:"rules_revision"`
+
+	// ExternalBillingAccountID is the tenant's external billing account, when one is set.
+	ExternalBillingAccountID *string `json:"external_billing_account_id,omitempty"`
 }
 
 // ProtoResourceTypeToSchema maps the proto message name of a billable resource to its schema

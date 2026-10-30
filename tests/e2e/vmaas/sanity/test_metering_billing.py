@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 
-from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import (
     delete_instance_type_if_present,
     unique_name,
@@ -37,6 +37,7 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import (
     HEARTBEAT_TYPE,
     MeteringCollector,
+    billing_account_id,
     interval_seconds,
     net_intervals,
     net_usage_past_by_dimension,
@@ -621,3 +622,143 @@ def test_metering_delete_ends_billing(
         with contextlib.suppress(Exception):
             _delete_vm(cli, grpc, k8s_hub_client, uuid=uuid, ci_name=ci_name)
         raise
+
+
+def _spec_billing_id(spec: dict[str, Any]) -> str | None:
+    """Read TenantSpec.external_billing_id from either proto JSON name."""
+    value = spec.get("external_billing_id", spec.get("externalBillingId"))
+    if value is None or value == "":
+        return None
+    return str(value)
+
+
+def _tenant_object(private_grpc: GRPCClient, name: str) -> dict[str, Any]:
+    tenant_id = private_grpc.find_tenant_id(name=name)
+    assert tenant_id, f"private tenant {name} is missing"
+    return private_grpc.call(service=f"{PRIVATE_API}.Tenants/Get", data={"id": tenant_id})["object"]
+
+
+def _set_external_billing_id(
+    private_grpc: GRPCClient, tenant: dict[str, Any], billing_id: str | None
+) -> dict[str, Any]:
+    """Replace TenantSpec, preserving every field except the billing id.
+
+    Private Update replaces the whole spec: sending only the billing id would
+    clear domains and the break-glass secret reference.
+    """
+    spec = dict(tenant.get("spec") or {})
+    spec.pop("external_billing_id", None)
+    spec.pop("externalBillingId", None)
+    if billing_id is not None:
+        spec["externalBillingId"] = billing_id
+    return private_grpc.call(
+        service=f"{PRIVATE_API}.Tenants/Update",
+        data={"object": {"id": tenant["id"], "metadata": tenant.get("metadata") or {}, "spec": spec}},
+    )["object"]
+
+
+def _accounts_by_event_id(metering: MeteringCollector, resource_id: str) -> dict[str, str | None]:
+    return {
+        event["id"]: billing_account_id(event)
+        for event in metering.get_all_events(HEARTBEAT_TYPE, resource_id)
+        if event.get("id")
+    }
+
+
+def _wait_for_billing_account(
+    metering: MeteringCollector,
+    resource_id: str,
+    account: str | None,
+    *,
+    excluding: set[str],
+    timeout: int = HEARTBEAT_TIMEOUT,
+) -> dict[str, Any]:
+    """The first heartbeat of the resource whose billing account matches, skipping known ids."""
+
+    def find() -> dict[str, Any] | None:
+        for event in metering.get_all_events(HEARTBEAT_TYPE, resource_id):
+            event_id = event.get("id", "")
+            if event_id in excluding:
+                continue
+            if billing_account_id(event) == account:
+                return event
+        return None
+
+    return poll_until(
+        fn=find,
+        until=lambda event: event is not None,
+        retries=timeout // 10,
+        delay=10,
+        description=f"heartbeat of {resource_id} with external_billing_account_id={account!r}",
+    )
+
+
+@pytest.mark.metering
+def test_metering_external_billing_account_on_heartbeats(
+    cli: OsacCLI,
+    grpc: GRPCClient,
+    private_grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    vm_template: str,
+    metering_network_attachment: dict[str, object],
+    metering: MeteringCollector,
+    metering_project: str,
+    jwt_tenant: str,
+) -> None:
+    """Heartbeats on the tenant topic carry the private tenant billing id.
+
+    The JWT tenant is already onboarded, so the test sets the field through
+    private Tenants/Update with a full spec replacement: that is the same
+    document Create writes. Three paths from the design test plan:
+
+    - omit: a tenant without the field publishes heartbeats that omit the key
+    - present: setting the field makes later heartbeats carry it
+    - change: a further change shows on later heartbeats; earlier ones stay
+    """
+    original = _tenant_object(private_grpc, jwt_tenant)
+    uuid: str | None = None
+    ci_name: str | None = None
+    try:
+        _set_external_billing_id(private_grpc, original, None)
+        uuid = _create_vm(
+            cli, vm_template=vm_template, network_attachment=metering_network_attachment, project=metering_project
+        )
+        ci_name = _wait_for_running_vm(k8s_hub_client, uuid=uuid)
+        omitted = metering.heartbeat_with_dimensions(
+            uuid, {"instance_type": cli.default_instance_type}, timeout=HEARTBEAT_TIMEOUT
+        )
+        metering.verify_event(omitted, resource_id=uuid)
+        assert billing_account_id(omitted) is None, (
+            f"heartbeat named billing account {billing_account_id(omitted)!r} before the tenant had one"
+        )
+
+        seen = _accounts_by_event_id(metering, uuid)
+        first_id = "acct-e2e-1"
+        current = _tenant_object(private_grpc, jwt_tenant)
+        _set_external_billing_id(private_grpc, current, first_id)
+        stored = _spec_billing_id(_tenant_object(private_grpc, jwt_tenant).get("spec") or {})
+        assert stored == first_id, f"private Get returned billing id {stored!r}, want {first_id!r}"
+        present = _wait_for_billing_account(metering, uuid, first_id, excluding=set(seen))
+        metering.verify_event(present, resource_id=uuid)
+        assert billing_account_id(present) == first_id
+
+        published = _accounts_by_event_id(metering, uuid)
+        second_id = "acct-e2e-2"
+        current = _tenant_object(private_grpc, jwt_tenant)
+        _set_external_billing_id(private_grpc, current, second_id)
+        changed = _wait_for_billing_account(metering, uuid, second_id, excluding=set(published))
+        metering.verify_event(changed, resource_id=uuid)
+        assert billing_account_id(changed) == second_id
+
+        still = _accounts_by_event_id(metering, uuid)
+        for event_id, account in published.items():
+            assert still.get(event_id) == account, (
+                f"heartbeat {event_id} changed from {account!r} to {still.get(event_id)!r} "
+                "after the tenant billing id was updated"
+            )
+    finally:
+        try:
+            _set_external_billing_id(private_grpc, original, _spec_billing_id(original.get("spec") or {}))
+        finally:
+            if uuid is not None:
+                _delete_vm(cli, grpc, k8s_hub_client, uuid=uuid, ci_name=ci_name)

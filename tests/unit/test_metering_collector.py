@@ -88,6 +88,14 @@ def test_verify_event_accepts_a_well_formed_heartbeat(collector: MeteringCollect
     assert collector.get_event(HEARTBEAT_TYPE, "vm-7") is event
 
 
+def test_verify_event_accepts_an_external_billing_account(collector: MeteringCollector) -> None:
+    """The account id is optional payload, not a required envelope field."""
+    event = _heartbeat()
+    event["data"]["external_billing_account_id"] = "acct-1"
+
+    collector.verify_event(event, resource_id="vm-7")
+
+
 def test_verify_event_rejects_a_heartbeat_missing_its_dimension(collector: MeteringCollector) -> None:
     # The running instance type lands 15-20 s after RUNNING, so the first
     # heartbeat of a VM can legitimately lack it; verify_event still enforces

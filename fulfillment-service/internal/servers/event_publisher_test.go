@@ -638,6 +638,66 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(events[0].event.GetTenant().GetStatus().GetBreakGlassCredentials()).To(BeNil())
 		})
 
+		It("Stamps the current billing id on every event in one batch", func() {
+			withID := "billing-" + uuid.New()
+			withoutRow := "plain-" + uuid.New()
+			withoutID := "empty-" + uuid.New()
+			_, err := pool.Exec(encodeCtx, `
+				insert into tenants (id, name, tenant, creator, data)
+				values
+					($1, $1, $1, 'system', '{"spec":{"external_billing_id":"acct-1"}}'),
+					($2, $2, $2, 'system', '{}')
+			`, withID, withoutID)
+			Expect(err).NotTo(HaveOccurred())
+			insertChange("projects", withID, "p-1", "")
+			insertChange("projects", withID, "p-2", "")
+			insertChange("projects", withoutRow, "p-3", "")
+			insertChange("projects", withoutID, "p-4", "")
+
+			cancel, done := startPublisher(pub)
+			defer stopPublisher(cancel, done)
+
+			stamped := collectKafkaEvents(client, DefaultEventTopicPrefix+withID, 2)
+			Expect(stamped[0].event.GetExternalBillingId()).To(Equal("acct-1"))
+			Expect(stamped[1].event.GetExternalBillingId()).To(Equal("acct-1"))
+			for _, tenant := range []string{withoutRow, withoutID} {
+				events := collectKafkaEvents(client, DefaultEventTopicPrefix+tenant, 1)
+				Expect(events[0].event.HasExternalBillingId()).To(BeFalse())
+			}
+		})
+
+		It("Keeps the billing id when tenant break-glass credentials are redacted", func() {
+			tenant := "billing-secret-" + uuid.New()
+			topic := DefaultEventTopicPrefix + tenant
+			_, err := pool.Exec(encodeCtx, `
+				insert into tenants (id, name, tenant, creator, data)
+				values ($1, $1, $1, 'system', '{"spec":{"external_billing_id":"acct-9"}}')
+			`, tenant)
+			Expect(err).NotTo(HaveOccurred())
+			payload, err := protojson.Marshal(privatev1.Tenant_builder{
+				Status: privatev1.TenantStatus_builder{
+					BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{
+						Username: "break-glass-user",
+						Password: "super-secret",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			insertChange("tenants", tenant, tenant, fmt.Sprintf(`{
+				"id": %q,
+				"name": %q,
+				"tenant": %q,
+				"data": %s
+			}`, tenant, tenant, tenant, payload))
+
+			cancel, done := startPublisher(pub)
+			defer stopPublisher(cancel, done)
+
+			events := collectKafkaEvents(client, topic, 1)
+			Expect(events[0].event.GetExternalBillingId()).To(Equal("acct-9"))
+			Expect(events[0].event.GetTenant().GetStatus().GetBreakGlassCredentials()).To(BeNil())
+		})
+
 		It("Maps each Event payload type to a unique table name", func() {
 			tenant := "map-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant

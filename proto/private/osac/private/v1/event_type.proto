@@ -69,6 +69,10 @@ message Event {
   // records when deletion was requested.
   google.protobuf.Timestamp timestamp = 36;
 
+  // Opaque billing account identifier for the event's tenant. Optional.
+  // Stamped by the publisher from the tenant record. Omitted from the public API.
+  optional string external_billing_id = 39 [(cleanapi.field).private = true];
+
   // Payload of the event.
   oneof payload {
     BareMetalInstance bare_metal_instance = 3;

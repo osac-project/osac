@@ -90,6 +90,12 @@ message TenantSpec {
   // existing Secret; the referenced Secret must exist. The secret data must contain `username` and
   // `password` entries.
   SecretLocalReference break_glass_credentials_secret = 2;
+
+  // Opaque identifier for this tenant's account in the external billing
+  // system. Optional. Provider-controlled. Omitted from the public API.
+  optional string external_billing_id = 3
+    [(cleanapi.field).private = true,
+     (buf.validate.field).string.max_len = 256];
 }
 
 // Represents the current operational state of a Tenant.

@@ -231,7 +231,13 @@ func (r *Round) Once(ctx context.Context, tenant string, roundTime time.Time) er
 		return nil
 	}
 
-	if err := r.compare(ctx, tx, tenant, progress, roundTime); err != nil {
+	billingID, _, err := database.LatestFactValue(
+		ctx, tx, tenant, database.BillingResourceType, tenant, database.BillingField,
+	)
+	if err != nil {
+		return err
+	}
+	if err := r.compare(ctx, tx, tenant, progress, roundTime, billingID); err != nil {
 		return err
 	}
 	if err := database.SetLastRound(ctx, tx, tenant, roundTime, progress.EventOffset); err != nil {
@@ -340,6 +346,7 @@ func (r *Round) compare(
 	tenant string,
 	progress database.Progress,
 	roundTime time.Time,
+	externalBillingAccountID string,
 ) error {
 	full, tail, err := r.scanResources(ctx, tx, tenant, progress, roundTime)
 	if err != nil {
@@ -352,6 +359,7 @@ func (r *Round) compare(
 		}
 		if err := r.recomputeWhole(
 			ctx, tx, tenant, progress, roundTime, resource, facts, root, ledger,
+			externalBillingAccountID,
 		); err != nil {
 			return err
 		}
@@ -377,6 +385,7 @@ func (r *Round) compare(
 			// unjustified usage is reversed.
 			if err := r.recomputeWhole(
 				ctx, tx, tenant, progress, roundTime, resource, facts, root, ledger,
+				externalBillingAccountID,
 			); err != nil {
 				return err
 			}
@@ -386,6 +395,7 @@ func (r *Round) compare(
 		// facts holds exactly what the previous round wrote.
 		if err := r.diffAndCommit(
 			ctx, tx, tenant, progress, roundTime, pieces, ledger, false, *progress.LastRoundTime,
+			externalBillingAccountID,
 		); err != nil {
 			return err
 		}
@@ -423,6 +433,7 @@ func (r *Round) recomputeWhole(
 	ctx context.Context, tx database.Querier, tenant string,
 	progress database.Progress, roundTime time.Time,
 	res resource, facts []database.Fact, root *usage.Root, ledger []database.LedgerPiece,
+	externalBillingAccountID string,
 ) error {
 	pieces, err := r.calculator.Expected(
 		tenant, res.resourceType, res.resourceID, facts, root, roundTime,
@@ -431,7 +442,10 @@ func (r *Round) recomputeWhole(
 		return fmt.Errorf("computing usage of %s %s: %w", res.resourceType, res.resourceID, err)
 	}
 	// Every key with a ledger row takes part: a late event can remove a meter entirely.
-	return r.diffAndCommit(ctx, tx, tenant, progress, roundTime, pieces, ledger, true, time.Time{})
+	return r.diffAndCommit(
+		ctx, tx, tenant, progress, roundTime, pieces, ledger, true, time.Time{},
+		externalBillingAccountID,
+	)
 }
 
 // scanResources returns the resources whose meters the round must recompute from history, and
@@ -452,6 +466,9 @@ func (r *Round) scanResources(
 		}
 		var resources []resource
 		for _, key := range keys {
+			if !metered(key) {
+				continue
+			}
 			resources = append(resources, resource{key.ResourceType, key.ResourceID})
 		}
 		return resources, nil, nil
@@ -499,6 +516,9 @@ func (r *Round) scanResources(
 	// recomputes in the same round, retroactively, without a fact of its own.
 	queue := make([]resource, 0, len(newFacts)+len(affectedResources))
 	for _, key := range newFacts {
+		if !metered(key) {
+			continue
+		}
 		queue = append(queue, resource{key.ResourceType, key.ResourceID})
 	}
 	queue = append(queue, affectedResources...)
@@ -544,12 +564,21 @@ func tenantResources(
 	}
 	var result []resource
 	for _, key := range keys {
+		if !metered(key) {
+			continue
+		}
 		if types != nil && !types[key.ResourceType] {
 			continue
 		}
 		result = append(result, resource{key.ResourceType, key.ResourceID})
 	}
 	return result, nil
+}
+
+// metered reports whether a history row is a resource the round bills. The tenant billing
+// id is stored as history so later rounds can read it, and it is not a metered resource.
+func metered(key database.LedgerKey) bool {
+	return key.ResourceType != database.BillingResourceType
 }
 
 // openKeysJustified reports whether the pieces cover every meter whose ledger row was open at
@@ -588,6 +617,7 @@ func (r *Round) diffAndCommit(
 	ledger []database.LedgerPiece,
 	includeLedgerKeys bool,
 	tailFrom time.Time,
+	externalBillingAccountID string,
 ) error {
 	keys := map[database.LedgerKey]bool{}
 	for _, piece := range expected {
@@ -644,6 +674,7 @@ func (r *Round) diffAndCommit(
 			event, err := heartbeat.New(
 				tenant, key, difference.start, difference.end, difference.quantityMicro,
 				meter.Unit, roundTime, progress.EventOffset, revision,
+				externalBillingAccountID,
 			)
 			if err != nil {
 				return err

@@ -768,13 +768,20 @@ func (p *EventPublisher) drain(ctx context.Context) (more bool, err error) {
 		return false, fmt.Errorf("failed to scan change rows: %w", err)
 	}
 
+	// One lookup for the batch. Every event for a tenant is stamped with the
+	// billing id stored on that tenant at publish time.
+	billingIDs, err := p.billingIDsByTenant(ctx, tx, p.tenantsInBatch(changes))
+	if err != nil {
+		return false, err
+	}
+
 	// Process the changes:
 	for _, change := range changes {
 		if err = ctx.Err(); err != nil {
 			err = fmt.Errorf("publish aborted: %w", err)
 			return
 		}
-		err = p.processChange(ctx, tx, &change)
+		err = p.processChange(ctx, tx, &change, billingIDs)
 		if err != nil {
 			return
 		}
@@ -795,7 +802,9 @@ func (p *EventPublisher) drain(ctx context.Context) (more bool, err error) {
 // The 'event_publish_errors_total' metric is intended for a future alert when unpublishable rows appear, for example:
 //
 //	increase(event_publish_errors_total[5m]) > 0
-func (p *EventPublisher) processChange(ctx context.Context, tx pgx.Tx, change *eventPublisherChange) error {
+func (p *EventPublisher) processChange(
+	ctx context.Context, tx pgx.Tx, change *eventPublisherChange, billingIDs map[string]string,
+) error {
 	// Convert the change to an event:
 	event, err := p.convertChange(change)
 	if err != nil {
@@ -824,6 +833,9 @@ func (p *EventPublisher) processChange(ctx context.Context, tx pgx.Tx, change *e
 		)
 		p.metrics.publishErrors.With(nil).Inc()
 		return p.deleteChange(ctx, tx, change.id)
+	}
+	if billingID := billingIDs[tenant]; billingID != "" {
+		event.SetExternalBillingId(billingID)
 	}
 	value, err := proto.Marshal(event)
 	if err != nil {
@@ -1233,6 +1245,63 @@ func (p *EventPublisher) payloadIdentity(event *privatev1.Event) (objectTenant, 
 	}
 	objectTenant = metadata.GetTenant()
 	return
+}
+
+// tenantsInBatch returns the distinct payload tenants of changes that can be converted.
+// Changes that cannot be converted are omitted here and handled by processChange.
+func (p *EventPublisher) tenantsInBatch(changes []eventPublisherChange) []string {
+	seen := make(map[string]struct{}, len(changes))
+	tenants := make([]string, 0, len(changes))
+	for i := range changes {
+		event, err := p.convertChange(&changes[i])
+		if err != nil {
+			continue
+		}
+		tenant, _, err := p.payloadIdentity(event)
+		if err != nil || tenant == "" {
+			continue
+		}
+		if _, ok := seen[tenant]; ok {
+			continue
+		}
+		seen[tenant] = struct{}{}
+		tenants = append(tenants, tenant)
+	}
+	return tenants
+}
+
+// billingIDsByTenant returns the stored spec.external_billing_id for each tenant name.
+// Tenants with no row or no id are absent from the map.
+func (p *EventPublisher) billingIDsByTenant(
+	ctx context.Context, tx pgx.Tx, tenants []string,
+) (map[string]string, error) {
+	ids := make(map[string]string, len(tenants))
+	if len(tenants) == 0 {
+		return ids, nil
+	}
+	rows, err := tx.Query(ctx, `
+		select name, data #>> '{spec,external_billing_id}'
+		from tenants
+		where name = any($1)
+	`, tenants)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read tenant billing ids: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var id *string
+		if err := rows.Scan(&name, &id); err != nil {
+			return nil, fmt.Errorf("failed to scan tenant billing id: %w", err)
+		}
+		if id != nil && *id != "" {
+			ids[name] = *id
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read tenant billing ids: %w", err)
+	}
+	return ids, nil
 }
 
 func (p *EventPublisher) registerUnpublishedCountMetric(registerer prometheus.Registerer) error {

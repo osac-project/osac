@@ -18,6 +18,7 @@ from tests.e2e.core.runner import poll_until
 logger = logging.getLogger(__name__)
 
 HEARTBEAT_TYPE = "osac.resource.heartbeat.v1"
+BILLING_ACCOUNT_FIELD = "external_billing_account_id"
 
 # The resource types the metering engine bills, in the shape heartbeats carry.
 HEARTBEAT_RESOURCE_TYPES = (
@@ -47,6 +48,19 @@ _QUANTITY_RE = re.compile(r"^-?\d+\.\d{6}$")
 # Net usage past a moment is a proportional overlap, and the division can
 # leave a rounding tail smaller than this without being real billing.
 _NET_USAGE_TOLERANCE = Decimal("0.000001")
+
+
+def billing_account_id(event: dict[str, Any]) -> str | None:
+    """The heartbeat's external billing account, or None when the field is omitted.
+
+    The round copies the latest non-empty tenant fact onto new heartbeats and
+    leaves already published ones unchanged. Absence is a missing or empty JSON
+    key, never a billing meter of its own.
+    """
+    value = event.get("data", {}).get(BILLING_ACCOUNT_FIELD)
+    if value is None or value == "":
+        return None
+    return str(value)
 
 
 def parse_time(s: str) -> datetime:

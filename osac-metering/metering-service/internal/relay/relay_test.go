@@ -69,7 +69,7 @@ func TestDrainOnceStoresTheSentOffset(t *testing.T) {
 		event, err := heartbeat.New(
 			tenant, key("compute"), base.Add(time.Duration(i)*time.Minute),
 			base.Add(time.Duration(i+1)*time.Minute), 60_000_000, "second",
-			roundTime, int64(i), "0001",
+			roundTime, int64(i), "0001", "",
 		)
 		if err != nil {
 			t.Fatalf("building heartbeat: %v", err)
@@ -132,7 +132,7 @@ func TestRunTenantSurvivesSendErrors(t *testing.T) {
 	roundTime := base.Add(time.Minute)
 	event, err := heartbeat.New(
 		tenant, key("compute"), base, base.Add(time.Minute), 60_000_000, "second",
-		roundTime, 0, "0001",
+		roundTime, 0, "0001", "",
 	)
 	if err != nil {
 		t.Fatalf("building heartbeat: %v", err)
@@ -252,7 +252,7 @@ func enqueueOne(
 ) string {
 	t.Helper()
 	event, err := heartbeat.New(
-		tenant, key("compute"), from, to, 60_000_000, "second", roundTime, 0, "0001",
+		tenant, key("compute"), from, to, 60_000_000, "second", roundTime, 0, "0001", "",
 	)
 	if err != nil {
 		t.Fatalf("building heartbeat: %v", err)
@@ -370,7 +370,7 @@ func TestRelayDoesNotAdvancePastUnreadHeartbeats(t *testing.T) {
 	for _, entry := range backlog {
 		event, err := heartbeat.New(
 			tenant, key("compute"), entry.from, entry.to, 60_000_000, "second",
-			entry.roundTime, 0, "0001",
+			entry.roundTime, 0, "0001", "",
 		)
 		if err != nil {
 			t.Fatalf("building heartbeat: %v", err)

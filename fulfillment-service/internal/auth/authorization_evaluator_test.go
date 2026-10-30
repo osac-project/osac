@@ -741,4 +741,52 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 			Expect(adminCreate.Allowed).To(BeTrue())
 		})
 	})
+
+	Describe("billing provider status authorization", func() {
+		const (
+			publicStatusGet  = "/osac.public.v1.BillingProviderStatuses/Get"
+			privateStatusGet = "/osac.private.v1.BillingProviderStatuses/Get"
+		)
+		DescribeTable("only admins may read the status",
+			func(ctx context.Context, method string, username string, roles []any, groups []any, allowed bool) {
+				evaluator, err := NewEvaluator().AddEmergencyServiceAccounts([]string{}).Build()
+				Expect(err).ToNot(HaveOccurred())
+				authContext := &AuthContext{
+					Username:     username,
+					Groups:       groups,
+					AuthMethod:   "jwt",
+					Organization: []any{"acme-corp"},
+					RealmAccess:  map[string]any{"roles": roles},
+					Tenant:       "acme-corp",
+				}
+				decision, err := evaluator.Evaluate(ctx, authContext, method)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(Equal(allowed))
+			},
+			Entry("public: admin group", publicStatusGet, "billing-test", []any{"user"}, []any{"admins"}, true),
+			Entry("public: osac-admin service account", publicStatusGet, "service-account-osac-admin",
+				[]any{}, []any{}, true),
+			Entry("public: osac-controller service account", publicStatusGet, "service-account-osac-controller",
+				[]any{}, []any{}, true),
+			Entry("public: tenant user", publicStatusGet, "billing-test", []any{"user"}, []any{}, false),
+			Entry("public: tenant admin", publicStatusGet, "billing-test", []any{"tenant-admin"}, []any{}, false),
+			Entry("public: tenant IdP manager", publicStatusGet, "billing-test", []any{"tenant-idp-manager"},
+				[]any{}, false),
+			Entry("public: tenant reader", publicStatusGet, "billing-test", []any{"tenant-reader"}, []any{}, false),
+			Entry("public: cloud provider reader", publicStatusGet, "billing-test",
+				[]any{"cloud-provider-reader"}, []any{}, false),
+			Entry("private: admin group", privateStatusGet, "billing-test", []any{"user"}, []any{"admins"}, true),
+			Entry("private: osac-admin service account", privateStatusGet, "service-account-osac-admin",
+				[]any{}, []any{}, true),
+			Entry("private: osac-controller service account", privateStatusGet, "service-account-osac-controller",
+				[]any{}, []any{}, true),
+			Entry("private: tenant user", privateStatusGet, "billing-test", []any{"user"}, []any{}, false),
+			Entry("private: tenant admin", privateStatusGet, "billing-test", []any{"tenant-admin"}, []any{}, false),
+			Entry("private: tenant IdP manager", privateStatusGet, "billing-test", []any{"tenant-idp-manager"},
+				[]any{}, false),
+			Entry("private: tenant reader", privateStatusGet, "billing-test", []any{"tenant-reader"}, []any{}, false),
+			Entry("private: cloud provider reader", privateStatusGet, "billing-test",
+				[]any{"cloud-provider-reader"}, []any{}, false),
+		)
+	})
 })

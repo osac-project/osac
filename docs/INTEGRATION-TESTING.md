@@ -235,8 +235,112 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 | Unit | `internal/`; `ginkgo run -r internal` | Fulfillment logic and adapters covered by package tests | External services are mocked where the package tests use mocks. |
 | Component integration | `it/`; `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` | Deployed Fulfillment Service, its database, and the CLI binary built from this checkout. NetworkClass manager-registration and readiness specs run separately with the local OSAC Operator image deployed. | CaaS, VMaaS, BMaaS, and external provider workflows unless a specific test exercises them. |
 | Component integration ([DEV] OSAC-6307) | `internal/servers` and `internal/database/migrations/126_hold_external_ip_capacity_until_archive_test.go`; from `fulfillment-service/`, run `go test ./internal/servers ./internal/database/migrations -timeout 20m` | Fulfillment server logic and PostgreSQL test container, including archive-time capacity and exclusivity for terminating consumers | Kubernetes and provider cleanup are not run; release completion is exercised by operator tests with provider fixtures. |
+| Component integration ([DEV] OSAC-6882) | `internal/testing/billingfake`, `internal/testing/billingstub`, `internal/servers`; from `fulfillment-service/`, run `go test ./internal/testing/billingfake ./internal/testing/billingstub ./internal/billing/... && go test ./internal/servers -ginkgo.focus Billing` | Fulfillment billing handlers and guard against the adapter contract; the real `m360` adapter against the stub server | The billing provider is a deterministic in-process fake; no M360 endpoint, token or network. Not wired into the deployed `it/` suite yet, see below. |
 | E2E | `../tests/e2e/` | Cross-component OSAC user journeys | Depends on the deployed test environment and its configured providers. |
 
+### Billing provider fake
+
+`internal/testing/billingfake` is a deterministic `billing.Adapter` for tests. It
+implements the adapter contract, not HTTP; keep HTTP fakes for adapter unit
+tests. Selecting it needs no production change: build a `billingfake.Scenario`,
+call `billingfake.New(scenario)`, and inject `fake.Provider()` (a configured
+`billing.Provider` with key `fake`) where a server takes a `*billing.Provider`.
+A disabled deployment is `billing.NewProvider("", fake, nil)`; assert
+`fake.Calls()` is empty.
+
+Every `Fake` owns its scenario and call log (no globals), so suites running in
+parallel cannot see each other's state. `New` copies the scenario.
+
+Scenario fixture (Go struct, or JSON through `billingfake.Load`, which rejects
+unknown fields):
+
+```json
+{
+  "correlationWrite": false,
+  "accounts": [{"id": "a1", "name": "n", "externalId": "ext", "state": "ACTIVE",
+                "rawStatus": "active", "approvalStatus": "Approved"}],
+  "services": [{"id": "s1", "name": "GPU Hours",
+                "attributes": [{"id": "gpu_hours", "name": "gpu_hours"}],
+                "rates": {"USD": {"rows": [{"dimensionId": "gpu_hours",
+                                            "priceMethod": "QUANTITY",
+                                            "unitRate": "0.25"}]}}}],
+  "failures": {"ListAccounts": {"reason": "UNAVAILABLE", "status": 503}}
+}
+```
+
+- Accounts: any `state` (`ACTIVE`, `INACTIVE`, `UNKNOWN`) with its raw status;
+  zero, one or two accounts sharing an `externalId` (the correlation value);
+  `ListAccounts` filters by exact external id and name and pages by token.
+- Correlation write: `correlationWrite` false behaves like M360
+  (`SupportsCorrelationWrite()` false, `SetCorrelationValue` fails UNSUPPORTED);
+  true stores the value.
+- Services and rates: services are found by exact name only; two services with
+  one name give AMBIGUOUS. Rate cards are keyed by requested currency; an
+  unscripted currency gives NOT_FOUND, a card `currency` that differs from the
+  key scripts a currency mismatch. Rows are returned verbatim, so
+  `QUANTITY`, other units, duplicate or missing dimensions script the shapes
+  the consumer must classify.
+- Failures: per method name, with `reason` (`TIMEOUT`, `UNAVAILABLE`, ...),
+  `retryable`, `status` and `times` (first N calls fail, 0 means always),
+  which scripts timeouts, 5xx and retry scenarios.
+- Recording: `Calls()`, `Count(op)` and `Succeeded(op)`. A retried write that
+  failed once has `Count` 2 and `Succeeded` 1; a write-unsupported fake still
+  records an attempted `SetCorrelationValue`, so assert `Count` is 0.
+
+#### Deployed stub M360 server
+
+The fake is in-process only: the configuration loader accepts only `m360` as
+`OSAC_BILLING_PROVIDER`, and no `fake` provider key is reachable in a
+deployment. The deployed `it/` suite instead uses
+`internal/testing/billingstub`, an HTTP server that speaks the M360 read API
+(`/api/<version>/accounts`, `/accounts/{id}`, `/services?q=`,
+`/services/{id}/priceable-attributes`, `/services/{id}/rate-cards/{currency}`,
+errors as a flat body with `status`, `error`, `message` and `path`), so a real
+M360 configuration (`OSAC_BILLING_PROVIDER=m360`, base URL, API version,
+credential file) runs the real adapter against it.
+
+- Same fixture: the stub is driven by `billingfake.Scenario` (the JSON above,
+  `billingfake.Load`). `accounts`, `services`, `rates` and `failures` apply;
+  `correlationWrite` does not, because the stub is read-only like M360.
+- Failures are keyed by adapter method. `status` sets the HTTP status; when
+  omitted it follows `reason` (`UNAUTHORIZED` 401, `NOT_FOUND` 404,
+  `TIMEOUT` 408, `UNAVAILABLE` 503, otherwise 500). `times` counts failing
+  responses, not logical calls: the adapter retries 5xx, so `"times": 2`
+  recovers within one call. The status probe (a one-item unfiltered
+  `/accounts` page) counts as `HealthCheck`, and a `ListAccounts` failure
+  applies to it too.
+- Recording: `Requests()`, `Count(op)`, `Succeeded(op)`. Every non-GET is
+  answered 405 and recorded; assert `Writes()` is empty to prove no
+  PUT/PATCH. A disabled deployment is proven by `Requests()` being empty.
+- Use: `stub := billingstub.New(scenario)`, `stub.Start("127.0.0.1:0")`,
+  `stub.URL()`, `stub.SetScenario(...)` to change a running stub, `Close()`.
+  Each stub owns its state, so parallel suites do not share scenarios.
+
+`it/it_billing_provider_status_test.go` ("with a stub M360") starts a stub in
+the test process, creates the credential Secret, patches the
+`fulfillment-grpc-server` Deployment in `osac` with the four `OSAC_BILLING_*`
+settings and the Secret volume, waits for the rollout, and expects `AVAILABLE`,
+then `UNAVAILABLE` after `SetScenario` scripts a 503. Cleanup restores the
+original pod spec. The specs are `Serial` and skip unless
+`OSAC_IT_BILLING_STUB_LISTEN` (bind address) and `OSAC_IT_BILLING_STUB_URL`
+(that listener as seen from the cluster, for kind the host side of the docker
+network) are set. No installer or chart setting exists for either variable,
+and the suite does not set them.
+
+What runs where:
+
+| Seam | Run in CI | Notes |
+|---|---|---|
+| `billingfake` and `billingstub` unit specs | Yes, `ginkgo run -r internal` in the fulfillment-service unit leg | No cluster needed. |
+| Real `m360` adapter against the stub (happy path, 5xx, 401) | Yes, in the `billingstub` unit specs | |
+| Deployed stub spec in `it/` | No | Skipped without the two variables, and no CI job sets them. |
+| Default `it/` billing specs | Yes | They cover only the unconfigured, `NOT_CONFIGURED` case. |
+
+To run the deployed spec, a developer must start the suite with the two
+variables set and a network path from the kind nodes to the test host. The
+same configured-provider boundary is listed as unresolved in the billing
+provider-status coverage note above; no follow-up ticket exists yet for
+wiring these specs into CI.
 ### Fulfillment integration timings
 
 The `SUITE=fulfillment` installer target uses Ginkgo's native `--json-report`
@@ -347,6 +451,7 @@ installer command in the tier table remains the component-integration check.
 - **FabricDomain to Netris lifecycle:** The complete BMaaS E2E journey is tracked by [OSAC-4786](https://redhat.atlassian.net/browse/OSAC-4786). It requires reserved real Netris hosts and owned cleanup; API-only integration cases are not substitutes.
 - **Catalog Items:** `it/` checks creation and update behavior, publication visibility, CLI creation, and the ClusterOrder release image written by Fulfillment. Catalog-backed provisioning journeys that exercise other components remain in the CaaS, VMaaS, BMaaS, and reference E2E suites.
 - **ComputeInstance additional-disk defaults:** the VMaaS regression test `test_compute_instance_empty_additional_disks_disables_catalog_item_default` covers the API contract for omitted and explicitly empty disk lists through provisioning and the resulting operator resource.
+- **Billing provider status ([DEV] [OSAC-6879](https://redhat.atlassian.net/browse/OSAC-6879), [OSAC-6881](https://redhat.atlassian.net/browse/OSAC-6881)):** `internal/servers/billing_provider_statuses_server_test.go` covers the statuses servers against a counting adapter double: one bounded probe per read, the shared last successful check, and failure reasons; authorization (admin group, service accounts, tenant-role denial on the public and private Get) is covered by `internal/auth/authorization_evaluator_test.go` at Unit tier. `it/it_billing_provider_status_test.go` targets the deployed CLI/gRPC boundary in disabled (`NOT_CONFIGURED`) mode only, because the dev deployment configures no billing provider; its sole execution path is the CI leg Integration test (fulfillment-service) (`ci-tests.yml`, run by `workflows/tests.yml`), which runs the Fulfillment installer target on Kind, and no locally executed run is recorded for this branch, so the deployed tier is planned rather than executed locally. The REST gateway routes have no route-level test — only handler-list membership in `start_rest_gateway_cmd_test.go` and a simulated gateway error-mapping case in the guard spec. Configured-provider states (AVAILABLE/UNAVAILABLE probes, `lastSuccessfulCheck` retention, provider failure messages), the REST routes, and deployed non-admin denial have no deployed-tier coverage. No owning follow-up ticket exists yet, so these gaps are unresolved.
 
 ## osac-installer
 
@@ -386,6 +491,33 @@ it does not start the hooks or prove a deployed fulfillment endpoint accepts
 the certificate. The Kind
 `SUITE=fulfillment` target exercises deployed startup and API behavior, subject
 to the profile's configured CA and enabled services.
+
+The `make billing-render-test` Helm contract renders the umbrella chart with
+and without `global.billing.provider`. It asserts the credential Secret is
+mounted only when configured, that no credential value is rendered, and that
+the schema and template checks reject partial, second-provider, out-of-range
+and inverted tuning values. It checks rendered manifests only; it does not
+install against a provider (the fulfillment install test is design-doc
+Story 1.05; no Jira ticket exists yet) and does not cover how metering
+consumes the block; no Jira ticket exists yet for that gap.
+
+The new `global.billing` block extends `values.schema.json`, which the
+Enclave Wizard pipeline renders automatically. Verify that the consuming
+Enclave plugin version picks up the changed schema and that the Wizard
+renders and validates the billing fields before declaring the feature
+available there; that pipeline is outside this repository's chart-render
+tests and is not verified by them; no Jira ticket exists yet for that gap.
+
+The chart hands the block to the fulfillment gRPC server as `OSAC_BILLING_*`
+environment variables. `OSAC_BILLING_PROVIDER`, `_BASE_URL`, `_API_VERSION`
+and `_CREDENTIAL_FILE` are consumed by the fulfillment loader
+`billing.LoadConfig`. The tuning variables `_ITEM_TIMEOUT_SECONDS`,
+`_LIST_DEADLINE_SECONDS`, `_CACHE_FRESH_TTL_SECONDS`,
+`_CACHE_STALE_TTL_SECONDS`, `_CACHE_MAX_ENTRIES`, `_RETRY_COUNT`,
+`_PRICING_BREAKER_FAILURE_THRESHOLD`, `_PRICING_BREAKER_FAILURE_WINDOW_SECONDS`
+and `_PRICING_BREAKER_OPEN_SECONDS` have no Go consumer yet; design-doc
+stories 5.02 and 7.01 will consume them, and no Jira tickets exist for
+them yet. Renaming a variable breaks that contract on both sides.
 
 ### Install preflight (OSAC-6561)
 

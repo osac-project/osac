@@ -20,6 +20,13 @@ specific language governing permissions and limitations under the License.
 {{- $vaultClientID := required "vault.keycloakClientId is required" .Values.vault.keycloakClientId }}
 {{- $globalValues := index .Values "global" | default dict }}
 {{- $networkingValues := index $globalValues "networking" | default dict }}
+{{- $billing := index $globalValues "billing" | default dict }}
+{{- $billingProvider := index $billing "provider" }}
+{{- $billingTuning := index $billing "tuning" | default dict }}
+{{- $billingBreaker := index $billingTuning "pricingBreaker" | default dict }}
+{{- /* Defaults mirror the umbrella chart values: a standalone subchart render has none. retryCount may be 0, which `default` would replace. */}}
+{{- $billingRetry := 3 }}
+{{- if hasKey $billingTuning "retryCount" }}{{- $billingRetry = $billingTuning.retryCount }}{{- end }}
 
 apiVersion: apps/v1
 kind: Deployment
@@ -134,6 +141,14 @@ spec:
           {{ end }}
           {{ end }}
           {{ end }}
+      {{- if $billingProvider }}
+      - name: billing
+        secret:
+          secretName: {{ $billingProvider.credentialSecret.name }}
+          items:
+          - key: {{ $billingProvider.credentialSecret.key }}
+            path: credential
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -165,6 +180,11 @@ spec:
         - name: kafka
           mountPath: /etc/fulfillment-grpc-server/kafka
           readOnly: true
+        {{- if $billingProvider }}
+        - name: billing
+          mountPath: /etc/fulfillment-grpc-server/billing
+          readOnly: true
+        {{- end }}
         - name: tls
           mountPath: /etc/fulfillment-grpc-server/tls
         - name: token-signer
@@ -218,6 +238,36 @@ spec:
         - --vault-keycloak-issuer-url={{ $vaultIssuerURL }}
         - --vault-keycloak-client-id={{ $vaultClientID }}
         - --vault-keycloak-client-secret-file=/etc/fulfillment-grpc-server/vault/client-secret
+        {{- if $billingProvider }}
+        # OSAC_BILLING_* contract: see docs/INTEGRATION-TESTING.md.
+        env:
+        - name: OSAC_BILLING_PROVIDER
+          value: {{ $billingProvider.key | quote }}
+        - name: OSAC_BILLING_BASE_URL
+          value: {{ $billingProvider.baseUrl | quote }}
+        - name: OSAC_BILLING_API_VERSION
+          value: {{ $billingProvider.apiVersion | quote }}
+        - name: OSAC_BILLING_CREDENTIAL_FILE
+          value: /etc/fulfillment-grpc-server/billing/credential
+        - name: OSAC_BILLING_ITEM_TIMEOUT_SECONDS
+          value: {{ $billingTuning.itemTimeoutSeconds | default 2 | quote }}
+        - name: OSAC_BILLING_LIST_DEADLINE_SECONDS
+          value: {{ $billingTuning.listDeadlineSeconds | default 5 | quote }}
+        - name: OSAC_BILLING_CACHE_FRESH_TTL_SECONDS
+          value: {{ $billingTuning.cacheFreshTtlSeconds | default 300 | quote }}
+        - name: OSAC_BILLING_CACHE_STALE_TTL_SECONDS
+          value: {{ $billingTuning.cacheStaleTtlSeconds | default 3600 | quote }}
+        - name: OSAC_BILLING_CACHE_MAX_ENTRIES
+          value: {{ $billingTuning.cacheMaxEntries | default 10000 | quote }}
+        - name: OSAC_BILLING_RETRY_COUNT
+          value: {{ $billingRetry | quote }}
+        - name: OSAC_BILLING_PRICING_BREAKER_FAILURE_THRESHOLD
+          value: {{ $billingBreaker.failureThreshold | default 5 | quote }}
+        - name: OSAC_BILLING_PRICING_BREAKER_FAILURE_WINDOW_SECONDS
+          value: {{ $billingBreaker.failureWindowSeconds | default 30 | quote }}
+        - name: OSAC_BILLING_PRICING_BREAKER_OPEN_SECONDS
+          value: {{ $billingBreaker.openSeconds | default 30 | quote }}
+        {{- end }}
         ports:
         - name: grpc
           containerPort: 8000

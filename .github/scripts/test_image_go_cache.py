@@ -147,6 +147,25 @@ class CacheContracts(unittest.TestCase):
         log = "#1 RUN echo OSAC_IMAGE_CACHE_VERIFIED\n#2 0.1 OSAC_IMAGE_CACHE_VERIFIED\n"
         self.assertEqual(["#2 0.1 OSAC_IMAGE_CACHE_VERIFIED"], cache.observe(log)["image_build_observations"])
 
+    def test_dependency_errors_preserve_literal_hosts_case_and_go_fallback(self) -> None:
+        for line in (
+            "#1 https://proxy.golang.org/example/@v/v1.zip: timeout",
+            "#1 https://sum.golang.org/lookup/example@v1: failed",
+            "#1 HTTPS://PROXY.GOLANG.ORG/example: ERROR",
+            "#1 HTTPS://SUM.GOLANG.ORG/lookup/example: RESET",
+            "#1 go: module download failed",
+            "#1 GO: connection TIMEOUT",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(1, cache.observe(line)["observed_dependency_error_lines"])
+
+    def test_dependency_errors_reject_wildcard_substituted_hostnames(self) -> None:
+        for hostname in ("proxyXgolang.org", "proxy.golangXorg", "sumXgolang.org", "sum.golangXorg"):
+            with self.subTest(hostname=hostname):
+                self.assertEqual(
+                    0, cache.observe(f"#1 https://{hostname}/example: timeout")["observed_dependency_error_lines"]
+                )
+
     def test_missing_and_malformed_restore_fall_back_without_injection(self) -> None:
         for malformed in (False, True):
             with self.subTest(malformed=malformed), tempfile.TemporaryDirectory() as temporary:

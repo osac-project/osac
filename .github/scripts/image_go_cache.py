@@ -311,7 +311,7 @@ def observe(log: str) -> dict[str, object]:
         "observed_dependency_error_lines": sum(
             bool(
                 re.search(
-                    r"(proxy.golang.org|sum.golang.org|go:).*"
+                    r"(proxy\.golang\.org|sum\.golang\.org|go:).*"
                     r"(error|timeout|INTERNAL_ERROR|reset|failed)",
                     line,
                     re.I,

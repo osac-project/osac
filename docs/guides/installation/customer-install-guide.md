@@ -1476,7 +1476,7 @@ subchart's own `values.yaml` file.
 | `operator.hubAccess.enabled` | schema | Creates the hub-access `ClusterRole` that the Fulfillment Service binds to. |
 | `operator.stall.preparingInfrastructureThreshold`, `operator.stall.controlPlaneStartingThreshold`, `operator.stall.workersJoiningThreshold` | schema | How long a cluster provisioning phase can wait before the Operator marks it stalled. |
 | `operator.tenants[]` | subchart | Tenants pre-created at installation. `shared` is the built-in tenant. |
-| `operator.networkManagers.fabricManagers.<name>.enabled`, `operator.networkManagers.k8sManagers.<name>.enabled` | subchart | Enables a fabric manager (`netris`, `cudn_net`) or a Kubernetes manager (`k8s_only`, `cudn_evpn`). |
+| `operator.networkManagers.fabricManagers.<name>.enabled`, `operator.networkManagers.k8sManagers.<name>.enabled` | schema | Creates manager registration `ConfigMap` resources. Built-in registrations include `netris`, `cudn_net`, `agentless_net`, and `k8s_only`. Custom registrations such as `cudn_evpn` also need `capabilities: [ipv4]`; `description` is optional. See [CUDN EVPN with Netris](#cudn-evpn-with-netris). |
 | `operator.remoteClusterKubeconfig`, `operator.remoteClusterKubeconfigSecretName`, `operator.remoteClusterKubeconfigSecretKey` | schema | Kubeconfig mount for VMaaS on a separate workload cluster. Set the path and Secret name together. The key defaults to `kubeconfig`. See [Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster). |
 
 <a id="table-53-networking-globalnetworking"></a>
@@ -1489,6 +1489,12 @@ Netris Fabric Manager when `fabricManager` is `netris`. EVPN host networking is
 configured by the `evpn` values of the phase-1 releases
 ([Section 2.6](#26-evpn-host-networking-for-vmaas)), not by these. See
 [Section 4.4](#44-installing-with-provider-networking).
+
+Normal deployments configure `global.networking`; Helm derives the AAP
+backend, manager registrations, and NetworkClass from it. The top-level
+`networkClass` block is a legacy expert override and is ignored unless
+`global.expertOverrides.networkClass: true`. CUDN EVPN uses that expert path
+as shown in [Section 6.1](#cudn-evpn-with-netris).
 
 | Parameter | Source | Description | Default |
 |---|---|---|---|
@@ -1657,6 +1663,9 @@ the cluster. Every workflow also needs the networking values and steps of
    first `ComputeInstance` needs. Without it, provisioning fails with an empty
    `storage_tier_definitions` even though every pod looks healthy.
 
+   For Netris connection settings, see
+   [CUDN EVPN with Netris](#cudn-evpn-with-netris).
+
    For virtual machines on a different cluster from the OSAC management
    services, see
    [Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster).
@@ -1683,6 +1692,83 @@ the cluster. Every workflow also needs the networking values and steps of
   ```console
   oc get computeinstance -A
   ```
+
+#### CUDN EVPN with Netris
+
+Configure host networking in the infra values file as described in
+[EVPN host networking](helm-deployment-guide.md#evpn-host-networking-vmaas).
+For phase 2, replace the service-specific block in step 1 with the following
+values. Keep the shared settings from [Section 4.2](#42-configuring-the-helm-values).
+Set the Netris URL, user, site, and tenant to your deployment's values:
+
+```yaml
+global:
+  services: { vmaas: { enabled: true }, caas: { enabled: false }, bmaas: { enabled: false }, maas: { enabled: false } }
+  networking:
+    fabricManager: netris
+    k8sManager: ""
+    netris:
+      controllerUrl: "https://netris.example.com"
+      validateCerts: true
+      credentials:
+        username: netris
+        externalSecret: true
+      siteId: "5"
+      tenantId: "1"
+      tenantName: Admin
+  expertOverrides:
+    networkClass: true
+operator:
+  networkManagers:
+    enabled: true
+    fabricManagers:
+      cudn_net:
+        enabled: false
+      netris:
+        enabled: true
+    k8sManagers:
+      k8s_only:
+        enabled: false
+      cudn_evpn:
+        enabled: true
+        description: "OVN EVPN VM-to-fabric bridging"
+        capabilities: [ipv4]
+networkClass:
+  enabled: true
+  title: "CUDN EVPN with Netris"
+  description: "IPv4 networking through Netris and CUDN EVPN"
+  fabricManager: netris
+  k8sManager: cudn_evpn
+  isDefault: true
+lvms:
+  enabled: true
+aap:
+  instanceGroups:
+    publishTemplates:
+      enabled: true
+    clusterFulfillment:
+      enabled: true
+    networkFulfillment:
+      enabled: true
+```
+
+With `externalSecret: true`, create the `netris-credentials` Secret with a
+`NETRIS_PASSWORD` key in the AAP namespace before installation. Alternatively,
+supply `global.networking.netris.credentials.password` through a separate
+gitignored values file as described in [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend).
+
+`global.networking` selects the Netris AAP backend. Its `k8sManager` must stay
+empty because the normal profile accepts only `""` or `k8s_only` and cannot
+select two managers. `global.expertOverrides.networkClass: true` enables the
+separate top-level block, where `enabled: true`, a nonempty `title`, and both
+manager names select the EVPN/Netris combination. Setting only
+`networkClass.k8sManager` leaves the normal profile in control.
+
+The operator subchart supplies the Netris registration defaults. It has no
+built-in `cudn_evpn` registration, so the example supplies `capabilities`
+explicitly. An empty capabilities list is rejected; `description` is optional.
+The [EVPN/Netris reference profile](../../../osac-installer/values/cudn-evpn-netris-test/instance.yaml)
+shows the same networking configuration with additional development settings.
 
 ### 6.2 Installing OSAC for CaaS
 
@@ -1883,8 +1969,9 @@ Manager such as Netris.
 ### 6.4 Installing VMaaS on a separate workload cluster
 
 Use this layout when OSAC management services run on one OpenShift cluster
-and virtual machines run on another. Leave CaaS disabled. The cluster
-controller cannot run in the same operator instance.
+and virtual machines run on another. Disable CaaS and BMaaS: the operator
+refuses to start when either the cluster controller or the bare-metal-instance
+controller is enabled with a remote kubeconfig.
 
 Prepare the two clusters with Helm as described in
 [Separate VMaaS workload cluster](helm-deployment-guide.md#separate-vmaas-workload-cluster).
@@ -1892,12 +1979,21 @@ Create the workload kubeconfig Secret on the management cluster, including
 the console-proxy label, as described in
 [VMaaS dedicated cluster](https://github.com/osac-project/osac/blob/main/osac-operator/docs/vmaas-dedicated-cluster/README.md).
 
-In `my-values.yaml`, enable VMaaS only and point the operator and AAP at that
-Secret:
+Start with the VMaaS values from [Section 6.1](#61-installing-osac-for-vmaas),
+including the storage registration and networking settings. For the LVMS
+workload cluster prepared above, keep `lvms.enabled: true` in the phase-2
+`my-values.yaml` on the management cluster. This registers the `local`
+StorageBackend and StorageTier in fulfillment; enabling LVMS only in the
+phase-1 infra values file does not register them.
+
+Merge these values into `my-values.yaml` to enable VMaaS only and point the
+operator and AAP at the Secret:
 
 ```yaml
 global:
   services: { vmaas: { enabled: true }, caas: { enabled: false }, bmaas: { enabled: false }, maas: { enabled: false } }
+lvms:
+  enabled: true
 operator:
   remoteClusterKubeconfig: /var/run/secrets/remote/kubeconfig
   remoteClusterKubeconfigSecretName: osac-remote-kubeconfig

@@ -23,6 +23,7 @@
       - [7.1.2 Observe the actual request and generated objects](#712-observe-the-actual-request-and-generated-objects)
       - [7.1.3 Generated DataVolume reference and consumer evidence](#713-generated-datavolume-reference-and-consumer-evidence)
       - [7.1.4 Result and cleanup](#714-result-and-cleanup)
+    - [7.2 Mandatory metering acceptance](#72-mandatory-metering-acceptance)
   - [8. Postinstallation tasks](#8-postinstallation-tasks)
     - [8.1 Accessing the OSAC consoles](#81-accessing-the-osac-consoles)
     - [8.2 Installing the `osac` CLI](#82-installing-the-osac-cli)
@@ -57,6 +58,8 @@ Use the prepared local `osac` chart and its approved values. The chart deploys t
 Complete the three preparation guides above for the same cluster, namespace and selected services before continuing. Use the common [cluster/access and client-tool requirements](../customer-install-guide.md#2-prerequisites), replacing public registry/Git access with the prepared disconnected sources.
 
 - Required Operators, trust distribution, selected operands and external services are ready as described in [operators.md](operators.md); do not reinstall them here.
+
+- After that provider setup and before Section 4, complete the [mandatory metering provider checkpoint](prereqs.md#41-mandatory-metering-provider-checkpoint) for both Core and Core + VMaaS, including external Fulfillment Kafka. Resolve Q-0012's actual provider/API/watch-scope/RBAC/client contract; observe its exact User and Topic Operator containers with the bounded reads there. Missing or unresolved capability blocks Helm; do not infer a skip from `kafka.enabled=false`, a CSV alone or prepared values.
 
 - Keep the approved `OSAC_NAMESPACE`, `OSAC_CHART_DIR` and `VALUES_FILE` available in the installation shell. `OSAC_CHART_DIR` is the exact downloaded/extracted **0.0.62** chart path; `VALUES_FILE` is the complete prepared values file.
 
@@ -133,7 +136,7 @@ Use only the service selected during preparation; retain the limits in [Section 
 
 Follow the [VMaaS workflow](../customer-install-guide.md#61-installing-osac-for-vmaas) with the prepared storage/LoadBalancer providers, network settings, mirrored disk images, internal AAP Git source and EE. Keep the required compute templates and storage-tier registration; do not enable an unselected provider.
 
-**Execution order:** select the prepared Core + VMaaS values → install once through Section 4 → pass the platform checks in Section 7 steps 1–9 → prepare the selected mirror-backed DiskImage and resolved CDI consumer contract in Sections 6.1.1–6.1.2 → complete the one VMaaS acceptance procedure in Section 7.1 → record the selected-service result in Section 7 step 10. Do not require all of Section 7 to be complete before the first test VM, and do not treat ready Pods alone as VM acceptance.
+**Execution order:** select the prepared Core + VMaaS values → install once through Section 4 → pass the platform checks in Section 7 steps 1–9 → prepare the selected mirror-backed DiskImage and resolved CDI consumer contract in Sections 6.1.1–6.1.2 → complete the one VMaaS acceptance procedure in Section 7.1 → record the selected-service result in Section 7 step 10 → record mandatory metering functional acceptance in step 11 using Section 7.2's approved contract. If that contract uses this service test as its stimulus, arrange its baseline before the test rather than requiring a metering pass first. Do not require all of Section 7 to be complete before the first test VM, and do not treat ready Pods alone as VM acceptance.
 
 ### 6.1.1 Selected mirror-backed DiskImages
 
@@ -234,7 +237,7 @@ CaaS provisioning is outside the current disconnected procedure. The [CaaS/Netri
 
 ## 7. Verifying the installation
 
-Perform platform checks 1–9 in order, using the prepared namespace `$NS`, selected providers and exact release object names. Have the prepared matching CLI artifact and site authentication/CA context available before any CLI/API check; Section 8.2 is a reusable instruction, not a requirement to wait until after service acceptance. Stop at the first failure and see [Section 11](#11-troubleshooting). Use the [connected verification sequence](../customer-install-guide.md#7-verifying-the-installation) only for common commands with site endpoints and trusted CA files, never by disabling TLS verification. Step 10 records the selected-service result after the platform checks, not a recursive request to rerun all of Section 6.
+Perform platform checks 1–9 in order, using the prepared namespace `$NS`, selected providers and exact release object names. Have the prepared matching CLI artifact and site authentication/CA context available before any CLI/API check; Section 8.2 is a reusable instruction, not a requirement to wait until after service acceptance. Stop at the first failure and see [Section 11](#11-troubleshooting). Use the [connected verification sequence](../customer-install-guide.md#7-verifying-the-installation) only for common commands with site endpoints and trusted CA files, never by disabling TLS verification. Step 10 records the selected-service result after the platform checks, not a recursive request to rerun all of Section 6. Step 11 separately records mandatory metering collection/reporting for every profile under Section 7.2. If its approved stimulus is the service test in step 10, prepare the required baseline before that test and review its result afterward; do not turn metering acceptance into a prerequisite for the first test VM.
 
 1. Run `helm status osac -n "$NS"`; require `STATUS: deployed` before continuing.
 
@@ -272,6 +275,8 @@ Perform platform checks 1–9 in order, using the prepared namespace `$NS`, sele
 9. Check the site Fulfillment API `/healthz`, then authenticate with the prepared matching CLI and CA trust and run `osac get tenants`. If UI is enabled, confirm its site URL redirects to the approved identity provider and returns to the OSAC console after login.
 
 10. For selected VMaaS, complete [Section 7.1](#71-vmaas-acceptance) after platform checks 1–9 and its catalog/CDI preparation. For Core-only scope, record the service checks applicable to that scope; do not create a VM or enable an unselected service. Record pass, failure or unresolved qualification explicitly; an unresolved selected VMaaS check is not a successful VMaaS acceptance result.
+
+11. For every selected profile, complete [mandatory metering acceptance](#72-mandatory-metering-acceptance) using a release-qualified, owner-approved procedure that positively demonstrates collection/progress and the resulting report for the approved scope. **TBD — Q-0013:** until its commands, correlation, expected outcomes and observation bounds are approved, record unresolved qualification, not a pass, skip or disabled metering. Pod existence/readiness and Kafka connectivity alone do not satisfy this step.
 
 ### 7.1 VMaaS acceptance
 
@@ -384,6 +389,30 @@ Record the selected profile and exact request, DiskImage/runtime source, storage
 After evidence capture, the test owner retires only the approved test request through the supported OSAC lifecycle. Use the release-qualified identity-safe retirement/ownership procedure; verify identity again and preserve unrelated workloads. A pre-delete name check followed by unconditional name-based deletion is not an atomic identity safeguard. If a supported safe retirement operation is not established, record cleanup pending with its owner rather than inventing a delete flag or deleting generated root resources/namespace by hand.
 
 Verify the intended test request's retirement and expected owned-resource cleanup through the supported interfaces. Leave shared DiskImages, templates, service credentials, operators and infrastructure intact. A failed or unverified cleanup is not silently reported as completed.
+
+### 7.2 Mandatory metering acceptance
+
+> **TBD — Q-0013: production metering acceptance.** Metering is mandatory, but the release-qualified functional commands, observable/reporting contract, observation window and selected monitoring/alert criteria remain for the metering/service, Kafka, operations and QE owners to approve. This section is a non-executable acceptance shape, not an approved test or a default passing result. Until those choices and their evidence are supplied, record metering as **unresolved qualification**, not passed, skipped or disabled.
+
+After the Phase 2 platform is available, use only the approved contract to show both collection/progress and the resulting report for the intended deployment/tenant/test scope. Prepare its baseline and observation context before its approved stimulus. If Q-0013 chooses the already-authorized service test from step 10 as that stimulus, capture the needed baseline first and review the metering result in step 11 afterward; do not require a metering pass before the first VM. Core-only acceptance must not create a VM or enable an unselected service merely to produce a billing event.
+
+```text
+TBD Q-0013 — NON-EXECUTABLE ACCEPTANCE SHAPE; NO DEFAULT PASS
+Owner and release/schema-qualified procedure: <TBD, approved by named service/operations owners>
+Approved deployment/tenant/test scope and correlation method: <TBD; keep site/tenant identities private>
+Baseline and observation start: <TBD approved source and timestamp before the stimulus>
+Authorized stimulus or explicitly approved existing signal: <TBD; exact identity/time and safe retry semantics>
+Collection/progress evidence: <TBD release-qualified observation showing this scope's signal was consumed/processed>
+Reporting evidence: <TBD approved resulting usage/report/billing observable correlated by the agreed semantics>
+Expected values, units/aggregation and maximum observation window: <TBD; no guessed lag/metric threshold>
+Selected metrics/scrape/alert and control/negative case, if required: <TBD owner-approved isolated procedure>
+Private evidence and allowlisted result review: <TBD; do not export raw payloads, credentials or unrelated tenant data>
+Failure/inconclusive handling and test cleanup owner: <TBD; no blind stimulus replay or unrelated-resource deletion>
+```
+
+The completed procedure must positively demonstrate the approved signal-to-metering-progress-to-report relationship, within the approved bounds; unrelated advancing counters, a Ready Pod, Kafka reachability or absence of an error is not that proof. Do not assume one input event maps to one report without the approved aggregation semantics. A denied/failed read, expired observation window or missing correlation is failure or unresolved qualification under that approved procedure, never success by inference. Do not select M360, another adapter, a monitoring stack, an endpoint, a test stimulus or a threshold as an interim answer.
+
+Keep the metering result separate from the selected-service result. Do not combine the checks into a synthetic atomic installation-wide receipt, pre-create chart-owned outputs, bypass TLS or change the provider to make the test pass.
 
 ## 8. Postinstallation tasks
 

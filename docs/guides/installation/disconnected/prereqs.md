@@ -9,6 +9,7 @@
     - [3.2 Approved Pod-network diagnostic](#32-approved-pod-network-diagnostic)
     - [3.3 Trust and authentication correction — unresolved consumer mapping](#33-trust-and-authentication-correction--unresolved-consumer-mapping)
   - [4. Select providers and record production contracts](#4-select-providers-and-record-production-contracts)
+    - [4.1 Mandatory metering provider checkpoint](#41-mandatory-metering-provider-checkpoint)
   - [5. Prepare the release chart and values](#5-prepare-the-release-chart-and-values)
   - [6. Handoff and worked flow](#6-handoff-and-worked-flow)
     - [Secret-key acceptance reference](#secret-key-acceptance-reference)
@@ -86,7 +87,7 @@ For each affected pool, record its current state separately: unpaused, observedG
 | --- | --- | --- |
 | `openshift-cert-manager-operator` | `stable-v1` | Core |
 | `ansible-automation-platform-operator` | `stable-2.6-cluster-scoped` | Core |
-| `amq-streams` | `stable` | Core package coverage; live provider follows Kafka selection |
+| `amq-streams` | `stable` | Core package coverage; the mandatory same-cluster Strimzi metering capability is required independently of the Fulfillment Kafka selection; provider installation/adoption remains governed by Q-0012 |
 | `kubevirt-hyperconverged`, `lvms-operator`, `metallb-operator` | Selected approved Doc 1 channels | Additional VMaaS coverage; package presence does not select installation |
 
 Check the selected packages and channels:
@@ -189,7 +190,7 @@ These are **installation selections**, not seven invented Helm values. Persist t
 | `enable_vmaas` | `false` or `true`; must equal `global.services.vmaas.enabled` |
 | `with_lvms` | Explicit boolean; true installs LVMS later, only with VMaaS; not an `osac` chart key |
 | `with_metallb` | Explicit boolean; true installs MetalLB later, only with VMaaS; not an `osac` chart key |
-| `kafka_provider` | `external` or `in-cluster`; `kafka.enabled` false or true respectively |
+| `kafka_provider` | `external` or `in-cluster` for Fulfillment Kafka; `kafka.enabled` false or true respectively. Neither option disables mandatory metering or its same-cluster Strimzi User/Topic Operators; see §4.1 |
 | `storage_class` | Approved dynamic class; not a global per-PVC Helm override |
 | `LOADBALANCER_PROVIDER` | `existing` with `with_metallb=false`, or `metallb` with `with_metallb=true`; protected site input |
 
@@ -200,8 +201,9 @@ These are **installation selections**, not seven invented Helm values. Persist t
 | PostgreSQL | Approved host/port/database, TLS CA and client identity, backup/restore owner evidence; authenticated temporary-table test returns count `1` |
 | Database URL | Released shape: `postgres://<user>@<host>:5432/<database>?sslmode=verify-full&sslrootcert=<mounted-ca>&sslcert=<mounted-cert>&sslkey=<mounted-key>`; actual paths from render |
 | Database consumers | `dbInit.host`, `service.database.connection[]`; URL Secret key `url`; exact mounted keys/names come from rendered consumers |
-| External Kafka | Bootstrap **and advertised broker** addresses, canonical TLS/SASL/ACL completion, credential and CA references; `service.kafka.connection[]` and `service.certs.caBundle` |
-| In-cluster Kafka | Intended `osac-kafka` namespace/cluster, storage selection and mirror-resident operand images; broker/user/ACL checks deferred to `operators.md`, never reported passed early |
+| External Kafka | Fulfillment bootstrap **and advertised broker** addresses, canonical TLS/SASL/ACL completion, credential and CA references; `service.kafka.connection[]` and `service.certs.caBundle`. Skipping its broker installation does not skip the separate metering Strimzi requirement. |
+| In-cluster Kafka | Intended Fulfillment `osac-kafka` namespace/cluster, storage selection and mirror-resident operand images; broker/user/ACL checks deferred to `operators.md`, never reported passed early. Mandatory metering capability is an additional post-setup requirement under §4.1. |
+| Mandatory metering | For every profile, an approved same-cluster Strimzi User/Topic Operator capability, actual metering coordinates/RBAC/client inputs, stable deployment identity and database configuration from the canonical metering guide; Q-0012 remains TBD. Run §4.1 only after provider setup, before Helm; no provider or namespace default is selected here. |
 | Vault/OpenBao | Approved HTTPS `service.vault.endpoint`, namespace/mount/role/issuer/audience and Secret/CA references from the canonical secrets guide |
 | Production identity | Approved exact HTTPS issuer/hosts; discovery issuer equality, authorization/token/JWKS endpoints and nonempty signing keys; approved client/role evidence |
 | Dynamic storage | Existing provider: actual bound PVC **and consuming workload write/read**; LVMS selected: device approval now, live provider test in `operators.md` |
@@ -216,6 +218,26 @@ Record the provider selections and each applicable canonical check result separa
 Check identity without sending credentials to unapproved endpoints:
 
 Record each applicable canonical identity check separately; a single observation does not establish the complete identity-service contract. Approve HTTPS scheme and exact hosts before discovery/JWKS requests or credential POST; reject userinfo, unexpected query/fragment and redirects. Match the same approved issuer across the OSAC clients and Vault contract. Missing roles/claims return to the identity/service owner, not a demonstration fixture.
+
+### 4.1 Mandatory metering provider checkpoint
+
+Metering is mandatory for OSAC **0.0.62**, for both `core` and `core-vmaas`. `kafka_provider` and `kafka.enabled` select the Fulfillment Kafka path; `external`/`false` does not suppress metering's `KafkaUser`/`KafkaTopic` resources or its required same-cluster Strimzi User Operator and Topic Operator. Use the [canonical metering configuration](../kafka-configuration.md#metering); Fulfillment credentials do not configure metering.
+
+> **TBD — Q-0012: production Strimzi/metering provider.** The Kafka/platform owners must approve the actual metering broker/cluster coordinates, same-cluster User/Topic Operator ownership and watch scope, served `kafka.strimzi.io/v1` APIs, credential-access RBAC, CA/authentication and availability/retention/recovery contract. Keep that provider decision open; do not select an interim cluster, namespace or broker. For the reference AMQ Streams installation, retain channel `stable`, Manual approval and the exact resolved-release compatibility review in `operators.md`; a running Pod or floating channel alone is not that decision.
+
+**Ordering:** declare this required capability during prerequisite selection, but run the live observations below only **after** the chosen AMQ Streams/Strimzi provider has been installed or owner-approved for adoption through Phase 1 setup, and **before** the OSAC Helm install. The in-cluster Kafka live-gate deferral above includes this mandatory Strimzi capability even when Fulfillment Kafka is external; the external Fulfillment service must still satisfy its own earlier canonical contract. A deferred metering check is required-post-setup, not ready or skipped. Do not require future metering `KafkaUser`/`KafkaTopic` objects, credential-copy outputs or an OSAC workload to perform this checkpoint; those generated objects stay Phase 2-owned. `installation.md` §2 calls this checkpoint after preparation.
+
+In the same approved Kubernetes cluster as OSAC, have the provider owner resolve the exact current Pod name, namespace, UID and container for **each** operator role from the approved current workload/ownership and watch-scope contract. The two roles may share a Pod; do not require two separate Deployments. The `METERING_USER_OPERATOR_*` and `METERING_TOPIC_OPERATOR_*` parameters below are protected diagnostic inputs, not Helm values. Do not select a first list item, match a name substring or substitute an arbitrary healthy container. Until Q-0012 is resolved and those bindings are approved, stop the dependent Helm installation; filling parameter names is not provider approval.
+
+```bash
+set -o pipefail
+oc --request-timeout=30s get pod "${METERING_USER_OPERATOR_POD:?Resolve the approved User Operator Pod}" -n "${METERING_USER_OPERATOR_NAMESPACE:?}" -o json | jq -e --arg uid "${METERING_USER_OPERATOR_POD_UID:?}" --arg container "${METERING_USER_OPERATOR_CONTAINER:?}" '(.metadata.uid == $uid) and (.metadata.deletionTimestamp == null) and (.status.phase == "Running") and any(.spec.containers[]?; .name == $container) and any(.status.containerStatuses[]?; .name == $container and .ready == true and (.state.running | type == "object"))' || exit 1
+oc --request-timeout=30s get pod "${METERING_TOPIC_OPERATOR_POD:?Resolve the approved Topic Operator Pod}" -n "${METERING_TOPIC_OPERATOR_NAMESPACE:?}" -o json | jq -e --arg uid "${METERING_TOPIC_OPERATOR_POD_UID:?}" --arg container "${METERING_TOPIC_OPERATOR_CONTAINER:?}" '(.metadata.uid == $uid) and (.metadata.deletionTimestamp == null) and (.status.phase == "Running") and any(.spec.containers[]?; .name == $container) and any(.status.containerStatuses[]?; .name == $container and .ready == true and (.state.running | type == "object"))' || exit 1
+```
+
+Expected local result for each independent read: `true` and exit status zero. Missing inputs, failed/denied API reads, a changed UID, a terminating/non-Running Pod or a missing/non-ready/non-running selected container stop the dependent install; use the responsible provider owner, not a public fallback, broader permissions or automatic InstallPlan approval. Keep only approved per-check metadata outside protected runtime context.
+
+**Why:** these observations establish only that the owner-qualified User and Topic Operator containers are currently running/ready in the intended cluster. They do not prove watch-scope correctness, successful user/topic reconciliation, broker authentication, metering collection or reporting. Keep the Q-0012 owner/API/RBAC/client contract separate, re-review replacement Pods after rescheduling, and complete actual functional metering acceptance in `installation.md` §7.2 after Phase 2; separate reads are not a locked snapshot.
 
 ## 5. Prepare the release chart and values
 

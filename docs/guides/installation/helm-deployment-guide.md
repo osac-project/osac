@@ -497,12 +497,12 @@ this release. Use this layout with provider networking disabled.
 Add a node by adding it to `evpn.nodes` and rerunning the phase 1b
 `helm upgrade --install osac-infra` command. Remove a node by deleting its
 entry and rerunning that command when at least one configured node remains.
-The chart deletes that node's NNCP and FRRConfigurations. To remove the final
-configured node, set `evpn.enabled: false` and `evpn.nodes: []`, then rerun the
-phase 1b command. That upgrade does not run the EVPN cleanup hook, so run the
-labeled EVPN deletion commands below after the upgrade succeeds. Deleting
-the NNCP does not remove its interface addresses from the node, so remove
-stale addresses separately when needed.
+The chart deletes that node's NNCP and `FRRConfiguration` resources. To remove
+the final configured node, set `evpn.enabled: false` and `evpn.nodes: []`,
+then rerun the phase 1b command. That upgrade does not run the EVPN cleanup
+hook, so run the labeled EVPN deletion commands below after the upgrade
+succeeds. Deleting the NNCP does not remove its interface addresses from the
+node, so remove stale addresses separately when needed.
 
 Uninstalling `osac-infra` does not remove the EVPN resources or revert the
 cluster network operator patch. Helm removes the configure-EVPN ServiceAccount

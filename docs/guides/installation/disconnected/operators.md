@@ -1,6 +1,34 @@
 # Prepare OSAC Operators and Shared Infrastructure
 
-This is Doc 2b for OSAC **0.0.24**. Complete the [mirroring handoff](README.md), [installation prerequisites](prereqs.md) and [AAP Git source handoff](aap-git-source.md) first, in that order. This guide prepares Phase 1; [installation.md](installation.md) owns the OSAC Helm release and Phase 2 acceptance.
+- [Prepare OSAC Operators and Shared Infrastructure](#prepare-osac-operators-and-shared-infrastructure)
+  - [1. Entry Contract](#1-entry-contract)
+    - [Private state and safe records](#private-state-and-safe-records)
+    - [Resume](#resume)
+  - [2. Install the Selected Operators](#2-install-the-selected-operators)
+    - [One OLM pattern](#one-olm-pattern)
+  - [3. Shared Certificates, Trust and Credentials](#3-shared-certificates-trust-and-credentials)
+    - [Dependency order](#dependency-order)
+    - [cert-manager initialization](#cert-manager-initialization)
+    - [trust-manager release contract](#trust-manager-release-contract)
+    - [Issuer and trust distribution](#issuer-and-trust-distribution)
+    - [Runtime Secret and ConfigMap contracts](#runtime-secret-and-configmap-contracts)
+  - [4. Production Services and AAP Inputs](#4-production-services-and-aap-inputs)
+    - [Identity, PostgreSQL and Vault/OpenBao](#identity-postgresql-and-vaultopenbao)
+    - [Kafka](#kafka)
+    - [AAP Git source handoff](#aap-git-source-handoff)
+    - [AAP instance boundary and production TLS](#aap-instance-boundary-and-production-tls)
+  - [5. Optional VMaaS Operands](#5-optional-vmaas-operands)
+    - [LVMS](#lvms)
+    - [MetalLB](#metallb)
+    - [OpenShift Virtualization](#openshift-virtualization)
+    - [CDI registry-consumer preparation](#cdi-registry-consumer-preparation)
+  - [6. Completion, Troubleshooting and Day 2](#6-completion-troubleshooting-and-day-2)
+    - [Seven responsibility outcomes](#seven-responsibility-outcomes)
+    - [Worked flow and failure recovery](#worked-flow-and-failure-recovery)
+    - [Day-2 boundaries](#day-2-boundaries)
+    - [Existing-site DiskImage inventory — post-Phase 2 only](#existing-site-diskimage-inventory--post-phase-2-only)
+
+This is Doc 2b for OSAC **0.0.62**. Complete the [mirroring handoff](README.md), [installation prerequisites](prereqs.md) and [AAP Git source handoff](aap-git-source.md) first, in that order. This guide prepares Phase 1; [installation.md](installation.md) owns the OSAC Helm release and Phase 2 acceptance.
 
 The supported scope here is Core and optional VMaaS. BMaaS and CaaS provisioning are outside this procedure. Mirroring an operator package does not select it for installation.
 
@@ -8,7 +36,7 @@ Use the [customer installation guide](../customer-install-guide.md) for OSAC con
 
 > Do not install the internal dependency or infrastructure charts. Use their release source only as reference. Production PostgreSQL, Keycloak and Vault/OpenBao remain customer-managed services.
 >
-> **WIP:** This guide references a companion validation toolkit (`$OSAC_VALIDATE`) that is not yet published. The validation gates below are specification, not executable procedure, until the toolkit ships.
+> Validation in this guide is manual and evidence-based. The actual **0.0.62** chart, its schema, and the commands below are the validation surface; no companion toolkit is used.
 
 ## 1. Entry Contract
 
@@ -18,8 +46,8 @@ Set `NS="$OSAC_NAMESPACE"` from the protected prerequisite value; `$NS` is the s
 
 | Input | Required value or contract |
 | --- | --- |
-| OSAC chart | Actual downloaded `osac` chart, version `0.0.24` |
-| Release source | Approved checkout of `osac/v0.0.24`, with Git provenance |
+| OSAC chart | Actual downloaded `osac` chart, version `0.0.62` |
+| Release source | Approved checkout of `osac/v0.0.62`, with Git provenance |
 | OSAC namespace | `$OSAC_NAMESPACE`, `osac` in examples; use the namespace bound by prerequisites |
 | Values | Existing protected `values-osac.yaml`; never regenerate defaults over it |
 | Selection | `profile`, `enable_vmaas`, `with_lvms`, `with_metallb`, `kafka_provider`, `storage_class` |
@@ -33,22 +61,13 @@ Set `NS="$OSAC_NAMESPACE"` from the protected prerequisite value; `$NS` is the s
 | AAP EE | Effective `aap.configAsCode.eeImage` from released defaults plus site values |
 | AAP Git handoff | Protected `aap-git-handoff.txt` from Doc 2a; same run/chart, returned internal URL, full source commit, auth/trust and egress confirmation |
 | Private state | Same run identity, cluster UID, chart tree, selections and approved values checkpoint |
-| Validator | `$OSAC_VALIDATE`, **WIP — unpublished**; approved version and checksum required |
-| Validator inputs | `$OPERATORS_INPUTS`, protected data file; never shell-evaluated |
+| Evidence record | Protected manual record of exact identities, inputs, observations, and pass/fail results |
 
 The independent `cliImage` and `aap.bootstrap.cliImage` settings both default to `quay.io/openshift/origin-cli:4.20.0`; set and validate both through the prerequisite contract for the target OpenShift minor. Neither changing an image name nor reaching its registry establishes mirror coverage.
 
 The AAP EE must support the selected Git/probe operations. Resolve and verify its exact image before any storage or source probe uses it.
 
-**Entry gate (WIP)** — the toolkit binds the prerequisite record, selection file, chart tree, namespace, cluster, original values digest and approved post-Git values checkpoint; it consumes the same-run Git handoff and rechecks endpoint/ref readiness.
-
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" operators check entry --inputs "$OPERATORS_INPUTS"
-```
-
-Expected: `PASS entry`; nonzero exit stops before resource creation.
+**Entry gate** — bind the prerequisite record, selection file, chart tree, namespace, cluster, original values digest, and approved post-Git values checkpoint. Consume the same-run Git handoff and recheck endpoint/ref readiness before resource creation. Missing or changed evidence stops this guide.
 
 **Catalog gate** — compare exact source identity and image with the archived generated CatalogSource, not a hostname substring.
 
@@ -68,7 +87,7 @@ Doc 1 owns IDMS/ITMS, ClusterCatalog/signatures and image availability. Prerequi
 
 - Read expected command results below only in the approved private review context; they are not permission to export command output.
 
-- The toolkit must emit fixed gate/service identifiers, UTC, bounded duration, exit status and an enumerated failure class, without arbitrary messages or private inputs.
+- Record fixed gate/service identifiers, UTC, bounded duration, exit status, and an enumerated failure class without arbitrary messages or private inputs.
 
 - Never save Secret bodies, tokens, credential-derived hashes or third-party Job logs in audit evidence.
 
@@ -76,13 +95,7 @@ Doc 1 owns IDMS/ITMS, ClusterCatalog/signatures and image availability. Prerequi
 
 Resume from the retained run, not a new directory. Verify the same chart tree, cluster, namespace, prerequisite record, selection and content-addressed approved values snapshot.
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" operators check checkpoint --inputs "$OPERATORS_INPUTS"
-```
-
-Expected: `PASS checkpoint`. A changed values digest requires private full-diff, fresh-render and image/Secret-contract review before an explicitly approved checkpoint update.
+Evidence result: `checkpoint: pass`. A changed values digest requires private full-diff, fresh-render and image/Secret-contract review before an explicitly approved checkpoint update.
 
 Missing/corrupt state is not authorization to initialize over it. A valid checkpoint restores context only: recheck live readiness and ownership before continuing the first unverified stage.
 
@@ -118,7 +131,7 @@ All OLM rows use `source: redhat-operators` and `sourceNamespace: openshift-mark
 | AAP | `ansible-aap` | `stable-2.6-cluster-scoped` | `aap-operator.v2.6.0-0.1787258256` | Manual, exact pin | `redhat-operators` | Package `ansible-automation-platform-operator`; Subscription `dev-ansible-automation-platform`; AllNamespaces |
 | OpenShift Virtualization / VMaaS | `openshift-cnv` | `stable` | None specified; record resolved CSV | Automatic | `redhat-operators` | Package/Subscription `kubevirt-hyperconverged`; OwnNamespace; VMaaS only |
 
-> **CVE-2026-75884:** This AAP CSV is the last release before the CVE fix; the pin is accepted as source-correct for OSAC 0.0.24.
+> **CVE-2026-75884:** This AAP CSV is the last release before the CVE fix; the pin is accepted as source-correct for OSAC 0.0.62.
 > Source correctness is not security approval. No automatic pin change is authorized; monitor for a patched CSV.
 
 **AAP security prerequisite** — before approving its Manual plan or accepting an adopted installation, require a recorded security-owner disposition in protected runtime evidence. Continuing with this pin requires an explicit, acknowledged risk-acceptance exception for CVE-2026-75884, bound to the exact CSV, reviewed bundle/image digests and verified CSV-to-image mapping. Missing, denied or deferred authorization blocks approval and acceptance; a patch decision returns to the release/security owners rather than silently changing the pin. Recheck this authorization and mapping at final acceptance; this guide does not grant an exception.
@@ -137,15 +150,7 @@ oc --request-timeout=30s get packagemanifest "$PACKAGE" -n openshift-marketplace
 
 Expected: `true`. A different AAP channel head blocks this reference procedure; return to the catalog compatibility owner rather than approving another bundle.
 
-**Manual-plan gate** — use the frozen, reviewed plan UID, CSV set, bundle set and Subscription specification from private inputs, including the AAP security authorization/verified mapping and, when selected, the AMQ resolved-CSV/v1 compatibility decision above.
-
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" operators check manual-plan --inputs "$OPERATORS_INPUTS"
-```
-
-Expected: `PASS manual-plan` only with those recorded prerequisites satisfied; missing authorization, mapping or selected compatibility evidence blocks approval and acceptance. No approval or mutation is performed by this check.
+**Manual-plan gate** — use the frozen, reviewed plan UID, CSV set, bundle set, and Subscription specification from private inputs, including the AAP security authorization/verified mapping and, when selected, the AMQ resolved-CSV/v1 compatibility decision above. Missing authorization, mapping, or selected compatibility evidence blocks approval and acceptance. This gate performs no approval or mutation.
 
 **CSV gate** — `$CSV` is the recorded installed CSV for `$SUB` in `$OPERATOR_NAMESPACE`.
 
@@ -155,15 +160,17 @@ oc --request-timeout=30s get csv "$CSV" -n "$OPERATOR_NAMESPACE" -o json | jq -e
 
 Expected: `true`. Also require the Subscription to identify this intended CSV; a copied CSV elsewhere is not evidence.
 
-**Subscription identity gate** — the toolkit checks row-specific scope/source/channel/approval, expected CSV and preserved plan identity.
+Expected: `true`. Also require the Subscription to identify this intended CSV; a copied CSV elsewhere is not evidence.
 
-<!-- TBF: requires unpublished companion toolkit -->
+**AAP related-image inspection** — use the same recorded `$CSV` and `$OPERATOR_NAMESPACE`, not a namespace-wide grep or a guessed AAP namespace. First satisfy the existing CSV/API and Subscription identity observations; inspect the selected bundle/CSV image selectors in the private context:
 
 ```bash
-"$OSAC_VALIDATE" operators check subscriptions --inputs "$OPERATORS_INPUTS"
+(set -o pipefail; oc --request-timeout=30s get csv "$CSV" -n "$OPERATOR_NAMESPACE" -o json | jq -er --arg csv "$CSV" 'if .metadata.name != $csv or .status.phase != "Succeeded" then error("unexpected CSV identity or phase") else [.spec.install.spec.deployments[]?.spec.template.spec.containers[]?.env[]? | select(.name | startswith("RELATED_IMAGE")) | {name,value}] | if length > 0 and all(.[]; (.value | type) == "string" and (.value | length) > 0) then .[] | "\(.name)=\(.value)" else error("unqualified related-image layout") end end') || exit 1
 ```
 
-Expected: `PASS subscriptions` for every selected operator; no empty-inventory success.
+**Why:** these are the intended CSV's declared selectors, not evidence of effective IDMS resolution, registry availability or a successful operand pull. Compare them with the approved bundle/image inventory. Missing or different packaging layout stops for operator-owner review; it is not proof that the registry itself is unsafe. Keep output private. Reuse the existing Succeeded/API checks instead of adding the removed name-grep validation a second time.
+
+**Subscription identity gate** — for every selected operator, verify row-specific scope, source, channel, approval mode, expected CSV, and preserved plan identity. An empty inventory is failure, not success.
 
 **API gate** — run once for each required CRD below.
 
@@ -244,7 +251,7 @@ Expected: `true`. Do not create dependent Certificates while this fails.
 
 ### trust-manager release contract
 
-Use the approved `osac/v0.0.24` blob `osac-installer/prerequisites/trust-manager.yaml`, not current main or an unverified working-tree copy. A compatible existing controller may be adopted with its owner's approval.
+Use the approved `osac/v0.0.62` blob `osac-installer/prerequisites/trust-manager.yaml`, not current main or an unverified working-tree copy. A compatible existing controller may be adopted with its owner's approval.
 
 | Component | Release reference |
 | --- | --- |
@@ -260,13 +267,7 @@ Both exact images require Doc 1 proof. The generic static-manifest installation 
 
 **Release-manifest gate**:
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" operators check trust-release --inputs "$OPERATORS_INPUTS"
-```
-
-Expected: `PASS trust-release`, including approved Git blob and image-coverage identities.
+Evidence result: `trust-release: pass`, including approved Git blob and image-coverage identities.
 
 **Serving-certificate gate**:
 
@@ -382,13 +383,7 @@ spec:
 
 **Trust ownership gate** — reject a foreign source/target or another Bundle whose selector would compete after labeling.
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" operators check trust-ownership --inputs "$OPERATORS_INPUTS"
-```
-
-Expected: `PASS trust-ownership`. Namespace label changes retain their reviewed resourceVersion precondition.
+Evidence result: `trust-ownership: pass`. Namespace label changes retain their reviewed resourceVersion precondition.
 
 **Bundle gate** — current generation, not a stale `Synced` condition:
 
@@ -400,13 +395,7 @@ Expected: `true`.
 
 **Trust-set gate** — exact approved/distributed certificate-fingerprint-set equality plus actual selected-signer membership, with unchanged issuer/Secret/target identities during verification.
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" operators check signer-bundle --inputs "$OPERATORS_INPUTS"
-```
-
-Expected: `PASS signer-bundle`; missing or unapproved certificates block consumers. PEM presence alone is not acceptance.
+Evidence result: `signer-bundle: pass`; missing or unapproved certificates block consumers. PEM presence alone is not acceptance.
 
 ### Runtime Secret and ConfigMap contracts
 
@@ -435,13 +424,7 @@ The operator's Fulfillment connection uses `operator.fulfillment.tokenFile`, `se
 
 **Consumer gate** — scan the current render and verify every required external name/key, optional reference and Phase 2 writer collision.
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" operators check secret-contracts --inputs "$OPERATORS_INPUTS"
-```
-
-Expected: `PASS secret-contracts`; required external inputs verified, chart-generated outputs explicitly `deferred-phase2`. Do not create an unused standard Secret to satisfy a guessed name.
+Evidence result: `secret-contracts: pass`; required external inputs verified, chart-generated outputs explicitly `deferred-phase2`. Do not create an unused standard Secret to satisfy a guessed name.
 
 Existing credentials require owner-approved adoption/rotation; do not overwrite a newer live credential from an old local file. Verify protected bytes without printing them. Do not change global Certificate garbage-collection policy merely to satisfy a verifier.
 
@@ -459,33 +442,15 @@ Use the canonical guides rather than duplicating service provisioning:
 
 **Identity gate** — exact HTTPS issuer and approved endpoint hostnames, discovery/JWKS, governed client authentication, role mapping and namespace-workload connectivity.
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" operators check identity --inputs "$OPERATORS_INPUTS"
-```
-
-Expected: `PASS identity`; cleanup of temporary token inputs is required on failure as well as success. A token alone does not prove authorization.
+Evidence result: `identity: pass`; cleanup of temporary token inputs is required on failure as well as success. A token alone does not prove authorization.
 
 **Database gate** — confirm rendered `dbInit.host`, database names, subjects and signer, including bootstrap `postgres` authorization and verify-full TLS.
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" operators check database-contract --inputs "$OPERATORS_INPUTS"
-```
-
-Expected: `PASS database-contract`. If the provider disallows the unconditional bootstrap, stop with chart/database owners; pre-provisioning an application database does not remove the hook.
+Evidence result: `database-contract: pass`. If the provider disallows the unconditional bootstrap, stop with chart/database owners; pre-provisioning an application database does not remove the hook.
 
 **Vault handoff gate**:
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" operators check vault-handoff --inputs "$OPERATORS_INPUTS"
-```
-
-Expected: `PASS vault-handoff`; canonical service-owner evidence plus actual rendered credential/CA references, not merely a nonempty evidence file.
+Evidence result: `vault-handoff: pass`; canonical service-owner evidence plus actual rendered credential/CA references, not merely a nonempty evidence file.
 
 ### Kafka
 
@@ -509,13 +474,7 @@ Expected: `true`.
 
 **Kafka functional gate** — selected-provider DNS, bootstrap and advertised-broker TLS, SCRAM authentication, canonical topic/group authorization and reviewed execution context.
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" operators check kafka --inputs "$OPERATORS_INPUTS"
-```
-
-Expected: `PASS kafka`. Operator CSV readiness alone is not broker or client readiness. For in-cluster Kafka, retire only the recorded temporary probe identity through owner-approved UID-preconditioned cleanup.
+Evidence result: `kafka: pass`. Operator CSV readiness alone is not broker or client readiness. For in-cluster Kafka, retire only the recorded temporary probe identity through owner-approved UID-preconditioned cleanup.
 
 ### AAP Git source handoff
 
@@ -541,17 +500,11 @@ operator:
     insecureSkipVerify: "false"
 ```
 
-The string `"false"` is deliberate for the 0.0.24 template. The shipped default is `"true"`; Bundle readiness does not by itself configure AAP HTTP-client trust. Do not invent an unconsumed AAP CA values key or use Fulfillment gRPC trust as proof of AAP HTTP trust.
+The string `"false"` is deliberate for the 0.0.62 template. The shipped default is `"true"`; Bundle readiness does not by itself configure AAP HTTP-client trust. Do not invent an unconsumed AAP CA values key or use Fulfillment gRPC trust as proof of AAP HTTP trust.
 
 **AAP input gate** — exact approved ZIP, Secret ownership/label, pinned operator/API, Git source and rendered explicit HTTPS/verification settings.
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" operators check aap-inputs --inputs "$OPERATORS_INPUTS"
-```
-
-Expected: `PASS aap-inputs`. Phase 2 must additionally prove the actual operator-to-AAP HTTPS request validates hostname and serving chain, plus bootstrap/project-sync revision. An unavailable trust mechanism blocks that acceptance; do not restore skip-verification.
+Evidence result: `aap-inputs: pass`. Phase 2 must additionally prove the actual operator-to-AAP HTTPS request validates hostname and serving chain, plus bootstrap/project-sync revision. An unavailable trust mechanism blocks that acceptance; do not restore skip-verification.
 
 ## 5. Optional VMaaS Operands
 
@@ -581,13 +534,7 @@ These reference sizing values are not production capacity approval. The storage 
 
 **Storage gate** — selected StorageClass, current provider rollout, disposable 1Gi RWO PVC plus actual write-test consumer; handles `WaitForFirstConsumer`.
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" operators check storage --inputs "$OPERATORS_INPUTS"
-```
-
-Expected: `PASS storage`; PVC `Bound` and write-test Pod `Succeeded`. A Pending claim alone is not evidence of failure or success. Retain the agreed class in values; the reference class is `lvms-vg1`.
+Evidence result: `storage: pass`; PVC `Bound` and write-test Pod `Succeeded`. A Pending claim alone is not evidence of failure or success. Retain the agreed class in values; the reference class is `lvms-vg1`.
 
 ### MetalLB
 
@@ -617,13 +564,7 @@ spec:
 
 Both branches require current provider readiness, disposable Service address allocation and successful traffic from the administration and intended consumer networks, using a site-approved protocol/fixture. Installing MetalLB is not a substitute for a failed existing-provider test.
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" operators check loadbalancer --inputs "$OPERATORS_INPUTS"
-```
-
-Expected: `PASS loadbalancer`; allocation without client traffic is insufficient. Keep actual endpoint addresses private. Record the selected provider's proof in `configure-metallb` even when no MetalLB is installed; do not use a profile-disabled skip for a declared `existing` provider.
+Evidence result: `loadbalancer: pass`; allocation without client traffic is insufficient. Keep actual endpoint addresses private. Record the selected provider's proof in `configure-metallb` even when no MetalLB is installed; do not use a profile-disabled skip for a declared `existing` provider.
 
 For example, `with_metallb=false` selects `LOADBALANCER_PROVIDER=existing`: the administrator checks the existing provider, not a new MetalLB installation. If client traffic fails, stop and return to the network/provider owner, then repeat this gate; do not silently switch providers.
 
@@ -671,15 +612,23 @@ jq -e '
 
 Expected: `true`. For target OpenShift 4.22, require all four expected statuses, including `ReconcileComplete=True`, with each condition's `observedGeneration` equal to the present, positive integer `.metadata.generation`. Missing conditions, missing/invalid generation evidence, stale generations or unexpected statuses block progress. The [4.22 installation verification](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/installing) describes the status checks; generation matching is scoped to the target 4.22 controller.
 
-**CDI gate** — use the [VMaaS mirroring](mirroring-vmaas.md) source, trust, access and no-public-contact procedure, not merely a node-level image pull.
+### CDI registry-consumer preparation
 
-<!-- TBF: requires unpublished companion toolkit -->
+Use the selected Virtualization product's approved namespace, exact CDI object name/UID and owner-reviewed controller selector. Do not select `.items[0]`, assume a resource called `cdi`, or substitute a similarly named object. Keep the HCO preparation above and common-boot-image selection unchanged. Before any diagnostic, record the intended identities privately; an observed Pod list is not ownership or continuing readiness proof.
 
 ```bash
-"$OSAC_VALIDATE" operators check cdi --inputs "$OPERATORS_INPUTS"
+(set -o pipefail; oc --request-timeout=30s get pods -n "${VIRT_NAMESPACE:?Set the approved namespace}" -l "${CDI_OPERATOR_SELECTOR:?Set the reviewed selector}" -o json | jq -e '(.items | length > 0) and all(.items[]; .metadata.deletionTimestamp == null and any(.status.conditions[]?; .type == "Ready" and .status == "True"))') || exit 1
+oc --request-timeout=30s get cdi "${CDI_NAME:?Set the reviewed CDI name}" -o jsonpath='{.metadata.uid}{"\n"}{.metadata.resourceVersion}{"\n"}' || exit 1
 ```
 
-Expected: `PASS cdi`; fresh selected `DataVolume=Succeeded`, `VMI=Running`, exact source/mirror authority and required `NeverContactSource` proof. Do not enable upstream common boot-image imports.
+**Why:** this observes the owner-bound controller set and resource identity only. It does not prove importer trust, selected image access, tenant authorization, effective image redirection, or a VM lifecycle. A missing/ambiguous set stops for the Virtualization owner. For controller image-pull errors use §6's selected-operator failure route; per-VM virt-launcher/importer failures and actual DataVolume/VMI/service acceptance belong to `installation.md`, after the platform exists.
+
+> [!WARNING]
+> **Q-0003 remains unresolved:** do not execute the removed direct CDI insecureRegistries patch or select proxy/image-config CA wiring from this subsection. A site/product owner must establish the supported HCO/CDI configuration surface and actual consumer CA/authentication contract. TLS-disable settings are not a temporary or default answer. This receiving text intentionally does not offer an executable mutation path until that decision is qualified.
+
+If the approved future procedure modifies a shared registry array, preserve the removed CAS safety contract: read the exact object's UID, opaque resourceVersion and existing list together; build the owner-reviewed merge preserving unrelated entries; submit the captured resourceVersion as a server-enforced write precondition; stop on any error. On conflict, re-read, re-merge and re-review the entire intended change. Never attach a freshly fetched version to a stale list, force ownership, or treat a post-write UID check as an atomic precondition. Q-0003 must also determine whether a direct CDI write is permitted or the change belongs in HCO-managed desired state; no alternative is selected here.
+
+The prerequisite diagnostic methods are in `prereqs.md` §3. Actual importer/VM acceptance is a Phase 2 responsibility in `installation.md`, not a condition requiring live OSAC/DiskImages during first mirroring or Phase 1 preparation. Remove the old back-reference to a deleted Doc 1 runtime recipe and do not restore its unpublished compound `PASS cdi` claim. No new companion validator is introduced.
 
 ## 6. Completion, Troubleshooting and Day 2
 
@@ -701,23 +650,11 @@ Classify each inventory entry as `guide-created`, `adopted` or `temporary`. Reco
 
 **Final gate** — repeats live selected-resource checks, nonempty owned-workload rollouts, original Manual-plan identities, trust, source, latest values/render/image/Secret contracts and the complete responsibility ledger. Require the recorded security-owner acknowledged exception for the pinned AAP CSV and its verified CSV-to-image mapping, and, for in-cluster Kafka, the recorded AMQ resolved-CSV/v1 compatibility decision plus all three served-v1 API checks. Missing or no-longer-applicable evidence blocks final acceptance, including for adopted installations.
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" operators check final --inputs "$OPERATORS_INPUTS"
-```
-
-Expected: `PASS final`; readiness is not inferred from file existence, namespace-wide counts or old replicas alone.
+Evidence result: `final: pass`; readiness is not inferred from file existence, namespace-wide counts or old replicas alone.
 
 **Completion** — after change-owner review, publish validated private handoff and separate allowlisted audit atomically.
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" operators complete --inputs "$OPERATORS_INPUTS"
-```
-
-Expected: `PASS complete`; no final completion artifact on failed reads, missing inputs, unresolved placeholders or failed active gates. Checkpoint, inventories and sensitive runtime inputs stay private through Phase 2 and the approved retry window.
+Evidence result: `complete: pass`; no final completion artifact on failed reads, missing inputs, unresolved placeholders or failed active gates. Checkpoint, inventories and sensitive runtime inputs stay private through Phase 2 and the approved retry window.
 
 ### Worked flow and failure recovery
 
@@ -733,6 +670,9 @@ If AAP resolves a different InstallPlan or CSV, leave it unapproved. Compare the
 | DNS, CA, mirror authentication, MCP convergence | Prerequisite owner; do not proceed to operator repair |
 | Pending Manual plan | Change owner reviews exact referenced UID, CSVs, bundles and images |
 | CSV/API failure | Selected operator owner; inspect private Subscription/plan/CSV conditions and controller state |
+| Subscription `UpgradePending` | Review the exact Subscription conditions and referenced InstallPlan against the frozen UID/CSV/bundle review; do not automatically approve a replacement plan or rewrite every Subscription |
+| Selected operator Pod `ImagePullBackOff` | Bind the failed container and exact image to the intended CSV/deployment; missing content returns to Doc 1, while DNS/TLS/read-credential failure returns to prereqs.md §3; never use a public-image fallback |
+| Required CRD missing before operand creation | Stop that dependent step; repeat the selected API observation in §2 and dependency order in §3, then resume only the reviewed operation; do not install internal charts or treat a namespace-wide Succeeded count as readiness |
 | Admission/webhook failure | Certificate, controller rollout, endpoint and CA-injection gates |
 | PVC/probe Pending | Storage owner; distinguish missing consumer from scheduling/provisioning failure |
 | Allocated LB address but no traffic | Network owner; provider/client-path evidence, not a second provider |
@@ -757,3 +697,32 @@ Raw logs/events and third-party Job output remain private under their owners' di
 - Remove only successfully verified disposable probes by recorded identity under approved cleanup. Never delete a shared namespace, adopted workload or final Phase 2 credential as cleanup.
 
 - Phase 2 must prove chart-generated Secrets/Certificates, database initialization, actual OSAC-to-Kafka/Vault integration, AAP bootstrap, synchronized project commit and operator-to-AAP authenticated TLS before acceptance.
+
+### Existing-site DiskImage inventory — post-Phase 2 only
+
+This optional discovery procedure runs only after an existing OSAC deployment, the matching authenticated CLI and the approved tenant/API access are available. It is not a first-install mirror-inventory producer or a requirement for this guide's Phase 1 completion. For a first installation, Doc 1 consumes an independently approved selected-source inventory before any OSAC instance exists. Runtime DiskImage replacement and VM acceptance remain in `installation.md`.
+
+Use the reviewed tenant rather than assuming every resource in `shared` is selected for a mirror run. Confirm the target release's CLI/JSON shape before using the removed reference fields `spec.source_type` and `spec.source_ref`; the following reference expects a JSON array. Missing/changed shape stops for the API/product owner, not a guessed schema conversion.
+
+```bash
+(
+  umask 077
+  set -o noclobber
+  osac get diskimages --tenant "${DISCOVERY_TENANT:?Set the approved tenant}" -o json > "${DISKIMAGE_DISCOVERY_JSON:?Set a fresh private output path}"
+) || exit 1
+```
+
+Review individual resources with the matching CLI (`osac describe diskimage ID|NAME` is the removed reference syntax; replace `ID|NAME` with one approved identifier, not a shell pipeline). Keep the original returned identities, resource selection and complete source references in the protected record. The optional candidate export below is not the approved selected-source handoff:
+
+```bash
+(
+  umask 077
+  set -o noclobber
+  jq -e 'type == "array" and length > 0' "${DISKIMAGE_DISCOVERY_JSON:?}" >/dev/null &&
+  jq '[.[] | select(.spec.source_type == "SOURCE_TYPE_REGISTRY") | .spec.source_ref] | if length > 0 and all(.[]; type == "string" and length > 0) then . else error("no qualified registry-source candidates") end' "$DISKIMAGE_DISCOVERY_JSON" > "${DISKIMAGE_SOURCE_CANDIDATES_JSON:?Set a fresh private candidate output path}"
+) || exit 1
+```
+
+**Why:** full references retain explicit tag/digest lineage. Do not silently strip transport/tag/digest into a file that a downstream consumer expects to contain original selected references. The normalized original-upstream tag-repository set for an ITMS observation is a separate derived contract, not this discovery export. The source API shape/tenant selection and both producer/consumer file contracts must be reconciled before any handoff.
+
+A failed command may leave a partial new output: mark it invalid and do not reuse it as success or overwrite a previous approved record. The mirror owner reviews the selected exact references and any requested inventory change against the same authoritative ISC/workspace lineage. This discovery does not update the ISC, policies, values or live DiskImages, and does not authorize concurrent mirror runs or a public-image fallback.

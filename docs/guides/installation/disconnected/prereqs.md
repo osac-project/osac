@@ -1,9 +1,22 @@
 # OSAC Disconnected Installation Prerequisites
 
-> [!IMPORTANT]
-> This is Doc 2a for OSAC **0.0.24** on OpenShift **4.22**. Complete the selected-profile [mirroring handoff](README.md) first, then this guide, then [AAP Git source handoff](aap-git-source.md), then [operators and shared infrastructure](operators.md). [installation.md](installation.md) owns the OSAC Helm release.
+- [OSAC Disconnected Installation Prerequisites](#osac-disconnected-installation-prerequisites)
+  - [1. Execution and input contract](#1-execution-and-input-contract)
+    - [Evidence contract](#evidence-contract)
+  - [2. Consume the mirror handoff](#2-consume-the-mirror-handoff)
+  - [3. Registry access and bounded configuration](#3-registry-access-and-bounded-configuration)
+    - [3.1 Node transport and representative image diagnostic](#31-node-transport-and-representative-image-diagnostic)
+    - [3.2 Approved Pod-network diagnostic](#32-approved-pod-network-diagnostic)
+    - [3.3 Trust and authentication correction — unresolved consumer mapping](#33-trust-and-authentication-correction--unresolved-consumer-mapping)
+  - [4. Select providers and record production contracts](#4-select-providers-and-record-production-contracts)
+  - [5. Prepare the release chart and values](#5-prepare-the-release-chart-and-values)
+  - [6. Handoff and worked flow](#6-handoff-and-worked-flow)
+    - [Secret-key acceptance reference](#secret-key-acceptance-reference)
 
-This guide specifies disconnected inputs and acceptance gates. It does not install operators, shared services, provider operands, or the OSAC release. Use the canonical guides for configuration semantics; use the actual downloaded 0.0.24 chart for schema, defaults, images, and rendered consumers. Do not copy a different release's image inventory or version table.
+> [!IMPORTANT]
+> This is Doc 2a for OSAC **0.0.62** on OpenShift **4.22**. Complete the selected-profile [mirroring handoff](README.md) first, then this guide, then [AAP Git source handoff](aap-git-source.md), then [operators and shared infrastructure](operators.md). [installation.md](installation.md) owns the OSAC Helm release.
+
+This guide specifies disconnected inputs and acceptance gates. It does not install operators, shared services, provider operands, or the OSAC release. Use the canonical guides for configuration semantics; use the actual downloaded 0.0.62 chart for schema, defaults, images, and rendered consumers. Do not copy a different release's image inventory or version table.
 
 | Canonical reference | Responsibility retained there |
 | --- | --- |
@@ -23,27 +36,19 @@ Keep values, endpoint identities, discovery documents, renders, credentials, and
 > [!WARNING]
 > One administrator owns shared mutations across all hosts. Local file locks do not serialize other hosts. Existing trust and pull-secret updates must preserve unrelated entries and submit server-enforced resourceVersion preconditions. Conflicts require a fresh read, merge, and review; never force ownership or replay stale writes.
 
-<!-- WIP: companion validation toolkit is proposed and unpublished -->
+### Evidence contract
 
-### Companion validation interface (WIP — toolkit unpublished)
-
-> **WIP:** The validation commands below reference a companion toolkit that is proposed but unpublished. Replace this section with the actual toolkit identity, version, and checksum before publication.
-
-**Publication hold:** Do not publish these three installation guides (`prereqs.md`, `aap-git-source.md`, and `operators.md`) for operator use until the approved toolkit executable is actually available, its identity, version, and checksum are pinned, and all documented gates have been validated. WIP/TBF examples are not runnable acceptance gates or permission to bypass them.
-
-Once published, set `OSAC_VALIDATE` to the approved, checksum-verified executable and `PREREQS_INPUTS` to its protected input file.
-
-**WIP contract:** Each `prereqs check <gate>` is non-mutating except explicitly approved temporary service probes. It returns exit 0 with fixed `PASS <gate>` only after all required predicates pass; a nonzero exit emits fixed `FAIL <gate>` and blocks progress. Detailed inputs/results stay private. Missing, stale, ambiguous, or malformed evidence is failure, not a skip. No check creates an operator, approves an InstallPlan, or repairs Doc 1.
+Validation is manual and evidence-based. Record the exact inputs, observed identities, and pass/fail result for every gate in protected runtime evidence. The actual **0.0.62** chart, its schema, and the commands in this guide are the validation surface; no companion toolkit is used. Missing, stale, ambiguous, or malformed evidence is failure, not a skip. No gate creates an operator, approves an InstallPlan, or repairs Doc 1.
 
 | Private input | Required value or source |
 | --- | --- |
-| `OSAC_CHART_REF`, `OSAC_CHART_VERSION` | `oci://ghcr.io/osac-project/charts/osac`, `0.0.24` |
+| `OSAC_CHART_REF`, `OSAC_CHART_VERSION` | `oci://ghcr.io/osac-project/charts/osac`, `0.0.62` |
 | `OSAC_NAMESPACE` | `osac`, or the approved consistent release namespace |
 | `DOC1_WORKSPACE` | Original oc-mirror workspace; ISC at its recorded authoritative location |
 | `MIRROR_HOST` | Exact registry authority including port; never substring matching |
 | `MIRROR_CA_FILE`, `MIRROR_AUTH_FILE` | Approved CA path; owner-readable authfile containing only the exact mirror entry and read-only credentials |
 | `CATALOG_SOURCE`, `CATALOG_NAMESPACE` | `redhat-operators`, `openshift-marketplace` |
-| `VALUES_FILE`, `OSAC_CHART_DIR` | Protected `values-osac.yaml` and exact path to the downloaded/extracted `0.0.24` chart |
+| `VALUES_FILE`, `OSAC_CHART_DIR` | Protected `values-osac.yaml` and exact path to the downloaded/extracted `0.0.62` chart |
 | Approved service inputs | Endpoint, namespace, credential/CA references, and owner evidence; no credential bytes in handoffs |
 
 ## 2. Consume the mirror handoff
@@ -71,23 +76,11 @@ Expected local result: `true`. An online default source is not a substitute for 
 
 Check complete identity, content, policy, and lineage binding:
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" prereqs check doc1 --inputs "$PREREQS_INPUTS"
-```
-
-Expected: `PASS doc1`. Require both mirror-set types, the exact CatalogSource name/namespace/image with `READY`, each generated ClusterCatalog `Serving=True` with reason `Available`, and the generated signature handoff. OLM Classic PackageManifest visibility does not prove ClusterCatalog readiness or vice versa.
+Evidence result: `doc1: pass`. Require both mirror-set types, the exact CatalogSource name/namespace/image with `READY`, each generated ClusterCatalog `Serving=True` with reason `Available`, and the generated signature handoff. OLM Classic PackageManifest visibility does not prove ClusterCatalog readiness or vice versa.
 
 Check affected-pool convergence:
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" prereqs check machineconfig --inputs "$PREREQS_INPUTS"
-```
-
-Expected: `PASS machineconfig`: every affected pool unpaused, observedGeneration=current generation, Updated=True, updatedMachineCount=machineCount, unavailable/degraded counts zero, and Degraded=False. Creating an IDMS does not drain or reboot nodes; modifying or deleting an IDMS can cause node disruption. ITMS changes can drain nodes. See the [OpenShift 4.22 mirror-set behavior](https://docs.openshift.com/it/documentation/openshift_container_platform/4.22/html/disconnected_environments/updating-a-cluster-in-a-disconnected-environment). Consume the completed rollout; do not reapply policies here.
+Evidence result: `machineconfig: pass`: every affected pool unpaused, observedGeneration=current generation, Updated=True, updatedMachineCount=machineCount, unavailable/degraded counts zero, and Degraded=False. Creating an IDMS does not drain or reboot nodes; modifying or deleting an IDMS can cause node disruption. ITMS changes can drain nodes. See the [OpenShift 4.22 mirror-set behavior](https://docs.openshift.com/it/documentation/openshift_container_platform/4.22/html/disconnected_environments/updating-a-cluster-in-a-disconnected-environment). Consume the completed rollout; do not reapply policies here.
 
 | Package visibility | Required channel | Selection |
 | --- | --- | --- |
@@ -98,45 +91,93 @@ Expected: `PASS machineconfig`: every affected pool unpaused, observedGeneration
 
 Check the selected packages and channels:
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" prereqs check packages --inputs "$PREREQS_INPUTS"
-```
-
-Expected: `PASS packages`. Every selected PackageManifest must match both `status.catalogSource=redhat-operators` and `status.catalogSourceNamespace=openshift-marketplace`. Operator namespaces, scopes, CSV pins, and Manual approval belong to the single product table in `operators.md`, not a second table here.
+Evidence result: `packages: pass`. Every selected PackageManifest must match both `status.catalogSource=redhat-operators` and `status.catalogSourceNamespace=openshift-marketplace`. Operator namespaces, scopes, CSV pins, and Manual approval belong to the single product table in `operators.md`, not a second table here.
 
 ## 3. Registry access and bounded configuration
 
+Use the exact approved registry authority in `MIRROR_HOST` (including port) and the separately reviewed DNS name in `MIRROR_DNS_NAME`; do not derive an IPv6/DNS identity by splitting on a colon. Diagnostic images, target nodes, namespaces and public CA paths must be reviewed for this release before use. These are adjacent observations, not a compound registry-readiness certificate.
+
 | Parameter | Contract |
 | --- | --- |
-| Mirror DNS | Approved address reachable from administration host and cluster execution contexts |
-| Registry TLS | Hostname and chain validation using approved trust; no `-k` or public fallback |
-| Node registry probe | Each applicable node reaches `https://<mirror-authority>/v2/`; HTTP `200` or `401` proves transport only |
-| `image.config.openshift.io/cluster.spec.additionalTrustedCA.name` | Existing referenced ConfigMap in `openshift-config`; `registry-config` only when no name is configured |
-| CA ConfigMap key | Registry hostname; replace port separator `:` with `..`, for example `mirror.example.com..8443` |
-| `openshift-config/pull-secret` | `.dockerconfigjson` includes approved mirror-read credentials; preserve all unrelated auth entries |
-| Credential boundary | Never upload the bastion source-read/mirror-write authfile or substitute an OpenShift API token |
+| Registry access | Approved DNS, hostname and chain validation; no `-k`, public image fallback or credential-bearing URL |
+| Mirror credentials | Approved mirror-read binding; never the bastion mirror-write authfile or an OpenShift API token |
+| Shared authentication | Preserve unrelated `openshift-config/pull-secret` entries and existing ownership; a present key is not successful authentication |
+| Node diagnostic image | `NODE_DEBUG_IMAGE`: approved mirror-resident image compatible with node debugging; no implicit public-image fallback |
+| Pod diagnostic fixture | `PROBE_NAMESPACE`, `PROBE_IMAGE`, `PROBE_CA_FILE`: approved existing namespace, mirror-resident fixture with `sleep`, `getent`, `curl`, and an already available public CA file inside that fixture |
 
-Check actual transport and credential usability:
+### 3.1 Node transport and representative image diagnostic
 
-<!-- TBF: requires unpublished companion toolkit -->
+Node debugging creates privileged diagnostic resources; use it only under the existing administrator/probe authorization and private-output policy. Review the nonempty applicable node set and keep its identities in the private run record. New/replaced nodes require a fresh observation; this list is not a lock or continuing guarantee.
 
 ```bash
-"$OSAC_VALIDATE" prereqs check registry --inputs "$PREREQS_INPUTS"
+: "${MIRROR_HOST:?Set the approved registry authority}"
+: "${NODE_DEBUG_IMAGE:?Set the approved mirror-resident debug image}"
+: "${NODE_DEBUG_NAMESPACE:?Set the approved diagnostic namespace}"
+NODES=$(oc --request-timeout=30s get nodes -o name) || exit 1
+test -n "$NODES" || exit 1
+for NODE in $NODES; do
+  oc --request-timeout=30s debug "$NODE" --to-namespace="$NODE_DEBUG_NAMESPACE" --image="$NODE_DEBUG_IMAGE" -- chroot /host sh -c '
+    code=$(curl --connect-timeout 10 --max-time 30 -sS -o /dev/null -w "%{http_code}" "https://$1/v2/") || exit 1
+    case "$code" in 200|401) exit 0 ;; *) exit 1 ;; esac
+  ' sh "$MIRROR_HOST" >/dev/null 2>&1 || {
+    printf 'FAIL node-registry-transport\n' >&2
+    exit 1
+  }
+done
 ```
 
-Expected: `PASS registry`: approved DNS/TLS in the required contexts, exact mirror authority, credential validation and representative mirrored manifests. A key's presence, PEM marker, reachable host, or HTTP challenge alone is insufficient. Include catalog, OSAC operator, Fulfillment Service, and AAP EE from the selected release inventory.
+**Why:** this checks the chosen node HTTP client's transport/TLS result. HTTP 200/401 is not registry authorization, selected-image availability, kubelet pull-secret usability, or CDI-client trust proof. Do not parse the entire `oc debug` output as an HTTP code; the HTTP result is evaluated inside the node command. Apply an owner-reviewed overall operation deadline in addition to the bounded HTTP/API calls, and handle interrupted diagnostic cleanup by recorded identity.
 
-If trust or pull credentials need correction, have the cluster owner perform the standard reviewed merge procedure using the parameters above. This is the only shared-cluster configuration repair owned here. Preserve existing CA/auth entries; creation must not overwrite a concurrently created object. Protect the image-config reference update against conflicting changes as well as the ConfigMap/Secret update. Recheck current state and affected pools afterward.
-
-<!-- TBF: requires unpublished companion toolkit -->
+For one reviewed original tag/digest reference from the selected image inventory, repeat the representative node pull in its approved context; neither a random registry image nor a future workload is a substitute:
 
 ```bash
-"$OSAC_VALIDATE" prereqs check registry --inputs "$PREREQS_INPUTS"
+oc --request-timeout=30s debug "${PULL_NODE:?Set the reviewed node resource}" --to-namespace="${NODE_DEBUG_NAMESPACE:?}" --image="${NODE_DEBUG_IMAGE:?}" -- chroot /host crictl pull "${SELECTED_PULL_IMAGE:?Set the exact selected reference}" >/dev/null 2>&1 || {
+  printf 'FAIL selected-node-image-pull\n' >&2
+  exit 1
+}
 ```
 
-Expected: `PASS registry` after correction. Missing manifest/blob/repository or failed mirror redirection returns to Doc 1; DNS, trust, authentication, or local trust-rollout failures remain with this prerequisite owner.
+**Why:** a node-runtime diagnostic does not by itself exercise a future Pod's credential injection or CDI's separate HTTP client. Bind the node, exact original reference, mirror policy and result privately; stop on failure rather than switching to a public image. Raw runtime output remains private.
+
+### 3.2 Approved Pod-network diagnostic
+
+For a fresh installation use an approved **existing** probe namespace/context; do not install HCO/CDI/OSAC merely to obtain a future importer Pod. If that future consumer network is not available yet, this generic diagnostic cannot attest it: perform actual importer-client acceptance after product/platform preparation in `installation.md`. The approved fixture CA path below checks that fixture only; it does not configure or settle the production trust mechanism.
+
+Create a fresh server-named Pod only with explicit probe authority. Do not adopt another run's fixed `mirror-network-check` Pod. The approved fixture must provide the tools and CA path below and satisfy site Pod policy; do not loosen policy or add credentials to make it start.
+
+```bash
+set -o pipefail
+: "${PROBE_NAMESPACE:?Set the approved existing namespace}"
+: "${PROBE_IMAGE:?Set the approved mirror-resident fixture}"
+: "${PROBE_CA_FILE:?Set the approved CA path already in the fixture}"
+: "${MIRROR_DNS_NAME:?Set the approved registry DNS name}"
+: "${PROBE_RUN_ID:?Set the approved unique run label value}"
+PROBE_JSON=$(jq -n --arg ns "$PROBE_NAMESPACE" --arg image "$PROBE_IMAGE" --arg run "$PROBE_RUN_ID" '{apiVersion:"v1",kind:"Pod",metadata:{generateName:"osac-mirror-network-",namespace:$ns,labels:{"osac-mirror-probe-run":$run}},spec:{automountServiceAccountToken:false,restartPolicy:"Never",containers:[{name:"check",image:$image,command:["sleep","600"]}]}}' | oc --request-timeout=30s create -f - -o json) || exit 1
+PROBE_NAME=$(printf '%s\n' "$PROBE_JSON" | jq -er '.metadata.name | select(type == "string" and length > 0)') || exit 1
+PROBE_UID=$(printf '%s\n' "$PROBE_JSON" | jq -er '.metadata.uid | select(type == "string" and length > 0)') || exit 1
+```
+
+Record the reviewed run-label value before create; it must be unique to this run and satisfy site label policy. If create fails or its response is lost, the write outcome is unknown: stop, recover matching objects with the owner under that recorded run label, and do not blindly retry or delete by prefix. Record namespace/name/UID and the reviewed fixture context in the existing private run record **before** the next block. Persistence failure stops probe execution and requires owner recovery of this newly created identity. The sleep duration bounds the fixture process, not API-object retention. Coordinate all writers; a UID recheck is an observation, not an atomic exec/cleanup lock.
+
+```bash
+oc --request-timeout=30s wait pod/"$PROBE_NAME" -n "$PROBE_NAMESPACE" --for=condition=Ready --timeout=2m >/dev/null || exit 1
+CURRENT_PROBE_UID=$(oc --request-timeout=30s get pod "$PROBE_NAME" -n "$PROBE_NAMESPACE" -o jsonpath='{.metadata.uid}') || exit 1
+test "$CURRENT_PROBE_UID" = "$PROBE_UID" || exit 1
+oc --request-timeout=30s exec -n "$PROBE_NAMESPACE" "$PROBE_NAME" -c check -- getent hosts "$MIRROR_DNS_NAME" >/dev/null 2>&1 || exit 1
+HTTP_CODE=$(oc --request-timeout=30s exec -n "$PROBE_NAMESPACE" "$PROBE_NAME" -c check -- curl --connect-timeout 10 --max-time 30 --cacert "$PROBE_CA_FILE" -sS -o /dev/null -w '%{http_code}' "https://${MIRROR_HOST:?}/v2/") || exit 1
+case "$HTTP_CODE" in 200|401) : ;; *) printf 'FAIL probe-registry-transport\n' >&2; exit 1 ;; esac
+```
+
+**Why:** DNS and trusted transport from this fixture are not image-pull authorization or proof that a different importer has the same mounts, CA, egress or credentials. Inspect scheduling/readiness failures under the private owner policy. On success **or failure**, the owner removes only this recorded Pod using a reviewed server-enforced UID delete precondition; no unguarded name-only deletion, namespace deletion or adopted-resource cleanup is prescribed here. Do not claim automated cleanup: this template leaves that separately authorized identity-bound step with the owner.
+
+### 3.3 Trust and authentication correction — unresolved consumer mapping
+
+> [!WARNING]
+> **Q-0003 is unresolved.** The removed reference uses `proxy/cluster.spec.trustedCA`; this branch describes `image.config.openshift.io/cluster.spec.additionalTrustedCA.name`. Neither text establishes a single qualified CA-delivery contract for both CRI-O node pulls and CDI importer HTTP clients. Do not infer equivalence, pick one as a fallback, patch either reference, or disable TLS to pass these diagnostics. The site/product owners must approve the exact consumer, object/field/namespace, public CA material and current reconciliation behavior first.
+
+Once that contract is approved, the existing change owner performs only the reviewed bounded trust/authentication repair. Preserve unrelated CA/auth entries; protect ConfigMap/Secret and reference writes with server-enforced version/identity preconditions. A conflict requires a fresh read, merge and review, never force ownership or a stale payload with a newer version. No CA/proxy mutation command or insecure default is selected by this receiving patch. Reuse §2's affected-pool observation for the actual approved change; do not reapply generated mirroring policies here or replace it with an unqualified all-pools wait.
+
+For an unauthorized result, distinguish transport challenge from an authenticated selected-image pull. Review the approved exact mirror-read binding privately; do not print Secret bodies or treat an auth key's presence as success. Missing manifest/blob/repository or failed redirection returns the exact selected reference and original lineage to Doc 1. DNS, trust and authentication stay with this prerequisite owner. Recheck the relevant actual consumer after owner correction; no blanket `PASS registry` or future-consumer readiness is inferred from a generic probe.
 
 ## 4. Select providers and record production contracts
 
@@ -170,36 +211,24 @@ No passwords, tokens, private keys, or credential-bearing URLs belong in selecti
 
 Check selection consistency and applicable production contracts:
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" prereqs check providers --inputs "$PREREQS_INPUTS"
-```
-
-Expected: `PASS providers`. Only the explicit in-cluster Kafka/LVMS/MetalLB live gates may be deferred to `operators.md`; external dependencies must already pass their canonical contracts. Deferred is not ready, and file existence alone is not owner verification. Storage Pending/WaitForFirstConsumer is not successful provisioning.
+Evidence result: `providers: pass`. Only the explicit in-cluster Kafka/LVMS/MetalLB live gates may be deferred to `operators.md`; external dependencies must already pass their canonical contracts. Deferred is not ready, and file existence alone is not owner verification. Storage Pending/WaitForFirstConsumer is not successful provisioning.
 
 Check identity without sending credentials to unapproved endpoints:
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" prereqs check identity --inputs "$PREREQS_INPUTS"
-```
-
-Expected: `PASS identity`. Approve HTTPS scheme and exact hosts before discovery/JWKS requests or credential POST; reject userinfo, unexpected query/fragment and redirects. Match the same approved issuer across the OSAC clients and Vault contract. Missing roles/claims return to the identity/service owner, not a demonstration fixture.
+Evidence result: `identity: pass`. Approve HTTPS scheme and exact hosts before discovery/JWKS requests or credential POST; reject userinfo, unexpected query/fragment and redirects. Match the same approved issuer across the OSAC clients and Vault contract. Missing roles/claims return to the identity/service owner, not a demonstration fixture.
 
 ## 5. Prepare the release chart and values
 
 The chart-delivery path is a controlled connected workstation/bastion with approved tunnel/VPN access to the disconnected API. Pull the published OCI chart there; do not use a repository checkout as the release artifact, push the chart into Quay Mirror, or assume oc-mirror v2 mirrors it. Cluster workloads must not fetch public registries or GitHub. Use a fresh chart staging directory; verify/adopt an existing approved chart instead of overwriting it on retry.
 
 ```bash
-helm pull oci://ghcr.io/osac-project/charts/osac --version 0.0.24 --untar --untardir .
+helm pull oci://ghcr.io/osac-project/charts/osac --version 0.0.62 --untar --untardir .
 ```
 
 Expected: successful pull and extracted `osac/` chart. Registry login is not required for this public chart.
 
 ```bash
-yq -e '.version == "0.0.24"' osac/Chart.yaml
+yq -e '.version == "0.0.62"' osac/Chart.yaml
 ```
 
 Expected local result: `true`. **Chart acceptance:** Before rendering or handoff, require successful signature verification of the pulled chart's exact OCI digest and approved OSAC publisher identity per the [repository chart-signature guidance](https://github.com/osac-project/osac/blob/37a47700819b4a1e4e51057dd503630f05a426e2/README.md). Retain the verified digest/result in existing private integrity state, bound to the complete chart/dependency contents actually used. A version match or local checksum alone is insufficient; failed verification or changed/unbound chart contents block use.
@@ -210,10 +239,10 @@ helm show values ./osac
 
 Expected local result: released defaults. Initialize the protected `VALUES_FILE` only when absent, using a no-clobber workflow; never truncate an existing approved file. Edit values through the canonical contracts; subsequent corrections modify values, not rendered manifests.
 
-| Values delta | OSAC 0.0.24 requirement |
+| Values delta | OSAC 0.0.62 requirement |
 | --- | --- |
 | `cliImage`, `aap.bootstrap.cliImage` | Merge `{cliImage: "<approved-mirror-cli-ref>", aap: {bootstrap: {cliImage: "<approved-mirror-cli-ref>"}}}` into protected `$VALUES_FILE`, preserving other `aap` keys; these independent settings otherwise retain Origin `4.20.0` defaults. Do not rely on a root-only or transient `--set` override. |
-| CLI-specific acceptance before Helm (WIP) | Existing `prereqs check render` must verify each rendered CLI consumer and exact mirror lineage/availability; `prereqs check registry` must cover the selected image with a fresh cluster pull and non-mutating required-tool smoke test in an approved existing probe context. Pull success alone does not prove script compatibility. |
+| CLI-specific acceptance before Helm | Review each rendered CLI consumer and its exact mirror lineage/availability; perform a fresh cluster pull and non-mutating required-tool smoke test in an approved existing probe context. Pull success alone does not prove script compatibility. |
 | CLI failure | Unpullable images block hook startup; missing/incompatible tools fail bootstrap/token scripts and can block or time out Helm hooks. Stop on failed preflight, correct approved values or the mirror/tool contract, then rerun both gates; do not bypass hooks. |
 | `aap.configAsCode.eeImage`, component images | Exact selected-chart references plus proven mirrored content; never derive component versions from umbrella version |
 | `aap.configAsCode.projectGitUri`, `projectGitBranch` | [aap-git-source.md](aap-git-source.md) supplies the internal full-monorepo handoff and exact commit from the actual chart; mirroring the EE does not deliver Git content |
@@ -234,28 +263,16 @@ helm template osac ./osac --namespace "$OSAC_NAMESPACE" --values "$VALUES_FILE" 
 
 Expected: protected nonempty render. Do not require global server-side dry-run: operator APIs/webhooks do not yet exist, and Phase 2 installs additional CRDs.
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" prereqs check render --inputs "$PREREQS_INPUTS"
-```
-
-Expected: `PASS render`: no unresolved placeholders or embedded credentials; actual consumers match selected services; every exact image has archived inventory membership, correct tag/ITMS or digest/IDMS mapping, specificity-resolved policy, exact mirror authority and available destination manifest. VMaaS selected sources require effective `NeverContactSource`; the separate CDI import path remains a later VMaaS acceptance gate. A broad registry prefix is not image availability proof. Any direct-mirror override, including CLI, needs its own exact lineage proof.
+Evidence result: `render: pass`: no unresolved placeholders or embedded credentials; actual consumers match selected services; every exact image has archived inventory membership, correct tag/ITMS or digest/IDMS mapping, specificity-resolved policy, exact mirror authority and available destination manifest. VMaaS selected sources require effective `NeverContactSource`; the separate CDI import path remains a later VMaaS acceptance gate. A broad registry prefix is not image availability proof. Any direct-mirror override, including CLI, needs its own exact lineage proof.
 
 ## 6. Handoff and worked flow
 
-<!-- TBF: requires unpublished companion toolkit -->
-
-```bash
-"$OSAC_VALIDATE" prereqs complete --inputs "$PREREQS_INPUTS"
-```
-
-Expected: `PASS complete` only after all applicable checks and change-owner review. Stage a consistent private record set, then atomically publish its final generation marker; failure/interruption must leave the last valid generation or no completion, never partial success. Recheck live state at the next boundary; a past record is not continuing readiness or authorization.
+Evidence result: `complete: pass` only after all applicable checks and change-owner review. Stage a consistent private record set, then atomically publish its final generation marker; failure/interruption must leave the last valid generation or no completion, never partial success. Recheck live state at the next boundary; a past record is not continuing readiness or authorization.
 
 | Artifact | Consumer and boundary |
 | --- | --- |
 | `prerequisite-selection.env` | Protected, data-only selections; retain explicit fields and consistent approved inputs |
-| `prereqs-completion.txt` | Private `profile`, `enable_vmaas`, `with_lvms`, `with_metallb`, `kafka_provider`, `storage_class`, `chart_version=0.0.24`, original `values_sha256` |
+| `prereqs-completion.txt` | Private `profile`, `enable_vmaas`, `with_lvms`, `with_metallb`, `kafka_provider`, `storage_class`, `chart_version=0.0.62`, original `values_sha256` |
 | `prereqs-artifacts.sha256` and private input state | Bind original values/render, complete chart, protected `OSAC_CHART_DIR` path (consume unchanged in `aap-git-source.md`), Doc 1 lineage, provider evidence and resource identities; available for owner verification/resume, not audit export |
 | Fresh prerequisite audit directory | Only schema-versioned allowlisted outcomes, timestamp, release/selections and approved configuration checksums; never endpoints, raw logs, source paths, credential-derived hashes or private input files |
 

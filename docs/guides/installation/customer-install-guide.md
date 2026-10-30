@@ -816,9 +816,9 @@ Use this procedure when the cluster already meets the prerequisites.
 - The issuer configured by `service.certs.issuerRef`, trust-manager, the
   `ConfigMap` named by `service.certs.caBundle.configMap`, Keycloak with the
   `osac` realm, and the credential Secrets exist. The `ConfigMap` is required
-  even when the API certificates use public trust. Set
-  `service.certs.caBundle.configMap` to the existing ConfigMap name in the
-  OSAC release namespace; see step 4 of
+  even when the API certificates use public trust. When `osac-infra` creates
+  the bundle, its `certs.caBundle.configMap` must match the phase-2
+  `service.certs.caBundle.configMap` value; see step 4 of
   [Section 7](#7-verifying-the-installation).
 - For a production deployment, the external PostgreSQL server is ready for
   the chart's client-certificate authentication, and `dbInit.host` is set
@@ -1420,7 +1420,7 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | `service.variant` | `openshift` or `kind`. Use `openshift`. |
 | `service.images.service`, `service.images.envoy` | Fulfillment Service and Envoy sidecar images. |
 | `service.certs.issuerRef.kind`, `service.certs.issuerRef.name` | cert-manager issuer for the service certificates. |
-| `service.certs.caBundle.configMap` | Existing CA-bundle `ConfigMap` mounted by the OSAC hooks. It must contain the PEM bundle under the fixed `bundle.pem` key. This value does not create or rename the ConfigMap. Set it to the existing ConfigMap name in the OSAC release namespace. Defaults to `ca-bundle`; see step 4 of [Section 7](#7-verifying-the-installation). |
+| `service.certs.caBundle.configMap` | Existing CA-bundle `ConfigMap` mounted by the OSAC hooks. It must contain the PEM bundle under the fixed `bundle.pem` key. This value does not create or rename the ConfigMap. For OSAC-managed trust, match `certs.caBundle.configMap` in the phase-1 `osac-infra` values; both default to `ca-bundle`. Set this to the existing ConfigMap name in the OSAC release namespace; see step 4 of [Section 7](#7-verifying-the-installation). |
 | `service.auth.issuerUrl` | OIDC issuer. Templated from `global.clusterDomain` by default. |
 | `service.auth.controllerCredentials[]` | Volume sources for the controller OIDC client credentials. |
 | `service.idp.provider`, `service.idp.url`, `service.idp.credentials[]` | Identity provider for user and role management. Only `keycloak` is supported. |
@@ -1989,17 +1989,33 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    The issuer must report `Ready: True`.
 
    Verify the trust bundle separately from the certificate issuer. For every
-   deployment, including deployments with publicly trusted API certificates,
-   the CA-bundle `ConfigMap` must already exist in the OSAC release namespace.
-   Set `service.certs.caBundle.configMap` in `my-values.yaml` to its name;
-   the default is `ca-bundle`. This value only references the ConfigMap and
-   does not create or rename it.
+   deployment, including customer-managed bundles and upstream trust-manager
+   installations, check the CA-bundle `ConfigMap` in the OSAC release
+   namespace.
 
-   Replace `<ca_bundle_configmap>` below with the configured name and
-   `<namespace>` with the OSAC release namespace:
+   For OSAC-managed trust, `certs.caBundle.configMap` in the phase-1
+   `my-infra-values.yaml` names the trust-manager `Bundle` and the
+   ConfigMaps it distributes. The hook targets the infrastructure release
+   namespace and the phase-2 namespace configured by `osacNamespace`.
+   Set `service.certs.caBundle.configMap` in the phase-2 `my-values.yaml`
+   to the same name. Both default to `ca-bundle`. Changing only the phase-2
+   value does not create or rename a ConfigMap; the OSAC hooks would mount
+   a ConfigMap that does not exist. For customer-managed trust, ensure that
+   the configured ConfigMap already exists in the OSAC release namespace.
+
+   Replace `<ca_bundle_configmap>` below with that shared name and
+   `<namespace>` with the phase-2 OSAC release namespace:
 
    ```console
    oc get configmap <ca_bundle_configmap> -n <namespace> -o yaml
+   ```
+
+   For OSAC-managed trust, also check the fully qualified trust-manager
+   `Bundle` resource. It is cluster-scoped and needs no namespace flag;
+   the hook Job that creates it runs in the infrastructure namespace:
+
+   ```console
+   oc get bundles.trust.cert-manager.io <ca_bundle_configmap>
    ```
 
    The ConfigMap must contain the CA bundle under the fixed `bundle.pem` key
@@ -2015,6 +2031,9 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    contain the CA that signs the endpoint's certificate. If an endpoint
    uses a different CA, obtain the matching PEM bundle from its
    administrator and use that file for that endpoint.
+
+   When `kafka.enabled` is `true` in `osac-infra`, also confirm that the
+   bundled Kafka resource reports `Ready=True` before proceeding.
 
 5. Check the prerequisite services with your platform administrators:
 
@@ -2034,8 +2053,8 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    including the realm path. Use the issuer URL supplied by your Keycloak
    administrator.
 
-   If the issuer certificate is signed by a CA in the trust bundle extracted
-   in step 4 of [this section](#7-verifying-the-installation), use that file:
+   For the bundled Keycloak, use the shared trust bundle extracted in
+   step 4 of [this section](#7-verifying-the-installation):
 
    ```console
    export OSAC_OIDC_CA_FILE="osac-ca-bundle.pem"
@@ -2097,8 +2116,8 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
     oc logs -f job/osac-aap-bootstrap -n <namespace>
     ```
 
-10. Check API reachability and log in with the `osac` CLI. For a custom CA,
-    use the API trust bundle prepared in step 4 of
+10. Check API reachability and log in with the `osac` CLI. For the bundled
+    CA or a custom CA, use the API trust bundle prepared in step 4 of
     [this section](#7-verifying-the-installation) for both commands:
 
     ```console
@@ -2309,8 +2328,8 @@ local hub is not already registered.
 
 1. Log in to the Fulfillment Service through `fulfillment-internal-api`.
    Hub registration uses the private API, so run this procedure from an
-   administrator host that can reach the internal route. For a custom CA,
-   use the API trust bundle prepared in step 4 of
+   administrator host that can reach the internal route. For the bundled CA
+   or a custom CA, use the API trust bundle prepared in step 4 of
    [Section 7](#7-verifying-the-installation):
 
    ```console

@@ -1121,6 +1121,72 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				Expect(bareMetalInstance.Status.ProvisioningJobs).To(HaveLen(1))
 			})
 		})
+
+		It("keeps a failed provisioning attempt active while retrying", func() {
+			const providerError = "AAP workflow failed: inventory service unavailable"
+			mockProvProvider.getProvisionStatusFunc = func(
+				_ context.Context, _ client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   opv1alpha1.JobStateFailed,
+					Message: providerError,
+				}, nil
+			}
+
+			// Trigger the first attempt, then poll it to observe the provider failure.
+			result, err := reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bareMetalInstance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeFalse())
+
+			result, err = reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bareMetalInstance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue(), "the failed attempt status update triggers the next reconcile")
+			Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+
+			condition := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonRetrying))
+			Expect(condition.Message).To(Equal(
+				"Provisioning retry scheduled after failed attempt: " + providerError))
+
+			// The scheduled reconcile must enter the lifecycle's exponential backoff.
+			result, err = reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bareMetalInstance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+		})
+
+		It("migrates a retained template failure to retrying during backoff", func() {
+			const providerError = "legacy AAP workflow failure"
+
+			// Trigger once to record a job with the current desired config version.
+			result, err := reconciler.reconcileProvisioning(ctx, bareMetalInstance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeFalse())
+			Expect(bareMetalInstance.Status.ProvisioningJobs).To(HaveLen(1))
+
+			bareMetalInstance.Status.ProvisioningJobs[0].State = opv1alpha1.JobStateFailed
+			bareMetalInstance.Status.ProvisioningJobs[0].Message = providerError
+			bareMetalInstance.SetStatusCondition(
+				v1alpha1.HostConditionProvisionTemplateComplete,
+				metav1.ConditionFalse,
+				v1alpha1.HostConditionReasonTemplateFailed,
+				providerError,
+			)
+
+			result, err = reconciler.reconcileProvisioning(ctx, bareMetalInstance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			condition := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonRetrying))
+			Expect(condition.Message).To(Equal(
+				"Provisioning retry scheduled after failed attempt: " + providerError))
+		})
 	})
 
 	Describe("syncBareMetalInstanceStatus", func() {
@@ -1944,15 +2010,25 @@ var _ = Describe("BareMetalInstance Controller", func() {
 			})
 		})
 
-		Context("when GetHostNICs succeeds after a prior transient failure", func() {
-			It("populates NICs and does not return an error", func() {
+		Context("when NIC data becomes available after a transient failure", func() {
+			It("leaves Hardware unset, then populates it on retry", func() {
+				attempts := 0
+				unavailableErr := errors.New("BMH is not ready")
 				invClient.getHostNICsFunc = func(_ context.Context, _ string) ([]inventory.HostNIC, error) {
+					attempts++
+					if attempts == 1 {
+						return nil, unavailableErr
+					}
 					return []inventory.HostNIC{{MAC: "aa:bb:cc:dd:ee:01"}}, nil
 				}
 
 				err := reconcilerForNICs.reconcileNICMetadata(ctx, bmi)
+				Expect(err).To(MatchError(unavailableErr))
+				Expect(bmi.Status.Hardware).To(BeNil())
 
+				err = reconcilerForNICs.reconcileNICMetadata(ctx, bmi)
 				Expect(err).NotTo(HaveOccurred())
+				Expect(attempts).To(Equal(2))
 				Expect(bmi.Status.Hardware).NotTo(BeNil())
 				Expect(bmi.Status.Hardware.NICs).To(HaveLen(1))
 			})

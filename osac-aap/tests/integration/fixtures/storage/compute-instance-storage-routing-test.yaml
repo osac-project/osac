@@ -1,0 +1,21 @@
+compute_instance_osac_finalizer: osac.openshift.io/compute-instance
+osac_job_vars:
+  resource:
+    apiVersion: osac.openshift.io/v1alpha1
+    kind: ComputeInstance
+    metadata:
+      name: "{{ routing_test_tenant_name }}"
+      namespace: osac-system
+    spec:
+      templateID: osac.test_overrides.storage_target_routing
+      bootDisk:
+        storageTier: fast
+    status:
+      tenantReference:
+        name: "{{ routing_test_tenant_name }}"
+        namespace: osac-system
+  storage_tier_definitions:
+    - name: fast
+      protocol: block
+      provider: lvms
+  storage_backend_connections: {}

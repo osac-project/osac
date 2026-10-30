@@ -41,7 +41,7 @@
         },
         "services": {
           "type": "object",
-          "description": "Service tier enablement flags. Controls which tiers are active across all OSAC components.",
+          "description": "Service tier enablement flags. Controls which tiers are active across all OSAC components. At least one tier must be enabled.",
           "properties": {
             "caas": {
               "type": "object",
@@ -61,7 +61,7 @@
               "properties": {
                 "enabled": {
                   "type": "boolean",
-                  "description": "Enable VMaaS tier (ComputeInstances, DiskImages, InstanceTypes, Volumes, ConsoleSessions)",
+                  "description": "Enable VMaaS tier (ComputeInstances, InstanceTypes, Volumes, ConsoleSessions). The shared DiskImages API is enabled when either VMaaS or BMaaS is enabled.",
                   "default": true
                 }
               },
@@ -73,7 +73,7 @@
               "properties": {
                 "enabled": {
                   "type": "boolean",
-                  "description": "Enable BMaaS tier (BareMetalInstances, BareMetalInstanceTypes)",
+                  "description": "Enable BMaaS tier (BareMetalInstances, BareMetalInstanceTypes). The shared DiskImages API is enabled when either VMaaS or BMaaS is enabled.",
                   "default": true
                 }
               },
@@ -282,6 +282,28 @@
           },
           "additionalProperties": false
         },
+        "upgradeTimeouts": {
+          "type": "object",
+          "description": "Cluster upgrade deadlines. Each value is a positive Go duration string.",
+          "properties": {
+            "pending": {
+              "$ref": "#/$defs/positiveDuration",
+              "description": "Time allowed after acceptance before upgrade progress is observed",
+              "default": "10m"
+            },
+            "controlPlane": {
+              "$ref": "#/$defs/positiveDuration",
+              "description": "Time allowed after control-plane progress before completion",
+              "default": "40m"
+            },
+            "nodePoolPerNode": {
+              "$ref": "#/$defs/positiveDuration",
+              "description": "Time allowed per accepted NodePool node after progress before completion",
+              "default": "20m"
+            }
+          },
+          "additionalProperties": false
+        },
         "aap": {
           "type": "object",
           "description": "AAP connection settings for the operator",
@@ -407,6 +429,10 @@
             "computeInstance": {
               "type": "boolean",
               "description": "Override the VMaaS ComputeInstance controller toggle"
+            },
+            "clusterOrder": {
+              "type": "boolean",
+              "description": "Override the CaaS ClusterOrder controller toggle"
             },
             "bareMetalInstance": {
               "type": "boolean",
@@ -535,6 +561,12 @@
                     "description": "ExternalIPAttachment input/result contract supported by this manager. Empty uses the unversioned flow.",
                     "enum": ["", "v1"],
                     "default": ""
+                  },
+                  "natGatewayContractVersion": {
+                    "type": "string",
+                    "description": "NATGateway input/result contract supported by this manager. Empty uses the unversioned flow.",
+                    "enum": ["", "v1"],
+                    "default": ""
                   }
                 },
                 "additionalProperties": false
@@ -574,6 +606,12 @@
                   "externalIPAttachmentContractVersion": {
                     "type": "string",
                     "description": "ExternalIPAttachment input/result contract supported by this manager. Empty uses the unversioned flow.",
+                    "enum": ["", "v1"],
+                    "default": ""
+                  },
+                  "natGatewayContractVersion": {
+                    "type": "string",
+                    "description": "NATGateway input/result contract supported by this manager. Empty uses the unversioned flow.",
                     "enum": ["", "v1"],
                     "default": ""
                   }
@@ -870,7 +908,8 @@
             },
             "topicRetention": {
               "type": "string",
-              "description": "How long a tenant's event topic keeps records: a negative duration like '-1s' keeps them indefinitely, or a positive one like '168h'",
+              "description": "How long a tenant's event topic keeps records: a negative duration like '-1s' keeps them indefinitely, or a positive one like '168h'. Only applies to topics the publisher creates",
+              "pattern": "^-?(0|([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)))+$",
               "default": "-1s"
             }
           }
@@ -1788,11 +1827,6 @@
       "type": "object",
       "description": "OSAC Metering Service configuration",
       "properties": {
-        "enabled": {
-          "type": "boolean",
-          "description": "Deploy the OSAC Metering Service (opt-in)",
-          "default": false
-        },
         "image": {
           "type": "object",
           "properties": {
@@ -1824,14 +1858,15 @@
           },
           "additionalProperties": false
         },
-        "reconciliation": {
+        "topics": {
           "type": "object",
-          "description": "Metering reconciliation configuration",
+          "description": "Per-tenant heartbeat and dead-letter topics metering creates when it first serves a tenant",
           "properties": {
-            "interval": {
+            "retentionMs": {
               "type": "string",
-              "description": "Reconciliation interval (Go duration format)",
-              "default": "60m"
+              "description": "How long the topics keep records, in milliseconds; -1 keeps them indefinitely. The retention is the recovery window, because metering rebuilds its database from the topics",
+              "pattern": "^(-1|[1-9][0-9]*)$",
+              "default": "-1"
             }
           },
           "additionalProperties": false
@@ -1860,6 +1895,11 @@
                 }
               },
               "additionalProperties": false
+            },
+            "maxEvents": {
+              "type": "integer",
+              "description": "How many heartbeats the echo adapter keeps for E2E assertions; a long parallel session evicts old events below this",
+              "minimum": 1
             }
           },
           "additionalProperties": false
@@ -1931,6 +1971,40 @@
         "global": {
           "type": "object",
           "description": "Helm-injected global values (passed automatically to subcharts)"
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "description": "Prometheus ServiceMonitor for the metering service and adapters. Requires a Prometheus operator or OpenShift user-workload monitoring.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create ServiceMonitors scraping the /metrics endpoints",
+              "default": false
+            },
+            "labels": {
+              "type": "object",
+              "description": "Extra labels for Prometheus instances that select monitors by label",
+              "additionalProperties": { "type": "string" }
+            }
+          },
+          "additionalProperties": false
+        },
+        "prometheusRule": {
+          "type": "object",
+          "description": "PrometheusRule with alert rules over the metering metrics: stalled rounds, round failures, outbox backlog, skipped events, dead-letter depth",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create the PrometheusRule with the metering alerts",
+              "default": false
+            },
+            "labels": {
+              "type": "object",
+              "description": "Extra labels for Prometheus instances that select rules by label",
+              "additionalProperties": { "type": "string" }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -2288,19 +2362,41 @@
     },
     "validation": {
       "type": "object",
-      "description": "Pre-install validation hook",
+      "description": "Install preflight switch. When false every preflight check is skipped and recorded as skipped in the report.",
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Run pre-install validation checks",
+          "description": "Run the install preflight checks",
           "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "preflight": {
+      "type": "object",
+      "description": "Install preflight settings. Installer and CLI setting: it is not part of the OSAC configuration the Enclave Wizard collects.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["enforce", "report", "strict"],
+          "description": "enforce: blocking findings stop the install before anything is created. report: findings are recorded in the report but never stop the install (use with helm --dry-run=server). strict: warnings stop the install too.",
+          "default": "enforce"
+        },
+        "skip": {
+          "type": "object",
+          "description": "Checks to skip, keyed by check id (see files/preflight/catalog.yaml), each with the reason it is safe to skip. The reason is recorded in the report.",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": {}
         }
       },
       "additionalProperties": false
     },
     "hubAccess": {
       "type": "object",
-      "description": "Hub access SA, RBAC, and create-hub hook (CI/dev only)",
+      "description": "Hub access SA, RBAC, and create-hub hook: the identity the fulfillment service uses on the local hub, for example to create tenant Kafka topics",
       "properties": {
         "enabled": {
           "type": "boolean",
@@ -2653,7 +2749,7 @@
   "$defs": {
     "positiveDuration": {
       "type": "string",
-      "description": "Positive Go time.Duration (e.g. 500ms, 15m, 1h30m). A zero or negative threshold is not useful for stall detection.",
+      "description": "Positive Go time.Duration (e.g. 500ms, 15m, 1h30m). Zero and negative timeouts are invalid.",
       "minLength": 2,
       "maxLength": 64,
       "pattern": "^[1-9][0-9]*(?:\\.[0-9]+)?(?:ns|us|µs|ms|s|m|h)(?:[0-9]+(?:\\.[0-9]+)?(?:ns|us|µs|ms|s|m|h))*$"
@@ -3148,6 +3244,102 @@
           }
         }
       }
+    },
+    {
+      "anyOf": [
+        {
+          "properties": {
+            "global": {
+              "properties": {
+                "services": {
+                  "properties": {
+                    "caas": {
+                      "properties": {
+                        "enabled": {
+                          "const": true
+                        }
+                      },
+                      "required": ["enabled"]
+                    }
+                  },
+                  "required": ["caas"]
+                }
+              },
+              "required": ["services"]
+            }
+          },
+          "required": ["global"]
+        },
+        {
+          "properties": {
+            "global": {
+              "properties": {
+                "services": {
+                  "properties": {
+                    "vmaas": {
+                      "properties": {
+                        "enabled": {
+                          "const": true
+                        }
+                      },
+                      "required": ["enabled"]
+                    }
+                  },
+                  "required": ["vmaas"]
+                }
+              },
+              "required": ["services"]
+            }
+          },
+          "required": ["global"]
+        },
+        {
+          "properties": {
+            "global": {
+              "properties": {
+                "services": {
+                  "properties": {
+                    "bmaas": {
+                      "properties": {
+                        "enabled": {
+                          "const": true
+                        }
+                      },
+                      "required": ["enabled"]
+                    }
+                  },
+                  "required": ["bmaas"]
+                }
+              },
+              "required": ["services"]
+            }
+          },
+          "required": ["global"]
+        },
+        {
+          "properties": {
+            "global": {
+              "properties": {
+                "services": {
+                  "properties": {
+                    "maas": {
+                      "properties": {
+                        "enabled": {
+                          "const": true
+                        }
+                      },
+                      "required": ["enabled"]
+                    }
+                  },
+                  "required": ["maas"]
+                }
+              },
+              "required": ["services"]
+            }
+          },
+          "required": ["global"]
+        }
+      ]
     }
   ],
   "additionalProperties": false

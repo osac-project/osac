@@ -46,6 +46,8 @@ options:
       - release_external_ip
       - ensure_external_ip_attachment
       - delete_external_ip_attachment
+      - ensure_nat_gateway
+      - delete_nat_gateway
   state_file:
     description: Path to the AgentlessNet API state file on the managed node.
     type: path
@@ -102,8 +104,11 @@ options:
   attachment_context:
     description: Controller-resolved ExternalIPAttachment dependency snapshot.
     type: dict
+  nat_gateway_context:
+    description: Controller-resolved NATGateway dependency snapshot.
+    type: dict
   external_interface:
-    description: Provider uplink used for ExternalIP forwarding rules.
+    description: Provider uplink used for ExternalIP and NATGateway rules.
     type: str
 author:
   - OSAC project
@@ -190,6 +195,8 @@ def main() -> None:
                     "release_external_ip",
                     "ensure_external_ip_attachment",
                     "delete_external_ip_attachment",
+                    "ensure_nat_gateway",
+                    "delete_nat_gateway",
                 ],
             },
             "state_file": {"type": "path", "required": True},
@@ -214,6 +221,7 @@ def main() -> None:
             "vip_cidr": {"type": "str", "default": ""},
             "mac_address": {"type": "str"},
             "attachment_context": {"type": "dict"},
+            "nat_gateway_context": {"type": "dict"},
             "external_interface": {"type": "str"},
         },
         required_if=[
@@ -259,6 +267,12 @@ def main() -> None:
                 ["fulfillment_id", "attachment_context", "external_interface"],
             ),
             ("action", "delete_external_ip_attachment", ["fulfillment_id"]),
+            (
+                "action",
+                "ensure_nat_gateway",
+                ["fulfillment_id", "nat_gateway_context", "external_interface"],
+            ),
+            ("action", "delete_nat_gateway", ["fulfillment_id"]),
         ],
         supports_check_mode=True,
     )
@@ -341,6 +355,30 @@ def main() -> None:
                     check_mode=module.check_mode,
                 )
             module.exit_json(changed=changed, backend_network_id=params["uid"])
+            return
+
+        if params["action"] in {"ensure_nat_gateway", "delete_nat_gateway"}:
+            if params["action"] == "ensure_nat_gateway":
+                _gateway, state_changed, provider_changed = store.ensure_nat_gateway(
+                    params["uid"],
+                    params["fulfillment_id"],
+                    params["tenant_id"],
+                    params["nat_gateway_context"],
+                    params["external_interface"],
+                    check_mode=module.check_mode,
+                )
+                module.exit_json(
+                    changed=state_changed or provider_changed,
+                    backend_network_id=params["uid"],
+                )
+            else:
+                _gateway, changed = store.delete_nat_gateway(
+                    params["uid"],
+                    params["fulfillment_id"],
+                    params["tenant_id"],
+                    check_mode=module.check_mode,
+                )
+                module.exit_json(changed=changed, backend_network_id=params["uid"])
             return
 
         if params["action"] == "ensure_virtual_network":

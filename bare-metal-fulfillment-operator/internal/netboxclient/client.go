@@ -51,6 +51,12 @@ type Device struct {
 	CustomFields map[string]interface{}
 }
 
+// DeviceInterface contains the native interface fields used for MAC lookup.
+type DeviceInterface struct {
+	Name       string
+	PrimaryMAC string
+}
+
 // CustomField describes a NetBox custom field attached to dcim.device.
 type CustomField struct {
 	Name        string
@@ -302,6 +308,48 @@ func (c *Client) GetDevice(ctx context.Context, id string) (DeviceSnapshot, erro
 	}, nil
 }
 
+// ListDeviceInterfaces returns the interfaces modeled for a NetBox device.
+func (c *Client) ListDeviceInterfaces(ctx context.Context, id string) ([]DeviceInterface, error) {
+	deviceID, err := parseDeviceID(id)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(nonNilContext(ctx), maxPaginationDuration)
+	defer cancel()
+
+	var interfaces []DeviceInterface
+	var offset int32
+	for {
+		page, _, err := c.listInterfacePage(ctx, deviceID, offset)
+		if err != nil {
+			return nil, err
+		}
+		if page == nil {
+			return nil, &APIError{Kind: ErrorKindInvalidResponse}
+		}
+
+		for _, value := range page.Results {
+			interfaces = append(interfaces, fromSDKInterface(value))
+		}
+
+		hasNext := page.GetNext() != ""
+		if !hasNext {
+			return interfaces, nil
+		}
+		offset, err = nextPaginationOffset(offset, page.Count, len(page.Results), hasNext)
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
+func (c *Client) listInterfacePage(ctx context.Context, deviceID, offset int32) (*netbox.PaginatedInterfaceList, *http.Response, error) {
+	return retryGET(ctx, func(requestContext context.Context) (*netbox.PaginatedInterfaceList, *http.Response, error) {
+		return c.api.DcimAPI.DcimInterfacesList(requestContext).
+			DeviceId([]int32{deviceID}).Limit(defaultPageSize).Offset(offset).Execute()
+	})
+}
+
 // PatchDevice sends one conditional PATCH. A missing or invalid ETag fails
 // locally; writes are never automatically retried after an uncertain outcome.
 func (c *Client) PatchDevice(ctx context.Context, id string, patch DevicePatch, etag string) (DeviceSnapshot, error) {
@@ -479,6 +527,14 @@ func fromSDKDevice(device netbox.DeviceWithConfigContext) Device {
 		Status:       status,
 		CustomFields: cloneCustomFields(device.CustomFields),
 	}
+}
+
+func fromSDKInterface(value netbox.Interface) DeviceInterface {
+	result := DeviceInterface{Name: value.Name}
+	if primary := value.PrimaryMacAddress.Get(); primary != nil {
+		result.PrimaryMAC = primary.GetMacAddress()
+	}
+	return result
 }
 
 func cloneCustomFields(fields map[string]interface{}) map[string]interface{} {

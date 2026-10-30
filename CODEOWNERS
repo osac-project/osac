@@ -8,7 +8,14 @@
 # A team that wants to own a folder adds a line here, for example `/osac-operator/ @osac-project/wg-vmaas`, in a pull
 # request that wg-infra approves (see the self-protection rule below). From then on a change to that folder needs the
 # approval of a member of that team, other than the author. The team must be visible and have write access to the
-# repository (the wg-* teams do). Leave a folder out and any maintainer's approval is enough.
+# repository (the wg-* teams do). Leave a folder out and the default rule below applies: a member of any working group has
+# to approve it.
+
+# Default owner: every path that no later rule names. maintainers is the parent of the working-group teams, so a member of
+# any of them (other than the author) has to approve. A bot, CodeRabbit included, is in none of them, so a pull request
+# is no longer merged on a bot's approval alone. A rule below with no owner at all is the only way to leave a path to any
+# approval.
+* @osac-project/maintainers
 
 # CODEOWNERS Self-Protection
 # Protects this file from unauthorized modification
@@ -28,7 +35,7 @@
 /.github/ci-tests.yml @osac-project/wg-infra
 /.pre-commit-config.yaml @osac-project/wg-infra
 # The osac-ui lint and typecheck workflows run on pull_request, use no secret and report no required check, so the osac-ui
-# maintainers (approvers in osac-ui/OWNERS) may approve them as well.
+# working group may approve them as well.
 /.github/workflows/osac-ui-lint.yaml @osac-project/wg-infra @osac-project/wg-ui
 /.github/workflows/osac-ui-typecheck.yaml @osac-project/wg-infra @osac-project/wg-ui
 # Markdown inside those folders (a README) cannot change a check: a rule with no owner clears ownership.

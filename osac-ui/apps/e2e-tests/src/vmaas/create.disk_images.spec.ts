@@ -7,7 +7,8 @@ import {
   expectDiskImageNotToExist,
   openCreateDiskImagePage,
 } from '../../../../libs/test-utils/src/disk_images.page';
-import { openAndLoginWithEnvironment } from '../../../../libs/test-utils/src/general/open_and_login';
+import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
+import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import { openDiskImagesPage } from '../../../../libs/test-utils/src/main.page';
 
 test(`creates disk image ${diskImagesTestData.name} from Infrastructure`, async ({ page }) => {
@@ -15,26 +16,44 @@ test(`creates disk image ${diskImagesTestData.name} from Infrastructure`, async 
   test.setTimeout(120_000);
   const diskImageName = diskImageNameOrSkip();
   if (!diskImageName) {
+    logProgress('disk-image-create', 'Skipped: disk_image.name is not configured.');
     return;
   }
+  logProgress('disk-image-create', `Starting flow for "${diskImageName}".`);
 
   const diskImage = { ...diskImagesTestData, name: diskImageName };
 
-  // 1. Open the browser and log in.
-  await openAndLoginWithEnvironment(page, '/');
+  await testStep('disk-image-create', 'Log in as the admin test user', () =>
+    openAndLogin(
+      page,
+      '/',
+      process.env.OSAC_ADMIN_USERNAME ?? '',
+      process.env.OSAC_ADMIN_PASSWORD ?? '',
+      'admin',
+    ),
+  );
 
-  // 2. Open Infrastructure > Disk images and verify the list page.
-  await openDiskImagesPage(page);
+  await testStep('disk-image-create', 'Open Infrastructure > Disk images', () =>
+    openDiskImagesPage(page),
+  );
 
-  // 3. Verify the configured name is available before creating the image.
-  await expectDiskImageNotToExist(page, diskImage.name);
+  await testStep(
+    'disk-image-create',
+    `Verify disk image "${diskImage.name}" does not exist before creation`,
+    () => expectDiskImageNotToExist(page, diskImage.name),
+  );
 
-  // 4. Open the creation form and verify its required fields.
-  await openCreateDiskImagePage(page);
+  await testStep('disk-image-create', 'Open the disk image creation form', () =>
+    openCreateDiskImagePage(page),
+  );
 
-  // 5. Create the VM-ready image configured in extravars.yaml.
-  await createDiskImage(page, diskImage);
+  await testStep('disk-image-create', 'Create the configured disk image', () =>
+    createDiskImage(page, diskImage),
+  );
 
-  // 6. Return to the Disk images list and verify the new image is listed.
-  await expectDiskImageListed(page, diskImage.name);
+  await testStep(
+    'disk-image-create',
+    `Verify disk image "${diskImage.name}" exists after creation`,
+    () => expectDiskImageListed(page, diskImage.name),
+  );
 });

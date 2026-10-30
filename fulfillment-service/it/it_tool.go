@@ -74,6 +74,8 @@ var OIDCTenants = map[string][]string{
 	"adam":    {"engineering"},
 	"ben":     {"development"},
 	"charles": {"sales"},
+	// Keep a separate single-tenant user for project access-isolation tests.
+	sshKeyProjectOwnerUsername: {usersGroup},
 }
 
 // ToolBuilder contains the data and logic needed to create an instance of the integration test tool. Don't create
@@ -1959,9 +1961,10 @@ const (
 
 // Details of the Keycloak regular user:
 const (
-	userUsername  = "user"
-	usersPassword = "password"
-	usersGroup    = "users"
+	userUsername               = "user"
+	usersPassword              = "password"
+	usersGroup                 = "users"
+	sshKeyProjectOwnerUsername = "ssh-key-project-owner"
 )
 
 // ExtractOrganizationNames extracts organization names from a JWT organization claim.

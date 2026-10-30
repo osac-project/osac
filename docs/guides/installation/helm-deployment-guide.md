@@ -6,10 +6,45 @@ monorepo checkout. If your cluster already has the prerequisites, see the
 [customer install guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md)
 to install just the published `osac` chart.
 
-The Fulfillment Service requires Kafka even when metering is disabled. To
-use an existing broker, complete the [external Kafka configuration
+The Fulfillment Service and metering require Kafka. Metering is always deployed.
+To use an existing broker, complete the [external Kafka configuration
 guide](kafka-configuration.md), including its credentials, TLS trust, and
 permissions, before installing the platform chart.
+
+## Table of contents
+
+- [Requirements](#requirements)
+- [How It Works](#how-it-works)
+  - [Phase 1a: `osac-deps`](#phase-1a-osac-deps)
+  - [Phase 1b: `osac-infra`](#phase-1b-osac-infra)
+  - [Phase 2: `osac`](#phase-2-osac)
+  - [Post-Install Hooks](#post-install-hooks)
+  - [Seeding ClusterVersions](#seeding-clusterversions)
+- [Installing](#installing)
+  - [Prepare values files](#prepare-values-files)
+  - [Prepare external PostgreSQL](#prepare-external-postgresql)
+  - [Storage class](#storage-class)
+  - [Phase 1a: install prerequisite Operators](#phase-1a-install-prerequisite-operators)
+  - [Phase 1b: install shared infrastructure](#phase-1b-install-shared-infrastructure)
+  - [Phase 2: install the OSAC platform](#phase-2-install-the-osac-platform)
+- [Phase-1 Parameters](#phase-1-parameters)
+- [When Prerequisites Already Exist](#when-prerequisites-already-exist)
+  - [How Toggles Affect Operands](#how-toggles-affect-operands)
+  - [Skipping Phase 1 Entirely](#skipping-phase-1-entirely)
+- [Development-Only Values](#development-only-values)
+  - [Infra chart (`osac-infra`) values](#infra-chart-osac-infra-values)
+  - [Instance chart (`osac`) values](#instance-chart-osac-values)
+- [Infrastructure Configuration](#infrastructure-configuration)
+  - [Keycloak Route with Public Ingress Certificates](#keycloak-route-with-public-ingress-certificates)
+- [Uninstall](#uninstall)
+- [Troubleshooting](#troubleshooting)
+  - [AAP Bootstrap Failing](#aap-bootstrap-failing)
+  - [Fulfillment Pods CrashLooping](#fulfillment-pods-crashlooping)
+  - [Helm Install Timeout](#helm-install-timeout)
+  - [Template Publish Hook Failing](#template-publish-hook-failing)
+  - [Hook Job Failed](#hook-job-failed)
+  - [An Operator CSV Never Reaches `Succeeded`](#an-operator-csv-never-reaches-succeeded)
+  - [`helm dependency build` or an OCI Pull Fails](#helm-dependency-build-or-an-oci-pull-fails)
 
 ## Requirements
 
@@ -45,8 +80,10 @@ credentials, bundled PostgreSQL (development only), and bundled OpenBao
 ### Phase 2: `osac`
 
 Installs OSAC: operator, fulfillment-service, AAP bootstrap, UI. All
-prerequisites are ready — certificates issued, secrets created, CRDs
-registered.
+prerequisite issuers, credential Secrets, and CRDs must already exist.
+The `osac` chart creates its database configuration Secrets and Certificate
+resources in this phase; cert-manager populates their client-certificate
+Secrets.
 
 ### Post-Install Hooks
 
@@ -120,10 +157,20 @@ separate verification.
 
 ## Installing
 
+Select an exact umbrella chart version using
+[What is released](customer-install-guide.md#11-what-is-released) in the
+customer install guide. Replace `<chart_version>` below with that version,
+without a tag prefix. Stable releases use `osac-release/vX.Y.Z`; their
+matching `osac/vX.Y.Z` source tags point to the same commit and are used
+for the checkout below. Nightly source tags also use `osac/v`. If you already
+set `OSAC_RELEASE_VERSION` while following that guide, keep the same value.
+Use the same shell session for the remaining commands.
+
 ```bash
+export OSAC_RELEASE_VERSION="<chart_version>"
 git clone https://github.com/osac-project/osac.git
 cd osac
-git checkout osac/v0.0.17   # pin to a tagged release; HEAD skips phase-compatibility testing
+git checkout "osac/v${OSAC_RELEASE_VERSION}"
 cd osac-installer
 
 export NS=osac
@@ -162,6 +209,64 @@ The customer install guide also explains how to configure `my-values.yaml` for
 the services you plan to deploy. Check the LVMS device configuration and
 MetalLB address range against your cluster, and set `cnv.enabled: true` if
 your deployment uses VMaaS.
+
+### Prepare external PostgreSQL
+
+For production, prepare PostgreSQL 18 or later before phase 2. The following
+steps apply to the umbrella `osac` chart:
+
+1. Provision a server with a hostname that resolves from the cluster and
+   accepts connections from OSAC pods on port 5432. Configure a TLS server
+   certificate that covers this hostname. The chart uses `sslmode=verify-full`;
+   its database clients must trust the server certificate through the CA
+   chain in their client-certificate Secrets' `ca.crt` key.
+
+2. Configure PostgreSQL to trust client certificates issued by
+   `service.certs.issuerRef`. The pre-installation hook authenticates as
+   `postgres`, using a certificate with that common name, and creates the
+   `osac_service` and `osac_metering` roles and databases. Allow that identity
+   to connect to the `postgres` database and create roles and databases.
+   Allow the application identities `osac_service` and `osac_metering` to
+   authenticate with their matching client certificates and access their
+   respective databases.
+
+3. In the `my-values.yaml` created above, set the external server's hostname:
+
+   ```yaml
+   dbInit:
+     host: postgres.example.com
+   ```
+
+   Replace `postgres.example.com` with your server's hostname. Keep
+   `bundledPostgres.enabled: false` in both values files for production.
+   The chart uses `dbInit.host` for the initialization hook and the
+   generated application connection URLs.
+
+4. Let the umbrella chart create `osac-db-config` and
+   `osac-db-metering-config`. Its Certificate resources cause cert-manager
+   to create `osac-db-client-cert` and `osac-db-metering-client-cert`.
+   Do not pre-create these four Secrets for a fresh umbrella installation.
+
+**Manual component installation**
+
+The [Fulfillment Service installation guide](../../../fulfillment-service/docs/INSTALL.md)
+retains manual PostgreSQL operator setup, database Secret creation, and
+standalone `fulfillment-service` Helm installation procedures. Follow that
+procedure for a standalone service installation. When using its PostgreSQL
+setup examples for the umbrella chart, adapt authentication and permissions
+to the certificate-based initialization and application identities above.
+
+**Adopting existing resources**
+
+For an intentional migration, `--take-ownership` lets Helm adopt existing
+resources that the chart renders. It skips ownership metadata checks;
+Helm then manages the database configuration Secrets using chart values,
+and cert-manager reconciles the client-certificate Secrets. Back up the
+existing configuration and coordinate the transfer with its current owner.
+Adoption does not preserve custom connection data independently of the chart.
+The Helm 4 `--force-conflicts` flag handles field conflicts and does not
+replace this ownership transfer. The phase-2 command below does not enable
+`--take-ownership`.
 
 ### Storage class
 
@@ -251,7 +356,14 @@ incompatible with OpenShift 4.17's Kubernetes 1.30; use Helm 3.17.x or 3.18.x
 for OpenShift 4.17. For other cluster versions, choose a Helm 3 minor that
 supports the cluster's Kubernetes version; see the
 [Helm 3 version-skew documentation](https://helm.sh/docs/v3/topics/version_skew/).
-Helm 3.17.0 is the minimum version required for `--take-ownership`.
+Helm 3.17.0 is the minimum version required for `--take-ownership`. It is
+also the minimum version that can install a chart pinned by content digest
+(`OSAC_CHART_OCI_REF` containing `@sha256:...`, the `install-osac` Makefile
+target's escape hatch for validating a staged OCI chart build by exact
+artifact rather than by semver tag) — on an older Helm, `make install-osac`
+rejects a digest-pinned `OSAC_CHART_OCI_REF` outright with an explicit
+version error instead of failing deep inside Helm's own tag-constraint
+parsing.
 
 ```bash
 helm dependency update ./charts/osac
@@ -290,6 +402,7 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `aapOperator.channel` | Update channel for the AAP Operator. | `stable-2.6-cluster-scoped` |
 | `cnv.enabled` | Creates the OpenShift Virtualization `Subscription` and the `HyperConverged` custom resource. Required for VMaaS. | `false` |
 | `cnv.channel` | Update channel for OpenShift Virtualization. | `stable` |
+| `evpn.enabled` | Configures OpenShift host networking for VMaaS CUDN EVPN; requires OpenShift 4.22 or later. Leave disabled on Kind. | `false` |
 | `lvms.enabled` | Creates the LVM Storage `Subscription` and the `LVMCluster` custom resource. | `false` |
 | `lvms.channel` | Update channel for LVM Storage. Set it to `stable-<cluster_minor>` at installation. | `stable-4.22` |
 | `metallb.enabled` | Creates the MetalLB `Subscription`, the `caas-address-pool` `IPAddressPool`, and the `L2Advertisement`. | `false` |
@@ -299,7 +412,7 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `mce.imageService.enabled` | Creates and runs the Assisted Image Service. Keep enabled until the Assisted discovery-artifact fix is released and verified. | `true` |
 | `mce.imageOverrides` | Temporary four-image MCE 5.0 Assisted operand bridge used until a stable MCE 5.0 catalog is available. Rendered only when `mce.enabled` is `true`. | Four pinned Assisted image entries |
 | `mce.osImages` | RHCOS live-ISO entries for agent discovery. | `[]` |
-| `kafka.enabled` | Creates the Streams for Apache Kafka `Subscription` and the Kafka custom resource. Enable when the installer should provide Kafka for fulfillment and optional metering. Keep `false` for an existing broker and follow [Kafka configuration](kafka-configuration.md). | `false` |
+| `kafka.enabled` | Creates the Streams for Apache Kafka `Subscription` and the Kafka custom resource. Enable when the installer should provide Kafka for fulfillment and metering. Keep `false` for an existing broker and follow [Kafka configuration](kafka-configuration.md). | `false` |
 | `kafka.replicas` | Kafka broker replica count. | `3` |
 | `kafka.storage.size` | Kafka broker storage size. | `100Gi` |
 | `kafka.version` | Kafka version. | `4.2.0` |
@@ -321,6 +434,82 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `bundledVault.enabled` | Deploys an in-cluster OpenBao secret store for development and evaluation. Set it to `false` for production and configure external Vault in the `osac` values file; see the [secrets management configuration guide](secrets-management-configuration.md). | `true` |
 | `bundledVault.podSecurityContext` | Pod-level `securityContext` for the OpenBao deployment. Defaults to `{runAsNonRoot: true}` with no hardcoded UID so OpenShift's restricted-v2 SCC can allocate from the namespace range. Override with a fixed UID (e.g. `runAsUser: 100`) on platforms that require one. | `{runAsNonRoot: true}` |
 | `cliImage` | The `oc` image that the chart hook jobs use. | `origin-cli:4.20.0` |
+
+## EVPN host networking (VMaaS)
+
+Set the `evpn` values in the same infra values file passed to `osac-deps` and
+`osac-infra`. The installer configures the OpenShift side of the VMaaS CUDN
+EVPN connection in this order:
+
+1. It enables FRR, route advertisements, routing via host, and global IP
+   forwarding in the cluster network operator. This restarts OVN-Kubernetes
+   once while it applies the network settings.
+2. It installs the NMState operator when requested and applies the `nmstate`
+   singleton.
+3. It creates one `NodeNetworkConfigurationPolicy` per configured node. The
+   policy adds each supplied uplink address and creates the `evpn-vtep0` dummy
+   interface with that node's VTEP address.
+4. It creates the `tenant-vtep` VTEP used by the CUDN.
+5. It creates each node's underlay BGP `FRRConfiguration` and a raw FRR
+   configuration that activates the EVPN address family.
+6. It creates a `RouteAdvertisements` resource selecting CUDNs labelled
+   `evpn: "true"`.
+7. It waits for every configured node-to-fabric BGP session to become
+   Established when `waitForEstablished` is enabled.
+
+The cluster admin supplies the OpenShift node names and the NMState operator
+channel. The fabric admin supplies the per-node cabling details: uplink
+interface, optional uplink address, fabric peer address, and peer ASN. The
+fabric admin also assigns the VTEP range, each node VTEP address, and the node
+ASN, and configures the matching VTEP range and node ASN on the fabric. If a
+node has a different ASN, set its `nodes[].asn`; otherwise the installer uses
+`bgp.asn`. `bgp.acceptPrefixes` comes from the fabric admin and lists remote
+fabric loopback ranges; the installer accepts only /32 routes within them.
+
+| Value | Meaning and source |
+|---|---|
+| `evpn.enabled` | Enables EVPN host setup on OpenShift; requires OpenShift 4.22 or later. Keep `false` on Kind. |
+| `evpn.nmstate.install` | Installs the NMState operator subscription; set `false` when it is already installed. |
+| `evpn.nmstate.channel` | NMState operator channel supported by the cluster. |
+| `evpn.configureClusterNetwork` | Applies the cluster network operator settings. It triggers one OVN-Kubernetes restart. |
+| `evpn.vtepCIDR` | Required VTEP address range, assigned with the fabric admin. |
+| `evpn.bgp.asn` | Required default node ASN, assigned with the fabric admin. |
+| `evpn.bgp.acceptPrefixes` | Required fabric loopback IPv4 ranges supplied by the fabric admin. Only /32 routes are accepted. |
+| `evpn.bgp.waitForEstablished` | Fails installation if a configured BGP session does not become Established. |
+| `evpn.bgp.timeoutSeconds` | Maximum wait per BGP session. |
+| `evpn.nodes[].name` | Kubernetes node name from the cluster admin. Add one entry for every VMaaS node. |
+| `evpn.nodes[].vtepIP` | Unique address inside `vtepCIDR`, assigned with the fabric admin and configured on the fabric. |
+| `evpn.nodes[].asn` | Optional node ASN override, assigned by the fabric admin. Defaults to `evpn.bgp.asn`. |
+| `evpn.nodes[].uplinks[].interface` | Node interface name for a cable to a fabric leaf, supplied by the fabric admin. |
+| `evpn.nodes[].uplinks[].address` | Optional IPv4 CIDR for the uplink. Omit it when the address is already configured. The fabric admin supplies it. |
+| `evpn.nodes[].uplinks[].peerAddress` | IPv4 address of the connected fabric BGP peer, supplied by the fabric admin. |
+| `evpn.nodes[].uplinks[].peerASN` | ASN of the connected fabric peer, supplied by the fabric admin. |
+
+For a multicluster VMaaS deployment, `make install-multicluster` uses the
+infra values to configure EVPN on the workload cluster. The management-cluster
+overlay keeps `evpn.enabled` disabled.
+
+Add a node by adding it to `evpn.nodes` and rerunning `make install`. Remove a
+node by deleting its entry and rerunning `make install`; the installer deletes
+that node's NNCP and FRRConfigurations. Deleting the NNCP does not remove its
+interface addresses from the node, so remove stale addresses separately when
+needed.
+
+Uninstalling `osac-infra` does not remove the EVPN resources or revert the
+cluster network operator patch. Helm removes the configure-EVPN ServiceAccount
+and RBAC resources on uninstall. To remove the labeled EVPN resources manually:
+
+```bash
+oc delete routeadvertisements,vteps -l osac.openshift.io/evpn=true
+oc delete frrconfigurations -n openshift-frr-k8s -l osac.openshift.io/evpn=true
+oc delete nncp -l osac.openshift.io/evpn=true
+```
+
+Restore the cluster network operator settings separately if the cluster no
+longer needs them. The VTEP range and uplink ranges must not overlap tenant
+address space. Add these infrastructure ranges to
+`global.networking.excludedIpv4Cidrs` in the `osac` chart when that value is
+available in the installed chart.
 
 ## When Prerequisites Already Exist
 
@@ -344,8 +533,8 @@ mce:          { enabled: false }
 
 ### How Toggles Affect Operands
 
-- Even with `certManager.enabled: false`, the pre-installation validation hook
-  requires the `certificates.cert-manager.io` CRD. Any cert-manager
+- Even with `certManager.enabled: false`, the `osac` chart's install preflight
+  (check `cert-manager-crds`) requires the `certificates.cert-manager.io` CRD. Any cert-manager
   distribution satisfies it.
 - Disabling `cnv.enabled` skips the `HyperConverged` custom resource.
   Disabling `lvms.enabled` skips an `LVMCluster` custom resource that uses
@@ -389,8 +578,10 @@ charts create and the `osac` release depends on.
 - The `fulfillment-controller-credentials` and `keycloak-client-secrets`
   Secrets, which an `osac-infra` postinstallation hook creates.
 - An operand custom resource for each Operator you use.
-- For a production deployment, an external PostgreSQL database with the
-  `osac-db-*` Secrets.
+- For a production deployment, a prepared external PostgreSQL server and
+  `dbInit.host` set in the phase-2 values file. The `osac` chart and
+  cert-manager create the database Secrets during phase 2. See
+  [Prepare external PostgreSQL](#prepare-external-postgresql).
 - For a production deployment, an external Vault-compatible store. Complete
   the [secrets management configuration guide](secrets-management-configuration.md)
   before installing the `osac` chart.
@@ -459,6 +650,38 @@ above sets the same public hostname and enables `publicIngress`.
 
 - Production clusters where browser cert warnings are unacceptable.
 - Environments with corporate CA or Let's Encrypt ingress certs.
+
+### Keycloak osac-ui redirect URIs
+
+Keycloak validates the browser's `redirect_uri` against the `osac-ui` client's
+`redirectUris` and does **not** resolve relative entries against the Route
+hostname, so the UI's real URL has to be known at realm-import time:
+
+```yaml
+# my-infra-values.yaml
+keycloak:
+  uiUrl: https://osac-ui-osac.apps.example.com  # scheme://host[:port], no path
+```
+
+The scheme must be `https`. Plain `http` is accepted only for the
+local-development hosts `localhost`, `*.localhost` and `127.0.0.1` (the chart
+default is the kind `dev-full` UI, `http://ui.osac.localhost:8080`); for any
+other host the `resolve-realm-secrets` initContainer fails the install rather
+than register a redirect URI that would return the authorization code
+unencrypted.
+
+`keycloak.uiUrl` is substituted into the `osac-ui` client's `rootUrl`,
+`redirectUris` (`/callback` and `/*`) and `webOrigins` by the
+`resolve-realm-secrets` initContainer. `make install-infra` sets it
+automatically on OpenShift from the cluster ingress domain
+(`https://osac-ui-<NS>.<DOMAIN>`), and `make install-osac` pins
+`ui.externalHostname` to the same host so the Route matches. The chart default
+targets the kind `dev-full` UI HTTPRoute.
+
+If the value does not match the URL the browser actually uses, login fails at
+Keycloak with `Invalid parameter: redirect_uri`. `make helm-validate` runs
+`scripts/validate-keycloak-ui-redirect-uris.py`, which fails if the client ever
+regains relative redirect URIs.
 
 ## Uninstall
 
@@ -582,10 +805,11 @@ requires a full monorepo checkout; the install procedure updates those with
 `helm dependency update ./charts/osac`. OCI chart pulls require outbound
 access to `ghcr.io`. A `not found` error on
 `oci://ghcr.io/osac-project/charts/*` usually means an incorrect `--version`.
-To list the tags:
+Confirm that `OSAC_RELEASE_VERSION` matches the selected umbrella release
+and that its chart is available:
 
 ```bash
-helm show chart oci://ghcr.io/osac-project/charts/osac --version 0.0.17
+helm show chart oci://ghcr.io/osac-project/charts/osac --version "$OSAC_RELEASE_VERSION"
 ```
 
 ---

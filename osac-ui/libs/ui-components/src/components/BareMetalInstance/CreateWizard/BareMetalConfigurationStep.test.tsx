@@ -13,6 +13,10 @@ import {
 
 import BareMetalConfigurationStep from './BareMetalConfigurationStep';
 import { createEmptyBareMetalInstanceValues, getBareMetalInstanceInitialValues } from './fields';
+import {
+  expectResourceSelectDisabled,
+  getResourceSelectCombobox,
+} from '../../../test-utils/resourceSelect';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 import { provisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
@@ -51,7 +55,7 @@ describe('BareMetalConfigurationStep', () => {
 
     await user.click(screen.getByRole('option', { name: /rhel/ }));
 
-    await waitFor(() => expect(diskImageSelect).toHaveTextContent('rhel'));
+    await waitFor(() => expect(getResourceSelectCombobox(/^Disk image/)).toHaveValue('rhel'));
   });
 
   it('shows the catalog item disk image when the wizard opens', async () => {
@@ -82,9 +86,9 @@ describe('BareMetalConfigurationStep', () => {
       },
     );
 
-    const diskImageSelect = await screen.findByLabelText(/^Disk image/);
-    await waitFor(() => expect(diskImageSelect).toHaveTextContent('rhel'));
-    expect(diskImageSelect).toBeDisabled();
+    await screen.findByLabelText(/^Disk image/);
+    await waitFor(() => expect(getResourceSelectCombobox(/^Disk image/)).toHaveValue('rhel'));
+    expectResourceSelectDisabled(/^Disk image/);
   });
 
   it('disables instance type selection when the catalog item locks its value', async () => {
@@ -100,8 +104,8 @@ describe('BareMetalConfigurationStep', () => {
       },
     );
 
-    const instanceTypeSelect = await screen.findByLabelText('Instance type');
-    expect(instanceTypeSelect).toBeDisabled();
+    await screen.findByLabelText('Instance type');
+    expectResourceSelectDisabled('Instance type');
   });
 
   it('lets the user switch between inline user data and a USER_DATA Secret', async () => {

@@ -47,6 +47,7 @@ type PrivateClusterCatalogItemsServer struct {
 	secretsDao                *dao.GenericDAO[*privatev1.Secret]
 	subnetsDao                *dao.GenericDAO[*privatev1.Subnet]
 	securityGroupsDao         *dao.GenericDAO[*privatev1.SecurityGroup]
+	addOnOperatorsDao         *dao.GenericDAO[*privatev1.AddOnOperator]
 	generic                   *GenericServer[*privatev1.ClusterCatalogItem]
 	bareMetalInstanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType]
 }
@@ -138,6 +139,15 @@ func (b *PrivateClusterCatalogItemsServerBuilder) Build() (result *PrivateCluste
 		return
 	}
 
+	addOnOperatorsDao, err := dao.NewGenericDAO[*privatev1.AddOnOperator]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	generic, err := NewGenericServer[*privatev1.ClusterCatalogItem]().
 		SetLogger(b.logger).
 		SetService(privatev1.ClusterCatalogItems_ServiceDesc.ServiceName).
@@ -166,6 +176,7 @@ func (b *PrivateClusterCatalogItemsServerBuilder) Build() (result *PrivateCluste
 		secretsDao:                secretsDao,
 		subnetsDao:                subnetsDao,
 		securityGroupsDao:         securityGroupsDao,
+		addOnOperatorsDao:         addOnOperatorsDao,
 		generic:                   generic,
 	}
 	return
@@ -220,7 +231,7 @@ func (s *PrivateClusterCatalogItemsServer) prepareCatalogItemCandidate(
 	if err := s.validateAndCanonicalizeTemplate(ctx, current, candidate); err != nil {
 		return err
 	}
-	if err := validateAndCanonicalizeClusterCatalogItemPolicies(ctx, candidate, s.bareMetalInstanceTypesDao, s.clusterVersionsDao, s.secretsDao, s.subnetsDao, s.securityGroupsDao); err != nil {
+	if err := validateAndCanonicalizeClusterCatalogItemPolicies(ctx, candidate, s.bareMetalInstanceTypesDao, s.clusterVersionsDao, s.secretsDao, s.subnetsDao, s.securityGroupsDao, s.addOnOperatorsDao); err != nil {
 		return err
 	}
 	return nil

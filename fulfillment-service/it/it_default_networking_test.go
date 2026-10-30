@@ -21,9 +21,11 @@ import (
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	"github.com/onsi/ginkgo/v2/dsl/reporting"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -31,6 +33,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/defaultnetworking"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing/fixturecleanup"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -123,6 +126,8 @@ var _ = Describe("Default networking provisioning", func() {
 		vnResp, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnId}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		vnObj := vnResp.GetObject()
+		Expect(vnObj.GetSpec().GetIpv4Cidr()).To(Equal("10.200.0.0/16"))
+		Expect(vnObj.GetSpec().GetIpv6Cidr()).To(BeEmpty())
 		vnObj.SetStatus(privatev1.VirtualNetworkStatus_builder{
 			State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
 		}.Build())
@@ -139,8 +144,13 @@ var _ = Describe("Default networking provisioning", func() {
 				Filter: &defaultLabelFilter,
 			}.Build())
 			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(resp.GetItems()).ToNot(BeEmpty())
-			subnetId = resp.GetItems()[0].GetId()
+			items := resp.GetItems()
+			g.Expect(items).To(HaveLen(1))
+			if len(items) != 1 {
+				return
+			}
+			g.Expect(items[0].GetMetadata().GetName()).To(Equal("default-ipv4"))
+			subnetId = items[0].GetId()
 		}, time.Minute, time.Second).Should(Succeed())
 
 		By("Verifying default Subnet K8s CR is created")
@@ -164,6 +174,8 @@ var _ = Describe("Default networking provisioning", func() {
 		subResp, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetId}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		subObj := subResp.GetObject()
+		Expect(subObj.GetSpec().GetIpv4Cidr()).To(Equal("10.200.0.0/20"))
+		Expect(subObj.GetSpec().GetIpv6Cidr()).To(BeEmpty())
 		subObj.SetStatus(privatev1.SubnetStatus_builder{
 			State: privatev1.SubnetState_SUBNET_STATE_READY,
 		}.Build())
@@ -496,6 +508,260 @@ var _ = Describe("Default networking provisioning", func() {
 			g.Expect(listIPs(g)).To(HaveLen(1))
 			g.Expect(listGateways(g)).To(HaveLen(1))
 		}, 5*time.Second, time.Second).Should(Succeed())
+
+		By("Preparing a second live tenant with all five default networking resources")
+		secondTenantID, secondTenantName, _ := createTenantAndDefaultVirtualNetwork(ctx, virtualNetworksClient)
+		type defaultResource struct {
+			object interface {
+				GetId() string
+				GetMetadata() *privatev1.Metadata
+			}
+			get func() error
+		}
+		listDefaults := func(g Gomega, resourceFilter string) map[string][]defaultResource {
+			resources := map[string][]defaultResource{
+				"VirtualNetwork": {}, "Subnet": {}, "SecurityGroup": {}, "ExternalIP": {}, "NATGateway": {},
+			}
+			vns, listErr := virtualNetworksClient.List(ctx, privatev1.VirtualNetworksListRequest_builder{Filter: &resourceFilter}.Build())
+			g.Expect(listErr).ToNot(HaveOccurred())
+			g.Expect(int(vns.GetTotal())).To(Equal(len(vns.GetItems())), "VirtualNetwork snapshot must be complete")
+			for _, object := range vns.GetItems() {
+				resources["VirtualNetwork"] = append(resources["VirtualNetwork"], defaultResource{object: object, get: func() error {
+					_, getErr := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: object.GetId()}.Build())
+					return getErr
+				}})
+			}
+			subnets, listErr := subnetsClient.List(ctx, privatev1.SubnetsListRequest_builder{Filter: &resourceFilter}.Build())
+			g.Expect(listErr).ToNot(HaveOccurred())
+			g.Expect(int(subnets.GetTotal())).To(Equal(len(subnets.GetItems())), "Subnet snapshot must be complete")
+			for _, object := range subnets.GetItems() {
+				resources["Subnet"] = append(resources["Subnet"], defaultResource{object: object, get: func() error {
+					_, getErr := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: object.GetId()}.Build())
+					return getErr
+				}})
+			}
+			groups, listErr := securityGroupsClient.List(ctx, privatev1.SecurityGroupsListRequest_builder{Filter: &resourceFilter}.Build())
+			g.Expect(listErr).ToNot(HaveOccurred())
+			g.Expect(int(groups.GetTotal())).To(Equal(len(groups.GetItems())), "SecurityGroup snapshot must be complete")
+			for _, object := range groups.GetItems() {
+				resources["SecurityGroup"] = append(resources["SecurityGroup"], defaultResource{object: object, get: func() error {
+					_, getErr := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: object.GetId()}.Build())
+					return getErr
+				}})
+			}
+			ips, listErr := externalIPsClient.List(ctx, privatev1.ExternalIPsListRequest_builder{Filter: &resourceFilter}.Build())
+			g.Expect(listErr).ToNot(HaveOccurred())
+			g.Expect(int(ips.GetTotal())).To(Equal(len(ips.GetItems())), "ExternalIP snapshot must be complete")
+			for _, object := range ips.GetItems() {
+				resources["ExternalIP"] = append(resources["ExternalIP"], defaultResource{object: object, get: func() error {
+					_, getErr := externalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{Id: object.GetId()}.Build())
+					return getErr
+				}})
+			}
+			gateways, listErr := natGatewaysClient.List(ctx, privatev1.NATGatewaysListRequest_builder{Filter: &resourceFilter}.Build())
+			g.Expect(listErr).ToNot(HaveOccurred())
+			g.Expect(int(gateways.GetTotal())).To(Equal(len(gateways.GetItems())), "NATGateway snapshot must be complete")
+			for _, object := range gateways.GetItems() {
+				resources["NATGateway"] = append(resources["NATGateway"], defaultResource{object: object, get: func() error {
+					_, getErr := natGatewaysClient.Get(ctx, privatev1.NATGatewaysGetRequest_builder{Id: object.GetId()}.Build())
+					return getErr
+				}})
+			}
+			return resources
+		}
+		defaultFilter := "this.metadata.labels['osac.openshift.io/default'] == 'true'"
+		tenantDefaultFilter := func(name string) string {
+			return fmt.Sprintf("%s && this.metadata.tenant == %q", defaultFilter, name)
+		}
+		Eventually(func(g Gomega) {
+			resources := listDefaults(g, tenantDefaultFilter(secondTenantName))
+			for _, objects := range resources {
+				for _, resource := range objects {
+					switch object := resource.object.(type) {
+					case *privatev1.VirtualNetwork:
+						crs := &osacv1alpha1.VirtualNetworkList{}
+						g.Expect(tool.KubeClient().List(ctx, crs, crclient.MatchingLabels{labels.VirtualNetworkUuid: object.GetId()})).To(Succeed())
+						g.Expect(crs.Items).To(HaveLen(1))
+						if object.GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {
+							object.SetStatus(privatev1.VirtualNetworkStatus_builder{State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY}.Build())
+							_, updateErr := virtualNetworksClient.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+								Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+							}.Build())
+							g.Expect(updateErr).ToNot(HaveOccurred())
+						}
+					case *privatev1.Subnet:
+						crs := &osacv1alpha1.SubnetList{}
+						g.Expect(tool.KubeClient().List(ctx, crs, crclient.MatchingLabels{labels.SubnetUuid: object.GetId()})).To(Succeed())
+						g.Expect(crs.Items).To(HaveLen(1))
+						if object.GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
+							object.SetStatus(privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_READY}.Build())
+							_, updateErr := subnetsClient.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+								Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+							}.Build())
+							g.Expect(updateErr).ToNot(HaveOccurred())
+						}
+					case *privatev1.SecurityGroup:
+						crs := &osacv1alpha1.SecurityGroupList{}
+						g.Expect(tool.KubeClient().List(ctx, crs, crclient.MatchingLabels{labels.SecurityGroupUuid: object.GetId()})).To(Succeed())
+						g.Expect(crs.Items).To(HaveLen(1))
+						if object.GetStatus().GetState() != privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY {
+							object.SetStatus(privatev1.SecurityGroupStatus_builder{State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY}.Build())
+							_, updateErr := securityGroupsClient.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+								Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+							}.Build())
+							g.Expect(updateErr).ToNot(HaveOccurred())
+						}
+					case *privatev1.ExternalIP:
+						g.Expect(setExternalIPFixtureState(ctx, externalIPsClient, object.GetId(),
+							privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)).To(Succeed())
+					case *privatev1.NATGateway:
+						g.Expect(setNATGatewayFixtureState(ctx, natGatewaysClient, object.GetId(),
+							privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY)).To(Succeed())
+					}
+				}
+			}
+			for kind, objects := range resources {
+				g.Expect(objects).To(HaveLen(1), kind)
+			}
+			response, getErr := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: secondTenantID}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			condition := findTenantCondition(response.GetObject().GetStatus().GetConditions(),
+				privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY)
+			g.Expect(condition).ToNot(BeNil())
+			g.Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+			g.Expect(condition.GetReason()).To(Equal("AllResourcesReady"))
+		}, time.Minute, time.Second).Should(Succeed())
+
+		By("Creating independent nondefault VirtualNetworks in both live tenants")
+		deleteManualVN := func(deleteCtx context.Context, id string) {
+			_, deleteErr := virtualNetworksClient.Delete(deleteCtx, privatev1.VirtualNetworksDeleteRequest_builder{Id: id}.Build())
+			if grpcstatus.Code(deleteErr) != grpccodes.NotFound {
+				Expect(deleteErr).ToNot(HaveOccurred())
+			}
+			Eventually(func(g Gomega) {
+				_, getErr := virtualNetworksClient.Get(deleteCtx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+				g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+				crs := &osacv1alpha1.VirtualNetworkList{}
+				g.Expect(tool.KubeClient().List(deleteCtx, crs, crclient.MatchingLabels{labels.VirtualNetworkUuid: id})).To(Succeed())
+				g.Expect(crs.Items).To(BeEmpty())
+			}, 2*time.Minute, time.Second).Should(Succeed())
+		}
+		manualVNs := make([]*privatev1.VirtualNetwork, 0, 2)
+		for _, name := range []string{tenantName, secondTenantName} {
+			cidr := uniqueCIDR()
+			response, createErr := virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-drain-manual-%s", uuid.New()[24:32]), Tenant: name}.Build(),
+					Spec: privatev1.VirtualNetworkSpec_builder{
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
+						Region:       "us-east-1", Ipv4Cidr: &cidr,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(createErr).ToNot(HaveOccurred())
+			id := response.GetObject().GetId()
+			DeferCleanup(func(cleanupCtx context.Context) { deleteManualVN(cleanupCtx, id) })
+			Eventually(func(g Gomega) {
+				crs := &osacv1alpha1.VirtualNetworkList{}
+				g.Expect(tool.KubeClient().List(ctx, crs, crclient.MatchingLabels{labels.VirtualNetworkUuid: id})).To(Succeed())
+				g.Expect(crs.Items).To(HaveLen(1))
+			}, time.Minute, time.Second).Should(Succeed())
+			fresh, getErr := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+			Expect(getErr).ToNot(HaveOccurred())
+			object := fresh.GetObject()
+			Expect(object.GetMetadata().GetTenant()).To(Equal(name))
+			Expect(object.GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+			Expect(object.GetMetadata().GetLabels()).ToNot(HaveKey("osac.openshift.io/default"))
+			Expect(object.GetSpec().GetNetworkClass().GetId()).To(Equal(networkClassId))
+			manualVNs = append(manualVNs, proto.Clone(object).(*privatev1.VirtualNetwork))
+		}
+
+		By("Snapshotting live tenants and original defaults before cleanup")
+		tenantSnapshot, err := tenantsClient.List(ctx, privatev1.TenantsListRequest_builder{}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(int(tenantSnapshot.GetTotal())).To(Equal(len(tenantSnapshot.GetItems())), "Tenant snapshot must be complete")
+		snapshotNames := make([]string, 0, len(tenantSnapshot.GetItems()))
+		snapshotIDs := make([]string, 0, len(tenantSnapshot.GetItems()))
+		for _, tenant := range tenantSnapshot.GetItems() {
+			snapshotNames = append(snapshotNames, tenant.GetMetadata().GetName())
+			snapshotIDs = append(snapshotIDs, tenant.GetId())
+			if tenant.GetId() == tenantID || tenant.GetId() == secondTenantID {
+				Expect(tenant.GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+			}
+		}
+		Expect(snapshotNames).To(ContainElements(tenantName, secondTenantName))
+		Expect(snapshotIDs).To(ContainElements(tenantID, secondTenantID))
+		for _, name := range []string{tenantName, secondTenantName} {
+			for kind, objects := range listDefaults(Default, tenantDefaultFilter(name)) {
+				Expect(objects).To(HaveLen(1), kind)
+				Expect(objects[0].object.GetId()).ToNot(BeEmpty())
+				Expect(objects[0].object.GetMetadata().GetTenant()).To(Equal(name))
+				Expect(objects[0].object.GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+			}
+		}
+		originalDefaults := listDefaults(Default, defaultFilter)
+		Expect(cleanupDefaultNetworkingForAllTenants(ctx, networkClassId)).To(Succeed())
+
+		expectGlobalAbsence := func(g Gomega) {
+			for kind, objects := range listDefaults(g, defaultFilter) {
+				g.Expect(objects).To(BeEmpty(), kind)
+			}
+		}
+		expectDrainedAndPreserved := func(g Gomega) {
+			for _, name := range snapshotNames {
+				for kind, objects := range listDefaults(g, tenantDefaultFilter(name)) {
+					g.Expect(objects).To(BeEmpty(), "%s in tenant %s", kind, name)
+				}
+			}
+			expectGlobalAbsence(g)
+			for _, objects := range originalDefaults {
+				for _, resource := range objects {
+					g.Expect(grpcstatus.Code(resource.get())).To(Equal(grpccodes.NotFound))
+				}
+			}
+			for _, original := range manualVNs {
+				response, getErr := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: original.GetId()}.Build())
+				g.Expect(getErr).ToNot(HaveOccurred())
+				current := response.GetObject()
+				g.Expect(current.GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+				g.Expect(current.GetId()).To(Equal(original.GetId()))
+				g.Expect(current.GetMetadata().GetName()).To(Equal(original.GetMetadata().GetName()))
+				g.Expect(current.GetMetadata().GetTenant()).To(Equal(original.GetMetadata().GetTenant()))
+				g.Expect(current.GetMetadata().GetLabels()).To(Equal(original.GetMetadata().GetLabels()))
+				g.Expect(proto.Equal(current.GetSpec(), original.GetSpec())).To(BeTrue())
+			}
+			response, getErr := networkClassesClient.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassId}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			g.Expect(response.GetObject().GetSpec().HasDefaults()).To(BeFalse())
+		}
+		expectDrainedAndPreserved(Default)
+		for _, id := range []string{tenantID, secondTenantID} {
+			_, signalErr := tenantsClient.Signal(ctx, privatev1.TenantsSignalRequest_builder{Id: id}.Build())
+			Expect(signalErr).ToNot(HaveOccurred())
+		}
+		Eventually(func(g Gomega) {
+			for _, id := range []string{tenantID, secondTenantID} {
+				response, getErr := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+				g.Expect(getErr).ToNot(HaveOccurred())
+				condition := findTenantCondition(response.GetObject().GetStatus().GetConditions(),
+					privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY)
+				g.Expect(condition).ToNot(BeNil())
+				g.Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+				g.Expect(condition.GetReason()).To(Equal("NoDefaultNetworking"))
+			}
+		}, time.Minute, time.Second).Should(Succeed())
+		Consistently(expectDrainedAndPreserved, 5*time.Second, time.Second).Should(Succeed())
+
+		By("Ordinarily deleting the preserved manual networks before the NetworkClass barrier")
+		for _, original := range manualVNs {
+			deleteManualVN(ctx, original.GetId())
+		}
+		expectGlobalAbsence(Default)
+		Expect(cleanupNetworkClassFixture(ctx, networkClassesClient, networkClassId)).To(Succeed())
+		_, err = networkClassesClient.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassId}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+		networkClassId = ""
+		Consistently(expectGlobalAbsence, 5*time.Second, time.Second).Should(Succeed())
 	})
 
 	It("sets DefaultNetworkingReady=True/NoDefaultNetworking when no default NetworkClass has defaults", func(ctx context.Context) {
@@ -728,12 +994,69 @@ func createDefaultNetworkClass(
 	return response.GetObject().GetId()
 }
 
+type defaultNetworkingCleanupSummary struct {
+	SchemaVersion         int    `json:"schema_version"`
+	TotalNS               int64  `json:"total_ns"`
+	DisableDefaultsNS     int64  `json:"disable_defaults_ns"`
+	SetupNS               int64  `json:"setup_ns"`
+	ListTenantsNS         int64  `json:"list_tenants_ns"`
+	TenantSweepNS         int64  `json:"tenant_sweep_ns"`
+	DeleteCallsNS         int64  `json:"delete_calls_ns"`
+	WaitNS                int64  `json:"wait_ns"`
+	TenantsListed         int    `json:"tenants_listed"`
+	TenantsStarted        int    `json:"tenants_started"`
+	TenantsCompleted      int    `json:"tenants_completed"`
+	TenantsWithoutPending int    `json:"tenants_without_pending"`
+	DeleteAttempts        int    `json:"delete_attempts"`
+	PendingResponses      int    `json:"pending_responses"`
+	Outcome               string `json:"outcome"`
+	LastStage             string `json:"last_stage"`
+}
+
 // cleanupDefaultNetworkingForAllTenants removes controller-owned default
 // resources created while the test NetworkClass was active. The integration
 // service starts with persistent test tenants, so deleting only the tenant
 // created by an individual spec leaves other VirtualNetworks referencing the
 // singleton NetworkClass.
-func cleanupDefaultNetworkingForAllTenants(ctx context.Context, networkClassID string) error {
+func cleanupDefaultNetworkingForAllTenants(ctx context.Context, networkClassID string) (resultErr error) {
+	sweepStats := &fixturecleanup.Stats{}
+	summary := defaultNetworkingCleanupSummary{SchemaVersion: 1, Outcome: "interrupted", LastStage: "setup"}
+	totalStarted := time.Now()
+	phaseStarted := totalStarted
+	if networkClassID != "" {
+		summary.LastStage = "disable_defaults"
+	}
+	defer func() {
+		summary.TenantsStarted = sweepStats.TenantsStarted
+		summary.TenantsCompleted = sweepStats.TenantsCompleted
+		summary.TenantsWithoutPending = sweepStats.TenantsWithoutPending
+		summary.DeleteAttempts = sweepStats.DeleteAttempts
+		summary.PendingResponses = sweepStats.PendingResponses
+		summary.DeleteCallsNS = sweepStats.DeleteCallsNS
+		summary.WaitNS = sweepStats.WaitNS
+		elapsed := time.Since(phaseStarted).Nanoseconds()
+		switch summary.LastStage {
+		case "disable_defaults":
+			summary.DisableDefaultsNS += elapsed
+		case "setup":
+			summary.SetupNS += elapsed
+		case "list_tenants":
+			summary.ListTenantsNS += elapsed
+		case "tenant_sweep":
+			summary.TenantSweepNS += elapsed
+		}
+		summary.TotalNS = time.Since(totalStarted).Nanoseconds()
+		if resultErr != nil {
+			summary.Outcome = "error"
+		} else if summary.LastStage == "complete" {
+			summary.Outcome = "success"
+		}
+		_, reporterConfig := GinkgoConfiguration()
+		if reporterConfig.JSONReport != "" {
+			reporting.AddReportEntry("default-networking-cleanup", summary, reporting.ReportEntryVisibilityNever)
+		}
+	}()
+
 	// Stop the tenant controller from recreating defaults while this fixture is
 	// being torn down. It reconciles every synced tenant while the NetworkClass
 	// still contains defaults, so deleting resources first races with Ensure.
@@ -764,6 +1087,9 @@ func cleanupDefaultNetworkingForAllTenants(ctx context.Context, networkClassID s
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
+		summary.DisableDefaultsNS += time.Since(phaseStarted).Nanoseconds()
+		summary.LastStage = "setup"
+		phaseStarted = time.Now()
 	}
 
 	store, err := auth.NewMemoryTokenStore().SetLogger(logger).Build()
@@ -794,36 +1120,29 @@ func cleanupDefaultNetworkingForAllTenants(ctx context.Context, networkClassID s
 		return fmt.Errorf("build default networking manager: %w", err)
 	}
 	tenantsClient := privatev1.NewTenantsClient(tool.InternalView().AdminConn())
+	summary.SetupNS += time.Since(phaseStarted).Nanoseconds()
+	summary.LastStage = "list_tenants"
+	phaseStarted = time.Now()
 	tenants, err := tenantsClient.List(ctx, privatev1.TenantsListRequest_builder{}.Build())
 	if err != nil {
 		return fmt.Errorf("list tenants for default networking cleanup: %w", err)
 	}
+	summary.ListTenantsNS += time.Since(phaseStarted).Nanoseconds()
+	summary.LastStage = "tenant_sweep"
+	phaseStarted = time.Now()
+	summary.TenantsListed = len(tenants.GetItems())
 
+	tenantNames := make([]string, 0, len(tenants.GetItems()))
 	for _, tenant := range tenants.GetItems() {
-		tenantName := tenant.GetMetadata().GetName()
-		cleanupCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		ticker := time.NewTicker(time.Second)
-		for {
-			err = manager.Delete(cleanupCtx, tenantName)
-			if err == nil {
-				break
-			}
-			if !errors.Is(err, defaultnetworking.ErrResourcesDeleting) {
-				cancel()
-				ticker.Stop()
-				return fmt.Errorf("delete default networking for tenant %q: %w", tenantName, err)
-			}
-			select {
-			case <-cleanupCtx.Done():
-				cancel()
-				ticker.Stop()
-				return fmt.Errorf("wait for default networking deletion for tenant %q: %w", tenantName, cleanupCtx.Err())
-			case <-ticker.C:
-			}
-		}
-		cancel()
-		ticker.Stop()
+		tenantNames = append(tenantNames, tenant.GetMetadata().GetName())
 	}
+	if err := fixturecleanup.Drain(ctx, tenantNames, manager.Delete, func(err error) bool {
+		return errors.Is(err, defaultnetworking.ErrResourcesDeleting)
+	}, sweepStats); err != nil {
+		return err
+	}
+	summary.TenantSweepNS += time.Since(phaseStarted).Nanoseconds()
+	summary.LastStage = "complete"
 	return nil
 }
 

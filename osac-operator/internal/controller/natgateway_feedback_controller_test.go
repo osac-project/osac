@@ -20,6 +20,7 @@ import (
 	"context"
 	"net"
 	"sync"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -28,6 +29,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -541,6 +544,89 @@ var _ = Describe("NATGatewayFeedbackController", func() {
 
 			Expect(mockServer.updates).To(BeEmpty())
 		})
+	})
+})
+
+var _ = Describe("syncNATGatewayDelete", func() {
+	It("dates a failed gateway's report at the CR's recorded transition time", func() {
+		remote := &privatev1.NATGateway{Id: "natgateway-del-failed", Status: &privatev1.NATGatewayStatus{}}
+		recorded := metav1.NewTime(time.Unix(1000, 0))
+		deletedAt := metav1.NewTime(time.Unix(2000, 0))
+		cr := &v1alpha1.NATGateway{
+			ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &deletedAt},
+			Status:     v1alpha1.NATGatewayStatus{Phase: v1alpha1.NATGatewayPhaseFailed, StateTransitionTime: &recorded},
+		}
+
+		Expect(syncNATGatewayDelete(context.Background(), cr, remote)).To(Succeed())
+
+		Expect(remote.GetStatus().GetStateTransitionTime().AsTime().Equal(recorded.Time)).To(BeTrue())
+	})
+
+	It("dates the forced DELETING of a pre-deletion phase at the deletion timestamp", func() {
+		// The recorded time dates the Ready phase, not the deletion: reporting
+		// DELETING at it would end billing at the Ready time and erase the span
+		// up to the deletion.
+		remote := &privatev1.NATGateway{Id: "natgateway-del-ready", Status: &privatev1.NATGatewayStatus{}}
+		recorded := metav1.NewTime(time.Unix(1000, 0))
+		deletedAt := metav1.NewTime(time.Unix(2000, 0))
+		cr := &v1alpha1.NATGateway{
+			ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &deletedAt},
+			Status:     v1alpha1.NATGatewayStatus{Phase: v1alpha1.NATGatewayPhaseReady, StateTransitionTime: &recorded},
+		}
+
+		Expect(syncNATGatewayDelete(context.Background(), cr, remote)).To(Succeed())
+
+		Expect(remote.GetStatus().GetStateTransitionTime().AsTime().Equal(deletedAt.Time)).To(BeTrue())
+	})
+
+	It("dates the forced DELETING at the later of the status time and the deletion timestamp", func() {
+		// A reconciler status write can land after the delete request, putting
+		// the CR's transition time past the deletion timestamp. Fulfillment
+		// rejects a change whose time is not later than the stored one, so the
+		// report must carry the later time — the status time — not the
+		// deletion timestamp.
+		remote := &privatev1.NATGateway{Id: "natgateway-del-late", Status: &privatev1.NATGatewayStatus{}}
+		deletedAt := metav1.NewTime(time.Unix(2000, 0))
+		statusAt := metav1.NewTime(time.Unix(3000, 0))
+		cr := &v1alpha1.NATGateway{
+			ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &deletedAt},
+			Status:     v1alpha1.NATGatewayStatus{Phase: v1alpha1.NATGatewayPhaseDeleting, StateTransitionTime: &statusAt},
+		}
+
+		Expect(syncNATGatewayDelete(context.Background(), cr, remote)).To(Succeed())
+
+		Expect(remote.GetStatus().GetStateTransitionTime().AsTime().Equal(statusAt.Time)).To(BeTrue())
+	})
+
+	It("dates the change at the deletion timestamp when the CR status carries no time", func() {
+		remote := &privatev1.NATGateway{Id: "natgateway-del-fallback", Status: &privatev1.NATGatewayStatus{}}
+		deletedAt := metav1.NewTime(time.Unix(2000, 0))
+		cr := &v1alpha1.NATGateway{
+			ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &deletedAt},
+			Status:     v1alpha1.NATGatewayStatus{Phase: v1alpha1.NATGatewayPhaseReady},
+		}
+
+		Expect(syncNATGatewayDelete(context.Background(), cr, remote)).To(Succeed())
+
+		Expect(remote.GetStatus().GetStateTransitionTime().AsTime().Equal(deletedAt.Time)).To(BeTrue())
+	})
+
+	It("keeps the remote's stored time when neither the CR nor its deletion carries one", func() {
+		remote := &privatev1.NATGateway{Id: "natgateway-del-remote", Status: &privatev1.NATGatewayStatus{}}
+		original := timestamppb.Now()
+		remote.GetStatus().SetStateTransitionTime(original)
+
+		Expect(syncNATGatewayDelete(context.Background(), &v1alpha1.NATGateway{}, remote)).To(Succeed())
+
+		Expect(proto.Equal(remote.GetStatus().GetStateTransitionTime(), original)).To(BeTrue())
+	})
+
+	It("rejects a gateway with no time anywhere", func() {
+		remote := &privatev1.NATGateway{Id: "natgateway-del-none", Status: &privatev1.NATGatewayStatus{}}
+
+		Expect(syncNATGatewayDelete(context.Background(), &v1alpha1.NATGateway{}, remote)).To(
+			MatchError(ContainSubstring("no state transition time")),
+		)
 	})
 })
 

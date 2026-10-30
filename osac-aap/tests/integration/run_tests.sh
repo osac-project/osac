@@ -66,6 +66,7 @@ ROLE_TESTS=(
   "agentless_net_external_ip_pool"
   "agentless_net_external_ip"
   "agentless_net_external_ip_attachment"
+  "agentless_net_nat_gateway"
   "agentless_net_subnet"
   "agentless_net_attachment"
   "compute_instance_delete_vmi_recovery"
@@ -82,6 +83,7 @@ ROLE_SCENARIO_TESTS=(
   "cluster_working_namespace:test_predefined"
   "cluster_working_namespace:test_found"
   "compute_instance_create:sysprep_secret_copy"
+  "compute_instance_create:storage_tier_mapping"
 )
 
 echo "=== Running Workflow Integration Tests ==="

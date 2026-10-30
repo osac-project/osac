@@ -85,6 +85,12 @@ spec:
           - name: OSAC_CLUSTER_WORKERS_JOINING_STALL_THRESHOLD_OVERRIDES
             value: {{ .Values.stall.workersJoiningByInstanceType | toJson | quote }}
           {{- end }}
+          - name: OSAC_CLUSTER_UPGRADE_PENDING_TIMEOUT
+            value: {{ .Values.upgradeTimeouts.pending | quote }}
+          - name: OSAC_CLUSTER_UPGRADE_CONTROL_PLANE_TIMEOUT
+            value: {{ .Values.upgradeTimeouts.controlPlane | quote }}
+          - name: OSAC_CLUSTER_UPGRADE_NODE_POOL_PER_NODE_TIMEOUT
+            value: {{ .Values.upgradeTimeouts.nodePoolPerNode | quote }}
           {{- if .Values.networkManagers.capabilitiesSyncInterval }}
           - name: OSAC_NETWORK_CLASS_SYNC_INTERVAL
             value: {{ .Values.networkManagers.capabilitiesSyncInterval | quote }}

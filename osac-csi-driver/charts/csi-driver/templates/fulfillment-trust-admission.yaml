@@ -475,9 +475,14 @@ metadata:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "0"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-output-log-policy": hook-failed
     {{- toYaml $attribution | nindent 4 }}
 spec:
   backoffLimit: 3
+  # Cumulative across retries: four attempts of the 300s rollout wait plus
+  # backoff is about 21 minutes. Stay below the 40m helm --timeout of the
+  # install guide so this Job fails with its own log before Helm gives up.
+  activeDeadlineSeconds: 1800
   template:
     metadata:
       annotations:
@@ -536,9 +541,11 @@ metadata:
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-output-log-policy": hook-failed
     {{- toYaml $attribution | nindent 4 }}
 spec:
   backoffLimit: 3
+  activeDeadlineSeconds: 600
   template:
     metadata:
       annotations:

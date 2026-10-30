@@ -11,9 +11,9 @@
   "ssoSessionMaxLifespan": 36000,
   "ssoSessionIdleTimeoutRememberMe": 0,
   "ssoSessionMaxLifespanRememberMe": 0,
-  "offlineSessionIdleTimeout": 2592000,
-  "offlineSessionMaxLifespanEnabled": false,
-  "offlineSessionMaxLifespan": 5184000,
+  "offlineSessionIdleTimeout": 14400,
+  "offlineSessionMaxLifespanEnabled": true,
+  "offlineSessionMaxLifespan": 86400,
   "clientSessionIdleTimeout": 0,
   "clientSessionMaxLifespan": 0,
   "clientOfflineSessionIdleTimeout": 0,
@@ -1092,7 +1092,7 @@
       "clientId": "osac-ui",
       "name": "OSAC UI",
       "description": "OSAC web console",
-      "rootUrl": "http://ui.osac.localhost:8080",
+      "rootUrl": "__OSAC_UI_URL__",
       "adminUrl": "",
       "baseUrl": "/",
       "surrogateAuthRequired": false,
@@ -1100,11 +1100,11 @@
       "alwaysDisplayInConsole": false,
       "clientAuthenticatorType": "client-secret",
       "redirectUris": [
-        "http://ui.osac.localhost:8080/callback",
-        "http://ui.osac.localhost:8080/*"
+        "__OSAC_UI_URL__/callback",
+        "__OSAC_UI_URL__/*"
       ],
       "webOrigins": [
-        "http://ui.osac.localhost:8080"
+        "__OSAC_UI_URL__"
       ],
       "notBefore": 0,
       "bearerOnly": false,

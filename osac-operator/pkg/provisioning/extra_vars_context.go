@@ -38,6 +38,7 @@ const (
 	addOnOperatorNameKey
 	externalIPPoolKey
 	externalIPAttachmentContextKey
+	natGatewayContextKey
 )
 
 // TierDefinition is the flat, AAP-schema-shaped representation of a storage tier
@@ -108,6 +109,47 @@ type ExternalIPAttachmentContext struct {
 	Target         ExternalIPAttachmentTargetContext         `json:"target"`
 	Subnet         ExternalIPAttachmentSubnetContext         `json:"subnet"`
 	VirtualNetwork ExternalIPAttachmentVirtualNetworkContext `json:"virtual_network"`
+}
+
+// NATGatewayContext is the controller-resolved dependency snapshot supplied to
+// NATGateway v1 jobs.
+type NATGatewayContext struct {
+	ExternalIP     NATGatewayExternalIPContext     `json:"external_ip"`
+	VirtualNetwork NATGatewayVirtualNetworkContext `json:"virtual_network"`
+}
+
+type NATGatewayExternalIPContext struct {
+	Name          string `json:"name"`
+	Namespace     string `json:"namespace"`
+	FulfillmentID string `json:"fulfillment_id"`
+	KubernetesUID string `json:"kubernetes_uid"`
+	TenantID      string `json:"tenant_id"`
+	Address       string `json:"address"`
+	State         string `json:"state"`
+	Phase         string `json:"phase"`
+}
+
+type NATGatewayVirtualNetworkContext struct {
+	Name          string `json:"name"`
+	Namespace     string `json:"namespace"`
+	FulfillmentID string `json:"fulfillment_id"`
+	KubernetesUID string `json:"kubernetes_uid"`
+	TenantID      string `json:"tenant_id"`
+	IPv4CIDR      string `json:"ipv4_cidr"`
+	Phase         string `json:"phase"`
+}
+
+// WithNATGatewayContext returns a context carrying the resolved dependency
+// snapshot for a NATGateway job.
+func WithNATGatewayContext(ctx context.Context, value NATGatewayContext) context.Context {
+	return context.WithValue(ctx, natGatewayContextKey, value)
+}
+
+// NATGatewayContextFromContext retrieves the resolved snapshot, or its zero
+// value when the job does not use NATGateway v1.
+func NATGatewayContextFromContext(ctx context.Context) NATGatewayContext {
+	value, _ := ctx.Value(natGatewayContextKey).(NATGatewayContext)
+	return value
 }
 
 type ExternalIPAttachmentExternalIPContext struct {

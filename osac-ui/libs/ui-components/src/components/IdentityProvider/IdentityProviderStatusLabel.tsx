@@ -36,10 +36,6 @@ const identityProviderPhaseMap = (
 const IdentityProviderStatusLabel = ({ idp }: IdentityProviderStatusLabelProps) => {
   const { t } = useTranslation();
 
-  if (!idp.spec?.enabled) {
-    return <ResourceStatusLabel text={t('Disabled')} status="unspecified" />;
-  }
-
   const phaseMap = identityProviderPhaseMap(t);
 
   const status =

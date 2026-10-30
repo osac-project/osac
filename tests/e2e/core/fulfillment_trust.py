@@ -67,6 +67,7 @@ def assert_cluster_trust(
         retries=120,
         delay=10,
         description=f"ClusterOrder {order_name} fulfillment trust ready",
+        retry_on_error=True,
     )
     assert _condition(order).get("reason") == "TrustBundleSynchronized"
     bundle = k8s.get_json(resource="configmap", name="ca-bundle")["data"]["bundle.pem"]
@@ -128,6 +129,7 @@ def assert_cluster_trust(
             retries=60,
             delay=5,
             description=f"tenant CSI rollout for ClusterOrder {order_name}",
+            retry_on_error=True,
         )
     return digest
 

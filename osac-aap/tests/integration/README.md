@@ -14,6 +14,13 @@ This creates a Kind cluster, installs CRDs, runs all tests, and cleans up. The
 storage target-routing test also creates an isolated second Kind cluster and
 removes it at the end of the test.
 
+Storage target-routing covers Tenant create/delete and compute-instance JIT
+StorageClass provisioning against distinct APIs. Compute checks include unset
+and empty remote configuration, workload targeting, a misplaced management
+StorageClass, repeated provisioning, and supplied kubeconfig preservation. The
+compute template asserts resolved storage classes without provisioning a VM;
+these checks do not exercise a deployed AAP or storage provider lifecycle.
+
 ## Current Status: 10/14 Tests Passing
 
 ### ✅ Passing Tests (10)

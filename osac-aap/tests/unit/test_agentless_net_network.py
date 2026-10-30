@@ -1,4 +1,5 @@
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -257,6 +258,138 @@ def test_command_failure_does_not_disclose_output_or_arguments(monkeypatch, fail
     expected = "ip could not run" if failure == "oserror" else "ip failed (exit status 2)"
     assert str(result.value) == expected
     assert all(value not in str(result.value) for value in sensitive.split())
+
+
+def test_ensure_iptables_rules_uses_one_snapshot_for_many_rules():
+    existing = [
+        ["-m", "comment", "--comment", f"existing-{index}", "-j", "ACCEPT"]
+        for index in range(100)
+    ]
+    desired = [
+        existing[50],
+        ["-s", "10.0.1.0/24", "-j", "SNAT", "--to-source", "198.51.100.10"],
+        ["-s", "10.0.2.0/24", "-j", "SNAT", "--to-source", "198.51.100.10"],
+    ]
+    commands = []
+
+    def run(command, check=True):
+        commands.append(command)
+        action_index = next(
+            (index for index, part in enumerate(command) if part in {"-S", "-A", "-C"}),
+            None,
+        )
+        assert action_index is not None
+        action = command[action_index]
+        chain = command[action_index + 1]
+        if action == "-S":
+            output = "\n".join(f"-A {chain} {shlex.join(rule)}" for rule in existing)
+            return completed(command, output)
+        if action == "-A":
+            existing.append(command[action_index + 2 :])
+            return completed(command)
+        raise AssertionError("bulk reconciliation must not run one -C check per rule")
+
+    changed = agentless_net_network.ensure_iptables_rules(
+        run, "nat", "POSTROUTING", desired, namespace="vn-test"
+    )
+
+    assert changed is True
+    assert sum("-S" in command for command in commands) == 1
+    assert sum("-A" in command for command in commands) == 2
+    assert all(command[:5] == ["ip", "netns", "exec", "vn-test", "iptables"] for command in commands)
+
+
+def test_ensure_iptables_rules_can_insert_missing_rules():
+    existing = [["-j", "RETURN"]]
+    desired = [["-s", "10.0.1.0/24", "-j", "SNAT", "--to-source", "198.51.100.10"]]
+    commands = []
+
+    def run(command, check=True):
+        commands.append(command)
+        action_index = next(
+            (index for index, part in enumerate(command) if part in {"-S", "-I"}),
+            None,
+        )
+        assert action_index is not None
+        action = command[action_index]
+        chain = command[action_index + 1]
+        if action == "-S":
+            output = "\n".join(f"-A {chain} {shlex.join(rule)}" for rule in existing)
+            return completed(command, output)
+        existing.insert(0, command[action_index + 3 :])
+        return completed(command)
+
+    changed = agentless_net_network.ensure_iptables_rules(
+        run, "nat", "POSTROUTING", desired, namespace="vn-test", insert=True
+    )
+
+    assert changed is True
+    assert existing == desired + [["-j", "RETURN"]]
+    assert sum("-S" in command for command in commands) == 1
+    assert sum("-I" in command for command in commands) == 1
+
+
+def test_ensure_iptables_rule_uses_shared_namespace_command_and_verifies_insert():
+    commands = []
+    present = False
+
+    def run(command, check=True):
+        nonlocal present
+        commands.append(command)
+        action_index = command.index("-C") if "-C" in command else command.index("-I")
+        if command[action_index] == "-C":
+            return completed(command, returncode=0 if present else 1)
+        present = True
+        return completed(command)
+
+    changed = agentless_net_network.ensure_iptables_rule(
+        run,
+        "filter",
+        "OSAC-TEST",
+        ["-j", "RETURN"],
+        namespace="vn-test",
+        insert=True,
+    )
+
+    assert changed is True
+    assert commands[0][:5] == ["ip", "netns", "exec", "vn-test", "iptables"]
+    insert_index = commands[1].index("-I")
+    assert commands[1][insert_index : insert_index + 3] == ["-I", "OSAC-TEST", "1"]
+    assert commands[2][commands[2].index("-C")] == "-C"
+
+
+def test_validate_ipv4_address_keeps_unspecified_policy_and_error_type():
+    class ProviderError(Exception):
+        pass
+
+    assert str(agentless_net_network.validate_ipv4_address("0.0.0.0", "NATGateway")) == "0.0.0.0"
+    with pytest.raises(ProviderError, match="ExternalIP must be canonical IPv4"):
+        agentless_net_network.validate_ipv4_address(
+            "0.0.0.0",
+            "ExternalIP",
+            reject_unspecified=True,
+            error_type=ProviderError,
+        )
+
+
+def test_parse_canonical_ipv4_network_rejects_invalid_and_wrong_family_inputs():
+    prefix = agentless_net_network.parse_canonical_ipv4_network(
+        "10.20.0.0/16", context="VirtualNetwork CIDR"
+    )
+    assert str(prefix) == "10.20.0.0/16"
+
+    with pytest.raises(TypeError, match="VirtualNetwork CIDR must be a string"):
+        agentless_net_network.parse_canonical_ipv4_network(None, context="VirtualNetwork CIDR")
+    with pytest.raises(ValueError, match="AgentlessNet VirtualNetworks require IPv4 CIDRs"):
+        agentless_net_network.parse_canonical_ipv4_network(
+            "2001:db8::/64",
+            context="VirtualNetwork CIDR",
+            wrong_family_message="AgentlessNet VirtualNetworks require IPv4 CIDRs",
+        )
+    with pytest.raises(ValueError):
+        agentless_net_network.parse_canonical_ipv4_network(
+            "10.20.0.1/16", context="VirtualNetwork CIDR"
+        )
 
 
 @pytest.mark.parametrize("remote_secret", ["", "remote-kubeconfig"])

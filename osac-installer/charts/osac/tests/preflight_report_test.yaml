@@ -1,0 +1,160 @@
+suite: "preflight report: hook ConfigMap, failure message, NOTES"
+templates:
+  - templates/preflight/report.yaml
+  - templates/NOTES.txt
+values:
+  - ../ci/default-values.yaml
+release:
+  name: osac
+  namespace: osac
+  revision: 1
+capabilities:
+  apiVersions:
+    - apiextensions.k8s.io/v1/CustomResourceDefinition
+
+# Shared fixtures: a healthy OpenShift cluster, plus the variants the cases
+# swap in. Each case lists the objects of its cluster explicitly.
+x-fixtures:
+  scheme: &scheme
+    "v1/Namespace": {gvr: {version: v1, resource: namespaces}, namespaced: false}
+    "v1/Node": {gvr: {version: v1, resource: nodes}, namespaced: false}
+    "v1/Secret": {gvr: {version: v1, resource: secrets}, namespaced: true}
+    "v1/ConfigMap": {gvr: {version: v1, resource: configmaps}, namespaced: true}
+    "storage.k8s.io/v1/StorageClass": {gvr: {group: storage.k8s.io, version: v1, resource: storageclasses}, namespaced: false}
+    "apiextensions.k8s.io/v1/CustomResourceDefinition": {gvr: {group: apiextensions.k8s.io, version: v1, resource: customresourcedefinitions}, namespaced: false}
+    "config.openshift.io/v1/ClusterVersion": {gvr: {group: config.openshift.io, version: v1, resource: clusterversions}, namespaced: false}
+    "cert-manager.io/v1/ClusterIssuer": {gvr: {group: cert-manager.io, version: v1, resource: clusterissuers}, namespaced: false}
+    "kafka.strimzi.io/v1/Kafka": {gvr: {group: kafka.strimzi.io, version: v1, resource: kafkas}, namespaced: true}
+    "discovery.k8s.io/v1/EndpointSlice": {gvr: {group: discovery.k8s.io, version: v1, resource: endpointslices}, namespaced: true}
+    "metal3.io/v1alpha1/Provisioning": {gvr: {group: metal3.io, version: v1alpha1, resource: provisionings}, namespaced: false}
+  ns_kube: &ns_kube {kind: Namespace, apiVersion: v1, metadata: {name: kube-system}}
+  ns_osac: &ns_osac {kind: Namespace, apiVersion: v1, metadata: {name: osac}, status: {phase: Active}}
+  ns_osac_terminating: &ns_osac_terminating {kind: Namespace, apiVersion: v1, metadata: {name: osac}, status: {phase: Terminating}}
+  node_ok: &node_ok {kind: Node, apiVersion: v1, metadata: {name: n1}, status: {conditions: [{type: Ready, status: "True"}]}}
+  node_notready: &node_notready {kind: Node, apiVersion: v1, metadata: {name: n1}, status: {conditions: [{type: Ready, status: "False"}]}}
+  node_cordoned: &node_cordoned {kind: Node, apiVersion: v1, metadata: {name: n1}, spec: {unschedulable: true}, status: {conditions: [{type: Ready, status: "True"}]}}
+  node_tainted: &node_tainted {kind: Node, apiVersion: v1, metadata: {name: n1}, spec: {taints: [{key: node-role.kubernetes.io/control-plane, effect: NoSchedule}]}, status: {conditions: [{type: Ready, status: "True"}]}}
+  sc_default: &sc_default {kind: StorageClass, apiVersion: storage.k8s.io/v1, metadata: {name: fast, annotations: {storageclass.kubernetes.io/is-default-class: "true"}}}
+  sc_plain: &sc_plain {kind: StorageClass, apiVersion: storage.k8s.io/v1, metadata: {name: slow}}
+  crd_certmgr: &crd_certmgr {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: certificates.cert-manager.io}}
+  crd_kubevirt: &crd_kubevirt {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: kubevirts.kubevirt.io}}
+  crd_mce: &crd_mce {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: multiclusterengines.multicluster.openshift.io}}
+  crd_acm: &crd_acm {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: multiclusterhubs.operator.open-cluster-management.io}}
+  crd_aap: &crd_aap {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: ansibleautomationplatforms.aap.ansible.com}, status: {conditions: [{type: Established, status: "True"}]}}
+  crd_aap_pending: &crd_aap_pending {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: ansibleautomationplatforms.aap.ansible.com}, status: {conditions: [{type: Established, status: "False", reason: Installing}]}}
+  crd_bmh: &crd_bmh {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: baremetalhosts.metal3.io}}
+  prov_watch_all: &prov_watch_all {kind: Provisioning, apiVersion: metal3.io/v1alpha1, metadata: {name: provisioning-configuration}, spec: {watchAllNamespaces: true}}
+  prov_watch_ns: &prov_watch_ns {kind: Provisioning, apiVersion: metal3.io/v1alpha1, metadata: {name: provisioning-configuration}, spec: {watchAllNamespaces: false}}
+  cv_ok: &cv_ok {kind: ClusterVersion, apiVersion: config.openshift.io/v1, metadata: {name: version}, status: {desired: {version: 4.22.5}}}
+  cv_old: &cv_old {kind: ClusterVersion, apiVersion: config.openshift.io/v1, metadata: {name: version}, status: {desired: {version: 4.21.3}}}
+  issuer_ok: &issuer_ok {kind: ClusterIssuer, apiVersion: cert-manager.io/v1, metadata: {name: default-ca}, status: {conditions: [{type: Ready, status: "True"}]}}
+  issuer_notready: &issuer_notready {kind: ClusterIssuer, apiVersion: cert-manager.io/v1, metadata: {name: default-ca}, status: {conditions: [{type: Ready, status: "False", reason: ErrGetKeyPair}]}}
+  cm_cabundle: &cm_cabundle {kind: ConfigMap, apiVersion: v1, metadata: {name: ca-bundle, namespace: osac}}
+  kafka_ok: &kafka_ok {kind: Kafka, apiVersion: kafka.strimzi.io/v1, metadata: {name: osac-kafka, namespace: osac-kafka}, status: {conditions: [{type: Ready, status: "True"}]}}
+  kafka_notready: &kafka_notready {kind: Kafka, apiVersion: kafka.strimzi.io/v1, metadata: {name: osac-kafka, namespace: osac-kafka}, status: {conditions: [{type: Ready, status: "False"}]}}
+  eps_postgres: &eps_postgres {kind: EndpointSlice, apiVersion: discovery.k8s.io/v1, metadata: {name: postgres-abc, namespace: osac-infra, labels: {kubernetes.io/service-name: postgres}}, endpoints: [{addresses: ["10.0.0.5"], conditions: {ready: true}}]}
+  eps_postgres_notready: &eps_postgres_notready {kind: EndpointSlice, apiVersion: discovery.k8s.io/v1, metadata: {name: postgres-abc, namespace: osac-infra, labels: {kubernetes.io/service-name: postgres}}, endpoints: [{addresses: ["10.0.0.5"], conditions: {ready: false}}]}
+  sec_ctrl: &sec_ctrl {kind: Secret, apiVersion: v1, metadata: {name: fulfillment-controller-credentials, namespace: osac}, data: {client-id: YQ==, client-secret: Yg==}}
+  sec_ctrl_partial: &sec_ctrl_partial {kind: Secret, apiVersion: v1, metadata: {name: fulfillment-controller-credentials, namespace: osac}, data: {client-id: YQ==}}
+  sec_vault: &sec_vault {kind: Secret, apiVersion: v1, metadata: {name: vault-credentials, namespace: osac}, data: {client-secret: Yg==}}
+  sec_license: &sec_license {kind: Secret, apiVersion: v1, metadata: {name: config-as-code-manifest-ig, namespace: osac, labels: {osac.openshift.io/project: osac-aap}}, data: {license.zip: Yg==}}
+  sec_license_nolabel: &sec_license_nolabel {kind: Secret, apiVersion: v1, metadata: {name: config-as-code-manifest-ig, namespace: osac}, data: {license.zip: Yg==}}
+  # url: postgres://svc:S3cr3tPw@db.example.com:5432/osac?sslmode=require
+  sec_mydb: &sec_mydb {kind: Secret, apiVersion: v1, metadata: {name: my-db, namespace: osac}, data: {url: cG9zdGdyZXM6Ly9zdmM6UzNjcjN0UHdAZGIuZXhhbXBsZS5jb206NTQzMi9vc2FjP3NzbG1vZGU9cmVxdWlyZQ==}}
+  sec_mydb_bad: &sec_mydb_bad {kind: Secret, apiVersion: v1, metadata: {name: my-db, namespace: osac}, data: {url: bm90LWEtdXJs}}
+  eps_other: &eps_other {kind: EndpointSlice, apiVersion: discovery.k8s.io/v1, metadata: {name: other-abc, namespace: osac-infra, labels: {kubernetes.io/service-name: other}}, endpoints: [{addresses: ["10.0.0.9"], conditions: {ready: true}}]}
+  crd_clusterissuers: &crd_clusterissuers {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: clusterissuers.cert-manager.io}, status: {conditions: [{type: Established, status: "True"}]}}
+  crd_kafkas: &crd_kafkas {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: kafkas.kafka.strimzi.io}, status: {conditions: [{type: Established, status: "True"}]}}
+  crd_clusterversions: &crd_clusterversions {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: clusterversions.config.openshift.io}, status: {conditions: [{type: Established, status: "True"}]}}
+  crd_scc: &crd_scc {kind: CustomResourceDefinition, apiVersion: apiextensions.k8s.io/v1, metadata: {name: securitycontextconstraints.security.openshift.io}, status: {conditions: [{type: Established, status: "True"}]}}
+  rel_v1_deployed: &rel_v1_deployed {kind: Secret, apiVersion: v1, metadata: {name: sh.helm.release.v1.osac.v1, namespace: osac, labels: {name: osac, owner: helm, status: deployed, version: "1"}}}
+  rel_v1_failed: &rel_v1_failed {kind: Secret, apiVersion: v1, metadata: {name: sh.helm.release.v1.osac.v1, namespace: osac, labels: {name: osac, owner: helm, status: failed, version: "1"}}}
+tests:
+  - it: "the report is a pre-install and pre-upgrade hook that is kept after success"
+    template: templates/preflight/report.yaml
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - equal: {path: metadata.name, value: osac-preflight-report}
+      - equal: {path: 'metadata.annotations["helm.sh/hook"]', value: "pre-install,pre-upgrade"}
+      - equal: {path: 'metadata.annotations["helm.sh/hook-weight"]', value: "-100"}
+      - equal: {path: 'metadata.annotations["helm.sh/hook-delete-policy"]', value: before-hook-creation}
+      - equal: {path: 'metadata.labels["osac.openshift.io/preflight-report"]', value: "true"}
+      - equal: {path: metadata.namespace, value: osac}
+      - exists: {path: 'data["render.json"]'}
+  - it: "the report ConfigMap carries a single JSON document starting at the report apiVersion"
+    template: templates/preflight/report.yaml
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '^\{"apiVersion":"preflight.osac.openshift.io/v1alpha1".*\}$'
+      - notMatchRegex:
+          path: 'data["render.json"]'
+          pattern: '\n'
+  - it: "a failed render prints the JSON line at column 0 with the same report"
+    template: templates/preflight/report.yaml
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_plain, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: '(?m)^OSAC-PREFLIGHT-JSON v1: \{"apiVersion":"preflight.osac.openshift.io/v1alpha1".*"blocking":1.*\}$'
+      - failedTemplate:
+          errorPattern: 'To skip a check: --set preflight.skip.<id>="<reason>"'
+  - it: "NOTES lists preflight warnings and the report location after a passing install"
+    template: templates/NOTES.txt
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_old, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - matchRegexRaw:
+          pattern: 'Preflight warnings \(the install went ahead\):\n  - ocp-version: OpenShift 4.21.3'
+      - matchRegexRaw:
+          pattern: 'kubectl get configmap osac-preflight-report -n osac'
+  - it: "NOTES has no warnings section when everything passes"
+    template: templates/NOTES.txt
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - notMatchRegexRaw:
+          pattern: 'Preflight warnings'

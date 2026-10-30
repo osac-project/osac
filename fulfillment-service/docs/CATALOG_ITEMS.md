@@ -325,7 +325,16 @@ is created or when its `fields` are updated.
 
 At BareMetalInstance creation, a locked value is applied, or an editable
 default is applied when the caller omitted `spec.disk_image`, before normal BMI
-DiskImage validation. A caller-provided value overrides an editable default.
+DiskImage validation. A caller-provided value overrides an editable default;
+supplying a locked field is rejected even if its value matches.
+
+CatalogItem Create/Update also checks architecture when the image is locked or
+defaulted and the type is locked, defaulted, or inherited from the template
+without an instance-type policy. Open choices are checked at instance Create.
+Image architecture removals and template type changes protect these concrete
+pairs, including unpublished catalogs across tenants. See
+[architecture compatibility](../../docs/guides/developer/baremetalinstance-guide.md#architecture-compatibility)
+for errors, corrections, and the immutable instance-selection rules.
 
 The referenced DiskImage must belong to the CatalogItem's tenant or the shared
 tenant. A cross-tenant reference is rejected with `InvalidArgument` when it

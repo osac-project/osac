@@ -1,4 +1,3 @@
 ---
-- name: Report unimplemented AgentlessNet operation
-  ansible.builtin.fail:
-    msg: "NotImplemented: agentless_net resource operations are not implemented."
+- name: Ensure AgentlessNet NATGateway SNAT state
+  ansible.builtin.include_tasks: _nat_gateway.yaml

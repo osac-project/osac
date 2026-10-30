@@ -1,0 +1,89 @@
+{{- /*
+Default meter definitions, shipped as rule revision 0001. Revisions are
+immutable: a change is a new ConfigMap with the next number and a future
+effective_at, never an edit of this one. The ConfigMap is natively immutable
+(its data cannot change), and the admission policy below blocks deleting it.
+
+The ConfigMap, the policy, and its binding carry helm.sh/resource-policy: keep
+so a release uninstall leaves all three in place. Billing history cannot be
+lost by uninstalling the release; removing it is deliberately manual: delete
+the binding and the policy first, then the ConfigMap.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osac-metering-rules-0001
+  namespace: {{ .Release.Namespace }}
+  # Only static labels: the ConfigMap is immutable, so Kubernetes rejects any
+  # update, including one that only changes a label or an annotation. Helm's
+  # chart label carries the chart version and changes on every upgrade, and a
+  # checksum annotation would change whenever its source does; either would
+  # fail the upgrade at apply time. The resource-policy annotation is static,
+  # so it does not change after the first install either.
+  labels:
+    app.kubernetes.io/name: {{ include "osac-metering.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/component: metering
+    osac.openshift.io/metering-rules: ""
+  annotations:
+    "helm.sh/resource-policy": keep
+immutable: true
+data:
+  effective_at: "1970-01-01T00:00:00Z"
+  meters.yaml: |
+{{ .Files.Get "rules/0001-meters.yaml" | indent 4 }}
+---
+{{- /*
+Rule revisions are the record of what was billed under which rules. Deleting
+one would make metering refuse to start, so deletion is denied. Editing is
+impossible: the ConfigMap is natively immutable, so the policy only needs to
+match DELETE, where the incoming object is null and oldObject carries the
+ConfigMap being deleted. Requires Kubernetes 1.30 or later.
+
+The policy and its binding are kept on uninstall together with the ConfigMap,
+so a release uninstall cannot remove the protection and then delete the
+history. Removing a revision is always a manual, two-step operation.
+*/}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "osac-metering.fullname" . }}-protect-rules
+  labels:
+    {{- include "osac-metering.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metering
+  annotations:
+    "helm.sh/resource-policy": keep
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    # The policy is cluster-scoped: without a namespace constraint one release
+    # would block deletion of every release's rule ConfigMaps. Every namespace
+    # carries its own name as a label since Kubernetes 1.22.
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace }}
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["DELETE"]
+        resources: ["configmaps"]
+  matchConditions:
+    - name: only-rule-revisions
+      expression: "oldObject.metadata.name.startsWith('osac-metering-rules-')"
+  validations:
+    - expression: "false"
+      message: "metering rule revisions must not be deleted"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "osac-metering.fullname" . }}-protect-rules
+  labels:
+    {{- include "osac-metering.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metering
+  annotations:
+    "helm.sh/resource-policy": keep
+spec:
+  policyName: {{ include "osac-metering.fullname" . }}-protect-rules
+  validationActions: ["Deny"]

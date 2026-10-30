@@ -4,9 +4,8 @@
 # dev-full needs a *rootful* Podman engine on Linux for KubeVirt's /dev/kvm access
 # and the TopoLVM loop device. This script
 # encapsulates the runtime detection the old kind-dev/setup.sh did:
-#   - macOS  : Docker Desktop or Podman Desktop (auto-detected)
-#   - Linux host     : rootful podman via sudo or an accessible rootful socket
-#   - Linux Distrobox: rootful podman via the host socket (/run/podman/podman.sock)
+#   - macOS     : Docker Desktop or Podman Desktop (auto-detected)
+#   - Linux host: rootful podman via sudo or an accessible rootful socket
 #   - Override: KIND_EXPERIMENTAL_PROVIDER=docker|podman
 #
 # It is BOTH:
@@ -27,6 +26,7 @@ set -euo pipefail
 ROOTFUL_SOCKET="${ROOTFUL_SOCKET:-/run/podman/podman.sock}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 TOPOLVM_RUNTIME_DIR="/var/lib/osac-dev-full/topolvm"
+TOPOLVM_BACKING_SIZE="${TOPOLVM_BACKING_SIZE:-20G}"
 TOPOLVM_LVMD_IMAGE="osac-dev/topolvm-lvmd:0.41.1-container-v2"
 TOPOLVM_LVMD_CONTAINER="osac-dev-full-topolvm-lvmd"
 TOPOLVM_LVM_BASE_DEVICE_ARGS=(
@@ -47,13 +47,6 @@ if command -v podman >/dev/null 2>&1; then
   KIND_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-podman}"
 else
   KIND_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-docker}"
-fi
-
-# Detect distrobox: podman is a host-exec wrapper, sudo can't reach it.
-if grep -qsw distrobox-host-exec "$(command -v podman 2>/dev/null)"; then
-  IN_DISTROBOX=true
-else
-  IN_DISTROBOX=false
 fi
 
 # ── Logging (stderr only) ────────────────────────────────────────────────────
@@ -78,15 +71,7 @@ detect_podman_mode() {
   [[ "$KIND_PROVIDER" == "podman" ]] || return 0
   [[ "$(uname -s)" == "Linux" ]] || return 0
 
-  if [[ "$IN_DISTROBOX" == "true" ]]; then
-    if [[ -S "$ROOTFUL_SOCKET" ]] && distrobox-host-exec env CONTAINER_HOST="unix://${ROOTFUL_SOCKET}" \
-         podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null | grep -q false; then
-      PODMAN_MODE="socket"
-      info "Using rootful Podman via ${ROOTFUL_SOCKET}"
-    else
-      PODMAN_MODE="rootless"
-    fi
-  elif [[ -S "$ROOTFUL_SOCKET" ]] && \
+  if [[ -S "$ROOTFUL_SOCKET" ]] && \
        CONTAINER_HOST="unix://${ROOTFUL_SOCKET}" podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null | grep -q false; then
     PODMAN_MODE="socket"
     info "Using rootful Podman via ${ROOTFUL_SOCKET}"
@@ -112,11 +97,7 @@ detect_podman_mode() {
   if [[ "${KIND_PROFILE:-}" == "dev-full" && "$PODMAN_MODE" != "socket" && "$PODMAN_MODE" != "sudo" && "$PODMAN_MODE" != "root" ]]; then
     err "Kind dev-full requires a reachable rootful Podman engine for the TopoLVM loop device and KubeVirt."
     err "A rootless Podman engine or the socket started by 'systemctl --user start podman.socket' is not sufficient."
-    if [[ "$IN_DISTROBOX" == "true" ]]; then
-      err "Ask the host administrator to enable ${ROOTFUL_SOCKET} for your user; see scripts/dev-full/manifests/podman-socket-rootful.conf."
-    else
-      err "Check your sudo permissions, or ask the host administrator to configure an accessible rootful socket at ${ROOTFUL_SOCKET}."
-    fi
+    err "Check your sudo permissions, or ask the host administrator to configure an accessible rootful socket at ${ROOTFUL_SOCKET}."
     exit 1
   fi
 }
@@ -128,19 +109,8 @@ kind_cmd() {
   if [[ "$KIND_PROVIDER" == "docker" || "$(uname -s)" == "Darwin" ]]; then
     KIND_EXPERIMENTAL_PROVIDER="${KIND_PROVIDER}" kind "$@"
   elif [[ "$PODMAN_MODE" == "socket" ]]; then
-    if [[ "$IN_DISTROBOX" == "true" ]]; then
-      systemd-run --scope --user \
-        env KIND_EXPERIMENTAL_PROVIDER="${KIND_PROVIDER}" \
-        CONTAINER_HOST="unix://${ROOTFUL_SOCKET}" \
-        kind "$@"
-    else
-      KIND_EXPERIMENTAL_PROVIDER="${KIND_PROVIDER}" \
-        CONTAINER_HOST="unix://${ROOTFUL_SOCKET}" kind "$@"
-    fi
-  elif [[ "$IN_DISTROBOX" == "true" ]]; then
-    systemd-run --scope --user \
-      env KIND_EXPERIMENTAL_PROVIDER="${KIND_PROVIDER}" \
-      kind "$@"
+    KIND_EXPERIMENTAL_PROVIDER="${KIND_PROVIDER}" \
+      CONTAINER_HOST="unix://${ROOTFUL_SOCKET}" kind "$@"
   elif [[ "$PODMAN_MODE" == "sudo" ]]; then
     sudo_cmd KIND_EXPERIMENTAL_PROVIDER="${KIND_PROVIDER}" kind "$@"
   else
@@ -159,13 +129,7 @@ container_cmd() {
     # sudo would select root's connection instead and cannot reach that socket.
     podman "$@"
   elif [[ "$PODMAN_MODE" == "socket" ]]; then
-    if [[ "$IN_DISTROBOX" == "true" ]]; then
-      distrobox-host-exec env CONTAINER_HOST="unix://${ROOTFUL_SOCKET}" podman "$@"
-    else
-      CONTAINER_HOST="unix://${ROOTFUL_SOCKET}" podman "$@"
-    fi
-  elif [[ "$IN_DISTROBOX" == "true" ]]; then
-    podman "$@"
+    CONTAINER_HOST="unix://${ROOTFUL_SOCKET}" podman "$@"
   elif [[ "$PODMAN_MODE" == "sudo" ]]; then
     sudo_cmd podman "$@"
   else
@@ -243,7 +207,14 @@ prepare_topolvm_storage() {
   setup_script='set -euo pipefail
 mkdir -p /runtime/socket /runtime/kubelet
 disk=/runtime/backing.img
-expected_size=21474836480
+if [[ ! "$TOPOLVM_BACKING_SIZE" =~ ^[1-9][0-9]*([KMGTPE])?$ ]]; then
+  echo "ERROR: TOPOLVM_BACKING_SIZE must be a positive byte count or an integer with a binary size suffix (for example, 20G)." >&2
+  exit 1
+fi
+if ! expected_size=$(numfmt --from=iec "$TOPOLVM_BACKING_SIZE" 2>/dev/null); then
+  echo "ERROR: TOPOLVM_BACKING_SIZE is not a valid size: ${TOPOLVM_BACKING_SIZE}." >&2
+  exit 1
+fi
 if [[ -e "$disk" ]]; then
   actual_size=$(stat -c %s "$disk")
   if [[ "$actual_size" != "$expected_size" ]]; then
@@ -251,7 +222,10 @@ if [[ -e "$disk" ]]; then
     exit 1
   fi
 else
-  truncate -s 20G "$disk"
+  if ! truncate -s "$expected_size" "$disk"; then
+    echo "ERROR: could not create the TopoLVM backing file with size ${expected_size} bytes; it may exceed the filesystem or process file-size limit." >&2
+    exit 1
+  fi
 fi
 
 loopdev=$(losetup -j "$disk" | awk -F: "NR == 1 { print \$1 }")
@@ -293,6 +267,7 @@ EOF'
   container_cmd run --rm "${TOPOLVM_LVM_DEVICE_ARGS[@]}" \
     --volume "${TOPOLVM_RUNTIME_DIR}:/runtime" \
     --volume /dev:/dev \
+    --env "TOPOLVM_BACKING_SIZE=${TOPOLVM_BACKING_SIZE}" \
     "${TOPOLVM_LVMD_IMAGE}" bash -euo pipefail -c "${setup_script}"
 }
 
@@ -470,8 +445,6 @@ check_prerequisites() {
       err "Podman is not reachable through the selected ${PODMAN_MODE} runtime."
       if [[ "${KIND_PROFILE:-}" == "dev-full" ]]; then
         err "Check that the rootful Podman service/socket is running and accessible, then rerun the install."
-      elif [[ "$IN_DISTROBOX" == "true" ]]; then
-        err "Distrobox: start the host Podman socket or install the rootful socket override (scripts/dev-full/manifests/podman-socket-rootful.conf)."
       else
         err "Host: start Podman with 'systemctl --user start podman.socket' for rootless profiles."
       fi

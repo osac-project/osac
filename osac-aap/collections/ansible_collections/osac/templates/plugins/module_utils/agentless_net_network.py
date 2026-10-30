@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import shlex
 import subprocess
 from typing import Any, Callable
 
@@ -35,6 +36,137 @@ def run_command(command: list[str], check: bool = True) -> subprocess.CompletedP
     if check and result.returncode != 0:
         raise NetworkCommandError(f"{command[0]} failed (exit status {result.returncode})")
     return result
+
+
+def validate_ipv4_address(
+    value: Any,
+    context: str,
+    *,
+    reject_unspecified: bool = False,
+    error_type: type[Exception] = NetworkCommandError,
+) -> ipaddress.IPv4Address:
+    if not isinstance(value, str):
+        raise error_type(f"{context} must be IPv4")
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError as error:
+        raise error_type(f"{context} must be IPv4") from error
+    if (
+        not isinstance(address, ipaddress.IPv4Address)
+        or (reject_unspecified and address.is_unspecified)
+        or str(address) != value
+    ):
+        raise error_type(f"{context} must be canonical IPv4")
+    return address
+
+
+def parse_canonical_ipv4_network(
+    value: Any,
+    *,
+    context: str = "IPv4 CIDR",
+    wrong_family_message: str | None = None,
+) -> ipaddress.IPv4Network:
+    if not isinstance(value, str):
+        raise TypeError(f"{context} must be a string")
+    prefix = ipaddress.ip_network(value, strict=True)
+    if not isinstance(prefix, ipaddress.IPv4Network):
+        raise ValueError(wrong_family_message or f"{context} must be an IPv4 CIDR")
+    if str(prefix) != value:
+        raise ValueError(f"{context} must be canonical")
+    return prefix
+
+
+def iptables_prefix(table: str, namespace: str | None = None) -> list[str]:
+    prefix = ["iptables", "-w", "-t", table]
+    if namespace is not None:
+        return ["ip", "netns", "exec", namespace, *prefix]
+    return prefix
+
+
+def iptables_chain_rules(
+    runner: Callable[..., Any],
+    table: str,
+    chain: str,
+    *,
+    namespace: str | None = None,
+) -> list[list[str]]:
+    result = runner(
+        [*iptables_prefix(table, namespace), "-S", chain],
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    rules = []
+    for line in result.stdout.splitlines():
+        parts = shlex.split(line)
+        if parts[:2] == ["-A", chain]:
+            rules.append(parts[2:])
+    return rules
+
+
+def ensure_iptables_rule(
+    runner: Callable[..., Any],
+    table: str,
+    chain: str,
+    rule: list[str],
+    *,
+    namespace: str | None = None,
+    insert: bool = False,
+    error_type: type[Exception] = NetworkCommandError,
+) -> bool:
+    prefix = iptables_prefix(table, namespace)
+    if runner([*prefix, "-C", chain, *rule], check=False).returncode == 0:
+        return False
+    action = ["-I", chain, "1"] if insert else ["-A", chain]
+    runner([*prefix, *action, *rule])
+    if runner([*prefix, "-C", chain, *rule], check=False).returncode != 0:
+        raise error_type(f"owned iptables rule did not converge in {chain}")
+    return True
+
+
+def ensure_iptables_rules(
+    runner: Callable[..., Any],
+    table: str,
+    chain: str,
+    rules: list[list[str]],
+    *,
+    namespace: str | None = None,
+    insert: bool = False,
+) -> bool:
+    """Ensure missing rules after one chain snapshot, avoiding repeated scans."""
+    existing_rules = iptables_chain_rules(runner, table, chain, namespace=namespace)
+    present = {tuple(rule) for rule in existing_rules}
+    prefix = iptables_prefix(table, namespace)
+    changed = False
+    for rule in rules:
+        signature = tuple(rule)
+        if signature in present:
+            continue
+        action = ["-I", chain, "1"] if insert else ["-A", chain]
+        runner([*prefix, *action, *rule])
+        present.add(signature)
+        changed = True
+    return changed
+
+
+def delete_iptables_rule(
+    runner: Callable[..., Any],
+    table: str,
+    chain: str,
+    rule: list[str],
+    *,
+    namespace: str | None = None,
+    error_message: str,
+    error_type: type[Exception] = NetworkCommandError,
+) -> bool:
+    prefix = iptables_prefix(table, namespace)
+    return remove_repeated_rule(
+        runner,
+        [*prefix, "-C", chain, *rule],
+        [*prefix, "-D", chain, *rule],
+        error_message=error_message,
+        error_type=error_type,
+    )
 
 
 def remove_repeated_rule(

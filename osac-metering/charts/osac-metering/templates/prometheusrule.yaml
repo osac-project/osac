@@ -1,0 +1,76 @@
+{{- /*
+Alert rules over the metering metrics. Opt-in: it requires a Prometheus operator
+or OpenShift user-workload monitoring to select the rule. Every alert here
+covers a failure mode where billing stops or records are lost while the pod
+stays ready.
+*/}}
+{{- if .Values.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "osac-metering.fullname" . }}
+  labels:
+    {{- include "osac-metering.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metering
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: osac-metering
+      rules:
+        - alert: MeteringRoundStalled
+          expr: time() - osac_metering_round_last_time_seconds > 600
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Billing for tenant {{`{{ $labels.tenant }}`}} stopped
+            description: >-
+              No successful metering round for more than 10 minutes while the
+              metering pod reports ready. The tenant's usage is not being
+              billed.
+        - alert: MeteringRoundFailures
+          expr: increase(osac_metering_round_failures_total[10m]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: Metering rounds for tenant {{`{{ $labels.tenant }}`}} failing
+            description: >-
+              Metering rounds returned errors in the last 10 minutes. Check the
+              metering pod logs for the round loop of this tenant.
+        - alert: MeteringOutboxBacklog
+          expr: osac_metering_outbox_depth > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Metering outbox backlog for tenant {{`{{ $labels.tenant }}`}}
+            description: >-
+              Heartbeats the rounds wrote have not reached the topic for 15
+              minutes. Kafka may be unreachable or the relay cannot send.
+        - alert: MeteringEventsSkipped
+          expr: increase(osac_metering_events_skipped_total[1h]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: Metering skipped events for tenant {{`{{ $labels.tenant }}`}}
+            description: >-
+              The fold skipped event-topic records in the last hour
+              ({{`{{ $labels.reason }}`}}): undecodable records, events of
+              another tenant, or a range Kafka retention deleted. Skipped
+              events are usage that cannot be billed.
+        - alert: MeteringDeadLetterQueue
+          # The depth gauge is log occupancy and only shrinks through topic
+          # retention, which is indefinite by default: alert on new dead
+          # letters, not on retained ones.
+          expr: increase(osac_metering_adapter_dlq_events_total[15m]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: Metering dead-letter queue received new records
+            description: >-
+              A metering adapter moved events to the dead-letter topic in the
+              last 15 minutes. These are billable events the provider never
+              received.
+{{- end }}

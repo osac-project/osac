@@ -8,6 +8,10 @@ import { StorageTierSchema, StorageTierState } from '@osac/types';
 
 import { AdditionalDisksArrayField } from './AdditionalDisksArrayField';
 import { createEmptyComputeInstanceValues } from './payload';
+import {
+  getAllResourceSelectComboboxes,
+  getResourceSelectCombobox,
+} from '../../../test-utils/resourceSelect';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 import { type ResourceSelectValue, emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 
@@ -120,9 +124,9 @@ describe('AdditionalDisksArrayField', () => {
     await selectTier(user, 0, 'fast');
     await selectTier(user, 1, 'bulk');
 
-    const toggles = screen.getAllByLabelText(/^Storage tier/);
-    expect(toggles[0]).toHaveTextContent('fast');
-    expect(toggles[1]).toHaveTextContent('bulk');
+    const comboboxes = getAllResourceSelectComboboxes(/^Storage tier/);
+    expect(comboboxes[0]).toHaveValue('fast');
+    expect(comboboxes[1]).toHaveValue('bulk');
   });
 
   it('clears a required error immediately after selecting an additional disk tier', async () => {
@@ -173,7 +177,7 @@ describe('AdditionalDisksArrayField', () => {
     expect(screen.queryByText('No additional disks added.')).not.toBeInTheDocument();
     const sizeInput = screen.getByRole('spinbutton', { name: 'Size (GiB)' });
     expect(sizeInput).toHaveValue(40);
-    await waitFor(() => expect(screen.getByLabelText(/^Storage tier/)).toHaveTextContent('fast'));
+    await waitFor(() => expect(getResourceSelectCombobox(/^Storage tier/)).toHaveValue('fast'));
 
     await user.clear(sizeInput);
     await user.type(sizeInput, '60');

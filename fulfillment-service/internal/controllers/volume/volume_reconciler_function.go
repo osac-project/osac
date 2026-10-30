@@ -26,7 +26,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -242,7 +241,7 @@ func (t *task) setDefaults() {
 	}
 	if t.volume.GetStatus().GetState() == privatev1.VolumeState_VOLUME_STATE_UNSPECIFIED {
 		t.volume.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_CREATING)
-		t.volume.GetStatus().SetStateTransitionTime(timestamppb.Now())
+		t.volume.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
 	}
 }
 
@@ -410,7 +409,7 @@ func (t *task) setFailed(err error) {
 	}
 	if t.volume.GetStatus().GetState() != privatev1.VolumeState_VOLUME_STATE_FAILED ||
 		t.volume.GetStatus().GetStateTransitionTime() == nil {
-		t.volume.GetStatus().SetStateTransitionTime(timestamppb.Now())
+		t.volume.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
 	}
 	t.volume.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_FAILED)
 	t.volume.GetStatus().SetMessage(err.Error())

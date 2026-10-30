@@ -1109,3 +1109,77 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 		})
 	})
 })
+
+var _ = Describe("Cluster Catalog Item add-on operator policies", Label("catalog-items"), func() {
+	It("returns a shared operator policy and applies locked references to the cluster spec", func(ctx context.Context) {
+		operator := createCatalogItemAddOnOperatorFixture(ctx, catalogItemFixtureName())
+		bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
+		version := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
+		template := createCatalogItemClusterTemplateFixture(ctx, privatev1.ClusterTemplateSpecDefaults_builder{}.Build(), clusterCatalogItemParameterDefinitions())
+		item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
+			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+			Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+			Published: true,
+			Fields: publicv1.ClusterCatalogItemFields_builder{
+				Version: publicv1.ClusterVersionReferenceFieldPolicy_builder{
+					Editable: publicv1.EditableClusterVersionReferenceField_builder{
+						DefaultValue: publicv1.ClusterVersionReference_builder{Id: version}.Build(),
+					}.Build(),
+				}.Build(),
+				NodeSets: publicv1.ClusterNodeSetMapPolicy_builder{
+					Editable: publicv1.EditableClusterNodeSetMap_builder{
+						DefaultValue: publicv1.ClusterNodeSetMap_builder{Items: map[string]*publicv1.ClusterCatalogNodeSet{
+							"workers": publicv1.ClusterCatalogNodeSet_builder{
+								Size:                  1,
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit}.Build(),
+							}.Build(),
+						}}.Build(),
+					}.Build(),
+				}.Build(),
+				AddOnOperators: publicv1.AddOnOperatorReferenceListFieldPolicy_builder{
+					Locked: publicv1.AddOnOperatorReferenceList_builder{
+						Items: []*publicv1.AddOnOperatorReference{
+							publicv1.AddOnOperatorReference_builder{Id: operator.GetId(), Shared: true}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build(),
+			TemplateParameters: catalogItemParameterPolicies(),
+		}.Build())
+
+		catalogClient := publicv1.NewClusterCatalogItemsClient(tool.ExternalView().AdminConn())
+		read, err := catalogClient.Get(ctx, publicv1.ClusterCatalogItemsGetRequest_builder{Id: item.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		storedReference := read.GetObject().GetFields().GetAddOnOperators().GetLocked().GetItems()[0]
+		Expect(storedReference.GetId()).To(Equal(operator.GetId()))
+		Expect(storedReference.GetName()).To(Equal(operator.GetMetadata().GetName()))
+		listed, err := catalogClient.List(ctx, publicv1.ClusterCatalogItemsListRequest_builder{
+			Filter: new("this.id == '" + item.GetId() + "'"),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listed.GetItems()).To(HaveLen(1))
+		listedReference := listed.GetItems()[0].GetFields().GetAddOnOperators().GetLocked().GetItems()[0]
+		Expect(listedReference.GetId()).To(Equal(operator.GetId()))
+		Expect(listedReference.GetName()).To(Equal(operator.GetMetadata().GetName()))
+
+		created, err := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
+			CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		clusters := publicv1.NewClustersClient(tool.ExternalView().UserConn())
+		persisted, err := clusters.Get(ctx, publicv1.ClustersGetRequest_builder{Id: created.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		selected := persisted.GetObject().GetSpec().GetAddOnOperators()
+		Expect(selected).To(HaveLen(1))
+		Expect(selected[0].GetId()).To(Equal(operator.GetId()))
+		Expect(selected[0].GetName()).To(Equal(operator.GetMetadata().GetName()))
+
+		By("checking that the downstream ClusterOrder receives the stable operator name")
+		Eventually(func(g Gomega) {
+			orders := &osacv1alpha1.ClusterOrderList{}
+			g.Expect(tool.KubeClient().List(ctx, orders, crclient.MatchingLabels{labels.ClusterOrderUuid: created.GetId()})).To(Succeed())
+			g.Expect(orders.Items).To(HaveLen(1))
+			g.Expect(orders.Items[0].Spec.AddOnOperators).To(Equal([]string{operator.GetMetadata().GetName()}))
+		}, time.Minute, time.Second).Should(Succeed())
+	})
+})

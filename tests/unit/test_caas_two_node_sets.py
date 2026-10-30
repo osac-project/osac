@@ -10,11 +10,15 @@ from tests.e2e.caas.regression import test_cluster_node_sets as regression
 from tests.e2e.caas.sanity import test_cluster_create as scenario
 from tests.e2e.core import helpers, runner
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.metering import MeteringCollector
 
 
 @pytest.fixture
 def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
-    clients = {name: Mock() for name in ("cli", "grpc", "private_grpc", "metering")}
+    # The metering mock needs the MeteringCollector spec: Python 3.14's Mock
+    # denies assert*-prefixed attribute names on unspec'd mocks, and the
+    # scenario calls metering.assert_no_events.
+    clients = {"cli": Mock(), "grpc": Mock(), "private_grpc": Mock(), "metering": Mock(spec=MeteringCollector)}
     k8s = clients["k8s_hub_client"] = Mock(spec=K8sClient)
     k8s.namespace = "osac"
     cli, grpc, private = (clients[name] for name in ("cli", "grpc", "private_grpc"))
@@ -105,6 +109,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     monkeypatch.setattr(scenario, "wait_for_cluster_order_cr", Mock(return_value="order-a"))
     for name in (
         "wait_for_cluster_progressing",
+        "wait_for_cluster_ready",
         "wait_for_cluster_deleting",
         "wait_for_cluster_grpc_deleting_or_archived",
         "wait_for_cluster_grpc_removal",

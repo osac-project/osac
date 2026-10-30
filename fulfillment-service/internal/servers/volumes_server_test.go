@@ -23,6 +23,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -452,25 +453,51 @@ var _ = Describe("Public volumes server", func() {
 			Expect(response.GetObject().GetSpec().GetStorageTier()).To(Equal("standard-block"))
 		})
 
-		It("Keeps the stored status on a maskless update carrying a spoofed status", func() {
-			created := createVolumeViaPublic("pub-vol-spoof")
+		It("Rejects reserved metadata before calling the private update", func() {
+			spy := &volumesListSpy{delegate: server.delegate}
+			server.delegate = spy
+
+			_, err := server.Update(ctx, publicv1.VolumesUpdateRequest_builder{
+				Object: publicv1.Volume_builder{
+					Id: "not-found",
+					Metadata: publicv1.Metadata_builder{
+						Labels:      map[string]string{"admin.osac.openshift.io/metadata-test": "blocked"},
+						Annotations: map[string]string{"operator.admin.osac.openshift.io/metadata-test": "blocked"},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+					"metadata.labels",
+					"metadata.annotations",
+				}},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(spy.updateCalls).To(BeZero())
+		})
+
+		// TC-U1a: A maskless update carrying a status keeps the stored one. The status is
+		// output-only and the metering trigger guards only its tracked fields, so the
+		// mapper must never copy a caller-supplied status, with or without a mask.
+		It("Drops a caller-supplied status on a maskless update", func() {
+			created := createVolumeViaPublic("pub-vol-spoofed-status")
 
 			response, err := server.Update(ctx, publicv1.VolumesUpdateRequest_builder{
 				Object: publicv1.Volume_builder{
-					Id: created.GetId(),
-					Metadata: publicv1.Metadata_builder{
-						Name: "pub-vol-spoof",
-					}.Build(),
-					Spec: created.GetSpec(),
+					Id:       created.GetId(),
+					Metadata: publicv1.Metadata_builder{Name: "pub-vol-spoofed-status"}.Build(),
+					Spec:     created.GetSpec(),
 					Status: publicv1.VolumeStatus_builder{
-						State: publicv1.VolumeState_VOLUME_STATE_AVAILABLE,
+						State:   publicv1.VolumeState_VOLUME_STATE_FAILED,
+						Message: new("spoofed message"),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			// The spoofed status never reached the database: the state is the system-written
-			// CREATING, not the caller's AVAILABLE.
-			Expect(response.GetObject().GetStatus().GetState()).To(Equal(publicv1.VolumeState_VOLUME_STATE_CREATING))
+			object := response.GetObject()
+			Expect(object.GetStatus().GetState()).To(Equal(created.GetStatus().GetState()))
+			Expect(object.GetStatus().GetMessage()).To(BeEmpty())
 		})
 
 		// TC-U2: Update that changes spec.storage_tier returns InvalidArgument.
@@ -644,8 +671,9 @@ var _ = Describe("Public volumes server", func() {
 // passed to List. All other methods delegate unchanged.
 type volumesListSpy struct {
 	privatev1.VolumesServer
-	delegate  privatev1.VolumesServer
-	lastOrder string
+	delegate    privatev1.VolumesServer
+	lastOrder   string
+	updateCalls int
 }
 
 func (s *volumesListSpy) List(ctx context.Context, req *privatev1.VolumesListRequest) (*privatev1.VolumesListResponse, error) {
@@ -662,6 +690,7 @@ func (s *volumesListSpy) Create(ctx context.Context, req *privatev1.VolumesCreat
 }
 
 func (s *volumesListSpy) Update(ctx context.Context, req *privatev1.VolumesUpdateRequest) (*privatev1.VolumesUpdateResponse, error) {
+	s.updateCalls++
 	return s.delegate.Update(ctx, req)
 }
 

@@ -86,7 +86,6 @@ docs/
 ├── AI-POLICY.md
 ├── designdoc.md
 ├── importing-esi-nodes.md
-├── OWNERS                         # Prow approvers/reviewers
 ├── personas.md
 └── README.md
 ```
@@ -161,10 +160,9 @@ See existing `.puml` files in `architecture/aap-provisioning/diagrams/` for exam
 Follow the mono-repo root [`AGENTS.md`](../AGENTS.md)'s git and contribution
 workflow: push to your fork (never to `upstream`), open the PR against
 `osac-project/osac:main` with an `OSAC-XXXX:`/`NO-ISSUE:`-prefixed title,
-link the issue, and summarize the documentation changes. This directory's own
-`OWNERS` file no longer gates review directly (approval follows the
-mono-repo's own review process); reconciling or retiring it is part of the
-follow-up reorg.
+link the issue, and summarize the documentation changes. This directory has no
+`OWNERS` file: approval follows the mono-repo's own review process (`CODEOWNERS`,
+where a path with no other owner needs a member of a working group).
 
 ## Documentation Conventions
 
@@ -237,19 +235,14 @@ Currently, PlantUML generation is only set up for `architecture/aap-provisioning
 
 ## Access Control
 
-**OWNERS file** defines:
-- **Approvers**: 22 total (9 architects + 6 leads + 7 managers)
-- **Reviewers**: 27 total (includes all 22 approvers + 5 additional contributors)
-
-Prow uses this file for PR approval workflows. To merge a PR, you need:
-- LGTM from at least one reviewer
-- `/approve` from at least one approver
-- All CI checks passing
+**Review** follows the mono-repo's process: the branch protection of `main` asks for an approving review, and
+`CODEOWNERS` names the owners of a path (a path that no rule names is owned by `@osac-project/maintainers`, the
+working-group teams, so a person has to approve it and a bot's approval is not enough). See the root `AGENTS.md` and
+`.github/CI.md`.
 
 **CI Checks**: This repository has minimal automated checks (no build system, no tests). CI typically validates:
 - DCO sign-off presence on commits
 - Basic Markdown linting (if configured)
-- Prow approval workflow compliance
 
 ## AI Policy Compliance
 
@@ -312,13 +305,12 @@ Or set up a commit template with DCO trailer in `~/.gitmessage`.
 - **Public repository**: All content is open-source under Apache 2.0 license
 - **No secrets**: Documentation contains no credentials, API keys, or sensitive data
 - **Container security**: PlantUML generation script uses official Docker Hub image with SELinux-aware volume mounts (`:Z` flag)
-- **Access control**: GitHub-based with OWNERS file integration
+- **Access control**: GitHub-based (branch protection and `CODEOWNERS`)
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `OWNERS` | Prow approver/reviewer definitions |
 | `AI-POLICY.md` | AI assistance disclosure requirements |
 | `personas.md` | User archetypes referenced in architecture docs |
 | `README.md` | Project overview and contribution workflow |

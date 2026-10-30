@@ -31,6 +31,11 @@ stall:
   workersJoiningThreshold: "20m"
   workersJoiningByInstanceType: {}
 
+upgradeTimeouts:
+  pending: "10m"
+  controlPlane: "40m"
+  nodePoolPerNode: "20m"
+
 # On OpenShift, trust the platform-managed ingress CA when fetching Assisted
 # Service discovery ignition through its HTTPS Route.
 ignition:
@@ -154,12 +159,13 @@ networkManagers:
       enabled: false
       externalIPContractVersion: v1
       externalIPAttachmentContractVersion: v1
+      natGatewayContractVersion: v1
       description: >-
         AgentlessNet VirtualNetwork and Subnet baseline. Implements UID-keyed
         namespaces, /31 transit links, Cumulus trunk VLANs, Subnet gateways,
         per-VirtualNetwork DHCP, and UID-owned IPv4 ExternalIP allocation and
-        release. Supports BMaaS ExternalIPAttachment DNAT and external route
-        lifecycle. SecurityGroups and NATGateway SNAT remain unsupported.
+        release. Supports BMaaS ExternalIPAttachment DNAT and NATGateway SNAT
+        with explicit external source addresses. SecurityGroups remain unsupported.
       capabilities:
       - ipv4
   k8sManagers:

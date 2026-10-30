@@ -63,16 +63,30 @@ removing forwarding, DNAT, and matching conntrack entries. The operator accepts
 the `osac_result` artifact before marking the attachment Ready or releasing its
 finalizers. BMaaS is the first supported consumer; VMaaS and CaaS target wiring
 remain follow-up work. Provider BGP peers are configured outside these jobs.
-SecurityGroups and NATGateway SNAT remain unsupported.
+For NATGateway contract v1, AAP reads the controller-supplied ExternalIP and
+VirtualNetwork snapshot and keeps the ExternalIP reservation until cleanup.
+It translates the complete immutable VirtualNetwork CIDR, excluding the saved
+transit `/31`, with a constant two-rule namespace pair. It installs explicit
+SNAT, scoped host forwarding and a NAT bypass rule, and announces the ExternalIP
+`/32` through local FRR. Subnet creation and deletion do not inspect or reconcile
+NATGateway state. NATGateway delete withdraws the route before removing SNAT,
+the transit exemption, and matching conntrack state.
+SecurityGroups remain unsupported.
 
 All AgentlessNet provider state uses schema version 1 in a SQLite database at
 `AGENTLESS_NET_STATE_FILE` (default `/etc/osac/agentless_network_state.sqlite3`).
 The current schema is created directly at v1 with `virtual_networks`,
-`subnets`, `external_ip_pools`, `external_ips`, and `attachments`. These tables
+`subnets`, `external_ip_pools`, `external_ips`, `attachments`, and
+`nat_gateways`. Earlier schema-v1 layouts are recognized and upgraded only by
+adding the missing consumer tables in one transaction; unknown layouts fail
+closed. These tables
 store VirtualNetwork, Subnet, immutable ExternalIPPool and ExternalIP state,
-and attachment-owned cleanup snapshots. `external_ips` reserves one provider
+attachment-owned cleanup snapshots, and NATGateway route cleanup identity.
+`external_ips` reserves one provider
 IPv4 address per ExternalIP Kubernetes UID and pool. `attachments` retains the
 ExternalIP, target, Subnet, VirtualNetwork and exact route/rule inputs until
+provider cleanup succeeds. `nat_gateways` retains the NATGateway, ExternalIP,
+VirtualNetwork, provider interfaces, route next hop, and cleanup identity until
 provider cleanup succeeds. The
 `virtual_networks` table stores each VirtualNetwork's immutable CR CIDR and one UID-keyed `/31` transit
 link carved from that CIDR. The `subnets` table stores each Kubernetes Subnet

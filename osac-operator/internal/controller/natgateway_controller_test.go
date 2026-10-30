@@ -533,6 +533,103 @@ var _ = Describe("NATGatewayReconciler", func() {
 	})
 
 	Context("dispatcher path", func() {
+		It("returns transient manager-resolution errors for controller-runtime retry", func() {
+			transientVNet := &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-vnet-natgw-transient",
+					Namespace: "default",
+					Labels: map[string]string{
+						osacVirtualNetworkIDLabel: "test-vnet-natgw-transient-uuid",
+					},
+					Annotations: map[string]string{
+						osacImplementationStrategyAnnotation: "cudn-net",
+					},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{
+					Region:       "us-west-1",
+					IPv4CIDR:     "10.1.0.0/16",
+					NetworkClass: "nc-missing-manager",
+				},
+			}
+			Expect(k8sClient.Create(ctx, transientVNet)).To(Succeed())
+			transientVNet.Status.Phase = osacv1alpha1.VirtualNetworkPhaseReady
+			Expect(k8sClient.Status().Update(ctx, transientVNet)).To(Succeed())
+
+			transientEIP := &osacv1alpha1.ExternalIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-eip-natgw-transient",
+					Namespace: "default",
+					Labels: map[string]string{
+						osacExternalIPIDLabel: "test-eip-natgw-transient-uuid",
+					},
+				},
+				Spec: osacv1alpha1.ExternalIPSpec{Pool: "test-pool-natgw-transient-uuid"},
+			}
+			Expect(k8sClient.Create(ctx, transientEIP)).To(Succeed())
+			transientEIP.Status.Address = "198.51.100.21"
+			Expect(k8sClient.Status().Update(ctx, transientEIP)).To(Succeed())
+
+			transientNATGW := &osacv1alpha1.NATGateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-natgateway-transient",
+					Namespace: "default",
+				},
+				Spec: osacv1alpha1.NATGatewaySpec{
+					VirtualNetwork: "test-vnet-natgw-transient-uuid",
+					ExternalIP:     "test-eip-natgw-transient-uuid",
+				},
+			}
+			Expect(k8sClient.Create(ctx, transientNATGW)).To(Succeed())
+			DeferCleanup(func() {
+				transientNATGW.Finalizers = nil
+				_ = k8sClient.Update(ctx, transientNATGW)
+				_ = k8sClient.Delete(ctx, transientNATGW)
+				_ = k8sClient.Delete(ctx, transientVNet)
+				_ = k8sClient.Delete(ctx, transientEIP)
+			})
+
+			discovery, err := networkmanager.NewDiscovery(k8sClient, "default")
+			Expect(err).NotTo(HaveOccurred())
+			reconciler.Resolver = dispatcher.NewResolver(
+				dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+					[]*privatev1.NetworkClass{{
+						Id: "nc-missing-manager", FabricManager: ptr.To("missing-manager"),
+					}},
+					&[]*privatev1.NetworkClass{},
+				)),
+				discovery,
+			)
+			request := mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: transientNATGW.Name, Namespace: transientNATGW.Namespace},
+			}}
+
+			_, err = reconciler.Reconcile(ctx, request)
+			Expect(err).To(HaveOccurred())
+
+			current := &osacv1alpha1.NATGateway{}
+			Expect(k8sClient.Get(ctx, request.NamespacedName, current)).To(Succeed())
+			Expect(current.Status.Phase).NotTo(Equal(osacv1alpha1.NATGatewayPhaseFailed))
+		})
+
+		It("treats unsupported pinned contract configuration as terminal", func() {
+			natgw.Annotations = map[string]string{
+				osacNATGatewayContractVersionAnnotation: networkmanager.NATGatewayContractVersionV1,
+			}
+			Expect(k8sClient.Create(ctx, natgw)).To(Succeed())
+			request := mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: natgw.Name, Namespace: natgw.Namespace},
+			}}
+
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+
+			current := &osacv1alpha1.NATGateway{}
+			Expect(k8sClient.Get(ctx, request.NamespacedName, current)).To(Succeed())
+			Expect(current.Status.Phase).To(Equal(osacv1alpha1.NATGatewayPhaseFailed))
+		})
+
 		It("uses the resolved fabric manager name from the parent VirtualNetwork's NetworkClass", func() {
 			testScheme := runtime.NewScheme()
 			Expect(osacv1alpha1.AddToScheme(testScheme)).To(Succeed())

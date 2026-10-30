@@ -589,6 +589,17 @@ func extractExtraVars(ctx context.Context, resource client.Object) (map[string]a
 		}
 		vars["external_ip_attachment_context"] = attachmentContext
 	}
+	if natGateway := NATGatewayContextFromContext(ctx); natGateway != (NATGatewayContext{}) {
+		encoded, err := json.Marshal(natGateway)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize NATGateway context: %w", err)
+		}
+		var natGatewayContext map[string]any
+		if err := json.Unmarshal(encoded, &natGatewayContext); err != nil {
+			return nil, fmt.Errorf("failed to serialize NATGateway context: %w", err)
+		}
+		vars["nat_gateway_context"] = natGatewayContext
+	}
 
 	return map[string]any{
 		"osac_job_vars": vars,

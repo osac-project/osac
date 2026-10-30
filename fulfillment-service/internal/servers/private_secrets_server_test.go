@@ -190,6 +190,23 @@ var _ = Describe("Private secrets server", func() {
 				privatev1.SecretBackend_SECRET_BACKEND_VAULT))
 		})
 
+		It("rejects invalid SSH public-key Secret data before storing it", func() {
+			const name = "invalid-ssh-key"
+			_, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+				Object: privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+					Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					Data:     map[string][]byte{"public_key": []byte("not-an-ssh-key")},
+				}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+
+			filter := "this.metadata.name == '" + name + "'"
+			stored, err := server.List(ctx, privatev1.SecretsListRequest_builder{Filter: &filter}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetItems()).To(BeEmpty())
+		})
+
 		It("Defaults unspecified backend to Vault", func() {
 			created := createVaultSecret()
 			Expect(created.GetBackend()).To(Equal(
@@ -742,6 +759,24 @@ var _ = Describe("Private secrets server", func() {
 				Expect(obj.GetData()).To(BeEmpty())
 			})
 
+			It("allows a tenant-scoped SSH public-key Secret", func() {
+				const name = "tenant-ssh-key"
+				publicKey := []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com")
+				mockStore.EXPECT().
+					Store(gomock.Any(), testTenant, "", name, map[string][]byte{"public_key": publicKey}).
+					Return(nil)
+
+				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+						Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+						Data:     map[string][]byte{"public_key": publicKey},
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(created.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
+			})
+
 			It("Vault unavailability prevents DB record creation", func() {
 				mockStore.EXPECT().
 					Store(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
@@ -843,7 +878,76 @@ var _ = Describe("Private secrets server", func() {
 				Expect(response.GetObject().GetData()).To(HaveKey("key"))
 			})
 
-			It("allows a platform administrator to create and retrieve a system Vault Secret", func() {
+			It("rejects a shared SSH public-key Secret before persistence", func() {
+				const name = "shared-ssh-key-rejected"
+				mockStore.EXPECT().
+					Store(gomock.Any(), auth.SharedTenant, "", name, gomock.Any()).
+					Times(0)
+
+				_, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   name,
+							Tenant: auth.SharedTenant,
+						}.Build(),
+						Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+						Data: map[string][]byte{
+							"public_key": []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com"),
+						},
+					}.Build(),
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+
+				filter := "this.metadata.name == '" + name + "'"
+				stored, err := server.List(ctx, privatev1.SecretsListRequest_builder{
+					Filter: &filter,
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetItems()).To(BeEmpty())
+			})
+
+			It("rejects a shared SSH key when the admin tenant defaults to shared", func() {
+				const name = "default-shared-ssh-key-rejected"
+				defaultSharedTenancy := auth.NewMockTenancyLogic(ctrl)
+				defaultSharedTenancy.EXPECT().DetermineAssignableTenants(gomock.Any()).
+					Return(auth.AllTenants, nil).AnyTimes()
+				defaultSharedTenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
+					Return(auth.SharedTenant, nil).AnyTimes()
+				defaultSharedTenancy.EXPECT().DetermineVisibility(gomock.Any()).
+					Return(auth.TotalVisibility(), nil).AnyTimes()
+
+				defaultSharedServer, err := NewPrivateSecretsServer().
+					SetLogger(logger).
+					SetAttributionLogic(attribution).
+					SetTenancyLogic(defaultSharedTenancy).
+					SetSecretStore(mockStore).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				mockStore.EXPECT().
+					Store(gomock.Any(), auth.SharedTenant, "", name, gomock.Any()).
+					Times(0)
+				_, err = defaultSharedServer.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+						Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+						Data: map[string][]byte{
+							"public_key": []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com"),
+						},
+					}.Build(),
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+
+				filter := "this.metadata.name == '" + name + "'"
+				stored, err := defaultSharedServer.List(ctx, privatev1.SecretsListRequest_builder{
+					Filter: &filter,
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetItems()).To(BeEmpty())
+			})
+
+			It("allows a platform administrator to create and retrieve a system SSH key Secret", func() {
+				publicKey := []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com")
 				mockStore.EXPECT().
 					Store(gomock.Any(), auth.SystemTenant, "", "system-admin-secret", gomock.Any()).
 					Return(nil)
@@ -853,7 +957,8 @@ var _ = Describe("Private secrets server", func() {
 							Name:   "system-admin-secret",
 							Tenant: auth.SystemTenant,
 						}.Build(),
-						Data: map[string][]byte{"key": []byte("value")},
+						Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+						Data: map[string][]byte{"public_key": publicKey},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -861,12 +966,12 @@ var _ = Describe("Private secrets server", func() {
 
 				mockStore.EXPECT().
 					Fetch(gomock.Any(), auth.SystemTenant, "", "system-admin-secret").
-					Return(map[string][]byte{"key": []byte("value")}, nil)
+					Return(map[string][]byte{"public_key": publicKey}, nil)
 				response, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
 					Id: created.GetObject().GetId(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(response.GetObject().GetData()).To(HaveKeyWithValue("key", []byte("value")))
+				Expect(response.GetObject().GetData()).To(HaveKeyWithValue("public_key", publicKey))
 			})
 
 			It("hides system Secrets from tenant-scoped identities", func() {

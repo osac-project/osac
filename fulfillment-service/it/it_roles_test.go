@@ -37,15 +37,16 @@ var _ = Describe("Roles", func() {
 	})
 
 	Describe("Private API", func() {
-		It("Can list built-in roles", func() {
+		It("Lists only bindable built-in roles", func() {
 			listResponse, err := privateClient.List(ctx, privatev1.RolesListRequest_builder{
 				Filter: new(`
-					this.metadata.name in [
-						'cloud-provider-admin',
-						'cloud-provider-reader',
-						'tenant-admin',
-						'tenant-reader',
-						'tenant-user',
+					this.id in [
+						'019dd9f6-36cb-7824-ac1c-6455d8a7a9b5',
+						'019dd9f6-36cc-7a35-bfc5-242833f11c2f',
+						'019dd9f6-36cd-78bf-9fa2-1be4464108b0',
+						'019dd9f6-36ce-78fc-96d8-b87cf58bf14c',
+						'019dd9f6-36cf-77bc-8041-c6a6a415c185',
+						'019dd9f6-d573-beaa-41c5-96965e594cc6',
 					]
 				`),
 			}.Build())
@@ -60,10 +61,10 @@ var _ = Describe("Roles", func() {
 			}
 			Expect(names).To(ContainElements(
 				"cloud-provider-admin",
-				"cloud-provider-reader",
 				"tenant-admin",
+				"tenant-idp-manager",
 				"tenant-reader",
-				"tenant-user",
+				"cloud-provider-reader",
 			))
 		})
 
@@ -93,7 +94,7 @@ var _ = Describe("Roles", func() {
 	})
 
 	Describe("Public API", func() {
-		It("Can list built-in roles", func() {
+		It("Lists only bindable built-in roles", func() {
 			listResponse, err := publicClient.List(ctx, publicv1.RolesListRequest_builder{
 				Filter: new(`
 					this.metadata.name in [
@@ -101,7 +102,7 @@ var _ = Describe("Roles", func() {
 						'cloud-provider-reader',
 						'tenant-admin',
 						'tenant-reader',
-						'tenant-user',
+						'tenant-idp-manager',
 					]
 				`),
 			}.Build())
@@ -117,13 +118,13 @@ var _ = Describe("Roles", func() {
 			Expect(names).To(ContainElements(
 				"tenant-admin",
 				"tenant-reader",
-				"tenant-user",
+				"tenant-idp-manager",
 			))
 		})
 
 		It("Can get a specific built-in role", func() {
 			listResponse, err := publicClient.List(ctx, publicv1.RolesListRequest_builder{
-				Filter: new("this.metadata.name == 'tenant-reader'"),
+				Filter: new("this.metadata.name == 'tenant-admin'"),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(listResponse).ToNot(BeNil())
@@ -139,8 +140,8 @@ var _ = Describe("Roles", func() {
 			object := getResponse.GetObject()
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).To(Equal(role.GetId()))
-			Expect(object.GetMetadata().GetName()).To(Equal("tenant-reader"))
-			Expect(object.GetSpec().GetTitle()).To(Equal("Tenant reader"))
+			Expect(object.GetMetadata().GetName()).To(Equal("tenant-admin"))
+			Expect(object.GetSpec().GetTitle()).To(Equal("Tenant administrator"))
 			Expect(object.GetSpec().GetDescription()).ToNot(BeEmpty())
 			Expect(object.GetStatus().GetState()).To(Equal(publicv1.RoleState_ROLE_STATE_READY))
 		})

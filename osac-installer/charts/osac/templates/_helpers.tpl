@@ -1,4 +1,13 @@
 {{/*
+Host that the db-init hook and the database client Certificate connect to. The
+install preflight resolves the same value, so a blank dbInit.host cannot make
+the checked host and the used host differ.
+*/}}
+{{- define "osac.dbInit.host" -}}
+{{- .Values.dbInit.host | default "postgres.osac-infra.svc.cluster.local" -}}
+{{- end }}
+
+{{/*
 Expand the name of the chart.
 */}}
 {{- define "osac.name" -}}

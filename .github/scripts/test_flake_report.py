@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from flake_report import aggregate, render_markdown, render_slack
+from flake_report import aggregate, format_overall_failure_risk, render_markdown, render_slack
 
 ROOT = Path(__file__).resolve().parents[2]
 RUN = {
@@ -142,6 +142,8 @@ class ReportTests(unittest.TestCase):
                 self.assertTrue(slack.startswith(icon))
                 self.assertIn(warning, slack)
                 self.assertIn("Incomplete report", render_markdown(report))
+                self.assertIn("*Overall failure risk: Unavailable*", slack)
+                self.assertIn("**Overall failure risk: Unavailable**", render_markdown(report))
                 self.assertNotIn("No failures detected", slack)
                 self.assertNotIn("No failures detected", render_markdown(report))
                 expected_status = (
@@ -303,7 +305,8 @@ class ReportTests(unittest.TestCase):
                 if not failing:
                     report["run"]["started_at"] = "2026-10-25T23:30:00-04:00"
                 payload = render_slack(report)
-                sections = (title, total, integration, unit, links)
+                risk = "77.8%" if failing else "0.0%"
+                sections = (title, f"*Overall failure risk: {risk}*", total, integration, unit, links)
                 self.assertEqual(payload["text"], "\n\n".join((*sections, f"<{RUN['report_url']}|View Report>")))
                 self.assertEqual(list(sections), [block["text"]["text"] for block in payload["blocks"][:-1]])
                 self.assertEqual(
@@ -323,6 +326,40 @@ class ReportTests(unittest.TestCase):
                 self.assertNotIn(RUN["report_url"], links)
                 self.assertFalse(payload["unfurl_links"])
                 self.assertFalse(payload["unfurl_media"])
+
+    def test_overall_failure_risk_for_complete_reports(self) -> None:
+        for failures, risk in (
+            ((0,) * 10, "0.0%"),
+            ((2, 2, 3, 3, 2, 0, 0, 0, 0, 0), "11.4%"),
+            ((100,) + (0,) * 9, "100.0%"),
+        ):
+            with self.subTest(failures=failures):
+                metadata = plan(100)
+                metadata["suites"] = [
+                    {"group": "unit", "id": f"Unit tests (component-{index})"} for index in range(len(failures))
+                ]
+                observations = [
+                    job(iteration=iteration)
+                    | {
+                        "id": index * 1000 + iteration,
+                        "name": f"Unit repetition {iteration} / {suite['id']} / Run",
+                        "conclusion": "failure" if iteration <= failures[index] else "success",
+                    }
+                    for index, suite in enumerate(metadata["suites"])
+                    for iteration in range(1, 101)
+                ]
+                conclusion = "failure" if any(failures) else "success"
+                report = aggregate(metadata, [{"jobs": observations}], [], RUN | {"conclusion": conclusion}, [])
+                self.assertEqual(format_overall_failure_risk(report), risk)
+                slack = render_slack(report)["text"]
+                markdown = render_markdown(report)
+                self.assertIn(f"*Overall failure risk: {risk}*", slack)
+                self.assertIn(f"**Overall failure risk: {risk}**", markdown)
+                self.assertNotIn("executions per suite", slack)
+                self.assertIn("calculated from observed suite failure rates", markdown)
+                self.assertIn("assuming independent suite outcomes", markdown)
+                self.assertIn("Zero observed failures do not establish zero future risk.", markdown)
+        self.assertEqual(format_overall_failure_risk({"status": "clean", "suites": []}), "Unavailable")
 
     def test_failure_summary_counts_suites_and_preserves_per_suite_rates(self) -> None:
         metadata = plan(100)
@@ -378,7 +415,8 @@ class ReportTests(unittest.TestCase):
         markdown = render_markdown(report)
         self.assertTrue(
             markdown.startswith(
-                "# Weekly Test Stability Report\n\n\U0001f534 **Failures detected in 2 of 4 suites** | October 19, 2026"
+                "# Weekly Test Stability Report\n\n**Overall failure risk: 77.8%**\n\n"
+                "\U0001f534 **Failures detected in 2 of 4 suites** | October 19, 2026"
             )
         )
         self.assertIn(f"**Commit:** [`{TEST_SHA[:7]}`]({url}/commit/{TEST_SHA})", markdown)
@@ -475,6 +513,20 @@ class ReportTests(unittest.TestCase):
                     self.assertEqual(failure["failed_steps"], ["Run tests"])
                     self.assertEqual(failure["url"], f"{RUN['url']}/job/{failure['job_id']}")
                     self.assertIn(failure["url"], (output / "summary.md").read_text())
+
+
+class WorkflowTests(unittest.TestCase):
+    def test_slack_notification_requires_a_successful_report(self) -> None:
+        workflow = yaml.safe_load((ROOT / ".github/workflows/flake-report.yml").read_text())
+        notify = workflow["jobs"]["notify"]
+        self.assertEqual(notify["needs"], "report")
+        self.assertEqual(
+            " ".join(notify["if"].split()),
+            "always() && needs.report.result == 'success' && "
+            "github.repository == 'osac-project/osac' && "
+            "needs.report.outputs.slack_payload != '' && "
+            "github.event.workflow_run.conclusion != 'cancelled'",
+        )
 
 
 @unittest.skipUnless(shutil.which("jq"), "planner tests require jq")

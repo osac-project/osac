@@ -221,8 +221,7 @@ print(json.dumps({
   # KubeVirt VM in exactly that subnet-target namespace, so forcing a fixed
   # namespace here makes the VM boot where the operator never looks — the CI stays
   # stuck at Provisioned=False/WaitingForVM forever. Let the role resolve it; the
-  # subnet namespace itself is created by provision-tenant.sh (subnet provisioning
-  # is a noop on kind, so nothing else creates it).
+  # subnet AAP job creates the target namespace and API-only CUDN object on Kind.
   local inventory_name inventory_id inv_id
   declare -A inventory_ids
   for inventory_name in \

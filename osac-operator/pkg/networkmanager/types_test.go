@@ -18,6 +18,7 @@ package networkmanager_test
 
 import (
 	"context"
+	"errors"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -165,31 +166,23 @@ var _ = Describe("ParseConfigMap", func() {
 		Expect(err.Error()).To(ContainSubstring("capabilities field must not be empty"))
 	})
 
-	It("rejects the IPv6 capability", func() {
-		cm := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
-			Data: map[string]string{
-				"name":         "ipv6-only",
-				"capabilities": "ipv6",
-			},
-		}
+	DescribeTable("rejects unsupported address-family capabilities",
+		func(capabilities string) {
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
+				Data: map[string]string{
+					"name":         "ds-only",
+					"capabilities": capabilities,
+				},
+			}
 
-		_, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
-		Expect(err).To(MatchError(ContainSubstring("ipv6")))
-	})
-
-	It("rejects the dual-stack capability", func() {
-		cm := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
-			Data: map[string]string{
-				"name":         "dual-stack",
-				"capabilities": "dualStack",
-			},
-		}
-
-		_, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
-		Expect(err).To(MatchError(ContainSubstring("dualStack")))
-	})
+			_, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
+			Expect(err).To(MatchError(ContainSubstring("invalid capability")))
+		},
+		Entry("IPv6", "ipv6"),
+		Entry("dual-stack", "dualStack"),
+		Entry("mixed IPv4 and IPv6", "ipv4,ipv6"),
+	)
 
 	It("rejects unsupported capability combinations", func() {
 		cm := &corev1.ConfigMap{
@@ -275,7 +268,7 @@ var _ = Describe("Ethernet east-west capability discovery", func() {
 var _ = Describe("Manager.HasCapability", func() {
 	It("returns true for a supported capability", func() {
 		mgr := &networkmanager.Manager{
-			Capabilities: []networkmanager.Capability{networkmanager.CapabilityIPv4, networkmanager.CapabilityIPv6},
+			Capabilities: []networkmanager.Capability{networkmanager.CapabilityIPv4, networkmanager.CapabilityDPUSupport},
 		}
 		Expect(mgr.HasCapability(networkmanager.CapabilityIPv4)).To(BeTrue())
 	})
@@ -354,5 +347,45 @@ var _ = Describe("ExternalIPAttachmentContractVersion", func() {
 
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("unsupported ExternalIPAttachment contract version"))
+	})
+})
+
+var _ = Describe("NATGatewayContractVersion", func() {
+	It("accepts v1 independently of the other external networking contracts", func() {
+		manager, err := networkmanager.ParseConfigMap(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "agentless", Namespace: "osac"},
+			Data: map[string]string{
+				"name": "agentless_net", "capabilities": "ipv4",
+				networkmanager.DataKeyNATGatewayContractVersion: networkmanager.NATGatewayContractVersionV1,
+			},
+		}, networkmanager.FabricManager)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(manager.NATGatewayContractVersion).To(Equal(networkmanager.NATGatewayContractVersionV1))
+		Expect(manager.ExternalIPContractVersion).To(BeEmpty())
+		Expect(manager.ExternalIPAttachmentContractVersion).To(BeEmpty())
+	})
+
+	It("keeps an empty version on the legacy path", func() {
+		manager, err := networkmanager.ParseConfigMap(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "netris", Namespace: "osac"},
+			Data:       map[string]string{"name": "netris", "capabilities": "ipv4"},
+		}, networkmanager.FabricManager)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(manager.NATGatewayContractVersion).To(BeEmpty())
+	})
+
+	It("rejects unsupported versions", func() {
+		_, err := networkmanager.ParseConfigMap(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "agentless", Namespace: "osac"},
+			Data: map[string]string{
+				"name": "agentless_net", "capabilities": "ipv4",
+				networkmanager.DataKeyNATGatewayContractVersion: "v2",
+			},
+		}, networkmanager.FabricManager)
+
+		Expect(err).To(MatchError(ContainSubstring("unsupported NATGateway contract version")))
+		Expect(errors.Is(err, networkmanager.ErrUnsupportedNATGatewayContractVersion)).To(BeTrue())
 	})
 })

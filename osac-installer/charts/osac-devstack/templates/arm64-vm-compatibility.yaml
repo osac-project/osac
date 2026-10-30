@@ -1,0 +1,61 @@
+{{- if .Values.arm64VmCompatibility.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: osac-dev-full-arm64-vm-compatibility
+  labels:
+    {{- include "osac-devstack.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kubevirt.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["virtualmachines"]
+        scope: Namespaced
+  mutations:
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          [
+            JSONPatch{op: "remove", path: "/spec/template/spec/domain/features/smm"},
+            JSONPatch{op: "remove", path: "/spec/template/spec/domain/features/hyperv"},
+            JSONPatch{op: "remove", path: "/spec/template/spec/domain/clock/timer/hyperv"}
+          ].filter(patch,
+            (patch.path == "/spec/template/spec/domain/features/smm" &&
+              has(object.spec.template) &&
+              has(object.spec.template.spec) &&
+              has(object.spec.template.spec.domain) &&
+              has(object.spec.template.spec.domain.features) &&
+              has(object.spec.template.spec.domain.features.smm)) ||
+            (patch.path == "/spec/template/spec/domain/features/hyperv" &&
+              has(object.spec.template) &&
+              has(object.spec.template.spec) &&
+              has(object.spec.template.spec.domain) &&
+              has(object.spec.template.spec.domain.features) &&
+              has(object.spec.template.spec.domain.features.hyperv)) ||
+            (patch.path == "/spec/template/spec/domain/clock/timer/hyperv" &&
+              has(object.spec.template) &&
+              has(object.spec.template.spec) &&
+              has(object.spec.template.spec.domain) &&
+              has(object.spec.template.spec.domain.clock) &&
+              has(object.spec.template.spec.domain.clock.timer) &&
+              has(object.spec.template.spec.domain.clock.timer.hyperv))
+          )
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: osac-dev-full-arm64-vm-compatibility
+  labels:
+    {{- include "osac-devstack.labels" . | nindent 4 }}
+spec:
+  policyName: osac-dev-full-arm64-vm-compatibility
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: osac.openshift.io/tenant
+          operator: Exists
+{{- end }}

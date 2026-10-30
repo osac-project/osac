@@ -1,20 +1,8 @@
 import { ReactNode } from 'react';
-import {
-  Card,
-  CardBody,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-  Divider,
-  Flex,
-  FlexItem,
-  Stack,
-  StackItem,
-} from '@patternfly/react-core';
+import { CardBody, CardFooter, Divider, Stack, StackItem } from '@patternfly/react-core';
 
+import ListPageCard from '@osac/ui-components/components/Page/ListPageCard';
 import { CatalogItemIcon } from '@osac/ui-components/icons';
-
-import './InstanceCard.css';
 
 interface InstanceCardProps {
   kind?: 'vm' | 'bm' | 'cluster';
@@ -35,24 +23,12 @@ const InstanceCard = ({
   footer,
   actionButton,
 }: InstanceCardProps) => (
-  <Card isFullHeight className="instance-card">
-    <CardHeader
-      className="instance-card__header"
-      actions={{
-        actions: (
-          <Flex
-            alignItems={{ default: 'alignItemsCenter' }}
-            spaceItems={{ default: 'spaceItemsSm' }}
-          >
-            <FlexItem>{statusLabel}</FlexItem>
-            <FlexItem>{actionMenu}</FlexItem>
-          </Flex>
-        ),
-      }}
-    >
-      <CatalogItemIcon kind={kind} />
-    </CardHeader>
-    <CardTitle>{title}</CardTitle>
+  <ListPageCard
+    title={title}
+    statusLabel={statusLabel}
+    actionMenu={actionMenu}
+    icon={<CatalogItemIcon kind={kind} />}
+  >
     <CardBody>{body}</CardBody>
     {footer || actionButton ? <Divider /> : null}
     <CardFooter>
@@ -61,7 +37,7 @@ const InstanceCard = ({
         {actionButton ? <StackItem>{actionButton}</StackItem> : null}
       </Stack>
     </CardFooter>
-  </Card>
+  </ListPageCard>
 );
 
 export default InstanceCard;

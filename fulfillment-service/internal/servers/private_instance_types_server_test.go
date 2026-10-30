@@ -16,6 +16,7 @@ package servers
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"time"
 
 	"buf.build/go/protovalidate"
@@ -248,6 +249,65 @@ var _ = Describe("Private instance types server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResponse.GetObject().GetSpec().GetDescription()).To(Equal("Updated description."))
+		})
+
+		It("Updates labels and annotations with a field mask", func() {
+			createResponse, err := server.Create(ctx, privatev1.InstanceTypesCreateRequest_builder{
+				Object: privatev1.InstanceType_builder{
+					Metadata: privatev1.Metadata_builder{Name: "metadata-update-test"}.Build(),
+					Spec: privatev1.InstanceTypeSpec_builder{
+						Vcpus:       4,
+						MemoryGib:   16,
+						Description: "Metadata update test.",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			object := createResponse.GetObject()
+
+			labels := map[string]string{"admin.osac.openshift.io/metadata-test": "private-label"}
+			annotations := map[string]string{"operator.admin.osac.openshift.io/metadata-test": "private-annotation"}
+			updateResponse, err := server.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
+				Object: privatev1.InstanceType_builder{
+					Id: object.GetId(),
+					Metadata: privatev1.Metadata_builder{
+						Labels:      labels,
+						Annotations: annotations,
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+					"metadata.labels",
+					"metadata.annotations",
+				}},
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(maps.Equal(updateResponse.GetObject().GetMetadata().GetLabels(), labels)).To(BeTrue())
+			Expect(maps.Equal(updateResponse.GetObject().GetMetadata().GetAnnotations(), annotations)).To(BeTrue())
+
+			getResponse, err := server.Get(ctx, privatev1.InstanceTypesGetRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(maps.Equal(getResponse.GetObject().GetMetadata().GetLabels(), labels)).To(BeTrue())
+			Expect(maps.Equal(getResponse.GetObject().GetMetadata().GetAnnotations(), annotations)).To(BeTrue())
+
+			_, err = server.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
+				Object: privatev1.InstanceType_builder{
+					Id: object.GetId(),
+					Metadata: privatev1.Metadata_builder{
+						Labels:      map[string]string{},
+						Annotations: map[string]string{},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+					"metadata.labels",
+					"metadata.annotations",
+				}},
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+
+			getResponse, err = server.Get(ctx, privatev1.InstanceTypesGetRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(getResponse.GetObject().GetMetadata().GetLabels()).To(BeEmpty())
+			Expect(getResponse.GetObject().GetMetadata().GetAnnotations()).To(BeEmpty())
 		})
 
 		It("Delete object", func() {

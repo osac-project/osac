@@ -1,0 +1,61 @@
+# Default meters, revision 0001. FAILED is never billable. Allocation meters
+# bill through DELETING until physical deletion. Volume capacity multiplies by
+# the provisioned GiB. Every meter also sends deployment, tenant, project,
+# catalog item, template, and meter type dimensions.
+- resource: ComputeInstance
+  meter: compute
+  unit: second
+  billable_when:
+    states: [RUNNING]
+  dimensions: [instance_type, image, boot_disk_size_gib]
+
+- resource: Cluster
+  meter: control_plane
+  unit: second
+  billable_when:
+    states: [PROGRESSING, READY]
+    turns_billable_once: [READY]
+  dimensions: [template, version]
+
+- resource: BareMetalInstance
+  meter: allocation
+  unit: second
+  billable_when:
+    states: [STARTING, RUNNING, STOPPING, STOPPED, DELETING]
+    turns_billable_once: [STARTING, RUNNING]
+  dimensions: [instance_type, cluster, node_set]
+
+- resource: BareMetalInstance
+  meter: consumption
+  unit: second
+  billable_when:
+    states: [RUNNING]
+  dimensions: [instance_type, cluster, node_set]
+
+- resource: Volume
+  meter: capacity
+  unit: gibibyte_second
+  billable_when:
+    states: [AVAILABLE, DELETING]
+    turns_billable_once: [AVAILABLE]
+    fields:
+      protocol: BLOCK
+      vendor_volume_id: set
+  multiplier: provisioned_size_gib
+  dimensions: [storage_tier]
+
+- resource: ExternalIP
+  meter: allocation
+  unit: second
+  billable_when:
+    states: [ALLOCATED, DELETING]
+    turns_billable_once: [ALLOCATED]
+  dimensions: [pool, ip_family, attached]
+
+- resource: NATGateway
+  meter: allocation
+  unit: second
+  billable_when:
+    states: [READY, DELETING]
+    turns_billable_once: [READY]
+  dimensions: [virtual_network, external_ip]

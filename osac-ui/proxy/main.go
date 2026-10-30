@@ -10,6 +10,8 @@ import (
 	"github.com/andybalholm/brotli"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/osac/proxy/auth"
 	"github.com/osac/proxy/bridge"
@@ -124,6 +126,12 @@ func main() {
 
 		connectHandler, err := bridge.NewConnectJSONProxy(grpcTarget, tlsConfig, reflectionToken)
 		if err != nil {
+			if reflectionToken == "" && status.Code(err) == codes.Unauthenticated {
+				log.WithError(err).Fatal(
+					"gRPC reflection requires authentication; set OIDC_ISSUER_URL, " +
+						"OIDC_SERVICE_CLIENT_ID, and OIDC_SERVICE_CLIENT_SECRET",
+				)
+			}
 			log.WithError(err).Fatal("Failed to create Connect JSON proxy")
 		}
 		router.Group(func(r chi.Router) {

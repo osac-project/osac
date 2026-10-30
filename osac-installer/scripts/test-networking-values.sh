@@ -94,6 +94,25 @@ render_failure_with_message() {
   fi
   if ! grep -Fq -- "${expected}" "${error}"; then
     echo "ERROR: ${name} failed without expected message ${expected@Q}" >&2
+    cat "${error}" >&2
+    exit 1
+  fi
+}
+
+render_failure_matching() {
+  local name=$1
+  local pattern=$2
+  shift 2
+
+  local error="${TMP_DIR}/${name}.stderr"
+  echo "checking ${name} (expected failure matching ${pattern@Q})"
+  if "${HELM_BIN}" "${COMMON_ARGS[@]}" "$@" >"/dev/null" 2>"${error}"; then
+    echo "ERROR: ${name} unexpectedly rendered successfully" >&2
+    exit 1
+  fi
+  if ! grep -Eiq -- "${pattern}" "${error}"; then
+    echo "ERROR: ${name} failed without expected message pattern ${pattern@Q}" >&2
+    cat "${error}" >&2
     exit 1
   fi
 }
@@ -393,6 +412,23 @@ render_failure \
   --set global.networking.networkClass.defaults.egressRules[0].protocol=PROTOCOL_ALL \
   --set global.networking.networkClass.defaults.egressRules[0].portFrom=80 \
   --set global.networking.networkClass.defaults.egressRules[0].portTo=443
+
+# The installer advertises an IPv4-only networking contract across all
+# supported profiles, including the legacy k8s_only path.
+render_failure_matching \
+  ipv6-egress-cidr \
+  '(global\.networking\.networkClass\.defaults\.egressRules\.0|/global/networking/networkClass/defaults/egressRules/0).*additional propert(y|ies).*ipv6Cidr.*(is )?not allowed' \
+  --set global.networking.fabricManager= \
+  --set global.networking.k8sManager=k8s_only \
+  --set global.networking.networkClass.defaults.egressRules[0].protocol=PROTOCOL_TCP \
+  --set-string global.networking.networkClass.defaults.egressRules[0].ipv6Cidr=2001:db8::/64
+
+render_failure_matching \
+  ipv6-manager-capability \
+  "(operator\\.networkManagers\\.k8sManagers\\.k8s_only\\.capabilities\\.0.*must be one of the following: [[:punct:]]ipv4[[:punct:]]|/operator/networkManagers/k8sManagers/k8s_only/capabilities/0.*value must be [[:punct:]]ipv4[[:punct:]])" \
+  --set global.networking.fabricManager= \
+  --set global.networking.k8sManager=k8s_only \
+  --set-string operator.networkManagers.k8sManagers.k8s_only.capabilities[0]=ipv6
 
 # Required fabric details and unsupported manager combinations must
 # fail before Helm produces installable manifests.

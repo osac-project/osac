@@ -9,6 +9,7 @@
 - [Overview](#overview)
 - [Why This Flow Matters](#why-this-flow-matters)
 - [Concepts](#concepts)
+- [Labels and annotations](#labels-and-annotations)
 - [Checking the current user with `osac whoami`](#checking-the-current-user-with-osac-whoami)
 - [Flow map](#flow-map)
 - [Prerequisites](#prerequisites)
@@ -96,6 +97,35 @@ After the IdP is registered and READY:
   tenants and (in many labs) registering identity providers.
 - **Public API** (`fulfillment-api…`): tenant-scoped operations after IdP login
   (projects, memberships, day-2 RBAC).
+
+### Labels and annotations
+
+Tenant users can use labels and annotations for ordinary metadata on resources where their public
+API permissions allow Create or Update. For example:
+
+```shell
+osac label projects demo-project team=platform
+osac annotate projects demo-project support-contact=team-a
+osac label projects demo-project team-
+```
+
+Keys in `admin.osac.openshift.io` and its dot-delimited subdomains are reserved for system use.
+Public reads and event payloads omit those entries for every caller. Public Create or Update
+requests that supply one fail with `InvalidArgument`:
+
+```text
+Label or annotation is reserved for use by the system.
+```
+
+The request is rejected as a whole; remove the reserved entry from the request rather than retrying
+the same payload. Removing a known reserved key with `key-` through a public session does not
+remove the stored value, because public reads hide it. An authorized private API client must make
+that change.
+
+Ordinary metadata keys remain available to CEL List filters and event filters. Public filters may
+not test the presence or value of a reserved key. See the
+[metadata administrator guide](admin/metadata.md) for the full API and CLI contract, and
+[Filter expressions](../../fulfillment-service/docs/FILTER.md) for filter syntax.
 
 ### Checking the current user with `osac whoami`
 
@@ -335,6 +365,10 @@ to OSAC.
 
 If the redirect URI is missing or wrong in the IdP, login fails after the password step.
 
+### Prerequisites
+
+1. Your tenant has been onboarded into OSAC
+
 ### Steps
 
 1. In your company IdP, create an OIDC client (with client id and client secret).
@@ -346,8 +380,12 @@ If the redirect URI is missing or wrong in the IdP, login fails after the passwo
 ### Create the IdentityProvider in OSAC
 
 ```bash
+# Log in as an admin or tenant-idp-manager account (breakglass account)
+# Cloud provider admin login:
 osac login --address "$OSAC" --insecure --private \
   --token-script "oc create token -n ${NS} admin"
+
+export TENANT="your-tenant-name"
 
 # Values from your IdP client
 export OIDC_ISSUER="https://idp.example.com/realms/osac-corp"
@@ -355,6 +393,22 @@ export OIDC_AUTHORIZATION_URL="${OIDC_ISSUER}/protocol/openid-connect/auth"
 export OIDC_TOKEN_URL="${OIDC_ISSUER}/protocol/openid-connect/token"
 export OIDC_CLIENT_ID="<client-id>"
 export OIDC_CLIENT_SECRET="<client-secret>"
+export CLIENT_SECRET_NAME="${TENANT}-oidc-secret"
+
+# create the client secret
+CLIENT_SECRET=$(printf "%s" "$OIDC_CLIENT_SECRET" | base64 -w 0)
+cat > /tmp/osac-demo/client-secret.yaml <<EOF
+"@type": type.googleapis.com/osac.private.v1.Secret
+metadata:
+  name: "${CLIENT_SECRET_NAME}"
+  tenant: "${TENANT}"
+data:
+  value: "${CLIENT_SECRET}"
+type: SECRET_TYPE_VALUE
+EOF
+
+osac create -f /tmp/osac-demo/client-secret.yaml
+rm -rf /tmp/osac-demo/client-secret.yaml
 
 cat > /tmp/osac-demo/idp.yaml <<EOF
 "@type": type.googleapis.com/osac.private.v1.IdentityProvider
@@ -368,7 +422,8 @@ spec:
     authorizationUrl: "${OIDC_AUTHORIZATION_URL}"
     tokenUrl: "${OIDC_TOKEN_URL}"
     clientId: "${OIDC_CLIENT_ID}"
-    clientSecret: "${OIDC_CLIENT_SECRET}"
+    clientSecretSecret:
+      name: "${CLIENT_SECRET_NAME}"
     issuer: "${OIDC_ISSUER}"
 EOF
 
@@ -496,9 +551,10 @@ metadata:
   name: tenant-admin-binding
   tenant: ${TENANT}
 spec:
-  role: tenant-admin
+  role:
+    name: tenant-admin
   users:
-    - ${ALICE_ID}
+    - id: ${ALICE_ID}
 EOF
 
 osac create -f /tmp/osac-demo/rolebinding.yaml
@@ -651,7 +707,7 @@ metadata:
 spec:
   role: PROJECT_MEMBERSHIP_ROLE_VIEWER
   users:
-    - ${BOB_OSAC_USER_ID}
+    - id: ${BOB_OSAC_USER_ID}
 EOF
 
 osac create -f /tmp/osac-demo/bob-membership.yaml

@@ -13,6 +13,11 @@ import {
 
 import { ExternalIpPoolWizardPage } from './ExternalIpPoolWizardPage';
 import type { MockTransportOverrides } from '../../test-utils/createMockConnectTransport';
+import {
+  expectResourceSelectDisabled,
+  expectResourceSelectEnabled,
+  getResourceSelectCombobox,
+} from '../../test-utils/resourceSelect';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const LIST_PATH = '/admin/infrastructure/external-ip-pools';
@@ -58,14 +63,10 @@ const fillPoolStep = async (user: UserEvent, name: string, cidr: string) => {
 
 const fillTenantStep = async (user: UserEvent, tenantName: string) => {
   await screen.findByRole('heading', { name: 'Tenant' });
-  const tenantToggle = await waitFor(() => {
-    const toggle = screen.getByRole('button', {
-      name: (_accessibleName, element) => element.id === 'external-ip-pool-tenant',
-    });
-    expect(toggle).not.toBeDisabled();
-    return toggle;
+  await waitFor(() => {
+    expectResourceSelectEnabled(/^Tenant/);
   });
-  await user.click(tenantToggle);
+  await user.click(screen.getByLabelText(/^Tenant/));
   await user.click(screen.getByRole('option', { name: tenantName }));
 };
 
@@ -130,11 +131,7 @@ describe('ExternalIpPoolWizardPage', () => {
       await clickNext(user);
       await screen.findByRole('heading', { name: 'Tenant' });
       await waitFor(() => {
-        expect(
-          screen.getByRole('button', {
-            name: (_accessibleName, element) => element.id === 'external-ip-pool-tenant',
-          }),
-        ).toHaveTextContent('acme');
+        expect(getResourceSelectCombobox(/^Tenant/)).toHaveValue('acme');
       });
       await clickNext(user);
 
@@ -232,11 +229,7 @@ describe('ExternalIpPoolWizardPage', () => {
       expect(
         screen.getByText('Register a tenant before creating and assigning an external IP pool.'),
       ).toBeInTheDocument();
-      expect(
-        screen.getByRole('button', {
-          name: (_accessibleName, element) => element.id === 'external-ip-pool-tenant',
-        }),
-      ).toBeDisabled();
+      expectResourceSelectDisabled(/^Tenant/);
     });
 
     it('shows a fetch error instead of the empty-tenant warning when listing tenants fails', async () => {
@@ -252,11 +245,7 @@ describe('ExternalIpPoolWizardPage', () => {
       expect(await screen.findByText('Failed to fetch tenants')).toBeInTheDocument();
       expect(screen.getByText('tenants unavailable')).toBeInTheDocument();
       expect(screen.queryByText('No registered tenants')).not.toBeInTheDocument();
-      expect(
-        screen.getByRole('button', {
-          name: (_accessibleName, element) => element.id === 'external-ip-pool-tenant',
-        }),
-      ).toBeDisabled();
+      expectResourceSelectDisabled(/^Tenant/);
     });
 
     it('shows a form-level error and does not navigate when the name already exists', async () => {

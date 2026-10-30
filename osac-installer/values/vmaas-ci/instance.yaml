@@ -195,9 +195,6 @@ hubAccess:
 
 # --- Metering ---
 metering:
-  enabled: true
-  reconciliation:
-    interval: "5m"
   # Echo adapter -- test/development tool only. Consumes metering events from
   # Kafka and exposes them via HTTP for E2E test assertions.
   echoAdapter:

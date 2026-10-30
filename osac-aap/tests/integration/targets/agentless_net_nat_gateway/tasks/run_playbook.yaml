@@ -1,0 +1,24 @@
+---
+- name: Run and validate the NATGateway provider playbook
+  vars:
+    agentless_provider_playbook: "{{ agentless_natgw_playbook }}"
+    agentless_provider_job_vars: "{{ agentless_natgw_job_vars }}"
+    agentless_provider_inventory: "{{ agentless_natgw_inventory }}"
+    agentless_provider_state_file: "{{ agentless_natgw_state_file }}"
+    agentless_provider_kubeconfig: /tmp/osac-agentless-natgw-no-kubeconfig
+    agentless_provider_extra_environment:
+      OSAC_AGENTLESS_NATGW_TEST_MODE: "true"
+      OSAC_AGENTLESS_NATGW_FAIL_DELETE: >-
+        {{ agentless_natgw_fail_delete | default(false) | ternary('true', 'false') }}
+    agentless_provider_should_succeed: "{{ agentless_natgw_should_succeed }}"
+    agentless_provider_operation: "{{ agentless_natgw_operation }}"
+    agentless_provider_resource: "{{ agentless_natgw_resource }}"
+  block:
+    - name: Run shared AgentlessNet provider playbook checks
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/../../../common/run_agentless_provider_playbook.yaml"
+
+    - name: Expose NATGateway result for scenario assertions
+      ansible.builtin.set_fact:
+        agentless_natgw_result: "{{ agentless_provider_result }}"
+      when: agentless_natgw_should_succeed | bool

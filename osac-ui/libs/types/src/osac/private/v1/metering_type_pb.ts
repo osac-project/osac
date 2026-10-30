@@ -26,7 +26,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/metering_type.proto.
  */
 export const file_osac_private_v1_metering_type: GenFile = /*@__PURE__*/
-  fileDesc("CiNvc2FjL3ByaXZhdGUvdjEvbWV0ZXJpbmdfdHlwZS5wcm90bxIPb3NhYy5wcml2YXRlLnYxImEKFE1ldGVyaW5nRmllbGRPcHRpb25zEjAKBGtpbmQYASABKA4yIi5vc2FjLnByaXZhdGUudjEuTWV0ZXJpbmdGaWVsZEtpbmQSFwoPdHJhbnNpdGlvbl90aW1lGAIgASgJKqIBChFNZXRlcmluZ0ZpZWxkS2luZBIjCh9NRVRFUklOR19GSUVMRF9LSU5EX1VOU1BFQ0lGSUVEEAASHgoaTUVURVJJTkdfRklFTERfS0lORF9WQVJJRVMQARIgChxNRVRFUklOR19GSUVMRF9LSU5EX0NPTlNUQU5UEAISJgoiTUVURVJJTkdfRklFTERfS0lORF9GSVhFRF9PTkNFX1NFVBADOmIKCG1ldGVyaW5nEh0uZ29vZ2xlLnByb3RvYnVmLkZpZWxkT3B0aW9ucxjShgMgASgLMiUub3NhYy5wcml2YXRlLnYxLk1ldGVyaW5nRmllbGRPcHRpb25zUghtZXRlcmluZ0IGirUYAggBYgZwcm90bzM", [file_cleanapi_cleanapi, file_google_protobuf_descriptor]);
+  fileDesc("CiNvc2FjL3ByaXZhdGUvdjEvbWV0ZXJpbmdfdHlwZS5wcm90bxIPb3NhYy5wcml2YXRlLnYxInkKFE1ldGVyaW5nRmllbGRPcHRpb25zEjAKBGtpbmQYASABKA4yIi5vc2FjLnByaXZhdGUudjEuTWV0ZXJpbmdGaWVsZEtpbmQSFwoPdHJhbnNpdGlvbl90aW1lGAIgASgJEhYKDm93bmVyX3Jlc291cmNlGAMgASgJKqIBChFNZXRlcmluZ0ZpZWxkS2luZBIjCh9NRVRFUklOR19GSUVMRF9LSU5EX1VOU1BFQ0lGSUVEEAASHgoaTUVURVJJTkdfRklFTERfS0lORF9WQVJJRVMQARIgChxNRVRFUklOR19GSUVMRF9LSU5EX0NPTlNUQU5UEAISJgoiTUVURVJJTkdfRklFTERfS0lORF9GSVhFRF9PTkNFX1NFVBADOmIKCG1ldGVyaW5nEh0uZ29vZ2xlLnByb3RvYnVmLkZpZWxkT3B0aW9ucxjShgMgASgLMiUub3NhYy5wcml2YXRlLnYxLk1ldGVyaW5nRmllbGRPcHRpb25zUghtZXRlcmluZ0IGirUYAggBYgZwcm90bzM", [file_cleanapi_cleanapi, file_google_protobuf_descriptor]);
 
 /**
  * Options of a field that metering tracks.
@@ -51,6 +51,17 @@ export type MeteringFieldOptions = Message<"osac.private.v1.MeteringFieldOptions
    * @generated from field: string transition_time = 2;
    */
   transitionTime: string;
+
+  /**
+   * Names the resource type this field's reference points at, when the field carries the
+   * resource's ownership root: for example a bare metal instance's cluster names "Cluster".
+   * Metering resolves the root by this annotation, gates the resource's billing on the
+   * root's states, and attributes the resource's usage under it. The field must be fixed
+   * once set, and the value metering uses is the reference's id, which never changes.
+   *
+   * @generated from field: string owner_resource = 3;
+   */
+  ownerResource: string;
 };
 
 /**

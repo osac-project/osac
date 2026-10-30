@@ -59,7 +59,7 @@ message BareMetalInstanceSpec {
   // Mutually exclusive with `template`.
   //
   // This can't be modified after the bare metal instance is created.
-  BareMetalInstanceCatalogItemReference catalog_item = 1 [(google.api.field_behavior) = IMMUTABLE];
+  BareMetalInstanceCatalogItemReference catalog_item = 1 [(google.api.field_behavior) = IMMUTABLE, (osac.private.v1.metering) = {kind: METERING_FIELD_KIND_CONSTANT}];
 
   // SSH public key injected into the OS at provisioning time. Immutable after creation.
   // Must be a valid SSH public key in OpenSSH format (ssh-rsa, ssh-ed25519, etc.).
@@ -194,7 +194,7 @@ message BareMetalInstanceStatus {
   // For a cluster worker this names the cluster the worker serves for its whole life. Empty for
   // standalone instances. The system sets it once, at creation, and it never changes; users can't
   // set or change it.
-  ClusterLocalReference cluster = 8 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_FIXED_ONCE_SET}];
+  ClusterLocalReference cluster = 8 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_FIXED_ONCE_SET, owner_resource: "Cluster"}];
 
   // The node set that the bare metal instance serves within its cluster. For a cluster worker
   // this is the identifier of the node set in the cluster's spec that the worker belongs to.

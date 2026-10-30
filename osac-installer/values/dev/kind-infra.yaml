@@ -76,7 +76,7 @@ keycloak:
     enabled: true
     mcpResourceURL: "https://mcp.osac.localhost:8443/"
 
-# --- Fake CRDs (HyperShift, OVN-K stubs for controllers) ---
+# --- Kind-only fake CRDs (HyperShift and networking API stubs) ---
 fakeCrds:
   enabled: true
 

@@ -124,6 +124,10 @@ operator:
     controlPlaneStartingThreshold: "30m"
     workersJoiningThreshold: "20m"
     workersJoiningByInstanceType: {}
+  upgradeTimeouts:
+    pending: "10m"
+    controlPlane: "40m"
+    nodePoolPerNode: "20m"
   fulfillment:
     serverAddress: "fulfillment-internal-api:8001"
     credentials:
@@ -161,8 +165,8 @@ operator:
   # (fabricManagers / k8sManagers). Defaults live in the osac-operator subchart;
   # override operator.networkManagers here to enable netris/k8s_only or change
   # capabilitiesSyncInterval. Manager registrations can set
-  # externalIPContractVersion / externalIPAttachmentContractVersion select
-  # independent v1 result contracts.
+  # externalIPContractVersion / externalIPAttachmentContractVersion /
+  # natGatewayContractVersion select independent v1 result contracts.
 
 # --- Fulfillment Service ---
 service:
@@ -379,12 +383,31 @@ ui:
     pullPolicy: auto
 
 # --- Metering ---
+# Always deployed: billing is not optional. The event publisher writes usage
+# events unconditionally, so an install without metering silently loses
+# revenue. The database wiring points at the secrets this chart's
+# workload-db-secrets template creates for the configured DB host.
 metering:
-  enabled: false
   image:
     repository: ghcr.io/osac-project/metering-service
     tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
     pullPolicy: Always
+  database:
+    connection:
+    - secret:
+        name: osac-db-metering-config
+        items:
+        - key: url
+          param: url
+    - secret:
+        name: osac-db-metering-client-cert
+        items:
+        - key: tls.crt
+          param: sslcert
+        - key: tls.key
+          param: sslkey
+        - key: ca.crt
+          param: sslrootcert
 
 # --- Bare Metal Fulfillment Operator CRDs ---
 bmfCrds: {}
@@ -459,9 +482,26 @@ bmf:
     namespace: ""
     hostClass: "metal3"
 
-# --- Validation hooks ---
+# --- Install preflight ---
+# Checks run while Helm renders the chart (helm install, helm upgrade and
+# --dry-run=server) and stop the install before anything is created when a
+# prerequisite is missing. The report is the ConfigMap <release>-preflight-report
+# and, on a failed render, the OSAC-PREFLIGHT-JSON line on stderr.
+# validation.enabled=false skips every check; the report still lists them.
 validation:
   enabled: true
+
+preflight:
+  # enforce: blocking findings stop the install (default).
+  # report:  findings are recorded but never stop the install; use with
+  #          helm ... --dry-run=server for a read-only report.
+  # strict:  warnings stop the install too.
+  mode: enforce
+  # Skip a check by id, with the reason. Ids are in files/preflight/catalog.yaml.
+  # Example:
+  #   skip:
+  #     cert-issuer-ready: "the issuer is created by GitOps after this install"
+  skip: {}
 
 hubAccess:
   enabled: false

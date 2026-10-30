@@ -17,6 +17,7 @@ REMOTE_STORAGE_CLASS=${REMOTE_STORAGE_CLASS:-"lvms-vg1"}
 REMOTE_KUBECONFIG_SECRET_NAME=${REMOTE_KUBECONFIG_SECRET_NAME:-"osac-remote-kubeconfig"}
 REMOTE_KUBECONFIG_SECRET_KEY=${REMOTE_KUBECONFIG_SECRET_KEY:-"kubeconfig"}
 MODE=${1:-"configure"}
+EVPN_VALUES=${EVPN_VALUES:-}
 
 validate_remote_kubeconfig_secret \
     "${REMOTE_KUBECONFIG_SECRET_NAME}" "${REMOTE_KUBECONFIG_SECRET_KEY}"
@@ -147,6 +148,56 @@ echo "CNV ready"
 
 else
 echo "Skipping prerequisites (LVMS, CNV) -- SKIP_PREREQUISITES=true"
+fi
+
+if [[ "${MODE}" == "prepare" && -n "${EVPN_VALUES}" ]]; then
+    values_args=()
+    IFS=' ' read -r -a evpn_values_files <<< "${EVPN_VALUES}"
+    for values_file in "${evpn_values_files[@]}"; do
+        values_args+=(-f "${values_file}")
+    done
+
+    deps_chart="${SCRIPT_DIR}/../charts/osac-deps"
+    infra_chart="${SCRIPT_DIR}/../charts/osac-infra"
+
+    # Validate the full charts first. --show-only exits non-zero when the
+    # guarded template is absent, which is expected when EVPN is disabled or
+    # the NMState subscription is already installed.
+    helm template osac-deps "${deps_chart}" "${values_args[@]}" >/dev/null
+    if nmstate_manifest=$(helm template osac-deps "${deps_chart}" \
+        "${values_args[@]}" --show-only templates/nmstate.yaml 2>/dev/null); then
+        if [[ -n "${nmstate_manifest}" ]]; then
+            printf '%s\n' "${nmstate_manifest}" \
+                | oc "${remote_args[@]}" apply -f -
+        fi
+    fi
+
+    infra_values_args=("${values_args[@]}" --set "osacNamespace=${INSTALLER_NAMESPACE}")
+    helm template osac-infra "${infra_chart}" "${infra_values_args[@]}" >/dev/null
+    if evpn_manifest=$(helm template osac-infra "${infra_chart}" \
+        "${infra_values_args[@]}" --show-only templates/evpn.yaml 2>/dev/null); then
+        if [[ -n "${evpn_manifest}" ]]; then
+            evpn_tmp=$(mktemp -d)
+            trap 'rm -rf "${evpn_tmp}"' EXIT
+            evpn_configmap=$(printf '%s\n' "${evpn_manifest}" \
+                | oc "${remote_args[@]}" create --dry-run=client -o json -f -)
+            for config_key in \
+                settings.env \
+                nodes.txt \
+                peers.txt \
+                cluster-network-patch.json \
+                nmstate.yaml \
+                nncp.yaml \
+                vtep.yaml \
+                frr.yaml \
+                routeadvertisements.yaml; do
+                jq -er --arg key "${config_key}" '.data[$key]' \
+                    <<< "${evpn_configmap}" > "${evpn_tmp}/${config_key}"
+            done
+            KUBECONFIG="${REMOTE_KUBECONFIG}" CONFIG_DIR="${evpn_tmp}" \
+                bash "${SCRIPT_DIR}/../charts/osac-infra/files/hooks/configure-evpn.sh"
+        fi
+    fi
 fi
 
 # Remote cluster: prepare for OSAC

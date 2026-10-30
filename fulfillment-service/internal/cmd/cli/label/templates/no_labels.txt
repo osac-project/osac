@@ -7,3 +7,7 @@ To remove a label, use the label name followed by a '-' character. For example, 
 'my-label' label:
 
 {{ binary }} label cluster 123 my-label-
+
+Keys in the 'admin.osac.openshift.io' domain and its subdomains are reserved for system use. Use an
+authorized private API session to manage them. Public reads hide these labels and public writes
+that include a reserved key are rejected.

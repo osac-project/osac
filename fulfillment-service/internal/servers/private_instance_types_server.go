@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
@@ -230,6 +231,10 @@ func applyInstanceTypeUpdate(base, update *privatev1.InstanceType, mask *fieldma
 	}
 	for _, path := range mask.GetPaths() {
 		switch path {
+		case "metadata.labels":
+			base.GetMetadata().SetLabels(maps.Clone(update.GetMetadata().GetLabels()))
+		case "metadata.annotations":
+			base.GetMetadata().SetAnnotations(maps.Clone(update.GetMetadata().GetAnnotations()))
 		case "spec.description":
 			base.GetSpec().SetDescription(update.GetSpec().GetDescription())
 		case "spec.state":

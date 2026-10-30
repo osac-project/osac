@@ -205,4 +205,33 @@ render_infra_failure_matching() {
 render_success valid-defaults
 render_infra_success infra-valid-defaults
 
+# Retry counts and POSIX IDs accept zero (no retries, root) but never
+# negative values.
+render_failure_matching \
+  backoff-limit-negative \
+  '(aap\.bootstrap\.backoffLimit|/aap/bootstrap/backoffLimit).*(must|should) be greater than or equal to 0' \
+  --set aap.bootstrap.backoffLimit=-1
+
+render_success \
+  backoff-limit-zero \
+  --set aap.bootstrap.backoffLimit=0
+
+for field in runAsUser runAsGroup fsGroup; do
+  render_infra_failure_matching \
+    "vault-${field}-negative" \
+    "(bundledVault\\.podSecurityContext\\.${field}|/bundledVault/podSecurityContext/${field}).*(must|should) be greater than or equal to 0" \
+    --set "bundledVault.podSecurityContext.${field}=-1"
+done
+
+render_infra_success \
+  vault-runasuser-zero \
+  --set bundledVault.podSecurityContext.runAsUser=0
+
+# Chart-owned objects are closed: an unknown key is rejected instead of
+# being silently ignored.
+render_failure_matching \
+  fulfillment-trust-unknown-key \
+  '(global\.fulfillmentTrust|/global/fulfillmentTrust).*additional propert(y|ies).*unknownKey.*(is )?not allowed' \
+  --set global.fulfillmentTrust.unknownKey=1
+
 echo "input validation passed"

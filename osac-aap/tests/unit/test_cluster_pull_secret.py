@@ -14,10 +14,12 @@ OSAC_AAP = Path(__file__).resolve().parents[2]
 SERVICE = OSAC_AAP / "collections/ansible_collections/osac/service"
 TEMPLATES = OSAC_AAP / "collections/ansible_collections/osac/templates"
 FIXTURE_MARKER = "OSAC7034_SYNTHETIC_REJECTED_INPUT"
+ACCEPTED_FIXTURE_MARKER = "OSAC7034_SYNTHETIC_ACCEPTED_PARAMETER"
 
 
 @pytest.mark.parametrize("failure", [None, "missing-reference", "inline", "parameters"])
-def test_reference_only_settings_and_extraction(tmp_path: Path, failure: str | None) -> None:
+@pytest.mark.parametrize("verbosity", [0, 2])
+def test_reference_only_settings_and_extraction(tmp_path: Path, failure: str | None, verbosity: int) -> None:
     """Run the real settings/extraction consumers; no Kubernetes module is provided."""
     order = {
         "metadata": {"name": "fixture", "namespace": "hub", "uid": "fixture-uid"},
@@ -26,7 +28,9 @@ def test_reference_only_settings_and_extraction(tmp_path: Path, failure: str | N
             "nodeRequests": [],
             "pullSecretRef": {"name": "owned-source"},
             "sshPublicKey": "fixture-public-key",
-            "templateParameters": '{"unrelated":"keep"}',
+            "templateParameters": json.dumps(
+                {"unrelated": "keep", "synthetic_sensitive_parameter": ACCEPTED_FIXTURE_MARKER}
+            ),
         },
     }
     if failure == "missing-reference":
@@ -45,6 +49,8 @@ def test_reference_only_settings_and_extraction(tmp_path: Path, failure: str | N
                 "that": [
                     "cluster_settings_pull_secret_name == 'pullsecret-cluster-fixture'",
                     "template_parameters.unrelated == 'keep'",
+                    "template_parameters.synthetic_sensitive_parameter == "
+                    "(cluster_order.spec.templateParameters | from_json).synthetic_sensitive_parameter",
                     "template_parameters.ssh_public_key == 'fixture-public-key'",
                     "'pull_secret' not in template_parameters",
                     "cluster_settings_pull_secret is not defined",
@@ -80,7 +86,7 @@ def test_reference_only_settings_and_extraction(tmp_path: Path, failure: str | N
         }
     )
     result = subprocess.run(
-        ["ansible-playbook", "-i", "localhost,", str(playbook)],
+        ["ansible-playbook", *(["-vv"] if verbosity else []), "-i", "localhost,", str(playbook)],
         cwd=OSAC_AAP,
         env=environment,
         capture_output=True,
@@ -92,6 +98,8 @@ def test_reference_only_settings_and_extraction(tmp_path: Path, failure: str | N
     assert (result.returncode == 0) == (failure is None), output
     assert FIXTURE_MARKER not in output
     assert base64.b64encode(FIXTURE_MARKER.encode()).decode() not in output
+    assert ACCEPTED_FIXTURE_MARKER not in output
+    assert base64.b64encode(ACCEPTED_FIXTURE_MARKER.encode()).decode() not in output
 
 
 def test_hosted_cluster_uses_controller_projection_only() -> None:

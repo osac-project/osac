@@ -43,3 +43,4 @@
     cluster_settings_pull_secret_name: "pullsecret-cluster-{{ cluster_order.metadata.name }}"
     template_parameters: >-
       {{ cluster_settings_template_parameters | combine({'ssh_public_key': cluster_settings_ssh_public_key}) }}
+  no_log: true

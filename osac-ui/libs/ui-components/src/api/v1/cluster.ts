@@ -2,22 +2,62 @@ import { useCallback, useEffect, useState } from 'react';
 import { type MessageInitShape } from '@bufbuild/protobuf';
 import { keepPreviousData, useMutation } from '@tanstack/react-query';
 
-import { Cluster, ClusterSchema, Clusters, Secrets } from '@osac/types';
+import { Cluster, ClusterSchema, Clusters, ClustersListResponse, Secrets } from '@osac/types';
+import { type CelFilter, cel } from '@osac/ui-components/api/cel';
 import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
 
 import { useApiFetch } from '../api-context';
 import { apiQueryKey } from '../types';
 import { type ApiQueryClient, useApiQuery, useApiQueryClient } from '../use-api-query';
 
-export const useClusters = () => {
+const combineClusterListFilter = (
+  projectFilter: CelFilter<Cluster> | undefined,
+  filters?: CelFilter<Cluster>,
+): CelFilter<Cluster> | undefined => {
+  const expression = cel<Cluster>((builder) => builder.and(projectFilter, filters));
+  return expression === '' ? undefined : expression;
+};
+
+export const useClusters = (
+  filters?: CelFilter<Cluster>,
+  enabled = true,
+): {
+  clusters: Cluster[];
+  totalItems: number;
+  isLoading: boolean;
+  error: unknown;
+} => {
   const client = useApiFetch(Clusters);
-  const filter = useProjectFilterQuery<Cluster>();
-  return useApiQuery({
+  const projectFilter = useProjectFilterQuery<Cluster>();
+  const filter = combineClusterListFilter(projectFilter, filters);
+  const totalsFilter = projectFilter;
+
+  const filteredClustersQuery = useApiQuery<ClustersListResponse, Cluster[]>({
     queryKey: apiQueryKey('v1/clusters', undefined, filter ? { filter } : undefined),
-    queryFn: () => client.list({ filter }),
+    queryFn: () => client.list(filter ? { filter } : {}),
     select: (data) => data.items,
     placeholderData: keepPreviousData,
+    enabled,
   });
+
+  const totalClustersQuery = useApiQuery<ClustersListResponse, number>({
+    queryKey: apiQueryKey(
+      'v1/clusters',
+      ['total'],
+      totalsFilter ? { filter: totalsFilter } : undefined,
+    ),
+    queryFn: () => client.list(totalsFilter ? { filter: totalsFilter, limit: 0 } : { limit: 0 }),
+    select: (data) => data.total ?? data.items.length,
+    placeholderData: keepPreviousData,
+    enabled,
+  });
+
+  return {
+    clusters: filteredClustersQuery.data ?? [],
+    totalItems: totalClustersQuery.data ?? 0,
+    isLoading: filteredClustersQuery.isLoading || totalClustersQuery.isLoading,
+    error: filteredClustersQuery.error ?? totalClustersQuery.error,
+  };
 };
 
 export const useCluster = (id: string) => {

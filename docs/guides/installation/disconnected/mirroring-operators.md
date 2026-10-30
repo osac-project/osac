@@ -96,36 +96,16 @@ export BASTION_AUTHFILE="${XDG_RUNTIME_DIR}/containers/auth.json"
 | OpenShift cluster is in a disconnected or restricted-network state | `oc get proxy/cluster -o jsonpath='{.spec}'` |
 | Latest available `oc-mirror` v2 binary on the bastion | `oc-mirror version` |
 | Mirror registry certificate validates from the bastion | `curl -sS -o /dev/null -w '%{http_code}\n' https://<registry>:8443/v2/` (no `-k`; HTTP `200` or `401` proves TLS validation and reachability) |
-| Mirror registry certificate validates from every cluster node | Run the per-node certificate validation below; every node must return HTTP `200` or `401` without `-k` |
+| Mirror registry certificate validates from every cluster node | Approved H6 evidence: every node returned HTTP `200` or `401` without `-k`; consume the prerequisite diagnostic result, not a new probe here |
 | **Bastion authfile** contains source read + mirror write credentials | `jq -e '.auths \| has("registry.redhat.io")' "${BASTION_AUTHFILE}"` |
 | **Bastion authfile** includes mirror registry write credentials | `jq -e '.auths \| has("<registry>:8443")' "${BASTION_AUTHFILE}"` |
 | **Cluster pull secret** contains mirror read-only credentials | `oc get secret/pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' \| base64 -d \| jq '.auths \| keys'` |
 | At least 400 GiB free disk on the bastion | `df -h $(pwd)` |
 | Cluster admin access | `oc auth can-i create catalogsource -n openshift-marketplace` |
 
-Validate the mirror registry certificate and reachability from every
-cluster node:
+<!-- Moved to prereqs.md §3 diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
 
-```bash
-for node in $(oc get nodes -o name); do
-  code="$(
-    oc debug "$node" -- chroot /host \
-      curl -sS -o /dev/null -w '%{http_code}' \
-      'https://<registry>:8443/v2/'
-  )" || {
-    echo "ERROR: TLS validation or reachability failed on $node" >&2
-    exit 1
-  }
-
-  case "$code" in
-    200|401) printf '%s %s\n' "$node" "$code" ;;
-    *)
-      echo "ERROR: unexpected registry response on $node: HTTP $code" >&2
-      exit 1
-      ;;
-  esac
-done
-```
+<!-- Moved to prereqs.md §3 diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
 
 ### Credential Separation
 
@@ -454,10 +434,10 @@ fi
 | Symptom | Likely cause | Resolution |
 | ------- | ------------ | ---------- |
 | CatalogSource stays in `CONNECTING` state | Catalog image not mirrored or IDMS not applied | Verify `oc get idms` lists the catalog index; re-run `oc-mirror` |
-| Subscription stuck on `UpgradePending` | Channel mismatch between ISC and Subscription | Ensure `defaultChannel` in ISC matches the Subscription channel |
-| `ImagePullBackOff` on operator pods | IDMS/ITMS not applied or registry unreachable from nodes | `oc debug node/<node> -- chroot /host crictl pull <image>` |
 | `oc-mirror` fails with `manifest unknown` | Registry disk full or partial upload | Check registry storage; re-run `oc-mirror` (idempotent) |
 | `maxVersion` mismatch for AAP | Version format includes build metadata | Use exact string `'2.6.0+0.1787258256'` with quotes in YAML |
+
+<!-- Moved to operators.md §6 troubleshooting. See docs/guides/installation/disconnected/operators.md -->
 
 ## CatalogSource naming requirement
 
@@ -502,5 +482,7 @@ See [Step 2b](#2b-verify-the-generated-catalogsource-name) above.
 
 4. **Fixed Subscription source** — The documented Subscription
    manifests reference `source: redhat-operators` literally.  A
-   mirrored CatalogSource with a different name requires editing
-   every Subscription manifest to match.
+   mirrored CatalogSource must retain that exact source name and the
+   `openshift-marketplace` namespace for this handoff.
+
+<!-- Moved to operators.md §CatalogSource and Subscription binding. See docs/guides/installation/disconnected/operators.md -->

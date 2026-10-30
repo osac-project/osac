@@ -10,11 +10,8 @@
     - [OSAC AAP integration image](#osac-aap-integration-image)
     - [Execution environment images for playbooks](#execution-environment-images-for-playbooks)
   - [Execution Steps](#execution-steps)
-    - [Step 1 — Verify AAP operator images are mirrored](#step-1--verify-aap-operator-images-are-mirrored)
     - [Step 2 — Verify IDMS includes AAP image references](#step-2--verify-idms-includes-aap-image-references)
     - [Step 3 — Verify mirror inventory *(Doc 1 scope ends here)*](#step-3--verify-mirror-inventory-doc-1-scope-ends-here)
-  - [Validation Commands](#validation-commands)
-  - [Troubleshooting](#troubleshooting)
   - [Known Gaps / Limitations](#known-gaps--limitations)
 
 ## Aim
@@ -35,9 +32,7 @@ registry.
 
 | Check | Command / evidence |
 | ----- | ------------------ |
-| Phase 1A complete: `ansible-automation-platform-operator` installed | `oc get csv -A \| grep ansible \| grep Succeeded` |
 | Phase 1B complete: `osac-aap:0.0.45` image mirrored | Image present in mirror registry |
-| AAP subscription manifest available | `license.zip` file |
 | IDMS/ITMS applied to the cluster | `oc get idms` `oc get itms` `oc get clustercatalog` `oc get catalogsource` |
 | Mirror registry reachable from cluster nodes | Node-level pull test succeeds |
 
@@ -46,7 +41,6 @@ registry.
 | Resource | Minimum |
 | -------- | ------- |
 | Additional disk (mirror registry) | ~3 GiB for AAP operand images |
-| AAP subscription manifest | `license.zip` from Red Hat Subscription Management |
 | Execution environment image(s) | Custom EE images used by OSAC playbooks, default: `ghcr.io/osac-project/osac-aap:0.0.45` |
 
 ## ImageSetConfiguration Section
@@ -63,12 +57,16 @@ The following images are managed by the AAP operator internally via
 environment variables on the operator deployment.  They are **not**
 configurable through OSAC Helm values:
 
-| Image | Purpose | How it's configured in Operator | How it's configured in the osac helm chart |
-| ----- | ------- | ------------------------------- | ------------------------------------------ |
-| Redis | Session cache and task queue for AAP controller | AAP operator env var `RELATED_IMAGE_REDIS` | `aap.aap.instance.redisMode: standalone` |
-| PostgreSQL | Database for AAP controller and hub | AAP operator env var `RELATED_IMAGE_POSTGRES` | Derived automatically by operator deployment spec |
-| AAP Controller (awx-ee) | Default execution environment | `RELATED_IMAGE_EE` in AWX database | `configAsCode.eeImage: ghcr.io/osac-project/osac-aap:0.0.45` |
-| AAP Hub (galaxy-ng) | Automation content hub | AAP operator env var `RELATED_IMAGE_HUB` | `aap.aap.instance.hub.disabled: true` |
+| Image | Purpose | Operator image-selection metadata |
+| ----- | ------- | --------------------------------- |
+| Redis | Session cache and task queue for AAP controller | AAP operator env var `RELATED_IMAGE_REDIS` |
+| PostgreSQL | Database for AAP controller and hub | AAP operator env var `RELATED_IMAGE_POSTGRES` |
+| AAP Controller (awx-ee) | Default execution environment | `RELATED_IMAGE_EE` in AWX database |
+| AAP Hub (galaxy-ng) | Automation content hub | AAP operator env var `RELATED_IMAGE_HUB` |
+
+Selected OSAC execution-environment image to mirror: `ghcr.io/osac-project/osac-aap:0.0.45`.
+
+<!-- Moved to installation.md §5. Helm chart configuration parameters. See docs/guides/installation/disconnected/installation.md -->
 
 These images are included in the operator bundle and are resolved via
 IDMS when the operator catalog is mirrored.  No explicit `additionalImages`
@@ -110,17 +108,7 @@ OSAC automation must be mirrored separately:
 
 ## Execution Steps
 
-Here, `NS` denotes the namespace in which osac helm chart is installed.
-
-### Step 1 — Verify AAP operator images are mirrored
-
-The AAP operator catalog, mirrored in Category A, includes all operand
-images via `RELATED_IMAGE_*` environment variables.  Verify:
-
-```bash
-# Check AAP operator CSV for related images
-oc get csv -n ansible-aap -o yaml | grep -i "RELATED_IMAGE"
-```
+<!-- Moved to operators.md §2. Install the Selected Operators. See docs/guides/installation/disconnected/operators.md -->
 
 ### Step 2 — Verify IDMS includes AAP image references
 
@@ -140,31 +128,10 @@ oc get packagemanifest ansible-automation-platform-operator \
   -n openshift-marketplace -o jsonpath='{.status.channels[*].name}'
 ```
 
-## Validation Commands
+<!-- Moved to operators.md §2. Install the Selected Operators. See docs/guides/installation/disconnected/operators.md -->
+<!-- Moved to installation.md §11.2 Other installation failures. See docs/guides/installation/disconnected/installation.md -->
 
-```bash
-# 1. Verify AAP operator CSV is Succeeded
-oc get csv -n ansible-aap | grep -i ansible
-# 2. Check AAP operator related images (resolved via IDMS)
-oc get csv -n ansible-aap -o json | \
-  jq -r '.items[].spec.install.spec.deployments[].spec.template.spec.containers[].env[] |
-    select(.name | startswith("RELATED_IMAGE")) | "\(.name)=\(.value)"'
-# 3. Verify no image-pull failures or back-off in AAP namespace
-oc get events -n "$NS" --field-selector reason=Failed -o wide | grep -i pull
-oc get events -n "$NS" --field-selector reason=BackOff -o wide | grep -i pull
-
-```
-
-## Troubleshooting
-
-| Symptom | Likely cause | Resolution |
-| ------- | ------------ | ---------- |
-| AAP controller stuck in `Pending` | Operator images not mirrored via IDMS | Verify `oc get idms -o yaml \| grep awx`; re-mirror the AAP/redhat operator catalog |
-| Redis `ImagePullBackOff` | RELATED_IMAGE_REDIS not resolved via IDMS | Check IDMS entries for Redis image; the image is in the operator bundle |
-| PostgreSQL `ImagePullBackOff` | RELATED_IMAGE_POSTGRES not resolved via IDMS | Check IDMS entries for PostgreSQL image; the image is in the operator bundle |
-| AAP license error | Manifest not uploaded or expired | Verify secret `config-as-code-manifest-ig` exists in `$NS` and manifest is valid |
-| Ansible job fails with `EE image not found` | Custom EE image not mirrored | Add EE image to `additionalImages`; re-run `oc-mirror` |
-| AAP controller route not accessible | Route not created or TLS misconfigured | Check `oc get route -n $NS`; verify cert-manager ClusterIssuer |
+<!-- Moved to installation.md §11.2 Other installation failures. See docs/guides/installation/disconnected/installation.md -->
 
 ## Known Gaps / Limitations
 

@@ -11,7 +11,7 @@ import (
 )
 
 // protectClusterOrderLaunch validates the final job/workflow input after all merges.
-func protectClusterOrderLaunch(resource client.Object, extraVars map[string]any) error {
+func protectClusterOrderLaunch(resource client.Object, extraVars map[string]any, requirePullSecret bool) error {
 	order, ok := resource.(*v1alpha1.ClusterOrder)
 	if !ok {
 		return nil
@@ -19,7 +19,7 @@ func protectClusterOrderLaunch(resource client.Object, extraVars map[string]any)
 	if pullsecret.ValidateOrder(order) != nil {
 		return pullsecret.ErrInvalid
 	}
-	if order.Spec.PullSecretRef == nil || order.Spec.PullSecretRef.Name == "" || order.Spec.PullSecretRevision == "" {
+	if requirePullSecret && (order.Spec.PullSecretRef == nil || order.Spec.PullSecretRef.Name == "" || order.Spec.PullSecretRevision == "") {
 		return pullsecret.ErrInvalid
 	}
 	clean := order.DeepCopy()

@@ -22,21 +22,28 @@ post-OSAC-4558 OCI reference approach.
 
 | Check | Command / evidence |
 | ----- | ------------------ |
-| Category A complete: `multicluster-engine` operator installed | `oc get csv -n multicluster-engine \| grep multicluster \| grep Succeeded` |
 | Category B complete: `bare-metal-fulfillment-operator` image mirrored | Image present in mirror registry |
-| Metal3 / Ironic agent services deployed by MCE | `oc get pods -n multicluster-engine -l app=metal3` |
-| Assisted-service (infrastructure-operator) is running | `oc get pods -n multicluster-engine -l app=assisted-service` |
 | BMaaS enabled in OSAC Helm values | `global.services.bmaas.enabled: true` in values file |
-| Mirror registry reachable and trusted from cluster nodes | Connectivity: `oc debug node/<node> -- chroot /host curl -sSf https://<registry>:8443/v2/ -k`; trust and pull readiness: `oc debug node/<node> -- chroot /host crictl pull <mirror-registry>:8443/<test-image>` |
-| BMC endpoints reachable via Redfish/IPMI from provisioning network | BMC responds: `curl -k https://<bmc-ip>/redfish/v1/Systems` |
+
+<!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target operators.md §BMaaS prerequisite operators. See docs/guides/installation/disconnected/operators.md -->
+
+<!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target operators.md §BMaaS prerequisite operands. See docs/guides/installation/disconnected/operators.md -->
+
+<!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target prereqs.md §BMaaS network diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
+
+The mirroring handoff retains the selected mirror authority, CA and
+read-access binding plus approved mirror reachability observations.
+BMaaS provisioning-network qualification is separate and remains on hold.
 
 ## Resources Required
 
 | Resource | Minimum |
 | -------- | ------- |
 | Additional disk (mirror registry) | ~5 GiB for agent and discovery ISO images |
-| Provisioning network | Layer 2 network for IPMI/Redfish BMC access |
-| BareMetalHost CRD | Provided by the `multicluster-engine` operator |
+
+<!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target prereqs.md §BMaaS provisioning network. See docs/guides/installation/disconnected/prereqs.md -->
+
+<!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target operators.md §BMaaS prerequisite APIs. See docs/guides/installation/disconnected/operators.md -->
 
 ## ImageSetConfiguration Section
 
@@ -97,12 +104,9 @@ includes most Metal3 agent images.  Verify they are present:
 # (this confirms mirror configuration, not that images are
 # present — test a pull to verify registry content)
 oc get idms -o yaml | grep -i "multicluster-engine\|assisted"
-
-# Verify a mirrored image is actually pullable using
-# the original upstream reference (IDMS redirects to mirror)
-oc debug node/<node> -- chroot /host \
-  crictl pull registry.redhat.io/multicluster-engine/assisted-installer-rhel9:<version>
 ```
+
+<!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target prereqs.md §BMaaS mirrored-agent diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
 
 ### Step 2 — Add any additional agent images (if needed)
 
@@ -131,156 +135,33 @@ else
 fi
 ```
 
-### Step 4 — Configure AgentServiceConfig for disconnected *(Doc 2)*
+### BMaaS inventory scope
 
-> **Scope note**: `AgentServiceConfig` and `BareMetalHost` setup
-> belongs in Doc 2 (operator/platform installation).  Doc 1
-> retains only the mirror inventory and verification steps.
+> **Scope note**: Doc 1 retains only BMaaS mirror inventory and
+> mirroring-artifact verification. BMaaS runtime procedures are removed;
+> any Doc 2 installation coverage awaits separate qualification.
 > MCE and BMF image pins are conditional on BMaaS selection
 > (`global.services.bmaas.enabled: true`).
 
-The `AgentServiceConfig` CR controls where the assisted-service looks
-for OS images.  Configure its `.spec.osImages` per the
-[multicluster engine for Kubernetes documentation](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.13/html/clusters/cluster_mce_overview)
-so that it points at images reachable from both the provisioning
-network **and** the assisted-image-service pod network.  The
-assisted-image-service pod fetches the configured OS images to
-build discovery artifacts; if the URL is unreachable from the pod
-network, BMaaS discovery cannot proceed.
+<!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target operators.md §BMaaS AgentServiceConfig. See docs/guides/installation/disconnected/operators.md -->
 
-Add entries for each OpenShift version your deployment supports:
+<!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target operators.md §BMaaS BMC Secret and BareMetalHost setup. See docs/guides/installation/disconnected/operators.md -->
 
-```yaml
-apiVersion: agent-install.openshift.io/v1beta1
-kind: AgentServiceConfig
-metadata:
-  name: agent
-spec:
-  databaseStorage:
-    accessModes:
-      - ReadWriteOnce
-    resources:
-      requests:
-        storage: 10Gi
-  filesystemStorage:
-    accessModes:
-      - ReadWriteOnce
-    resources:
-      requests:
-        storage: 20Gi
-  osImages:
-    - openshiftVersion: "4.22"
-      version: "422.94.202503170640-0"
-      url: "http://<bastion>:8080/rhcos-4.22-live.x86_64.iso"
-      cpuArchitecture: x86_64
-```
+## Mirroring artifact checks
 
-> **HTTP vs HTTPS**: the provisioning network HTTP server on the
-> bastion is typically plain HTTP (port 8080) because it serves
-> only RHCOS live ISOs to Ironic agents on the isolated
-> provisioning network.  If you use HTTPS instead, every
-> provisioning agent must trust the server's CA — add the CA
-> bundle to the `AgentServiceConfig` or to the cluster-wide
-> proxy trust bundle.
-
-Apply the complete, reviewed `AgentServiceConfig` manifest in Doc 2:
+<!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target operators.md §BMaaS operator and operand diagnostics. See docs/guides/installation/disconnected/operators.md -->
 
 ```bash
-oc apply -f agentserviceconfig.yaml
-```
-
-> **Do not merge-patch `spec.osImages`.** JSON merge patch replaces the
-> entire array and can delete entries added for other OpenShift versions or
-> architectures. The Doc 2 procedure must read the current resource, merge
-> the new entry by the tuple `openshiftVersion`, `version`, and
-> `cpuArchitecture`, reject conflicting duplicates, preserve all unrelated
-> entries, and update with resource-version concurrency protection.
-Verify the `AgentServiceConfig` contains the expected
-`osImages` entries:
-
-```bash
-oc get agentserviceconfig agent -o json | jq '.spec.osImages'
-```
-
-Each entry must reference a URL accessible from both the
-provisioning network and the assisted-image-service pod network —
-typically a local HTTP server on the bastion host.
-
-### Step 5 — Configure BareMetalHost resources *(Doc 2)*
-
-Create the BMC credentials `Secret` and then the `BareMetalHost` resource.
-Ensure the referenced `InfraEnv` exists in the same namespace before
-creating the `BareMetalHost` — the agent-based workflow requires an
-`InfraEnv` to generate the discovery ISO.
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: worker-0-bmc-secret
-  namespace: osac
-type: Opaque
-stringData:
-  username: <bmc-username>
-  password: <bmc-password>
----
-apiVersion: metal3.io/v1alpha1
-kind: BareMetalHost
-metadata:
-  name: worker-0
-  namespace: osac
-  labels:
-    infraenvs.agent-install.openshift.io: bmaas-infraenv
-spec:
-  online: true
-  bootMACAddress: "AA:BB:CC:DD:EE:FF"
-  bmc:
-    address: idrac-virtualmedia+https://192.168.1.10/redfish/v1/Systems/System.Embedded.1
-    credentialsName: worker-0-bmc-secret
-    disableCertificateVerification: false  # set to true only for self-signed BMC certificates
-```
-
-> **Note**: `disableCertificateVerification` defaults to `false`.  Set it
-> to `true` only when the BMC uses a self-signed or untrusted TLS
-> certificate.  The `InfraEnv` label
-> (`infraenvs.agent-install.openshift.io`) binds this host to the
-> specified `InfraEnv` resource, which must exist in the same namespace.
-
-## Validation Commands
-
-```bash
-# 1. Verify MCE operator is healthy
-oc get csv -n multicluster-engine | grep multicluster
-
-# 2. Verify Metal3 pods are running
-oc get pods -n multicluster-engine -l app.kubernetes.io/part-of=metal3
-
-# 3. Verify assisted-service is running
-oc get pods -n multicluster-engine -l app=assisted-service
-
 # 4. Check IDMS entries for MCE/Metal3 images
 oc get idms -o yaml | grep -c "multicluster-engine"
-
-# 5. Verify BareMetalHost status
-oc get baremetalhost -A -o custom-columns=\
-'NAME:.metadata.name,STATE:.status.provisioning.state,ERROR:.status.errorMessage'
-
-# 6. Check AgentServiceConfig OS images
-oc get agentserviceconfig agent -o jsonpath='{.spec.osImages[*].url}'
-
-# 7. Verify bare-metal-fulfillment-operator is running
-oc get pods -n osac -l app.kubernetes.io/name=bare-metal-fulfillment-operator
 ```
 
-## Troubleshooting
+<!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target operators.md §BMaaS host and AgentServiceConfig diagnostics. See docs/guides/installation/disconnected/operators.md -->
 
-| Symptom | Likely cause | Resolution |
-| ------- | ------------ | ---------- |
-| BareMetalHost stuck in `registering` | Agent images not mirrored or IDMS missing | Check IDMS includes MCE images; verify agent pod logs |
-| Discovery ISO fails to boot | OS image URL not reachable from provisioning network | Verify `AgentServiceConfig` `osImages` URLs are accessible |
-| `ImagePullBackOff` on assisted-service pods | MCE operator images not fully mirrored | Re-run `oc-mirror` with the MCE catalog; check catalog completeness |
-| BareMetalHost `inspection error` | Ironic inspector cannot reach the host via BMC | Verify BMC credentials and network connectivity |
-| `bare-metal-fulfillment-operator` CrashLoop | Missing secrets or OSAC platform not fully deployed | Ensure Phase 2 (osac chart) is complete; check operator logs |
+<!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target installation.md §BMaaS post-install diagnostics. See docs/guides/installation/disconnected/installation.md -->
+
+<!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target operators.md §BMaaS runtime troubleshooting. See docs/guides/installation/disconnected/operators.md -->
+<!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target installation.md §BMaaS post-install troubleshooting. See docs/guides/installation/disconnected/installation.md -->
 
 ## Known Gaps / Limitations
 
@@ -289,10 +170,8 @@ oc get pods -n osac -l app.kubernetes.io/name=bare-metal-fulfillment-operator
    on the MCE version.  Verify that all required agent images are present
    in the mirror after running `oc-mirror`.
 
-2. **Provisioning network requirements** — BMaaS requires a Layer 2
-   provisioning network for BMC (IPMI/Redfish) access.  This network
-   must be configured independently of the disconnected mirroring setup.
+<!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target prereqs.md §BMaaS provisioning network. See docs/guides/installation/disconnected/prereqs.md -->
 
-3. **Agent image versioning** — Metal3 agent images are versioned with
+2.**Agent image versioning** — Metal3 agent images are versioned with
    the MCE release.  Ensure the mirrored MCE version matches the
    installed operator version to avoid version skew.

@@ -4055,7 +4055,7 @@ var _ = Describe("Storage Controller", func() {
 				Expect(client.IgnoreNotFound(err)).To(Succeed())
 			}
 
-			By("retaining storageFinalizer and emitting StorageTeardownBlocked when 0 OSAC tiers resolve but a hub Secret still exists")
+			By("retaining storageFinalizer, preserving CaaS ClusterOrder finalizer, and emitting StorageTeardownBlocked when 0 OSAC tiers resolve but a hub Secret still exists")
 			fakeRecorder := events.NewFakeRecorder(100)
 			r.Recorder = fakeRecorder
 			nameOSACBackendRemains := "csp-delete-osac-backend-remains"
@@ -4063,6 +4063,22 @@ var _ = Describe("Storage Controller", func() {
 			nnRemains := types.NamespacedName{Name: nameOSACBackendRemains, Namespace: testNamespace}
 			_, err = r.Reconcile(ctx, storageReconcileRequest(nnRemains))
 			Expect(err).NotTo(HaveOccurred())
+
+			coRemains := newClusterOrder("co-remains-"+nameOSACBackendRemains, testNamespace, map[string]string{
+				osacTenantKey: nameOSACBackendRemains,
+			})
+			controllerutil.AddFinalizer(coRemains, clusterStorageFinalizer)
+			Expect(k8sClient.Create(ctx, coRemains)).To(Succeed())
+			DeferCleanup(func() {
+				updated := &v1alpha1.ClusterOrder{}
+				if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(coRemains), updated); err == nil {
+					if controllerutil.RemoveFinalizer(updated, clusterStorageFinalizer) {
+						Expect(k8sClient.Update(ctx, updated)).To(Succeed())
+					}
+				}
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, coRemains))).To(Succeed())
+			})
+			waitForIndexedClientObject(coRemains)
 
 			// Create a tenant hub Secret so hubSecretReady == true in handleBackendDeprovisioning,
 			// exercising the !r.canProvisionOSACStorage(ctx) guard rather than the !hubSecretReady fallback.
@@ -4095,6 +4111,11 @@ var _ = Describe("Storage Controller", func() {
 			Expect(deprovTriggers).To(BeZero())
 			Expect(k8sClient.Get(ctx, nnRemains, tenantRemains)).To(Succeed())
 			Expect(tenantRemains.Finalizers).To(ContainElement(storageFinalizer))
+
+			updatedCORemains := &v1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(coRemains), updatedCORemains)).To(Succeed())
+			Expect(updatedCORemains.Finalizers).To(ContainElement(clusterStorageFinalizer))
+
 			Expect(drainEvents(fakeRecorder)).To(ContainElement(And(
 				ContainSubstring("StorageTeardownBlocked"),
 				ContainSubstring("hub Secret"),

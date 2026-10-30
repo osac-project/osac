@@ -775,27 +775,14 @@ func (r *StorageReconciler) handleDelete(ctx context.Context, tenant *v1alpha1.T
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
-	// CaaS cleanup: remove cluster-side storage (StorageClasses, CSI) from
-	// all CaaS clusters and remove our finalizer from their ClusterOrders.
-	// The ClusterOrders themselves are not being deleted (they have no
-	// OwnerReference to the Tenant), but the storage backend is about to be
-	// torn down so cluster-side resources must be removed first.
-	//
-	// This runs independently of ClusterStorageProvider: when the
-	// HostedControlPlane is already gone the finalizer is removed without
-	// triggering AAP deprovisioning (OSAC-4340).
-	// handleCaaSDelete already guards against empty backend connections (OSAC-4855).
-	caasResult, caasErr := r.handleCaaSDelete(ctx, tenant, true)
-	if caasErr != nil || caasResult.RequeueAfter > 0 {
-		return caasResult, caasErr
-	}
-
 	// Guard: when no OSAC tier resolves, the deprovisioning jobs cannot run, so
-	// the Stage 1 and Stage 2 helpers skip them. Removing the finalizer in that
-	// case would orphan any OSAC storage the tenant still has (hub Secret, CSI
-	// Secrets, StorageClasses, backend resources). Retain the finalizer and
-	// requeue until the tier is restored or the leftovers are cleaned up
-	// manually. Active deprovision jobs are still polled to completion below.
+	// handleCaaSDelete would strip ClusterOrder finalizers without cluster-side
+	// cleanup and the Stage 1 and Stage 2 helpers would skip deprovisioning.
+	// Removing finalizers in that case would orphan any OSAC storage the tenant
+	// still has (hub Secret, CSI Secrets, StorageClasses, backend resources).
+	// Retain the finalizer and requeue until the tier is restored or the
+	// leftovers are cleaned up manually. Active deprovision jobs are still
+	// polled to completion below.
 	if (r.ClusterStorageProvider != nil || r.BackendProvider != nil) &&
 		!r.canProvisionOSACStorage(ctx) &&
 		!hasActiveDeprovisionJob(tenant.Status.ClusterStorageJobs) &&
@@ -813,6 +800,21 @@ func (r *StorageReconciler) handleDelete(ctx context.Context, tenant *v1alpha1.T
 				strings.Join(found, ", "), storageFinalizer)
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
+	}
+
+	// CaaS cleanup: remove cluster-side storage (StorageClasses, CSI) from
+	// all CaaS clusters and remove our finalizer from their ClusterOrders.
+	// The ClusterOrders themselves are not being deleted (they have no
+	// OwnerReference to the Tenant), but the storage backend is about to be
+	// torn down so cluster-side resources must be removed first.
+	//
+	// This runs independently of ClusterStorageProvider: when the
+	// HostedControlPlane is already gone the finalizer is removed without
+	// triggering AAP deprovisioning (OSAC-4340).
+	// handleCaaSDelete already guards against empty backend connections (OSAC-4855).
+	caasResult, caasErr := r.handleCaaSDelete(ctx, tenant, true)
+	if caasErr != nil || caasResult.RequeueAfter > 0 {
+		return caasResult, caasErr
 	}
 
 	// Stage 1: class cleanup

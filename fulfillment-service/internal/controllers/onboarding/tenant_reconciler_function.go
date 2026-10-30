@@ -261,7 +261,10 @@ func (t *task) delete(ctx context.Context) error {
 		Limit:  new(int32(0)),
 	}.Build())
 	if err != nil {
-		return fmt.Errorf("failed to query for remaining projects: %w", err)
+		return controllers.RequeueAfter(
+			fmt.Errorf("failed to query for remaining projects: %w", err),
+			tenantDeletionRetryInterval,
+		)
 	}
 	if listResp.GetTotal() > 0 {
 		return controllers.RequeueAfter(

@@ -1214,6 +1214,12 @@ var _ = Describe("run", func() {
 				err := f.run(ctx, tenant)
 
 				Expect(err).To(MatchError(ContainSubstring("failed to query for remaining projects: projects db error")))
+				var retryable interface{ RequeueAfter() time.Duration }
+				Expect(errors.As(err, &retryable)).To(BeTrue())
+				Expect(retryable.RequeueAfter()).To(Equal(time.Second))
+				var backoff interface{ UseExponentialBackoff() bool }
+				Expect(errors.As(err, &backoff)).To(BeTrue())
+				Expect(backoff.UseExponentialBackoff()).To(BeTrue())
 				Expect(hasFinalizer(tenant)).To(BeTrue())
 			})
 

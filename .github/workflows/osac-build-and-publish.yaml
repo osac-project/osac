@@ -137,7 +137,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         ref: ${{ github.sha }}
         fetch-depth: 0
@@ -672,7 +672,7 @@ jobs:
             image: ghcr.io/osac-project/osac-ui
     steps:
     - name: Checkout temporary branch
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         ref: ${{ needs.prepare.outputs.temp-branch }}
         fetch-depth: 0
@@ -971,7 +971,7 @@ jobs:
 
     steps:
     - name: Checkout temporary branch
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         ref: ${{ needs.prepare.outputs.temp-branch }}
         fetch-depth: 0
@@ -1143,7 +1143,7 @@ jobs:
 
     steps:
     - name: Checkout temporary branch
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         ref: ${{ needs.prepare.outputs.temp-branch }}
         fetch-depth: 0
@@ -1456,7 +1456,7 @@ jobs:
         private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
 
     - name: Checkout repository
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         ref: ${{ needs.prepare.outputs.temp-branch }}
         fetch-depth: 0
@@ -1704,7 +1704,7 @@ jobs:
 
     - name: Checkout repository
       if: steps.check.outputs.tagged == 'true'
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         persist-credentials: false
 
@@ -1794,7 +1794,7 @@ jobs:
 
     steps:
     - name: Checkout release automation
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         persist-credentials: false
 
@@ -1848,7 +1848,7 @@ jobs:
       # composite action and to source nightly-charts.sh below -- no tag
       # is pushed from this job, so the default read-only GITHUB_TOKEN is
       # enough (unlike tag, which needs a separate PAT for that).
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         persist-credentials: false
 
@@ -1971,7 +1971,7 @@ jobs:
     - name: Checkout repository
       # Only needed to resolve the local ./.github/actions/vault-slack-webhook
       # composite action -- no chart/script content is used in this job.
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
 
     - name: Retrieve Slack webhook from Vault
       id: vault
@@ -2098,7 +2098,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         ref: ${{ needs.prepare.outputs.temp-branch }}
 
@@ -2408,7 +2408,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         ref: ${{ needs.prepare.outputs.temp-branch }}
 
@@ -3014,7 +3014,7 @@ jobs:
         permission-contents: write
 
     - name: Checkout repository
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         ref: ${{ needs.prepare.outputs.temp-branch }}
         fetch-depth: 0
@@ -3554,7 +3554,7 @@ jobs:
 
     steps:
     - name: Checkout notification action
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         persist-credentials: false
 

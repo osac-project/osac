@@ -18,6 +18,8 @@ type Updater<T> = T | ((old: T | undefined) => T | undefined);
 export type ApiQueryClient = {
   /** Mark matching queries stale and trigger a background refetch. */
   invalidateQueries: (filters: { queryKey: ApiQueryKey }) => Promise<void>;
+  /** Invalidate all queries keyed by a Connect service descriptor (e.g. useListResource). */
+  invalidateServiceQueries: (service: { typeName: string }) => Promise<void>;
   /** Immediately refetch matching active queries. */
   refetchQueries: (filters: { queryKey: ApiQueryKey }) => Promise<void>;
   /** Cancel any in-flight fetches for matching queries. */
@@ -35,6 +37,7 @@ export const useApiQueryClient = (): ApiQueryClient => {
 
   return {
     invalidateQueries: (filters) => qc.invalidateQueries(filters),
+    invalidateServiceQueries: (service) => qc.invalidateQueries({ queryKey: [service.typeName] }),
     refetchQueries: (filters) => qc.refetchQueries(filters),
     cancelQueries: (filters) => qc.cancelQueries(filters),
     getQueryData: <T>(queryKey: ApiQueryKey) => qc.getQueryData<T>(queryKey),

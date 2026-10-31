@@ -19,6 +19,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     # denies assert*-prefixed attribute names on unspec'd mocks, and the
     # scenario calls metering.assert_no_events.
     clients = {"cli": Mock(), "grpc": Mock(), "private_grpc": Mock(), "metering": Mock(spec=MeteringCollector)}
+    clients["request"] = Mock()
     k8s = clients["k8s_hub_client"] = Mock(spec=K8sClient)
     k8s.namespace = "osac"
     cli, grpc, private = (clients[name] for name in ("cli", "grpc", "private_grpc"))
@@ -101,12 +102,26 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
         }
 
     k8s.get_json.side_effect = get_resource
+    k8s.get_cluster_order_name.return_value = "order-a"
     k8s.get_cluster_order_namespace.return_value = "osac"
     k8s.get_baremetal_instance_name.side_effect = lambda *, uuid, checked: f"{uuid}-cr"
     k8s.get_cluster_order_infra_env_name.return_value = "order-a-infraenv"
     k8s.is_absent.side_effect = [False, True, False, True]
     k8s.is_present.return_value = False
     monkeypatch.setattr(scenario, "wait_for_cluster_order_cr", Mock(return_value="order-a"))
+    refs = Mock()
+    baseline = {"hosted": {"spec": {"release": {"image": regression.TEST_RELEASE_IMAGE}}}}
+    target = {"id": "target-id", "name": "target-version", "image": "target-image"}
+
+    def references_after_install(**_kwargs: object) -> Mock:
+        assert scenario.wait_for_cluster_ready.called
+        return refs
+
+    monkeypatch.setattr(regression.upgrade, "_cluster_references", Mock(side_effect=references_after_install))
+    monkeypatch.setattr(regression.upgrade, "_ready_baseline", Mock(return_value=baseline))
+    monkeypatch.setattr(regression.upgrade, "_catalog_version", Mock(return_value=(target, True)))
+    monkeypatch.setattr(regression.upgrade, "_upgrade_control_plane", Mock(return_value={}))
+    monkeypatch.setattr(regression.upgrade, "_upgrade_node_pool", Mock())
     for name in (
         "wait_for_cluster_progressing",
         "wait_for_cluster_ready",
@@ -116,6 +131,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     ):
         monkeypatch.setattr(scenario, name, Mock())
     monkeypatch.setattr(scenario, "snapshot_cluster_deletion", Mock(return_value=[]))
+    monkeypatch.setattr(regression.upgrade, "wait_for_cluster_grpc_removal", Mock())
     monkeypatch.setattr(runner.time, "sleep", Mock())
     monkeypatch.setattr(
         helpers,
@@ -157,9 +173,34 @@ def test_two_node_set_scenario_uses_same_natural_teardown_budgets(
     assert runner.time.sleep.call_args_list == [call(5), call(10), call(5)]
     helpers.wait_for_cluster_deletion.assert_not_called()
     scenario.wait_for_cluster_grpc_removal.assert_called_once_with(grpc=two_node_set_clients["grpc"], uuid="cluster-id")
-    two_node_set_clients["cli"].delete_cluster.assert_has_calls([call(uuid="cluster-id"), call(uuid="cluster-id")])
+    two_node_set_clients["request"].getfixturevalue.assert_called_once_with("jwt_grpc_tenant1")
+    regression.upgrade._cluster_references.assert_called_once()
+    regression.upgrade._upgrade_control_plane.assert_called_once()
+    regression.upgrade._upgrade_node_pool.assert_called_once()
+    two_node_set_clients["private_grpc"].delete_cluster_version.assert_called_once_with(version_id="target-id")
+    two_node_set_clients["cli"].delete_cluster.assert_called_once_with(uuid="cluster-id")
     for name in ("patch", "apply", "delete"):
         getattr(two_node_set_clients["k8s_hub_client"], name).assert_not_called()
+
+
+def test_two_node_set_scenario_captures_cluster_order_before_install_failure(
+    monkeypatch: pytest.MonkeyPatch, two_node_set_clients: dict[str, Mock]
+) -> None:
+    """Cleanup must know the ClusterOrder even when installation readiness fails."""
+    order_lookup = Mock(return_value="order-a")
+    install = Mock(side_effect=RuntimeError("install-failed"))
+    cleanup = Mock()
+    monkeypatch.setattr(regression, "wait_for_cluster_order_cr", order_lookup)
+    monkeypatch.setattr(regression, "assert_cluster_with_two_node_sets_available", install)
+    monkeypatch.setattr(regression.upgrade, "_cleanup", cleanup)
+
+    with pytest.raises(RuntimeError, match="install-failed"):
+        _run_scenario(two_node_set_clients)
+
+    assert order_lookup.call_args.kwargs == {"k8s": two_node_set_clients["k8s_hub_client"], "uuid": "cluster-id"}
+    install.assert_called_once()
+    cleanup.assert_called_once()
+    assert cleanup.call_args.kwargs["co_name"] == "order-a"
 
 
 def test_two_node_set_scenario_rejects_foreign_worker_before_teardown(two_node_set_clients: dict[str, Mock]) -> None:
@@ -175,4 +216,8 @@ def test_two_node_set_scenario_rejects_foreign_worker_before_teardown(two_node_s
     two_node_set_clients["cli"].delete_cluster.assert_called_once_with(uuid="cluster-id")
     scenario.wait_for_cluster_deleting.assert_not_called()
     helpers.wait_for_cluster_deletion.assert_not_called()
-    two_node_set_clients["k8s_hub_client"].is_absent.assert_not_called()
+    assert two_node_set_clients["k8s_hub_client"].is_absent.call_args_list == [
+        call(resource="clusterorder", name="order-a"),
+        call(resource="clusterorder", name="order-a"),
+    ]
+    regression.upgrade._cluster_references.assert_not_called()

@@ -63,7 +63,7 @@ TOPOLVM_BACKING_SIZE ?= 20G
 # -- Fail-fast parameter validation ------------------------------------
 # Guards fire at parse time, gated by MAKECMDGOALS so `make help` works.
 
-ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-load-images test
+ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack validate-inputs kind-load-images test
 
 ifneq ($(filter $(ALL_TARGETS),$(MAKECMDGOALS)),)
 ifndef PLATFORM
@@ -114,6 +114,14 @@ $(error install-multicluster requires PROFILE=vmaas-ci)
 endif
 ifndef REMOTE_KUBECONFIG
 $(error REMOTE_KUBECONFIG is required (workload cluster kubeconfig))
+endif
+endif
+ifneq ($(filter install-devstack,$(MAKECMDGOALS)),)
+ifneq ($(PLATFORM),kind)
+$(error install-devstack requires PLATFORM=kind)
+endif
+ifneq ($(PROFILE),dev-full)
+$(error install-devstack requires PROFILE=dev-full)
 endif
 endif
 ifneq ($(filter install-osac,$(MAKECMDGOALS)),)
@@ -223,6 +231,16 @@ INSTANCE_VALUES_EXTRA := -f values/bmaas-netbox-ci/instance.yaml
 else ifdef PROFILE
 INFRA_VALUES    := values/$(PROFILE)/infra.yaml
 INSTANCE_VALUES := values/$(PROFILE)/instance.yaml
+endif
+
+# install-multicluster's recipe passes the multicluster infra overlay to its
+# recursive install-infra; the gate must see the same effective values, or an
+# invalid overlay would only surface after prepare-remote-cluster has already
+# changed the remote workload cluster. `override` keeps the append even when
+# INFRA_VALUES_EXTRA is set on the command line, matching the install's
+# unconditional overlay.
+ifneq ($(filter install-multicluster,$(MAKECMDGOALS)),)
+override INFRA_VALUES_EXTRA += -f values/vmaas-ci/multicluster-infra.yaml
 endif
 
 # Kind cluster create/delete routing. dev-full needs a rootful runtime (KubeVirt
@@ -512,7 +530,21 @@ else
 endif
 
 .PHONY: validate-inputs
-validate-inputs: helm-deps helm-infra-deps validate-osac-chart-oci-ref ## Render every applicable chart offline, rejecting invalid inputs before any cluster change
+# An OCI-ref install renders the pulled chart, so the local osac chart's
+# dependencies are not built for it (mirrors the install-osac guard below).
+ifneq ($(OSAC_CHART_OCI_REF),)
+validate-inputs: helm-infra-deps validate-osac-chart-oci-ref
+else
+validate-inputs: helm-osac-deps helm-infra-deps validate-osac-chart-oci-ref ## Render every applicable chart offline, rejecting invalid inputs before any cluster change
+endif
+# dev-full is the only profile whose gate renders the devstack chart. Its
+# dependencies are a prerequisite, not a recipe step, so make shares (and
+# deduplicates) the build with install-devstack's own even under make -j.
+ifeq ($(PLATFORM),kind)
+ifeq ($(PROFILE),dev-full)
+validate-inputs: helm-devstack-deps
+endif
+endif
 ifeq ($(PLATFORM),kind)
 	helm template osac-infra $(INFRA_CHART) \
 		--namespace osac-infra \
@@ -739,7 +771,7 @@ install-multicluster: validate-inputs ## Prepare a VMaaS workload cluster, then 
 		EVPN_VALUES="$(INFRA_VALUES)"
 	$(MAKE) install-infra PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
 		KUBECONFIG="$(KUBECONFIG)" \
-		INFRA_VALUES_EXTRA="-f values/vmaas-ci/multicluster-infra.yaml"
+		INFRA_VALUES_EXTRA="$(INFRA_VALUES_EXTRA)"
 	$(MAKE) install-osac PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
 		KUBECONFIG="$(KUBECONFIG)" \
 		REMOTE_KUBECONFIG="$(REMOTE_KUBECONFIG)" \

@@ -737,11 +737,13 @@ Every installation target (`install`, `install-infra`, `install-osac`,
 an offline `helm template` of every applicable chart with the exact values
 the installation would use — the same profile values files, `EXTRA_HELM_ARGS`
 overrides, and (on OpenShift) the same read-only cluster lookups for the
-cluster domain and version. Invalid values — wrong types, negative numbers
-where only zero-or-positive is allowed, unknown keys, contradictory settings —
-fail the install before any namespace, secret, or release is created, and
-before any readiness wait. The failure names the offending field and the
-violated constraint; fix the reported value and retry.
+cluster domain and version. (With `DRY_RUN=1`, `install` renders offline via
+`install-dry-run` and skips the gate — the dry run is itself an offline
+render.) Invalid values — wrong types, negative numbers where only
+zero-or-positive is allowed, unknown keys — fail the install before any
+namespace, secret, or release is created, and before any readiness wait.
+The failure names the offending field and the violated constraint; fix the
+reported value and retry.
 
 The gate validates static inputs only. It does not check that the cluster is
 ready for the installation: prerequisites that must already exist (issuers,

@@ -393,7 +393,8 @@ to the profile's configured CA and enabled services.
 
 Every installation target (`install`, `install-infra`, `install-osac`,
 `install-devstack`, `install-multicluster`) runs `make validate-inputs`
-first: an offline `helm template` of every applicable chart with the exact
+first (with `DRY_RUN=1`, `install` renders offline via `install-dry-run`
+instead): an offline `helm template` of every applicable chart with the exact
 merged values the installation would use (profile files, `EXTRA_HELM_ARGS`,
 and read-only OpenShift lookups for the cluster domain and version). Invalid
 inputs abort the install before any cluster mutation or readiness wait. The

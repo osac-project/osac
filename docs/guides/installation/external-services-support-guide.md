@@ -115,7 +115,7 @@ between stages).
 | 1 | Installer chart pin + image digests | | a tagged release or tested commit; §7's digest-pinning trap |
 | 2 | Services host: OS, resources, address `<host-ip>` | | dedicated machine, §2.1; the worksheet value is what every consumer points at |
 | 3 | Privileges you hold | | cluster admin on the hub; root (or sudo) on the services host |
-| 4 | DNS names: `<kc-host>`, `<ui-origin>`, `<api-route>` | | resolvable from cluster **and** from admin/browser machines; §1.2 hostname stability |
+| 4 | DNS names: `<kc-host>`, `<ui-origin>`, `<api-route>` | | `<kc-host>` and `<api-route>` are hostnames, `<ui-origin>` is the full UI origin including the `https://` scheme; all resolvable from cluster **and** from admin/browser machines; §1.2 hostname stability |
 | 5 | CA strategy per service | | corporate CA or self-signed per §2.2; same CA signs server + client certs where mTLS applies |
 | 6 | Keycloak: `<kc-host>`, port 8443, realm-admin + bootstrap admin credentials, client secrets (5) | | §5.2 rows 1–11; generated, stored in your credential store |
 | 7 | PostgreSQL: DB names/users, server + client cert plan | | §3.1; HBA source IPs (cluster egress, `<kc-source-ip>`) |
@@ -199,8 +199,12 @@ Everything here must exist **before phase 2 (`helm install` of the
 **Gate — standalone readiness, not application tests.** The listeners
 exist now, so prove the path and each service on its own terms:
 §2.1's in-cluster netcheck probe for each port (5432, 8200, 8443,
-9092 — from a pod, not from the host); PostgreSQL reachable with a
-client certificate over TLS (`psql`); OpenBao health 200/unsealed (§4.3's
+9092 — from a pod, not from the host); PostgreSQL presenting its server
+certificate over TLS (`openssl s_client -connect <host-ip>:5432
+-starttls postgres` from the admin host — the client certificates the
+db-init job uses do not exist until the chart issues them in stage 4,
+so client-certificate authentication is exercised there, not here);
+OpenBao health 200/unsealed (§4.3's
 health checks); Keycloak serving the realm and issuing a token (§5.4);
 Kafka accepting an admin-client connection (A.5 step 7's readiness
 check). Checks that need the **application** — OSAC's PG sessions,
@@ -629,9 +633,11 @@ and realm import. Provide them yourself before `helm install`:
      --from-literal=client-id=<controller-client-id> \
      --from-literal=client-secret=<controller-client-secret>
    oc -n osac create secret generic vault-credentials \
-     --from-literal=client-secret=<osac-controller-client-secret>
+     --from-literal=client-secret=<controller-client-secret>
    ```
-   (The UI-backend and CSI-driver Secrets follow the same shape if your
+   (`service.vault.keycloakClientId` is the `osac-controller` client, so
+   this is the **same secret** as the one above, not a new one. The
+   UI-backend and CSI-driver Secrets follow the same shape if your
    values reference them.)
 2. **The realm** — seed it per §5.3. Its clients must exist with matching
    IDs and secrets, and the controller client needs the realm-management
@@ -641,11 +647,13 @@ and realm import. Provide them yourself before `helm install`:
 
 ### 5.3 Seed the realm
 
-Import the chart's `realm.json` (in the installer chart at
-`files/realm.json`) with its `__OSAC_*__` placeholders resolved — the
-realm admin username/password and the admin/controller/CSI-driver/
-UI-backend client secrets — then apply the post-import fixups (UI client
-redirect URIs, `profile` and `email` scopes).
+Import the chart's `realm.json` (in the installer at
+`osac-installer/charts/osac-infra/files/realm.json`; copy it out of the
+checkout or read it in place before running the preprocessing below)
+with its `__OSAC_*__` placeholders resolved — the realm admin
+username/password, the admin/controller/CSI-driver/UI-backend client
+secrets, and the UI origin — then apply the post-import fixups
+(`profile` and `email` scopes).
 
 In a bundled install the chart does this itself: a
 `resolve-realm-secrets` initContainer fills the placeholders from the
@@ -653,22 +661,21 @@ In a bundled install the chart does this itself: a
 `--import-realm`. On this path there is no such machinery — pick the
 client secrets yourself (they must match the Secrets you created in
 §5.2), resolve the placeholders, **and fix the `osac-ui` client**: the
-chart's `realm.json` ships it with development-only values — redirect
-URIs and web origins pointing at a throwaway localhost dev origin, and
-a `defaultClientScopes` list that omits `profile` and `email` — the
-placeholder substitution does not touch any of those, so patch them to
-your real `<ui-origin>` in the same preprocessing step:
+`__OSAC_UI_URL__` placeholder covers its `rootUrl`, redirect URIs and
+web origins (substitution fills all three), but its
+`defaultClientScopes` list omits `profile` and `email`, which the UI's
+login requires — patch the scopes in the same preprocessing step:
 
 ```bash
 # resolve placeholders and patch the osac-ui client into a resolved
 # realm file (secret values are yours — they must match the §5.2
 # client-credential Secrets). UI_ORIGIN is the FULL origin the browser
 # loads the UI from — scheme, host and port, no path, no trailing slash
-# (e.g. https://osac-ui.example.com). It is used AS-IS: the script
-# appends only the callback paths below, so do not strip the scheme.
+# (e.g. https://osac-ui.example.com) — the same value as the worksheet's
+# <ui-origin> row, used AS-IS with its scheme.
 python3 - realm.json > realm-resolved.json <<'PY'
 import json, sys
-UI_ORIGIN = "https://<ui-origin>"
+UI_ORIGIN = "<ui-origin>"
 subs = {
   "__OSAC_REALM_ADMIN_USERNAME__": "<realm-admin-user>",
   "__OSAC_REALM_ADMIN_PASSWORD__": "<realm-admin-password>",
@@ -676,12 +683,17 @@ subs = {
   "__OSAC_CONTROLLER_CLIENT_SECRET__": "<controller-client-secret>",
   "__OSAC_CSI_DRIVER_CLIENT_SECRET__": "<csi-driver-client-secret>",
   "__OSAC_UI_BACKEND_CLIENT_SECRET__": "<ui-backend-client-secret>",
+  "__OSAC_UI_URL__": UI_ORIGIN,
 }
 text = open(sys.argv[1]).read()
 for k, v in subs.items(): text = text.replace(k, v)
 realm = json.loads(text)             # fail loudly on a bad resolve
 
 ui = next(c for c in realm["clients"] if c["clientId"] == "osac-ui")
+# substitution already filled rootUrl/redirectUris/webOrigins from
+# __OSAC_UI_URL__; re-assert them in case an older realm.json shipped
+# development-only values, and add the scopes the UI login requires
+ui["rootUrl"] = UI_ORIGIN
 ui["redirectUris"] = [UI_ORIGIN + "/callback",
                       UI_ORIGIN + "/*"]
 ui["webOrigins"] = [UI_ORIGIN]
@@ -995,11 +1007,11 @@ metering:
 dbInit:
   host: <host-ip>               # db-init + Secrets build here
 service:
-  database:                     # chart default, shown for completeness —
-    connection:                 # consumes the Secrets built from dbInit.host
-    - secret:
-        name: osac-db-config
-        items:
+  database:                     # REQUIRED — the chart default is an empty
+    connection:                 # list, so fulfillment gets no database URL
+    - secret:                   # or client cert unless this block is present
+        name: osac-db-config    # in the values Helm renders; it consumes
+        items:                  # the Secrets built from dbInit.host
         - {key: url, param: url}
     - secret:
         name: osac-db-client-cert
@@ -1135,22 +1147,42 @@ curl -s --cacert <cluster-ca> -o /dev/null -w '%{http_code}\n' \
 # --resolve <api-route>:443:127.0.0.1)
 
 # tenant smoke — the smallest end-to-end workflow (the API's tenant
-# endpoints are POST/GET/DELETE /api/fulfillment/v1/tenants):
+# endpoints are POST/GET/DELETE /api/fulfillment/v1/tenants). Tenant
+# creation is administrator-only (the policy recognizes the realm's
+# admins group and service accounts such as osac-controller) — a §5.4
+# tenant-user token gets 403 here, so use the realm-admin user or an
+# osac-admin client-credentials token for this workflow:
+ADMIN_TOKEN=$(curl -s --cacert /root/kc-ca.pem \
+  -d "client_id=admin-cli&username=<realm-admin-user>&password=<realm-admin-password>&grant_type=password" \
+  https://<kc-host>:8443/realms/osac/protocol/openid-connect/token \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 NAME=smoke-$RANDOM
-TENANT_ID=$(curl -s --cacert <cluster-ca> -H "Authorization: Bearer ${OSAC_TOKEN}" \
+# the create response IS the Tenant (response_body: "object"), so its
+# id sits at the top level:
+TENANT_ID=$(curl -s --cacert <cluster-ca> -H "Authorization: Bearer ${ADMIN_TOKEN}" \
   -H 'Content-Type: application/json' \
   -d "{\"metadata\":{\"name\":\"$NAME\"},\"spec\":{\"domains\":[\"$NAME.example.org\"]}}" \
   https://<api-route>/api/fulfillment/v1/tenants \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['object']['id'])")
-# the reconciler signals completion by creating the tenant's break-glass
-# Secret — poll for it, then list, delete, and confirm it is gone:
-oc -n osac get secret -w &   # wait for the break-glass Secret of $NAME
-curl -s --cacert <cluster-ca> -H "Authorization: Bearer ${OSAC_TOKEN}" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+# the reconciler signals completion by setting the tenant's
+# spec.break_glass_credentials_secret — poll the tenant API for it
+# (it names a Secret in OSAC's own API, not a Kubernetes Secret, so
+# `oc get secret -w` never sees it):
+for i in $(seq 1 60); do
+  BG=$(curl -s --cacert <cluster-ca> -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    https://<api-route>/api/fulfillment/v1/tenants/$TENANT_ID \
+    | python3 -c "import sys,json; \
+print(json.load(sys.stdin).get('spec',{}).get('breakGlassCredentialsSecret',{}).get('name',''))" 2>/dev/null)
+  [ -n "$BG" ] && break
+  sleep 5
+done
+[ -n "$BG" ] || { echo "break-glass Secret never appeared for $NAME" >&2; exit 1; }
+curl -s --cacert <cluster-ca> -H "Authorization: Bearer ${ADMIN_TOKEN}" \
   https://<api-route>/api/fulfillment/v1/tenants/$TENANT_ID    # the object
-curl -s --cacert <cluster-ca> -X DELETE -H "Authorization: Bearer ${OSAC_TOKEN}" \
+curl -s --cacert <cluster-ca> -X DELETE -H "Authorization: Bearer ${ADMIN_TOKEN}" \
   https://<api-route>/api/fulfillment/v1/tenants/$TENANT_ID
 curl -s --cacert <cluster-ca> -o /dev/null -w '%{http_code}\n' \
-  -H "Authorization: Bearer ${OSAC_TOKEN}" \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
   https://<api-route>/api/fulfillment/v1/tenants/$TENANT_ID                             # 404
 
 # Kafka canary (§6.3): a billable workflow on a real tenant —
@@ -1258,8 +1290,8 @@ for i in $(seq 1 30); do
     READY=1; break
   fi
 done
-# 200 means initialized, unsealed AND active — anything else (501 sealed,
-# 503 not-ready, 429 standby) is a failure after the 60 s budget below
+# 200 means initialized, unsealed AND active — anything else (501 not
+# initialized, 503 sealed, 429 standby) is a failure after the 60 s budget below
 [ "$READY" = 1 ] || { echo "ERROR: OpenBao not healthy 60s after start" >&2; exit 1; }
 curl -s --cacert "$CA" https://<host-ip>:8200/v1/sys/health | grep -q '"sealed":false'
 echo "OK bao-data-$STAMP.tar.gz"
@@ -1626,7 +1658,8 @@ listener "tcp" {
 # add its CA to the cluster trust bundle (§2.2 option 2).
 openssl req -x509 -newkey rsa:2048 -keyout /root/bao-key.pem -out /root/bao-cert.pem \
   -days 365 -nodes -subj "/CN=<host-ip>" -addext "subjectAltName=IP:<host-ip>"
-chmod 644 /root/bao-cert.pem /root/bao-key.pem
+chmod 644 /root/bao-cert.pem
+chmod 600 /root/bao-key.pem
 # CA that validates the server cert, for clients inside the container:
 # with the self-signed shortcut the cert is its own CA; with a
 # cluster-issued cert (§2.2 option 1) copy the issuing CA here instead.
@@ -1652,13 +1685,18 @@ unseal helper below reads (unseal key + root token, root-only). Note
 **`-format=json`** — without it `bao operator init` writes a human-readable
 table that the JSON-parsing helper cannot read:
 
-Every `bao` invocation below runs inside the container, so it needs an
-explicit address and CA trust — `podman exec` does not inherit them:
+Every `bao` invocation below runs on the **host**, against the published
+address. `podman exec` would need the container to reach back out to
+`<host-ip>:8200` (a hairpin-NAT dependency not every host allows), and
+dialing `127.0.0.1` from inside the container fails the cert's SAN
+check. Copy the binary out of the container once, then point it at the
+published address with the host-side CA:
 
 ```bash
+podman cp osac-openbao:/bin/bao /usr/local/bin/bao
+export BAO_ADDR=https://<host-ip>:8200 BAO_CACERT=/root/bao-ca.pem
 umask 077
-podman exec -e BAO_ADDR=https://<host-ip>:8200 -e BAO_CACERT=/bao/tls/ca.crt \
-  osac-openbao bao operator init -format=json \
+bao operator init -format=json \
   -key-shares=1 -key-threshold=1 > /root/openbao-init.json
 chmod 600 /root/openbao-init.json
 
@@ -1675,9 +1713,8 @@ lifecycle policy and role):
 
 ```bash
 ROOT_TOKEN=$(python3 -c 'import json;print(json.load(open("/root/openbao-init.json"))["root_token"])')
-# -i forwards stdin (the policy-write heredoc below) into the container
-BAO="podman exec -i -e BAO_ADDR=https://<host-ip>:8200 -e BAO_CACERT=/bao/tls/ca.crt \
-  -e BAO_TOKEN=$ROOT_TOKEN osac-openbao bao"
+BAO="env BAO_ADDR=https://<host-ip>:8200 BAO_CACERT=/root/bao-ca.pem \
+  BAO_TOKEN=$ROOT_TOKEN bao"
 
 # existence checks are explicit so a TLS or auth failure is visible instead
 # of being masked by an "already exists" fallback
@@ -1709,10 +1746,14 @@ path "+/auth/*" {
 }
 POLICY
 
-# point JWT auth at the external Keycloak issuer (reachable over TLS the
-# server trusts; add oidc_discovery_ca_pem=@<ca.pem> if using an internal CA)
+# point JWT auth at the external Keycloak issuer. The bundled chart's
+# bootstrap writes oidc_discovery_ca_pem=@/vault/ca/bundle.pem — pass the
+# Keycloak CA here the same way (the A.4 recipe's CA, /root/kc-ca.pem):
+# without it, discovery fails against any issuer whose cert is not in
+# the host's public trust store (self-signed or cluster-issued)
 $BAO write -namespace=osac auth/jwt/config \
   oidc_discovery_url="https://<kc-host>:8443/realms/osac" \
+  oidc_discovery_ca_pem=@/root/kc-ca.pem \
   default_role="lifecycle"
 
 $BAO write -namespace=osac auth/jwt/role/lifecycle \
@@ -1848,9 +1889,11 @@ hostname, instead of accepting any certificate; without it the
 connection either fails closed or, with `sslmode` relaxed, silently
 skips verification. If `verify-full` fails on hostname checking, the
 right fix is the certificate, not the mode: the server certificate must
-carry a SAN matching the address in the JDBC URL (an IP-SAN-only cert
-will fail `verify-full` when reached by IP — give the cert a DNS SAN
-and connect by name, or re-issue it with the IP). `sslmode=verify-ca`
+carry a SAN matching the address in the JDBC URL — an IP SAN matches a
+URL that dials that IP, a hostname URL needs a DNS SAN (so an
+IP-SAN-only cert fails `verify-full` when connected to by name: give
+the cert a DNS SAN and connect by name, or re-issue it with the IP).
+`sslmode=verify-ca`
 exists but skips hostname verification; treat any use of it as a marked,
 justified exception in your records, not an ordinary configuration.
 
@@ -2029,11 +2072,13 @@ make_client_props() { # $1=file $2=user $3=password
 make_client_props "$KROOT/client-admin.properties" admin "$KAFKA_ADMIN_PASSWORD"
 make_client_props "$KROOT/client-fulfillment.properties" fulfillment-service "$KAFKA_FULFILLMENT_PASSWORD"
 
-# helper for the Kafka CLI tools (as admin, host network)
+# helper for the Kafka CLI tools. No --network host and no --user 0:0:
+# the tools only need to reach the published <host-ip>:9092 like any
+# other client, and they run fine as the image's default user
 IMAGE=docker.io/apache/kafka:4.2.0
 krun() { # krun <tool> [args...]
   local tool=$1; shift
-  podman run --rm --security-opt label=disable --user 0:0 --network host \
+  podman run --rm --security-opt label=disable \
     -v "$KROOT/client-admin.properties:/etc/kafka/client.properties:ro" \
     --entrypoint /bin/bash "$IMAGE" \
     -c "/opt/kafka/bin/$tool --bootstrap-server <host-ip>:9092 --command-config /etc/kafka/client.properties $*"
@@ -2096,10 +2141,16 @@ systemctl daemon-reload && systemctl enable --now container-osac-kafka.service
 `kafka-storage.sh` trap):
 
 ```bash
+# fail loudly if the broker never comes up — without the exit the loop
+# below falls through after 60 tries and the user-creation commands
+# run against a dead broker, reporting connection errors that point
+# away from the real cause
+ready=
 for i in $(seq 1 60); do
-  krun kafka-broker-api-versions.sh >/dev/null 2>&1 && break
+  if krun kafka-broker-api-versions.sh >/dev/null 2>&1; then ready=1; break; fi
   sleep 5
 done
+[ -n "$ready" ] || { echo "kafka broker never became ready" >&2; exit 1; }
 
 krun kafka-configs.sh --alter --entity-type users --entity-name fulfillment-service \
   --add-config "SCRAM-SHA-512=[password=${KAFKA_FULFILLMENT_PASSWORD}]"

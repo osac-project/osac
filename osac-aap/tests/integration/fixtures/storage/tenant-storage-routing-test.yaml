@@ -1,3 +1,4 @@
+---
 osac_job_vars:
   resource:
     apiVersion: osac.openshift.io/v1alpha1

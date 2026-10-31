@@ -67,6 +67,7 @@
       vars:
         _provider_tiers: "{{ _computed_provider_tiers }}"
         _provider_backend_connections: "{{ _computed_provider_backend_connections }}"
+        vast_storage_csi_provisioner_map: "{{ storage_provider_csi_driver_matrix.vast.protocols }}"
 
 - name: "Accumulate tenant config after dispatch (setup only)"
   ansible.builtin.set_fact:

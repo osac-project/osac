@@ -7,13 +7,6 @@
     tenant_name: "{{ osac_job_vars.resource.metadata.name }}"
     tenant_namespace: "{{ osac_job_vars.resource.metadata.namespace }}"
     tenant_uid: "{{ osac_job_vars.resource.metadata.uid }}"
-    # Overridable so tests can stub out the real Helm install while still
-    # exercising this playbook's own vars: mapping, matching the pattern
-    # osac.templates.ocp_virt_vm already uses for its create_step_* hooks.
-    csi_driver_install_default:
-      name: osac.service.csi_driver_install
-      tasks_from: main.yaml
-
   pre_tasks:
     - name: Show resource metadata
       ansible.builtin.debug:
@@ -60,10 +53,33 @@
     # Gated by csi_driver_install_enabled (default false).
     - name: Install OSAC CSI driver (once per dispatch, regardless of provider count)
       when: csi_driver_install_enabled | default(false) | bool
-      ansible.builtin.include_role:
-        name: "{{ (csi_driver_install_override | default(csi_driver_install_default)).name }}"
-        tasks_from: "{{ (csi_driver_install_override | default(csi_driver_install_default)).tasks_from }}"
-      vars:
-        csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
-        # StorageClasses belong to Stage 2, after backend readiness is confirmed.
-        csi_driver_install_skip_lvms_storage_class: true
+      block:
+        - name: Resolve the CSI installer target
+          ansible.builtin.include_role:
+            name: osac.service.csi_driver_install
+            tasks_from: select_test_override_target.yaml
+          vars:
+            csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+
+        - name: Install the test-only CSI driver override
+          when:
+            - lookup('env', 'OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES', default='false') | bool
+            - csi_driver_install_override is defined
+          ansible.builtin.include_role:
+            name: "{{ csi_driver_install_override.name }}"
+            tasks_from: "{{ csi_driver_install_override.tasks_from }}"
+          vars:
+            csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+            # StorageClasses belong to Stage 2, after backend readiness is confirmed.
+            csi_driver_install_skip_lvms_storage_class: true
+
+        - name: Install the production OSAC CSI driver role
+          when: >-
+            not (lookup('env', 'OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES', default='false') | bool
+                 and csi_driver_install_override is defined)
+          ansible.builtin.include_role:
+            name: osac.service.csi_driver_install
+            tasks_from: main.yaml
+          vars:
+            csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+            csi_driver_install_skip_lvms_storage_class: true

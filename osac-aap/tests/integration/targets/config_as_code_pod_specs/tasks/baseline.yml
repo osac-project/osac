@@ -19,6 +19,25 @@
       ansible.builtin.set_fact:
         _pod: "{{ _pod_spec | from_yaml }}"
 
+    - name: Assert Lease pod metadata is injected into compute-instance workers
+      ansible.builtin.assert:
+        that:
+          - >-
+            _pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'POD_NAMESPACE')
+            | map(attribute='valueFrom.fieldRef.fieldPath') | list == ['metadata.namespace']
+          - >-
+            _pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'POD_NAME')
+            | map(attribute='valueFrom.fieldRef.fieldPath') | list == ['metadata.name']
+          - >-
+            _pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'POD_UID')
+            | map(attribute='valueFrom.fieldRef.fieldPath') | list == ['metadata.uid']
+        fail_msg: >-
+          ComputeInstance worker pods must expose namespace, name, and UID
+          for Lease placement and owner-reference cleanup.
+
     - name: Extract compute-instance secretRef from envFrom
       ansible.builtin.set_fact:
         _compute_secret_ref: >-
@@ -91,6 +110,25 @@
     - name: Parse storage-operations pod spec
       ansible.builtin.set_fact:
         _storage_pod: "{{ _storage_pod_spec | from_yaml }}"
+
+    - name: Assert Lease pod metadata is injected into storage workers
+      ansible.builtin.assert:
+        that:
+          - >-
+            _storage_pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'POD_NAMESPACE')
+            | map(attribute='valueFrom.fieldRef.fieldPath') | list == ['metadata.namespace']
+          - >-
+            _storage_pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'POD_NAME')
+            | map(attribute='valueFrom.fieldRef.fieldPath') | list == ['metadata.name']
+          - >-
+            _storage_pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'POD_UID')
+            | map(attribute='valueFrom.fieldRef.fieldPath') | list == ['metadata.uid']
+        fail_msg: >-
+          Storage worker pods must expose namespace, name, and UID
+          for Lease placement and owner-reference cleanup.
 
     - name: Assert storage credentials remain isolated
       ansible.builtin.assert:

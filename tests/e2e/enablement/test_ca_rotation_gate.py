@@ -25,7 +25,7 @@ import pytest
 
 from tests.e2e.core.fulfillment_trust import assert_cluster_trust, assert_management_tls
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.runner import env, poll_until, run
+from tests.e2e.core.runner import env, managed_process, poll_until, run
 
 pytestmark = [
     pytest.mark.regression,
@@ -49,13 +49,17 @@ def _metrics(k8s: K8sClient, deployment: str) -> Iterator[Callable[[], str]]:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
-    process = subprocess.Popen(
-        [*k8s._base(), "-n", k8s.namespace, "port-forward", f"deployment/{deployment}", f"{port}:{remote_port}"],
+    with managed_process(
+        *k8s._base(),
+        "-n",
+        k8s.namespace,
+        "port-forward",
+        f"deployment/{deployment}",
+        f"{port}:{remote_port}",
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
-        text=True,
-    )
-    try:
+        terminate_timeout=5,
+    ) as process:
 
         def read_metrics() -> str:
             if process.poll() is not None:
@@ -77,13 +81,6 @@ def _metrics(k8s: K8sClient, deployment: str) -> Iterator[Callable[[], str]]:
         else:
             raise AssertionError(f"Timed out waiting for {deployment} metrics")
         yield read_metrics
-    finally:
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
 
 
 def test_all_clients_converged_before_rotation_advance(k8s_hub_client: K8sClient) -> None:
@@ -121,11 +118,7 @@ def test_all_clients_converged_before_rotation_advance(k8s_hub_client: K8sClient
     orders = json.loads(
         run(*k8s_hub_client._base(), "-n", k8s_hub_client.namespace, "get", "clusterorders", "-o", "json")
     )["items"]
-    selected = [
-        order
-        for order in orders
-        if order["metadata"].get("annotations", {}).get("osac.openshift.io/tenant")
-    ]
+    selected = [order for order in orders if order["metadata"].get("annotations", {}).get("osac.openshift.io/tenant")]
     assert selected, "No tenant-scoped ClusterOrders were found"
     for order in selected:
         assert (

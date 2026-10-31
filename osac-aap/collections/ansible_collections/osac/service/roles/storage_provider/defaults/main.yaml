@@ -14,3 +14,43 @@ storage_provider_csi_backends_chart_ref: >-
 storage_provider_csi_backends_chart_version: ""
 storage_provider_csi_backends_release_name: "osac-csi-backends"
 storage_provider_csi_backends_namespace: "osac-csi-backends"
+
+# Manual approval lets OLM resolve the current stable-channel bundle while
+# keeping later upgrades under review. AAP approves only the initial plan.
+storage_provider_csi_driver_matrix:
+  netapp:
+    protocols:
+      block: "csi.trident.netapp.io"
+    installer:
+      method: olm
+      package: trident-operator
+      channel: stable
+      # The certified Trident CSV supports AllNamespaces only. Keep its
+      # Subscription isolated from unrelated Manual InstallPlans.
+      namespace: trident-operator
+      operator_group: trident-operator-group
+      install_plan_approval: Manual
+      catalog_source: certified-operators
+      catalog_namespace: openshift-marketplace
+      trident_namespace: trident
+  vast:
+    protocols:
+      nfs: "csi.vastdata.com"
+      block: "block.csi.vastdata.com"
+    installer:
+      method: olm
+      namespace: vast-csi-system
+      package: vast-csi-operator
+      channel: stable
+      install_plan_approval: Manual
+      catalog_source: certified-operators
+      catalog_namespace: openshift-marketplace
+  lvms: {}
+
+# One OLM Subscription spec shape shared by all native CSI providers.
+storage_provider_olm_subscription_spec:
+  channel: "{{ storage_provider_olm_subscription_channel }}"
+  installPlanApproval: "{{ storage_provider_olm_subscription_install_plan_approval }}"
+  name: "{{ storage_provider_olm_subscription_package }}"
+  source: "{{ storage_provider_olm_subscription_catalog_source }}"
+  sourceNamespace: "{{ storage_provider_olm_subscription_catalog_namespace }}"

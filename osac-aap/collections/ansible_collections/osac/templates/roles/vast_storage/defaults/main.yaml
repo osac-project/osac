@@ -1,13 +1,6 @@
 ---
 # VAST-specific defaults — all use vast_storage_ prefix.
 
-# Protocol-to-CSI-driver map used by ensure_csi_operator and ensure_storage_class.
-# These must match the CSI driver names registered by the VAST CSI Operator
-# (same names as the Helm chart defaults: csi.vastdata.com / block.csi.vastdata.com).
-vast_storage_csi_provisioner_map:
-  nfs: "csi.vastdata.com"
-  block: "block.csi.vastdata.com"
-
 # K8s Secret on hub cluster that stores per-tenant VAST config
 vast_storage_tenant_config_secret_prefix: "vast-tenant-config-"
 
@@ -55,10 +48,3 @@ vast_storage_vip_pool_gw_ipv6: "{{ lookup('env', 'VAST_VIP_POOL_GW_IPV6') | defa
 
 # Local provider naming — each tenant gets its own identity provider.
 vast_storage_local_provider_prefix: "lp-"
-
-# CSI Operator installation via OLM
-vast_storage_csi_operator_namespace: "vast-csi-system"
-vast_storage_csi_operator_channel: "stable"
-vast_storage_csi_operator_approval: "Automatic"
-vast_storage_csi_operator_catalog_source: "certified-operators"
-vast_storage_csi_operator_catalog_namespace: "openshift-marketplace"

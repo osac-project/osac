@@ -27,20 +27,19 @@
       {{ osac_job_vars.resource.metadata.namespace }}
       {%- endif -%}
     tenant_uid: "{{ osac_job_vars.resource.metadata.uid }}"
-    # Overridable so tests can stub out the real Helm install while still
-    # exercising this playbook's own when: gate and vars: mapping, matching
-    # the pattern osac.templates.ocp_virt_vm already uses for its
-    # create_step_* hooks.
-    csi_driver_install_default:
-      name: osac.service.csi_driver_install
-      tasks_from: main.yaml
-
+    # ClusterOrder is the legacy CaaS guest-cluster path. Keep its VAST CSI
+    # installation in the VAST provider role until OSAC CSI is ready for CaaS;
+    # the separate provider-native install action below remains Tenant/VMaaS-only.
+    storage_provider_caas_legacy_vast_csi_install_enabled: >-
+      {{ osac_job_vars.resource.kind == 'ClusterOrder' }}
   pre_tasks:
     - name: Show resource metadata
+      tags: [always]
       ansible.builtin.debug:
         var: osac_job_vars.resource.metadata
 
     - name: Validate tenant payload is present
+      tags: [always]
       ansible.builtin.fail:
         msg: "tenant must be provided via osac_job_vars.resource with metadata.name, metadata.namespace, and metadata.uid set"
       when: >-
@@ -53,6 +52,7 @@
         osac_job_vars.resource.metadata.uid | length == 0
 
     - name: Validate storage_tier_definitions is a non-empty array in the EDA event
+      tags: [always]
       ansible.builtin.fail:
         msg: >-
           osac_job_vars.storage_tier_definitions must be a non-empty array, populated
@@ -66,6 +66,7 @@
         osac_job_vars.storage_tier_definitions | length == 0
 
     - name: Write admin_kubeconfig to temporary file when provided
+      tags: [always]
       when: >-
         osac_job_vars.admin_kubeconfig is defined and
         osac_job_vars.admin_kubeconfig | length > 0
@@ -76,6 +77,7 @@
         _remote_kubeconfig_insecure: true
 
     - name: Use the ClusterOrder admin kubeconfig for storage class operations
+      tags: [always]
       ansible.builtin.set_fact:
         _storage_target_kubeconfig: "{{ _remote_kubeconfig }}"
         _storage_target_kubeconfig_insecure: true
@@ -84,12 +86,16 @@
         - _remote_kubeconfig is defined
 
     - name: Get configured remote cluster kubeconfig for Tenant storage
+      tags: [always]
       ansible.builtin.include_role:
         name: osac.service.common
         tasks_from: get_remote_cluster_kubeconfig.yaml
+        apply:
+          tags: [always]
       when: osac_job_vars.resource.kind == 'Tenant'
 
     - name: Set Tenant storage target kubeconfig when configured
+      tags: [always]
       ansible.builtin.set_fact:
         _storage_target_kubeconfig: "{{ remote_cluster_kubeconfig }}"
       when:
@@ -97,6 +103,7 @@
         - remote_cluster_kubeconfig is defined
 
     - name: Fail when guest-cluster storage is requested without admin_kubeconfig
+      tags: [always]
       ansible.builtin.fail:
         msg: >-
           admin_kubeconfig is required in the job vars for ClusterOrder
@@ -108,48 +115,59 @@
         (_remote_kubeconfig is not defined or _remote_kubeconfig | length == 0)
 
   tasks:
-    # Hub (VMaaS) only -- osac.service.csi_driver_install always targets the AAP
-    # execution environment's default kubeconfig context (the hub), never
-    # _remote_kubeconfig. Skipping for ClusterOrder (CaaS) avoids installing the
-    # OSAC CSI driver on a tenant's guest cluster, which is out of scope here.
-    #
-    # HUB vs. GUEST-CLUSTER TARGETING:
-    # This playbook is invoked for two distinct targets:
-    # 1. Hub cluster storage (kind == 'Tenant') via handleClusterStorageProvisioning.
-    # 2. Tenant guest cluster storage / CaaS (kind == 'ClusterOrder') via handleCaaSUpdate.
-    #
-    # csi_driver_install deploys to the HUB cluster using the default hub kubeconfig
-    # context. It must run ONLY for the Tenant (hub) case and NEVER for ClusterOrder
-    # (guest-cluster) cases, where guest-cluster CSI driver installation is handled
-    # directly on the remote cluster via osac.templates.osac_csi_driver (OSAC-3291).
-    #
-    # This playbook's own task order does NOT guarantee the vendor controller
-    # Service csi_driver_install's pre-block fail-fast requires already exists
-    # -- this is Stage 2 (ensure_storage_class), which never calls
-    # ensure_csi_backends.yaml. Safety here comes from an external invariant
-    # this file cannot enforce or verify: osac-operator's storage_controller.go
-    # handleBackendReadiness blocks Stage 2 from running until Stage 1
-    # (playbook_osac_create_tenant_storage_backend.yml's setup dispatch) has
-    # gone green for this tenant. A future change to that controller's
-    # Stage-gating logic could silently break this precondition. That
-    # cross-repo Stage-gating contract is verified in osac-operator's
-    # internal/controller/storage_controller_test.go ("Stage 1: Backend
-    # provisioning" and "Stage 2: Cluster storage provisioning" contexts),
-    # which drive handleBackendReadiness against a real envtest control plane.
-    # The role may install the CSI Helm release, create an opt-in local-tier
-    # StorageClass, or both. Each operation has an independent flag; the CSI
-    # role remains limited to Tenant (hub) dispatches.
+    # Tenant storage uses the selected VMaaS target resolved above. ClusterOrder
+    # storage is the separate CaaS guest-cluster path and does not run this new
+    # provider-native setup action. Existing VAST ClusterOrders retain their
+    # legacy install through ensure_storage_class, enabled explicitly below.
+    - name: Ensure provider-native CSI drivers on the selected VMaaS cluster
+      tags: [provider_csi_driver_install]
+      when: osac_job_vars.resource.kind == 'Tenant'
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+        apply:
+          tags: [provider_csi_driver_install]
+      vars:
+        storage_provider_action: ensure_csi_driver
+        storage_provider_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+        storage_provider_target_kubeconfig: "{{ _storage_target_kubeconfig | default(omit) }}"
+        storage_provider_target_kubeconfig_insecure: "{{ _storage_target_kubeconfig_insecure | default(false) }}"
+
+    # The optional OSAC CSI role uses the AAP execution environment's default
+    # context, so keep it separate from native provider driver setup and never
+    # invoke it for ClusterOrder guest-cluster storage.
     - name: Install OSAC CSI driver or create local-tier StorageClasses on the hub
       when:
         - >-
           (csi_driver_install_enabled | default(false) | bool) or
           (csi_driver_install_lvms_storage_class_enabled | default(false) | bool)
         - osac_job_vars.resource.kind == 'Tenant'
-      ansible.builtin.include_role:
-        name: "{{ (csi_driver_install_override | default(csi_driver_install_default)).name }}"
-        tasks_from: "{{ (csi_driver_install_override | default(csi_driver_install_default)).tasks_from }}"
-      vars:
-        csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+      block:
+        - name: Resolve the CSI installer target
+          ansible.builtin.include_role:
+            name: osac.service.csi_driver_install
+            tasks_from: select_test_override_target.yaml
+          vars:
+            csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+
+        - name: Install the test-only CSI driver override
+          when:
+            - lookup('env', 'OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES', default='false') | bool
+            - csi_driver_install_override is defined
+          ansible.builtin.include_role:
+            name: "{{ csi_driver_install_override.name }}"
+            tasks_from: "{{ csi_driver_install_override.tasks_from }}"
+          vars:
+            csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+
+        - name: Install the production OSAC CSI driver role
+          when: >-
+            not (lookup('env', 'OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES', default='false') | bool
+                 and csi_driver_install_override is defined)
+          ansible.builtin.include_role:
+            name: osac.service.csi_driver_install
+            tasks_from: main.yaml
+          vars:
+            csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
 
     # Keep the provider dispatch even when the CSI role created the LVMS class:
     # it provisions network classes and publishes the common class-name output.

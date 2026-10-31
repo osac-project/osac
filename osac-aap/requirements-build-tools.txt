@@ -17,12 +17,12 @@
 # so no wheel candidate is ever fetched or selected for anything here.
 # Once any entry below has a --hash, pip's own hash-checking mode requires
 # every entry in this file to have one -- keep all of them hashed.
-ansible-core==2.20.10 --hash=sha256:577b8d3c18e4228310a4e5180c3e133bb3955b378367077bfc643f3c21ebee5c
+ansible-core==2.21.5 --hash=sha256:08886f9f3e23d129aa98a01271c4a47833516e1cb7c737a246788cb474f41222 --hash=sha256:65bb3148c58ebb843cd5074004c805f404f152114d98476dd823324616c9c6cb
 ansible-runner==2.4.3 --hash=sha256:5f3025529bb968fdc3b627457dd8d418dbf9d53bc73735d50e69c28544d53031
 bindep==2.14.0 --hash=sha256:0c804c7e48dd17db24cb39121ade7171f684fb463c8aa01d0338cd11d254364a
 PyYAML==6.0.3 --hash=sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f
 packaging==26.3 --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79
-dumb-init==1.2.5 --hash=sha256:2881d15410cc9f175e20a252c2f24331f5ba05c6a8340954d152ff58435e4ca9
+dumb-init==1.2.5.post1 --hash=sha256:5d6b1fe9b8efcdbbdcb670efe7a55f9117251ee9648d35ffd0c487fd79515ea5 --hash=sha256:6510538a975e0de10658b0210ec2ad62dc3617543af5c6fbd29a3af111eae981 --hash=sha256:a516a16a7dfed012de2524eb449e31f7f583b11b938eebb3ec09fd194497293d --hash=sha256:c52a20fe73a6f56501079f969775098ab83bd9c73648b9e4eb68fa1b02a9b98e --hash=sha256:fc1e309f52c898ee00df056189f46ca3f6055a72b77015f4eefbd7c58c45290f
 # bindep's own transitive dependencies -- Cachi2 didn't auto-resolve these
 # for a build-requirements entry the way it did for ansible-core/
 # ansible-runner's own transitive deps (confirmed live: distro>=1.7 missing
@@ -45,8 +45,8 @@ Parsley==1.3 --hash=sha256:9444278d47161d5f2be76a767809a3cbe6db4db822f46a4fd7481
 # 70.0.0 is the single version satisfying both packages' constraints at
 # once, so one pin covers both rather than needing two coexisting
 # versions.
-setuptools==70.0.0 --hash=sha256:f211a66637b8fa059bb28183da127d4e86396c991a942b028c6650d4319c3fd0
-# ansible-core's build-system.requires also hard-pins wheel == 0.45.1
+setuptools==84.2.1 --hash=sha256:3ff8b3b5492a0aa66960f4419365a86b84e013070d4313e4d4a6894f5d64d6bc --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2
+# ansible-core's build-system.requires also hard-pins wheel == 0.48.0
 # exactly (confirmed via its real sdist pyproject.toml), a different
 # exact version than python-esiclient's own wheel need below -- both
 # coexist fine in the shared prefetch cache since pip resolves each
@@ -103,7 +103,7 @@ maturin==1.15.0 --hash=sha256:94b26cc8e8aba61a5f2099715fe640e18c5f678e9a500408b3
 # real PyPI metadata) has no pyproject.toml (legacy setuptools backend,
 # same bootstrap as Cython/python-esiclient) and whose own build-system
 # needs only setuptools>=62.4 + setuptools_scm (already prefetched).
-setuptools==82.0.0 --hash=sha256:22e0a2d69474c6ae4feb01951cb69d515ed23728cf96d05513d36e42b62b37cb
+setuptools==84.2.1 --hash=sha256:3ff8b3b5492a0aa66960f4419365a86b84e013070d4313e4d4a6894f5d64d6bc --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2
 setuptools-rust==1.13.0 --hash=sha256:f2afcf4baeee689910ce49cfa8aad4e08cce72f417449bcc32891b8664fdc726
 semantic_version==2.10.0 --hash=sha256:bdabb6d336998cbb378d4b9db3a4b56a1e3235701dc05ea2690d9a997ed5041c
 # cryptography's own sdist build-system.requires also lists cffi
@@ -120,7 +120,7 @@ cffi==2.1.1 --hash=sha256:dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc82
 # requirement flit_core<4,>=3.8 (from versions: none)". flit_core's own
 # build-system.requires is empty (self-hosting), confirmed via its real
 # sdist pyproject.toml, so no further transitive need here.
-flit_core==3.12.0 --hash=sha256:18f63100d6f94385c6ed57a72073443e1a71a4acb4339491615d0f16d6ff01b2
+flit_core==4.2.0 --hash=sha256:2bee22dc8ba89c2e35b4e1ad575e596aac945c85672dd8f3cad21b629036e044 --hash=sha256:84e4e4d8fdd45ba2613800a3ebc6834de26d47ec9746efc3719f94181137b460
 # ansible-runner's build-system.requires also lists
 # setuptools-scm[toml]>=6.2,<=8.1.0 (confirmed via its real sdist
 # pyproject.toml) alongside setuptools -- 8.1.0 is the exact upper
@@ -130,7 +130,7 @@ flit_core==3.12.0 --hash=sha256:18f63100d6f94385c6ed57a72073443e1a71a4acb4339491
 # bootstrap quirk of that package); its runtime requires_dist reduces
 # to packaging+setuptools (already prefetched above) for python3.12 --
 # the tomli/typing-extensions entries are gated to python_version<3.11.
-setuptools-scm==8.1.0 --hash=sha256:42dea1b65771cba93b7a515d65a65d8246e560768a66b9106a592c8e7f26c8a7
+setuptools-scm==10.3.4 --hash=sha256:82f34c3e3084fc2b57d397200637cc13f2338004052d2fee47baa5f0e902464e --hash=sha256:a69f28bfc245608781205e912faae437c2b2165773afa4e7b979d77447a69dd2
 # PyYAML's build-system.requires includes a bare Cython (python_version
 # < "3.13", which this EE's python3.12 matches) alongside setuptools --
 # confirmed via its real sdist pyproject.toml. Confirmed live: "Could
@@ -173,20 +173,20 @@ Cython==3.3.0 --hash=sha256:eed0d93fbca7087f143b42c34b05a825849bdf17f101572c2105
 # Resolved via each package's real PyPI metadata/sdist pyproject.toml,
 # same methodology as everything else in this file -- not guessed.
 puccinialin==0.1.14 --hash=sha256:c186d3ab26ceceae709f7edb7a620ea51e46fbeeb4f58d2de717c485e507914b
-filelock==3.32.7 --hash=sha256:37b8a3d9811b0f9aef7e5ec5c71bb320de52df51e6ca9bcd6f5ad81187660da7
+filelock==4.2.4 --hash=sha256:301241438c57936ef93f4243a94f2559022268bfcf9b375a9a72eb0f8db8358e --hash=sha256:c6d8663535e1650ee430507b4ffbac7b464dd64b7647ea0112a9f406499d163d
 httpx==0.28.1 --hash=sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc
 anyio==4.15.1 --hash=sha256:9f28306018cbd6d329e64a36d58256edff76dd996fe423bc957326e578b82a94
-certifi==2026.10.19 --hash=sha256:035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae
+certifi==2026.10.23 --hash=sha256:a9895e6e2758b371e0545e321a3a8fd1fcfd9829ada8824a936dfb16aaaf36cd --hash=sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1
 httpcore==1.0.9 --hash=sha256:6e34463af53fd2ab5d807f399a9b45ea31c3dfa2276f15a2c3f00afff6e176e8
 idna==3.20 --hash=sha256:a7db850025b95ded1eae8a46181a1a6c56c92c96f0e2b005d9ff8dc0210cab44
 h11==0.16.0 --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1
 typing_extensions==4.16.0 --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
-platformdirs==4.13.5 --hash=sha256:05831adf87d392760f4b5c3a0a95579ab5a10b18b9b9bd43680dcb47544788a0
+platformdirs==4.13.6 --hash=sha256:211d176e24674b5895dedf9021c262bcf9fad008a70610bfb147d4a8d6d8fe1b --hash=sha256:21fc198fb09f3e78cadcdfd8a6ae4fd65cadc64a3cba78b694321c2996114a3e
 tqdm==4.70.1 --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4
-hatchling==1.32.4 --hash=sha256:c4468f73144c054d2aab4ef0f0378c43b9878bf07f8ffd6b79690e970d375f07
+hatchling==1.33.0 --hash=sha256:415290b84f464d2884303fca8974d38e7b85579069fab02a15db0828fbb1446d --hash=sha256:4c422bd4d554fcff5de5b73e9596f85e41e9f97f7e553d8f7595ecb31a627bef
 hatch-vcs==0.5.0 --hash=sha256:0395fa126940340215090c344a2bf4e2a77bcbe7daab16f41b37b98c95809ff9
 hatch-fancy-pypi-readme==25.1.0 --hash=sha256:9c58ed3dff90d51f43414ce37009ad1d5b0f08ffc9fc216998a06380f01c0045
-setuptools-scm==8.3.1 --hash=sha256:3d555e92b75dacd037d32bafdf94f97af51ea29ae8c7b234cf94b7a5bd242a63
+setuptools-scm==10.3.4 --hash=sha256:82f34c3e3084fc2b57d397200637cc13f2338004052d2fee47baa5f0e902464e --hash=sha256:a69f28bfc245608781205e912faae437c2b2165773afa4e7b979d77447a69dd2
 # hatchling's own runtime deps (packaging already prefetched above):
 pathspec==1.1.1 --hash=sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a
 pluggy==1.7.0 --hash=sha256:d1eaa46ebb595891b860ab086b4d09c8588af65ebd4361b8e8f4bb8920b90ba8
@@ -226,7 +226,7 @@ pkgconfig==1.6.0 --hash=sha256:4a5a6631ce937fafac457104a40d558785a658bbdca5c49b6
 # (already have); its own runtime need is packaging (have) +
 # pyproject_hooks (new, bare, also flit_core-backed, no further
 # cascade).
-setuptools-scm==9.2.2 --hash=sha256:1c674ab4665686a0887d7e24c03ab25f24201c213e82ea689d2f3e169ef7ef57
+setuptools-scm==10.3.4 --hash=sha256:82f34c3e3084fc2b57d397200637cc13f2338004052d2fee47baa5f0e902464e --hash=sha256:a69f28bfc245608781205e912faae437c2b2165773afa4e7b979d77447a69dd2
 pyproject_hooks==1.3.3 --hash=sha256:defda19b854fa0d3bd4f76ea4ddcba8abd7dcfcdd585a6690ade050744fc5f43
 build==1.6.1 --hash=sha256:51cc11666391ab6f092070437ac747002ff46f3e4113a3622177ee6b488bfc53
 # frozenlist's own build-system.requires also lists a bare "expandvars"
@@ -246,7 +246,7 @@ expandvars==1.1.2 --hash=sha256:6c5822b7b756a99a356b915dd1267f52ab8a4efaa135963b
 # satisfies the requirement Cython~=3.1.0 (from versions: 3.3.0)". A
 # SECOND coexisting Cython version, same pattern as setuptools/wheel/
 # setuptools-scm above.
-Cython==3.1.8 --hash=sha256:518475fbe633ba30c1577669f417440f41e1a23ad6b6e2dbb20703cd457f04ef
+Cython==3.3.0 --hash=sha256:03056533fe4fdbc4f1d34a39178f9a4937ff35196f8bcdde2a67b5b5809c61fe --hash=sha256:03bc5333932f5dda3ba9315298ecdd21daa1b58410bb1f8ce04c78ec8337130a --hash=sha256:0507d9caf7dc35f1212627145d5d13dbc5dd7128529a6608ab72690472fa688e --hash=sha256:0deedc2e9a5a664e1adfa4c2d310aa7b54903e1a647c274b6c9213f77a02d637 --hash=sha256:11e437f086affee8051cec4bb531be3edb646ab66e325154aa6849377f365033 --hash=sha256:14e825253455e943ca765a95096b355745558436b0c46c24856de9269cc4dbd9 --hash=sha256:169e56fd411f4cd5bba51c82f8239421d547a846099db2b261e4aed48ba9f51f --hash=sha256:23942b0662642927a55676e4b26e6840fb166dd7d76436384685227e7e8619a4 --hash=sha256:26a5e536fc68e85a9de091a0b51c42c5ac834f8d00aaa43f227cbc3efa797ae5 --hash=sha256:29f38ebafdf23e3da2516f40c4d065da38bfe002181bf93e2b8cf1262449aba6 --hash=sha256:311a016369adfd1e0015c4f9819168fc0e518451d7efb4435c30d65a3a26d52b --hash=sha256:333449cc0350baedee5a6af27929eac8a71eac4ec59333c45ff476b33c6c660d --hash=sha256:428fafed98ea26927000a287b4dfc9ef07339f56656a5329a34eaa593f79a4f8 --hash=sha256:46072c0d404616b5e652a63882c79cc3f8a1d62635a8692f56ed0e416a4dfed8 --hash=sha256:4a36c34d1950845b8ac148653b07cdc62421a4b0d9abfcc849e69f1c4ff9919d --hash=sha256:51999fb834365721b6c7f689cf6e2ec7c8667aae783df9eb5e589c290a414d9c --hash=sha256:596e8df019372a2cd417805015022d42cb8ee4e1803ccdc11ed00e451625fb66 --hash=sha256:66d86b6a1548ae64851b211e3c3504535814b8c8e6c46ddcaf01062bf8d5fad2 --hash=sha256:75c4ae8a6d3a5ccf3cdaba8ab32e6a8d0cd38e3a476aa7ac12df8f8171a8d570 --hash=sha256:7e321ae700995a16dc3055ada06ffb8d61e1a7434e5d0e811547a45ac1015ebd --hash=sha256:82f94565b6001bab8e31bf52a0911672910b5735910612a2c0f772c719670006 --hash=sha256:843d7134e784e7b320ef387512e89f1b29af80c641e176dfa8eabd52aab61c3c --hash=sha256:8566ea804cfc265f5e9dda71d1b716aa24ee4c3423a5da4b28a248a78c33e3f9 --hash=sha256:90869072e50b7c8904fe1dd7810321ae901fd5637a6eec6646ed9c57f9eb1081 --hash=sha256:9b24b5c8cd536946b62086fcafee6d5509d3f549f72d553d2336af87ffbe0da1 --hash=sha256:ab24d1a4fb6aaf0b5b6fcd75a6d70255fbd3130fa78884c26991f8d5502616b5 --hash=sha256:b447f6906e0555f05dc4742ef1f99091b1e5d9aa9f16616e772fbf9ff6271616 --hash=sha256:b55c72e8eccdd508c8de3cf3bbc543aafbb3bf6a518e1ee20358d3241cd780ef --hash=sha256:b94fb5613b9fe34c27d13ec9972dc0dcd2a2155db2902e93921cadc162610a38 --hash=sha256:bc2f2a6b65a991666cfd35a35bab0cd88ffba4df2f601edb6e76cc8116de24b9 --hash=sha256:bf411da3ef1af8763781c219108860f7de33f1100038da35d6bf1b4d83fcb2c0 --hash=sha256:c4558ba85849ab65dc57e10fd0efb13fabd9d3c09981a2566e18dec7cf47586a --hash=sha256:dce56c26d388f00a19426371b6926bf2f77c5c03b71d5273e4556c68be98c2dd --hash=sha256:de883ec6764b61547c1e7674c0d8a8a875d398bd6bb684e46b93d83e4f13b260 --hash=sha256:e0d2713d2b292c826bc21dc8732bd9e47628103aa3764180c881e04b3fef95dc --hash=sha256:e6035b5231a9316edc19d6415f4296fd1d0370e2a165a714b3edc167b9ca00e1 --hash=sha256:ec09dbf73ff4f7be2b339b995fadae9c4bb517bbbed7ec11d6fe99c2092b48fd --hash=sha256:eda47eb7731c3b41180b58bb83de423f43aa58a677677e3390e8d332b003859e --hash=sha256:eed0d93fbca7087f143b42c34b05a825849bdf17f101572c2105acfa49aa88b8
 # ansible-builder's own build-time introspection (introspect.py, vendored
 # under execution-environment/ansible-builder-scripts/) independently
 # scans every vendored collection's own requirements.txt and merges them
@@ -268,7 +268,7 @@ pycountry==26.2.16 --hash=sha256:5b6027d453fcd6060112b951dd010f01f168b51b4bf8a1f
 # setuptools version, same pattern as above; its own build-system.
 # requires is commented out in its real sdist (self-hosting, no further
 # cascade).
-setuptools==80.10.2 --hash=sha256:8b0e9d10c784bf7d262c4e5ec5d4ec94127ce206e8738f29a437945fbc219b70
+setuptools==84.2.1 --hash=sha256:3ff8b3b5492a0aa66960f4419365a86b84e013070d4313e4d4a6894f5d64d6bc --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2
 # pycountry's own build backend is poetry-core (unconstrained),
 # confirmed via its real sdist pyproject.toml -- already satisfied by
 # poetry-core==2.5.0 above, no further need.

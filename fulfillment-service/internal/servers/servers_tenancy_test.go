@@ -20,6 +20,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
@@ -73,9 +74,25 @@ var _ = Describe("Tenancy logic", func() {
 			SetLogger(logger).SetTenancyLogic(tenancy).Build()
 		Expect(err).ToNot(HaveOccurred())
 		_, err = instanceTypesDao.Create().SetObject(privatev1.BareMetalInstanceType_builder{
-			Id: "worker-bmit", Metadata: privatev1.Metadata_builder{Name: "worker-bmit", Tenant: auth.SharedTenant}.Build(),
+			Id:       "worker-bmit",
+			Metadata: privatev1.Metadata_builder{Name: "worker-bmit", Tenant: auth.SharedTenant}.Build(),
+			Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+				Hardware: privatev1.BareMetalHardwareSpec_builder{
+					NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+						privatev1.BareMetalNetworkPortSpec_builder{
+							Name: "data-0",
+							Role: "fabric",
+						}.Build(),
+					},
+				}.Build(),
+			}.Build(),
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
+
+		// Seed ready, default-labelled networking per tenant so cluster creation
+		// with an omitted attachment resolves usable defaults in that tenant.
+		seedTenantDefaultNetworking("my-tenant", "", nil)
+		seedTenantDefaultNetworking("your-tenant", "", nil)
 	})
 
 	It("Returns tenant in metadata when object is created", func() {
@@ -420,6 +437,9 @@ var _ = Describe("Tenancy logic", func() {
 					Tenant: "your-tenant",
 				}.Build(),
 			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"metadata.tenant"},
+			},
 		}.Build())
 		Expect(err).To(HaveOccurred())
 		status, ok := grpcstatus.FromError(err)
@@ -497,6 +517,9 @@ var _ = Describe("Tenancy logic", func() {
 					},
 				}.Build(),
 			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"spec.node_sets"},
+			},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(updateResponse.GetObject().GetMetadata().GetTenant()).To(Equal("my-tenant"))
@@ -625,6 +648,9 @@ var _ = Describe("Tenancy logic", func() {
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-		Expect(status.Message()).To(Equal("tenant 'does-not-exist' doesn't exist"))
+		// The omitted attachment cannot resolve in a tenant that has no rows, so
+		// the missing-default rejection fires before the DB tenant foreign-key
+		// trigger. The tenant FK stays enforced for paths that reach the DAO.
+		Expect(status.Message()).To(ContainSubstring("a default subnet is required"))
 	})
 })

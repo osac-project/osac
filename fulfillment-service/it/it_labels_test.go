@@ -42,7 +42,9 @@ var _ = Describe("Labels", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		getOrCreateTenantDefaultNetworkClassFixture(ctx)
+		// Cluster creates resolve omitted attachments to the tenant's default
+		// Subnet and SecurityGroup; usable tenant-default networking must exist.
+		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		publicAdminClustersClient = publicv1.NewClustersClient(tool.ExternalView().AdminConn())
 		adminClustersClient = privatev1.NewClustersClient(tool.InternalView().AdminConn())

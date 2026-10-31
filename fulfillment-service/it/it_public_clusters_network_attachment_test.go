@@ -19,6 +19,7 @@ import (
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -239,48 +240,276 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 		Expect(spec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(securityGroupId))
 	})
 
-	It("Uses tenant defaults when network_attachment is omitted", func() {
-		// Seed READY tenant default networking (default Subnet + SecurityGroup
-		// and backing VirtualNetwork) for the suite tenant:
-		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
-		network := getTenantDefaultNetworkFixture(ctx, usersGroup, "")
+	Context("Tenant-default networking", func() {
+		// Each case runs in a fresh project so ambient defaults in the shared
+		// tenant cannot satisfy these requests and negative cases cannot be
+		// repaired by tenant-wide fixture helpers. Default-labelled resources
+		// reject admin deletion, so case-local networking clients use the
+		// controller identity for setup, readiness, and cleanup.
+		newIsolatedVirtualNetwork := func(project string) string {
+			networks := privatev1.NewVirtualNetworksClient(tool.InternalView().ControllerConn())
+			id := fmt.Sprintf("test-vnet-%s", uuid.New())
+			_, err := networks.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+				Object: privatev1.VirtualNetwork_builder{
+					Id: id,
+					Metadata: privatev1.Metadata_builder{
+						Name:    fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
+						Tenant:  usersGroup,
+						Project: project,
+						Labels:  map[string]string{tenantDefaultNetworkingLabel: "true"},
+					}.Build(),
+					Spec: privatev1.VirtualNetworkSpec_builder{
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
+						Region:       "us-east-1",
+						Ipv4Cidr:     new("10.100.0.0/16"),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(func(cleanupCtx context.Context) {
+				Expect(cleanupVirtualNetworkFixture(cleanupCtx, networks, id)).To(Succeed())
+			})
+			setComputeInstanceFixtureVirtualNetworkReady(ctx, networks, id)
+			return id
+		}
 
-		// Create the cluster without any network attachment:
-		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
-			Object: publicv1.Cluster_builder{
-				Metadata: publicv1.Metadata_builder{
-					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+		waitForSubnetPending := func(subnets privatev1.SubnetsClient, id string) {
+			Eventually(func(g Gomega) {
+				probeCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
+				defer cancel()
+				resp, err := subnets.Get(probeCtx, privatev1.SubnetsGetRequest_builder{Id: id}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(resp.GetObject().GetStatus().GetState()).To(
+					Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
+			}, time.Minute, time.Second).Should(Succeed())
+		}
+
+		waitForSecurityGroupPending := func(groups privatev1.SecurityGroupsClient, id string) {
+			Eventually(func(g Gomega) {
+				probeCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
+				defer cancel()
+				resp, err := groups.Get(probeCtx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(resp.GetObject().GetStatus().GetState()).To(
+					Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
+			}, time.Minute, time.Second).Should(Succeed())
+		}
+
+		newProjectSubnet := func(project, virtualNetworkId string, defaultLabelled bool, state string) string {
+			subnets := privatev1.NewSubnetsClient(tool.InternalView().ControllerConn())
+			id := fmt.Sprintf("test-subnet-%s", uuid.New())
+			labels := map[string]string{}
+			if defaultLabelled {
+				labels[tenantDefaultNetworkingLabel] = "true"
+			}
+			_, err := subnets.Create(ctx, privatev1.SubnetsCreateRequest_builder{
+				Object: privatev1.Subnet_builder{
+					Id: id,
+					Metadata: privatev1.Metadata_builder{
+						Name:    fmt.Sprintf("test-subnet-%s", uuid.New()[24:32]),
+						Tenant:  usersGroup,
+						Project: project,
+						Labels:  labels,
+					}.Build(),
+					Spec: privatev1.SubnetSpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
+						Ipv4Cidr:       new("10.100.1.0/24"),
+					}.Build(),
 				}.Build(),
-				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					NodeSets: testClusterNodeSets(bmitName, 3),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(func(cleanupCtx context.Context) {
+				Expect(cleanupSubnetFixture(cleanupCtx, subnets, id)).To(Succeed())
+			})
+			switch state {
+			case "ready":
+				setSubnetReady(ctx, subnets, id)
+			case "pending":
+				waitForSubnetPending(subnets, id)
+			}
+			return id
+		}
+
+		newProjectSecurityGroup := func(project, virtualNetworkId string, defaultLabelled bool, state string) string {
+			groups := privatev1.NewSecurityGroupsClient(tool.InternalView().ControllerConn())
+			id := fmt.Sprintf("test-sg-%s", uuid.New())
+			labels := map[string]string{}
+			if defaultLabelled {
+				labels[tenantDefaultNetworkingLabel] = "true"
+			}
+			_, err := groups.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+				Object: privatev1.SecurityGroup_builder{
+					Id: id,
+					Metadata: privatev1.Metadata_builder{
+						Name:    fmt.Sprintf("test-sg-%s", uuid.New()[24:32]),
+						Tenant:  usersGroup,
+						Project: project,
+						Labels:  labels,
+					}.Build(),
+					Spec: privatev1.SecurityGroupSpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
+					}.Build(),
 				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		object := createResponse.GetObject()
-		DeferCleanup(func(cleanupCtx context.Context) {
-			Expect(cleanupClusterFixture(cleanupCtx, clustersClient, privateClustersClient, object.GetId())).To(Succeed())
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(func(cleanupCtx context.Context) {
+				Expect(cleanupSecurityGroupFixture(cleanupCtx, groups, id)).To(Succeed())
+			})
+			switch state {
+			case "ready":
+				setSecurityGroupReady(ctx, groups, id)
+			case "pending":
+				waitForSecurityGroupPending(groups, id)
+			}
+			return id
+		}
+
+		newProjectClusterRequest := func(project, clusterId string) *publicv1.ClustersCreateRequest {
+			return publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Id: clusterId,
+					Metadata: publicv1.Metadata_builder{
+						Name:    fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+						Project: project,
+					}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Shared: true}.Build(),
+						NodeSets: testClusterNodeSets(bmitName, 3),
+					}.Build(),
+				}.Build(),
+			}.Build()
+		}
+
+		expectNoStoredCluster := func(clusterId string) {
+			_, getErr := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{Id: clusterId}.Build())
+			Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+			_, adminGetErr := privateClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: clusterId}.Build())
+			Expect(grpcstatus.Code(adminGetErr)).To(Equal(grpccodes.NotFound))
+		}
+
+		DescribeTable("rejects an omitted attachment without a usable tenant default",
+			func(configure func(project, virtualNetworkId string), wantField, wantPhrase string) {
+				project := createCatalogItemProjectFixture(ctx, usersGroup)
+				// The public caller needs project membership to resolve
+				// project-scoped defaults and references.
+				grantComputeInstanceSSHKeyProjectAccess(ctx, usersGroup, project)
+				virtualNetworkId := newIsolatedVirtualNetwork(project)
+				configure(project, virtualNetworkId)
+
+				clusterId := fmt.Sprintf("test-cluster-%s", uuid.New())
+				DeferCleanup(func(cleanupCtx context.Context) {
+					Expect(cleanupClusterFixture(cleanupCtx, clustersClient, privateClustersClient, clusterId)).To(Succeed())
+				})
+
+				response, err := clustersClient.Create(ctx, newProjectClusterRequest(project, clusterId))
+				Expect(err).To(HaveOccurred())
+				Expect(response).To(BeNil())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring(wantField))
+				Expect(status.Message()).To(ContainSubstring(wantPhrase))
+				expectNoStoredCluster(clusterId)
+			},
+			Entry("missing default Subnet",
+				func(project, virtualNetworkId string) {
+					newProjectSecurityGroup(project, virtualNetworkId, true, "ready")
+				},
+				"spec.network_attachment.subnet", "a default subnet is required"),
+			Entry("pending default Subnet",
+				func(project, virtualNetworkId string) {
+					newProjectSubnet(project, virtualNetworkId, true, "pending")
+					newProjectSecurityGroup(project, virtualNetworkId, true, "ready")
+				},
+				"spec.network_attachment.subnet", "a default subnet is required"),
+			Entry("missing default SecurityGroup",
+				func(project, virtualNetworkId string) {
+					newProjectSubnet(project, virtualNetworkId, true, "ready")
+				},
+				"spec.network_attachment.security_groups", "a default security group is required"),
+			Entry("pending default SecurityGroup",
+				func(project, virtualNetworkId string) {
+					newProjectSubnet(project, virtualNetworkId, true, "ready")
+					newProjectSecurityGroup(project, virtualNetworkId, true, "pending")
+				},
+				"spec.network_attachment.security_groups", "a default security group is required"),
+		)
+
+		It("resolves ready tenant defaults and stores both references", func() {
+			project := createCatalogItemProjectFixture(ctx, usersGroup)
+			// The public caller needs project membership to resolve
+			// project-scoped defaults and references.
+			grantComputeInstanceSSHKeyProjectAccess(ctx, usersGroup, project)
+			virtualNetworkId := newIsolatedVirtualNetwork(project)
+			defaultSubnetId := newProjectSubnet(project, virtualNetworkId, true, "ready")
+			defaultSecurityGroupId := newProjectSecurityGroup(project, virtualNetworkId, true, "ready")
+
+			clusterId := fmt.Sprintf("test-cluster-%s", uuid.New())
+			DeferCleanup(func(cleanupCtx context.Context) {
+				Expect(cleanupClusterFixture(cleanupCtx, clustersClient, privateClustersClient, clusterId)).To(Succeed())
+			})
+
+			createResponse, err := clustersClient.Create(ctx, newProjectClusterRequest(project, clusterId))
+			Expect(err).ToNot(HaveOccurred())
+			object := createResponse.GetObject()
+
+			spec := object.GetSpec()
+			Expect(spec.GetNetworkAttachment()).ToNot(BeNil())
+			Expect(spec.GetNetworkAttachment().GetSubnet().GetId()).To(Equal(defaultSubnetId))
+			Expect(spec.GetNetworkAttachment().GetSecurityGroups()).To(HaveLen(1))
+			Expect(spec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(defaultSecurityGroupId))
+
+			getResponse, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{
+				Id: object.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			spec = getResponse.GetObject().GetSpec()
+			Expect(spec.GetNetworkAttachment()).ToNot(BeNil())
+			Expect(spec.GetNetworkAttachment().GetSubnet().GetId()).To(Equal(defaultSubnetId))
+			Expect(spec.GetNetworkAttachment().GetSecurityGroups()).To(HaveLen(1))
+			Expect(spec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(defaultSecurityGroupId))
 		})
 
-		// The omitted attachment must resolve to the tenant default Subnet and
-		// SecurityGroup:
-		spec := object.GetSpec()
-		Expect(spec.GetNetworkAttachment()).ToNot(BeNil())
-		Expect(spec.GetNetworkAttachment().GetSubnet().GetId()).To(Equal(network.subnetID))
-		Expect(spec.GetNetworkAttachment().GetSecurityGroups()).To(HaveLen(1))
-		Expect(spec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID))
+		It("preserves a complete explicit attachment without labelled defaults", func() {
+			project := createCatalogItemProjectFixture(ctx, usersGroup)
+			// The public caller needs project membership to resolve
+			// project-scoped defaults and references.
+			grantComputeInstanceSSHKeyProjectAccess(ctx, usersGroup, project)
+			virtualNetworkId := newIsolatedVirtualNetwork(project)
+			explicitSubnetId := newProjectSubnet(project, virtualNetworkId, false, "ready")
+			explicitSecurityGroupId := newProjectSecurityGroup(project, virtualNetworkId, false, "ready")
 
-		// The resolved defaults must survive public Get:
-		getResponse, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{
-			Id: object.GetId(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		spec = getResponse.GetObject().GetSpec()
-		Expect(spec.GetNetworkAttachment()).ToNot(BeNil())
-		Expect(spec.GetNetworkAttachment().GetSubnet().GetId()).To(Equal(network.subnetID))
-		Expect(spec.GetNetworkAttachment().GetSecurityGroups()).To(HaveLen(1))
-		Expect(spec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID))
+			clusterId := fmt.Sprintf("test-cluster-%s", uuid.New())
+			DeferCleanup(func(cleanupCtx context.Context) {
+				Expect(cleanupClusterFixture(cleanupCtx, clustersClient, privateClustersClient, clusterId)).To(Succeed())
+			})
+
+			request := newProjectClusterRequest(project, clusterId)
+			request.GetObject().GetSpec().SetNetworkAttachment(publicv1.ClusterNetworkAttachment_builder{
+				Subnet: publicv1.SubnetLocalReference_builder{Id: explicitSubnetId}.Build(),
+				SecurityGroups: []*publicv1.SecurityGroupLocalReference{
+					publicv1.SecurityGroupLocalReference_builder{Id: explicitSecurityGroupId}.Build(),
+				},
+			}.Build())
+
+			createResponse, err := clustersClient.Create(ctx, request)
+			Expect(err).ToNot(HaveOccurred())
+			object := createResponse.GetObject()
+
+			spec := object.GetSpec()
+			Expect(spec.GetNetworkAttachment().GetSubnet().GetId()).To(Equal(explicitSubnetId))
+			Expect(spec.GetNetworkAttachment().GetSecurityGroups()).To(HaveLen(1))
+			Expect(spec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(explicitSecurityGroupId))
+
+			getResponse, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{
+				Id: object.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			spec = getResponse.GetObject().GetSpec()
+			Expect(spec.GetNetworkAttachment().GetSubnet().GetId()).To(Equal(explicitSubnetId))
+			Expect(spec.GetNetworkAttachment().GetSecurityGroups()).To(HaveLen(1))
+			Expect(spec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(explicitSecurityGroupId))
+		})
 	})
 
 	It("Rejects cluster creation when the referenced subnet is not in READY state", func() {

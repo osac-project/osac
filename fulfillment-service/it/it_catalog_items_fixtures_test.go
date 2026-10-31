@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -1261,11 +1262,20 @@ func deleteTenantDefaultNetworkingFixture(ctx context.Context, manager defaultne
 	defer deadline.Stop()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	var lastErr error
 	for {
 		err := manager.Delete(ctx, tenant)
-		if !errors.Is(err, defaultnetworking.ErrResourcesDeleting) {
+		if err == nil {
+			return nil
+		}
+		// The resource guard rejects deleting a default SecurityGroup while
+		// terminating clusters still reference it; those references finish
+		// asynchronously, so the delete is retried like a finalizer wait.
+		if !errors.Is(err, defaultnetworking.ErrResourcesDeleting) &&
+			!stillReferencedByActiveResources(err) {
 			return err
 		}
+		lastErr = err
 		if err := clearTenantDefaultNetworkingFinalizers(ctx, tenant); err != nil {
 			return fmt.Errorf("clear terminating default networking fixture finalizers: %w", err)
 		}
@@ -1273,10 +1283,21 @@ func deleteTenantDefaultNetworkingFixture(ctx context.Context, manager defaultne
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
+			if lastErr != nil {
+				return fmt.Errorf("default networking resources for tenant %q remain after delete: %w",
+					tenant, lastErr)
+			}
 			return fmt.Errorf("default networking resources for tenant %q remain after delete", tenant)
 		case <-ticker.C:
 		}
 	}
+}
+
+// stillReferencedByActiveResources reports whether the delete was rejected by
+// the resource guard because terminating clusters still reference the tenant
+// defaults; the guard counts them as active, so the delete is retried.
+func stillReferencedByActiveResources(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "still reference")
 }
 
 func clearTenantDefaultNetworkingFinalizers(ctx context.Context, tenant string) error {

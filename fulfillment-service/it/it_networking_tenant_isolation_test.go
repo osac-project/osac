@@ -77,6 +77,10 @@ var _ = Describe("Networking tenant isolation", func() {
 		tenantBID := createTenant(ctx, tenantsClient, tenantBName)
 		waitForTenantSynced(ctx, tenantsClient, tenantAID)
 		waitForTenantSynced(ctx, tenantsClient, tenantBID)
+		// Cluster creates resolve omitted attachments to each tenant's default
+		// Subnet and SecurityGroup; seed one per fresh tenant.
+		ensureTenantDefaultNetworkingFixture(ctx, tenantAName, "")
+		ensureTenantDefaultNetworkingFixture(ctx, tenantBName, "")
 		projectsClient := privatev1.NewProjectsClient(tool.InternalView().AdminConn())
 		DeferCleanup(func(cleanupCtx context.Context) {
 			deleteTenant(cleanupCtx, tenantsClient, projectsClient, tenantBID, tenantBName)

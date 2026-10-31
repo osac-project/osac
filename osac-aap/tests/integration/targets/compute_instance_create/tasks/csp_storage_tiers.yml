@@ -30,8 +30,7 @@
                 'name': 'test-vm-csp-tiers',
                 'namespace': 'osac-system',
                 'annotations': {
-                  'osac.openshift.io/tenant': 'integration-tenant',
-                  'osac.openshift.io/subnet-target-namespace': 'test-subnet'
+                  'osac.openshift.io/tenant': 'integration-tenant'
                 }
               },
               'spec': _base_ci_fixture.spec | combine({
@@ -55,6 +54,16 @@
               }
             }, recursive=True)
           }}
+
+    # Provider networking disabled (what CI deploys): the operator's vm_network is
+    # the default pod network with masquerade in the VM namespace.
+    - name: Build the vm_network job input
+      ansible.builtin.set_fact:
+        test_csp_vm_network:
+          namespace: test-subnet
+          networks: [{name: default, pod: {}}]
+          interfaces: [{name: default, masquerade: {}}]
+          labels: {osac.openshift.io/compute-instance-id: 3c0b9d2e-6596-4a5b-9c7d-2e4f6a8b0c12}
 
     - name: Create test-vm-csp-tiers ComputeInstance CR in Kind
       kubernetes.core.k8s:
@@ -81,6 +90,7 @@
                 "ansible_python_interpreter": ansible_python_interpreter,
                 "osac_job_vars": {
                   "resource": test_csp_compute_instance,
+                  "vm_network": test_csp_vm_network,
                   "tenant_storage_classes": [
                     {"name": "netapp-gold-sc", "tier": "gold"},
                     {"name": "vast-fast-1", "tier": "fast"},
@@ -142,6 +152,7 @@
                     "ansible_python_interpreter": ansible_python_interpreter,
                     "osac_job_vars": {
                       "resource": test_csp_compute_instance,
+                      "vm_network": test_csp_vm_network,
                       "tenant_storage_classes": [
                         {"name": "netapp-gold-sc", "tier": "gold"},
                         {"name": "vast-fast-sc", "tier": "fast"}
@@ -270,6 +281,7 @@
                     "ansible_python_interpreter": ansible_python_interpreter,
                     "osac_job_vars": {
                       "resource": test_csp_compute_instance,
+                      "vm_network": test_csp_vm_network,
                       "tenant_storage_classes": [
                         {"name": "custom-gold-sc", "tier": "gold"}
                       ],

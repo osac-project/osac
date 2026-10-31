@@ -1,72 +1,112 @@
 ---
-# VirtualNetwork maps to a Netris VPC + IPAM allocation
-# Creates a VPC (routing domain) and an IPAM allocation for the VN's CIDR
+# VirtualNetwork -> Netris VPC osac-vn-<id> plus the IPAM allocation of the same
+# name (spec.ipv4Cidr, purpose common, in the VPC). With a network type the
+# VPC's VNI is returned as l3_vni. Get-or-create by name: a rerun finds both
+# objects and writes nothing. No NAT rule is created: bare metal reaches DNS
+# through the resolver of the installation's default DHCP option set.
+# Results go through _publish.yaml only.
+- name: Create the VirtualNetwork on Netris
+  block:
+    - name: Check the settings
+      ansible.builtin.include_tasks: _settings.yaml
+      vars:
+        netris_require: [controller, credentials, site, tenant]
 
-- name: Extract VirtualNetwork configuration
-  ansible.builtin.set_fact:
-    vn_name: "{{ virtual_network.metadata.name }}"
-    vn_ipv4_cidr: "{{ virtual_network.spec.ipv4Cidr | default('') }}"
-    vn_region: "{{ virtual_network.spec.region }}"
-    vn_tenant_id: "{{ virtual_network.metadata.annotations['osac.openshift.io/tenant'] | default('') }}"
+    - name: Check the task input
+      ansible.builtin.include_tasks: _input.yaml
 
-- name: Resolve region to Netris site ID
-  ansible.builtin.set_fact:
-    vn_site_id: "{{ netris_region_site_map[vn_region] | default(netris_site_id) }}"
+    - name: Check the network type
+      ansible.builtin.include_tasks: _network_type.yaml
 
-- name: Display VirtualNetwork information
-  ansible.builtin.debug:
-    msg:
-      - "Creating Netris VPC + IPAM allocation for VirtualNetwork '{{ vn_name }}'"
-      - "Region: {{ vn_region }}"
-      - "Site ID: {{ vn_site_id }}"
-      - "IPv4 CIDR: {{ vn_ipv4_cidr | default('not configured') }}"
+    - name: Build the object names
+      ansible.builtin.include_tasks: _names.yaml
 
-- name: Create VPC in Netris controller
-  ansible.builtin.include_role:
-    name: netris.controller.vpc
-    tasks_from: create
-  vars:
-    vpc_name: "{{ vn_name }}"
-    vpc_site_id: "{{ vn_site_id }}"
-    vpc_tenant_id: "{{ netris_tenant_id }}"
+    - name: Check the VirtualNetwork CIDR
+      vars:
+        _cidr_error: "{{ osac_job_vars.resource.spec.ipv4Cidr | default('', true) | osac.templates.netris_vn_cidr_error }}"
+        netris_fail:
+          message: "Netris invalid task input: {{ _cidr_error }}"
+          retryable: false
+      when: _cidr_error | length > 0
+      ansible.builtin.include_tasks: _fail.yaml
 
-- name: Display VPC creation result
-  ansible.builtin.debug:
-    msg: >-
-      VPC '{{ vn_name }}' {{ (vpc_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
-      (ID: {{ vpc_id | default('unknown') }})
+    - name: Create the VPC
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: create
+      vars:
+        vpc_name: "{{ netris_names.vpc }}"
+        vpc_site_id: "{{ netris_site_id | int }}"
+        vpc_tenant_id: "{{ netris_tenant_id | int }}"
 
-- name: Validate Netris VPC ID
-  ansible.builtin.assert:
-    that:
-      - vpc_id is defined
-      - vpc_id | string | trim is match('^[0-9]+$')
-      - vpc_id | int > 0
-    fail_msg: "Netris did not return a VPC ID for VirtualNetwork '{{ vn_name }}'"
+    - name: Check the VPC ID
+      ansible.builtin.assert:
+        that:
+          - vpc_id is defined
+          - vpc_id | string | trim is match('^[1-9][0-9]*$')
+        fail_msg: "Netris did not return a VPC ID for {{ netris_names.vpc }}"
 
-- name: Create IPAM allocation for VirtualNetwork CIDR
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: create_allocation
-  vars:
-    ipam_name: "{{ vn_name }}"
-    ipam_cidr: "{{ vn_ipv4_cidr }}"
-    ipam_purpose: "common"
-    ipam_site_id: "{{ vn_site_id }}"
-    ipam_tenant_id: "{{ netris_tenant_id }}"
-    ipam_vpc_id: "{{ vpc_id }}"
-  when: vn_ipv4_cidr | length > 0
+    - name: Create the IPAM allocation of the VirtualNetwork
+      when: (osac_job_vars.resource.spec.ipv4Cidr | default('', true)) | length > 0
+      block:
+        - name: Create the allocation in the VPC
+          ansible.builtin.include_role:
+            name: netris.controller.ipam
+            tasks_from: create_allocation
+          vars:
+            ipam_name: "{{ netris_names.vn_ipam }}"
+            ipam_cidr: "{{ osac_job_vars.resource.spec.ipv4Cidr }}"
+            ipam_purpose: common
+            ipam_site_id: "{{ netris_site_id | int }}"
+            ipam_tenant_id: "{{ netris_tenant_id | int }}"
+            ipam_vpc_id: "{{ vpc_id }}"
+      rescue:
+        # Netris refuses an overlapping or malformed prefix with a 4xx: the
+        # same request would fail again, so the error is final.
+        - name: Classify a refused CIDR as final
+          when: (ansible_failed_result.status | default(0)) in [400, 409, 422]
+          vars:
+            netris_fail:
+              message: >-
+                Netris refused the VirtualNetwork CIDR {{ osac_job_vars.resource.spec.ipv4Cidr }}
+                ({{ ansible_failed_result | netris.controller.netris_safe_error_detail }}); it can overlap another allocation.
+              retryable: false
+          ansible.builtin.include_tasks: _fail.yaml
 
-- name: Display IPAM allocation result
-  ansible.builtin.debug:
-    msg: >-
-      IPAM allocation '{{ vn_name }}' {{ (ipam_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
-      (ID: {{ ipam_subnet_id | default('unknown') }})
-  when: vn_ipv4_cidr | length > 0
+        - name: Pass on any other failure
+          ansible.builtin.fail:
+            msg: "{{ ansible_failed_result.msg | default('IPAM allocation failed') }}"
 
-- name: Export VirtualNetwork VPC ID
-  ansible.builtin.set_stats:
-    data:
-      vpc_id: "{{ vpc_id | int }}"
-    per_host: false
-    aggregate: false
+    - name: Read the VPC for its L3 VNI
+      when: netris_network_type == 'evpn'
+      block:
+        - name: Look up the VPC
+          ansible.builtin.include_role:
+            name: netris.controller.vpc
+            tasks_from: read
+          vars:
+            vpc_name: "{{ netris_names.vpc }}"
+            vpc_tenant_id: "{{ netris_tenant_id | int }}"
+
+        - name: Check the L3 VNI
+          vars:
+            _vni: "{{ (netris_vpc | default({}, true)).vni | default(none) | osac.templates.netris_vni_check('VPC ' ~ netris_names.vpc) }}"
+            netris_fail:
+              message: "{{ _vni.error }}"
+              retryable: "{{ _vni.retryable }}"
+          when: _vni.error | length > 0
+          ansible.builtin.include_tasks: _fail.yaml
+
+        - name: Record the L3 VNI
+          ansible.builtin.set_fact:
+            _netris_l3_vni: "{{ netris_vpc.vni | int }}"
+
+    - name: Return the result to OSAC
+      ansible.builtin.include_tasks: _publish.yaml
+      vars:
+        netris_result: >-
+          {{ {'backend_id': vpc_id}
+             | combine({'l3_vni': _netris_l3_vni} if netris_network_type == 'evpn' else {}) }}
+  rescue:
+    - name: Report the error
+      ansible.builtin.include_tasks: _rescue.yaml

@@ -4,7 +4,7 @@ import logging
 import os
 import subprocess
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, TypeVar
 
@@ -19,6 +19,8 @@ except ImportError:
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
+from tests.e2e.core.sanitize import sanitize_args, sanitize_text
+
 T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
@@ -30,8 +32,54 @@ logger = logging.getLogger(__name__)
 _PROGRESS_LOG_INTERVAL_S = 30
 
 
+_OUTPUT_TAIL = 2000
+_SCALAR_SUMMARY_LIMIT = 120
+
+
+def _text(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return value or ""
+
+
+class CommandFailed(subprocess.CalledProcessError):
+    """A command exited non-zero. `cmd` is sanitized; `stdout` and `stderr` stay as captured for callers."""
+
+    def __init__(
+        self, returncode: int, cmd: Sequence[str], output: str | None = None, stderr: str | None = None
+    ) -> None:
+        super().__init__(returncode, sanitize_args(cmd), output, stderr)
+        # Exception repr and pickling use args, which would otherwise hold the raw stderr.
+        self.args = (str(self),)
+
+    def __str__(self) -> str:
+        detail = sanitize_text(_text(self.stderr) or _text(self.stdout)).strip()[-_OUTPUT_TAIL:]
+        return f"{' '.join(map(str, self.cmd))} exited {self.returncode}: {detail}"
+
+
+class CommandTimedOut(subprocess.TimeoutExpired):
+    """A command ran past its timeout. `cmd` is sanitized."""
+
+    def __init__(
+        self, cmd: Sequence[str], timeout: float, output: str | bytes | None = None, stderr: str | bytes | None = None
+    ) -> None:
+        super().__init__(sanitize_args(cmd), timeout, output, stderr)
+        self.args = (str(self),)
+
+    def __str__(self) -> str:
+        return f"{' '.join(map(str, self.cmd))} timed out after {self.timeout}s"
+
+
 def run(*args: str, timeout: int = 300) -> str:
-    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=True)
+    # pytest's long traceback prints each frame's arguments, and these hold the Authorization header and payload.
+    __tracebackhide__ = True
+    # The raw subprocess exceptions carry the unsanitized command line, so they are never chained.
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=True)
+    except subprocess.CalledProcessError as exc:
+        raise CommandFailed(exc.returncode, args, exc.stdout, exc.stderr) from None
+    except subprocess.TimeoutExpired as exc:
+        raise CommandTimedOut(args, exc.timeout, exc.stdout, exc.stderr) from None
     return result.stdout.strip()
 
 
@@ -49,11 +97,44 @@ def run_unchecked(*args: str, timeout: int = 300, include_stderr: bool = False) 
     On failure (rc != 0), stdout and stderr are always combined so that
     error messages written to either stream are available for diagnostics.
     """
-    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+    __tracebackhide__ = True
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise CommandTimedOut(args, exc.timeout, exc.stdout, exc.stderr) from None
     if result.returncode == 0 and not include_stderr:
         return result.stdout.strip(), 0
     combined = (result.stdout.strip() + "\n" + result.stderr.strip()).strip()
     return combined, result.returncode
+
+
+class StuckState(TimeoutError):
+    """An object never reached the state `poll_until` waited for."""
+
+    def __init__(self, description: str, last_value: str, elapsed_s: float, last_call_failure: str = "") -> None:
+        self.description: str = sanitize_text(description)
+        self.last_value: str = last_value
+        self.elapsed_s: float = elapsed_s
+        message = f"{self.description} not reached after {elapsed_s:.0f}s; last value: {last_value}"
+        if last_call_failure:
+            message += f"; last call failed: {last_call_failure}"
+        super().__init__(message)
+
+
+def _summarize(value: object) -> str:
+    """A short description of a polled value. Polled values may be whole API objects: never their content."""
+    if isinstance(value, dict):
+        return f"<dict with {len(value)} keys>"
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return f"<list of {len(value)}>"
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return sanitize_text(repr(value))[:_SCALAR_SUMMARY_LIMIT]
+    return f"<{type(value).__name__}>"
+
+
+def _describe_failure(exc: BaseException) -> str:
+    # Only a CommandFailed has a sanitized str(); any other exception may carry the raw command line.
+    return f"{type(exc).__name__}: {exc}" if isinstance(exc, CommandFailed) else type(exc).__name__
 
 
 def poll_until(
@@ -69,9 +150,12 @@ def poll_until(
     last_error: subprocess.CalledProcessError | None = None
     start = time.monotonic()
     last_logged = start
-    with _wait_span(description, delay=delay, retries=retries) as span:
-        # Descriptions and polled values may contain API responses or credentials.
-        logger.info("Waiting for resource condition...")
+    label = sanitize_text(description)
+    with _wait_span(label, delay=delay, retries=retries) as span:
+        # Descriptions name resources and conditions, so they are logged after sanitizing.
+        # Polled values, errors and tracebacks stay out of logs; only the StuckState message
+        # carries a summary of the last scalar value, never a container.
+        logger.info("Waiting for %s...", label)
         for attempt in range(retries):
             # retry_on_error is opt-in: most callers' fn() raising CalledProcessError
             # indicates a real bug (bad namespace, typo'd resource, auth
@@ -89,27 +173,30 @@ def poll_until(
                     last_error = None
                     if until(value):
                         _end_wait_span(span, attempt + 1, True)
-                        logger.info("Resource condition met after %.0fs", time.monotonic() - start)
+                        logger.info("Done waiting for %s after %.0fs", label, time.monotonic() - start)
                         return value
             else:
                 value = fn()
                 if until(value):
                     _end_wait_span(span, attempt + 1, True)
-                    logger.info("Resource condition met after %.0fs", time.monotonic() - start)
+                    logger.info("Done waiting for %s after %.0fs", label, time.monotonic() - start)
                     return value
             now = time.monotonic()
             if now - last_logged >= _PROGRESS_LOG_INTERVAL_S:
-                logger.info("Still waiting (attempt %d/%d, %.0fs elapsed)", attempt + 1, retries, now - start)
+                logger.info(
+                    "Still waiting for %s (attempt %d/%d, %.0fs elapsed)", label, attempt + 1, retries, now - start
+                )
                 last_logged = now
             if attempt + 1 < retries:
                 time.sleep(delay)
         _end_wait_span(span, retries, False)
-        if last_error is not None:
-            # Suppress the subprocess exception: its command and output may contain secrets.
-            raise TimeoutError(
-                f"Resource condition timed out after {max(retries - 1, 0) * delay}s (last call failed)"
-            ) from None
-        raise TimeoutError(f"Resource condition timed out after {max(retries - 1, 0) * delay}s")
+        # `from None`: a raw subprocess exception holds the command line and its output, which may hold secrets.
+        raise StuckState(
+            description,
+            _summarize(value),
+            time.monotonic() - start,
+            _describe_failure(last_error) if last_error is not None else "",
+        ) from None
 
 
 class _NoOpWaitSpan:

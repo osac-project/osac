@@ -152,10 +152,10 @@ def test_deletion_feedback_with_removed_disk_image_releases_network(
 
     try:
         vn_id, vn_cr = create_and_wait_for_virtual_network(
-            grpc, k8s_hub_client, unique_name("e2e-deleting-vn"), "10.214.0.0/16"
+            grpc, k8s_hub_client, unique_name("e2e-deleting-vn"), "172.29.0.0/16"
         )
         subnet_id, subnet_cr = create_and_wait_for_subnet(
-            grpc, k8s_hub_client, vn_id, "10.214.1.0/24", name_prefix="e2e-deleting-subnet"
+            grpc, k8s_hub_client, vn_id, "172.29.1.0/24", name_prefix="e2e-deleting-subnet"
         )
         sg_id = grpc.create_security_group(name=unique_name("e2e-deleting-sg"), virtual_network=vn_id)
         sg_cr = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=sg_id)

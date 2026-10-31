@@ -1,0 +1,21 @@
+{{- if eq (.Values.global.networking.k8sManager | default "") "cudn_evpn" }}
+{{/*
+Registration of OSAC's cudn_evpn Kubernetes Manager (network manager contract
+section 4.2): the installer creates each OSAC Kubernetes Manager's
+registration, with an osac.* ansible_role and exactly one network_type. It is
+immutable; only metadata (Helm labels) changes on upgrade.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osac-network-k8s-manager-cudn-evpn
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+    osac.openshift.io/network-k8s-manager: "true"
+immutable: true
+data:
+  name: cudn_evpn
+  ansible_role: osac.templates.cudn_evpn
+  network_type: evpn
+{{- end }}

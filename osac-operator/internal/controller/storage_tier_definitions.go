@@ -228,10 +228,11 @@ func resolveBackendPassword(
 	return string(value), nil
 }
 
-// resolveAndInjectTierContext resolves storage tier definitions and backend
-// connections from the Tier API and injects them into ctx for downstream AAP
-// calls to pick up, returning the tier definitions directly for callers that
-// also need them locally (e.g. tier-coverage validation).
+// resolveAndPartitionTierContext resolves storage tier definitions and backend
+// connections from the Tier and Backend APIs, partitions resolved tiers into
+// OSAC-managed and CSP-managed slices, injects only OSAC-managed tiers and
+// backend connections into ctx for AAP extra_vars, and reports whether any
+// tier was skipped during resolution.
 //
 // The returned error is non-nil when both clients were configured but the
 // Tier/Backend API call failed (gRPC Unavailable, Unauthenticated, etc.).
@@ -242,22 +243,6 @@ func resolveBackendPassword(
 //
 // logKV is passed through to the info log call for caller-specific context
 // (e.g. "tenant", name or "computeInstance", name).
-func resolveAndInjectTierContext(
-	ctx context.Context,
-	tiersClient StorageTiersLister,
-	backendsClient StorageBackendsClient,
-	secretsClient SecretsClient,
-	logKV ...any,
-) (context.Context, []provisioning.TierDefinition, error) {
-	ctx, osacTiers, _, _, err := resolveAndPartitionTierContext(ctx, tiersClient, backendsClient, secretsClient, logKV...)
-	return ctx, osacTiers, err
-}
-
-// resolveAndPartitionTierContext resolves storage tier definitions and backend
-// connections from the Tier and Backend APIs, partitions resolved tiers into
-// OSAC-managed and CSP-managed slices, injects only OSAC-managed tiers and
-// backend connections into ctx for AAP extra_vars, and reports whether any
-// tier was skipped during resolution.
 func resolveAndPartitionTierContext(
 	ctx context.Context,
 	tiersClient StorageTiersLister,

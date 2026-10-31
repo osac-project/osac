@@ -158,6 +158,34 @@ func reconcileAutoExternalIPCleanup(
 	return true, ctrl.Result{}, nil
 }
 
+// automaticExternalAccessRemains reports whether an automatic
+// ExternalIPAttachment or ExternalIP CR of the workload still exists (Unified
+// design, Automatic external access). The workload's cleanup finalizer holds
+// the workload CR until none remains; only the fulfillment service deletes
+// them, so this deletes nothing.
+func automaticExternalAccessRemains(
+	ctx context.Context,
+	c client.Client,
+	networkingNamespace string,
+	owner autoExternalIPOwner,
+) (bool, error) {
+	if networkingNamespace == "" || owner.id == "" {
+		return false, nil
+	}
+	attachments, err := listAutoExternalIPAttachments(ctx, c, networkingNamespace, owner)
+	if err != nil {
+		return false, err
+	}
+	if len(attachments) > 0 {
+		return true, nil
+	}
+	externalIPs, err := listAutoExternalIPs(ctx, c, networkingNamespace, owner)
+	if err != nil {
+		return false, err
+	}
+	return len(externalIPs) > 0, nil
+}
+
 func listAutoExternalIPAttachments(
 	ctx context.Context,
 	c client.Client,

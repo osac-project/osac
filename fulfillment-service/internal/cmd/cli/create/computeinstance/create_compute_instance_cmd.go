@@ -18,6 +18,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"google.golang.org/grpc"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -202,6 +203,7 @@ type runnerContext struct {
 	parsedSSHKeyRef        *publicv1.SecretReference
 	console                *terminal.Console
 	settings               *config.Settings
+	networkAttachment      *publicv1.ComputeNetworkAttachment
 	templatesClient        publicv1.ComputeInstanceTemplatesClient
 	catalogItemsClient     publicv1.ComputeInstanceCatalogItemsClient
 	computeInstancesClient publicv1.ComputeInstancesClient
@@ -254,6 +256,11 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
 	defer conn.Close()
+
+	// Resolve the names of the network attachment before anything is created:
+	if err := c.resolveNetworkAttachment(ctx, conn); err != nil {
+		return err
+	}
 
 	// Create the reflection helper:
 	helper, err := reflection.NewHelper().
@@ -833,86 +840,35 @@ func (c *runnerContext) buildBootDisk() (*publicv1.ComputeInstanceDisk, error) {
 	return builder.Build(), nil
 }
 
-// applyNetworkingFlags sets spec.network_attachments from CLI flags.
-func (c *runnerContext) applyNetworkingFlags(spec *publicv1.ComputeInstanceSpec_builder) error {
+// resolveNetworkAttachment parses the --network-attachment flag, at most once, and resolves its names to IDs.
+func (c *runnerContext) resolveNetworkAttachment(ctx context.Context, conn grpc.ClientConnInterface) error {
 	if len(c.args.networkAttachments) == 0 {
 		return nil
 	}
-
-	attachments := make([]*publicv1.ComputeNetworkAttachment, 0, len(c.args.networkAttachments))
-	for _, raw := range c.args.networkAttachments {
-		na, err := parseNetworkAttachmentFlag(raw)
-		if err != nil {
-			return err
-		}
-		attachments = append(attachments, na)
+	if len(c.args.networkAttachments) > 1 {
+		return fmt.Errorf("at most one --network-attachment is supported")
 	}
-	spec.NetworkAttachments = attachments
+	flag, err := netutil.ParseNetworkAttachmentFlag(c.args.networkAttachments[0], false)
+	if err != nil {
+		return err
+	}
+	subnet, groups, err := netutil.ResolveNetworkAttachment(ctx, conn, flag)
+	if err != nil {
+		return err
+	}
+	c.networkAttachment = publicv1.ComputeNetworkAttachment_builder{
+		Subnet:         subnet,
+		SecurityGroups: groups,
+	}.Build()
 	return nil
 }
 
-// parseMainSubnetOnly parses the subnet portion of --network-attachment (no security-groups clause): either a bare id
-// or exactly subnet=<id>, optionally with a single comma between other parts only if we add more keys later.
-func parseMainSubnetOnly(main string) (string, error) {
-	main = strings.TrimSpace(strings.TrimSuffix(main, ","))
-	if main == "" {
-		return "", fmt.Errorf("--network-attachment must include a subnet or subnet=<id>")
+// applyNetworkingFlags sets spec.network_attachments from the resolved --network-attachment flag.
+func (c *runnerContext) applyNetworkingFlags(spec *publicv1.ComputeInstanceSpec_builder) error {
+	if c.networkAttachment != nil {
+		spec.NetworkAttachments = []*publicv1.ComputeNetworkAttachment{c.networkAttachment}
 	}
-	if !strings.Contains(main, "=") {
-		return main, nil
-	}
-	var subnet string
-	for _, fragment := range strings.Split(main, ",") {
-		fragment = strings.TrimSpace(fragment)
-		if fragment == "" {
-			continue
-		}
-		key, val, ok := strings.Cut(fragment, "=")
-		if !ok {
-			return "", fmt.Errorf("invalid --network-attachment fragment %q (expected key=value)", fragment)
-		}
-		key = strings.TrimSpace(strings.ToLower(key))
-		val = strings.TrimSpace(val)
-		if val == "" {
-			return "", fmt.Errorf("invalid --network-attachment fragment %q (value is empty)", fragment)
-		}
-		if key != "subnet" {
-			return "", fmt.Errorf("unknown key %q before security-groups (use subnet)", key)
-		}
-		if subnet != "" {
-			return "", fmt.Errorf("subnet appears more than once in --network-attachment %q", main)
-		}
-		subnet = val
-	}
-	if subnet == "" {
-		return "", fmt.Errorf("--network-attachment %q must include subnet=... or be a bare subnet id", main)
-	}
-	return subnet, nil
-}
-
-// parseNetworkAttachmentFlag parses one --network-attachment value: a bare subnet id, or subnet=<id> with optional
-// security-groups=/security_groups= suffix (commas allowed in the group list).
-func parseNetworkAttachmentFlag(s string) (*publicv1.ComputeNetworkAttachment, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil, fmt.Errorf("empty --network-attachment value")
-	}
-	prefix, securityGroups, hadGroups := netutil.ExtractSecurityGroupListSuffix(s)
-	subnet, err := parseMainSubnetOnly(prefix)
-	if err != nil {
-		return nil, err
-	}
-	if !hadGroups && !strings.Contains(s, "=") {
-		return publicv1.ComputeNetworkAttachment_builder{Subnet: &publicv1.SubnetLocalReference{Id: s}}.Build(), nil
-	}
-	sgRefs := make([]*publicv1.SecurityGroupLocalReference, len(securityGroups))
-	for i, sg := range securityGroups {
-		sgRefs[i] = &publicv1.SecurityGroupLocalReference{Id: sg}
-	}
-	return publicv1.ComputeNetworkAttachment_builder{
-		Subnet:         &publicv1.SubnetLocalReference{Id: subnet},
-		SecurityGroups: sgRefs,
-	}.Build(), nil
+	return nil
 }
 
 // buildSpecFromCatalogItem builds the spec for catalog-item-based creation.
@@ -1228,10 +1184,13 @@ and must be well-formed XML. The secret must exist in the same tenant. See also
 `
 
 const networkAttachmentFlagHelp = `
-_SPEC_ - Per-NIC network attachment. The value can be a plain subnet ID, or a
-comma-separated specification in the format
-{{ bt }}subnet=ID[,security-groups=ID,ID...]{{ bt }}. Can be
-specified multiple times to attach multiple NICs.
+_SPEC_ - Network attachment of the instance, at most one. The value can be a
+plain subnet name or ID, or a comma-separated specification in the format
+{{ bt }}[subnet=NAME][,security-groups=NAME,NAME...]{{ bt }}; names and IDs
+are accepted. Every part is optional: without a subnet the tenant's default
+subnet is used, and without security groups the tenant's default security
+group is used when the subnet is in the tenant's default virtual network.
+Without the flag the tenant defaults are used.
 `
 
 const externalIPAttachmentFlagHelp = `

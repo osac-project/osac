@@ -278,9 +278,6 @@ func validateBareMetalInstanceCatalogItemNetworkPolicy(
 				}
 				attachment.GetSecurityGroups()[j] = canonicalSecurityGroupLocalReference(resolvedSecurityGroup)
 			}
-			if err := validateBareMetalSubnetFabricManager(ctx, resolvedSubnet, fmt.Sprintf("fields.network_attachments[%d]", i), virtualNetworksDao, networkClassesDao, logger); err != nil {
-				return err
-			}
 		}
 		// An editable instance_type policy without a default allows the BMI
 		// creator to supply the type, so interface compatibility cannot be

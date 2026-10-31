@@ -27,7 +27,7 @@ def test_poll_without_opentelemetry_waits_and_returns(monkeypatch: pytest.Monkey
 def test_poll_without_opentelemetry_still_raises_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(runner, "_otel_trace", None)
 
-    with pytest.raises(TimeoutError, match="timed out"):
+    with pytest.raises(TimeoutError, match="not reached after"):
         runner.poll_until(fn=lambda: "pending", until=lambda _: False, retries=1, delay=0, description="no otel")
 
 
@@ -109,7 +109,7 @@ def test_wait_span_timeout_sets_error_status_and_raises(exporter: object, monkey
 
     monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
 
-    with pytest.raises(TimeoutError, match="timed out"):
+    with pytest.raises(TimeoutError, match="not reached after"):
         runner.poll_until(
             fn=lambda: "pending", until=lambda _: False, retries=2, delay=5, description="ClusterOrder to become Ready"
         )

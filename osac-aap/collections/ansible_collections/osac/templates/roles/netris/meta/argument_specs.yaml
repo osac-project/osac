@@ -1,133 +1,214 @@
 ---
 argument_specs:
   create_virtual_network:
+    short_description: Create the VPC and IPAM allocation of a VirtualNetwork
     options:
-      virtual_network:
-        type: dict
-        required: true
-        description: VirtualNetwork CR from fulfillment-api via osac_job_vars
-      template_parameters:
-        type: dict
-        description: Template-specific parameters (reserved for future use)
-        options: {}
-        default: {}
-
-  delete_virtual_network:
-    options:
-      virtual_network:
-        type: dict
-        required: true
-        description: VirtualNetwork CR from fulfillment-api via osac_job_vars
-
-  create_subnet:
-    options:
-      subnet:
-        type: dict
-        required: true
-        description: Subnet CR from fulfillment-api via osac_job_vars
-      template_parameters:
-        type: dict
-        description: Template-specific parameters (reserved for future use)
-        options: {}
-        default: {}
-
-  delete_subnet:
-    options:
-      subnet:
-        type: dict
-        required: true
-        description: Subnet CR from fulfillment-api via osac_job_vars
-
-  create_security_group:
-    options:
-      security_group:
-        type: dict
-        required: true
-        description: SecurityGroup CR from fulfillment-api via osac_job_vars
-      template_parameters:
-        type: dict
-        description: Template-specific parameters (reserved for future use)
-        options: {}
-        default: {}
-
-  delete_security_group:
-    options:
-      security_group:
-        type: dict
-        required: true
-        description: SecurityGroup CR from fulfillment-api via osac_job_vars
-
-  create_external_ip:
-    options:
-      external_ip:
-        type: dict
-        required: true
-        description: ExternalIP CR from fulfillment-api via osac_job_vars
-      template_parameters:
-        type: dict
-        description: Template-specific parameters (reserved for future use)
-        options: {}
-        default: {}
-
-  delete_external_ip:
-    options:
-      external_ip:
-        type: dict
-        required: true
-        description: ExternalIP CR from fulfillment-api via osac_job_vars
-
-  create_nat_gateway:
-    options:
-      nat_gateway:
-        type: dict
-        required: true
-        description: NATGateway CR from fulfillment-api via osac_job_vars
-      template_parameters:
-        type: dict
-        description: Template-specific parameters (reserved for future use)
-        options: {}
-        default: {}
-
-  delete_nat_gateway:
-    options:
-      nat_gateway:
-        type: dict
-        required: true
-        description: NATGateway CR from fulfillment-api via osac_job_vars
-
-  move_network_attachment:
-    options:
-      network_attachment:
+      osac_job_vars:
         type: dict
         required: true
         description: >-
-          Move a server's fabric port between Netris V-Nets: detach from
-          from_vnet_name (if set) then attach to to_vnet_name (if set).
-        options:
-          host_name:
-            type: str
-            required: true
-            description: Netris server (host) name.
-          logical_interface_name:
-            type: str
-            required: true
-            description: Server port / logical interface name (e.g. eth9).
-          subnet_ref:
-            type: str
-            required: false
-            description: Subnet UUID from the shared attachment payload; unused for Netris port moves.
-          from_vnet_name:
-            type: str
-            required: false
-            default: ""
-            description: Netris V-Net name to detach the port from (empty = skip).
-          to_vnet_name:
-            type: str
-            required: false
-            default: ""
-            description: Netris V-Net name to attach the port to (empty = skip).
-      template_parameters:
+          Network manager task input (resource, virtual_network, ipam,
+          network_type); its content is checked by tasks/_input.yaml.
+
+  delete_virtual_network:
+    short_description: Delete the IPAM allocation and VPC of a VirtualNetwork
+    options:
+      osac_job_vars:
         type: dict
-        description: Template-specific parameters (reserved for future use)
-        options: {}
-        default: {}
+        required: true
+        description: >-
+          Network manager task input (resource, virtual_network, ipam,
+          network_type); its content is checked by tasks/_input.yaml.
+
+  create_subnet:
+    short_description: Create the IPAM subnet and V-Net of a Subnet
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource, virtual_network, ipam,
+          network_type); its content is checked by tasks/_input.yaml.
+
+  delete_subnet:
+    short_description: Delete the V-Net and IPAM subnet of a Subnet
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource, virtual_network, ipam,
+          network_type); its content is checked by tasks/_input.yaml.
+
+  create_security_group:
+    short_description: No-op, the Kubernetes manager enforces SecurityGroups
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource, virtual_network, ipam,
+          network_type); its content is checked by tasks/_input.yaml.
+
+  delete_security_group:
+    short_description: No-op, the Kubernetes manager enforces SecurityGroups
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource, virtual_network, ipam,
+          network_type); its content is checked by tasks/_input.yaml.
+
+  apply_network_attachment:
+    short_description: Move the fabric ports of a physical attachment, no-op for overlay
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource, target, network_attachment,
+          virtual_network, subnet, ipam, network_type); its content is checked
+          by tasks/_input.yaml and the netris_attachment_plan filter.
+
+  delete_network_attachment:
+    short_description: Move the fabric ports of a physical attachment back, no-op for overlay
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource, target, network_attachment,
+          virtual_network, subnet, ipam, network_type); its content is checked
+          by tasks/_input.yaml and the netris_attachment_plan filter.
+
+  query_dhcp_lease:
+    short_description: Read the DHCP lease of the interface MAC of a physical attachment
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource, target, network_attachment,
+          virtual_network, subnet, ipam, network_type); its content is checked
+          by tasks/_input.yaml and the netris_attachment_plan filter.
+
+  create_fabric_domain:
+    short_description: Create the Server Cluster of a FabricDomain
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource, virtual_network, network_type);
+          its content is checked by tasks/_input.yaml.
+
+  delete_fabric_domain:
+    short_description: Delete the Server Cluster of a FabricDomain
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource, virtual_network, network_type);
+          its content is checked by tasks/_input.yaml.
+
+  reserve_cluster_ingress_ip:
+    short_description: Final error, cluster ingress is not supported yet
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource, virtual_network, network_type);
+          its content is checked by tasks/_input.yaml.
+
+  release_cluster_ingress_ip:
+    short_description: No-op, nothing is reserved on Netris
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource, virtual_network, network_type);
+          its content is checked by tasks/_input.yaml.
+
+  create_external_ip_pool:
+    short_description: Create the IPAM allocation of an ExternalIPPool
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource and the parents the task needs);
+          its content is checked by tasks/_input.yaml.
+
+  delete_external_ip_pool:
+    short_description: Delete the IPAM allocation of an ExternalIPPool
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource and the parents the task needs);
+          its content is checked by tasks/_input.yaml.
+
+  create_external_ip:
+    short_description: Reserve the address of an ExternalIP
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource and the parents the task needs);
+          its content is checked by tasks/_input.yaml.
+
+  delete_external_ip:
+    short_description: Release the address of an ExternalIP
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource and the parents the task needs);
+          its content is checked by tasks/_input.yaml.
+
+  attach_external_ip:
+    short_description: Create the DNAT rule of an ExternalIPAttachment
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource and the parents the task needs);
+          its content is checked by tasks/_input.yaml.
+
+  detach_external_ip:
+    short_description: Delete the DNAT rule of an ExternalIPAttachment
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource and the parents the task needs);
+          its content is checked by tasks/_input.yaml.
+
+  create_nat_gateway:
+    short_description: Create the SNAT rule of a NATGateway
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource and the parents the task needs);
+          its content is checked by tasks/_input.yaml.
+
+  delete_nat_gateway:
+    short_description: Delete the SNAT rule of a NATGateway
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Network manager task input (resource and the parents the task needs);
+          its content is checked by tasks/_input.yaml.

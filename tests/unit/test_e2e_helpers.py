@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ipaddress
 import subprocess
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock, call
 
 import pytest
@@ -9,9 +11,9 @@ import pytest
 from tests.e2e.core import helpers
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.references import conftest as references_conftest
+from tests.e2e.networking.vmaas.references import conftest as references_conftest
+from tests.e2e.networking.vmaas.references import test_ip_management_references as ip_management_references
 from tests.e2e.references import test_compute_references as compute_references
-from tests.e2e.references import test_ip_management_references as ip_management_references
 
 
 @pytest.mark.parametrize("cleanup_fails", [False, True])
@@ -443,3 +445,33 @@ def test_nat_gateway_reference_waits_for_external_ip_allocation_and_deletion(mon
         "external-ip-delete-requested",
         "external-ip-deleted",
     ]
+
+
+def _security_group(state: str, message: str = "") -> dict[str, Any]:
+    return {"object": {"status": {"state": state, "message": message}}}
+
+
+def test_wait_for_security_group_update_waits_for_updating_to_clear(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("tests.e2e.core.runner.time.sleep", lambda _delay: None)
+    responses = iter(
+        [
+            _security_group("SECURITY_GROUP_STATE_READY", "Updating"),
+            _security_group("SECURITY_GROUP_STATE_READY", "Updating"),
+            _security_group("SECURITY_GROUP_STATE_READY"),
+        ]
+    )
+    grpc = SimpleNamespace(get_security_group=lambda *, sg_id: next(responses))
+
+    helpers.wait_for_security_group_update(grpc=grpc, sg_id="sg-id")
+
+    assert next(responses, None) is None
+
+
+def test_wait_for_security_group_update_fails_at_once_on_failed_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("tests.e2e.core.runner.time.sleep", lambda _delay: None)
+    grpc = SimpleNamespace(
+        get_security_group=lambda *, sg_id: _security_group("SECURITY_GROUP_STATE_FAILED", "provider rejected")
+    )
+
+    with pytest.raises(RuntimeError, match="provider rejected"):
+        helpers.wait_for_security_group_update(grpc=grpc, sg_id="sg-id")

@@ -63,32 +63,11 @@ func validateSingleIPv4PoolCIDR(cidrs []string) ([]string, error) {
 	return []string{canonical}, nil
 }
 
-func validateNoCIDRSelfOverlap(cidrs []string) error {
-	prefixes := make([]netip.Prefix, len(cidrs))
-	for i, cidr := range cidrs {
-		p, err := netip.ParsePrefix(cidr)
-		if err != nil {
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to parse CIDR '%s'", cidr)
-		}
-		prefixes[i] = p
-	}
-
-	for i := 0; i < len(prefixes); i++ {
-		for j := i + 1; j < len(prefixes); j++ {
-			if prefixes[i].Overlaps(prefixes[j]) {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument,
-					"field 'spec.cidrs[%d]' (%s) overlaps with 'spec.cidrs[%d]' (%s) within the same pool",
-					i, cidrs[i], j, cidrs[j])
-			}
-		}
-	}
-	return nil
-}
-
-func calculatePoolCapacity(cidrs []string, ipFamily privatev1.IPFamily) int64 {
+// calculatePoolCapacity returns the usable addresses of the IPv4 CIDRs of a pool.
+func calculatePoolCapacity(cidrs []string) int64 {
 	var total int64
 	for _, cidr := range cidrs {
-		cap := calculateCIDRCapacity(cidr, ipFamily)
+		cap := calculateCIDRCapacity(cidr)
 		if total > math.MaxInt64-cap {
 			return math.MaxInt64
 		}
@@ -97,31 +76,19 @@ func calculatePoolCapacity(cidrs []string, ipFamily privatev1.IPFamily) int64 {
 	return total
 }
 
-func calculateCIDRCapacity(cidrStr string, ipFamily privatev1.IPFamily) int64 {
+// calculateCIDRCapacity returns the usable addresses of an IPv4 CIDR: all but the network and broadcast addresses,
+// except /31 and /32. Pools are IPv4 only, so anything else counts 0.
+func calculateCIDRCapacity(cidrStr string) int64 {
 	prefix, err := netip.ParsePrefix(cidrStr)
-	if err != nil {
+	if err != nil || !prefix.Addr().Is4() {
 		return 0
 	}
-	bits := prefix.Addr().BitLen()
-	ones := prefix.Bits()
-	if ones < 0 {
-		return 0
+	hostBits := 32 - prefix.Bits()
+	total := int64(1) << hostBits
+	if hostBits >= 2 {
+		return total - 2 // subtract network and broadcast
 	}
-	hostBits := bits - ones
-
-	if ipFamily == privatev1.IPFamily_IP_FAMILY_IPV4 {
-		total := int64(1) << hostBits
-		if hostBits >= 2 {
-			return total - 2 // subtract network and broadcast
-		}
-		return total // /31 = 2 (point-to-point), /32 = 1 (host route)
-	}
-
-	// IPv6: all addresses usable; cap at math.MaxInt64 for large prefix lengths.
-	if hostBits >= 63 {
-		return math.MaxInt64
-	}
-	return int64(1) << hostBits
+	return total // /31 = 2 (point-to-point), /32 = 1 (host route)
 }
 
 func cidrSlicesEqual(a, b []string) bool {

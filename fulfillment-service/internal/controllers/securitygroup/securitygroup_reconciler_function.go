@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
-	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -32,7 +31,6 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
-	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -179,9 +177,8 @@ func (t *task) update(ctx context.Context) error {
 		return err
 	}
 
-	// Select a hub and return immediately if it was just selected. This ensures the hub is
-	// persisted before any Kubernetes objects are created.
-	hubJustSelected := t.securityGroup.GetStatus().GetHub() == ""
+	// Resolve the hub. The CR is created (or adopted by its label) before status.hub is written, at the end of the
+	// run, so a restart between the two never creates a second CR.
 	if err := t.selectHub(ctx); err != nil {
 		return err
 	}
@@ -194,9 +191,6 @@ func (t *task) update(ctx context.Context) error {
 	spec, err := t.buildSpec()
 	if err != nil {
 		t.setFailed(err)
-		return nil
-	}
-	if hubJustSelected {
 		return nil
 	}
 
@@ -212,12 +206,10 @@ func (t *task) update(ctx context.Context) error {
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace:    t.hubNamespace,
 				GenerateName: objectPrefix,
-				Labels: map[string]string{
+				Labels: labels.MergeTrustedExternalIPLifecycleLabels(map[string]string{
 					labels.SecurityGroupUuid: t.securityGroup.GetId(),
-				},
-				Annotations: map[string]string{
-					annotations.Tenant: t.securityGroup.GetMetadata().GetTenant(),
-				},
+				}, t.securityGroup.GetMetadata().GetLabels(), t.securityGroup.GetMetadata().GetCreator() == "system"),
+				Annotations: controllers.AutomaticCRAnnotations(t.securityGroup.GetMetadata()),
 			},
 			Spec: spec,
 		}
@@ -462,52 +454,10 @@ func (t *task) buildSpec() (osacv1alpha1.SecurityGroupSpec, error) {
 // single IPv4 CIDR field whose meaning depends on direction: ingress is sourced
 // from the CIDR, while egress is destined for it.
 func convertRules(rules []*privatev1.SecurityRule, ingress bool) ([]osacv1alpha1.SecurityRule, error) {
-	result := make([]osacv1alpha1.SecurityRule, 0, len(rules))
-	direction := "egress"
-	if ingress {
-		direction = "ingress"
-	}
-	for index, rule := range rules {
-		if rule == nil || !rule.HasIpv4Cidr() || rule.GetIpv4Cidr() == "" || rule.HasIpv6Cidr() {
-			return nil, fmt.Errorf(
-				"security group %s rule %d must contain an IPv4 CIDR and no IPv6 CIDR",
-				direction,
-				index,
-			)
-		}
-		r := osacv1alpha1.SecurityRule{
-			Protocol: osacv1alpha1.SecurityGroupProtocol(protocolToString(rule.GetProtocol())),
-		}
-		if rule.HasPortFrom() {
-			portFrom := int32(rule.GetPortFrom())
-			r.PortFrom = &portFrom
-		}
-		if rule.HasPortTo() {
-			portTo := int32(rule.GetPortTo())
-			r.PortTo = &portTo
-		}
-		if ingress {
-			r.SourceCIDR = rule.GetIpv4Cidr()
-		} else {
-			r.DestinationCIDR = rule.GetIpv4Cidr()
-		}
-		result = append(result, r)
-	}
-	return result, nil
+	return controllers.ConvertSecurityRules(rules, ingress)
 }
 
 // protocolToString converts a Protocol enum value to a lowercase string matching the K8s CR enum.
 func protocolToString(p privatev1.Protocol) string {
-	switch p {
-	case privatev1.Protocol_PROTOCOL_TCP:
-		return "tcp"
-	case privatev1.Protocol_PROTOCOL_UDP:
-		return "udp"
-	case privatev1.Protocol_PROTOCOL_ICMP:
-		return "icmp"
-	case privatev1.Protocol_PROTOCOL_ALL:
-		return "all"
-	default:
-		return strings.ToLower(p.String())
-	}
+	return controllers.ProtocolName(p)
 }

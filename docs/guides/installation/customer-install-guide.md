@@ -2,7 +2,7 @@
 
 **Last Updated**: 2026-10-27
 **Audience**: Cloud administrators
-**Status**: WIP — see the TBD notes in [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend)
+**Status**: WIP — see the TBD notes in [Section 6.2](#62-installing-osac-for-caas-with-a-registered-fabric-manager)
 and [Section 8.3](#83-registering-the-hub) for what's still open
 
 ---
@@ -288,16 +288,13 @@ Required for CaaS:
   [Section 8.4](#84-installing-without-dns-management). For more information,
   see
   [`dns-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/dns-backend.md).
-- **A `NetworkClass` with a registered manager.** OSAC provisions cluster
-  networking through a `NetworkClass` custom resource, which requires a
-  fabric manager, a Kubernetes manager, or both, to be registered and
-  referenced (`networkClass.fabricManager` / `networkClass.k8sManager`). At
-  this stage, CaaS assumes the cluster runs on servers that are part of a
-  physical fabric managed by a fabric manager, such as Netris. Netris
-  requires the controller URL, credentials, site and tenant IDs, and SSH keys
-  to the servers and the bastion host. Other fabric and Kubernetes managers
-  may be registered on your cluster; check with whoever manages your OSAC
-  networking configuration for what's available. For more information, see
+- **A registered Fabric Manager.** OSAC provisions networking through one
+  `NetworkClass`, which the installer creates from `global.networking`. It
+  names the provider's Fabric Manager (`global.networking.fabricManager`,
+  required), whose registration `ConfigMap` the administrator applies, and
+  and optionally a Kubernetes Manager registration. Configure manager-specific
+  settings and credentials according to the owning teams' documentation. For
+  more information, see
   [`network-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/network-backend.md).
 
 Required for BMaaS with the Metal3 or NetBox backend:
@@ -489,7 +486,7 @@ You create one values file for the `osac` chart, `my-values.yaml`.
    the [secrets management configuration guide](secrets-management-configuration.md#configure-the-osac-instance).
 
 5. Add the service-specific value blocks (`global.services.*`,
-   `operator.networkManagers`, `networkClass`, `aap`, `metering`, and `bmf`)
+   `global.networking`, `aap`, `metering`, and `bmf`)
    from [Section 6](#6-installation-workflows-by-service) for the service you
    are installing.
 
@@ -584,24 +581,23 @@ subchart's own `values.yaml` file.
 | `operator.fulfillment.serverAddress` | schema | Fulfillment gRPC endpoint used by the Operator. |
 | `operator.fulfillment.credentials.secretName`, `clientIdKey`, `clientSecretKey` | schema | Name and keys of the Kubernetes Secret holding the `osac-controller` Keycloak service-account credentials. `osac-infra` provisions it for bundled Keycloak; external Keycloak deployments must provide an equivalent Secret. The OSAC chart only references it. |
 | `operator.controllers.tenant`, `operator.controllers.networking`, `operator.controllers.storage` | schema | Enable or disable individual reconcilers. Which services run is driven by `global.services.*`. |
-| `operator.controllers.networkingProvisioning` | schema | When `false`, networking custom resources reconcile to `READY` without a real fabric. |
 | `operator.controllers.volume` | subchart | Enables the Volume reconciler. |
 | `operator.configSecret.name`, `operator.configSecret.optional` | schema | Additional Operator configuration Secret. |
 | `operator.hubAccess.enabled` | schema | Creates the hub-access `ClusterRole` that the Fulfillment Service binds to. |
 | `operator.stall.preparingInfrastructureThreshold`, `operator.stall.controlPlaneStartingThreshold`, `operator.stall.workersJoiningThreshold` | schema | How long a cluster provisioning phase can wait before the Operator marks it stalled. |
 | `operator.tenants[]` | subchart | Tenants pre-created at installation. `shared` is the built-in tenant. |
-| `operator.networkManagers.fabricManagers.<name>.enabled`, `operator.networkManagers.k8sManagers.<name>.enabled` | subchart | Enables a fabric manager (`netris`, `cudn_net`) or a Kubernetes manager (`k8s_only`). |
 
 **Table 5.3. Networking (umbrella level)**
 
 | Parameter | Source | Description | Default |
 |---|---|---|---|
-| `networkManagers[]` | schema | Registers network-manager `ConfigMap` resources that the Operator dispatcher discovers. Each entry has `name`, `role` (`fabric` or `k8s`), `description`, and `capabilities`. Equivalent to `operator.networkManagers.*`. | `[]` |
-| `networkClass.enabled` | schema | Creates the default `NetworkClass` in the Fulfillment Service after installation. Required for VirtualNetwork and tenant onboarding. | `true` |
-| `networkClass.title`, `networkClass.description` | schema | Required title and description for the `NetworkClass`. | CUDN text |
-| `networkClass.fabricManager`, `networkClass.k8sManager` | schema | Which registered manager backs the class. For fabric-less VMaaS, set `fabricManager: ""` and `k8sManager: "k8s_only"`. For Netris, set `fabricManager: "netris"`. | `cudn_net` and `""` |
-| `networkClass.isDefault` | schema | Marks the class the deployment default. Only one `NetworkClass` can exist. | `true` |
-| `networkClass.defaults.virtualNetworkIPv4CIDR`, `networkClass.defaults.subnetIPv4CIDR`, `networkClass.defaults.enableNatGateway`, `networkClass.defaults.egressRules` | schema | Tenant-onboarding defaults that auto-create the VirtualNetwork, Subnet, and SecurityGroup. | `10.200.0.0/16` and others |
+| `global.networking.provisioningEnabled` | schema | When `false`, OSAC runs no networking jobs and networking resources become `READY` without provider work. Fixed at installation. | `true` |
+| `global.networking.excludedIpv4Cidrs` | schema | IPv4 CIDRs of the provider's infrastructure; VirtualNetwork and ExternalIPPool CIDRs may not overlap them. | `[]` |
+| `global.networking.fabricManager` | schema | Name of the provider's Fabric Manager registration (a `ConfigMap` the administrator applies). Required. | Not set |
+| `global.networking.k8sManager` | schema | Name of the registered Kubernetes Manager, or `""` when none is selected. Required with VMaaS. | `""` |
+| `global.networking.networkClass.defaults.*`, `global.networking.networkClass.eastWestCapabilities.*`, `global.networking.networkClass.addressPlan` | schema | Tenant-onboarding defaults (VirtualNetwork and Subnet CIDRs, SecurityGroup rules), east-west capabilities, and the optional Subnet address plan. None of these can change after installation. | `10.200.0.0/16`, `10.200.0.0/20` |
+
+For the rules and checks, see [`network-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/network-backend.md).
 
 **Table 5.4. Fulfillment Service (`service.*`, all `schema`)**
 
@@ -634,7 +630,7 @@ subchart's own `values.yaml` file.
 | `aap.configAsCode.projectGitUri`, `aap.configAsCode.projectGitBranch` | Git source for the Ansible content that the bootstrap job imports. |
 | `aap.configAsCode.importAgentsEnabled`, `aap.configAsCode.importBcmAgentsEnabled` | Enable bare-metal agent import and the BCM inventory backend. |
 | `aap.instanceGroups.clusterFulfillment.enabled`, `aap.instanceGroups.clusterFulfillment.config`, `aap.instanceGroups.clusterFulfillment.secret` | The `cluster-fulfillment` instance group for CaaS provisioning. See [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend). |
-| `aap.instanceGroups.networkFulfillment.enabled`, `aap.instanceGroups.networkFulfillment.config`, `aap.instanceGroups.networkFulfillment.secret` | The `network-fulfillment` instance group for Netris. See [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend). |
+| `aap.instanceGroups.networkFulfillment.enabled`, `aap.instanceGroups.networkFulfillment.config`, `aap.instanceGroups.networkFulfillment.secret` | The `network-fulfillment` instance group that runs every networking job. `config` and `secret` hold the network managers' settings and credentials, written verbatim. Required with `global.networking.provisioningEnabled`. Default `enabled: true`. |
 | `aap.instanceGroups.storageFulfillment.config.STORAGE_SNAPSHOTS_ENABLED` | Snapshot toggle for the `storage-operations` instance group. |
 | `aap.instanceGroups.publishTemplates.enabled` | Runs the postinstallation `osac-publish-templates` hook, which publishes cluster templates (CaaS, MaaS), compute instance templates (VMaaS), bare-metal instance templates, and add-on operators (CaaS) to the fulfillment catalog. Default `true`. Set to `false` only when no enabled service depends on hook-published templates — currently a BMaaS-only deployment — or when all required templates are provisioned separately. |
 | `aap.instanceGroups.publishTemplates.config.OSAC_TEMPLATE_COLLECTIONS`, `aap.instanceGroups.publishTemplates.config.OSAC_FULFILLMENT_SERVICE_URI` | The Ansible collections to publish and the internal Fulfillment Service URI. |
@@ -650,7 +646,8 @@ subchart's own `values.yaml` file.
 | `ui.images.ui` | schema | Web console image. | Release tag |
 | `bmf.metal3.enabled`, `bmf.metal3.namespace`, `bmf.metal3.hostClass` | schema | Use the Metal3 backend. Set `namespace` to where your `BareMetalHost` resources live. Requires BareMetalOperator and a `Provisioning` custom resource with `spec.watchAllNamespaces: true`. | `false` |
 | `bmf.env.aapInsecureSkipVerify` | schema | Skip TLS verification for AAP API calls. | `"true"` |
-| `bmf.env.aapUrl`, `bmf.env.enableNetworkingProvisioning` | subchart | AAP controller URL that the Bare Metal Fulfillment Operator drives, and its networking-provisioning toggle. | Not applicable |
+| `bmf.env.aapUrl` | subchart | AAP controller URL that the Bare Metal Fulfillment Operator drives. | Not applicable |
+| `bmf.env.enableNetworkingProvisioning` | subchart | BMF's existing networking toggle. It remains component-owned and separate from `global.networking.provisioningEnabled` until the BMF component adopts the shared setting. | `"false"` |
 | `bmf.bcm.enabled`, `bmf.bcm.url`, `bmf.bcm.cert`, `bmf.bcm.key`, `bmf.bcm.caCert`, `bmf.bcm.insecureSkipVerify`, `bmf.bcm.hostClass`, `bmf.bcm.bmhNamespace` | subchart | Base Command Manager (BCM) backend. | `false` |
 | `bmf.secrets.inventoryConfig`, `bmf.secrets.managementConfig`, `bmf.secrets.osClouds`, `bmf.configMaps.profiles` | schema | Names of the inventory, management, and `clouds.yaml` Secrets and the profiles `ConfigMap`. | Default names |
 | `operatorCrds.install` | schema | Install the OSAC CRDs. Set it to `false` if a cluster administrator manages them. | `true` |
@@ -702,10 +699,11 @@ the cluster. Then follow [Section 4](#4-installing-osac).
 
 **Procedure**
 
-1. In `my-values.yaml`, enable the VMaaS tier and configure fabric-less
-   networking. Fabric-less networking creates the VirtualNetwork and Subnet by
-   using ClusterUserDefinedNetwork (CUDN), the SecurityGroup by using a
-   `NetworkPolicy`, and the ExternalIP by using MetalLB L2:
+1. In `my-values.yaml`, enable the VMaaS tier and its networking. Select the
+   registered Fabric Manager and Kubernetes Manager for the deployment. Apply
+   their registrations and put manager-specific settings in
+   `aap.instanceGroups.networkFulfillment` as described in
+   [`network-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/network-backend.md):
 
    The OSAC chart does not deploy the OSAC CSI routing meta-driver. Provider CSI
    setup and tenant storage provisioning are handled separately by the storage
@@ -714,20 +712,19 @@ the cluster. Then follow [Section 4](#4-installing-osac).
    ```yaml
    global:
      services: { vmaas: { enabled: true }, caas: { enabled: false }, bmaas: { enabled: false }, maas: { enabled: false } }
+     networking:
+       fabricManager: "<registered-fabric-manager>"
+       k8sManager: "<registered-kubernetes-manager>"
+       excludedIpv4Cidrs: ["192.0.2.0/24"]
    lvms:
      enabled: true
-   operator:
-     networkManagers:
-       k8sManagers:
-         k8s_only:
-           enabled: true
-   networkClass:
-     fabricManager: ""
-     k8sManager: "k8s_only"
    aap:
      instanceGroups:
        publishTemplates:
          enabled: true
+       networkFulfillment:
+         enabled: true
+         config: {}  # add the selected managers' settings per their owner docs
    ```
 
    The `publishTemplates` hook publishes the compute instance
@@ -754,7 +751,7 @@ the cluster. Then follow [Section 4](#4-installing-osac).
   oc get computeinstance -A
   ```
 
-### 6.2 Installing OSAC for CaaS with the Netris network backend
+### 6.2 Installing OSAC for CaaS with a registered Fabric Manager
 
 The AWS Route 53 DNS backend is the default; it's independent of the network
 backend. For the full variable reference, see
@@ -768,35 +765,27 @@ backend. For the full variable reference, see
   [Section 2.1](#21-cluster-and-access)). Hosted control planes provision
   etcd persistent volume claims from it.
 - You have AWS Route 53 credentials for the target hosted zone.
-- Access to the Netris controller: URL, user name, password, site and tenant
-  IDs, and management VPC details.
-- SSH private keys for the servers and the bastion host.
+- Access to the selected Fabric Manager and its settings, as documented by
+  its owning team.
 
 > **Note**: OSAC-managed storage tiers are not yet available for CaaS tenant
 > clusters. The tenant-cluster CSI storage provider is under development.
 
 **Procedure**
 
-1. In `my-values.yaml`, enable the CaaS tier, the OpenShift Container Platform
-   release images offered to hosted clusters, and the `cluster-fulfillment`
-   and `network-fulfillment` instance groups with the Netris coordinates:
+1. Apply the Fabric Manager registration `ConfigMap` to the release namespace
+   (see [`network-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/network-backend.md)). In `my-values.yaml`, enable the CaaS
+   tier, the OpenShift Container Platform release images offered to hosted
+   clusters, and the `cluster-fulfillment` and `network-fulfillment` instance
+   groups with the selected manager settings:
 
    ```yaml
    global:
      services: { caas: { enabled: true }, vmaas: { enabled: false }, bmaas: { enabled: false }, maas: { enabled: false } }
      networking:
-       fabricManager: netris
+       fabricManager: "<registered-fabric-manager>"
        k8sManager: ""
-       netris:
-         controllerUrl: "https://netris.example.com"
-         credentials:
-           username: "netris"
-         siteId: "5"
-         tenantId: "1"
-         tenantName: "Admin"
-         mgmtVpcId: "4"
-         mgmtVpcName: "RH-Infra"
-         resourceClassMap: '{"fc430":{"server_cluster_template_id":89,"mgmt_interface":"ens4","vpc_interfaces":["ens13"]}}'
+       excludedIpv4Cidrs: ["192.0.2.0/24"]
    clusterVersions:
      enabled: true
      versions:
@@ -811,11 +800,6 @@ backend. For the full variable reference, see
          enabled: true
          config:
            DNS_CLASS: "dns.route53.dns"
-           SERVER_SSH_BASTION_HOST: "bastion.example.com"
-           SERVER_SSH_BASTION_USER: "ubuntu"
-           SERVER_SSH_USER: "core"
-           SERVER_MGMT_ROUTE_DESTINATION: "198.51.100.0/30"
-           SERVER_MGMT_ROUTE_GATEWAY: "192.0.2.1"
            EXTERNAL_ACCESS_BASE_DOMAIN: "clusters.example.com"
            EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS: "clusters.example.com"
            EXTERNAL_ACCESS_API_INTERNAL_NETWORK: "hypershift"
@@ -824,32 +808,21 @@ backend. For the full variable reference, see
            HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "HighlyAvailable"
        networkFulfillment:
          enabled: true
+         config: {}  # add the selected manager's nonsecret settings
    ```
 
-   In `global.networking.netris.resourceClassMap`, each key is a resource-class name;
-   `server_cluster_template_id` is the Netris server-cluster template,
-   `mgmt_interface` is the management NIC, and `vpc_interfaces` are the
-   data-plane NICs.
-
-2. Put the AWS and Netris credentials in a separate values file that is
+2. Put the AWS and network manager credentials in a separate values file that is
    excluded from version control:
 
    ```yaml
-   global:
-     networking:
-       netris:
-         credentials:
-           password: "<netris_password>"
    aap:
      instanceGroups:
        clusterFulfillment:
          secret:
            AWS_ACCESS_KEY_ID: "<route53_access_key_id>"
            AWS_SECRET_ACCESS_KEY: "<route53_secret_access_key>"
-           SERVER_SSH_KEY: |
-             <contents_of_your_openssh_private_key_file>
-           SERVER_SSH_BASTION_KEY: |
-             <contents_of_your_openssh_bastion_private_key_file>
+       networkFulfillment:
+         secret: {}  # add manager credentials per the owning team's documentation
    ```
 
 3. Install OSAC (see [Section 4.3](#43-installing-osac)), passing every
@@ -880,9 +853,9 @@ backend. For the full variable reference, see
    ```yaml
    global:
      services: { bmaas: { enabled: true }, vmaas: { enabled: false }, caas: { enabled: false }, maas: { enabled: false } }
-   operator:
-     controllers:
-       networkingProvisioning: false
+     networking:
+       provisioningEnabled: false   # no provider networking; true needs the manager settings
+       fabricManager: "<registered-fabric-manager>"
    bmf:
      metal3:
        enabled: true
@@ -891,13 +864,14 @@ backend. For the full variable reference, see
      env:
        aapUrl: "http://osac-aap/api/controller"
        aapInsecureSkipVerify: "true"
-       enableNetworkingProvisioning: "false"
    aap:
      instanceGroups:
        publishTemplates:
          enabled: false
    ```
 
+   `fabricManager` is required even with provider networking disabled; apply
+   its registration `ConfigMap` (see [`network-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/network-backend.md)).
    Setting `publishTemplates.enabled` to `false` is safe here
    because a BMaaS-only deployment does not consume templates
    published by this hook. Set `bmf.metal3.namespace` to the
@@ -1862,11 +1836,13 @@ with the correct `global.clusterDomain`.
   `oc get sc --show-labels` for the `osac.openshift.io/tenant` and
   `osac.openshift.io/storage-tier` labels and the `status.storageClasses` field
   of the `Tenant`, and align the requested tier with a labeled storage class.
-- Networking custom resources stuck in `PROGRESSING` on a cluster with no real
-  fabric: set `operator.controllers.networkingProvisioning` to `false`.
-- **CaaS:** watch the AAP `cluster-fulfillment` job for the failing task. Netris
-  or Route 53 credential errors, and `NETRIS_RESOURCE_CLASS_MAP` errors, appear
-  there.
+- Networking resources stuck in `PENDING`: read the `Ready` condition and
+  `status.jobs` of the networking custom resource, then the named AAP
+  `network-fulfillment` job. `global.networking.provisioningEnabled` is fixed
+  at installation; a cluster without a fabric is installed with `false`.
+- **CaaS:** watch the AAP `cluster-fulfillment` job for the failing task; Route
+  53 credential errors appear there; network manager errors appear in the
+  corresponding networking jobs.
 
 ### 11.13 Additional resources
 
@@ -1908,9 +1884,9 @@ with the correct `global.clusterDomain`.
 - **Instance group** — An AAP execution group with its own `ConfigMap` and
   Secret of environment variables, for example `cluster-fulfillment`,
   `network-fulfillment`, `storage-fulfillment`, or `publish-templates`.
-- **Network backend (`NETWORK_CLASS`)** — How CaaS clusters get networking,
-  driven by the `NetworkClass` custom resource's registered fabric and
-  Kubernetes managers. Netris is the documented fabric manager.
+- **Network managers** — The provider's Fabric Manager and optional Kubernetes
+  Manager, selected by the single `NetworkClass` and registered through
+  `ConfigMap` resources.
 - **DNS backend (`DNS_CLASS`)** — How CaaS clusters get DNS records:
   `dns.route53.dns` (default, AWS Route 53).
 - **config-as-code** — The Ansible content that the `osac-aap-bootstrap` job

@@ -31,7 +31,6 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
-	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -171,15 +170,11 @@ func (t *task) update(ctx context.Context) error {
 		return err
 	}
 
-	hubJustSelected := t.externalIPAttachment.GetStatus().GetHub() == ""
 	if err := t.selectHub(ctx); err != nil {
 		return err
 	}
 
 	t.externalIPAttachment.GetStatus().SetHub(t.hubId)
-	if hubJustSelected {
-		return nil
-	}
 
 	object, err := t.getKubeObject(ctx)
 	if err != nil {
@@ -197,9 +192,7 @@ func (t *task) update(ctx context.Context) error {
 				Labels: labels.MergeTrustedExternalIPLifecycleLabels(map[string]string{
 					labels.ExternalIPAttachmentUuid: t.externalIPAttachment.GetId(),
 				}, metadata.GetLabels(), metadata.GetCreator() == "system"),
-				Annotations: map[string]string{
-					annotations.Tenant: t.externalIPAttachment.GetMetadata().GetTenant(),
-				},
+				Annotations: controllers.AutomaticCRAnnotations(t.externalIPAttachment.GetMetadata()),
 			},
 			Spec: spec,
 		}
@@ -254,10 +247,15 @@ func (t *task) validateTenant() error {
 func (t *task) delete(ctx context.Context) (err error) {
 	t.hubId = t.externalIPAttachment.GetStatus().GetHub()
 	if t.hubId == "" {
-		t.removeFinalizer()
-		return nil
+		// The CR may exist without status.hub when the controller restarted between its create and the hub
+		// write, so look it up in the canonical hub.
+		if selectErr := t.selectHub(ctx); selectErr != nil {
+			t.removeFinalizer()
+			return nil
+		}
+	} else {
+		err = t.getHub(ctx)
 	}
-	err = t.getHub(ctx)
 	if err != nil {
 		if errors.Is(err, controllers.ErrHubNotFound) {
 			controllers.RemoveFinalizerOnDecommissionedHub(ctx, t.r.logger, t.hubId, "external_ip_attachment_id", t.externalIPAttachment.GetId(), t.removeFinalizer)

@@ -18,10 +18,10 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -29,10 +29,11 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
-	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -48,6 +49,7 @@ import (
 	kubevirtv1 "kubevirt.io/api/core/v1"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/networktask"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
@@ -56,29 +58,59 @@ const (
 	// reconciliation is not yet met (e.g. parent resource not found, configuration
 	// not populated, or dependent resource not in a ready state)
 	defaultPreconditionRequeueInterval = 10 * time.Second
+
+	// computeInstanceProvisionTask and computeInstanceDeprovisionTask are the
+	// status.jobs tasks of the ocp_virt_vm jobs (VMaaS design; manager none).
+	computeInstanceProvisionTask   = "provision"
+	computeInstanceDeprovisionTask = "deprovision"
+
+	// computeInstanceIDVMLabel is the label ocp_virt_vm sets on the VM template,
+	// DataVolumes and Secrets (VMaaS design, VM construction). The Kubernetes
+	// Manager selects the VM pod by it.
+	computeInstanceIDVMLabel = "osac.openshift.io/compute-instance-id"
+
+	// vmNetworkTenant is the VM's pod network and interface name with provider
+	// networking enabled; vmNetworkDefault the fallback with it disabled.
+	vmNetworkTenant  = "tenant"
+	vmNetworkDefault = "default"
+
+	// ipAddressNotFoundDelay is how long a Running VMI may report no address
+	// before the IPAddressNotFound Warning event.
+	ipAddressNotFoundDelay = 10 * time.Minute
+
+	eventReasonNetworkAttached         = "NetworkAttached"
+	eventReasonNetworkAttachmentFailed = "NetworkAttachmentFailed"
+	eventReasonIPAddressNotFound       = "IPAddressNotFound"
+	eventReasonIPAddressChanged        = "IPAddressChanged"
 )
 
-// errSubnetNotFound is returned when the Subnet CR referenced by the primary
-// subnet (networkAttachments[0].subnetRef) does not exist.
-// handleUpdate treats this as a transient error and requeues with a fixed delay
-// instead of exponential backoff.
-var errSubnetNotFound = errors.New("subnet CR not found")
+// dataVolumeListGVK is the CDI DataVolume list kind, read as unstructured so
+// the operator needs no CDI API dependency.
+var dataVolumeListGVK = schema.GroupVersionKind{Group: "cdi.kubevirt.io", Version: "v1beta1", Kind: "DataVolumeList"}
 
-// ComputeInstanceReconciler reconciles a ComputeInstance object
+// ComputeInstanceReconciler reconciles a ComputeInstance object (VMaaS
+// networking design): it creates the VM's NetworkAttachment, runs the
+// ocp_virt_vm provision and deprovision jobs through the network task engine
+// (status.jobs, manager none), discovers the VM address and reports NetworkReady.
 type ComputeInstanceReconciler struct {
 	client.Client
+	// APIReader reads from the API server where a stale cache must not be used.
+	APIReader                client.Reader
 	Scheme                   *runtime.Scheme
 	Recorder                 events.EventRecorder
 	mgr                      mcmanager.Manager
 	ComputeInstanceNamespace string
 	TenantNamespace          string
 	NetworkingNamespace      string
-	ProvisioningProvider     provisioning.ProvisioningProvider
-	// StatusPollInterval defines how often to check provisioning job status
+	// Engine launches and tracks the provision and deprovision jobs. Its
+	// ProvisioningEnabled is global.networking.provisioningEnabled.
+	Engine *networktask.Engine
+	// ProvisionTemplate and DeprovisionTemplate are the ocp_virt_vm job templates.
+	ProvisionTemplate   string
+	DeprovisionTemplate string
+	// StatusPollInterval is how often waiting steps are checked again.
 	StatusPollInterval time.Duration
-	// MaxJobHistory defines how many jobs to keep per job array
-	MaxJobHistory int
-	targetCluster mc.ClusterName
+	targetCluster      mc.ClusterName
 	// TiersClient and BackendsClient query the fulfillment service Tier API for
 	// JIT storage provisioning extra_vars. When nil, tier/backend context
 	// injection is skipped — backward compatible with environments without a
@@ -89,6 +121,13 @@ type ComputeInstanceReconciler struct {
 	// when the backend supplies password_secret instead of an inline password. When
 	// nil, backends that rely on password_secret are skipped. See resolveAndPartitionTierContext.
 	SecretsClient SecretsClient
+
+	now func() time.Time
+
+	// ipNotFoundEvents records the VMIs (by UID) that already got the
+	// IPAddressNotFound event, so it is emitted once per VMI.
+	ipNotFoundMu     sync.Mutex
+	ipNotFoundEvents map[types.UID]bool
 }
 
 func NewComputeInstanceReconciler(
@@ -96,9 +135,10 @@ func NewComputeInstanceReconciler(
 	computeInstanceNamespace string,
 	tenantNamespace string,
 	networkingNamespace string,
-	provisioningProvider provisioning.ProvisioningProvider,
+	engine *networktask.Engine,
+	provisionTemplate string,
+	deprovisionTemplate string,
 	statusPollInterval time.Duration,
-	maxJobHistory int,
 	targetCluster mc.ClusterName,
 ) *ComputeInstanceReconciler {
 	if mgr == nil {
@@ -113,21 +153,19 @@ func NewComputeInstanceReconciler(
 		statusPollInterval = provisioning.DefaultStatusPollInterval
 	}
 
-	if maxJobHistory <= 0 {
-		maxJobHistory = provisioning.DefaultMaxJobHistory
-	}
-
 	return &ComputeInstanceReconciler{
 		Client:                   mgr.GetLocalManager().GetClient(),
+		APIReader:                mgr.GetLocalManager().GetAPIReader(),
 		Scheme:                   mgr.GetLocalManager().GetScheme(),
 		Recorder:                 mgr.GetLocalManager().GetEventRecorder(computeInstanceControllerName),
 		mgr:                      mgr,
 		ComputeInstanceNamespace: computeInstanceNamespace,
 		TenantNamespace:          tenantNamespace,
 		NetworkingNamespace:      networkingNamespace,
-		ProvisioningProvider:     provisioningProvider,
+		Engine:                   engine,
+		ProvisionTemplate:        provisionTemplate,
+		DeprovisionTemplate:      deprovisionTemplate,
 		StatusPollInterval:       statusPollInterval,
-		MaxJobHistory:            maxJobHistory,
 		targetCluster:            targetCluster,
 	}
 }
@@ -135,8 +173,13 @@ func NewComputeInstanceReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances/finalizers,verbs=update
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=networkattachments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalipattachments;externalips;subnets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets;pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachines;virtualmachineinstances,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups=cdi.kubevirt.io,resources=datavolumes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -166,40 +209,23 @@ func (r *ComputeInstanceReconciler) Reconcile(ctx context.Context, req mcreconci
 	} else {
 		res, err = r.handleDelete(ctx, req.Request, instance)
 	}
+	if err != nil {
+		// A failed step (including a status write conflict of the task
+		// engine) leaves the in-memory object stale: write nothing.
+		return res, err
+	}
 
 	if !equality.Semantic.DeepEqual(instance.Status, *oldstatus) {
 		log.Info("status requires update")
-		if err := r.updateStatusWithRetry(ctx, req.NamespacedName, instance.Status); err != nil {
+		// The update is conditional on the resourceVersion read (or written)
+		// in this reconcile, so a stale object never overwrites status.jobs.
+		if err := r.Status().Update(ctx, instance); err != nil {
 			return res, err
 		}
 	}
 
 	log.Info("end reconcile")
-	return res, err
-}
-
-// updateStatusWithRetry updates the instance status with retry on conflict.
-// This prevents duplicate job triggers when status updates fail due to optimistic concurrency conflicts.
-func (r *ComputeInstanceReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.ComputeInstanceStatus) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		// Fetch latest version to get current resourceVersion
-		latest := &v1alpha1.ComputeInstance{}
-		if err := r.Get(ctx, key, latest); err != nil {
-			return err
-		}
-		// Copy status updates to the latest version
-		latest.Status = newStatus
-		if !latest.DeletionTimestamp.IsZero() {
-			// Provisioning can finish after the API has accepted deletion. Keep
-			// the provider job history for cleanup, but don't publish stale
-			// Running/Ready state over the deletion state.
-			latest.Status.Phase = v1alpha1.ComputeInstancePhaseDeleting
-			latest.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionFalse,
-				"ComputeInstance is being deleted", v1alpha1.ReasonDeleting)
-		}
-		// Attempt to update with fresh resourceVersion
-		return r.Status().Update(ctx, latest)
-	})
+	return res, nil
 }
 
 func ComputeInstanceNamespacePredicate(namespace string) predicate.Predicate {
@@ -263,6 +289,13 @@ func (r *ComputeInstanceReconciler) SetupWithManager(mgr mcmanager.Manager) erro
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(false),
 		).
+		Watches(
+			&v1alpha1.NetworkAttachment{},
+			mchandler.EnqueueRequestsFromMapFunc(r.mapNetworkAttachmentToComputeInstance),
+			mcbuilder.WithPredicates(ComputeInstanceNamespacePredicate(r.NetworkingNamespace)),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
+		).
 		Complete(r)
 }
 
@@ -309,6 +342,26 @@ func (r *ComputeInstanceReconciler) mapObjectToComputeInstance(ctx context.Conte
 	}
 }
 
+// mapNetworkAttachmentToComputeInstance maps a NetworkAttachment event to the
+// ComputeInstance it targets (by the API ID label).
+func (r *ComputeInstanceReconciler) mapNetworkAttachmentToComputeInstance(ctx context.Context, obj client.Object) []reconcile.Request {
+	na, ok := obj.(*v1alpha1.NetworkAttachment)
+	if !ok || na.Spec.Target.Kind != v1alpha1.NetworkAttachmentTargetComputeInstance || na.Spec.Target.ID == "" {
+		return nil
+	}
+	list := &v1alpha1.ComputeInstanceList{}
+	if err := r.List(ctx, list, client.InNamespace(r.ComputeInstanceNamespace),
+		client.MatchingLabels{osacComputeInstanceIDLabel: na.Spec.Target.ID}); err != nil {
+		ctrllog.FromContext(ctx).Error(err, "failed to list compute instances for a NetworkAttachment", "networkattachment", na.Name)
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for i := range list.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])})
+	}
+	return requests
+}
+
 func (r *ComputeInstanceReconciler) mapTenantToComputeInstances(ctx context.Context, obj client.Object) []reconcile.Request {
 	log := ctrllog.FromContext(ctx)
 
@@ -342,180 +395,48 @@ func (r *ComputeInstanceReconciler) mapTenantToComputeInstances(ctx context.Cont
 	return requests
 }
 
-// handleProvisioning manages the provisioning job lifecycle for a ComputeInstance.
-// Uses shared RunProvisioningLifecycle with statusFlush to prevent duplicate jobs
-// from concurrent reconciliations.
-func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	// Check for ManagementStateManual annotation
-	val, exists := instance.Annotations[osacComputeInstanceManagementStateAnnotation]
-	if exists && val == ManagementStateManual {
-		log.Info("skipping provisioning due to management-state annotation", "management-state", val)
-		return ctrl.Result{}, nil
-	}
-
-	// If no provider configured, skip provisioning
-	if r.ProvisioningProvider == nil {
-		log.Info("no provisioning provider configured, skipping provisioning")
-		return ctrl.Result{}, nil
-	}
-
-	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, instance,
-		r.provisionState(instance),
-		r.MaxJobHistory, r.StatusPollInterval,
-		&provisioning.PollCallbacks{
-			OnFailed: func(message string) {
-				// Only set Failed phase if no VM exists yet (first-time provisioning failure).
-				// If the VM already exists (re-provisioning failure), the phase is driven by KubeVirt
-				// PrintableStatus and the failed job is visible in status.provisioningJobs.
-				if instance.Status.VirtualMachineReference == nil {
-					setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseFailed)
-				}
-				instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, message, v1alpha1.ReasonProvisioningFailed)
-			},
-		},
-		func() bool {
-			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.mgr.GetLocalManager().GetAPIReader(), client.ObjectKeyFromObject(instance), &v1alpha1.ComputeInstance{}, func(obj client.Object) []v1alpha1.JobStatus {
-				return obj.(*v1alpha1.ComputeInstance).Status.ProvisioningJobs
-			})
-		},
-		func() error {
-			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status)
-		},
-	)
+// provisioningEnabled reports global.networking.provisioningEnabled.
+func (r *ComputeInstanceReconciler) provisioningEnabled() bool {
+	return r.Engine.ProvisioningEnabled()
 }
 
-// handleDeprovisioning manages the deprovisioning job lifecycle for a ComputeInstance.
-// Note: Finalizer management is handled by handleDelete(), not here.
-func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
-	val, exists := instance.Annotations[osacComputeInstanceManagementStateAnnotation]
-	if exists && val == ManagementStateManual {
-		ctrllog.FromContext(ctx).Info("skipping deprovisioning due to management-state annotation", "management-state", val)
-		return ctrl.Result{}, nil
+func (r *ComputeInstanceReconciler) clock() time.Time {
+	if r.now != nil {
+		return r.now()
 	}
-
-	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, instance,
-		&instance.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
-	if err != nil || !done {
-		return result, err
-	}
-	return ctrl.Result{}, nil
+	return time.Now()
 }
 
-// resolveSubnetTargetNamespace looks up the Subnet CR referenced by the primary subnet
-// (networkAttachments[0].subnetRef) and returns the subnet target
-// namespace (which equals the Subnet CR name).
-// Returns empty string if no primary subnet is set.
-// Returns error if Subnet CR lookup fails.
-func (r *ComputeInstanceReconciler) resolveSubnetTargetNamespace(ctx context.Context, instance *v1alpha1.ComputeInstance) (string, error) {
-	log := ctrllog.FromContext(ctx)
-
-	primarySubnetRef := instance.Spec.PrimarySubnetRef()
-	if primarySubnetRef == "" {
-		// No subnet reference, no namespace to resolve
-		return "", nil
+// vmNetwork is the ocp_virt_vm networking input (VMaaS design, VM
+// construction): the namespace, the pod network and its interface, and the
+// API ID label. With provider networking disabled the VM uses the cluster
+// default pod network with masquerade.
+func vmNetwork(namespace, id string, enabled bool) map[string]any {
+	name := vmNetworkTenant
+	iface := map[string]any{fieldName: name, "binding": map[string]any{fieldName: "l2bridge"}}
+	if !enabled {
+		name = vmNetworkDefault
+		iface = map[string]any{fieldName: name, "masquerade": map[string]any{}}
 	}
-
-	// Look up Subnet CR in the same namespace as ComputeInstance
-	subnet := &v1alpha1.Subnet{}
-	subnetKey := types.NamespacedName{
-		Name:      primarySubnetRef,
-		Namespace: instance.Namespace,
+	return map[string]any{
+		"namespace":  namespace,
+		"networks":   []any{map[string]any{fieldName: name, "pod": map[string]any{}}},
+		"interfaces": []any{iface},
+		"labels":     map[string]any{computeInstanceIDVMLabel: id},
 	}
-
-	err := r.Get(ctx, subnetKey, subnet)
-	if err != nil {
-		return "", fmt.Errorf("failed to get Subnet CR %s: %w", primarySubnetRef, err)
-	}
-
-	// Subnet namespace = Subnet CR name (established pattern from Phase 17)
-	subnetTargetNamespace := subnet.Name
-
-	log.Info("Resolved subnet target namespace from Subnet CR",
-		"primarySubnetRef", primarySubnetRef,
-		"subnetTargetNamespace", subnetTargetNamespace,
-	)
-
-	return subnetTargetNamespace, nil
-}
-
-// syncSubnetTargetNamespaceAnnotation ensures the subnet-target-namespace annotation is set
-// when a primary subnet (networkAttachments[0].subnetRef) is configured.
-// The primary subnet reference is immutable, so the annotation only needs to be resolved
-// and written once; subsequent reconciles reuse the cached annotation value.
-// Returns the resolved namespace, whether the annotation was written, and any error.
-func (r *ComputeInstanceReconciler) syncSubnetTargetNamespaceAnnotation(ctx context.Context, instance *v1alpha1.ComputeInstance) (string, bool, error) {
-	if instance.Spec.PrimarySubnetRef() == "" {
-		return "", false, nil
-	}
-
-	// Primary subnet is immutable — if the annotation is already set, reuse it.
-	if ns, ok := instance.Annotations[osacSubnetTargetNamespaceAnnotation]; ok {
-		return ns, false, nil
-	}
-
-	subnetTargetNamespace, err := r.resolveSubnetTargetNamespace(ctx, instance)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return "", false, fmt.Errorf("%w: %w", errSubnetNotFound, err)
-		}
-		return "", false, err
-	}
-	if instance.Annotations == nil {
-		instance.Annotations = make(map[string]string)
-	}
-	instance.Annotations[osacSubnetTargetNamespaceAnnotation] = subnetTargetNamespace
-	return subnetTargetNamespace, true, nil
-}
-
-// syncMetadataPreflight ensures the finalizer is set and the subnet-target-namespace
-// annotation is in sync with the current networkAttachments subnet.  It batches all metadata
-// changes into a single r.Update() call to avoid multiple round-trips and the
-// status-clobbering problem.  The resolved subnetTargetNamespace is returned so
-// callers can reuse it without a second resolveSubnetNamespace call.
-func (r *ComputeInstanceReconciler) syncMetadataPreflight(ctx context.Context, instance *v1alpha1.ComputeInstance) (string, error) {
-	log := ctrllog.FromContext(ctx)
-
-	metadataChanged := controllerutil.AddFinalizer(instance, osacComputeInstanceFinalizer)
-
-	subnetTargetNamespace, changed, err := r.syncSubnetTargetNamespaceAnnotation(ctx, instance)
-	if err != nil {
-		log.Error(err, "Failed to resolve subnet target namespace")
-		return "", err
-	}
-	if changed {
-		metadataChanged = true
-	}
-
-	if metadataChanged {
-		if err := r.Update(ctx, instance); err != nil {
-			return "", err
-		}
-		// r.Update() returns the full server response via .Into(obj): the annotation
-		// we just wrote, the latest ResourceVersion, and the current server-side status
-		// are all present in instance after this call. No re-fetch is needed.
-		// A cache-based r.Get() here would race against the async watch stream and
-		// return a stale version that wipes the annotation from instance before it
-		// reaches the AAP template payload in handleProvisioning.
-	}
-
-	return subnetTargetNamespace, nil
 }
 
 func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
-	subnetTargetNamespace, err := r.syncMetadataPreflight(ctx, instance)
-	if err != nil {
-		if errors.Is(err, errSubnetNotFound) {
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	if controllerutil.AddFinalizer(instance, osacComputeInstanceFinalizer) {
+		// r.Update returns the server object: the in-memory status is the stored
+		// one again, so status changes are made only after this call.
+		if err := r.Update(ctx, instance); err != nil {
+			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, err
 	}
 
-	// Initialize status after the metadata update, because r.Update() overwrites
-	// the in-memory status with the server response (status subresource is separate).
 	r.initializeStatusConditions(instance)
 	// Initialize phase to Starting for brand-new CIs (Phase is empty until first set).
 	// Overridden by determinePhaseFromPrintableStatus() once a KubeVirt VM exists.
@@ -548,73 +469,113 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		return ctrl.Result{}, err
 	}
 
-	targetNamespace := computeInstanceTargetNamespace(tenant, subnetTargetNamespace)
-
-	kv, err := r.findKubeVirtVMs(ctx, targetClient, instance, targetNamespace)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Capture the persisted reason of the condition that records a storage
-	// readiness gate before this reconcile overwrites it, so the TenantNotReady
-	// event fires only when the gate is first hit.
-	priorGateReason := conditionReason(instance, storageGateCondition(kv))
-	if kv != nil {
-		if err := r.handleKubeVirtVM(ctx, targetClient, instance, kv); err != nil {
-			return ctrl.Result{}, err
+	// The VM's namespace: the accepted vm_attachment of its NetworkAttachment,
+	// or the Tenant namespace with provider networking disabled.
+	var na *v1alpha1.NetworkAttachment
+	vmNamespace := ""
+	if r.provisioningEnabled() {
+		var wait bool
+		na, wait, err = r.reconcileNetworkAttachment(ctx, instance)
+		if err != nil || wait {
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, err
 		}
-		setComputeInstancePhase(&instance.Status, determinePhaseFromPrintableStatus(ctx, kv, instance.Status.Phase))
+		vmNamespace = na.Status.VMAttachment.Namespace
 	} else {
-		// No KubeVirt VM exists yet: infrastructure is being provisioned.
-		setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseStarting)
-		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, "VirtualMachine not yet created, waiting for provisioning", v1alpha1.ReasonWaitingForVM)
-		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
-		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionRestartRequired, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
+		vmNamespace = tenant.Status.Namespace
+		if vmNamespace == "" {
+			vmNamespace = tenant.GetName()
+		}
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionNetworkReady, metav1.ConditionTrue,
+			networktask.MessageNetworkingDisabled, v1alpha1.ReasonProvisioningDisabled)
 	}
 
 	if err := r.handleDesiredConfigVersion(ctx, instance); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	if provisioning.IsConfigApplied(&instance.Status.ProvisioningJobs, instance.Status.DesiredConfigVersion) {
-		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
-
-		// Update lastRestartedAt when a restart was requested and provisioning has reconciled it.
-		if instance.Spec.RestartRequestedAt != nil {
-			if instance.Status.LastRestartedAt == nil || instance.Spec.RestartRequestedAt.After(instance.Status.LastRestartedAt.Time) {
-				log.Info("restart completed via provisioning", "restartRequestedAt", instance.Spec.RestartRequestedAt)
-				instance.Status.LastRestartedAt = instance.Spec.RestartRequestedAt.DeepCopy()
-				instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionRestartInProgress, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
-			}
+	// The VM recorded in status. A job launched below cannot have created it
+	// yet: the VM watch reconciles again when it appears.
+	var kv *kubevirtv1.VirtualMachine
+	if instance.Status.VirtualMachineReference != nil {
+		kv, err = r.findKubeVirtVMs(ctx, targetClient, instance, instance.Status.VirtualMachineReference.Namespace)
+		if err != nil {
+			return ctrl.Result{}, err
 		}
+	}
+
+	// Capture the persisted reason of the condition that records a storage
+	// readiness gate before this reconcile overwrites it, so the TenantNotReady
+	// event fires only when the gate is first hit.
+	priorGateReason := conditionReason(instance, storageGateCondition(kv))
+
+	// Decided once for the pass: only a pass that may launch resolves the
+	// storage context, and only such a pass launches (see handleProvisioning).
+	launch := r.willTriggerProvisioning(instance)
+	gateMessage := ""
+	if launch {
+		ctx, gateMessage, err = r.prepareStorageContext(ctx, targetClient, instance, tenant)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	// A gated pass starts no job and leaves status.jobs as it is; the status
+	// steps below still run, with the zero Outcome: the job they would report
+	// on is the one that waits, not a failed one.
+	var provision networktask.Outcome
+	result := ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}
+	if gateMessage == "" {
+		provision, err = r.handleProvisioning(ctx, instance, vmNamespace, launch)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		result = ctrl.Result{RequeueAfter: provision.RequeueAfter}
+	}
+
+	if kv != nil {
+		r.handleKubeVirtVM(ctx, instance, kv)
+		setComputeInstancePhase(&instance.Status, determinePhaseFromPrintableStatus(ctx, kv, instance.Status.Phase))
 	} else {
-		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionFalse, "Applying configuration", v1alpha1.ReasonAsExpected)
-
-		// Set RestartInProgress condition when a restart is pending provisioning.
-		if instance.Spec.RestartRequestedAt != nil {
-			if instance.Status.LastRestartedAt == nil || instance.Spec.RestartRequestedAt.After(instance.Status.LastRestartedAt.Time) {
-				instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionRestartInProgress, metav1.ConditionTrue,
-					fmt.Sprintf("Restart initiated at %s", instance.Spec.RestartRequestedAt.UTC().Format(time.RFC3339)),
-					"RestartInProgress")
-			}
+		// No KubeVirt VM exists yet: infrastructure is being provisioned.
+		setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseStarting)
+		if !provision.Failed() {
+			instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, "VirtualMachine not yet created, waiting for provisioning", v1alpha1.ReasonWaitingForVM)
 		}
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionRestartRequired, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
+	}
+	if provision.Failed() {
+		// A failed provision job is final until the spec changes: a new spec runs the job again
+		// as the next attempt (see handleProvisioning); the same spec stays failed (VMaaS design,
+		// Create step 5).
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse,
+			provision.Entry.Message, v1alpha1.ReasonProvisioningFailed)
+		if kv == nil {
+			setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseFailed)
+		}
+	}
+
+	requeue, err := r.reconcileNetworkStatus(ctx, instance, na, kv)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	result = mergeReconcileResult(result, requeue)
+	r.reconcileReadyCondition(instance, kv)
+
+	r.reconcileConfigAndRestart(ctx, instance)
+
+	if na != nil && networkAttachmentFailed(na) {
+		setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseFailed)
 	}
 
 	recordRunningConfig(instance)
 
-	var gated bool
-	ctx, gated, err = r.prepareStorageContext(ctx, targetClient, instance, tenant, kv, priorGateReason)
-	if err != nil {
-		return ctrl.Result{}, err
+	// Written last: the status steps above set Provisioned ("VirtualMachine not
+	// yet created") and ConfigurationApplied ("Applying configuration"), and
+	// neither may replace the reason the job is waiting.
+	if gateMessage != "" {
+		r.deferProvisioningForStorage(ctx, instance, tenant, kv, priorGateReason, gateMessage)
 	}
-	if gated {
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-	}
-
-	// Always delegate to provisioning lifecycle — EvaluateAction decides
-	// whether to skip, poll, or trigger. This avoids the A-B-A problem where
-	// IsConfigApplied alone could match a stale historical job.
-	return r.handleProvisioning(ctx, instance)
+	return result, nil
 }
 
 func formatTenantNotReadyMessage(tenant *v1alpha1.Tenant) string {
@@ -628,17 +589,16 @@ func formatTenantNotReadyMessage(tenant *v1alpha1.Tenant) string {
 	return msg
 }
 
+// prepareStorageContext resolves the storage context of a job that this pass
+// would launch. It returns the context for the job, and a non-empty message
+// when the job must wait for tenant storage: the caller then launches nothing
+// and records the message with deferProvisioningForStorage.
 func (r *ComputeInstanceReconciler) prepareStorageContext(
 	ctx context.Context,
 	targetClient client.Client,
 	instance *v1alpha1.ComputeInstance,
 	tenant *v1alpha1.Tenant,
-	kv *kubevirtv1.VirtualMachine,
-	priorGateReason string,
-) (context.Context, bool, error) {
-	if !r.willTriggerProvisioning(instance) {
-		return ctx, false, nil
-	}
+) (context.Context, string, error) {
 	log := ctrllog.FromContext(ctx)
 
 	reqTiers := requestedStorageTiers(instance)
@@ -667,8 +627,7 @@ func (r *ComputeInstanceReconciler) prepareStorageContext(
 	// Every job this pass would trigger runs the AAP tier validation, so gate
 	// day-2 jobs on an existing VM as well as initial provisioning.
 	if ready, msg := checkStorageReadiness(tenant, reqTiers, reqCSPTiers, unresolvedTiers, tierErr); !ready {
-		r.deferProvisioningForStorage(ctx, instance, tenant, kv, priorGateReason, msg)
-		return ctx, true, nil
+		return ctx, msg, nil
 	}
 
 	// Inject tenant storage classes into context for AAP extra_vars.
@@ -690,7 +649,7 @@ func (r *ComputeInstanceReconciler) prepareStorageContext(
 		tenantName := tenant.GetName()
 		resolution, err := getTenantStorageClasses(ctx, targetClient, tenantName)
 		if err != nil {
-			return ctx, false, fmt.Errorf("failed to resolve tenant storage classes from target cluster for tenant %s: %w", tenantName, err)
+			return ctx, "", fmt.Errorf("failed to resolve tenant storage classes from target cluster for tenant %s: %w", tenantName, err)
 		}
 
 		for _, msg := range resolution.duplicateMessages {
@@ -700,10 +659,8 @@ func (r *ComputeInstanceReconciler) prepareStorageContext(
 		// tier needs a StorageClass already on the target cluster.
 		if tierErr != nil {
 			if unmapped := tiersWithoutStorageClass(reqTiers, countStorageClassNamesByTier(resolution.resolved)); len(unmapped) > 0 {
-				r.deferProvisioningForStorage(ctx, instance, tenant, kv, priorGateReason,
-					fmt.Sprintf("Tenant '%s' storage tier catalog resolution failed and requested tier(s) have no StorageClass on the target cluster: %s",
-						tenantName, strings.Join(unmapped, ", ")))
-				return ctx, true, nil
+				return ctx, fmt.Sprintf("Tenant '%s' storage tier catalog resolution failed and requested tier(s) have no StorageClass on the target cluster: %s",
+					tenantName, strings.Join(unmapped, ", ")), nil
 			}
 		}
 		if len(resolution.resolved) > 0 {
@@ -718,16 +675,441 @@ func (r *ComputeInstanceReconciler) prepareStorageContext(
 		}
 	}
 
-	return ctx, false, nil
+	return ctx, "", nil
+}
+
+func (r *ComputeInstanceReconciler) reconcileConfigAndRestart(ctx context.Context, instance *v1alpha1.ComputeInstance) {
+	log := ctrllog.FromContext(ctx)
+	if computeInstanceConfigApplied(instance) {
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+		if instance.Spec.RestartRequestedAt != nil {
+			if instance.Status.LastRestartedAt == nil || instance.Spec.RestartRequestedAt.After(instance.Status.LastRestartedAt.Time) {
+				log.Info("restart completed via provisioning", "restartRequestedAt", instance.Spec.RestartRequestedAt)
+				instance.Status.LastRestartedAt = instance.Spec.RestartRequestedAt.DeepCopy()
+				instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionRestartInProgress, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
+			}
+		}
+	} else {
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionFalse, "Applying configuration", v1alpha1.ReasonAsExpected)
+		if instance.Spec.RestartRequestedAt != nil {
+			if instance.Status.LastRestartedAt == nil || instance.Spec.RestartRequestedAt.After(instance.Status.LastRestartedAt.Time) {
+				instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionRestartInProgress, metav1.ConditionTrue,
+					fmt.Sprintf("Restart initiated at %s", instance.Spec.RestartRequestedAt.UTC().Format(time.RFC3339)),
+					"RestartInProgress")
+			}
+		}
+	}
+}
+
+// networkAttachmentFailed reports whether a NetworkAttachment is Ready=False, reason Failed.
+func networkAttachmentFailed(na *v1alpha1.NetworkAttachment) bool {
+	ready := meta.FindStatusCondition(na.Status.Conditions, v1alpha1.NetworkConditionReady)
+	return ready != nil && ready.Status == metav1.ConditionFalse && ready.Reason == v1alpha1.ReasonFailed
+}
+
+// networkAttachmentReadyMessage returns the message of the Ready condition of a NetworkAttachment.
+func networkAttachmentReadyMessage(na *v1alpha1.NetworkAttachment) string {
+	if ready := meta.FindStatusCondition(na.Status.Conditions, v1alpha1.NetworkConditionReady); ready != nil {
+		return ready.Message
+	}
+	return ""
+}
+
+// reconcileNetworkAttachment creates the VM's NetworkAttachment when missing
+// and sets NetworkReady while it is not usable yet (VMaaS design, Create
+// steps 3 and 4). It returns the NetworkAttachment and whether the VM must
+// still wait (no accepted vm_attachment, or a failed attachment).
+func (r *ComputeInstanceReconciler) setNetworkReady(instance *v1alpha1.ComputeInstance, status metav1.ConditionStatus, reason, message string) {
+	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionNetworkReady, status, message, reason)
+}
+
+func (r *ComputeInstanceReconciler) reconcileNetworkAttachment(ctx context.Context, instance *v1alpha1.ComputeInstance) (*v1alpha1.NetworkAttachment, bool, error) {
+	id := instance.Labels[osacComputeInstanceIDLabel]
+	if id == "" {
+		return nil, true, fmt.Errorf("compute instance %s has no %s label", instance.Name, osacComputeInstanceIDLabel)
+	}
+	if len(instance.Spec.NetworkAttachments) == 0 || len(instance.Spec.NetworkAttachments[0].SecurityGroupRefs) == 0 {
+		r.markNetworkAttachmentFailed(instance, "the ComputeInstance has no network attachment with a Subnet and SecurityGroups")
+		setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseFailed)
+		return nil, true, nil
+	}
+
+	name := v1alpha1.NetworkAttachmentName(v1alpha1.NetworkAttachmentTargetComputeInstance, id)
+	na := &v1alpha1.NetworkAttachment{}
+	err := r.Get(ctx, client.ObjectKey{Namespace: r.NetworkingNamespace, Name: name}, na)
+	if apierrors.IsNotFound(err) {
+		attachment := instance.Spec.NetworkAttachments[0]
+		na = &v1alpha1.NetworkAttachment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        name,
+				Namespace:   r.NetworkingNamespace,
+				Finalizers:  []string{osacComputeInstanceFinalizer},
+				Annotations: map[string]string{osacTenantKey: instance.Annotations[osacTenantKey]},
+			},
+			Spec: v1alpha1.NetworkAttachmentSpec{
+				Target:         v1alpha1.NetworkAttachmentTarget{Kind: v1alpha1.NetworkAttachmentTargetComputeInstance, ID: id},
+				Subnet:         attachment.SubnetRef,
+				Interface:      v1alpha1.NetworkAttachmentInterface{Type: v1alpha1.NetworkInterfaceOverlay},
+				SecurityGroups: attachment.SecurityGroupRefs,
+			},
+		}
+		// Create only if missing; AlreadyExists counts as created (VMaaS edge
+		// case "Restart after the NetworkAttachment create").
+		if err := r.Create(ctx, na); err != nil && !apierrors.IsAlreadyExists(err) {
+			return nil, true, fmt.Errorf("create NetworkAttachment %s: %w", name, err)
+		}
+		r.setNetworkReady(instance, metav1.ConditionFalse, v1alpha1.ComputeInstanceReasonNetworkAttachmentProgressing,
+			"waiting for the network attachment")
+		return nil, true, nil
+	}
+	if err != nil {
+		return nil, true, fmt.Errorf("get NetworkAttachment %s: %w", name, err)
+	}
+
+	if networkAttachmentFailed(na) {
+		r.markNetworkAttachmentFailed(instance, networkAttachmentReadyMessage(na))
+		// After a Kubernetes apply failure no VM is created; after a Fabric
+		// apply failure the VM stays and its status is still reported.
+		return na, na.Status.VMAttachment == nil, nil
+	}
+	if na.Status.VMAttachment == nil || na.Status.VMAttachment.Namespace == "" {
+		message := networkAttachmentReadyMessage(na)
+		if message == "" {
+			message = "waiting for the network attachment"
+		}
+		r.setNetworkReady(instance, metav1.ConditionFalse, v1alpha1.ComputeInstanceReasonNetworkAttachmentProgressing, message)
+		return na, true, nil
+	}
+	return na, false, nil
+}
+
+// markNetworkAttachmentFailed sets NetworkReady=False NetworkAttachmentFailed,
+// phase Failed, and emits the event once.
+func (r *ComputeInstanceReconciler) markNetworkAttachmentFailed(instance *v1alpha1.ComputeInstance, message string) {
+	if conditionReason(instance, v1alpha1.ComputeInstanceConditionNetworkReady) != v1alpha1.ComputeInstanceReasonNetworkAttachmentFailed {
+		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonNetworkAttachmentFailed, eventActionReconcile, "%s", message)
+	}
+	r.setNetworkReady(instance, metav1.ConditionFalse, v1alpha1.ComputeInstanceReasonNetworkAttachmentFailed, message)
+	setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseFailed)
+}
+
+// handleProvisioning runs the ocp_virt_vm provision job (VMaaS design, Create
+// step 5): one status.jobs entry, task provision, manager none. The first
+// launch records status.virtualMachineReference in the same status write. A
+// spec change after a provision that ended, Succeeded or Failed (a restart, a
+// run strategy or an instance type change), runs the job again as a new
+// attempt (decision 23). BeforeLaunch records the version the attempt runs
+// for, so a rerun that fails again stops until the spec changes once more; the
+// same spec after a failure stays final (design decision D4).
+//
+// launch is the willTriggerProvisioning answer the storage context was resolved
+// for. Without it the job input has no storage context, so the engine only
+// tracks the job and starts nothing (networktask.Request.HoldLaunch).
+func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, instance *v1alpha1.ComputeInstance, vmNamespace string, launch bool) (networktask.Outcome, error) {
+	log := ctrllog.FromContext(ctx)
+
+	// Check for ManagementStateManual annotation
+	if val, exists := instance.Annotations[osacComputeInstanceManagementStateAnnotation]; exists && val == ManagementStateManual {
+		log.Info("skipping provisioning due to management-state annotation", "management-state", val)
+		return networktask.Outcome{}, nil
+	}
+
+	entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
+	if provisionRerunDue(instance, entry) {
+		log.Info("configuration changed after the provision job ended; running it again",
+			"state", entry.State,
+			"provisionConfigVersion", instance.Status.ProvisionConfigVersion,
+			"desiredConfigVersion", instance.Status.DesiredConfigVersion)
+		r.Engine.MarkForRerun(instance, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
+	}
+
+	vars, err := provisioning.JobVars(ctx, instance)
+	if err != nil {
+		return networktask.Outcome{}, fmt.Errorf("build the provision job input: %w", err)
+	}
+	vars["vm_network"] = vmNetwork(vmNamespace, instance.Labels[osacComputeInstanceIDLabel], r.provisioningEnabled())
+	desired := instance.Status.DesiredConfigVersion
+	return r.Engine.Run(ctx, instance, networktask.Request{
+		Task:     computeInstanceProvisionTask,
+		Manager:  v1alpha1.NetworkJobManagerNone,
+		Kind:     kindComputeInstance,
+		Template: r.ProvisionTemplate,
+		Vars:     vars,
+		// The job input of a pass that may not launch has no storage context.
+		HoldLaunch: !launch,
+		BeforeLaunch: func() error {
+			instance.Status.VirtualMachineReference = &v1alpha1.VirtualMachineReferenceType{
+				Namespace:                  vmNamespace,
+				KubeVirtVirtualMachineName: instance.Name,
+			}
+			instance.Status.ProvisionConfigVersion = desired
+			return nil
+		},
+	})
+}
+
+// provisionRerunDue reports whether the provision job that ended must run again
+// because the spec changed after it ran.
+func provisionRerunDue(instance *v1alpha1.ComputeInstance, entry *v1alpha1.NetworkJobStatus) bool {
+	return entry != nil && (entry.State == v1alpha1.NetworkJobStateSucceeded || entry.State == v1alpha1.NetworkJobStateFailed) &&
+		instance.Status.ProvisionConfigVersion != instance.Status.DesiredConfigVersion
+}
+
+// computeInstanceConfigApplied reports whether the provision job succeeded
+// with the current desiredConfigVersion.
+func computeInstanceConfigApplied(instance *v1alpha1.ComputeInstance) bool {
+	entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
+	return entry != nil && entry.State == v1alpha1.NetworkJobStateSucceeded &&
+		instance.Status.ProvisionConfigVersion == instance.Status.DesiredConfigVersion
+}
+
+// reconcileNetworkStatus discovers the VM address and sets NetworkReady
+// (VMaaS design, Network status and address discovery).
+func (r *ComputeInstanceReconciler) reconcileNetworkStatus(ctx context.Context, instance *v1alpha1.ComputeInstance,
+	na *v1alpha1.NetworkAttachment, kv *kubevirtv1.VirtualMachine) (ctrl.Result, error) {
+	enabled := r.provisioningEnabled()
+	failed := na != nil && networkAttachmentFailed(na)
+	oldAddress := instance.Status.IPAddress
+
+	vmi, err := r.runningVMI(ctx, instance, kv)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if vmi == nil {
+		instance.Status.ComputeNetworkAttachmentStatuses = nil
+		instance.SetIPAddress("")
+		if enabled && !failed {
+			r.setNetworkReady(instance, metav1.ConditionFalse, v1alpha1.ComputeInstanceReasonVMNotRunning, "the VM is not running")
+		}
+		return ctrl.Result{}, nil
+	}
+
+	if !enabled {
+		instance.Status.ComputeNetworkAttachmentStatuses = nil
+		instance.SetIPAddress(firstIPv4OfInterface(vmi, vmNetworkDefault, nil))
+		return ctrl.Result{}, nil
+	}
+
+	// The guest reports its address, so it is trusted only inside the Subnet's
+	// overlay range. With no range known (no Subnet ID, a missing or
+	// ambiguous Subnet, or no status.ipam yet) no address is published: the
+	// check fails closed, and the controller polls until the range arrives.
+	subnetID := instance.Spec.PrimarySubnetRef()
+	overlay, err := r.subnetOverlayCIDRs(ctx, subnetID)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	address := ""
+	if len(overlay) > 0 {
+		address = firstIPv4OfInterface(vmi, vmNetworkTenant, overlay)
+	}
+	if address == "" {
+		if len(overlay) == 0 && keepsValidatedAddress(instance, vmi, subnetID) {
+			// The range went away under a VM whose address was validated against it and is
+			// still reported: keep the address and the condition. Only new addresses wait.
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
+		instance.Status.ComputeNetworkAttachmentStatuses = nil
+		instance.SetIPAddress("")
+		if len(overlay) == 0 {
+			if !failed {
+				r.setNetworkReady(instance, metav1.ConditionFalse, v1alpha1.ComputeInstanceReasonWaitingForIPAddress,
+					fmt.Sprintf("waiting for the address range of the Subnet %q before accepting a VM address", subnetID))
+			}
+			return mergeReconcileResult(r.ipAddressNotFound(instance, vmi), ctrl.Result{RequeueAfter: r.StatusPollInterval}), nil
+		}
+		if !failed {
+			r.setNetworkReady(instance, metav1.ConditionFalse, v1alpha1.ComputeInstanceReasonWaitingForIPAddress,
+				fmt.Sprintf("waiting for an IPv4 address in %s on the VM interface %s", strings.Join(overlay, ", "), vmNetworkTenant))
+		}
+		return r.ipAddressNotFound(instance, vmi), nil
+	}
+
+	instance.Status.ComputeNetworkAttachmentStatuses = []v1alpha1.ComputeNetworkAttachmentStatus{{
+		SubnetRef: subnetID,
+		IPAddress: address,
+	}}
+	instance.SetIPAddress(address)
+	if bound := boundIPv4Address(na); address != oldAddress && bound != "" && address != bound {
+		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonIPAddressChanged, eventActionReconcile,
+			"the VM address changed from %s to %s; the network attachment keeps %s", bound, address, bound)
+	}
+	if failed {
+		return ctrl.Result{}, nil
+	}
+	if na != nil && meta.IsStatusConditionTrue(na.Status.Conditions, v1alpha1.NetworkConditionReady) {
+		if conditionStatus(instance, v1alpha1.ComputeInstanceConditionNetworkReady) != metav1.ConditionTrue {
+			r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, eventReasonNetworkAttached, eventActionReconcile,
+				"network attachment ready, IP: %s", address)
+		}
+		r.setNetworkReady(instance, metav1.ConditionTrue, v1alpha1.ComputeInstanceReasonIPDiscovered, "")
+		return ctrl.Result{}, nil
+	}
+	message := ""
+	if na != nil {
+		message = networkAttachmentReadyMessage(na)
+	}
+	if message == "" {
+		message = "waiting for the fabric binding of the VM address"
+	}
+	r.setNetworkReady(instance, metav1.ConditionFalse, v1alpha1.ComputeInstanceReasonWaitingForFabricBinding, message)
+	return ctrl.Result{}, nil
+}
+
+// reconcileReadyCondition sets Ready: a ready VM and NetworkReady=True.
+func (r *ComputeInstanceReconciler) reconcileReadyCondition(instance *v1alpha1.ComputeInstance, kv *kubevirtv1.VirtualMachine) {
+	oldReadyStatus := conditionStatus(instance, v1alpha1.ComputeInstanceConditionReady)
+	vmReady := kv != nil && kvVMHasConditionWithStatus(kv, kubevirtv1.VirtualMachineReady, corev1.ConditionTrue)
+	networkReady := instance.IsStatusConditionTrue(v1alpha1.ComputeInstanceConditionNetworkReady)
+	if vmReady && networkReady {
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+		if oldReadyStatus != metav1.ConditionTrue {
+			r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, eventReasonReady, eventActionReconcile,
+				"VirtualMachine is ready, IP: %s", instance.Status.IPAddress)
+		}
+		return
+	}
+	message := ""
+	if vmReady && !networkReady {
+		message = "waiting for the VM network"
+	}
+	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionFalse, message, v1alpha1.ReasonAsExpected)
+}
+
+// runningVMI returns the VM's VirtualMachineInstance when it is Running, or nil.
+func (r *ComputeInstanceReconciler) runningVMI(ctx context.Context, instance *v1alpha1.ComputeInstance, kv *kubevirtv1.VirtualMachine) (*kubevirtv1.VirtualMachineInstance, error) {
+	if kv == nil {
+		return nil, nil
+	}
+	targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
+	if err != nil {
+		return nil, err
+	}
+	vmi := &kubevirtv1.VirtualMachineInstance{}
+	if err := targetClient.Get(ctx, types.NamespacedName{Namespace: kv.Namespace, Name: kv.Name}, vmi); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get VirtualMachineInstance %s/%s: %w", kv.Namespace, kv.Name, err)
+	}
+	if vmi.Status.Phase != kubevirtv1.Running {
+		return nil, nil
+	}
+	return vmi, nil
+}
+
+// keepsValidatedAddress reports whether the published address was validated against the Subnet
+// with this ID and the VM still reports it.
+func keepsValidatedAddress(instance *v1alpha1.ComputeInstance, vmi *kubevirtv1.VirtualMachineInstance, subnetID string) bool {
+	statuses := instance.Status.ComputeNetworkAttachmentStatuses
+	if len(statuses) != 1 || statuses[0].SubnetRef != subnetID || statuses[0].IPAddress == "" {
+		return false
+	}
+	previous := statuses[0].IPAddress
+	return firstIPv4OfInterface(vmi, vmNetworkTenant, []string{previous + "/32"}) == previous
+}
+
+// subnetOverlayCIDRs returns the overlay range of the Subnet with the given
+// API ID (Subnet status.ipam, contract §4.8). It returns no range when the ID
+// is empty, the Subnet is missing or ambiguous, or status.ipam is not set yet;
+// the caller then accepts no address.
+func (r *ComputeInstanceReconciler) subnetOverlayCIDRs(ctx context.Context, subnetID string) ([]string, error) {
+	if subnetID == "" {
+		return nil, nil
+	}
+	list := &v1alpha1.SubnetList{}
+	if err := r.List(ctx, list, client.InNamespace(r.NetworkingNamespace), client.MatchingLabels{osacSubnetIDLabel: subnetID}); err != nil {
+		return nil, fmt.Errorf("list Subnet %s: %w", subnetID, err)
+	}
+	if len(list.Items) != 1 || list.Items[0].Status.IPAM == nil {
+		return nil, nil
+	}
+	return list.Items[0].Status.IPAM.OverlayIPv4CIDRs, nil
+}
+
+// firstIPv4OfInterface returns the first canonical IPv4 address of the VMI
+// interface with the given name; with cidrs, only an address inside one of
+// them. Other interfaces (including guest-only ones) are ignored.
+func firstIPv4OfInterface(vmi *kubevirtv1.VirtualMachineInstance, name string, cidrs []string) string {
+	for _, iface := range vmi.Status.Interfaces {
+		if iface.Name != name {
+			continue
+		}
+		candidates := append([]string{}, iface.IPs...)
+		if iface.IP != "" {
+			candidates = append(candidates, iface.IP)
+		}
+		for _, candidate := range candidates {
+			address, err := netip.ParseAddr(candidate)
+			if err != nil || !address.Is4() || address.String() != candidate {
+				continue
+			}
+			if cidrs == nil || addressInCIDRs(address, cidrs) {
+				return candidate
+			}
+		}
+	}
+	return ""
+}
+
+func addressInCIDRs(address netip.Addr, cidrs []string) bool {
+	for _, cidr := range cidrs {
+		prefix, err := netip.ParsePrefix(cidr)
+		if err == nil && prefix.Contains(address) {
+			return true
+		}
+	}
+	return false
+}
+
+// boundIPv4Address returns the VM address in the NetworkAttachment's stored
+// task input (network_attachment.interface.ipv4_address), or "".
+func boundIPv4Address(na *v1alpha1.NetworkAttachment) string {
+	if na == nil {
+		return ""
+	}
+	input, err := networktask.LoadInput(na)
+	if err != nil || input == nil {
+		return ""
+	}
+	attachment, _ := input["network_attachment"].(map[string]any)
+	iface, _ := attachment["interface"].(map[string]any)
+	address, _ := iface["ipv4_address"].(string)
+	return address
+}
+
+// ipAddressNotFound emits IPAddressNotFound once per VMI, 10 minutes after
+// its transition to Running, and returns when to check again.
+func (r *ComputeInstanceReconciler) ipAddressNotFound(instance *v1alpha1.ComputeInstance, vmi *kubevirtv1.VirtualMachineInstance) ctrl.Result {
+	runningSince := time.Time{}
+	for _, transition := range vmi.Status.PhaseTransitionTimestamps {
+		if transition.Phase == kubevirtv1.Running && transition.PhaseTransitionTimestamp.Time.After(runningSince) {
+			runningSince = transition.PhaseTransitionTimestamp.Time
+		}
+	}
+	if runningSince.IsZero() {
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}
+	}
+	if wait := runningSince.Add(ipAddressNotFoundDelay).Sub(r.clock()); wait > 0 {
+		return ctrl.Result{RequeueAfter: wait}
+	}
+	r.ipNotFoundMu.Lock()
+	defer r.ipNotFoundMu.Unlock()
+	if r.ipNotFoundEvents == nil {
+		r.ipNotFoundEvents = map[types.UID]bool{}
+	}
+	if !r.ipNotFoundEvents[vmi.UID] {
+		r.ipNotFoundEvents[vmi.UID] = true
+		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonIPAddressNotFound, eventActionReconcile,
+			"the VM has no usable IPv4 address on interface %s after %s (none reported, or none in the Subnet range)", vmNetworkTenant, ipAddressNotFoundDelay)
+	}
+	return ctrl.Result{}
 }
 
 func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	log.Info("deleting compute instance")
 
-	// The outer Reconcile persists status after handleDelete returns. Keep the
-	// base finalizer until a later reconcile observes that status in the API.
-	oldStatus := instance.Status.DeepCopy()
 	setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseDeleting)
 	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionFalse,
 		"ComputeInstance is being deleted", v1alpha1.ReasonDeleting)
@@ -737,36 +1119,177 @@ func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ reconcil
 		return ctrl.Result{}, nil
 	}
 
-	done, result, err := reconcileAutoExternalIPCleanup(ctx, r.Client, r.NetworkingNamespace,
-		autoExternalIPOwner{kind: computeInstanceOwner, id: instance.Labels[osacComputeInstanceIDLabel]}, r.StatusPollInterval)
-	if err != nil || !done {
-		return result, err
-	}
-
-	// Handle deprovisioning - provider decides internally if needed
-	log.Info("handling deletion")
-	result, err = r.handleDeprovisioning(ctx, instance)
+	// Hold until no automatic ExternalIPAttachment or ExternalIP CR remains;
+	// the fulfillment service deletes them (VMaaS design, Delete step 2).
+	remains, err := automaticExternalAccessRemains(ctx, r.Client, r.NetworkingNamespace,
+		autoExternalIPOwner{kind: computeInstanceOwner, id: instance.Labels[osacComputeInstanceIDLabel]})
 	if err != nil {
-		return result, err
+		return ctrl.Result{}, err
 	}
-
-	// If we need to requeue (jobs still running or provider needs time), do so
-	if result.RequeueAfter > 0 {
-		return result, nil
-	}
-
-	if !equality.Semantic.DeepEqual(instance.Status, *oldStatus) {
+	if remains {
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
-	// Deprovisioning complete or skipped, remove base finalizer
-	if controllerutil.RemoveFinalizer(instance, osacComputeInstanceFinalizer) {
-		if err := r.mgr.GetLocalManager().GetClient().Update(ctx, instance); err != nil {
+	vmGone, result, err := r.removeVM(ctx, instance)
+	if err != nil || !vmGone {
+		return result, err
+	}
+
+	if r.provisioningEnabled() {
+		naGone, err := r.deleteNetworkAttachment(ctx, instance)
+		if err != nil {
 			return ctrl.Result{}, err
+		}
+		if !naGone {
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
 	}
 
+	// Write the deletion status first; remove the finalizer on a later reconcile.
+	if !equality.Semantic.DeepEqual(instance.Status, *r.persistedStatus(ctx, instance)) {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+	if controllerutil.RemoveFinalizer(instance, osacComputeInstanceFinalizer) {
+		if err := r.Update(ctx, instance); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	r.Engine.Forget(instance.UID)
 	return ctrl.Result{}, nil
+}
+
+// persistedStatus returns the status last read from the cache.
+func (r *ComputeInstanceReconciler) persistedStatus(ctx context.Context, instance *v1alpha1.ComputeInstance) *v1alpha1.ComputeInstanceStatus {
+	current := &v1alpha1.ComputeInstance{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(instance), current); err != nil {
+		return &v1alpha1.ComputeInstanceStatus{}
+	}
+	return &current.Status
+}
+
+// removeVM removes the VM (VMaaS design, Delete step 4): it cancels a running
+// provision job and waits for its end, runs the deprovision job when a
+// provision job ever started, then waits until the VM, the VMI, the
+// virt-launcher pod, the DataVolumes and the Secrets are gone.
+func (r *ComputeInstanceReconciler) removeVM(ctx context.Context, instance *v1alpha1.ComputeInstance) (bool, ctrl.Result, error) {
+	log := ctrllog.FromContext(ctx)
+	if val, exists := instance.Annotations[osacComputeInstanceManagementStateAnnotation]; exists && val == ManagementStateManual {
+		log.Info("skipping deprovisioning due to management-state annotation", "management-state", val)
+		return true, ctrl.Result{}, nil
+	}
+
+	done, wait, err := r.Engine.CancelForDelete(ctx, instance, kindComputeInstance)
+	if err != nil {
+		return false, ctrl.Result{}, err
+	}
+	if !done {
+		return false, ctrl.Result{RequeueAfter: wait}, nil
+	}
+	if !networktask.Started(instance, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone) ||
+		instance.Status.VirtualMachineReference == nil {
+		// No provision job ever started: no VM exists.
+		return true, ctrl.Result{}, nil
+	}
+
+	namespace := instance.Status.VirtualMachineReference.Namespace
+	vars, err := provisioning.JobVars(ctx, instance)
+	if err != nil {
+		return false, ctrl.Result{}, fmt.Errorf("build the deprovision job input: %w", err)
+	}
+	vars["vm_network"] = vmNetwork(namespace, instance.Labels[osacComputeInstanceIDLabel], r.provisioningEnabled())
+	outcome, err := r.Engine.Run(ctx, instance, networktask.Request{
+		Task:     computeInstanceDeprovisionTask,
+		Manager:  v1alpha1.NetworkJobManagerNone,
+		Kind:     kindComputeInstance,
+		Template: r.DeprovisionTemplate,
+		Vars:     vars,
+	})
+	if err != nil {
+		return false, ctrl.Result{}, err
+	}
+	if !outcome.Succeeded() {
+		return false, ctrl.Result{RequeueAfter: outcome.RequeueAfter}, nil
+	}
+
+	gone, err := r.vmResourcesGone(ctx, instance, namespace)
+	if err != nil {
+		return false, ctrl.Result{}, err
+	}
+	if !gone {
+		return false, ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
+	return true, ctrl.Result{}, nil
+}
+
+// vmResourcesGone reports whether the VM and VMI (by name) and the
+// virt-launcher pod, DataVolumes and Secrets (by the API ID label) are gone
+// from the VM namespace. It reads the API server, not a cache.
+func (r *ComputeInstanceReconciler) vmResourcesGone(ctx context.Context, instance *v1alpha1.ComputeInstance, namespace string) (bool, error) {
+	cluster, err := r.mgr.GetCluster(ctx, r.targetCluster)
+	if err != nil {
+		return false, err
+	}
+	reader := cluster.GetAPIReader()
+	key := types.NamespacedName{Namespace: namespace, Name: instance.Name}
+	for _, obj := range []client.Object{&kubevirtv1.VirtualMachine{}, &kubevirtv1.VirtualMachineInstance{}} {
+		if err := reader.Get(ctx, key, obj); err == nil {
+			return false, nil
+		} else if !apierrors.IsNotFound(err) {
+			return false, err
+		}
+	}
+	selector := client.MatchingLabels{computeInstanceIDVMLabel: instance.Labels[osacComputeInstanceIDLabel]}
+	if instance.Labels[osacComputeInstanceIDLabel] == "" {
+		return true, nil
+	}
+	dataVolumes := &unstructured.UnstructuredList{}
+	dataVolumes.SetGroupVersionKind(dataVolumeListGVK)
+	for _, list := range []client.ObjectList{&corev1.PodList{}, &corev1.SecretList{}, dataVolumes} {
+		if err := reader.List(ctx, list, client.InNamespace(namespace), selector); err != nil {
+			if meta.IsNoMatchError(err) {
+				// CDI is not installed: no DataVolume can exist.
+				continue
+			}
+			return false, err
+		}
+		if meta.LenList(list) > 0 {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// deleteNetworkAttachment deletes the VM's NetworkAttachment and removes the
+// ComputeInstance finalizer from it once only that finalizer remains (VMaaS
+// design, Delete steps 5 and 6). It reads the API server, not the cache. It
+// returns true when the NetworkAttachment is gone.
+func (r *ComputeInstanceReconciler) deleteNetworkAttachment(ctx context.Context, instance *v1alpha1.ComputeInstance) (bool, error) {
+	id := instance.Labels[osacComputeInstanceIDLabel]
+	if id == "" {
+		return true, nil
+	}
+	na := &v1alpha1.NetworkAttachment{}
+	key := client.ObjectKey{Namespace: r.NetworkingNamespace, Name: v1alpha1.NetworkAttachmentName(v1alpha1.NetworkAttachmentTargetComputeInstance, id)}
+	if err := r.APIReader.Get(ctx, key, na); err != nil {
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	if na.DeletionTimestamp.IsZero() {
+		if err := r.Delete(ctx, na); err != nil && !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("delete NetworkAttachment %s: %w", key.Name, err)
+		}
+		return false, nil
+	}
+	if len(na.Finalizers) == 1 && na.Finalizers[0] == osacComputeInstanceFinalizer {
+		base := na.DeepCopy()
+		controllerutil.RemoveFinalizer(na, osacComputeInstanceFinalizer)
+		if err := r.Patch(ctx, na, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil && !apierrors.IsNotFound(err) {
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 // initializeStatusConditions initializes the conditions that haven't already been initialized.
@@ -810,16 +1333,6 @@ func (r *ComputeInstanceReconciler) initializeStatusCondition(instance *v1alpha1
 	instance.SetStatusCondition(conditionType, status, "", reason)
 }
 
-func computeInstanceTargetNamespace(tenant *v1alpha1.Tenant, subnetTargetNamespace string) string {
-	if subnetTargetNamespace != "" {
-		return subnetTargetNamespace
-	}
-	if tenant.Status.Namespace != "" {
-		return tenant.Status.Namespace
-	}
-	return tenant.GetName()
-}
-
 func (r *ComputeInstanceReconciler) findKubeVirtVMs(ctx context.Context, targetClient client.Client, instance *v1alpha1.ComputeInstance, nsName string) (*kubevirtv1.VirtualMachine, error) {
 	log := ctrllog.FromContext(ctx)
 
@@ -840,8 +1353,11 @@ func (r *ComputeInstanceReconciler) findKubeVirtVMs(ctx context.Context, targetC
 	return &kubeVirtVMList.Items[0], nil
 }
 
-func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, targetClient client.Client, instance *v1alpha1.ComputeInstance,
-	kv *kubevirtv1.VirtualMachine) error {
+// handleKubeVirtVM records the VM reference and sets the Provisioned and
+// RestartRequired conditions from the KubeVirt VM. Ready and the address are
+// set by reconcileNetworkStatus and reconcileReadyCondition.
+func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, instance *v1alpha1.ComputeInstance,
+	kv *kubevirtv1.VirtualMachine) {
 	log := ctrllog.FromContext(ctx)
 
 	name := kv.GetName()
@@ -897,46 +1413,6 @@ func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, target
 		}
 	}
 
-	// Ready mirrors VirtualMachine.Status.Ready, synced from the VirtualMachineInstance
-	// Ready condition (set by the virt-launcher pod's readiness probe).
-	oldReadyStatus := conditionStatus(instance, v1alpha1.ComputeInstanceConditionReady)
-	instance.Status.ComputeNetworkAttachmentStatuses = nil
-	if kvVMHasConditionWithStatus(kv, kubevirtv1.VirtualMachineReady, corev1.ConditionTrue) {
-		ipAddress := r.getDefaultVMIIPAddress(ctx, targetClient, kv.GetNamespace(), name)
-
-		if ipAddress != "" && len(instance.Spec.NetworkAttachments) == 1 {
-			subnetRef := instance.Spec.NetworkAttachments[0].SubnetRef
-			subnet := &v1alpha1.Subnet{}
-			if err := r.Get(ctx, types.NamespacedName{Name: subnetRef, Namespace: instance.Namespace}, subnet); err != nil {
-				return fmt.Errorf("failed to get Subnet CR %s for ComputeInstance network status: %w", subnetRef, err)
-			}
-			subnetID := subnet.Labels[osacSubnetIDLabel]
-			if subnetID == "" {
-				return fmt.Errorf("subnet CR %s is missing the %s label", subnetRef, osacSubnetIDLabel)
-			}
-			if !isCanonicalIPv4AddressInSubnet(ipAddress, subnet.Spec.IPv4CIDR) {
-				log.Info("ignoring default VMI interface IP outside the attached Subnet IPv4 CIDR",
-					"computeinstance", instance.GetName(), "ipAddress", ipAddress,
-					"subnet", subnetRef, "subnetIPv4CIDR", subnet.Spec.IPv4CIDR)
-				ipAddress = ""
-			} else {
-				instance.Status.ComputeNetworkAttachmentStatuses = []v1alpha1.ComputeNetworkAttachmentStatus{{
-					SubnetRef: subnetID,
-					IPAddress: ipAddress,
-				}}
-			}
-		}
-
-		log.Info("KubeVirt virtual machine (kubevirt resource) is ready", "computeinstance", instance.GetName(), "ipAddress", ipAddress)
-		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
-		instance.SetIPAddress(ipAddress)
-		if oldReadyStatus != metav1.ConditionTrue {
-			r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, eventReasonReady, eventActionReconcile, "VirtualMachine is ready, IP: %s", ipAddress)
-		}
-	} else {
-		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
-	}
-
 	// RestartRequired mirrors KubeVirt's RestartRequired condition, which is set when
 	// CPU/memory/device changes have been applied to the VM spec but require a reboot.
 	if kvVMHasConditionWithStatus(kv, kubevirtv1.VirtualMachineRestartRequired, corev1.ConditionTrue) {
@@ -944,45 +1420,16 @@ func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, target
 	} else {
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionRestartRequired, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 	}
+}
 
+// handleDesiredConfigVersion sets status.desiredConfigVersion to the hash of spec.
+func (r *ComputeInstanceReconciler) handleDesiredConfigVersion(_ context.Context, instance *v1alpha1.ComputeInstance) error {
+	version, err := provisioning.ComputeDesiredConfigVersion(instance.Spec)
+	if err != nil {
+		return err
+	}
+	instance.Status.DesiredConfigVersion = version
 	return nil
-}
-
-// isCanonicalIPv4AddressInSubnet accepts only a canonical IPv4 address contained
-// by the attached Subnet CIDR. VMI status is guest-reported, so it must not be
-// published as a tenant attachment address or used as an ExternalIP DNAT target
-// unless it belongs to that Subnet.
-func isCanonicalIPv4AddressInSubnet(ipAddress, subnetCIDR string) bool {
-	address, err := netip.ParseAddr(ipAddress)
-	if err != nil || !address.Is4() || address.String() != ipAddress {
-		return false
-	}
-
-	prefix, err := netip.ParsePrefix(subnetCIDR)
-	if err != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() {
-		return false
-	}
-
-	return prefix.Contains(address)
-}
-
-// getDefaultVMIIPAddress fetches the VirtualMachineInstance and returns the IP for its default network interface.
-func (r *ComputeInstanceReconciler) getDefaultVMIIPAddress(ctx context.Context, targetClient client.Client, namespace, name string) string {
-	log := ctrllog.FromContext(ctx)
-
-	vmi := &kubevirtv1.VirtualMachineInstance{}
-	if err := targetClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, vmi); err != nil {
-		log.Error(err, "failed to get VirtualMachineInstance", "namespace", namespace, "name", name)
-		return ""
-	}
-	for _, iface := range vmi.Status.Interfaces {
-		if iface.Name == "default" {
-			return iface.IP
-		}
-	}
-
-	log.Info("no IP address found for default VirtualMachineInstance interface", "namespace", namespace, "name", name)
-	return ""
 }
 
 func kvVMGetCondition(vm *kubevirtv1.VirtualMachine, cond kubevirtv1.VirtualMachineConditionType) *kubevirtv1.VirtualMachineCondition {
@@ -1142,23 +1589,6 @@ func determinePhaseFromPrintableStatus(ctx context.Context, kv *kubevirtv1.Virtu
 			"printableStatus", kv.Status.PrintableStatus)
 		return v1alpha1.ComputeInstancePhaseFailed
 	}
-}
-
-func (r *ComputeInstanceReconciler) provisionState(instance *v1alpha1.ComputeInstance) *provisioning.State {
-	return &provisioning.State{
-		Jobs:                 &instance.Status.ProvisioningJobs,
-		DesiredConfigVersion: instance.Status.DesiredConfigVersion,
-	}
-}
-
-// handleDesiredConfigVersion sets status.desiredConfigVersion to the hash of spec.
-func (r *ComputeInstanceReconciler) handleDesiredConfigVersion(ctx context.Context, instance *v1alpha1.ComputeInstance) error {
-	version, err := provisioning.ComputeDesiredConfigVersion(instance.Spec)
-	if err != nil {
-		return err
-	}
-	instance.Status.DesiredConfigVersion = version
-	return nil
 }
 
 // recordRunningConfig records the desired config version that is actually running, so the
@@ -1386,35 +1816,29 @@ func unresolvedRequestedTiers(
 	return out
 }
 
-// willTriggerProvisioning reports whether handleProvisioning will trigger a new
-// provisioning job on this reconcile pass. When false (manual management state,
-// nil provider, or EvaluateAction returning Skip, Poll, Requeue, or Backoff with
-// delay remaining), storage context resolution and readiness gating are skipped
-// so steady-state VM/VMI updates, job polls, and active backoff waits make zero
-// gRPC or StorageClass API calls.
+// willTriggerProvisioning reports whether handleProvisioning may start the
+// provision job on this reconcile pass: it mirrors handleProvisioning and
+// Engine.Run. It is true with no job yet, after a job that ended when the spec
+// changed since it ran (provisionRerunDue), after a Cancelled job, and when a
+// retry is due. It is false with the manual management state, while a job
+// runs, during a retry backoff, and after a job that ended for this spec, which
+// includes a failed job: that failure is final until the spec changes. When
+// false, storage context resolution and readiness gating are skipped so
+// steady-state VM/VMI updates, job polls, and active backoff waits make zero
+// gRPC or StorageClass API calls, and the pass starts no job (HoldLaunch).
+//
+// A Running job can also need a new launch, when AAP lost it or it was
+// cancelled by hand. Only polling AAP shows that, so the engine ends such an
+// entry as Cancelled under HoldLaunch and this reports true on the next pass.
 func (r *ComputeInstanceReconciler) willTriggerProvisioning(
 	instance *v1alpha1.ComputeInstance,
 ) bool {
-	if r.ProvisioningProvider == nil {
-		return false
-	}
 	if val, exists := instance.Annotations[osacComputeInstanceManagementStateAnnotation]; exists && val == ManagementStateManual {
 		return false
 	}
-	provState := r.provisionState(instance)
-	action, latestJob := provisioning.EvaluateAction(provState, func() bool { return false })
-	switch action {
-	case provisioning.Trigger:
-		return true
-	case provisioning.Backoff:
-		if latestJob == nil {
-			return false
-		}
-		backoff := provisioning.ComputeBackoffFromJobs(*provState.Jobs, provState.DesiredConfigVersion)
-		return time.Since(latestJob.Timestamp.Time) >= backoff
-	default:
-		return false
-	}
+	entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
+	return provisionRerunDue(instance, entry) ||
+		r.Engine.LaunchDue(instance, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
 }
 
 // storageGateCondition returns the ComputeInstance condition that records a

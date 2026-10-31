@@ -1,0 +1,84 @@
+{
+  "ipam": {
+    "gateway_ipv4": "10.0.1.1",
+    "lb_vip_ipv4_cidrs": [
+      "10.0.1.192/26"
+    ],
+    "overlay_ipv4_cidrs": [
+      "10.0.1.0/25"
+    ],
+    "physical_ipv4_cidrs": [
+      "10.0.1.128/26"
+    ]
+  },
+  "manager": {
+    "ansible_role": "osac.templates.netris",
+    "name": "netris",
+    "type": "fabric"
+  },
+  "network_attachment": {
+    "interface": {
+      "ipv4_address": "10.0.1.17",
+      "type": "overlay"
+    },
+    "security_group_ids": [
+      "6a5b4c3d-2e1f-4a0b-9c8d-7e6f5a4b3c2e"
+    ],
+    "subnet": "8a2b4c6d-1e3f-4a5b-9c7d-2e4f6a8b0c12"
+  },
+  "resource": {
+    "apiVersion": "osac.openshift.io/v1alpha1",
+    "id": "0f1e2d3c-4b5a-4968-8776-655443322110",
+    "kind": "NetworkAttachment",
+    "metadata": {
+      "generation": 1,
+      "name": "computeinstance-0f1e2d3c-4b5a-4968-8776-655443322110",
+      "namespace": "osac-networking",
+      "uid": "00000000-0000-4000-8000-000000000006"
+    },
+    "spec": {
+      "subnet": "8a2b4c6d-1e3f-4a5b-9c7d-2e4f6a8b0c12",
+      "target": {
+        "id": "0f1e2d3c-4b5a-4968-8776-655443322110",
+        "kind": "ComputeInstance"
+      }
+    }
+  },
+  "subnet": {
+    "apiVersion": "osac.openshift.io/v1alpha1",
+    "id": "8a2b4c6d-1e3f-4a5b-9c7d-2e4f6a8b0c12",
+    "kind": "Subnet",
+    "metadata": {
+      "generation": 1,
+      "name": "subnet-8a2b4c6d",
+      "namespace": "osac-networking",
+      "uid": "00000000-0000-4000-8000-000000000002"
+    },
+    "spec": {
+      "ipv4Cidr": "10.0.1.0/24"
+    }
+  },
+  "target": {
+    "id": "0f1e2d3c-4b5a-4968-8776-655443322110",
+    "kind": "ComputeInstance"
+  },
+  "task": "apply_network_attachment",
+  "tenant": "tenant-a",
+  "virtual_network": {
+    "apiVersion": "osac.openshift.io/v1alpha1",
+    "id": "3f1c9a2e-7b4d-4e8a-9c6f-0d2e4b6a8c10",
+    "kind": "VirtualNetwork",
+    "metadata": {
+      "generation": 1,
+      "name": "vn-3f1c9a2e",
+      "namespace": "osac-networking",
+      "uid": "00000000-0000-4000-8000-000000000001"
+    },
+    "spec": {
+      "ipv4Cidr": "10.0.0.0/16"
+    },
+    "status": {
+      "l3Vni": 10001
+    }
+  }
+}

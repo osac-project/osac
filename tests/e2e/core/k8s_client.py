@@ -23,6 +23,7 @@ _RESOURCE_NOT_FOUND_RE = re.compile(
 _RESOURCE_NOT_FOUND_ALIASES = {
     "clusterorder": {"clusterorders", "clusterorders.osac.openshift.io"},
     "infraenv.agent-install.openshift.io": {"infraenvs.agent-install.openshift.io"},
+    "namespace": {"namespaces"},
     "tenant": {"tenants", "tenants.osac.openshift.io"},
 }
 
@@ -55,6 +56,10 @@ class K8sClient:
         if self.as_system_admin:
             args.extend(["--as", "system:admin"])
         return args
+
+    def base_args(self) -> list[str]:
+        """The kubectl prefix (binary, kubeconfig, impersonation) for callers that run their own commands."""
+        return self._base()
 
     def _get(self, *args: str, checked: bool = True) -> tuple[str, int]:
         if checked:
@@ -255,27 +260,27 @@ class K8sClient:
     def get_compute_instance_last_restarted_at(self, *, name: str) -> str:
         return self.get_jsonpath(resource="computeinstance", name=name, jsonpath="{.status.lastRestartedAt}")
 
-    def get_compute_instance_latest_job_id(self, *, name: str, job_type: str, checked: bool = True) -> str:
+    def _get_latest_compute_instance_job(self, *, name: str, job_type: str, checked: bool) -> dict[str, Any] | None:
         output, rc = self._get("get", "computeinstance", name, "-n", self.namespace, "-o", "json", checked=checked)
         if rc != 0:
-            return ""
-        jobs: list[dict[str, Any]] = [
-            j for j in json.loads(output).get("status", {}).get("jobs", []) if j["type"] == job_type
+            return None
+        jobs = [
+            job
+            for job in json.loads(output).get("status", {}).get("jobs", [])
+            if job.get("task") == job_type and job.get("manager") == "none"
         ]
         if not jobs:
-            return ""
-        return sorted(jobs, key=lambda j: j["timestamp"], reverse=True)[0]["jobID"]
+            return None
+        return max(jobs, key=lambda job: job.get("attempt", 0))
+
+    def get_compute_instance_latest_job_id(self, *, name: str, job_type: str, checked: bool = True) -> str:
+        job = self._get_latest_compute_instance_job(name=name, job_type=job_type, checked=checked)
+        return job.get("jobID", "") if job else ""
 
     def get_compute_instance_latest_job_state(self, *, name: str, job_type: str, checked: bool = True) -> str:
-        output, rc = self._get("get", "computeinstance", name, "-n", self.namespace, "-o", "json", checked=checked)
-        if rc != 0:
-            return ""
-        jobs: list[dict[str, Any]] = [
-            j for j in json.loads(output).get("status", {}).get("jobs", []) if j["type"] == job_type
-        ]
-        if not jobs:
-            return ""
-        return sorted(jobs, key=lambda j: j["timestamp"], reverse=True)[0].get("state", "")
+        job = self._get_latest_compute_instance_job(name=name, job_type=job_type, checked=checked)
+        state = job.get("state", "") if job else ""
+        return "Canceled" if state == "Cancelled" else state
 
     def get_compute_instance_condition_status(self, *, name: str, condition_type: str, checked: bool = True) -> str:
         output, rc = self._get("get", "computeinstance", name, "-n", self.namespace, "-o", "json", checked=checked)
@@ -294,6 +299,23 @@ class K8sClient:
 
     # VirtualNetwork queries
 
+    def get_ready_condition(self, *, resource: str, name: str, checked: bool = True) -> str:
+        """Status of the Ready condition ("True", "False", "Unknown"), or "" when absent.
+
+        Networking CRs report readiness only through this condition.
+        """
+        output, rc = self._get(
+            "get",
+            resource,
+            name,
+            "-n",
+            self.namespace,
+            "-o",
+            'jsonpath={.status.conditions[?(@.type=="Ready")].status}',
+            checked=checked,
+        )
+        return output if rc == 0 else ""
+
     def get_virtual_network_name(self, *, uuid: str, checked: bool = True) -> str:
         output, rc = self._get(
             "get",
@@ -305,12 +327,6 @@ class K8sClient:
             "-o",
             "jsonpath={.items[0].metadata.name}",
             checked=checked,
-        )
-        return output if rc == 0 else ""
-
-    def get_virtual_network_phase(self, *, name: str, checked: bool = True) -> str:
-        output, rc = self._get(
-            "get", "virtualnetwork", name, "-n", self.namespace, "-o", "jsonpath={.status.phase}", checked=checked
         )
         return output if rc == 0 else ""
 
@@ -327,12 +343,6 @@ class K8sClient:
             "-o",
             "jsonpath={.items[0].metadata.name}",
             checked=checked,
-        )
-        return output if rc == 0 else ""
-
-    def get_subnet_phase(self, *, name: str, checked: bool = True) -> str:
-        output, rc = self._get(
-            "get", "subnet", name, "-n", self.namespace, "-o", "jsonpath={.status.phase}", checked=checked
         )
         return output if rc == 0 else ""
 
@@ -464,12 +474,6 @@ class K8sClient:
         )
         return output if rc == 0 else ""
 
-    def get_external_ip_pool_phase(self, *, name: str, checked: bool = True) -> str:
-        output, rc = self._get(
-            "get", "externalippool", name, "-n", self.namespace, "-o", "jsonpath={.status.phase}", checked=checked
-        )
-        return output if rc == 0 else ""
-
     # ExternalIP queries
 
     def get_external_ip_name(self, *, uuid: str, checked: bool = True) -> str:
@@ -486,12 +490,6 @@ class K8sClient:
         )
         return output if rc == 0 else ""
 
-    def get_external_ip_state(self, *, name: str, checked: bool = True) -> str:
-        output, rc = self._get(
-            "get", "externalip", name, "-n", self.namespace, "-o", "jsonpath={.status.state}", checked=checked
-        )
-        return output if rc == 0 else ""
-
     # ExternalIPAttachment queries
 
     def get_external_ip_attachment_name(self, *, uuid: str, checked: bool = True) -> str:
@@ -505,12 +503,6 @@ class K8sClient:
             "-o",
             "jsonpath={.items[0].metadata.name}",
             checked=checked,
-        )
-        return output if rc == 0 else ""
-
-    def get_external_ip_attachment_phase(self, *, name: str, checked: bool = True) -> str:
-        output, rc = self._get(
-            "get", "externalipattachment", name, "-n", self.namespace, "-o", "jsonpath={.status.phase}", checked=checked
         )
         return output if rc == 0 else ""
 
@@ -735,12 +727,6 @@ class K8sClient:
             "-o",
             "jsonpath={.items[0].metadata.name}",
             checked=checked,
-        )
-        return output if rc == 0 else ""
-
-    def get_security_group_phase(self, *, name: str, checked: bool = True) -> str:
-        output, rc = self._get(
-            "get", "securitygroup", name, "-n", self.namespace, "-o", "jsonpath={.status.phase}", checked=checked
         )
         return output if rc == 0 else ""
 

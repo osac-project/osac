@@ -43,7 +43,7 @@ def test_storage_teardown_warnings_do_not_log_runtime_values_or_tracebacks() -> 
         assert not any(keyword.arg == "exc_info" for keyword in node.keywords)
 
 
-def test_poll_until_logs_progress_without_descriptions_or_values(
+def test_poll_until_logs_description_but_not_values(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(runner, "_PROGRESS_LOG_INTERVAL_S", 0)
@@ -55,17 +55,37 @@ def test_poll_until_logs_progress_without_descriptions_or_values(
             until=lambda value: value == "ready",
             retries=2,
             delay=0,
-            description="secret-description",
+            description="widget ready",
         )
 
+    messages = [record.getMessage() for record in caplog.records]
     assert result == "ready"
-    assert "Waiting" in caplog.text
-    assert "condition met" in caplog.text
-    assert "secret-description" not in caplog.text
+    assert any(m.startswith("Waiting for widget ready") for m in messages)
+    assert any(m.startswith("Still waiting for widget ready (attempt 1/2") for m in messages)
+    assert any(m.startswith("Done waiting for widget ready after") for m in messages)
     assert "secret-response" not in caplog.text
 
 
-def test_poll_until_timeout_does_not_expose_last_value(
+def test_poll_until_redacts_credentials_in_the_description(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runner, "_PROGRESS_LOG_INTERVAL_S", 0)
+    values = iter(["pending", "ready"])
+
+    with caplog.at_level(logging.INFO, logger=runner.logger.name):
+        runner.poll_until(
+            fn=lambda: next(values),
+            until=lambda value: value == "ready",
+            retries=2,
+            delay=0,
+            description="call with Bearer abcdefgh12345678",
+        )
+
+    assert "<redacted>" in caplog.text
+    assert "abcdefgh12345678" not in caplog.text
+
+
+def test_poll_until_timeout_reports_the_description_and_scalar_but_logs_neither(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(runner, "_PROGRESS_LOG_INTERVAL_S", 0)
@@ -75,8 +95,19 @@ def test_poll_until_timeout_does_not_expose_last_value(
             fn=lambda: "secret-response", until=lambda _: False, retries=1, delay=0, description="secret-description"
         )
 
-    assert "secret-description" not in caplog.text + str(exc.value)
-    assert "secret-response" not in caplog.text + str(exc.value)
+    # The exception reaches the failure report; the shared progress log stays free of runtime values.
+    assert "secret-response" not in caplog.text
+    assert "secret-description not reached" in str(exc.value)
+    assert "'secret-response'" in str(exc.value)
+
+
+def test_poll_until_timeout_does_not_expose_the_content_of_a_container() -> None:
+    with pytest.raises(TimeoutError) as exc:
+        runner.poll_until(
+            fn=lambda: {"key": "secret-response"}, until=lambda _: False, retries=1, delay=0, description="d"
+        )
+
+    assert "secret-response" not in str(exc.value)
 
 
 def test_poll_until_recovers_after_a_command_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -111,5 +142,5 @@ def test_poll_until_retry_error_does_not_log_command_output(
             fn=fail, until=lambda _: False, retries=2, delay=0, description="secret-description", retry_on_error=True
         )
 
-    for secret in ("secret-description", "secret-command", "secret-response"):
+    for secret in ("secret-command", "secret-response"):
         assert secret not in caplog.text + str(exc.value)

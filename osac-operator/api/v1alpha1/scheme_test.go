@@ -62,6 +62,8 @@ var _ = Describe("Scheme Registration", func() {
 			{"ExternalIPAttachment", "ExternalIPAttachmentList", &v1alpha1.ExternalIPAttachment{}, &v1alpha1.ExternalIPAttachmentList{}},
 			{"NATGateway", "NATGatewayList", &v1alpha1.NATGateway{}, &v1alpha1.NATGatewayList{}},
 			{"FabricDomain", "FabricDomainList", &v1alpha1.FabricDomain{}, &v1alpha1.FabricDomainList{}},
+			{"NetworkClass", "NetworkClassList", &v1alpha1.NetworkClass{}, &v1alpha1.NetworkClassList{}},
+			{"NetworkAttachment", "NetworkAttachmentList", &v1alpha1.NetworkAttachment{}, &v1alpha1.NetworkAttachmentList{}},
 		}
 
 		for _, e := range entries {
@@ -96,6 +98,8 @@ var _ = Describe("Scheme Registration", func() {
 				"ExternalIPAttachment", "ExternalIPAttachmentList",
 				"NATGateway", "NATGatewayList",
 				"FabricDomain", "FabricDomainList",
+				"NetworkClass", "NetworkClassList",
+				"NetworkAttachment", "NetworkAttachmentList",
 			}
 			for _, kind := range expectedKinds {
 				gvk := v1alpha1.GroupVersion.WithKind(kind)

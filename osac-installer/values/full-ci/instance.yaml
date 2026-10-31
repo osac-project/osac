@@ -5,11 +5,14 @@ global:
   osacDeploymentId: "ci/osac"
   fulfillmentTrust:
     enabled: false
-  # Keep clusterFulfillment NETWORK_STEPS_COLLECTION=ci.steps authoritative.
-  # Without this, the agentless networking facade overwrites it with
-  # agentless_net.steps (see docs/aap-configuration.md).
-  expertOverrides:
-    aap: true
+  # Provider networking disabled: networking resources become READY without
+  # provider work. The osac chart renders the Netris Fabric Manager and
+  # cudn_evpn Kubernetes Manager registrations from fabricManager and
+  # k8sManager; no Netris connection settings are needed.
+  networking:
+    provisioningEnabled: false
+    fabricManager: netris
+    k8sManager: cudn_evpn
   services:
     caas:
       enabled: true
@@ -175,7 +178,6 @@ aap:
     clusterFulfillment:
       enabled: true
       config:
-        NETWORK_STEPS_COLLECTION: "ci.steps"
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: "SingleReplica"
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "SingleReplica"
     networkFulfillment:

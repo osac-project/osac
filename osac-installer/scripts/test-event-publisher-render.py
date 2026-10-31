@@ -67,7 +67,7 @@ def check_retention_values() -> None:
         for value in values:
             result = render_status(["--set-string", f"{key}={value}"])
             assert result.returncode != 0, f"{key}={value} passed schema validation"
-            assert "does not match pattern" in result.stderr, (
+            assert "does not match pattern" in result.stderr.lower(), (
                 f"{key}={value} failed for another reason: {result.stderr}"
             )
     for key, values in valid.items():

@@ -25,10 +25,7 @@
             - name: root-disk
               disk:
                 bus: virtio
-          interfaces:
-            - name: default
-              binding:
-                name: l2bridge
+          interfaces: "{{ vm_network_interfaces }}"
           # USB tablet provides absolute cursor positioning for VNC
           inputs:
             - name: tablet
@@ -44,9 +41,7 @@
             vapic: {}
             spinlocks:
               spinlocks: 8191
-      networks:
-        - name: default
-          pod: {}
+      networks: "{{ vm_network_networks }}"
       volumes: "{{ root_disk_volume }}"
   when: guest_os_family != 'windows'
 
@@ -82,10 +77,7 @@
             - name: root-disk
               disk:
                 bus: virtio
-          interfaces:
-            - name: default
-              binding:
-                name: l2bridge
+          interfaces: "{{ vm_network_interfaces }}"
           # USB tablet provides absolute cursor positioning for VNC
           inputs:
             - name: tablet
@@ -103,9 +95,7 @@
             vapic: {}
             spinlocks:
               spinlocks: 8192
-      networks:
-        - name: default
-          pod: {}
+      networks: "{{ vm_network_networks }}"
       volumes: "{{ root_disk_volume }}"
   when: guest_os_family == 'windows'
 

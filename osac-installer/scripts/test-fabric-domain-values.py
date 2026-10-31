@@ -134,22 +134,11 @@ class FabricDomainValuesTest(unittest.TestCase):
             {"templateId": "42"},
         )
         for config in removed:
-            for expert in (False, True):
-                with self.subTest(config=config, expert=expert):
-                    values = (
-                        {
-                            "global": {"expertOverrides": {"networkClass": True}},
-                            "networkClass": {
-                                "enabled": True, "title": "Private networking",
-                                "k8sManager": "k8s_only", **config,
-                            },
-                        }
-                        if expert else {"global": {"networking": {"networkClass": config}}}
-                    )
-                    result = render(UMBRELLA, values)
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("schema", result.stderr)
-                    self.assertIn(next(iter(config)), result.stderr)
+            with self.subTest(config=config):
+                result = render(UMBRELLA, {"global": {"networking": {"networkClass": config}}})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("schema", result.stderr)
+                self.assertIn(next(iter(config)), result.stderr)
 
     def test_fabricdomain_crd_in_umbrella(self):
         docs = self.manifests(UMBRELLA)

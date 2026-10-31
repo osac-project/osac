@@ -149,7 +149,12 @@ def check_fulfillment_auth(
     assert "grant_type=client_credentials" in commands, name
     assert "client_secret@${client_secret_file}" in commands, name
     assert "printf '%s\\n' \"${access_token}\"" in commands, name
-    assert "Authorization: Bearer ${AUTH_TOKEN}" in commands, name
+    if name == "create-network-class":
+        # The NetworkClass step sends the token from Python with the CA bundle.
+        assert "export AUTH_TOKEN" in commands, name
+        assert "- name: FULFILLMENT_CA_FILE\n          value: /etc/ca-bundle/bundle.pem" in job, name
+    else:
+        assert "Authorization: Bearer ${AUTH_TOKEN}" in commands, name
     assert "/var/run/secrets/kubernetes.io/serviceaccount/token" not in commands, name
     assert "name: FULFILLMENT_ISSUER_URL" in job, name
     assert "valueFrom:\n            secretKeyRef:" in job, name
@@ -273,11 +278,6 @@ def check_profile_emergency_service_accounts() -> None:
             "osac-metering",
         },
         "bmaas-ci/instance.yaml": {
-            "admin",
-            "template-publisher",
-            "osac-metering",
-        },
-        "cudn-evpn-netris-test/instance.yaml": {
             "admin",
             "template-publisher",
             "osac-metering",

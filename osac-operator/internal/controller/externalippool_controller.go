@@ -18,358 +18,114 @@ package controller
 
 import (
 	"context"
-	"fmt"
-	"time"
+	"errors"
 
-	"k8s.io/apimachinery/pkg/api/equality"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
-	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
-	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
-	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
-	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
-	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/internal/networktask"
 )
 
-const (
-	// osacExternalIPPoolFinalizer is the finalizer for ExternalIPPool resources
-	osacExternalIPPoolFinalizer = "osac.openshift.io/externalippool-finalizer"
-)
-
-// ExternalIPPoolReconciler reconciles ExternalIPPool CRs created by the fulfillment-service.
-//
-// A ExternalIPPool defines a range of external IP addresses (CIDRs) that can be allocated
-// as individual ExternalIP resources. Implementation strategy is resolved exclusively
-// from the default NetworkClass via the dispatcher. When no manager is configured the
-// controller blocks with ReasonNoManagerConfigured rather than falling back to a
-// hardcoded default.
-//
-// The controller adds a finalizer, triggers AAP provisioning/deprovisioning jobs via
-// the shared provisioning lifecycle, and transitions phases:
-// "" -> Progressing -> Ready/Failed; on delete: Deleting.
+// ExternalIPPoolReconciler runs the Fabric create_external_ip_pool and
+// delete_external_ip_pool tasks (contract §4.10). A pool records only the
+// Fabric Manager of the NetworkClass.
 type ExternalIPPoolReconciler struct {
-	client.Client
-	APIReader            client.Reader
-	Scheme               *runtime.Scheme
-	mgr                  mcmanager.Manager
-	NetworkingNamespace  string
-	ProvisioningProvider provisioning.ProvisioningProvider
-	StatusPollInterval   time.Duration
-	MaxJobHistory        int
-	targetCluster        mc.ClusterName
-	// Resolver resolves a NetworkClass to its registered managers. Nil when the
-	// two-manager model isn't configured (no gRPC connection / networking namespace),
-	// in which case the controller always uses the legacy implementation-strategy path.
-	Resolver *dispatcher.Resolver
-	// networkClassesClient lists NetworkClasses to find the deployment singleton used
-	// as the dispatcher input. Nil when gRPC is not configured.
-	networkClassesClient privatev1.NetworkClassesClient
-	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
-	// provisioning jobs. When false, resources are set to Ready immediately.
-	NetworkProvisioningEnabled bool
+	Client              client.Client
+	Engine              *networktask.Engine
+	NetworkingNamespace string
 }
 
-// NewExternalIPPoolReconciler creates a new reconciler for ExternalIPPool resources.
-func NewExternalIPPoolReconciler(
-	mgr mcmanager.Manager,
-	networkingNamespace string,
-	provisioningProvider provisioning.ProvisioningProvider,
-	statusPollInterval time.Duration,
-	maxJobHistory int,
-	targetCluster mc.ClusterName,
-	resolver *dispatcher.Resolver,
-	networkClassesClient privatev1.NetworkClassesClient,
-) *ExternalIPPoolReconciler {
-	if mgr == nil {
-		panic("mgr must not be nil")
-	}
-	if statusPollInterval <= 0 {
-		statusPollInterval = provisioning.DefaultStatusPollInterval
-	}
-	if maxJobHistory <= 0 {
-		maxJobHistory = provisioning.DefaultMaxJobHistory
-	}
-	return &ExternalIPPoolReconciler{
-		Client:               mgr.GetLocalManager().GetClient(),
-		APIReader:            mgr.GetLocalManager().GetAPIReader(),
-		Scheme:               mgr.GetLocalManager().GetScheme(),
-		mgr:                  mgr,
-		NetworkingNamespace:  networkingNamespace,
-		ProvisioningProvider: provisioningProvider,
-		StatusPollInterval:   statusPollInterval,
-		MaxJobHistory:        maxJobHistory,
-		targetCluster:        targetCluster,
-		Resolver:             resolver,
-		networkClassesClient: networkClassesClient,
-	}
-}
-
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalippools,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalippools/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalippools/finalizers,verbs=update
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips,verbs=list
-
-// Reconcile handles create/update/delete for a ExternalIPPool CR.
-// On create/update it ensures a finalizer, resolves the implementation strategy,
-// and runs provisioning. On delete it triggers deprovisioning and removes the finalizer.
-func (r *ExternalIPPoolReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	pool := &v1alpha1.ExternalIPPool{}
-	err := r.Get(ctx, req.NamespacedName, pool)
-	if err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-
-	val, exists := pool.Annotations[osacManagementStateAnnotation]
-	if pool.ObjectMeta.DeletionTimestamp.IsZero() && exists && val == ManagementStateUnmanaged {
-		log.Info("ignoring ExternalIPPool due to management-state annotation", "management-state", val)
-		return ctrl.Result{}, nil
-	}
-
-	log.Info("start reconcile")
-
-	oldstatus := pool.Status.DeepCopy()
-
-	var res ctrl.Result
-	if pool.ObjectMeta.DeletionTimestamp.IsZero() {
-		res, err = r.handleUpdate(ctx, pool)
-	} else {
-		res, err = r.handleDelete(ctx, pool)
-	}
-
-	if !equality.Semantic.DeepEqual(pool.Status, *oldstatus) {
-		log.Info("status requires update")
-		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(pool), pool.Status); err != nil {
-			return res, err
-		}
-	}
-
-	log.Info("end reconcile")
-	return res, err
-}
-
-// handleUpdate processes a non-deleted ExternalIPPool: adds finalizer, stamps the
-// implementation-strategy annotation, and then runs provisioning.
-func (r *ExternalIPPoolReconciler) handleUpdate(ctx context.Context, pool *v1alpha1.ExternalIPPool) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	// Add finalizer if not present
-	if controllerutil.AddFinalizer(pool, osacExternalIPPoolFinalizer) {
-		if err := r.Update(ctx, pool); err != nil {
-			return ctrl.Result{}, err
-		}
-		// Re-fetch so we have the latest resourceVersion and status
-		if err := r.Get(ctx, client.ObjectKeyFromObject(pool), pool); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-
-	// Set initial phase to Progressing
-	if pool.Status.Phase == "" {
-		pool.Status.Phase = v1alpha1.ExternalIPPoolPhaseProgressing
-	}
-
-	// When networking provisioning is disabled, skip AAP job dispatch and set Ready
-	// immediately.
-	if !r.NetworkProvisioningEnabled {
-		pool.Status.Phase = v1alpha1.ExternalIPPoolPhaseReady
-		setReadyConditionTrue(&pool.Status.Conditions)
-		return ctrl.Result{}, nil
-	}
-
-	// Resolve implementation strategy exclusively from the default NetworkClass
-	// via the dispatcher. When no manager is configured the controller blocks
-	// with ReasonNoManagerConfigured instead of falling back to a spec field.
-	networkClassID, err := lookupDefaultNetworkClassID(ctx, r.networkClassesClient)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	implementationStrategy, err := resolveImplementationStrategy(
-		ctx, r.Resolver, "ExternalIPPool", networkClassID)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if implementationStrategy == "" {
-		msg := fmt.Sprintf("no fabric_manager or k8s_manager configured for ExternalIPPool (default NetworkClass %q)", networkClassID)
-		setReadyConditionBlocked(&pool.Status.Conditions, v1alpha1.ReasonNoManagerConfigured, msg)
-		log.Info("implementation strategy not set", "externalIPPool", pool.Name)
-		return ctrl.Result{}, fmt.Errorf("cannot reconcile ExternalIPPool %q: %s", pool.Name, msg)
-	}
-
-	// Stamp the implementation-strategy annotation so AAP playbooks can read it
-	// without having to look up a parent resource. Return early so the next
-	// reconciliation triggers AAP with the annotation already present on the CR.
-	if pool.Annotations == nil {
-		pool.Annotations = make(map[string]string)
-	}
-	if pool.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy {
-		log.Info("setting implementation-strategy annotation", "strategy", implementationStrategy)
-		pool.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
-		if err := r.Update(ctx, pool); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
-	}
-
-	// Compute desired config version from spec and implementation strategy
-	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(struct {
-		Spec                   v1alpha1.ExternalIPPoolSpec
-		ImplementationStrategy string
-	}{pool.Spec, implementationStrategy})
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to compute desired config version: %w", err)
-	}
-	pool.Status.DesiredConfigVersion = desiredVersion
-
-	// Set ConfigurationApplied condition to True after processing the spec
-	v1alpha1.SetExternalIPPoolStatusCondition(pool, metav1.Condition{
-		Type:               string(v1alpha1.ExternalIPPoolConditionConfigurationApplied),
-		Status:             metav1.ConditionTrue,
-		Reason:             conditionReasonConfigurationApplied,
-		Message:            conditionMessageConfigurationApplied,
-		LastTransitionTime: metav1.Now(),
+// Reconcile advances the create or delete of an ExternalIPPool.
+func (r *ExternalIPPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return reconcileNetworkResource(ctx, r.Client, r.Engine, req.NamespacedName, networkingHandlers[*v1alpha1.ExternalIPPool]{
+		kind:      kindExternalIPPool,
+		finalizer: osacExternalIPPoolFinalizer,
+		newObject: func() *v1alpha1.ExternalIPPool { return &v1alpha1.ExternalIPPool{} },
+		status:    func(o *v1alpha1.ExternalIPPool) any { return &o.Status },
+		create:    r.create,
+		remove:    r.remove,
 	})
-
-	// Set phase to Progressing on first provision (empty phase) or when spec changed
-	// after a previous success. Don't override Failed during backoff.
-	if pool.Status.Phase == "" || (pool.Status.Phase == v1alpha1.ExternalIPPoolPhaseReady &&
-		!provisioning.IsConfigApplied(&pool.Status.ProvisioningJobs, pool.Status.DesiredConfigVersion)) {
-		pool.Status.Phase = v1alpha1.ExternalIPPoolPhaseProgressing
-	}
-
-	// Handle provisioning
-	return r.handleProvisioning(ctx, pool)
 }
 
-// handleDelete sets the Deleting phase, runs deprovisioning, and removes the finalizer
-// once deprovisioning completes (or is skipped).
-func (r *ExternalIPPoolReconciler) handleDelete(ctx context.Context, pool *v1alpha1.ExternalIPPool) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-	log.Info("deleting external IP pool")
-
-	pool.Status.Phase = v1alpha1.ExternalIPPoolPhaseDeleting
-
-	// Finalizer already removed, cleanup complete
-	if !controllerutil.ContainsFinalizer(pool, osacExternalIPPoolFinalizer) {
-		return ctrl.Result{}, nil
-	}
-
-	// Gate: wait for all ExternalIP CRs allocated from this pool to be fully removed.
-	// Child ExternalIPs reference the parent pool by its fulfillment-service UUID
-	// (stored in the osac.openshift.io/externalippool-uuid label), not by K8s name.
-	poolUUID := pool.Labels[osacExternalIPPoolIDLabel]
-	ns := pool.Namespace
-
-	eipList := &v1alpha1.ExternalIPList{}
-	if err := r.List(ctx, eipList, client.InNamespace(ns)); err != nil {
-		return ctrl.Result{}, fmt.Errorf("listing ExternalIPs: %w", err)
-	}
-	for i := range eipList.Items {
-		if eipList.Items[i].Spec.Pool == poolUUID {
-			log.Info("waiting for child ExternalIP to be deleted before deprovisioning ExternalIPPool",
-				"externalIP", eipList.Items[i].Name)
-			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+func (r *ExternalIPPoolReconciler) create(ctx context.Context, pool *v1alpha1.ExternalIPPool) (ctrl.Result, error) {
+	if pool.Status.NetworkManagers == nil {
+		nc, err := readyNetworkClass(ctx, r.Client, pool.Namespace, r.Engine.ProvisioningEnabled())
+		if err != nil {
+			return ctrl.Result{}, err
 		}
+		if nc == nil {
+			networktask.SetProgressing(pool, msgWaitingForNetworkClass)
+			return waitResult(), nil
+		}
+		copyManagers(pool, nc.Status.NetworkManagers, true)
 	}
-
-	// Handle deprovisioning
-	result, err := r.handleDeprovisioning(ctx, pool)
-	if err != nil || result.RequeueAfter > 0 {
-		return result, err
-	}
-
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(pool, osacExternalIPPoolFinalizer)
-	if err := r.Update(ctx, pool); err != nil {
+	input, store, err := inputOf(pool, func() (map[string]any, error) {
+		resource, err := networktask.Snapshot(pool, kindExternalIPPool, pool.Spec, "cidrs")
+		if err != nil {
+			return nil, err
+		}
+		return networktask.NewInput(pool, kindExternalIPPool, resource), nil
+	}, nil)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
-
-	return ctrl.Result{}, nil
-}
-
-// handleProvisioning delegates to the shared provisioning lifecycle, which triggers
-// an AAP job (e.g., osac-create-external-ip-pool) and polls its status until completion.
-func (r *ExternalIPPoolReconciler) handleProvisioning(ctx context.Context, pool *v1alpha1.ExternalIPPool) (ctrl.Result, error) {
-	if r.ProvisioningProvider == nil {
-		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping provisioning")
+	if !r.Engine.ProvisioningEnabled() {
+		networktask.SetProvisioningDisabled(pool, networktask.CreateExternalIPPool)
+		return ctrl.Result{}, store()
+	}
+	req := taskRequest(pool, kindExternalIPPool, networktask.CreateExternalIPPool, v1alpha1.NetworkJobManagerFabric, input)
+	req.BeforeLaunch = store
+	out, err := r.Engine.Run(ctx, pool, req)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if out.Succeeded() {
+		networktask.SetSucceeded(pool)
 		return ctrl.Result{}, nil
 	}
+	reportOutcome(pool, out)
+	return outcomeResult(out), nil
+}
 
-	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, pool,
-		&provisioning.State{Jobs: &pool.Status.ProvisioningJobs, DesiredConfigVersion: pool.Status.DesiredConfigVersion},
-		r.MaxJobHistory, r.StatusPollInterval,
-		&provisioning.PollCallbacks{
-			OnFailed: func(message string) {
-				pool.Status.Phase = v1alpha1.ExternalIPPoolPhaseFailed
-				setReadyConditionFailed(&pool.Status.Conditions, message)
-			},
-			OnSuccess: func(_ provisioning.ProvisionStatus) {
-				pool.Status.Phase = v1alpha1.ExternalIPPoolPhaseReady
-				setReadyConditionTrue(&pool.Status.Conditions)
-			},
-		},
-		func() bool {
-			return provisioning.CheckAPIServerForNonTerminalProvisionJob(
-				ctx, r.APIReader, client.ObjectKeyFromObject(pool), &v1alpha1.ExternalIPPool{}, func(obj client.Object) []v1alpha1.JobStatus {
-					return obj.(*v1alpha1.ExternalIPPool).Status.ProvisioningJobs
-				})
-		},
-		func() error {
-			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(pool), pool.Status)
-		},
+func (r *ExternalIPPoolReconciler) remove(ctx context.Context, pool *v1alpha1.ExternalIPPool) (bool, ctrl.Result, error) {
+	if id := pool.Labels[osacExternalIPPoolIDLabel]; id != "" {
+		used, err := anyItem(ctx, r.Client, &v1alpha1.ExternalIPList{}, pool.Namespace, func(o client.Object) bool {
+			return o.(*v1alpha1.ExternalIP).Spec.Pool == id
+		})
+		if err != nil || used {
+			return false, waitResult(), err
+		}
+	}
+	input := cleanupInput(pool)
+	return runCleanup(ctx, r.Engine, pool, kindExternalIPPool,
+		cleanupTask{create: networktask.CreateExternalIPPool, manager: v1alpha1.NetworkJobManagerFabric,
+			request: func() networktask.Request {
+				return taskRequest(pool, kindExternalIPPool, networktask.DeleteExternalIPPool, v1alpha1.NetworkJobManagerFabric, input)
+			}},
 	)
 }
 
-// handleDeprovisioning triggers an AAP deprovisioning job (e.g., osac-delete-external-ip-pool)
-// and polls its status. On failure, it either blocks deletion (to prevent orphaned
-// resources) or allows the process to continue, depending on provider policy.
-func (r *ExternalIPPoolReconciler) handleDeprovisioning(ctx context.Context, pool *v1alpha1.ExternalIPPool) (ctrl.Result, error) {
-	if !r.NetworkProvisioningEnabled {
-		ctrllog.FromContext(ctx).Info("network provisioning disabled, skipping deprovisioning")
-		return ctrl.Result{}, nil
-	}
-
-	if r.ProvisioningProvider == nil {
-		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
-		return ctrl.Result{}, nil
-	}
-	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, pool,
-		&pool.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
-	if err != nil || !done {
-		return result, err
-	}
-	return ctrl.Result{}, nil
-}
-
-// updateStatusWithRetry updates the external IP pool status with retry on conflict.
-func (r *ExternalIPPoolReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.ExternalIPPoolStatus) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		latest := &v1alpha1.ExternalIPPool{}
-		if err := r.Get(ctx, key, latest); err != nil {
-			return err
-		}
-		latest.Status = newStatus
-		return r.Status().Update(ctx, latest)
-	})
-}
-
-// SetupWithManager registers this controller with the multicluster manager.
-// It watches ExternalIPPool CRs in the networking namespace on the local cluster only.
+// SetupWithManager registers the controller. NetworkClass events re-queue
+// waiting pools; ExternalIP events re-queue their pool.
 func (r *ExternalIPPoolReconciler) SetupWithManager(mgr mcmanager.Manager) error {
-	return mcbuilder.ControllerManagedBy(mgr).
-		For(&v1alpha1.ExternalIPPool{},
-			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
-			mcbuilder.WithEngageWithLocalCluster(true),
-			mcbuilder.WithEngageWithProviderClusters(false)).
+	localMgr := mgr.GetLocalManager()
+	if localMgr == nil {
+		return errors.New("local manager is nil")
+	}
+	ns := r.NetworkingNamespace
+	inNamespace := builder.WithPredicates(NetworkingNamespacePredicate(ns))
+	poolList := func() client.ObjectList { return &v1alpha1.ExternalIPPoolList{} }
+	return ctrl.NewControllerManagedBy(localMgr).
+		Named("externalippool").
+		For(&v1alpha1.ExternalIPPool{}, inNamespace).
+		Watches(&v1alpha1.NetworkClass{}, enqueueWhere(r.Client, ns, poolList, func(obj, _ client.Object) bool {
+			return obj.(*v1alpha1.ExternalIPPool).Status.NetworkManagers == nil
+		}), inNamespace).
+		Watches(&v1alpha1.ExternalIP{}, enqueueWhere(r.Client, ns, poolList, func(obj, trigger client.Object) bool {
+			return triggerID(obj, kindExternalIPPool) == trigger.(*v1alpha1.ExternalIP).Spec.Pool
+		}), inNamespace).
 		Complete(r)
 }

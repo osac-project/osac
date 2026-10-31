@@ -30,7 +30,9 @@ OSAC distinguishes between two cluster roles:
 Management and target clusters may be the same cluster or different clusters. When the
 operator is configured with `OSAC_REMOTE_CLUSTER_KUBECONFIG`, it uses that kubeconfig to
 reach the target cluster. When that variable is not set, the operator uses the cluster it is
-running on as both management and target.
+running on as both management and target. A remote target cluster is supported only with
+provider networking disabled (`global.networking.provisioningEnabled=false`): the network
+managers work on the management cluster, so the operator refuses to start with both.
 
 ### Operator namespace
 
@@ -388,17 +390,16 @@ To create a dedicated class, follow [Step 3a](#step-3a-dedicated-tenant-storagec
 
 ### Networking CRDs must be applied when upgrading
 
-The `SecurityGroup`, `Subnet`, and `VirtualNetwork` CRDs were added as part of the
-networking work in the OSAC operator. If you are upgrading an existing deployment that
+The networking CRDs (`VirtualNetwork`, `Subnet`, `SecurityGroup`, `NetworkClass`,
+`NetworkAttachment`, and the external IP, NAT gateway, and FabricDomain CRDs) are part of
+the OSAC operator. If you are upgrading an existing deployment that
 predates this work, these CRDs will not exist on your cluster and the operator will fail to
 start because it cannot set up watches for these resource types.
 
 Apply the CRDs before (re)starting the operator:
 
 ```bash
-oc apply -f config/crd/bases/osac.openshift.io_securitygroups.yaml
-oc apply -f config/crd/bases/osac.openshift.io_subnets.yaml
-oc apply -f config/crd/bases/osac.openshift.io_virtualnetworks.yaml
+oc apply -f config/crd/bases/
 ```
 
 Also update the operator's ClusterRole to include the new permissions:
@@ -419,10 +420,12 @@ Verify all controllers start:
 oc logs -l control-plane=controller-manager -n osac-devel --tail=50 | grep "Starting Controller"
 ```
 
-> **Note:** VirtualNetwork and Subnet objects are not yet required for ComputeInstance
-> creation to work. The CRDs must exist so the operator can start, but you do not need to
-> create any VirtualNetwork or Subnet objects to provision a VM at this time. This guide will
-> be updated when network attachment becomes a required step.
+> **Note:** With provider networking enabled (`global.networking.provisioningEnabled`),
+> every ComputeInstance attaches to a Subnet. Through the fulfillment API, a ComputeInstance
+> without a network attachment gets the tenant's default networking. A ComputeInstance CR
+> applied directly must carry the `osac.openshift.io/compute-instance-id` label and
+> `spec.networkAttachments` with a Subnet and SecurityGroups, or its `NetworkReady`
+> condition fails. See the [Networking Guide](networking-guide.md).
 
 ---
 

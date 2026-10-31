@@ -11,6 +11,7 @@ from tests.e2e.core.runner import run, run_unchecked
 
 PUBLIC_API: str = "osac.public.v1"
 PRIVATE_API: str = "osac.private.v1"
+DEFAULT_HOST_LABEL_SELECTOR = {"osac.openshift.io/host-type": "default"}
 
 
 def _metadata(*, name: str, tenant: str | None = None, project: str | None = None) -> dict[str, str]:
@@ -607,7 +608,7 @@ class GRPCClient:
         tenant: str = "shared",
     ) -> str:
         """Create a BareMetalInstanceType via the private API."""
-        selector = host_label_selector or {"osac.openshift.io/host-type": "default"}
+        selector = host_label_selector or DEFAULT_HOST_LABEL_SELECTOR
         ports = network_ports or [
             {"name": "ens5", "role": "fabric", "type": "Ethernet", "speed": "10Gbps"},
             {"name": "ens4", "role": "management", "type": "Ethernet", "speed": "10Gbps"},
@@ -749,7 +750,10 @@ class GRPCClient:
     def delete_baremetal_instance(self, *, bmi_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.BareMetalInstances/Delete", data={"id": bmi_id})
 
-    def create_baremetal_instance_type(self, *, name: str, host_type_label: str, fabric_port: str) -> str:
+    def create_baremetal_instance_type(
+        self, *, name: str, fabric_port: str, host_label_selector: dict[str, str] | None = None
+    ) -> str:
+        selector = host_label_selector or DEFAULT_HOST_LABEL_SELECTOR
         response = self.call(
             service=f"{PRIVATE_API}.BareMetalInstanceTypes/Create",
             data={
@@ -763,7 +767,7 @@ class GRPCClient:
                                 {"name": fabric_port, "role": "fabric", "type": "Ethernet", "speed": "10Gbps"}
                             ],
                         },
-                        "host_label_selector": {"match_labels": {"osac.openshift.io/host-type": host_type_label}},
+                        "host_label_selector": {"match_labels": selector},
                     },
                 }
             },

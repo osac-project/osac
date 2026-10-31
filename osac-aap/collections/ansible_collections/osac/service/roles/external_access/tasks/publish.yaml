@@ -1,0 +1,21 @@
+---
+# Publish caller-provided endpoint addresses for the operator to reconcile.
+- name: Write VIP annotations to ClusterOrder
+  kubernetes.core.k8s:
+    state: patched
+    definition:
+      apiVersion: osac.openshift.io/v1alpha1
+      kind: ClusterOrder
+      metadata:
+        name: "{{ cluster_order.metadata.name }}"
+        namespace: "{{ cluster_order.metadata.namespace }}"
+        annotations:
+          osac.openshift.io/api-endpoint: "{{ external_access_api_internal_ip }}"
+          osac.openshift.io/ingress-endpoint: >-
+            {{ external_access_metallb_ingress_ip | default(external_access_ingress_ip, true) }}
+  when:
+    - external_access_api_internal_ip | default('') | length > 0
+    - >-
+      (external_access_metallb_ingress_ip | default('') | length > 0) or
+      (external_access_ingress_ip | default('') | length > 0)
+  no_log: true

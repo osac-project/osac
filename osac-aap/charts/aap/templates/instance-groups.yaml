@@ -22,7 +22,7 @@
 {{- end -}}
 {{- $netris := $globalNetworking.netris | default dict -}}
 {{- $netrisEnabled := eq $fabricManager "netris" -}}
-{{- $agentlessEnabled := eq $k8sManager "k8s_only" -}}
+{{- $agentlessEnabled := or (eq $fabricManager "agentless_net") (eq $k8sManager "k8s_only") -}}
 {{- $netExpert := false -}}
 {{- if and .Values.global .Values.global.expertOverrides }}
 {{- $netExpert = .Values.global.expertOverrides.aap | default false -}}

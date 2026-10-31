@@ -78,7 +78,7 @@ def bmi_instance_type_for_tests(grpc: GRPCClient, *, template_name: str, configu
         return
 
     name = unique_name("e2e-bmi-type")
-    type_id = grpc.create_baremetal_instance_type(name=name, host_type_label="default", fabric_port="data-0")
+    type_id = grpc.create_baremetal_instance_type(name=name, fabric_port="data-0")
     try:
         yield name
     finally:

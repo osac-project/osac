@@ -1,5 +1,16 @@
 ---
-- name: Include network-class-specific delete tasks
+- name: Validate the network steps collection
+  ansible.builtin.assert:
+    that:
+      - network_steps_collection | default('') | length > 0
+    fail_msg: >-
+      NETWORK_STEPS_COLLECTION must identify the network steps collection for
+      the generic external-access flow.
+
+- name: Include network-class-specific external access delete tasks
   ansible.builtin.include_role:
     name: "{{ network_steps_collection }}.external_access"
     tasks_from: delete.yaml
+
+- name: Clear backend endpoint annotations
+  ansible.builtin.include_tasks: clear.yaml

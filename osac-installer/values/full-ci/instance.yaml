@@ -5,11 +5,6 @@ global:
   osacDeploymentId: "ci/osac"
   fulfillmentTrust:
     enabled: false
-  # Keep clusterFulfillment NETWORK_STEPS_COLLECTION=ci.steps authoritative.
-  # Without this, the agentless networking facade overwrites it with
-  # agentless_net.steps (see docs/aap-configuration.md).
-  expertOverrides:
-    aap: true
   services:
     caas:
       enabled: true
@@ -46,6 +41,7 @@ operator:
   controllers:
     tenant: true
     networking: true
+    networkingProvisioning: false
     storage: true
   hubAccess:
     enabled: true
@@ -149,8 +145,6 @@ ui:
         caBundle:
           configMap: ca-bundle
   auth:
-    # oidcIssuerURL defaults to match service.auth.issuerUrl -- set automatically
-    # by install-osac via --set ui.auth.oidcIssuerURL when global.clusterDomain is set.
     certs:
       caBundle:
         configMap: ca-bundle
@@ -175,7 +169,6 @@ aap:
     clusterFulfillment:
       enabled: true
       config:
-        NETWORK_STEPS_COLLECTION: "ci.steps"
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: "SingleReplica"
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "SingleReplica"
     networkFulfillment:

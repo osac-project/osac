@@ -14,7 +14,7 @@ from tests.e2e.caas.sanity.test_cluster_create import (
 )
 from tests.e2e.core.fulfillment_trust import assert_cluster_trust, assert_management_tls
 from tests.e2e.core.grpc_client import GRPCClient
-from tests.e2e.core.helpers import unique_name
+from tests.e2e.core.helpers import unique_name, wait_for_cluster_order_cr
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
@@ -68,18 +68,18 @@ def test_cluster_create_with_two_node_sets(
             pull_secret=pull_secret_name,
             ssh_public_key_file=ssh_public_key_path,
         )
+        co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=uuid)
         cluster = assert_cluster_with_two_node_sets_available(
             grpc=grpc, k8s=k8s_hub_client, metering=metering, uuid=uuid, instance_types=instance_types
         )
-        co_name = cluster.co_name
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
             assert_management_tls(k8s_hub_client, require_metering=True)
-            assert_cluster_trust(k8s_hub_client, cluster.co_name)
+            assert_cluster_trust(k8s_hub_client, co_name)
         evidence["phase"] = "install-completed"
 
         jwt_grpc_tenant1: GRPCClient = request.getfixturevalue("jwt_grpc_tenant1")
         refs = upgrade._cluster_references(
-            k8s=k8s_hub_client, uuid=uuid, co_name=cluster.co_name, expected_node_sets=set(instance_types)
+            k8s=k8s_hub_client, uuid=uuid, co_name=co_name, expected_node_sets=set(instance_types)
         )
         baseline = upgrade._ready_baseline(k8s=k8s_hub_client, grpc=grpc, refs=refs)
         target_version, target_created = upgrade._catalog_version(

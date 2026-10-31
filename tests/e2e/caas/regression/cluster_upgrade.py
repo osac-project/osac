@@ -369,21 +369,39 @@ def _check_hypershift_failure(resource: dict[str, Any], component: str) -> None:
 
 
 def _assert_unchanged(
-    snapshot: dict[str, Any], *, images: dict[str, str], versions: dict[str, str], hosted_image: str | None = None
+    snapshot: dict[str, Any], *, baseline_pools: dict[str, dict[str, Any]], hosted_image: str | None = None
 ) -> None:
     """Keep unselected HyperShift components at their baseline."""
     if hosted_image is not None:
         assert snapshot["hosted"].get("spec", {}).get("release", {}).get("image") == hosted_image, (
             "Unselected HostedCluster image changed"
         )
-    for node_set, image in images.items():
+    for node_set, baseline_pool in baseline_pools.items():
         pool = snapshot["pools"][node_set]
-        assert pool.get("spec", {}).get("release", {}).get("image") == image, (
-            f"Unselected {node_set} NodePool image changed"
-        )
-        assert pool.get("status", {}).get("version") == versions[node_set], (
+
+        assert pool.get("spec", {}).get("release", {}).get("image") == (
+            baseline_pool.get("spec", {}).get("release", {}).get("image")
+        ), f"Unselected {node_set} NodePool image changed"
+
+        assert pool.get("status", {}).get("version") == baseline_pool.get("status", {}).get("version"), (
             f"Unselected {node_set} NodePool version changed"
         )
+
+        assert pool.get("spec", {}).get("replicas") == baseline_pool.get("spec", {}).get("replicas"), (
+            f"Unselected {node_set} NodePool replica count changed"
+        )
+
+        assert pool.get("metadata", {}).get("labels", {}).get("osac.openshift.io/instance_type") == (
+            baseline_pool.get("metadata", {}).get("labels", {}).get("osac.openshift.io/instance_type")
+        ), f"Unselected {node_set} NodePool instance type changed"
+
+        assert pool.get("spec", {}).get("platform", {}).get("agent", {}).get("agentLabelSelector") == (
+            baseline_pool.get("spec", {}).get("platform", {}).get("agent", {}).get("agentLabelSelector")
+        ), f"Unselected {node_set} NodePool agent selector changed"
+
+        assert sorted(_condition_summary(pool), key=lambda condition: condition["type"]) == sorted(
+            _condition_summary(baseline_pool), key=lambda condition: condition["type"]
+        ), f"Unselected {node_set} NodePool conditions changed"
 
 
 def _cp_started(hosted: dict[str, Any], target_image: str) -> bool:
@@ -498,8 +516,6 @@ def _upgrade_control_plane(
     evidence: dict[str, Any],
 ) -> dict[str, Any]:
     """Submit the control-plane version edit and await HyperShift completion."""
-    old_images = {name: pool["spec"]["release"]["image"] for name, pool in baseline["pools"].items()}
-    old_versions = {name: pool["status"]["version"] for name, pool in baseline["pools"].items()}
     prior_job_ids = {job["jobID"] for job in baseline["order"].get("status", {}).get("provisioningJobs", [])}
     target_image = target["image"]
 
@@ -519,7 +535,7 @@ def _upgrade_control_plane(
         current = _snapshot(k8s=k8s, grpc=grpc, refs=refs)
         _warn_readiness_mismatch(current, reported)
         _check_cluster_failure(current)
-        _assert_unchanged(current, images=old_images, versions=old_versions)
+        _assert_unchanged(current, baseline_pools=baseline["pools"])
         assert current["cluster"]["spec"]["version"]["name"] == target["name"]
         _check_hypershift_failure(current["hosted"], "control plane")
         job = _new_provision_job(current, prior_job_ids)
@@ -595,12 +611,7 @@ def _upgrade_node_pool(
         current = _snapshot(k8s=k8s, grpc=grpc, refs=refs)
         _warn_readiness_mismatch(current, reported)
         _check_cluster_failure(current)
-        _assert_unchanged(
-            current,
-            images={unchanged_node_set: unchanged_pool["spec"]["release"]["image"]},
-            versions={unchanged_node_set: unchanged_pool["status"]["version"]},
-            hosted_image=target_image,
-        )
+        _assert_unchanged(current, baseline_pools={unchanged_node_set: unchanged_pool}, hosted_image=target_image)
         assert _cp_completed(current["hosted"], target_image), "Control plane is not completed and healthy"
         assert current["cluster"]["spec"]["nodeSets"][upgraded_node_set]["version"]["name"] == target["name"]
         assert current["order"]["spec"].get("releaseImage") == target_image
@@ -699,6 +710,7 @@ def _cleanup(
             target=log_deletion_diagnostics, daemon=True, name="caas-deletion-diagnostics"
         )
 
+        wait_error: BaseException | None = None
         try:
             if uuid is not None:
                 if not delete_cluster_requested:
@@ -707,6 +719,8 @@ def _cleanup(
                     diagnostics_thread.start()
                     try:
                         wait_for_cluster_deletion_without_cleanup(k8s=k8s, name=co_name)
+                    except BaseException as exc:
+                        wait_error = exc
                     finally:
                         diagnostics_stop.set()
                         latest_diagnostics: dict[str, Any] | None = None
@@ -723,7 +737,13 @@ def _cleanup(
                             elapsed_seconds=time.monotonic() - deletion_started,
                             final=True,
                         )
-                wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
+                try:
+                    wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
+                except BaseException as exc:
+                    if wait_error is None:
+                        wait_error = exc
+                if wait_error is not None:
+                    raise wait_error
         except BaseException as exc:
             first_error = exc
         for version_id in reversed(created_version_ids):

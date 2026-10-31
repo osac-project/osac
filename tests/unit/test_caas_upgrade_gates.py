@@ -88,24 +88,62 @@ def test_readiness_mismatch_warns_once_per_observed_state(caplog: pytest.LogCapt
 
 def test_unselected_components_survive_independent_cluster_state_change() -> None:
     """Upgrade checks do not own the Cluster's provisioning state."""
+    baseline_pool = {
+        "metadata": {"labels": {"osac.openshift.io/instance_type": "gpu-instance-type"}},
+        "spec": {
+            "replicas": 1,
+            "release": {"image": "source-image"},
+            "platform": {
+                "agent": {
+                    "agentLabelSelector": {
+                        "matchLabels": {
+                            "osac.openshift.io/clusterorder": "order-a",
+                            "osac.openshift.io/node-set": "gpu",
+                        }
+                    }
+                }
+            },
+        },
+        "status": {
+            "version": "4.22.0",
+            "conditions": [
+                {"type": "Ready", "status": "True", "reason": "AsExpected"},
+                {"type": "AllMachinesReady", "status": "True", "reason": "AsExpected"},
+            ],
+        },
+    }
     snapshot = {
         "cluster": {"status": {"state": "CLUSTER_STATE_PROGRESSING"}},
         "hosted": {"spec": {"release": {"image": "target-image"}}},
-        "pools": {"gpu": {"spec": {"release": {"image": "source-image"}}, "status": {"version": "4.22.0"}}},
+        "pools": {"gpu": deepcopy(baseline_pool)},
     }
-    expected = {"images": {"gpu": "source-image"}, "versions": {"gpu": "4.22.0"}, "hosted_image": "target-image"}
+    expected = {"baseline_pools": {"gpu": baseline_pool}, "hosted_image": "target-image"}
 
     scenario._assert_unchanged(snapshot, **expected)
 
-    changed_image = deepcopy(snapshot)
-    changed_image["pools"]["gpu"]["spec"]["release"]["image"] = "unexpected-image"
-    with pytest.raises(AssertionError, match="Unselected gpu NodePool image changed"):
-        scenario._assert_unchanged(changed_image, **expected)
-
-    changed_version = deepcopy(snapshot)
-    changed_version["pools"]["gpu"]["status"]["version"] = "4.22.1"
-    with pytest.raises(AssertionError, match="Unselected gpu NodePool version changed"):
-        scenario._assert_unchanged(changed_version, **expected)
+    mutations = (
+        ("image changed", lambda pool: pool["spec"]["release"].update(image="unexpected-image")),
+        ("version changed", lambda pool: pool["status"].update(version="4.22.1")),
+        ("replica count changed", lambda pool: pool["spec"].update(replicas=2)),
+        (
+            "instance type changed",
+            lambda pool: pool["metadata"]["labels"].update(
+                **{"osac.openshift.io/instance_type": "unexpected-instance-type"}
+            ),
+        ),
+        (
+            "agent selector changed",
+            lambda pool: pool["spec"]["platform"]["agent"]["agentLabelSelector"]["matchLabels"].update(
+                **{"osac.openshift.io/node-set": "unexpected-node-set"}
+            ),
+        ),
+        ("conditions changed", lambda pool: pool["status"]["conditions"][0].update(status="False")),
+    )
+    for expected_message, mutate in mutations:
+        changed = deepcopy(snapshot)
+        mutate(changed["pools"]["gpu"])
+        with pytest.raises(AssertionError, match=f"Unselected gpu NodePool {expected_message}"):
+            scenario._assert_unchanged(changed, **expected)
 
 
 def test_cluster_failure_guard_allows_progressing() -> None:

@@ -102,6 +102,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
         }
 
     k8s.get_json.side_effect = get_resource
+    k8s.get_cluster_order_name.return_value = "order-a"
     k8s.get_cluster_order_namespace.return_value = "osac"
     k8s.get_baremetal_instance_name.side_effect = lambda *, uuid, checked: f"{uuid}-cr"
     k8s.get_cluster_order_infra_env_name.return_value = "order-a-infraenv"
@@ -182,6 +183,26 @@ def test_two_node_set_scenario_uses_same_natural_teardown_budgets(
         getattr(two_node_set_clients["k8s_hub_client"], name).assert_not_called()
 
 
+def test_two_node_set_scenario_captures_cluster_order_before_install_failure(
+    monkeypatch: pytest.MonkeyPatch, two_node_set_clients: dict[str, Mock]
+) -> None:
+    """Cleanup must know the ClusterOrder even when installation readiness fails."""
+    order_lookup = Mock(return_value="order-a")
+    install = Mock(side_effect=RuntimeError("install-failed"))
+    cleanup = Mock()
+    monkeypatch.setattr(regression, "wait_for_cluster_order_cr", order_lookup)
+    monkeypatch.setattr(regression, "assert_cluster_with_two_node_sets_available", install)
+    monkeypatch.setattr(regression.upgrade, "_cleanup", cleanup)
+
+    with pytest.raises(RuntimeError, match="install-failed"):
+        _run_scenario(two_node_set_clients)
+
+    assert order_lookup.call_args.kwargs == {"k8s": two_node_set_clients["k8s_hub_client"], "uuid": "cluster-id"}
+    install.assert_called_once()
+    cleanup.assert_called_once()
+    assert cleanup.call_args.kwargs["co_name"] == "order-a"
+
+
 def test_two_node_set_scenario_rejects_foreign_worker_before_teardown(two_node_set_clients: dict[str, Mock]) -> None:
     grpc = two_node_set_clients["grpc"]
     lookup: Callable[..., dict[str, Any]] = grpc.get_baremetal_instance.side_effect
@@ -195,5 +216,8 @@ def test_two_node_set_scenario_rejects_foreign_worker_before_teardown(two_node_s
     two_node_set_clients["cli"].delete_cluster.assert_called_once_with(uuid="cluster-id")
     scenario.wait_for_cluster_deleting.assert_not_called()
     helpers.wait_for_cluster_deletion.assert_not_called()
-    two_node_set_clients["k8s_hub_client"].is_absent.assert_not_called()
+    assert two_node_set_clients["k8s_hub_client"].is_absent.call_args_list == [
+        call(resource="clusterorder", name="order-a"),
+        call(resource="clusterorder", name="order-a"),
+    ]
     regression.upgrade._cluster_references.assert_not_called()

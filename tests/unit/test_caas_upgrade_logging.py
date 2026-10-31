@@ -85,6 +85,34 @@ def test_cleanup_logs_only_allowlisted_upgrade_evidence(
     private_grpc.delete_cluster_version.assert_called_once_with(version_id="secret-catalog-id")
 
 
+def test_cleanup_continues_grpc_removal_after_cluster_order_wait_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ClusterOrder wait failure must not skip the Fulfillment removal wait."""
+    cli, grpc, private_grpc, k8s = (Mock() for _ in range(4))
+    wait_order = Mock(side_effect=RuntimeError("order-failed"))
+    wait_grpc = Mock(side_effect=RuntimeError("grpc-failed"))
+    monkeypatch.setattr(scenario, "_deletion_diagnostics", Mock(return_value={}))
+    monkeypatch.setattr(scenario, "wait_for_cluster_deletion_without_cleanup", wait_order)
+    monkeypatch.setattr(scenario, "wait_for_cluster_grpc_removal", wait_grpc)
+
+    with pytest.raises(RuntimeError, match="order-failed"):
+        scenario._cleanup(
+            cli=cli,
+            grpc=grpc,
+            private_grpc=private_grpc,
+            k8s=k8s,
+            uuid="cluster-id",
+            co_name="order-name",
+            created_version_ids=["version-id"],
+            evidence={"phase": "node-pool-completed", "outcome": "failed"},
+            source_version=INSTALL_VERSION,
+            delete_cluster_requested=True,
+        )
+
+    wait_order.assert_called_once_with(k8s=k8s, name="order-name")
+    wait_grpc.assert_called_once_with(grpc=grpc, uuid="cluster-id")
+    private_grpc.delete_cluster_version.assert_called_once_with(version_id="version-id")
+
+
 def test_cleanup_waits_without_repeating_a_requested_cluster_delete(monkeypatch: pytest.MonkeyPatch) -> None:
     """A failed natural teardown may need another wait, not another Delete request."""
     cli, grpc, private_grpc, k8s = (Mock() for _ in range(4))

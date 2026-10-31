@@ -225,7 +225,7 @@ pbr==7.0.3
     #   python-openstackclient
 pexpect==4.9.0
     # via ansible-runner
-platformdirs==4.9.4
+platformdirs==4.14.0
     # via
     #   openstacksdk
     #   python-ironicclient

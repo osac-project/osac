@@ -30,6 +30,10 @@ _CALL_LOG = []
 def _empty_config():
     """Return the default scenario configuration with empty stores."""
     return {
+        "vpcs": [],
+        "acl_rules": [],
+        "acl_delete_status": 200,
+        "acl_retain": False,
         "vnets": [],
         "vnet_delete_status": 204,
         "ipam_subnets": [],
@@ -41,7 +45,6 @@ _CONFIG = _empty_config()
 
 
 class MockNetrisHandler(BaseHTTPRequestHandler):
-
     def _respond(self, status, payload=None):
         """Write a JSON response with the given status code and payload."""
         body = json.dumps(payload if payload is not None else {}).encode()
@@ -70,6 +73,14 @@ class MockNetrisHandler(BaseHTTPRequestHandler):
                 self._respond(200, {"calls": list(_CALL_LOG)})
         elif path == "/_health":
             self._respond(200)
+        elif path == "/_acls":
+            self._respond(200, {"data": config["acl_rules"]})
+        elif path == "/api/v2/vpc":
+            self._record("GET")
+            self._respond(200, {"data": config["vpcs"]})
+        elif path == "/api/acl":
+            self._record("GET")
+            self._respond(200, {"data": config["acl_rules"]})
         elif path == "/api/v2/vnet":
             self._record("GET")
             self._respond(200, {"data": config["vnets"]})
@@ -107,7 +118,15 @@ class MockNetrisHandler(BaseHTTPRequestHandler):
         """Serve the vnet and ipam subnet delete endpoints."""
         path = self.path.split("?")[0]
         config = self._config()
-        if path.startswith("/api/v2/vnet/"):
+        if path == "/api/acl":
+            self._record("DELETE")
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            status = int(config["acl_delete_status"])
+            if status in (200, 204, 404) and not config["acl_retain"]:
+                with _LOCK:
+                    _CONFIG["acl_rules"] = [row for row in _CONFIG["acl_rules"] if row["id"] not in body["id"]]
+            self._respond(status, {})
+        elif path.startswith("/api/v2/vnet/"):
             self._record("DELETE")
             self._respond(int(config["vnet_delete_status"]), {"message": "vnet delete"})
         elif path.startswith("/api/v2/ipam/subnet/"):

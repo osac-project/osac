@@ -377,6 +377,51 @@
             that:
               - nd04_configmap.resources | length == 0
             success_msg: "ND-04 fabric output ConfigMap removed"
+        # ND-05/06: real Kubernetes SG discovery and production teardown,
+        # with provider ACL cleanup scoped to one Subnet of a shared VN.
+        - name: Create the ACL cleanup parent VirtualNetwork fixture
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: VirtualNetwork
+              metadata:
+                name: acl-parent
+                namespace: "{{ fixture_namespace }}"
+                labels:
+                  osac.openshift.io/virtualnetwork-uuid: acl-parent-uuid
+                annotations:
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+              spec:
+                region: integration-test
+                ipv4Cidr: 192.0.0.0/16
+
+        - name: Create the shared SecurityGroup fixture
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: SecurityGroup
+              metadata:
+                name: acl-sg
+                namespace: "{{ fixture_namespace }}"
+                annotations:
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+              spec:
+                virtualNetwork: acl-parent-uuid
+
+        - name: Verify successful and failed Subnet ACL teardown
+          ansible.builtin.include_tasks: run_acl_scenario.yaml
+          loop:
+            - name: ND-05
+              status: 200
+              succeeds: true
+            - name: ND-06
+              status: 503
+              succeeds: false
+          loop_control:
+            loop_var: acl_scenario
+            label: "{{ acl_scenario.name }}"
       always:
         - name: Stop the mock Netris API fixture
           ansible.builtin.shell: "pkill -f '[m]ock_netris.py {{ mock_netris_port }}' 2>/dev/null || true"

@@ -159,6 +159,57 @@
     - is_cudn_evpn
     - _subnet_ipam_parent is not mapping
 
+# Remove only this Subnet's SG ACL rows. Shared groups and sibling rules remain.
+- name: Verify the parent VPC before Subnet ACL cleanup
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+    tasks_from: read
+  vars:
+    vpc_name: "{{ _subnet_parent_vn_name }}"
+    vpc_lookup_id: "{{ _subnet_parent_vpc_id }}"
+    vpc_tenant_id: "{{ netris_tenant_id }}"
+  when: subnet_virtual_network_id | length > 0
+
+- name: Require the expected parent VPC before Subnet ACL cleanup
+  ansible.builtin.assert:
+    that:
+      - netris_vpc is mapping
+      - netris_vpc.id | int == _subnet_parent_vpc_id | int
+    fail_msg: Cannot verify parent VPC ownership; refusing Subnet ACL cleanup.
+  when: subnet_virtual_network_id | length > 0
+
+- name: Look up SecurityGroups for Subnet ACL cleanup
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: SecurityGroup
+    namespace: "{{ subnet.metadata.namespace }}"
+  register: _subnet_security_groups
+  # An SG create that took its Subnet snapshot before deletion must finish first.
+  # Jobs starting afterwards exclude the terminating Subnet from their snapshot.
+  until: >-
+    (_subnet_security_groups.resources
+     | selectattr('spec.virtualNetwork', 'defined')
+     | selectattr('spec.virtualNetwork', 'equalto', subnet_virtual_network_id)
+     | map(attribute='status.provisioningJobs', default=[]) | flatten
+     | selectattr('state', 'in', ['Running', 'Pending']) | list | length) == 0
+  retries: 12
+  delay: 5
+  when: subnet_virtual_network_id | length > 0
+
+- name: Delete SecurityGroup ACL rules for this Subnet
+  ansible.builtin.include_role:
+    name: netris.controller.acl
+    tasks_from: delete_for_subnet
+  vars:
+    acl_vpc_id: "{{ _subnet_parent_vpc_id | default('') }}"
+    acl_subnet_cidr: "{{ subnet_ipv4_cidr }}"
+    acl_security_group_names: >-
+      {{ _subnet_security_groups.resources
+         | selectattr('spec.virtualNetwork', 'defined')
+         | selectattr('spec.virtualNetwork', 'equalto', subnet_virtual_network_id)
+         | map(attribute='metadata.name') | list }}
+  when: subnet_virtual_network_id | length > 0
+
 - name: Delete V-Net from Netris controller
   ansible.builtin.include_role:
     name: netris.controller.vnet

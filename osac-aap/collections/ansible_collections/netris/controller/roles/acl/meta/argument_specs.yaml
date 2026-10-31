@@ -74,3 +74,19 @@ argument_specs:
         type: str
         required: true
         description: "Name of the ACL rule to delete."
+
+  delete_for_subnet:
+    options:
+      acl_vpc_id:
+        type: int
+        required: true
+        description: Exact parent VPC ID for Subnet ACL cleanup.
+      acl_subnet_cidr:
+        type: str
+        required: true
+        description: Canonical IPv4 CIDR of the Subnet being deleted.
+      acl_security_group_names:
+        type: list
+        elements: str
+        required: true
+        description: SecurityGroup CR names on the parent VirtualNetwork.

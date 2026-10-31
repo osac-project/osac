@@ -31,6 +31,14 @@ last VM retain the namespace, CUDN, and assignment. Subnet deletion is blocked b
 every unarchived dependent reference, including pending, failed-retained, and
 deleting workloads. Parent/default resource deletion protections remain in force.
 
+An unused Subnet can be deleted while its VirtualNetwork's SecurityGroups remain.
+The Netris fabric delete path waits for in-flight SecurityGroup jobs, verifies the
+parent VPC, and removes only ACL rows matching that Subnet's CIDR, exact SG names,
+and VPC before deleting its V-Net/IPAM resources. Sibling ACL rows and the shared
+SecurityGroups are retained. New SG provisioning excludes terminating Subnets.
+Provider errors, ambiguous ownership, or surviving ACL rows stop teardown for retry.
+This is subnet teardown cleanup, not general SecurityGroup rule reconciliation.
+
 Once dependencies are gone, owner deletion removes the CUDN, waits for absence,
 then removes its namespace before recording completed cleanup on the same Lease.
 The old owner name remains a fence until its Subnet CR disappears. New candidates

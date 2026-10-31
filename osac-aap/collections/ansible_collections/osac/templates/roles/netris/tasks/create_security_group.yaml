@@ -60,6 +60,7 @@
       ansible.builtin.set_fact:
         _sg_subnet_cidrs: >-
           {{ _sg_all_subnets.resources | default([])
+             | rejectattr('metadata.deletionTimestamp', 'defined')
              | selectattr('spec.virtualNetwork', 'defined')
              | selectattr('spec.virtualNetwork', 'equalto', sg_virtual_network)
              | map(attribute='spec.ipv4Cidr')

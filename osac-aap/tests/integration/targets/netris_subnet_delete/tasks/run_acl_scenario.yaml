@@ -1,0 +1,128 @@
+---
+- name: Seed the Subnet ACL cleanup scenario
+  ansible.builtin.uri:
+    url: "{{ mock_netris_url }}/_config"
+    method: POST
+    body_format: json
+    body:
+      vpcs:
+        - id: 7
+          name: acl-parent
+          adminTenant:
+            id: 77
+      acl_rules:
+        - id: 10
+          name: acl-sg-egress-0-0
+          vpc:
+            id: 7
+          src_prefix: 192.0.2.0/24
+          dst_prefix: 0.0.0.0/0
+        - id: 11
+          name: acl-sg-egress-1-1
+          vpc:
+            id: 7
+          src_prefix: 198.51.100.0/24
+          dst_prefix: 0.0.0.0/0
+        - id: 12
+          name: acl-sg-egress-0-0
+          vpc:
+            id: 8
+          src_prefix: 192.0.2.0/24
+          dst_prefix: 0.0.0.0/0
+      acl_delete_status: "{{ acl_scenario.status }}"
+      vnets:
+        - id: 101
+          name: "{{ subnet_name }}"
+          vpc:
+            id: 7
+          tenantID: 77
+          sites:
+            - id: 1
+      ipam_subnets:
+        - id: 202
+          name: "{{ subnet_name }}"
+          prefix: 192.0.2.0/24
+          purpose: common
+          vpc:
+            id: 7
+          tenant:
+            id: 77
+          sites:
+            - id: 1
+    status_code: 200
+  changed_when: false
+
+- name: Create the scenario fabric output ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "{{ fabric_configmap_name }}"
+        namespace: "{{ fixture_namespace }}"
+
+- name: Run production Subnet deletion with a surviving SecurityGroup
+  ansible.builtin.include_tasks: run_delete_playbook.yaml
+  vars:
+    netris_delete_should_succeed: "{{ acl_scenario.succeeds }}"
+    netris_delete_resource:
+      metadata:
+        name: "{{ subnet_name }}"
+        namespace: "{{ fixture_namespace }}"
+        annotations:
+          osac.openshift.io/tenant: "{{ tenant_id }}"
+          osac.openshift.io/implementation-strategy: netris
+      spec:
+        ipv4Cidr: 192.0.2.0/24
+        virtualNetwork: acl-parent-uuid
+
+- name: Observe remaining provider ACL rows
+  ansible.builtin.uri:
+    url: "{{ mock_netris_url }}/_acls"
+    status_code: 200
+  register: acl_remaining
+  changed_when: false
+
+- name: Observe the provider operation order
+  ansible.builtin.uri:
+    url: "{{ mock_netris_url }}/_calls"
+    status_code: 200
+  register: acl_calls
+  changed_when: false
+
+- name: Observe shared SecurityGroup retention
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: SecurityGroup
+    namespace: "{{ fixture_namespace }}"
+    name: acl-sg
+  register: acl_shared_group
+
+- name: Observe the fabric output cleanup boundary
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    namespace: "{{ fixture_namespace }}"
+    name: "{{ fabric_configmap_name }}"
+  register: acl_configmap
+
+- name: Verify subnet-scoped cleanup and failure retention
+  ansible.builtin.assert:
+    that:
+      - acl_shared_group.resources | length == 1
+      - (acl_configmap.resources | length == 0) == (acl_scenario.succeeds | bool)
+      - >-
+        (acl_remaining.json.data | map(attribute='id') | list) ==
+        ([11, 12] if acl_scenario.succeeds else [10, 11, 12])
+      - >-
+        (acl_calls.json.calls | selectattr('path', 'equalto', '/api/v2/vnet/101') | list | length > 0)
+        == (acl_scenario.succeeds | bool)
+      - >-
+        (acl_calls.json.calls | selectattr('path', 'equalto', '/api/v2/ipam/subnet/202') | list | length > 0)
+        == (acl_scenario.succeeds | bool)
+      - acl_calls.json.calls[0].path == '/api/v2/vpc'
+      - acl_calls.json.calls[1].path == '/api/v2/vpc'
+      - acl_calls.json.calls[2] == {'method':'GET', 'path':'/api/acl'}
+      - acl_calls.json.calls[3] == {'method':'DELETE', 'path':'/api/acl'}
+      - acl_calls.json.calls | length == (9 if acl_scenario.succeeds else 4)

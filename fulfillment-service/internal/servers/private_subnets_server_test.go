@@ -1466,6 +1466,57 @@ var _ = Describe("Private subnets server", func() {
 				Expect(err.Error()).To(ContainSubstring("compute instance"))
 			})
 
+			It("allows deleting an unused sibling while a VM uses the shared SecurityGroup", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+				var subnetIDs []string
+				for i, name := range []string{"owner-subnet", "unused-sibling"} {
+					created, err := server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
+						Object: privatev1.Subnet_builder{
+							Metadata: privatev1.Metadata_builder{Name: name, Tenant: testTenant}.Build(),
+							Spec: privatev1.SubnetSpec_builder{
+								Ipv4Cidr:       new(fmt.Sprintf("10.0.%d.0/24", i+1)),
+								VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build())
+					Expect(err).ToNot(HaveOccurred())
+					subnetIDs = append(subnetIDs, created.GetObject().GetId())
+				}
+				sgDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+				Expect(err).ToNot(HaveOccurred())
+				group, err := sgDao.Create().SetObject(privatev1.SecurityGroup_builder{
+					Metadata: privatev1.Metadata_builder{Name: "shared-vm-group", Tenant: testTenant}.Build(),
+					Spec: privatev1.SecurityGroupSpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				groupID := group.GetObject().GetId()
+				_, err = computeInstancesDao.Create().SetObject(privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: "owner-vm", Tenant: testTenant}.Build(),
+					Status:   privatev1.ComputeInstanceStatus_builder{State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+							privatev1.ComputeNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: subnetIDs[0]}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+									privatev1.SecurityGroupLocalReference_builder{Id: groupID}.Build(),
+								},
+							}.Build(),
+						},
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = server.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: subnetIDs[1]}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				_, err = sgDao.Get().SetId(groupID).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				_, err = server.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: subnetIDs[0]}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(err.Error()).To(ContainSubstring("compute instance"))
+			})
+
 			It("allows deletion when no compute instances use the subnet", func() {
 				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
 

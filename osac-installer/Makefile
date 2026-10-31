@@ -546,13 +546,13 @@ validate-inputs: helm-devstack-deps
 endif
 endif
 ifeq ($(PLATFORM),kind)
-	helm template osac-infra $(INFRA_CHART) \
+	@helm template osac-infra $(INFRA_CHART) \
 		--namespace osac-infra \
 		-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set osacNamespace=$(NS) \
 		$(INFRA_HELM_ARGS) >/dev/null \
 	|| { echo "ERROR: invalid installer inputs for osac-infra; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
-	helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
+	@helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
@@ -560,7 +560,7 @@ ifeq ($(PLATFORM),kind)
 		$(EXTRA_HELM_ARGS) >/dev/null \
 	|| { echo "ERROR: invalid installer inputs for the osac chart; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
 ifeq ($(PROFILE),dev-full)
-	helm template osac-devstack $(CHARTS)/osac-devstack \
+	@helm template osac-devstack $(CHARTS)/osac-devstack \
 		--namespace $(NS) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--set osacNamespace=$(NS) \
@@ -574,13 +574,13 @@ else
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))
 	@[ -n "$(OCP_VERSION)" ] || { echo "ERROR: could not determine the OpenShift version for input validation. Is oc logged in?" >&2; exit 1; }
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: could not determine cluster domain for input validation. Is oc logged in?" >&2; exit 1; }
-	helm template osac-deps $(DEPS_CHART) \
+	@helm template osac-deps $(DEPS_CHART) \
 		--namespace osac-deps \
 		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set lvms.channel=stable-$(OCP_VERSION) \
 		$(INFRA_HELM_ARGS) >/dev/null \
 	|| { echo "ERROR: invalid installer inputs for osac-deps; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
-	helm template osac-infra $(INFRA_CHART) \
+	@helm template osac-infra $(INFRA_CHART) \
 		--namespace osac-infra \
 		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set osacNamespace=$(NS) \
@@ -591,7 +591,7 @@ else
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
 		$(INFRA_HELM_ARGS) >/dev/null \
 	|| { echo "ERROR: invalid installer inputs for osac-infra; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
-	helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
+	@helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
@@ -720,11 +720,11 @@ ifeq ($(PLATFORM),kind)
 else
 	helm template osac-deps $(DEPS_CHART) \
 		--namespace osac-deps \
-		--values $(INFRA_VALUES) \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set lvms.channel=stable-$(DRY_RUN_OCP_VERSION)
 	helm template osac-infra $(INFRA_CHART) \
 		--namespace osac-infra \
-		--values $(INFRA_VALUES) \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set osacNamespace=$(NS) \
 		--set lvms.channel=stable-$(DRY_RUN_OCP_VERSION) \
 		--set keycloak.hostname=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \

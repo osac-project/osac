@@ -118,6 +118,72 @@ TLS certificate verification defaults to `true`. Set
 `global.networking.netris.validateCerts: false` only for a trusted,
 non-production Netris endpoint using a self-signed certificate.
 
+### Netris Fabric Manager contract
+
+The Netris role implements the network manager integration contract
+(`enhancements/OSAC-1433-network-manager-integration-contract-networking`
+in `enhancement-proposals`). One `osac_job_vars` envelope arrives per task;
+the role replies with a typed `osac_result` or a sanitized `osac_error`
+carrying `retryable`.
+
+Task results:
+
+| Task | Typed result |
+|------|--------------|
+| `create_virtual_network` | `backend_id` |
+| `create_subnet` | `network_segment` when `network_type` is `evpn`, none otherwise |
+| `apply_network_attachment`, `delete_network_attachment` | None |
+| `query_dhcp_lease` | `dhcp_lease.ip_address`, `dhcp_lease.mac_address` |
+| `reserve_cluster_ingress_ip` | `cluster_ingress.address` |
+| `create_external_ip` | `external_ip.address` |
+| `create_fabric_domain` | `backend_id` |
+
+SecurityGroup, ExternalIPPool, ExternalIPAttachment, NATGateway, release,
+detach and every delete task publish no typed result.
+
+Documented no-ops, allowed by contract section 4.10:
+
+- The Fabric `create_security_group` and `delete_security_group` tasks
+  validate the rule set and create no ACL. Netris v1 ACLs are VPC-scoped
+  prefix rules that need the Subnet CIDR, which does not exist yet when the
+  group is created. The Kubernetes Manager enforces VM SecurityGroups; a
+  bare-metal port is therefore unfiltered by SecurityGroups in this release.
+- The Fabric bind in `apply_network_attachment` and the overlay attachment
+  path change nothing.
+- Fabric DHCP is skipped when `ipam.physical_ipv4_cidrs` is empty.
+
+Supported pairings:
+
+| Pairing | Status |
+|---------|--------|
+| `netris` fabric manager with no Kubernetes manager | Shipped installer pairing; contract paths unit-tested |
+| `netris` with `cudn_evpn` | Intended pair for VMaaS; needs the shared dispatch (OSAC-6766 CORE-06) and a Netris lab, so not yet advertised as validated |
+
+Prerequisites beyond the connection settings above:
+
+- The host-to-switch-port inventory mapping used by
+  `apply_network_attachment`, and the provisioning V-Net name passed as
+  `provisioning_vnet`.
+- `netris_fabric_domain_template_id` when the site needs a server-cluster
+  template; the FabricDomain snapshot does not carry one.
+
+The legacy raw-CR payload stays supported while the shared dispatch is in
+progress. `roles/netris/tasks/_contract_input.yaml` is the only
+shape-aware file. Delete it, and the legacy-only task files, in the same
+window that CORE-06 starts sending `osac_job_vars`.
+
+Reproducible checks:
+
+```bash
+cd osac-aap
+uv run --group development pytest tests/unit -q -k netris
+uv run --group development ansible-lint \
+  collections/ansible_collections/osac/templates/roles/netris
+```
+
+Lab profiles (`baremetal`, `vm`, `cluster`) are pending; see
+`docs/features/netris-caas-networking.md` for the current record.
+
 ### Netris HTTPS trust
 
 For a Netris controller signed by a private or customer CA, create the CA

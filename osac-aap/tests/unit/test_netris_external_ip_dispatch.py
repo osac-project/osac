@@ -127,10 +127,15 @@ def test_unknown_version_routes_to_no_provider_work() -> None:
     """Both routing includes must be false for a nonempty unknown version."""
     for name in ("create_external_ip", "delete_external_ip"):
         tasks = _tasks(name)
+        # The input normalizer performs no provider work, so only the
+        # provider dispatch includes must carry the version guard.
         includes = [
             task
             for task in tasks
             if task.get("ansible.builtin.include_tasks") is not None
+            and not str(task["ansible.builtin.include_tasks"]).startswith(
+                ("_contract_input", "_external_ip_contract")
+            )
         ]
         assert includes, f"{name} must dispatch through included task files"
         for include in includes:
@@ -306,3 +311,69 @@ def test_entry_points_keep_their_names_and_dispatch_through_includes() -> None:
                 assert "kubernetes.core" not in str(task.keys()), (
                     f"{name} wrapper must not issue Kubernetes writes directly"
                 )
+
+
+# --- Contract envelope routing -------------------------------------------
+
+
+def test_entry_points_route_the_contract_envelope_to_the_typed_tasks() -> None:
+    for name, operation in [
+        ("create_external_ip", "allocate"),
+        ("delete_external_ip", "release"),
+    ]:
+        tasks = _tasks(name)
+        include = next(
+            task
+            for task in tasks
+            if task.get("ansible.builtin.include_tasks") == "_external_ip_contract.yaml"
+        )
+        assert "_osac_contract" in str(include.get("when")), (
+            f"{name} must route the contract envelope on the input shape"
+        )
+        assert include["vars"]["external_ip_contract_operation"] == operation
+
+
+def test_entry_points_never_run_a_legacy_route_on_the_contract_path() -> None:
+    for name in ("create_external_ip", "delete_external_ip"):
+        tasks = _tasks(name)
+        for include in tasks:
+            target = str(include.get("ansible.builtin.include_tasks", ""))
+            if not target.startswith("_"):
+                continue
+            if target in ("_contract_input.yaml", "_external_ip_contract.yaml"):
+                continue
+            assert "not _osac_contract" in str(include.get("when")), (
+                f"{name} must not run {target} when osac_job_vars is present"
+            )
+
+
+def test_contract_tasks_emit_only_the_typed_external_ip_result() -> None:
+    tasks = _tasks("_external_ip_contract")
+    stats_task = next(task for task in tasks if "ansible.builtin.include_tasks" in task
+                      and task["ansible.builtin.include_tasks"] == "_emit_result.yaml")
+    result = next(
+        task
+        for task in tasks
+        if "external_ip" in str(task.get("ansible.builtin.set_fact", {}))
+        and "_osac_result_data" in str(task.get("ansible.builtin.set_fact", {}))
+    )
+    expression = str(result["ansible.builtin.set_fact"]["_osac_result_data"])
+    assert "'external_ip': {'address'" in expression
+    assert "schemaVersion" not in expression
+    assert "resourceUID" not in expression
+    assert "observedGeneration" not in expression
+    assert stats_task is not None
+
+
+def test_contract_tasks_publish_a_sanitized_error() -> None:
+    tasks = _tasks("_external_ip_contract")
+    rescue = next(task for task in yaml.safe_load(
+        (ROLE_ROOT / "tasks" / "_external_ip_contract.yaml").read_text(encoding="utf-8")
+    ) if task.get("rescue"))
+    rescue_tasks = _flatten_tasks(rescue["rescue"])
+    publish = next(
+        task
+        for task in rescue_tasks
+        if task.get("ansible.builtin.include_tasks") == "_contract_rescue.yaml"
+    )
+    assert publish["vars"]["_osac_error_label"] == "ExternalIP reservation"

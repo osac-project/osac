@@ -15,11 +15,19 @@ VPC_ROLE = COLLECTIONS / "netris/controller/roles/vpc/tasks"
 
 
 def _tasks(path: Path) -> list[dict]:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+    tasks = yaml.safe_load(path.read_text(encoding="utf-8"))
+    work = path.with_name(f"_{path.stem}_work.yaml")
+    if path.parent == TEMPLATE_NETRIS and work.exists():
+        tasks = tasks + yaml.safe_load(work.read_text(encoding="utf-8"))
+    return tasks
 
 
 def _named_task(tasks: list[dict], name: str) -> dict:
     return next(task for task in tasks if task.get("name") == name)
+
+
+def _when(value) -> list[str]:
+    return value if isinstance(value, list) else [value]
 
 
 def test_ipam_create_and_delete_match_the_complete_requested_identity() -> None:
@@ -70,7 +78,10 @@ def test_netris_subnet_flow_supplies_full_identity_to_ipam_roles() -> None:
 
     delete = _tasks(TEMPLATE_NETRIS / "delete_subnet.yaml")
     parent_vnet = _named_task(delete, "Set parent VirtualNetwork name")
-    assert parent_vnet["when"] == "is_cudn_evpn"
+    assert _when(parent_vnet["when"]) == [
+        "is_cudn_evpn",
+        "not _osac_contract | default(false) | bool",
+    ]
     parent_lookup = _named_task(delete, "Find the exact IPAM parent for this Subnet")
     assert parent_lookup["ansible.builtin.include_role"]["tasks_from"] == "find_subnet_by_identity"
     assert parent_lookup["vars"] == {
@@ -166,6 +177,35 @@ def test_parent_vpc_lookup_matches_id_and_tenant_and_rejects_ambiguity() -> None
     assert "vpc_id" not in read_args
 
     subnet_create = _tasks(TEMPLATE_NETRIS / "create_subnet.yaml")
-    role_call = _named_task(subnet_create, "Look up parent VPC by name")
-    assert role_call["vars"]["vpc_lookup_id"] == "{{ subnet_virtual_network_vpc_id }}"
-    assert role_call["vars"]["vpc_tenant_id"] == "{{ netris_tenant_id }}"
+    by_id = _named_task(subnet_create, "Look up parent VPC by the VirtualNetwork status ID")
+    assert by_id["vars"]["vpc_lookup_id"] == "{{ subnet_virtual_network_vpc_id | int }}"
+    assert by_id["vars"]["vpc_tenant_id"] == "{{ netris_tenant_id }}"
+    by_name = _named_task(subnet_create, "Look up parent VPC by name")
+    assert "vpc_lookup_id" not in by_name["vars"]
+    assert by_name["vars"]["vpc_tenant_id"] == "{{ netris_tenant_id }}"
+
+
+def test_create_subnet_picks_one_vpc_lookup_shape() -> None:
+    create = _tasks(TEMPLATE_NETRIS / "create_subnet.yaml")
+    lookups = [
+        task
+        for task in create
+        if task.get("ansible.builtin.include_role", {}).get("name")
+        == "netris.controller.vpc"
+    ]
+
+    by_id = [task for task in lookups if "vpc_lookup_id" in task.get("vars", {})]
+    by_name = [task for task in lookups if "vpc_lookup_id" not in task.get("vars", {})]
+
+    assert len(by_id) == 1, "the status-ID lookup must pass a real integer"
+    assert "omit" not in str(by_id[0]["vars"]["vpc_lookup_id"])
+    assert len(by_name) == 1, "the name-only lookup must omit vpc_lookup_id entirely"
+
+
+def test_create_subnet_output_validation_accepts_the_contract_ipam() -> None:
+    create = _tasks(TEMPLATE_NETRIS / "create_subnet.yaml")
+
+    assert any(
+        "_osac_ipam" in str(task.get("ansible.builtin.assert", {}))
+        for task in create
+    ), "the contract path has no _fabric_reserved_range; it must validate ipam"

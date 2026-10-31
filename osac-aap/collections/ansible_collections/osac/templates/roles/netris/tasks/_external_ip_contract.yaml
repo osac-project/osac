@@ -1,0 +1,56 @@
+---
+# Contract ExternalIP allocate/release. The caller supplies the ExternalIP
+# snapshot and the ExternalIPPool snapshot; the module owns the Netris /32
+# reservation keyed by the resource UID. Allocate publishes the typed address,
+# release publishes nothing, and every failure publishes osac_error.
+
+- name: Validate the contract ExternalIP inputs
+  ansible.builtin.assert:
+    that:
+      - external_ip is mapping
+      - _osac_resource.id | default('') | length > 0
+      - _osac_external_ip_pool is mapping
+      - _osac_external_ip_pool | length > 0
+      - external_ip_contract_operation in ['allocate', 'release']
+    fail_msg: >-
+      A contract ExternalIP task needs the ExternalIP snapshot, its API ID,
+      the external_ip_pool snapshot, and an allocate or release operation.
+
+- name: Reserve or release the ExternalIP reservation
+  block:
+    - name: Ensure Netris auth
+      ansible.builtin.include_role:
+        name: netris.controller.auth
+      when:
+        - netris_session_cookie is not defined
+        - not ansible_check_mode
+
+    - name: Apply the Netris ExternalIP reservation
+      osac.templates.netris_external_ip:
+        shape: contract
+        operation: "external_ip.{{ external_ip_contract_operation }}"
+        resource: "{{ external_ip }}"
+        pool: "{{ _osac_external_ip_pool }}"
+        controller_url: "{{ netris_controller_url }}"
+        session_cookie: "{{ netris_session_cookie | default('') }}"
+        site_id: "{{ netris_site_id | int }}"
+        tenant_id: "{{ netris_tenant_id | int }}"
+        timeout: "{{ netris_timeout | default(30) }}"
+        validate_certs: "{{ netris_validate_certs | default(true) }}"
+        ca_path: "{{ netris_ca_path | default(omit, true) }}"
+      register: _eip_contract_result
+
+    - name: Build the typed ExternalIP result
+      ansible.builtin.set_fact:
+        _osac_result_data: >-
+          {{ {'external_ip': {'address': _eip_contract_result.address}}
+             if external_ip_contract_operation == 'allocate' else {} }}
+
+    - name: Emit the typed ExternalIP result
+      ansible.builtin.include_tasks: _emit_result.yaml
+      when: external_ip_contract_operation == 'allocate'
+  rescue:
+    - name: Publish the sanitized ExternalIP reservation error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
+      vars:
+        _osac_error_label: ExternalIP reservation

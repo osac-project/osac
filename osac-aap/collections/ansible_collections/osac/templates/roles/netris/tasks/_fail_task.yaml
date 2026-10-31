@@ -1,0 +1,11 @@
+---
+# Publishes a sanitized error before the play fails.
+
+- name: Publish the task error
+  ansible.builtin.set_stats:
+    data: >-
+      {{ {'osac_error': {'message': _osac_error_message,
+                         'retryable': _osac_error_retryable | default(false) | bool}} }}
+    per_host: false
+    aggregate: false
+  when: _osac_error_message | default('') | length > 0

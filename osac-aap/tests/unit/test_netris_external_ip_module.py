@@ -292,7 +292,10 @@ def test_provider_failure_is_sanitized(monkeypatch, capsys):
     result = run_main(monkeypatch, capsys, module_args(), client)
 
     assert result["failed"] is True
-    assert result["msg"] == "Netris ExternalIP external_ip.allocate failed (provider_error, HTTP 400)"
+    assert result["msg"] == (
+        "Netris ExternalIP external_ip.allocate failed"
+        " (provider_error, HTTP 400): Netris IPAM subnet create failed"
+    )
     assert TEST_COOKIE not in capsys.readouterr().out
 
 
@@ -496,3 +499,163 @@ def test_request_fails_closed_on_invalid_and_non_object_json(monkeypatch):
         client, _ = _client_with_response(monkeypatch, 200, payload)
         with pytest.raises(netris_eip.NetrisExternalIPError):
             client.list_subnets()
+
+
+# --- Contract snapshot shape ---------------------------------------------
+
+
+EXTERNAL_IP_API_ID = "44444444-4444-4444-8444-444444444444"
+POOL_API_ID = "22222222-2222-4222-8222-222222222222"
+
+
+def contract_resource():
+    return {
+        "apiVersion": "osac.openshift.io/v1alpha1",
+        "kind": "ExternalIP",
+        "id": EXTERNAL_IP_API_ID,
+        "metadata": {
+            "name": "eip-test",
+            "namespace": "osac",
+            "uid": RESOURCE_UID,
+            "generation": 1,
+        },
+        "spec": {"pool": POOL_API_ID},
+    }
+
+
+def contract_pool(cidr="10.20.0.0/24"):
+    return {
+        "apiVersion": "osac.openshift.io/v1alpha1",
+        "kind": "ExternalIPPool",
+        "id": POOL_API_ID,
+        "metadata": {
+            "name": "pool-test",
+            "namespace": "osac",
+            "uid": "33333333-3333-4333-8333-333333333333",
+            "generation": 1,
+        },
+        "spec": {"cidrs": [cidr]},
+    }
+
+
+def contract_args(**overrides):
+    args = {
+        "operation": "external_ip.allocate",
+        "shape": "contract",
+        "resource": contract_resource(),
+        "pool": contract_pool(),
+        "controller_url": "https://netris.example",
+        "session_cookie": TEST_COOKIE,
+        "site_id": 1,
+        "tenant_id": 7,
+    }
+    args.update(overrides)
+    return args
+
+
+class VerifyingContractClient(StubNetrisClient):
+    def list_subnets(self):
+        if self.created:
+            return [
+                {
+                    "id": 101,
+                    "name": self.created[-1][0],
+                    "prefix": f"{self.created[-1][1].split('/')[0]}/32",
+                    "purpose": "nat",
+                    "site_id": 1,
+                    "tenant_id": 7,
+                }
+            ]
+        return []
+
+
+def test_contract_shape_allocates_from_the_snapshot_pool(monkeypatch, capsys):
+    client = VerifyingContractClient()
+
+    result = run_main(monkeypatch, capsys, contract_args(), client)
+
+    assert result["changed"] is True
+    assert result["address"] == "10.20.0.1"
+    assert client.created == [(f"osac-eip-{EXTERNAL_IP_API_ID}", "10.20.0.1/32", 1, 7)]
+    module_args_result = result["invocation"]["module_args"]
+    assert module_args_result["shape"] == "contract"
+    assert module_args_result["resource"] == "VALUE_SPECIFIED_IN_NO_LOG_PARAMETER"
+    assert module_args_result["pool"] == "VALUE_SPECIFIED_IN_NO_LOG_PARAMETER"
+    assert TEST_COOKIE not in capsys.readouterr().out
+
+
+def test_contract_check_mode_writes_nothing(monkeypatch, capsys):
+    client = VerifyingContractClient()
+
+    result = run_main(
+        monkeypatch, capsys, contract_args(_ansible_check_mode=True), client
+    )
+
+    assert result["changed"] is False
+    assert result["address"] == ""
+    assert client.created == []
+
+
+def test_contract_shape_reports_an_exhausted_pool_as_final(monkeypatch, capsys):
+    occupied = [
+        {
+            "id": 1,
+            "name": "other-1",
+            "prefix": "10.20.0.1/32",
+            "purpose": "nat",
+            "site_id": 1,
+            "tenant_id": 7,
+        },
+        {
+            "id": 2,
+            "name": "other-2",
+            "prefix": "10.20.0.2/32",
+            "purpose": "nat",
+            "site_id": 1,
+            "tenant_id": 7,
+        },
+    ]
+
+    result = run_main(
+        monkeypatch,
+        capsys,
+        contract_args(pool=contract_pool("10.20.0.0/30")),
+        StubNetrisClient(records=occupied),
+    )
+
+    assert result["failed"] is True
+    assert result["category"] == "exhausted"
+    assert result["retryable"] is False
+    assert "no free host address" in result["msg"]
+
+
+def test_contract_shape_reports_a_provider_failure_as_retryable(monkeypatch, capsys):
+    error = netris_eip.NetrisExternalIPError(
+        "Netris API POST request failed", category="provider_error", http_status=500
+    )
+    client = StubNetrisClient(records=[], create_error=error)
+
+    result = run_main(monkeypatch, capsys, contract_args(), client)
+
+    assert result["failed"] is True
+    assert result["category"] == "provider_error"
+    assert result["retryable"] is True
+
+
+@pytest.mark.parametrize("status, retryable", [
+    (400, False), (401, False), (403, False), (404, False), (409, False),
+    (422, False), (408, True), (425, True), (429, True), (500, True), (503, True),
+    (-1, True), (None, True),
+])
+def test_module_provider_failure_retry_policy(monkeypatch, capsys, status, retryable):
+    class FailedClient(StubNetrisClient):
+        def list_subnets(self):
+            raise netris_eip.NetrisExternalIPError(
+                "provider read failed",
+                category="transport_error" if status == -1 else "provider_error",
+                http_status=status,
+            )
+
+    result = run_main(monkeypatch, capsys, contract_args(), FailedClient())
+    assert result["failed"] is True
+    assert result["retryable"] is retryable

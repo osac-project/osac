@@ -1,0 +1,16 @@
+---
+# Keeps a sanitized summary of the provider failure that the task's own rescue
+# is about to replace. The playbook-level legacy reporter re-raises a plain
+# message; without this, it would lose the HTTP status and provider body that
+# netris_safe_error_detail needs for a useful, sanitized message.
+#
+# Never store ansible_failed_result itself: it holds the failed module's
+# arguments (including authentication cookies and headers), and ansible-core
+# does not honour no_log for it. Only bounded, redacted text is preserved.
+
+- name: Preserve a sanitized provider failure summary for the legacy report
+  ansible.builtin.set_fact:
+    _netris_failure_origin_task: "{{ ansible_failed_task.name | default('unknown provider task') }}"
+    _netris_failure_origin_detail: >-
+      {{ ansible_failed_result | netris.controller.netris_safe_error_detail }}
+  when: not (_osac_contract | default(false) | bool)

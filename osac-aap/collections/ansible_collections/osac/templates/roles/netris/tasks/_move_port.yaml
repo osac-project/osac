@@ -1,0 +1,120 @@
+---
+# Moves a server's fabric port between Netris V-Nets. Callers decide what
+# the V-Nets mean; this helper performs only the port operations.
+#
+# Idempotent / interrupt-safe (OSAC-4923):
+# - Port already off source -> detach is a no-op success
+# - Port already on target -> attach is a no-op success
+# - Interrupted after detach before attach -> rerun completes attach
+# Attach/detach helpers assert membership post-conditions.
+
+- name: Extract move configuration
+  ansible.builtin.set_fact:
+    na_host_name: "{{ network_attachment.host_name }}"
+    na_logical_interface: "{{ network_attachment.logical_interface_name }}"
+    _na_from: "{{ network_attachment.from_vnet_name | default('', true) }}"
+    _na_to: "{{ network_attachment.to_vnet_name | default('', true) }}"
+    _na_from_vpc_id: "{{ network_attachment.from_vpc_id | default(0) | int }}"
+    _na_from_tenant_id: "{{ network_attachment.from_tenant_id | default(0) | int }}"
+    _na_to_vpc_id: "{{ network_attachment.to_vpc_id | default(0) | int }}"
+    _na_to_tenant_id: "{{ network_attachment.to_tenant_id | default(0) | int }}"
+    _na_reconcile: "{{ network_attachment.reconcile_host_ports | default('') }}"
+
+- name: Resolve server port
+  ansible.builtin.include_tasks: _resolve_server_port.yaml
+
+- name: Fail if server port not found
+  ansible.builtin.fail:
+    msg: >-
+      Port '{{ na_logical_interface }}' not found on server '{{ na_host_name }}'
+      (ensure the host is registered in Netris and the interface name is correct).
+  when: _target_port is none
+
+- name: Preserve the full fabric port identity for contract attachments
+  ansible.builtin.include_tasks: _fabric_port_state.yaml
+  when: _na_reconcile in ['apply', 'delete']
+
+- name: Take every host fabric port off provisioning before tenant access
+  ansible.builtin.include_tasks: _detach_port_from_vnet.yaml
+  vars:
+    _target_port: "{{ {'id': _na_host_port_id} }}"
+    _op_vnet_name: "{{ _na_from }}"
+    vnet_vpc_id: "{{ _na_from_vpc_id }}"
+    vnet_tenant_id: "{{ _na_from_tenant_id }}"
+  loop: "{{ _na_fabric_plan.port_ids | default([]) }}"
+  loop_control:
+    loop_var: _na_host_port_id
+  when: _na_reconcile == 'apply'
+
+- name: Detach from source V-Net
+  ansible.builtin.include_tasks: _detach_port_from_vnet.yaml
+  vars:
+    _op_vnet_name: "{{ _na_from }}"
+    vnet_vpc_id: "{{ _na_from_vpc_id }}"
+    vnet_tenant_id: "{{ _na_from_tenant_id }}"
+  when: _na_from | length > 0
+
+- name: Wait for fabric to settle after detach
+  ansible.builtin.pause:
+    seconds: 15
+  when: _na_from | length > 0 and _na_to | length > 0
+
+- name: Attach to target V-Net
+  ansible.builtin.include_tasks: _attach_port_to_vnet.yaml
+  vars:
+    _op_vnet_name: "{{ _na_to }}"
+    vnet_vpc_id: "{{ _na_to_vpc_id }}"
+    vnet_tenant_id: "{{ _na_to_tenant_id }}"
+  when: _na_to | length > 0
+
+- name: Restore every saved fabric port on contract attachment delete
+  ansible.builtin.include_tasks: _attach_port_to_vnet.yaml
+  vars:
+    _target_port: "{{ {'id': _na_host_port_id} }}"
+    _op_vnet_name: "{{ _na_to }}"
+    vnet_vpc_id: "{{ _na_to_vpc_id }}"
+    vnet_tenant_id: "{{ _na_to_tenant_id }}"
+  loop: "{{ _na_fabric_plan.port_ids | default([]) }}"
+  loop_control:
+    loop_var: _na_host_port_id
+  when: _na_reconcile == 'delete'
+
+- name: Verify the full host fabric membership after reconciliation
+  when: _na_reconcile in ['apply', 'delete']
+  block:
+    - name: Re-read the provisioning network after all port changes
+      ansible.builtin.include_role:
+        name: netris.controller.vnet
+        tasks_from: read_by_id
+      vars:
+        vnet_id: "{{ _na_provisioning_id }}"
+
+    - name: Require the expected provisioning membership for every fabric port
+      ansible.builtin.assert:
+        that:
+          - >-
+            (netris_vnet_detail | netris.controller.netris_port_on_vnet(item))
+            == (_na_reconcile == 'delete')
+        fail_msg: "Host fabric provisioning membership post-condition failed"
+      loop: "{{ _na_fabric_plan.port_ids }}"
+
+    - name: Remove the saved snapshot only after every fabric port is restored
+      ansible.builtin.include_role:
+        name: netris.controller.vnet
+        tasks_from: update
+      vars:
+        vnet_id: "{{ _na_provisioning_id }}"
+        vnet_body: >-
+          {{ netris_vnet_detail | combine({'tags':
+               netris_vnet_detail.tags | default([])
+               | reject('equalto', _na_fabric_plan.saved_tag) | list}) }}
+      when:
+        - _na_reconcile == 'delete'
+        - _na_fabric_plan.had_snapshot
+
+- name: Display move completion
+  ansible.builtin.debug:
+    msg: >-
+      Move of '{{ na_host_name }}/{{ na_logical_interface }}'
+      from '{{ _na_from | default('(none)') }}' to '{{ _na_to | default('(none)') }}'
+      completed with post-conditions satisfied.

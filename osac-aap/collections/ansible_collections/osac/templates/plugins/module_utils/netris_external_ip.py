@@ -10,6 +10,18 @@ from http.cookiejar import CookieJar, DefaultCookiePolicy
 from ansible.module_utils.urls import fetch_url
 
 OPERATIONS = ("external_ip.allocate", "external_ip.release")
+SHAPES = ("v1", "contract")
+
+RETRYABLE_CATEGORIES = frozenset(
+    {
+        "transport_error",
+        "provider_error",
+        "malformed_response",
+        "uncertain_state",
+        "exhausted_attempts",
+        "exhausted_observations",
+    }
+)
 
 CONTRACT_VERSION = "v1"
 TENANT_ANNOTATION = "osac.openshift.io/tenant"
@@ -66,10 +78,81 @@ def _canonical_ipv4(value, context: str) -> ipaddress.IPv4Network:
     return network
 
 
-def validate_request(resource: dict, pool: dict, operation: str) -> dict:
-    """Normalize and validate resource + pool snapshots before any provider I/O."""
+def is_retryable(category: str, http_status=None) -> bool:
+    """Prefer the HTTP status over the category for provider failures."""
+    if isinstance(http_status, int) and http_status > 0:
+        return http_status >= 500 or http_status in (408, 425, 429)
+    return category in RETRYABLE_CATEGORIES
+
+
+def validate_request(
+    resource: dict, pool: dict, operation: str, shape: str = "v1"
+) -> dict:
+    """Normalize and validate the input shape before any provider I/O."""
+    if shape not in SHAPES:
+        raise ValueError(f"unsupported ExternalIP input shape {shape!r}")
     if operation not in OPERATIONS:
         raise ValueError(f"unsupported ExternalIP operation {operation!r}")
+    if shape == "contract":
+        return _validate_contract_request(resource, pool, operation)
+    return _validate_v1_request(resource, pool, operation)
+
+
+def _validate_contract_request(
+    resource: dict, pool: dict, operation: str
+) -> dict:
+    """Validate the contract snapshots: ExternalIP and ExternalIPPool."""
+    if not isinstance(resource, dict):
+        raise ValueError("ExternalIP resource snapshot must be a dictionary")
+    if not isinstance(pool, dict):
+        raise ValueError("ExternalIP pool snapshot must be a dictionary")
+    metadata = resource.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError("ExternalIP resource snapshot omits metadata")
+    uid = _required_text(metadata.get("uid"), "ExternalIP resource UID")
+    generation = _positive_int(
+        metadata.get("generation"), "ExternalIP generation"
+    )
+    resource_id = _required_text(resource.get("id"), "ExternalIP API ID")
+    spec = resource.get("spec")
+    if not isinstance(spec, dict):
+        raise ValueError("ExternalIP resource snapshot omits spec")
+    pool_reference = _required_text(spec.get("pool"), "ExternalIP pool reference")
+    pool_id = _required_text(pool.get("id"), "ExternalIPPool API ID")
+    if pool_id != pool_reference:
+        raise ValueError(
+            "ExternalIP pool reference does not match the pool snapshot"
+        )
+    pool_spec = pool.get("spec")
+    if not isinstance(pool_spec, dict):
+        raise ValueError("ExternalIPPool snapshot omits spec")
+    cidrs = pool_spec.get("cidrs")
+    if not isinstance(cidrs, list) or len(cidrs) != 1:
+        raise ValueError(
+            "ExternalIPPool snapshot spec.cidrs must hold exactly one IPv4"
+            " CIDR"
+        )
+    network = _canonical_ipv4(cidrs[0], "ExternalIPPool CIDR")
+    return {
+        "operation": operation,
+        "uid": uid,
+        "generation": generation,
+        # Key the reservation by the stable fulfillment API ID, not the CR UID:
+        # a recreated CR keeps its API ID, so a retry after the hub UID changed
+        # reuses the same reservation instead of leaking the first one.
+        "reservation_name": f"{RESERVATION_NAME_PREFIX}{resource_id}",
+        "resource_id": resource_id,
+        "tenant_id": "",
+        "pool_id": pool_id,
+        "pool_uid": "",
+        "pool_tenant_id": "",
+        "cidr": str(network),
+        "phase": "Deleting" if operation == "external_ip.release" else "Ready",
+    }
+
+
+def _validate_v1_request(resource: dict, pool: dict, operation: str) -> dict:
+    """Validate the opt-in annotation v1 snapshots."""
     if not isinstance(resource, dict):
         raise ValueError("ExternalIP resource snapshot must be a dictionary")
     if not isinstance(pool, dict):
@@ -393,12 +476,19 @@ class NetrisSubnetClient:
             )
         return [_normalize_subnet_record(record) for record in data]
 
-    def create_subnet(self, name: str, prefix: str, site_id: int, tenant_id: int):
-        """Create a nat reservation subnet and return its provider id."""
+    def create_subnet(
+        self,
+        name: str,
+        prefix: str,
+        site_id: int,
+        tenant_id: int,
+        purpose: str = RESERVATION_PURPOSE,
+    ):
+        """Create a reservation subnet and return its provider id."""
         body = {
             "name": name,
             "prefix": prefix,
-            "purpose": RESERVATION_PURPOSE,
+            "purpose": purpose,
             "sites": [{"id": int(site_id)}],
             "tenant": {"id": int(tenant_id)},
         }
@@ -434,16 +524,75 @@ def _pause(delay_seconds: float, attempt: int, max_attempts: int) -> None:
         time.sleep(delay_seconds)
 
 
-def _reconcile_allocate(request, client, site_id, tenant_id, delay_seconds) -> dict:
-    """Allocate or reuse the UID reservation; return changed + address."""
+def _reserve_address(
+    read_owned,
+    select_address,
+    create_reservation,
+    *,
+    delay_seconds,
+    max_attempts,
+    unexpected_error,
+    convergence_error,
+) -> dict:
+    """Reserve with bounded retries and read back uncertain create outcomes.
+
+    Resource-specific callbacks retain ownership, range and purpose validation.
+    A failed create is observed again before another write, since its response
+    may have been lost after the provider committed the reservation.
+    """
     wrote = False
     last_error = None
-    attempt = 0
-    while attempt < MAX_ALLOCATE_ATTEMPTS:
-        attempt += 1
-        subnets, owned = _read_owned(request, client, site_id, tenant_id)
+    for attempt in range(1, max_attempts + 1):
+        subnets, owned = read_owned()
         if owned is not None:
             return {"changed": wrote, "address": _reservation_address(owned)}
+        address = select_address(subnets)
+        wrote = True
+        try:
+            create_reservation(address)
+        except NetrisExternalIPError as error:
+            last_error = error
+            _pause(delay_seconds, attempt, max_attempts)
+            continue
+        _, owned = read_owned()
+        if owned is not None:
+            if _reservation_address(owned) != address:
+                raise unexpected_error
+            return {"changed": True, "address": address}
+        _pause(delay_seconds, attempt, max_attempts)
+    if last_error is not None:
+        raise last_error
+    raise convergence_error
+
+
+def _release_reservation(
+    read_owned,
+    delete_reservation,
+    *,
+    delay_seconds,
+    max_observations,
+    convergence_error,
+) -> dict:
+    """Delete only owned reservations and report success after observed absence."""
+    changed = False
+    for observation in range(1, max_observations + 1):
+        _, owned = read_owned()
+        if owned is None:
+            return {"changed": changed, "address": ""}
+        changed = True
+        try:
+            delete_reservation(owned["id"])
+        except NetrisExternalIPError as error:
+            if error.http_status != 404:
+                raise
+        _pause(delay_seconds, observation, max_observations)
+    raise convergence_error
+
+
+def _reconcile_allocate(request, client, site_id, tenant_id, delay_seconds) -> dict:
+    """Allocate or reuse the UID reservation; return changed + address."""
+
+    def choose_address(subnets):
         try:
             pool_network = ipaddress.ip_network(request["cidr"])
             occupied = [
@@ -452,53 +601,40 @@ def _reconcile_allocate(request, client, site_id, tenant_id, delay_seconds) -> d
                 if r["purpose"] == RESERVATION_PURPOSE
                 or not pool_network.subnet_of(ipaddress.ip_network(r["prefix"]))
             ]
-            address = select_address(request["cidr"], occupied)
+            return select_address(request["cidr"], occupied)
         except ValueError as error:
             raise NetrisExternalIPError(str(error), category="exhausted") from error
-        wrote = True
-        try:
-            client.create_subnet(
-                request["reservation_name"], f"{address}/32", site_id, tenant_id
-            )
-        except NetrisExternalIPError as error:
-            last_error = error
-            _pause(delay_seconds, attempt, MAX_ALLOCATE_ATTEMPTS)
-            continue
-        subnets, owned = _read_owned(request, client, site_id, tenant_id)
-        if owned is not None:
-            observed = _reservation_address(owned)
-            if observed != address:
-                raise NetrisExternalIPError(
-                    "Netris returned a UID reservation at an unexpected address",
-                    category="uncertain_state",
-                )
-            return {"changed": True, "address": address}
-        _pause(delay_seconds, attempt, MAX_ALLOCATE_ATTEMPTS)
-    if last_error is not None:
-        raise last_error
-    raise NetrisExternalIPError(
-        "Netris ExternalIP allocation did not converge within the attempt bound",
-        category="exhausted_attempts",
+
+    return _reserve_address(
+        lambda: _read_owned(request, client, site_id, tenant_id),
+        choose_address,
+        lambda address: client.create_subnet(
+            request["reservation_name"], f"{address}/32", site_id, tenant_id
+        ),
+        delay_seconds=delay_seconds,
+        max_attempts=MAX_ALLOCATE_ATTEMPTS,
+        unexpected_error=NetrisExternalIPError(
+            "Netris returned a UID reservation at an unexpected address",
+            category="uncertain_state",
+        ),
+        convergence_error=NetrisExternalIPError(
+            "Netris ExternalIP allocation did not converge within the attempt bound",
+            category="exhausted_attempts",
+        ),
     )
 
 
 def _reconcile_release(request, client, site_id, tenant_id, delay_seconds) -> dict:
     """Delete the UID reservation and confirm absence within the bound."""
-    changed = False
-    for observation in range(1, MAX_RELEASE_OBSERVATIONS + 1):
-        subnets, owned = _read_owned(request, client, site_id, tenant_id)
-        if owned is None:
-            return {"changed": changed, "address": ""}
-        changed = True
-        try:
-            client.delete_subnet(owned["id"])
-        except NetrisExternalIPError as error:
-            if error.http_status != 404:
-                raise
-        _pause(delay_seconds, observation, MAX_RELEASE_OBSERVATIONS)
-    raise NetrisExternalIPError(
-        "Netris UID reservation persists after the observation bound",
-        category="exhausted_observations",
+    return _release_reservation(
+        lambda: _read_owned(request, client, site_id, tenant_id),
+        client.delete_subnet,
+        delay_seconds=delay_seconds,
+        max_observations=MAX_RELEASE_OBSERVATIONS,
+        convergence_error=NetrisExternalIPError(
+            "Netris UID reservation persists after the observation bound",
+            category="exhausted_observations",
+        ),
     )
 
 

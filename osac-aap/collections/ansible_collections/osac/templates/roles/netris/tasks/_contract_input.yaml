@@ -1,0 +1,168 @@
+---
+# Normalizes either the manager contract envelope or the legacy top-level
+# variables into one set of facts. Pure fact transformation: no lookups, no
+# backend calls, no address math.
+
+- name: Require the task name
+  ansible.builtin.assert:
+    that:
+      - _osac_task_name is defined
+      - _osac_task_name | string | length > 0
+    fail_msg: "Netris role invoked without a task name."
+
+- name: Detect the input shape
+  ansible.builtin.set_fact:
+    _osac_contract: >-
+      {{ osac_job_vars is defined
+         and osac_job_vars is mapping
+         and osac_job_vars.manager is defined }}
+
+- name: Require the contract manager descriptor
+  ansible.builtin.assert:
+    that:
+      - osac_job_vars.task is defined
+      - osac_job_vars.task | string | length > 0
+      - osac_job_vars.manager.name is defined
+      - osac_job_vars.manager.type is defined
+      - osac_job_vars.manager.ansible_role is defined
+    fail_msg: >-
+      Malformed osac_job_vars envelope: task, manager.name, manager.type and
+      manager.ansible_role are required.
+  when: _osac_contract | bool
+
+- name: Set the task identity
+  ansible.builtin.set_fact:
+    _osac_task: >-
+      {{ (osac_job_vars.task | default(_osac_task_name))
+         if _osac_contract | bool else _osac_task_name }}
+
+- name: Reject a task mismatch
+  ansible.builtin.assert:
+    that:
+      - _osac_task | string == _osac_task_name | string
+    fail_msg: >-
+      Task mismatch: osac_job_vars.task is '{{ _osac_task }}' but the role ran
+      '{{ _osac_task_name }}'.
+  when: _osac_contract | bool
+
+- name: Reject a manager that is not a fabric manager
+  ansible.builtin.assert:
+    that:
+      - osac_job_vars.manager.type is not defined
+        or osac_job_vars.manager.type == 'fabric'
+    fail_msg: >-
+      Netris is a Fabric Manager but osac_job_vars.manager.type is
+      '{{ osac_job_vars.manager.type }}'.
+  when: _osac_contract | bool
+
+- name: Select the legacy resource variable
+  ansible.builtin.set_fact:
+    _osac_legacy_resource_var: >-
+      {{ _osac_task_arguments.get(_osac_task_name, '') }}
+    _osac_alias_var: ''
+  vars:
+    _osac_task_arguments:
+      create_virtual_network: virtual_network
+      delete_virtual_network: virtual_network
+      create_subnet: subnet
+      delete_subnet: subnet
+      create_security_group: security_group
+      delete_security_group: security_group
+      create_external_ip: external_ip
+      delete_external_ip: external_ip
+      create_external_ip_pool: external_ip_pool
+      delete_external_ip_pool: external_ip_pool
+      attach_external_ip: external_ip_attachment
+      detach_external_ip: external_ip_attachment
+      create_nat_gateway: nat_gateway
+      delete_nat_gateway: nat_gateway
+      create_server_cluster: server_cluster
+      delete_server_cluster: server_cluster
+      create_fabric_domain: server_cluster
+      delete_fabric_domain: server_cluster
+      move_network_attachment: network_attachment
+      query_dhcp_lease: network_attachment
+
+- name: Resolve the resource snapshot
+  ansible.builtin.set_fact:
+    _osac_resource: >-
+      {{ osac_job_vars.resource
+         if _osac_contract | bool
+         else vars[_osac_legacy_resource_var] | default({}, true) }}
+
+- name: Require a resource snapshot
+  ansible.builtin.assert:
+    that:
+      - _osac_resource is mapping
+      - _osac_resource | length > 0
+    fail_msg: "No resource snapshot supplied for task '{{ _osac_task_name }}'."
+
+- name: Resolve the contract inputs
+  ansible.builtin.set_fact:
+    _osac_tenant: >-
+      {{ osac_job_vars.tenant
+         if _osac_contract | bool and osac_job_vars.tenant is defined
+         else ((_osac_resource.metadata | default({})).get('annotations', {}) | default({})).get('osac.openshift.io/tenant', '') }}
+    _osac_ipam: >-
+      {{ osac_job_vars.ipam | default({}) if _osac_contract | bool else {} }}
+    _osac_network_type: >-
+      {{ osac_job_vars.network_type | default('') if _osac_contract | bool else '' }}
+    _osac_network_segment: >-
+      {{ osac_job_vars.network_segment | default({}) if _osac_contract | bool else {} }}
+    _osac_virtual_network: >-
+      {{ osac_job_vars.virtual_network | default({}) if _osac_contract | bool else {} }}
+    _osac_subnet: >-
+      {{ osac_job_vars.subnet | default({}) if _osac_contract | bool else {} }}
+    _osac_external_ip_pool: >-
+      {{ osac_job_vars.external_ip_pool | default({}) if _osac_contract | bool else {} }}
+    _osac_external_ip_ref: >-
+      {{ osac_job_vars.external_ip | default({}) if _osac_contract | bool else {} }}
+    _osac_destination: >-
+      {{ osac_job_vars.destination | default({}) if _osac_contract | bool else {} }}
+    _osac_target: >-
+      {{ osac_job_vars.target | default({}) if _osac_contract | bool else {} }}
+    _osac_interface: >-
+      {{ (osac_job_vars.network_attachment | default({})).interface | default({})
+         if _osac_contract | bool else {} }}
+    _osac_security_group_ids: >-
+      {{ (osac_job_vars.network_attachment | default({})).security_group_ids | default([])
+         if _osac_contract | bool else [] }}
+
+- name: Select the legacy alias for the resource kind
+  ansible.builtin.set_fact:
+    _osac_alias_var: >-
+      {{ _osac_resource_kinds.get(_osac_resource.kind | default(''), '') }}
+  when: _osac_contract | bool
+  vars:
+    _osac_resource_kinds:
+      VirtualNetwork: virtual_network
+      Subnet: subnet
+      SecurityGroup: security_group
+      ExternalIP: external_ip
+      ExternalIPPool: external_ip_pool
+      ExternalIPAttachment: external_ip_attachment
+      NATGateway: nat_gateway
+      NetworkAttachment: network_attachment
+      FabricDomain: server_cluster
+      ClusterOrder: cluster_order
+
+- name: Publish the resource alias
+  ansible.builtin.set_fact:
+    "{{ _osac_alias_var }}": "{{ _osac_resource }}"
+  when:
+    - _osac_contract | bool
+    - _osac_alias_var | length > 0
+
+- name: Publish the VirtualNetwork alias
+  ansible.builtin.set_fact:
+    virtual_network: "{{ _osac_virtual_network }}"
+  when:
+    - _osac_contract | bool
+    - _osac_virtual_network | length > 0
+
+- name: Publish the Subnet alias
+  ansible.builtin.set_fact:
+    subnet: "{{ _osac_subnet }}"
+  when:
+    - _osac_contract | bool
+    - _osac_subnet | length > 0

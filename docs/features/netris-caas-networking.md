@@ -237,3 +237,89 @@ Ansible controller
 This two-hop path ensures the management connection is never disrupted by
 the VPC reconfiguration it triggers — the management NIC and routes are left
 untouched.
+
+## Network Manager Contract Alignment
+
+The Netris role follows the network manager integration contract in
+`enhancement-proposals` (`enhancements/OSAC-1433-network-manager-integration-contract-networking/design.md`):
+OSAC sends exactly one `osac_job_vars` envelope per task, and the role
+answers with a typed `osac_result` or a sanitized `osac_error`. Until the
+shared dispatch lands, the role also accepts the previous raw-CR payload;
+`tasks/_contract_input.yaml` is the only file that knows that shape.
+
+| Task | Netris behavior |
+|------|-----------------|
+| `create_virtual_network` | VPC named after the VirtualNetwork, typed `backend_id` |
+| `create_subnet` | V-Net per Subnet, gateway and DHCP from `ipam`, typed `network_segment` when `network_type: evpn` |
+| `create_security_group` | Rules are validated exactly; Fabric ACL creation is a documented no-op |
+| `apply_network_attachment` | Physical port move; overlay and SecurityGroup bind are documented no-ops |
+| `query_dhcp_lease` | One typed `dhcp_lease`; only an active DHCP-sourced binding for the MAC counts, and zero or multiple matches retry |
+| `reserve_cluster_ingress_ip` | One `/32` from `ipam.lb_vip_ipv4_cidrs`, typed `cluster_ingress.address` |
+| ExternalIP family | Typed `external_ip.address` from the supplied snapshots |
+| `create_fabric_domain` | Netris server cluster bound to the VirtualNetwork VPC, typed `backend_id` |
+
+Every contract task publishes `osac_error {message, retryable}`. A
+missing or malformed Netris setting (`NETRIS_CONTROLLER_URL`,
+`NETRIS_USERNAME`, `NETRIS_PASSWORD`, `NETRIS_BM_PROVISIONING_VNET`,
+`NETRIS_MGMT_VPC_ID`) is retryable because an administrator can repair
+it; transport failures and HTTP 5xx/408/425/429 retry; other HTTP
+statuses and input validation are final. Provider messages are bounded
+and redacted, and `ansible_failed_result` is never published, logged, or
+kept in a fact.
+
+Physical attachments require an unambiguous host/interface-to-port mapping
+before any provider write. Apply saves the host's provisioning fabric-port
+IDs in a durable, target-API-ID-scoped snapshot. Delete restores that saved
+set. Without a snapshot, legacy single-port cleanup restores the selected
+port only if it is already on provisioning or belongs to the intended
+VPC/tenant-scoped Subnet segment. Otherwise cleanup fails closed without
+changing membership, so deleting a rejected apply cannot pull a
+FabricDomain-only or unrelated port onto provisioning. An already-idle
+delete remains a no-op, even if the tenant segment no longer exists.
+
+Diagnostic redaction covers complete Authorization scheme/value fields
+and common token, API-key, and client-secret keys. An unquoted
+Authorization field or an unterminated quoted credential suppresses the
+remaining diagnostic text rather than guessing where its secret ends;
+the bounded HTTP status and preceding diagnostic context remain available.
+
+### SecurityGroup enforcement
+
+Netris v1 ACLs are flat, VPC-scoped prefix rules: each rule needs the
+Subnet CIDR it protects, and `create_security_group` runs before any Subnet
+exists. Writing a VirtualNetwork-wide rule instead would allow more traffic
+than the bound interfaces, which the contract forbids. The Fabric
+SecurityGroup create and delete, and the bind in the physical attachment,
+are therefore documented no-ops (contract section 4.10).
+
+Consequences for this release:
+
+- VM SecurityGroups are enforced by the Kubernetes Manager (`cudn_evpn`
+  NetworkPolicy), which is the enforcement point for VM traffic.
+- Bare-metal ports are not filtered by SecurityGroups. The ACL object per
+  Subnet is the remaining work, and it belongs with the physical bind.
+- The `vm` profile can still pass when the Kubernetes Manager enforces the
+  rules; the `baremetal` and `sg` enforcement profiles stay pending.
+
+### Cluster ingress address
+
+`reserve_cluster_ingress_ip` reserves a tenant IPAM `/32` from
+`ipam.lb_vip_ipv4_cidrs`, keyed by the Cluster API ID, so a retry returns
+the same address and another Cluster on the Subnet gets a different one.
+The reservation does not yet attach the address to a VirtualNetwork VPC or
+program an EVPN advertisement, and the guest MetalLB L2 announcement path
+has not been lab-validated. The `cluster` profile stays pending.
+
+## Conformance Status
+
+| Area | Status |
+|------|--------|
+| Contract unit tests (`osac-aap/tests/unit`, `-k netris`) | Passing |
+| Fake Netris endpoint integration targets | Subnet and parent delete pass; new contract targets not yet added |
+| `baremetal` profile | Pending, needs a Netris lab |
+| `vm` profile with `netris` + `cudn_evpn` | Pending, needs the shared dispatch and a Netris lab |
+| `cluster` profile | Pending, needs the ingress advertisement and a Netris lab |
+
+The repository has no conformance runner for the contract testplan, so lab
+runs are recorded manually with their configuration and evidence. A skipped
+required run is not a pass.

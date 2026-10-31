@@ -33,9 +33,11 @@ def _flatten_tasks(tasks: list[dict]) -> list[dict]:
 
 
 def _lifecycle_tasks(name: str) -> list[dict]:
-    return _flatten_tasks(
-        yaml.safe_load((ROLE_ROOT / "tasks" / f"{name}.yaml").read_text(encoding="utf-8"))
-    )
+    tasks = yaml.safe_load((ROLE_ROOT / "tasks" / f"{name}.yaml").read_text(encoding="utf-8"))
+    work = ROLE_ROOT / "tasks" / f"_{name}_work.yaml"
+    if work.exists():
+        tasks = tasks + yaml.safe_load(work.read_text(encoding="utf-8"))
+    return _flatten_tasks(tasks)
 
 
 def _included_write_tasks(name: str) -> list[tuple[str, str]]:

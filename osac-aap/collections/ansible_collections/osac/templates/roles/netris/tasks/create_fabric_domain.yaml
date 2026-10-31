@@ -1,0 +1,161 @@
+---
+# FabricDomain maps to a Netris server cluster: an Ethernet east-west domain
+# bound to the VirtualNetwork's VPC, containing exactly spec.servers.
+# Contract path: the snapshots supply the servers and the VirtualNetwork; the
+# VPC is resolved by VirtualNetwork name. backend_id is the typed result.
+
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: create_fabric_domain
+
+- name: Extract FabricDomain configuration
+  ansible.builtin.set_fact:
+    fabric_domain_name: "{{ _osac_resource.metadata.name }}"
+    fabric_domain_spec: "{{ _osac_resource.spec | default({}) }}"
+    fabric_domain_servers: "{{ (_osac_resource.spec | default({})).servers | default([]) }}"
+
+- name: Validate legacy ServerCluster provisioning fields before conversion
+  ansible.builtin.assert:
+    that:
+      - server_cluster.metadata.name is defined
+      - server_cluster.spec.servers is defined
+      - server_cluster.spec.templateId is defined
+      - server_cluster.spec.vpcId is defined
+      - server_cluster.spec.region is defined
+      - server_cluster.spec.vpcId | string is match('^[1-9][0-9]*$')
+      - >-
+        server_cluster.spec.backendId | default('') | string == ''
+        or server_cluster.spec.backendId | string is match('^[1-9][0-9]*$')
+    fail_msg: >-
+      ServerCluster requires a name, servers, templateId, region, and a
+      positive numeric vpcId/backendId
+  when: not _osac_contract | default(false) | bool
+
+- name: Validate the contract FabricDomain snapshot
+  ansible.builtin.assert:
+    that:
+      - fabric_domain_spec.type | default('') == 'ethernet_ew'
+      - fabric_domain_servers is sequence
+      - fabric_domain_servers | length > 0
+      - >-
+        fabric_domain_servers | select('string') | list | length
+        == fabric_domain_servers | length
+      - _osac_virtual_network.metadata.name | default('') | length > 0
+    fail_msg: >-
+      FabricDomain '{{ fabric_domain_name }}' needs spec.type ethernet_ew,
+      a non-empty list of inventory server names, and its VirtualNetwork
+      snapshot.
+  when: _osac_contract | default(false) | bool
+
+- name: Resolve the FabricDomain identity
+  ansible.builtin.set_fact:
+    _fd_name: "{{ fabric_domain_name }}"
+    _fd_servers: "{{ fabric_domain_servers }}"
+    _fd_site_id: >-
+      {{ server_cluster.spec.siteId
+         | default((netris_region_site_map | default({}))[server_cluster.spec.region]
+                   | default(netris_site_id)) | int
+         if not _osac_contract | default(false) | bool
+         else netris_site_id | int }}
+    _fd_template_id: >-
+      {{ server_cluster.spec.templateId | default('') | string
+         if not _osac_contract | default(false) | bool
+         else netris_fabric_domain_template_id | default('') | string }}
+    _fd_tags: >-
+      {{ server_cluster.spec.tags | default([])
+         if not _osac_contract | default(false) | bool
+         else [] }}
+    _fd_backend_id: >-
+      {{ server_cluster.spec.backendId | default('') | string
+         if not _osac_contract | default(false) | bool
+         else '' }}
+
+- name: Create or update the FabricDomain in Netris
+  block:
+    - name: Ensure Netris auth
+      ansible.builtin.include_role:
+        name: netris.controller.auth
+      when:
+        - netris_session_cookie is not defined
+        - not ansible_check_mode
+
+    - name: Look up the parent VPC by VirtualNetwork name
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: read
+      vars:
+        vpc_name: "{{ _osac_virtual_network.metadata.name }}"
+        vpc_tenant_id: "{{ netris_tenant_id }}"
+      when: _osac_contract | default(false) | bool
+
+    - name: Require the parent VPC for the FabricDomain
+      ansible.builtin.assert:
+        that:
+          - netris_vpc is mapping
+          - netris_vpc.id is defined
+        fail_msg: >-
+          VirtualNetwork '{{ _osac_virtual_network.metadata.name }}' has no
+          Netris VPC named after it; refusing to attach the FabricDomain to
+          another routing domain.
+      when: _osac_contract | default(false) | bool
+
+    - name: Set the FabricDomain VPC
+      ansible.builtin.set_fact:
+        _fd_vpc_id: >-
+          {{ (netris_vpc.id | int)
+             if _osac_contract | default(false) | bool
+             else (server_cluster.spec.vpcId | int) }}
+
+    - name: Create or update the FabricDomain without a backend template
+      ansible.builtin.include_role:
+        name: netris.controller.server_cluster
+        tasks_from: create
+      vars:
+        server_cluster_name: "{{ _fd_name }}"
+        server_cluster_site_id: "{{ _fd_site_id | int }}"
+        server_cluster_servers: "{{ _fd_servers }}"
+        server_cluster_vpc_id: "{{ _fd_vpc_id | int }}"
+        server_cluster_tags: "{{ _fd_tags }}"
+        server_cluster_backend_id: "{{ _fd_backend_id }}"
+      when: _fd_template_id | length == 0
+
+    - name: Create or update the FabricDomain with a backend template
+      ansible.builtin.include_role:
+        name: netris.controller.server_cluster
+        tasks_from: create
+      vars:
+        server_cluster_name: "{{ _fd_name }}"
+        server_cluster_site_id: "{{ _fd_site_id | int }}"
+        server_cluster_servers: "{{ _fd_servers }}"
+        server_cluster_vpc_id: "{{ _fd_vpc_id | int }}"
+        server_cluster_tags: "{{ _fd_tags }}"
+        server_cluster_backend_id: "{{ _fd_backend_id }}"
+        server_cluster_template_id: "{{ _fd_template_id | int }}"
+      when: _fd_template_id | length > 0
+
+    - name: Build the typed FabricDomain result
+      ansible.builtin.set_fact:
+        _osac_result_data: >-
+          {{ {'backend_id': server_cluster_id | default('') | string} }}
+      when: _osac_contract | default(false) | bool
+
+    - name: Emit the typed FabricDomain result
+      ansible.builtin.include_tasks: _emit_result.yaml
+      when: _osac_contract | default(false) | bool
+
+    - name: Publish the legacy ServerCluster identifiers
+      ansible.builtin.set_stats:
+        data:
+          server_cluster_id: "{{ server_cluster_id | default('') | string }}"
+          server_cluster_vpc_id: "{{ _server_cluster_confirmed_vpc_id | default('') | string }}"
+        per_host: false
+        aggregate: false
+      when: not _osac_contract | default(false) | bool
+  rescue:
+    - name: Preserve the underlying provider failure for the legacy report
+      ansible.builtin.include_tasks: _preserve_failure.yaml
+    - name: Publish the sanitized FabricDomain create error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
+      vars:
+        _osac_error_label: FabricDomain create

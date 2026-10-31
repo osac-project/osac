@@ -1,0 +1,81 @@
+---
+# Applies a NetworkAttachment at the Fabric enforcement point. Overlay
+# attachments and SecurityGroup binds are documented no-ops: the Kubernetes
+# Manager enforces VM SecurityGroups, and the Fabric has no enforcement point
+# on a VM address.
+
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: apply_network_attachment
+
+- name: Validate the interface type
+  ansible.builtin.assert:
+    that:
+      - _osac_interface.type | default('') in ['physical', 'overlay']
+    fail_msg: "interface.type must be physical or overlay"
+
+- name: Leave an overlay attachment to the Kubernetes Manager
+  ansible.builtin.debug:
+    msg: "Overlay attachment: no Fabric change; the Kubernetes Manager attached the VM"
+  when: _osac_interface.type | default('') == 'overlay'
+
+- name: Move the bare-metal port onto the Subnet segment
+  when: _osac_interface.type | default('') == 'physical'
+  block:
+    - name: Validate the physical attachment input
+      ansible.builtin.assert:
+        that:
+          - _osac_target.host_name | default('') | length > 0
+          - _osac_interface.name | default('') | length > 0
+          - _osac_interface.mac_address | default('') | length > 0
+          - subnet.metadata.name | default('') | length > 0
+          - _osac_virtual_network.metadata.name | default('') | length > 0
+        fail_msg: >-
+          A physical attachment needs target.host_name, interface.name,
+          interface.mac_address, the Subnet name and the parent VirtualNetwork.
+
+    - name: Require the provisioning network settings
+      ansible.builtin.assert:
+        that:
+          - netris_bm_provisioning_vnet | default('') | length > 0
+          - netris_mgmt_vpc_id | default(0) | int > 0
+        fail_msg: >-
+          Netris setting error: NETRIS_BM_PROVISIONING_VNET and
+          NETRIS_MGMT_VPC_ID must be set. A physical attachment needs the
+          provisioning V-Net and the management VPC to scope the port move.
+
+    - name: Look up the tenant VPC for the Subnet segment
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: read
+      vars:
+        vpc_name: "{{ _osac_virtual_network.metadata.name }}"
+        vpc_tenant_id: "{{ netris_tenant_id }}"
+
+    - name: Require the tenant VPC
+      ansible.builtin.assert:
+        that:
+          - netris_vpc is mapping
+          - netris_vpc.id is defined
+        fail_msg: >-
+          VirtualNetwork '{{ _osac_virtual_network.metadata.name }}' has no
+          Netris VPC; refusing to move a port into an unresolved segment.
+
+    - name: Move the port to the Subnet segment
+      ansible.builtin.include_tasks: _move_port.yaml
+      vars:
+        network_attachment:
+          host_name: "{{ _osac_target.host_name }}"
+          logical_interface_name: "{{ _osac_interface.name }}"
+          from_vnet_name: "{{ netris_bm_provisioning_vnet }}"
+          from_vpc_id: "{{ netris_mgmt_vpc_id | default(0) | int }}"
+          to_vnet_name: "{{ subnet.metadata.name }}"
+          to_vpc_id: "{{ netris_vpc.id }}"
+          to_tenant_id: "{{ netris_tenant_id }}"
+          reconcile_host_ports: apply
+  rescue:
+    - name: Publish the sanitized NetworkAttachment apply error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
+      vars:
+        _osac_error_label: NetworkAttachment apply

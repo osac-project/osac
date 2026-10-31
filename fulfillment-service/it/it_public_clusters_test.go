@@ -282,6 +282,7 @@ var _ = Describe("Public clusters", func() {
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					PullSecretSecret:  object.GetSpec().GetPullSecretSecret(),
 					NetworkAttachment: object.GetSpec().GetNetworkAttachment(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my-node-set": {

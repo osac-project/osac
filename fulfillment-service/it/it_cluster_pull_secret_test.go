@@ -51,6 +51,27 @@ func clusterPullSecretDefaultsFixture(ctx context.Context) *privatev1.ClusterTem
 	}.Build()
 }
 
+func clusterPullSecretSharedDefaultsFixture(ctx context.Context) *privatev1.ClusterTemplateSpecDefaults {
+	GinkgoHelper()
+	client := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
+	response, err := client.Create(ctx, privatev1.SecretsCreateRequest_builder{
+		Object: privatev1.Secret_builder{
+			Metadata: privatev1.Metadata_builder{Name: "fixture-shared-pull-secret-" + uuid.New(), Tenant: "shared"}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
+			Data:     map[string][]byte{corev1.DockerConfigJsonKey: []byte(dockerConfigJSON)},
+		}.Build(),
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+	secretID := response.GetObject().GetId()
+	DeferCleanup(func(ctx context.Context) {
+		_, err := client.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: secretID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+	})
+	return privatev1.ClusterTemplateSpecDefaults_builder{
+		PullSecretSecret: privatev1.SecretLocalReference_builder{Id: secretID}.Build(),
+	}.Build()
+}
+
 func clusterPullSecretReferenceFixture(ctx context.Context, conn grpc.ClientConnInterface, tenant string) *publicv1.SecretLocalReference {
 	GinkgoHelper()
 	client := publicv1.NewSecretsClient(conn)

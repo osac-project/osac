@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -151,6 +152,14 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 						err = nil
 					}
 					Expect(err).ToNot(HaveOccurred())
+					Eventually(func(g Gomega) {
+						response, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenant}.Build())
+						g.Expect(err).ToNot(HaveOccurred())
+						condition := findTenantCondition(response.GetObject().GetStatus().GetConditions(),
+							privatev1.TenantConditionType_TENANT_CONDITION_TYPE_VAULT_READY)
+						g.Expect(condition).ToNot(BeNil())
+						g.Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+					}, time.Minute, time.Second).Should(Succeed())
 				}
 
 				// Create cluster template for testing

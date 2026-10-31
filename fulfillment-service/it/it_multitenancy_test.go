@@ -153,6 +153,16 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 					Expect(err).ToNot(HaveOccurred())
 				}
 
+				// Cluster creates resolve omitted attachments to the tenant's
+				// default Subnet and SecurityGroup; seed one per tenant.
+				uniqueTenants := make(map[string]bool)
+				for _, tenant := range ServiceAccountTenants {
+					uniqueTenants[tenant] = true
+				}
+				for tenant := range uniqueTenants {
+					ensureTenantDefaultNetworkingFixture(ctx, tenant, "")
+				}
+
 				// Create cluster template for testing
 				templateId := fmt.Sprintf("sa-isolation-template-%s", uuid.New())
 				templatesClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
@@ -391,6 +401,12 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 						err = nil
 					}
 					Expect(err).ToNot(HaveOccurred())
+				}
+
+				// Cluster creates resolve omitted attachments to the tenant's
+				// default Subnet and SecurityGroup; seed one per tenant.
+				for tenant := range uniqueTenants {
+					ensureTenantDefaultNetworkingFixture(ctx, tenant, "")
 				}
 
 				// Create a bare metal instance type for testing

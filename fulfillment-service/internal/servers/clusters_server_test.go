@@ -349,6 +349,7 @@ var _ = Describe("Clusters server", func() {
 			}.Build())
 			seedAddOnOperator(ctx, "published-operator-id", "published-operator", true)
 			seedAddOnOperator(ctx, "unpublished-operator-id", "unpublished-operator", false)
+			seedTenantDefaultNetworking(testTenant, "", nil)
 		})
 
 		It("rejects reserved metadata on public create", func() {
@@ -1114,6 +1115,9 @@ var _ = Describe("Clusters server", func() {
 						},
 					}.Build(),
 				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.node_sets"},
+				},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object = updateResponse.GetObject()
@@ -2170,7 +2174,7 @@ var _ = Describe("Clusters server", func() {
 							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template"}.Build(),
 							NodeSets: map[string]*publicv1.ClusterNodeSet{
 								"workers": publicv1.ClusterNodeSet_builder{
-									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_no_fabric", Shared: true}.
+									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.
 										Build(),
 									Size: proto.Int32(3),
 								}.Build(),
@@ -2179,7 +2183,7 @@ var _ = Describe("Clusters server", func() {
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(response.GetObject().GetSpec().GetNodeSets()["workers"].GetBaremetalInstanceType().GetId()).To(Equal("bmit_no_fabric"))
+				Expect(response.GetObject().GetSpec().GetNodeSets()["workers"].GetBaremetalInstanceType().GetId()).To(Equal("bmit_standard"))
 			})
 
 			It("Accepts node set with baremetal_instance_type when template has none", func() {
@@ -2453,6 +2457,7 @@ var _ = Describe("Clusters server", func() {
 					State:     privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_ACTIVE,
 				}.Build(),
 			}.Build())
+			seedTenantDefaultNetworking(testTenant, "", nil)
 		})
 
 		It("Preserves explicit fields through create and get", func() {
@@ -2598,6 +2603,9 @@ var _ = Describe("Clusters server", func() {
 						}.Build(),
 					}.Build(),
 				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.network"},
+				},
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
@@ -2629,6 +2637,9 @@ var _ = Describe("Clusters server", func() {
 						}.Build(),
 					}.Build(),
 				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.network"},
+				},
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)

@@ -172,7 +172,9 @@ func readerTestClusterObject(name, tenant string, assets readerTestAssets) *publ
 
 func createReaderTestAssets(ctx context.Context) readerTestAssets {
 	GinkgoHelper()
-	_, _ = getOrCreateTenantDefaultNetworkClassFixture(ctx)
+	// Cluster creates resolve omitted attachments to the tenant's default
+	// Subnet and SecurityGroup; usable tenant-default networking must exist.
+	ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 	return readerTestAssets{
 		instanceTypeID: createCatalogItemBareMetalInstanceTypeFixture(ctx, ""),
 		templateID:     createCatalogItemClusterTemplateFixture(ctx, nil, nil),

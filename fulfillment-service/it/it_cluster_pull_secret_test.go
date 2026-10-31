@@ -149,7 +149,9 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		getOrCreateTenantDefaultNetworkClassFixture(ctx)
+		// Cluster creates resolve omitted attachments to the tenant's default
+		// Subnet and SecurityGroup; usable tenant-default networking must exist.
+		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		secretsClient = publicv1.NewSecretsClient(tool.ExternalView().UserConn())

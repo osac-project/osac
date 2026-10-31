@@ -19,10 +19,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -31,9 +29,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/start/mcpserver"
-	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -91,35 +87,7 @@ var _ = Describe("MCP authorized discovery", func() {
 		adamSecretID, adamSecretBytes := createMCPDiscoverySecret(ctx, adamConn, "adam")
 		benSecretID, benSecretBytes := createMCPDiscoverySecret(ctx, benConn, "ben")
 
-		jwksCache, err := auth.NewJwksCache().
-			SetLogger(logger).
-			SetCaPool(tool.CaPool()).
-			AddIssuers(keycloakIssuer(ctx)).
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-		jwtValidator, err := auth.NewJwtValidator().
-			SetLogger(logger).
-			SetJwksCache(jwksCache).
-			SetExpirationLeeway(5 * time.Second).
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-		grpcConn, err := network.NewGrpcClient().
-			SetLogger(logger).
-			SetCaPool(tool.CaPool()).
-			SetAddress(externalServiceAddr).
-			SetUserAgent("fulfillment-mcp-discovery-it").
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() { Expect(grpcConn.Close()).To(Succeed()) })
-		handler, err := mcpserver.NewHandler(
-			mcpserver.NewServerDeps(grpcConn), jwtValidator, "", "",
-			mcpserver.TokenExchangerFunc(func(_ context.Context, subjectToken string, _ *jwt.Token) (string, error) {
-				return subjectToken, nil
-			}),
-		)
-		Expect(err).ToNot(HaveOccurred())
-		httpServer := httptest.NewServer(handler)
-		DeferCleanup(httpServer.Close)
+		httpServer := startInProcessMCPServer(ctx, "fulfillment-mcp-discovery-it")
 
 		adamSession := connectMCPDiscoveryCaller(ctx, httpServer.URL, "adam")
 		DeferCleanup(func() { Expect(adamSession.Close()).To(Succeed()) })
@@ -184,8 +152,9 @@ var _ = Describe("MCP authorized discovery", func() {
 			for _, item := range decoded.Items {
 				Expect(item).To(HaveKey("id"))
 				Expect(item).To(HaveKey("name"))
+				Expect(item).To(HaveKey("version"))
 				Expect(item).To(HaveKey("type"))
-				Expect(item).To(HaveLen(3))
+				Expect(item).To(HaveLen(4))
 			}
 		}
 
@@ -210,6 +179,23 @@ var _ = Describe("MCP authorized discovery", func() {
 		Expect(err).To(Succeed())
 		Expect(string(getSecretResultJSON)).ToNot(ContainSubstring(adamSecretBytes))
 		Expect(string(getSecretResultJSON)).ToNot(ContainSubstring(base64.StdEncoding.EncodeToString([]byte(adamSecretBytes))))
+
+		listedTools, err := adamSession.ListTools(ctx, nil)
+		Expect(err).ToNot(HaveOccurred())
+		var getResourceSchema any
+		for _, listedTool := range listedTools.Tools {
+			if listedTool.Name == "get_resource" {
+				getResourceSchema = listedTool.InputSchema
+				break
+			}
+		}
+		schema, ok := getResourceSchema.(map[string]any)
+		Expect(ok).To(BeTrue())
+		properties, ok := schema["properties"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		resourceType, ok := properties["resource_type"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(resourceType["enum"]).ToNot(ContainElement(string(mcpserver.ResourceTypeSecretReference)))
 
 		adamProject, err := adamProjects.Get(ctx, publicv1.ProjectsGetRequest_builder{Id: adamProjectID}.Build())
 		Expect(err).ToNot(HaveOccurred())

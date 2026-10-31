@@ -134,7 +134,7 @@ spec:
         - name: resolve
           # Same image build-helm-chart-oci-ta's own "package-and-push" step
           # uses -- already has git.
-          image: quay.io/konflux-ci/tools@sha256:2112b51ba80d1041c120c32b67b871d371fde4e5775b32a3c7bf01a2f9ec0964
+          image: quay.io/konflux-ci/tools@sha256:4edbd2c988ccba348e87ce9e4ba56d9977ef5f189a454d2a44193f08c2f72d27
           script: |
             #!/bin/bash
             set -euo pipefail

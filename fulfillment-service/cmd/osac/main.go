@@ -39,5 +39,5 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	return root.Execute()
+	return cli.Execute(root)
 }

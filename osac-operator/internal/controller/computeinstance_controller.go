@@ -1388,9 +1388,10 @@ func unresolvedRequestedTiers(
 
 // willTriggerProvisioning reports whether handleProvisioning will trigger a new
 // provisioning job on this reconcile pass. When false (manual management state,
-// nil provider, or EvaluateAction returning Skip, Poll, or Backoff), storage
-// context resolution and readiness gating are skipped so steady-state VM/VMI
-// updates and job polls make zero gRPC or StorageClass API calls.
+// nil provider, or EvaluateAction returning Skip, Poll, Requeue, or Backoff with
+// delay remaining), storage context resolution and readiness gating are skipped
+// so steady-state VM/VMI updates, job polls, and active backoff waits make zero
+// gRPC or StorageClass API calls.
 func (r *ComputeInstanceReconciler) willTriggerProvisioning(
 	instance *v1alpha1.ComputeInstance,
 ) bool {
@@ -1400,8 +1401,20 @@ func (r *ComputeInstanceReconciler) willTriggerProvisioning(
 	if val, exists := instance.Annotations[osacComputeInstanceManagementStateAnnotation]; exists && val == ManagementStateManual {
 		return false
 	}
-	action, _ := provisioning.EvaluateAction(r.provisionState(instance), func() bool { return false })
-	return action == provisioning.Trigger
+	provState := r.provisionState(instance)
+	action, latestJob := provisioning.EvaluateAction(provState, func() bool { return false })
+	switch action {
+	case provisioning.Trigger:
+		return true
+	case provisioning.Backoff:
+		if latestJob == nil {
+			return false
+		}
+		backoff := provisioning.ComputeBackoffFromJobs(*provState.Jobs, provState.DesiredConfigVersion)
+		return time.Since(latestJob.Timestamp.Time) >= backoff
+	default:
+		return false
+	}
 }
 
 // storageGateCondition returns the ComputeInstance condition that records a

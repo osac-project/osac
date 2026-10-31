@@ -58,22 +58,31 @@
     - name: Filter storage tier definitions to requested tiers for JIT storage
       when: (osac_job_vars.storage_tier_definitions | default([])) | length > 0
       block:
-        - name: Filter to only the requested tiers
+        - name: Filter to only the requested tiers without an existing StorageClass mapping
           ansible.builtin.set_fact:
             _jit_storage_tiers: >-
+              {% set _mapped_tiers = [] -%}
+              {% for _sc in tenant_storage_class_storage_classes -%}
+              {% set _sc_name = _sc.name | default('', true) | string | trim -%}
+              {% set _sc_tier = _sc.tier | default('', true) | string | trim | lower -%}
+              {% if (_sc_name != '') and (_sc_tier != '') and (_sc_tier not in _mapped_tiers) -%}
+              {% set _ = _mapped_tiers.append(_sc_tier) -%}
+              {% endif -%}
+              {% endfor -%}
               {% set _matched = [] -%}
               {% for _td in osac_job_vars.storage_tier_definitions -%}
-              {% if (_td.name | default('') | string | trim | lower) in _cr_requested_tiers -%}
+              {% set _td_tier = _td.name | default('', true) | string | trim | lower -%}
+              {% if (_td_tier in _cr_requested_tiers) and (_td_tier not in _mapped_tiers) -%}
               {% set _ = _matched.append(_td) -%}
               {% endif -%}
               {% endfor -%}
               {{ _matched }}
 
-        - name: Warn if no requested tiers found in storage_tier_definitions
+        - name: Warn if no unmapped requested tiers found in storage_tier_definitions
           ansible.builtin.debug:
             msg: >-
               None of the requested storage tiers {{ _cr_requested_tiers | to_json }}
-              found in storage_tier_definitions.
+              require JIT provisioning from storage_tier_definitions.
               Available tiers: {{ osac_job_vars.storage_tier_definitions | map(attribute='name') | list | to_json }}.
               JIT storage provisioning will be skipped.
           when: _jit_storage_tiers | length == 0

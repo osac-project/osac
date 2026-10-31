@@ -3288,12 +3288,25 @@ var _ = Describe("ComputeInstance Controller", func() {
 			for _, job := range []osacv1alpha1.JobStatus{
 				{Type: osacv1alpha1.JobTypeProvision, JobID: "job-running", State: osacv1alpha1.JobStateRunning, ConfigVersion: "v1"},
 				{Type: osacv1alpha1.JobTypeProvision, JobID: "job-succeeded", State: osacv1alpha1.JobStateSucceeded, ConfigVersion: "v1"},
-				{Type: osacv1alpha1.JobTypeProvision, JobID: "job-failed", State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1"},
+				{Type: osacv1alpha1.JobTypeProvision, JobID: "job-failed", State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.Now()},
 			} {
 				ciWithJob := baseCI.DeepCopy()
 				ciWithJob.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{job}
 				Expect(reconciler.willTriggerProvisioning(ciWithJob)).To(BeFalse(), "expected false for job state %s", job.State)
 			}
+
+			// Once the backoff delay has elapsed since a failed job on the current
+			// config version, handleBackoffForTarget triggers a retry job, so storage
+			// preparation and readiness gating must run.
+			elapsedBackoffCI := baseCI.DeepCopy()
+			elapsedBackoffCI.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				Type:          osacv1alpha1.JobTypeProvision,
+				JobID:         "job-failed-elapsed",
+				State:         osacv1alpha1.JobStateFailed,
+				ConfigVersion: "v1",
+				Timestamp:     metav1.NewTime(time.Now().Add(-provisioning.BackoffBaseDelay - time.Second)),
+			}}
+			Expect(reconciler.willTriggerProvisioning(elapsedBackoffCI)).To(BeTrue())
 
 			// A day-2 spec change on an existing VM leaves the last succeeded job on
 			// a stale config version, which triggers (and therefore gates) a new job.
@@ -4181,6 +4194,66 @@ var _ = Describe("ComputeInstance Controller", func() {
 			condC := expectCondition(getCI(nnC), osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)
 			Expect(condC.Message).To(ContainSubstring("StorageReady=False"))
 			Expect(secrets.getCallCount).To(BeZero())
+		})
+
+		It("should prepare storage context and enforce CSP readiness gating when retrying a failed job after backoff elapses", func() {
+			const resourceName = "test-ci-backoff-retry-storage"
+			const tenantName = "tenant-ci-backoff-retry-storage"
+			createStorageTenant(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			spec := storageSpec("gold", "silver", "fast")
+			nn := createStorageCI(resourceName, tenantName, spec)
+
+			var capture triggerCapture
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", capturingProvider(&capture), 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler.TiersClient = catalogTiersClient(
+				newTestStorageTier("gold", "be-netapp"),
+				newTestStorageTier("silver", "be-netapp"),
+				newTestStorageTier("fast", "be-vast"),
+			)
+			reconciler.BackendsClient = mixedBackendsClient()
+
+			desiredVer, err := provisioning.ComputeDesiredConfigVersion(spec)
+			Expect(err).NotTo(HaveOccurred())
+			ci := getCI(nn)
+			ci.Status.DesiredConfigVersion = desiredVer
+			ci.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID:         "failed-job-1",
+				Type:          osacv1alpha1.JobTypeProvision,
+				State:         osacv1alpha1.JobStateFailed,
+				ConfigVersion: desiredVer,
+				Timestamp:     metav1.NewTime(time.Now().Add(-provisioning.BackoffBaseDelay - time.Second)),
+			}}
+			Expect(k8sClient.Status().Update(ctx, ci)).To(Succeed())
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(reconciler.Client.Get(ctx, nn, cached)).To(Succeed())
+				g.Expect(cached.Status.ProvisioningJobs).To(HaveLen(1))
+				g.Expect(cached.Status.ProvisioningJobs[0].State).To(Equal(osacv1alpha1.JobStateFailed))
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+
+			By("Step 1: when backoff has elapsed but CSP tier silver is unmapped, the retry is gated on storage readiness")
+			res := reconcileCI(reconciler, nn)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(BeZero())
+			gated := getCI(nn)
+			Expect(gated.Status.ProvisioningJobs).To(HaveLen(1))
+			cond := expectCondition(gated, osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)
+			Expect(cond.Message).To(ContainSubstring("missing tier(s): silver"))
+
+			By("Step 2: once silver is mapped in Tenant.status.storageClasses, the elapsed-backoff retry triggers with injected StorageClasses and JIT tier/backend data")
+			setTenantStorageClasses(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC, silverSC})
+			reconcileCI(reconciler, nn)
+			Expect(capture.count).To(Equal(1))
+			Expect(capture.scs).To(ConsistOf(goldSC, silverSC))
+			Expect(capture.tiers).To(HaveLen(1))
+			Expect(capture.tiers[0].Name).To(Equal("fast"))
+			Expect(capture.conns).To(HaveKey("be-vast"))
+			Expect(capture.conns).NotTo(HaveKey("be-netapp"))
+
+			retried := getCI(nn)
+			Expect(retried.Status.ProvisioningJobs).To(HaveLen(2))
+			Expect(retried.Status.ProvisioningJobs[1].JobID).To(Equal("capture-job-1"))
 		})
 	})
 

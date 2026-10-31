@@ -486,3 +486,55 @@
               Expected whitespace-only StorageClass name for tier 'fast' to fail in pre_tasks before tasks:,
               got (rc={{ _blank_name_playbook_run.rc }}):
               {{ _blank_name_playbook_run.stdout + _blank_name_playbook_run.stderr }}
+
+        - name: Execute playbook_osac_create_compute_instance.yml with already-mapped custom StorageClass names and matching storage_tier_definitions
+          ansible.builtin.command:
+            argv:
+              - ansible-playbook
+              - --inventory
+              - localhost,
+              - --connection
+              - local
+              - "{{ playbook_dir }}/../../../../../../../playbook_osac_create_compute_instance.yml"
+              - -e
+              - >-
+                {{
+                  {
+                    "osac_job_vars": {
+                      "resource": {
+                        "metadata": {"name": "vm-csp-test", "namespace": "default"},
+                        "status": {"tenantReference": {"name": "tenant-acme", "namespace": "default"}},
+                        "spec": {
+                          "templateID": "osac.templates.ocp_virt_vm",
+                          "bootDisk": {"sizeGiB": 30, "storageTier": "gold"},
+                          "additionalDisks": [{"sizeGiB": 20, "storageTier": "fast"}]
+                        }
+                      },
+                      "tenant_storage_classes": [
+                        {"name": "custom-gold-sc", "tier": "gold"},
+                        {"name": "custom-fast-sc", "tier": "fast"}
+                      ],
+                      "storage_tier_definitions": [
+                        {"name": "gold", "provider": "lvms", "protocol": "block"},
+                        {"name": "fast", "provider": "lvms", "protocol": "block"}
+                      ]
+                    }
+                  } | to_json
+                }}
+            chdir: "{{ playbook_dir }}/../../../../../../../"
+          environment:
+            KUBECONFIG: "/dev/null"
+            K8S_AUTH_KUBECONFIG: "/dev/null"
+          register: _already_mapped_jit_skip_run
+          changed_when: false
+          failed_when: false
+
+        - name: Assert already-mapped tiers are excluded from JIT provisioning and reach Display compute instance information
+          ansible.builtin.assert:
+            that:
+              - "'JIT storage provisioning will be skipped.' in (_already_mapped_jit_skip_run.stdout + _already_mapped_jit_skip_run.stderr)"
+              - "'osac.service.storage_provider :' not in (_already_mapped_jit_skip_run.stdout + _already_mapped_jit_skip_run.stderr)"
+              - "'Compute instance name: vm-csp-test' in (_already_mapped_jit_skip_run.stdout + _already_mapped_jit_skip_run.stderr)"
+            fail_msg: >-
+              Expected already-mapped tiers to be excluded from JIT provisioning,
+              got: {{ _already_mapped_jit_skip_run.stdout + _already_mapped_jit_skip_run.stderr }}

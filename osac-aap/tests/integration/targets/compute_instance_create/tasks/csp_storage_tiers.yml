@@ -236,7 +236,127 @@
               Expected VirtualMachine volumes to reference root and additional DataVolumes,
               got: {{ _created_vm.resources[0].spec.template.spec.volumes | default([]) }}
 
+        - name: Remove DataVolumes and VirtualMachine before mixed mapped/unmapped JIT run
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ _cleanup_item.api_version }}"
+            kind: "{{ _cleanup_item.kind }}"
+            name: "{{ _cleanup_item.name }}"
+            namespace: "test-subnet"
+          loop:
+            - {api_version: "kubevirt.io/v1", kind: "VirtualMachine", name: "test-vm-csp-tiers"}
+            - {api_version: "cdi.kubevirt.io/v1beta1", kind: "DataVolume", name: "test-vm-csp-tiers-root-disk"}
+            - {api_version: "cdi.kubevirt.io/v1beta1", kind: "DataVolume", name: "test-vm-csp-tiers-disk-1"}
+          loop_control:
+            loop_var: _cleanup_item
+
+        - name: Run playbook_osac_create_compute_instance.yml with mapped custom-named gold tier and unmapped JIT fast tier
+          ansible.builtin.command:
+            argv:
+              - ansible-playbook
+              - --inventory
+              - localhost,
+              - --connection
+              - local
+              - "{{ playbook_dir }}/../../../../../playbook_osac_create_compute_instance.yml"
+              - -e
+              - "@{{ playbook_dir }}/../../../common_vars.yml"
+              - -e
+              - >-
+                {{
+                  {
+                    "ansible_connection": "local",
+                    "ansible_become": false,
+                    "ansible_python_interpreter": ansible_python_interpreter,
+                    "osac_job_vars": {
+                      "resource": test_csp_compute_instance,
+                      "tenant_storage_classes": [
+                        {"name": "custom-gold-sc", "tier": "gold"}
+                      ],
+                      "storage_tier_definitions": [
+                        {"name": "gold", "provider": "lvms", "protocol": "block"},
+                        {"name": "fast", "provider": "lvms", "protocol": "block"}
+                      ]
+                    },
+                    "create_step_wait_annotate_override": {
+                      "name": "osac.workflows.workflow_helpers",
+                      "tasks_from": "noop.yml"
+                    }
+                  } | to_json
+                }}
+            chdir: "{{ playbook_dir }}/../../../../../"
+          environment:
+            ANSIBLE_JINJA2_NATIVE: "true"
+          register: _mixed_mapped_unmapped_jit_run
+          changed_when: false
+
+        - name: Verify LVMS JIT did not create duplicate StorageClass for already-mapped gold tier
+          kubernetes.core.k8s_info:
+            api_version: storage.k8s.io/v1
+            kind: StorageClass
+            name: "osac-integration-tenant-gold"
+          register: _jit_gold_sc
+
+        - name: Assert osac-integration-tenant-gold StorageClass was not created
+          ansible.builtin.assert:
+            that:
+              - _jit_gold_sc.resources | length == 0
+            fail_msg: >-
+              Expected already-mapped gold tier to be excluded from JIT provisioning,
+              but found StorageClass: {{ _jit_gold_sc.resources }}
+
+        - name: Verify LVMS JIT created StorageClass for unmapped fast tier
+          kubernetes.core.k8s_info:
+            api_version: storage.k8s.io/v1
+            kind: StorageClass
+            name: "osac-integration-tenant-fast"
+          register: _jit_fast_sc
+
+        - name: Assert osac-integration-tenant-fast StorageClass was created
+          ansible.builtin.assert:
+            that:
+              - _jit_fast_sc.resources | length == 1
+            fail_msg: >-
+              Expected unmapped fast tier to be JIT-provisioned as osac-integration-tenant-fast,
+              got: {{ _jit_fast_sc.resources }}
+
+        - name: Read root and additional disk DataVolumes after mixed mapped/unmapped JIT run
+          kubernetes.core.k8s_info:
+            api_version: cdi.kubevirt.io/v1beta1
+            kind: DataVolume
+            namespace: "test-subnet"
+          register: _mixed_jit_dvs
+
+        - name: Assert DataVolumes use custom-gold-sc and JIT-created osac-integration-tenant-fast
+          ansible.builtin.assert:
+            that:
+              - >-
+                (_mixed_jit_dvs.resources
+                 | selectattr('metadata.name', 'equalto', 'test-vm-csp-tiers-root-disk')
+                 | map(attribute='spec.pvc.storageClassName')
+                 | list) == ['custom-gold-sc']
+              - >-
+                (_mixed_jit_dvs.resources
+                 | selectattr('metadata.name', 'equalto', 'test-vm-csp-tiers-disk-1')
+                 | map(attribute='spec.pvc.storageClassName')
+                 | list) == ['osac-integration-tenant-fast']
+            fail_msg: >-
+              Expected root disk='custom-gold-sc' and disk-1='osac-integration-tenant-fast',
+              got: {{ _mixed_jit_dvs.resources }}
+
       always:
+        - name: Remove JIT-created StorageClasses from mixed mapped/unmapped test
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: StorageClass
+            name: "{{ _jit_sc_name }}"
+          loop:
+            - "osac-integration-tenant-gold"
+            - "osac-integration-tenant-fast"
+          loop_control:
+            loop_var: _jit_sc_name
+          failed_when: false
         - name: Remove test VirtualMachine
           kubernetes.core.k8s:
             state: absent

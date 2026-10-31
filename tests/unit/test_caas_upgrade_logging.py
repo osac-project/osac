@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import nullcontext
-from unittest.mock import ANY, Mock
+from unittest.mock import Mock
 
 import pytest
 
@@ -107,5 +107,5 @@ def test_cleanup_waits_without_repeating_a_requested_cluster_delete(monkeypatch:
     )
 
     cli.delete_cluster.assert_not_called()
-    wait_order.assert_called_once_with(k8s=k8s, name="order-name", on_poll=ANY)
+    wait_order.assert_called_once_with(k8s=k8s, name="order-name")
     wait_grpc.assert_called_once_with(grpc=grpc, uuid="cluster-id")

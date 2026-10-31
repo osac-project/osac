@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import math
+import queue
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -675,34 +677,52 @@ def _cleanup(
     try:
         first_error: BaseException | None = None
         deletion_started = time.monotonic()
-        last_deletion_log: float | None = None
+        diagnostics_stop = threading.Event()
+        diagnostics_results: queue.Queue[dict[str, Any]] = queue.Queue()
 
-        def log_deletion(final: bool = False) -> None:
-            nonlocal last_deletion_log
-            now = time.monotonic()
-            if not final and last_deletion_log is not None and now - last_deletion_log < _DIAGNOSTIC_INTERVAL_SECONDS:
-                return
-            last_deletion_log = now
-            _log_diagnostics(
-                component="cluster deletion",
-                data=_deletion_diagnostics(k8s=k8s, grpc=grpc, uuid=uuid, co_name=co_name),
-                elapsed_seconds=now - deletion_started,
-                final=final,
-            )
+        def log_deletion_diagnostics() -> None:
+            while not diagnostics_stop.is_set():
+                try:
+                    data = _deletion_diagnostics(k8s=k8s, grpc=grpc, uuid=uuid, co_name=co_name)
+                except Exception:
+                    data = {"diagnostics_error": "lookup_failed"}
+                diagnostics_results.put(data)
+                if diagnostics_stop.is_set():
+                    return
+                _log_diagnostics(
+                    component="cluster deletion", data=data, elapsed_seconds=time.monotonic() - deletion_started
+                )
+                if diagnostics_stop.wait(_DIAGNOSTIC_INTERVAL_SECONDS):
+                    return
+
+        diagnostics_thread = threading.Thread(
+            target=log_deletion_diagnostics, daemon=True, name="caas-deletion-diagnostics"
+        )
 
         try:
             if uuid is not None:
                 if not delete_cluster_requested:
                     cli.delete_cluster(uuid=uuid)
                 if co_name is not None:
-                    log_deletion()
+                    diagnostics_thread.start()
                     try:
-                        wait_for_cluster_deletion_without_cleanup(k8s=k8s, name=co_name, on_poll=lambda: log_deletion())
-                    except BaseException:
-                        log_deletion(final=True)
-                        raise
-                    else:
-                        log_deletion(final=True)
+                        wait_for_cluster_deletion_without_cleanup(k8s=k8s, name=co_name)
+                    finally:
+                        diagnostics_stop.set()
+                        latest_diagnostics: dict[str, Any] | None = None
+                        while True:
+                            try:
+                                latest_diagnostics = diagnostics_results.get_nowait()
+                            except queue.Empty:
+                                break
+                        if latest_diagnostics is None:
+                            latest_diagnostics = {"diagnostics_pending": True}
+                        _log_diagnostics(
+                            component="cluster deletion",
+                            data=latest_diagnostics,
+                            elapsed_seconds=time.monotonic() - deletion_started,
+                            final=True,
+                        )
                 wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
         except BaseException as exc:
             first_error = exc

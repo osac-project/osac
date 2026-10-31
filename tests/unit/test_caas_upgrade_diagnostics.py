@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 from typing import Any
 from unittest.mock import Mock
 
@@ -127,6 +129,43 @@ def test_wait_elapsed_skips_sleep_after_diagnostics_cross_deadline(
     assert sleeps == []
     messages = [record.getMessage() for record in caplog.records if record.name == scenario.diagnostics_logger.name]
     assert len(messages) == 2
+
+
+def test_cleanup_does_not_wait_for_deletion_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ClusterOrder absence polling must not wait for slow deletion lookups."""
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_diagnostics(**_kwargs: object) -> dict[str, Any]:
+        started.set()
+        release.wait(timeout=1)
+        return {}
+
+    def fast_wait(**_kwargs: object) -> None:
+        assert started.wait(timeout=1)
+
+    monkeypatch.setattr(scenario, "_deletion_diagnostics", slow_diagnostics)
+    monkeypatch.setattr(scenario, "wait_for_cluster_deletion_without_cleanup", fast_wait)
+    monkeypatch.setattr(scenario, "wait_for_cluster_grpc_removal", Mock())
+    cli, grpc, private_grpc, k8s = (Mock() for _ in range(4))
+
+    started_at = time.monotonic()
+    scenario._cleanup(
+        cli=cli,
+        grpc=grpc,
+        private_grpc=private_grpc,
+        k8s=k8s,
+        uuid="cluster-id",
+        co_name="order-name",
+        created_version_ids=[],
+        evidence={"phase": "node-pool-completed", "outcome": "failed"},
+        source_version="4.22.0-rhcos",
+        delete_cluster_requested=True,
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 0.5
+    release.set()
 
 
 def test_deletion_diagnostics_reports_order_hosted_cluster_and_pools() -> None:

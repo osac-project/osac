@@ -5,6 +5,8 @@ image provides it through pytest-opentelemetry); everywhere else they skip
 and the no-OpenTelemetry tests below still exercise the inert path.
 """
 
+import subprocess
+
 import pytest
 
 from tests.e2e.core import runner
@@ -134,3 +136,34 @@ def test_wait_span_nests_under_the_current_span(exporter: object, monkeypatch: p
     wait = spans[0]
     assert wait.parent is not None
     assert wait.parent.span_id == call_span.get_span_context().span_id
+
+
+def test_wait_span_records_no_exception_and_no_command_on_escaping_error(
+    exporter: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An escaping CalledProcessError must not leak its command into the trace.
+
+    The SDK records escaping exceptions as span events by default; a
+    CalledProcessError's message carries the command and output, which may
+    contain secrets. poll_until suppresses them in its own TimeoutError for
+    the same reason, so the wait span must record neither the event nor the
+    text -- only a generic ERROR status.
+    """
+    from opentelemetry.trace import StatusCode
+
+    def fail() -> str:
+        raise subprocess.CalledProcessError(
+            returncode=1, cmd=["grpcurl", "-H", "authorization: Bearer SECRET-TOKEN", "api/Method"]
+        )
+
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.poll_until(fn=fail, until=lambda _: True, retries=2, delay=0, description="flaky grpcurl call")
+
+    spans = wait_spans(exporter, "flaky grpcurl call")
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.status.description == "poll failed"
+    assert span.events == ()
+    assert "SECRET-TOKEN" not in str(span.attributes)
+    assert "grpcurl" not in str(span.attributes)

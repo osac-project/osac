@@ -132,24 +132,34 @@ def _wait_span(description: str, *, delay: int, retries: int) -> Iterator[Span |
     The span nests under whatever span is current when poll_until runs (the
     test's call span in the ci-observe trace), so each wait shows with its
     own duration in the trace waterfall.
+
+    Exception recording is disabled: an escaping CalledProcessError carries
+    the command and its output, which may contain secrets -- poll_until's
+    own TimeoutError messages suppress them for the same reason. A generic
+    ERROR status still marks the failed wait.
     """
     if _otel_trace is None:
         yield _NO_OP_WAIT_SPAN
         return
     with _otel_trace.get_tracer(__name__).start_as_current_span(
-        description, kind=_otel_trace.SpanKind.INTERNAL
+        description, kind=_otel_trace.SpanKind.INTERNAL, record_exception=False, set_status_on_exception=False
     ) as span:
         span.set_attribute("poll.delay", delay)
         span.set_attribute("poll.retries", retries)
-        yield span
+        try:
+            yield span
+        except TimeoutError:
+            span.set_status(_otel_trace.Status(_otel_trace.StatusCode.ERROR, "poll timed out"))
+            raise
+        except BaseException:
+            span.set_status(_otel_trace.Status(_otel_trace.StatusCode.ERROR, "poll failed"))
+            raise
 
 
 def _end_wait_span(span: Span | _NoOpWaitSpan, attempts: int, met: bool) -> None:
     """Record the wait's outcome: bounded counters and flags, no polled data."""
     span.set_attribute("poll.attempts", attempts)
     span.set_attribute("poll.condition_met", met)
-    if not met and _otel_trace is not None:
-        span.set_status(_otel_trace.Status(_otel_trace.StatusCode.ERROR, "poll timed out"))
 
 
 def env(name: str, default: str | None = None) -> str:

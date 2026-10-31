@@ -76,7 +76,10 @@ def _wait_elapsed(
         if diagnose is not None and (last_diagnostic is None or now - last_diagnostic >= _DIAGNOSTIC_INTERVAL_SECONDS):
             last_diagnostic = now
             _log_diagnostics(component=component, data=diagnose(value), elapsed_seconds=now - accepted_at)
-        time.sleep(min(POLL_SECONDS, deadline - now))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(POLL_SECONDS, remaining))
     if diagnose is not None and last_value is not None:
         _log_diagnostics(
             component=component, data=diagnose(last_value), elapsed_seconds=time.monotonic() - accepted_at, final=True

@@ -77,7 +77,7 @@ def test_wait_elapsed_logs_initial_and_final_diagnostics(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A timeout leaves a final redacted snapshot, not only a generic message."""
-    times = iter([0.0, 0.0, 1.0, 1.0])
+    times = iter([0.0, 0.0, 1.0, 1.0, 1.0])
     monkeypatch.setattr(scenario.time, "monotonic", lambda: next(times))
     monkeypatch.setattr(scenario.time, "sleep", lambda _seconds: None)
 
@@ -100,6 +100,33 @@ def test_wait_elapsed_logs_initial_and_final_diagnostics(
     final = json.loads(messages[1].removeprefix("CaaS upgrade diagnostics: "))
     assert initial == {"component": "test component", "elapsed_seconds": 0.0, "observed": "observed-value"}
     assert final == {"component": "test component", "elapsed_seconds": 1.0, "final": True, "observed": "observed-value"}
+
+
+def test_wait_elapsed_skips_sleep_after_diagnostics_cross_deadline(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A diagnostic that crosses the deadline must not cause a negative sleep."""
+    times = iter([0.0, 0.0, 2.0, 2.0])
+    sleeps: list[float] = []
+    monkeypatch.setattr(scenario.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(scenario.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    with (
+        caplog.at_level(logging.INFO, logger=scenario.diagnostics_logger.name),
+        pytest.raises(TimeoutError, match="timed out after 1 elapsed second"),
+    ):
+        scenario._wait_elapsed(
+            component="diagnostic deadline",
+            accepted_at=0.0,
+            limit_seconds=1,
+            observe=lambda: "observed-value",
+            ready=lambda _value: False,
+            diagnose=lambda value: {"observed": value},
+        )
+
+    assert sleeps == []
+    messages = [record.getMessage() for record in caplog.records if record.name == scenario.diagnostics_logger.name]
+    assert len(messages) == 2
 
 
 def test_deletion_diagnostics_reports_order_hosted_cluster_and_pools() -> None:

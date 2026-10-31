@@ -1637,9 +1637,9 @@ the cluster. Every workflow also needs the networking values and steps of
 #### CUDN EVPN with Netris
 
 Your platform administrators must prepare the EVPN host networking, including
-the EVPN `FRRConfiguration`, and configure the external EVPN/BGP/VTEP fabric
-before installation. They must also make the `cudn_evpn` implementation
-available in the AAP execution environment. See
+the EVPN `FRRConfiguration` resources, and configure the external
+EVPN/BGP/VTEP fabric before installation. They must also make the
+`cudn_evpn` implementation available in the AAP execution environment. See
 [EVPN host networking (VMaaS)](helm-deployment-guide.md#evpn-host-networking-vmaas).
 
 Replace the service-specific block in step 1 with the following

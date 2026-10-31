@@ -361,6 +361,16 @@ explicit disabled-state suppression, enabled empty-override behavior, and the
 CaaS profile's explicit enablement with inherited defaults. It does not install
 MCE or call an Operator catalog or cluster API.
 
+The `make -C osac-installer infra-ready-wait-test` unit suite checks the waits
+that end `make install-infra`. `helm upgrade --install osac-infra --wait-for-jobs`
+waits for hook Jobs but not for Deployments, so the CA issuer, the bundled
+PostgreSQL and Kafka can still be starting when `make install-osac` begins. The
+suite uses a stub `kubectl` to check that each is waited for only when the
+profile created it, with the right namespace, condition and timeout, and that a
+resource that does not become ready fails the step with its name. It does not
+start a cluster; the wait was also exercised once by hand against a Kind API
+server with a slow-starting and a never-ready Deployment.
+
 The `make -C osac-installer kind-runtime-test` unit suite is owned by installer
 implementation work. It uses command stubs to check runtime selection, sudo
 authentication and credential expiry, Makefile/host setup routing, native

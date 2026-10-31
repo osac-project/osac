@@ -70,7 +70,7 @@ importers:
         version: 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-icons':
         specifier: ^6.6.1
-        version: 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+        version: 6.7.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-table':
         specifier: ^6.6.1
         version: 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -234,7 +234,7 @@ importers:
         version: 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-icons':
         specifier: ^6.6.1
-        version: 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+        version: 6.7.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-table':
         specifier: ^6.6.1
         version: 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -945,8 +945,8 @@ packages:
       react: ^17 || ^18 || ^19
       react-dom: ^17 || ^18 || ^19
 
-  '@patternfly/react-icons@6.6.1':
-    resolution: {integrity: sha512-EUHnTliMlUMNfaueyGTaNcdCDGN4CjLtQpNdSg6iWcl5oloHtUDEAIltP0nbCWnepMJDoM2YgjMlyjwWlkNzXg==}
+  '@patternfly/react-icons@6.7.0':
+    resolution: {integrity: sha512-dqMuCtQvPKgCX+7JhRjwxF+0S1A0pJ04VPBrpEw4ss6el+1Mp5VHpwYQFUi2iJlt5vEF5NL1eHhnGoVEg7MjEw==}
     peerDependencies:
       react: ^17 || ^18 || ^19
       react-dom: ^17 || ^18 || ^19
@@ -3128,6 +3128,9 @@ packages:
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
 
+  tslib@2.9.1:
+    resolution: {integrity: sha512-a4Ux9VKuIMHsOS7ENbEq6hK2ZGYIT27Rtl0E4eD9KqwxhKiQeMZE/9xb3IdYwWaSOyIBQLExhQgXDTYoiCxnWA==}
+
   tsx@4.21.0:
     resolution: {integrity: sha512-5C1sg4USs1lfG0GFb2RLXsdpXqBSEhAaA/0kPL01wxzpMqLILNxIxIOKiILz+cdg/pLnOUxFYOR5yhHU666wbw==}
     engines: {node: '>=18.0.0'}
@@ -3787,17 +3790,17 @@ snapshots:
   '@emnapi/core@1.9.2':
     dependencies:
       '@emnapi/wasi-threads': 1.2.1
-      tslib: 2.8.1
+      tslib: 2.9.1
     optional: true
 
   '@emnapi/runtime@1.9.2':
     dependencies:
-      tslib: 2.8.1
+      tslib: 2.9.1
     optional: true
 
   '@emnapi/wasi-threads@1.2.1':
     dependencies:
-      tslib: 2.8.1
+      tslib: 2.9.1
     optional: true
 
   '@esbuild/aix-ppc64@0.27.7':
@@ -4121,7 +4124,7 @@ snapshots:
 
   '@patternfly/react-core@6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:
-      '@patternfly/react-icons': 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@patternfly/react-icons': 6.7.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-styles': 6.6.1
       '@patternfly/react-tokens': 6.6.1
       focus-trap: 7.6.6
@@ -4130,18 +4133,18 @@ snapshots:
       react-dropzone: 14.4.1(react@19.2.5)
       tslib: 2.8.1
 
-  '@patternfly/react-icons@6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
+  '@patternfly/react-icons@6.7.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:
       react: 19.2.5
       react-dom: 19.2.5(react@19.2.5)
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@patternfly/react-styles@6.6.1': {}
 
   '@patternfly/react-table@6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:
       '@patternfly/react-core': 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@patternfly/react-icons': 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@patternfly/react-icons': 6.7.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-styles': 6.6.1
       '@patternfly/react-tokens': 6.6.1
       lodash: 4.18.1
@@ -4152,7 +4155,7 @@ snapshots:
   '@patternfly/react-templates@6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:
       '@patternfly/react-core': 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@patternfly/react-icons': 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@patternfly/react-icons': 6.7.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-styles': 6.6.1
       '@patternfly/react-tokens': 6.6.1
       react: 19.2.5
@@ -4290,7 +4293,7 @@ snapshots:
     dependencies:
       '@babel/runtime': 7.29.2
       content-type: 1.0.5
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@tanstack/query-core@5.104.1': {}
 
@@ -4335,7 +4338,7 @@ snapshots:
 
   '@tybys/wasm-util@0.10.1':
     dependencies:
-      tslib: 2.8.1
+      tslib: 2.9.1
     optional: true
 
   '@types/aria-query@5.0.4': {}
@@ -6463,6 +6466,8 @@ snapshots:
       strip-bom: 3.0.0
 
   tslib@2.8.1: {}
+
+  tslib@2.9.1: {}
 
   tsx@4.21.0:
     dependencies:

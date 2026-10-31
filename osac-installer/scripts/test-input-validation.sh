@@ -117,6 +117,61 @@ assert_renders_first install-devstack PLATFORM=kind PROFILE=dev-full NS=osac
 REMOTE_KUBECONFIG="${LOG}" assert_renders_first install-multicluster \
   PLATFORM=openshift PROFILE=vmaas-ci NS=osac
 
+# Entry points that never render the devstack chart must not build its
+# external (awx-operator) dependencies: the gate adds no network dependency
+# the entry point did not already have.
+assert_no_devstack_deps() {
+  local label=$1
+  shift
+  local plan="${TMP_DIR}/no-devstack-${label}.plan"
+  MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+    make -C "${SANDBOX}" --no-print-directory -n "$@" \
+    >"${plan}" 2>"${TMP_DIR}/no-devstack-${label}.err" \
+    || fail "make -n $* failed"
+  if grep -Eq 'awx-operator|helm-devstack-deps' "${plan}"; then
+    fail "${label}: the gate builds devstack dependencies it never renders"
+  fi
+}
+
+assert_no_devstack_deps kind-dev install PLATFORM=kind PROFILE=dev NS=osac
+assert_no_devstack_deps openshift-osac install-osac PLATFORM=openshift \
+  PROFILE=caas-ci NS=osac
+assert_no_devstack_deps multicluster install-multicluster \
+  PLATFORM=openshift PROFILE=vmaas-ci NS=osac REMOTE_KUBECONFIG="${LOG}"
+
+# install-multicluster's gate must validate the multicluster infra overlay
+# too: the recipe only passes it to the recursive install-infra, which runs
+# after prepare-remote-cluster has already changed the remote cluster.
+# Continuation lines are joined so the render command and its values flags
+# match on one line, and only the plan region before the first recursive
+# make is checked -- that is the gate, not the sub-make's own renders.
+join_continuations() {
+  awk '/\\$/ { sub(/\\$/, ""); acc = acc $0 " "; next }
+       { print acc $0; acc = "" }'
+}
+
+mc_plan="${TMP_DIR}/multicluster.plan"
+MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  REMOTE_KUBECONFIG="${LOG}" \
+  make -C "${SANDBOX}" --no-print-directory -n install-multicluster \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    >"${mc_plan}" 2>/dev/null || fail "make -n install-multicluster failed"
+sed -n '1,/prepare-remote-cluster/p' "${mc_plan}" | join_continuations \
+  | grep 'helm template osac-infra' | grep -q 'multicluster-infra.yaml' \
+  || fail "install-multicluster: the gate does not render the multicluster overlay"
+
+# install-devstack rejects a wrong profile at parse time, before the gate's
+# cluster lookups or renders, so the user sees the actual mistake.
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory -n install-devstack \
+    PLATFORM=kind PROFILE=dev NS=osac \
+    >"${TMP_DIR}/devstack-guard.out" 2>"${TMP_DIR}/devstack-guard.err"; then
+  fail "install-devstack accepted PROFILE=dev"
+fi
+grep -q 'install-devstack requires PROFILE=dev-full' \
+  "${TMP_DIR}/devstack-guard.err" \
+  || fail "install-devstack did not name the profile requirement"
+
 # An invalid configuration must abort the install before any cluster
 # mutation -- serially and in parallel.
 assert_no_mutation_on_failure() {

@@ -22,6 +22,7 @@ CP_LIMIT_SECONDS = 60 * 60
 NP_LIMIT_SECONDS_PER_NODE = 30 * 60
 START_LIMIT_SECONDS = 10 * 60
 POLL_SECONDS = 20
+_DIAGNOSTIC_INTERVAL_SECONDS = 60
 _TERMINAL_JOB_FAILURES = {"Failed", "Canceled"}
 _PHASES = (
     "preparing",
@@ -35,6 +36,7 @@ _PHASES = (
 )
 _T = TypeVar("_T")
 logger = logging.getLogger(__name__)
+diagnostics_logger = logging.getLogger(f"{__name__}.diagnostics")
 
 
 @dataclass(frozen=True)
@@ -47,18 +49,38 @@ class _ClusterRefs:
 
 
 def _wait_elapsed(
-    *, component: str, accepted_at: float, limit_seconds: int, observe: Callable[[], _T], ready: Callable[[_T], bool]
+    *,
+    component: str,
+    accepted_at: float,
+    limit_seconds: int,
+    observe: Callable[[], _T],
+    ready: Callable[[_T], bool],
+    diagnose: Callable[[_T], dict[str, Any]] | None = None,
 ) -> _T:
     """Count observation time and sleeps against the original request deadline."""
     deadline = accepted_at + limit_seconds
+    last_diagnostic: float | None = None
+    last_value: _T | None = None
     while time.monotonic() < deadline:
         value = observe()
+        last_value = value
         now = time.monotonic()
         if now > deadline:
             break
         if ready(value):
+            if diagnose is not None:
+                _log_diagnostics(
+                    component=component, data=diagnose(value), elapsed_seconds=now - accepted_at, final=True
+                )
             return value
+        if diagnose is not None and (last_diagnostic is None or now - last_diagnostic >= _DIAGNOSTIC_INTERVAL_SECONDS):
+            last_diagnostic = now
+            _log_diagnostics(component=component, data=diagnose(value), elapsed_seconds=now - accepted_at)
         time.sleep(min(POLL_SECONDS, deadline - now))
+    if diagnose is not None and last_value is not None:
+        _log_diagnostics(
+            component=component, data=diagnose(last_value), elapsed_seconds=time.monotonic() - accepted_at, final=True
+        )
     raise TimeoutError(f"{component} timed out after {limit_seconds} elapsed seconds")
 
 
@@ -85,6 +107,179 @@ def _catalog_version(
 def _condition(resource: dict[str, Any], kind: str) -> dict[str, Any]:
     """Return the named status condition, or an empty mapping if absent."""
     return next((item for item in resource.get("status", {}).get("conditions", []) if item.get("type") == kind), {})
+
+
+def _mapping(value: object) -> dict[str, Any]:
+    """Return a mapping, treating an unexpected provider shape as empty."""
+    return value if isinstance(value, dict) else {}
+
+
+def _sequence(value: object) -> list[Any]:
+    """Return a sequence, treating an unexpected provider shape as empty."""
+    return value if isinstance(value, list) else []
+
+
+def _condition_summary(resource: dict[str, Any]) -> list[dict[str, str]]:
+    """Return condition identity and health without messages or secrets."""
+    return [
+        {
+            "type": condition.get("type", ""),
+            "status": condition.get("status", ""),
+            "reason": condition.get("reason", ""),
+        }
+        for condition in _sequence(_mapping(resource.get("status", {})).get("conditions", []))
+    ]
+
+
+def _safe_job(job: dict[str, Any]) -> dict[str, str]:
+    """Expose only the job identity fields needed to diagnose progress."""
+    return {"type": job.get("type", ""), "state": job.get("state", "")}
+
+
+def _upgrade_diagnostics(*, snapshot: dict[str, Any], target_image: str, job: dict[str, Any]) -> dict[str, Any]:
+    """Summarize every upgrade start gate without logging resource payloads."""
+    hosted = snapshot.get("hosted", {})
+    version = hosted.get("status", {}).get("version", {})
+    history = version.get("history", [])
+    newest = history[0] if history else {}
+    generation = int(hosted.get("metadata", {}).get("generation", 0))
+    observed_generation = int(version.get("observedGeneration", -1))
+    pools: dict[str, dict[str, Any]] = {}
+    for node_set, pool in snapshot.get("pools", {}).items():
+        pools[node_set] = {
+            "image_matches": pool.get("spec", {}).get("release", {}).get("image") == target_image,
+            "version": pool.get("status", {}).get("version", ""),
+            "ready": _condition(pool, "Ready").get("status") == "True",
+            "all_machines_ready": _condition(pool, "AllMachinesReady").get("status") == "True",
+            "conditions": _condition_summary(pool),
+        }
+    return {
+        "cluster_state": snapshot.get("cluster", {}).get("status", {}).get("state", ""),
+        "order_phase": snapshot.get("order", {}).get("status", {}).get("phase", ""),
+        "order_release_image_matches": snapshot.get("order", {}).get("spec", {}).get("releaseImage") == target_image,
+        "new_provision_job": bool(job.get("jobID")),
+        "job": _safe_job(job),
+        "hosted_spec_image_matches": hosted.get("spec", {}).get("release", {}).get("image") == target_image,
+        "hosted_desired_image_matches": version.get("desired", {}).get("image") == target_image,
+        "hosted_generation": generation,
+        "hosted_observed_generation": observed_generation,
+        "hosted_observed_generation_matches": observed_generation >= generation,
+        "hosted_history_image_matches": newest.get("image") == target_image,
+        "hosted_history_state": newest.get("state", ""),
+        "hosted_progressing": _condition(hosted, "ClusterVersionProgressing").get("status") == "True",
+        "hosted_available": _condition(hosted, "Available").get("status") == "True",
+        "hosted_degraded": _condition(hosted, "Degraded").get("status") == "True",
+        "hosted_conditions": _condition_summary(hosted),
+        "node_pools": pools,
+    }
+
+
+def _log_diagnostics(
+    *, component: str, data: dict[str, Any], elapsed_seconds: float | None = None, final: bool = False
+) -> None:
+    """Log one stable, redacted diagnostic envelope."""
+    payload: dict[str, Any] = {"component": component}
+    if elapsed_seconds is not None:
+        payload["elapsed_seconds"] = round(elapsed_seconds, 1)
+    if final:
+        payload["final"] = True
+    payload.update(data)
+    diagnostics_logger.info("CaaS upgrade diagnostics: %s", json.dumps(payload, sort_keys=True))
+
+
+def _deletion_diagnostics(*, k8s: K8sClient, grpc: GRPCClient, uuid: str | None, co_name: str | None) -> dict[str, Any]:
+    """Collect the lifecycle facts needed to diagnose a stuck teardown."""
+    diagnostics: dict[str, Any] = {}
+    if uuid is not None:
+        try:
+            cluster = _mapping(_mapping(grpc.get_cluster(cluster_id=uuid)).get("object", {}))
+            diagnostics["cluster_state"] = _mapping(cluster.get("status", {})).get("state", "")
+        except Exception:
+            diagnostics["cluster_state"] = "unavailable"
+
+    if co_name is None:
+        diagnostics.update({"cluster_order_exists": False, "cluster_reference_present": False})
+        return diagnostics
+
+    try:
+        phase = k8s.get_cluster_order_phase(name=co_name, checked=False)
+    except Exception:
+        diagnostics.update({"cluster_order_exists": False, "cluster_order_lookup_failed": True})
+        return diagnostics
+    if phase is None:
+        diagnostics.update({"cluster_order_exists": False, "cluster_reference_present": False})
+        return diagnostics
+
+    try:
+        order = _mapping(k8s.get_json(resource="clusterorder", name=co_name))
+    except Exception:
+        diagnostics.update({"cluster_order_exists": True, "cluster_order_lookup_failed": True})
+        return diagnostics
+
+    metadata = _mapping(order.get("metadata", {}))
+    status = _mapping(order.get("status", {}))
+    jobs = _sequence(status.get("provisioningJobs", []))
+    latest_job = _mapping(jobs[-1]) if jobs else {}
+    reference = _mapping(status.get("clusterReference") or {})
+    diagnostics.update(
+        {
+            "cluster_order_exists": True,
+            "cluster_order_phase": status.get("phase", ""),
+            "cluster_order_deletion_requested": bool(metadata.get("deletionTimestamp")),
+            "cluster_order_finalizers": _sequence(metadata.get("finalizers", [])),
+            "cluster_order_conditions": _condition_summary(order),
+            "latest_job": _safe_job(latest_job),
+            "cluster_reference_present": bool(reference.get("namespace") or reference.get("hostedClusterName")),
+        }
+    )
+
+    namespace = reference.get("namespace")
+    hosted_name = reference.get("hostedClusterName")
+    if not namespace or not hosted_name:
+        diagnostics.update({"hosted_cluster_exists": False, "node_pool_count": 0})
+        return diagnostics
+
+    try:
+        hosted = _mapping(
+            k8s.get_json(resource="hostedclusters.hypershift.openshift.io", name=hosted_name, namespace=namespace)
+        )
+    except Exception:
+        diagnostics.update({"hosted_cluster_exists": False, "node_pool_count": 0})
+        return diagnostics
+
+    hosted_metadata = _mapping(hosted.get("metadata", {}))
+    diagnostics.update(
+        {
+            "hosted_cluster_exists": True,
+            "hosted_cluster_deletion_requested": bool(hosted_metadata.get("deletionTimestamp")),
+            "hosted_cluster_conditions": _condition_summary(hosted),
+        }
+    )
+
+    try:
+        pools = _sequence(
+            _mapping(k8s.list_json(resource="nodepools.hypershift.openshift.io", namespace=namespace)).get("items", [])
+        )
+    except Exception:
+        diagnostics["node_pool_count"] = 0
+        return diagnostics
+
+    owned = [
+        pool
+        for pool in pools
+        if _mapping(_mapping(pool).get("metadata", {})).get("labels", {}).get("osac.openshift.io/clusterorder")
+        == co_name
+    ]
+    diagnostics["node_pool_count"] = len(owned)
+    diagnostics["node_pools"] = {
+        _mapping(_mapping(pool).get("metadata", {})).get("labels", {}).get("osac.openshift.io/node-set", ""): {
+            "ready": _condition(pool, "Ready").get("status") == "True",
+            "all_machines_ready": _condition(pool, "AllMachinesReady").get("status") == "True",
+            "conditions": _condition_summary(pool),
+        }
+        for pool in owned
+    }
+    return diagnostics
 
 
 def _hosted_ready(hosted: dict[str, Any]) -> bool:
@@ -326,6 +521,10 @@ def _upgrade_control_plane(
         _check_job(job, "control plane")
         return current, job
 
+    def diagnose(pair: tuple[dict[str, Any], dict[str, Any]]) -> dict[str, Any]:
+        current, job = pair
+        return _upgrade_diagnostics(snapshot=current, target_image=target_image, job=job)
+
     _wait_elapsed(
         component="control plane start",
         accepted_at=accepted,
@@ -336,6 +535,7 @@ def _upgrade_control_plane(
             and bool(pair[1].get("jobID"))
             and _cp_started(pair[0]["hosted"], target_image)
         ),
+        diagnose=diagnose,
     )
     evidence["phase"] = "control-plane-started"
     completed = _wait_elapsed(
@@ -344,6 +544,7 @@ def _upgrade_control_plane(
         limit_seconds=CP_LIMIT_SECONDS,
         observe=observe,
         ready=lambda pair: _cp_completed(pair[0]["hosted"], target_image),
+        diagnose=diagnose,
     )
     evidence["phase"] = "control-plane-completed"
     evidence["cp_elapsed_seconds"] = round(time.monotonic() - accepted, 1)
@@ -403,6 +604,10 @@ def _upgrade_node_pool(
         _check_job(job, "upgraded node pool")
         return current, job
 
+    def diagnose(pair: tuple[dict[str, Any], dict[str, Any]]) -> dict[str, Any]:
+        current, job = pair
+        return _upgrade_diagnostics(snapshot=current, target_image=target_image, job=job)
+
     _wait_elapsed(
         component="upgraded node pool start",
         accepted_at=accepted,
@@ -416,6 +621,7 @@ def _upgrade_node_pool(
             and bool(pair[1].get("jobID"))
             and _np_started(pair[0]["pools"][upgraded_node_set], old_transition, target_image)
         ),
+        diagnose=diagnose,
     )
     evidence["phase"] = "node-pool-started"
     _wait_elapsed(
@@ -424,6 +630,7 @@ def _upgrade_node_pool(
         limit_seconds=NP_LIMIT_SECONDS_PER_NODE * int(upgraded_before["spec"]["replicas"]),
         observe=observe,
         ready=lambda pair: _np_completed(pair[0]["pools"][upgraded_node_set], old_transition, target_image),
+        diagnose=diagnose,
     )
     evidence["phase"] = "node-pool-completed"
     evidence["np_elapsed_seconds"] = round(time.monotonic() - accepted, 1)
@@ -464,12 +671,35 @@ def _cleanup(
     """Try cluster and catalog deletion, then log the sanitized outcome."""
     try:
         first_error: BaseException | None = None
+        deletion_started = time.monotonic()
+        last_deletion_log: float | None = None
+
+        def log_deletion(final: bool = False) -> None:
+            nonlocal last_deletion_log
+            now = time.monotonic()
+            if not final and last_deletion_log is not None and now - last_deletion_log < _DIAGNOSTIC_INTERVAL_SECONDS:
+                return
+            last_deletion_log = now
+            _log_diagnostics(
+                component="cluster deletion",
+                data=_deletion_diagnostics(k8s=k8s, grpc=grpc, uuid=uuid, co_name=co_name),
+                elapsed_seconds=now - deletion_started,
+                final=final,
+            )
+
         try:
             if uuid is not None:
                 if not delete_cluster_requested:
                     cli.delete_cluster(uuid=uuid)
                 if co_name is not None:
-                    wait_for_cluster_deletion_without_cleanup(k8s=k8s, name=co_name)
+                    log_deletion()
+                    try:
+                        wait_for_cluster_deletion_without_cleanup(k8s=k8s, name=co_name, on_poll=lambda: log_deletion())
+                    except BaseException:
+                        log_deletion(final=True)
+                        raise
+                    else:
+                        log_deletion(final=True)
                 wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
         except BaseException as exc:
             first_error = exc

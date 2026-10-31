@@ -1,0 +1,42 @@
+---
+- name: Write SSH key to temporary file
+  ansible.builtin.copy:
+    content: "{{ lookup('env', 'KCLI_SSH_PRIVATE_KEY') }}"
+    dest: /tmp/.kcli_ssh_key
+    mode: "0600"
+  no_log: true
+
+- name: Set kcli connection variables
+  ansible.builtin.set_fact:
+    kcli_host: "{{ lookup('env', 'KCLI_HOST') }}"
+    kcli_user: "{{ lookup('env', 'KCLI_USER') | default('root', true) }}"
+    kcli_client: "{{ lookup('env', 'KCLI_CLIENT') | default('local', true) }}"
+    _kcli_record: "{{ dns_record_name | regex_replace('\\.' ~ dns_zone ~ '$', '') }}"
+    _kcli_is_wildcard: "{{ dns_record_name.startswith('*.') }}"
+
+- name: Set record name for wildcard
+  ansible.builtin.set_fact:
+    _kcli_name: "{{ _kcli_record | regex_replace('^\\*\\.', '') }}"
+  when: _kcli_is_wildcard
+
+- name: Set record name for regular entry
+  ansible.builtin.set_fact:
+    _kcli_name: "{{ _kcli_record }}"
+  when: not _kcli_is_wildcard
+
+- name: Create DNS record via kcli
+  ansible.builtin.shell: >
+    ssh -i /tmp/.kcli_ssh_key -o StrictHostKeyChecking=no
+    {{ kcli_user }}@{{ kcli_host }}
+    "kcli -C {{ kcli_client }} create dns
+    -d {{ dns_zone }}
+    -i {{ dns_record_value }}
+    {{ '-a \"*\"' if _kcli_is_wildcard else '' }}
+    {{ _kcli_name }}"
+  no_log: true
+
+- name: Remove temporary SSH key
+  ansible.builtin.file:
+    path: /tmp/.kcli_ssh_key
+    state: absent
+  no_log: true

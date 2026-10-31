@@ -336,11 +336,15 @@ aap:
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: ""
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""
         PARKING_VNET_NAME: ""
+        KCLI_CLIENT: ""
+        KCLI_HOST: ""
+        KCLI_USER: ""
       secret:
         AWS_ACCESS_KEY_ID: ""
         AWS_SECRET_ACCESS_KEY: ""
         SERVER_SSH_KEY: ""
         SERVER_SSH_BASTION_KEY: ""
+        KCLI_SSH_PRIVATE_KEY: ""
     networkFulfillment:
       enabled: false
       config: {}

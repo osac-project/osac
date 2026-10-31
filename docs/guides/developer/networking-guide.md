@@ -650,3 +650,10 @@ rejections with different status codes.
 
 With networking in place, you can create compute instances that attach to your Subnets
 (and optionally SecurityGroups). See [Creating a VM with OSAC](computeinstance-guide.md).
+
+For bare-metal servers on the same Subnets, see
+[Bare Metal Instance networking](baremetalinstance-guide.md#networking) and the
+[bare-metal fulfillment architecture](../../architecture/bm-server-fulfillment.md)
+summary. Shared NetworkClass and address-plan operator guidance remains under the
+Unified / Default Networking designs; BMaaS-specific lifecycle details live in the
+[BMaaS networking design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md).

@@ -6,7 +6,9 @@ including IP, MAC, or network-attachment data on any provisioned resource.
 ## Authoritative sources and implementation status
 
 This summary was checked against the accepted designs on `enhancement-proposals`
-`main` on 2026-09-30. Read the applicable full designs before finalizing scope:
+`main` on 2026-10-28 (BMaaS notes aligned with PR #357 / OSAC-6817). Shared
+networking doc refresh remains under OSAC-6812. Read the applicable full designs
+before finalizing scope:
 
 - [Unified networking, OSAC-1433](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-unified-networking/design.md)
 - [Default networking, OSAC-1433](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-default-networking/design.md)
@@ -65,7 +67,9 @@ superseded or extended design explicitly.
    the resource-specific message types and compatibility rules below.
 8. **DHCP and discovery:** Workloads receive tenant-network addresses through
    DHCP. Discover assigned addresses through the service-specific status and
-   feedback paths. BMaaS queries fabric DHCP leases by NIC MAC; CaaS delegates
+   feedback paths. For BMaaS, the Fabric Manager owns lease lookup; the networking
+   controller runs `query_dhcp_lease` by the selected NIC MAC after the handoff
+   reboot, and BMF mirrors the result without calling managers. CaaS delegates
    host provisioning, port moves, and IP discovery to BMaaS. Check the per-service
    designs for timing and API/ingress VIP allocation.
 9. **Pluggable managers:** Managers register type/capabilities through ConfigMaps

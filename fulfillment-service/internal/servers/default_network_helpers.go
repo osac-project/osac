@@ -15,105 +15,83 @@ package servers
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"sort"
+
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// findDefaultSubnet returns the newest READY subnet labeled as a tenant default
-// with an IPv4 CIDR, scoped to the given tenant and project. Returns nil if none found.
+// findDefaultSubnet returns the tenant's READY default Subnet with an IPv4 CIDR, or nil. Tenant defaults are
+// tenant-wide (Default Networking design), so the project isn't used.
 func findDefaultSubnet(
 	ctx context.Context,
-	logger *slog.Logger,
+	_ *slog.Logger,
 	subnetsDao *dao.GenericDAO[*privatev1.Subnet],
-	tenant, project string,
+	tenant, _ string,
 ) (*privatev1.Subnet, error) {
-	filter := fmt.Sprintf(
-		"this.metadata.labels[\"%s\"] == \"true\" && has(this.spec.ipv4_cidr) && this.metadata.tenant == \"%s\"",
-		defaultLabel, tenant,
-	)
-	filter += fmt.Sprintf(" && this.metadata.project == %q", project)
-	listResponse, err := subnetsDao.List().
-		SetFilter(filter).
-		Do(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var items []*privatev1.Subnet
-	for _, subnet := range listResponse.GetItems() {
-		if subnet.GetMetadata().HasDeletionTimestamp() {
-			continue
-		}
-		if subnet.GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
-			continue
-		}
-		items = append(items, subnet)
-	}
-	if len(items) == 0 {
-		return nil, nil
-	}
-	sort.Slice(items, func(i, j int) bool {
-		ti := items[i].GetMetadata().GetCreationTimestamp().AsTime()
-		tj := items[j].GetMetadata().GetCreationTimestamp().AsTime()
-		return ti.After(tj)
+	return findTenantDefault(ctx, subnetsDao, tenant, func(subnet *privatev1.Subnet) bool {
+		return subnet.GetSpec().GetIpv4Cidr() != "" &&
+			subnet.GetStatus().GetState() == privatev1.SubnetState_SUBNET_STATE_READY
 	})
-	if len(items) > 1 {
-		logger.WarnContext(ctx, "multiple default Subnets found, using newest",
-			slog.Int("count", len(items)),
-		)
-	}
-	return items[0], nil
 }
 
-// findDefaultSecurityGroup returns the newest READY security group labeled as a
-// tenant default that belongs to the given virtual network, scoped to the given
-// tenant and project. Returns nil if none found.
+// findDefaultSecurityGroup returns the tenant's READY default SecurityGroup of the given VirtualNetwork, or nil.
+// Tenant defaults are tenant-wide (Default Networking design), so the project isn't used.
 func findDefaultSecurityGroup(
 	ctx context.Context,
-	logger *slog.Logger,
+	_ *slog.Logger,
 	securityGroupsDao *dao.GenericDAO[*privatev1.SecurityGroup],
 	virtualNetworkID string,
-	tenant, project string,
+	tenant, _ string,
 ) (*privatev1.SecurityGroup, error) {
-	filter := fmt.Sprintf(
-		"this.metadata.labels[\"%s\"] == \"true\" && this.metadata.tenant == \"%s\"",
-		defaultLabel, tenant,
-	)
-	filter += fmt.Sprintf(" && this.metadata.project == %q", project)
-	listResponse, err := securityGroupsDao.List().
-		SetFilter(filter).
-		Do(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var items []*privatev1.SecurityGroup
-	for _, sg := range listResponse.GetItems() {
-		if sg.GetMetadata().HasDeletionTimestamp() {
-			continue
-		}
-		if sg.GetStatus().GetState() != privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY {
-			continue
-		}
-		if refKey(sg.GetSpec().GetVirtualNetwork()) != virtualNetworkID {
-			continue
-		}
-		items = append(items, sg)
-	}
-	if len(items) == 0 {
-		return nil, nil
-	}
-	sort.Slice(items, func(i, j int) bool {
-		ti := items[i].GetMetadata().GetCreationTimestamp().AsTime()
-		tj := items[j].GetMetadata().GetCreationTimestamp().AsTime()
-		return ti.After(tj)
+	return findTenantDefault(ctx, securityGroupsDao, tenant, func(group *privatev1.SecurityGroup) bool {
+		return refKey(group.GetSpec().GetVirtualNetwork()) == virtualNetworkID &&
+			group.GetStatus().GetState() == privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY
 	})
-	if len(items) > 1 {
-		logger.WarnContext(ctx, "multiple default SecurityGroups found, using newest",
-			slog.Int("count", len(items)),
-		)
+}
+
+// resolveNetworkingReference resolves a Subnet or SecurityGroup reference of a BareMetalInstance or Cluster in the
+// owner's tenant and project. The tenant defaults are tenant-wide (Default Networking design), so a reference to a
+// tenant default of the owner's tenant resolves from any project. The target is locked when locked is true.
+func resolveNetworkingReference[O referenceResource](
+	ctx context.Context,
+	resourceDao *dao.GenericDAO[O],
+	owner *privatev1.Metadata,
+	reference resourceReference,
+	kind string,
+	notFoundCode grpccodes.Code,
+	locked bool,
+) (O, error) {
+	resolve := resolveAndCanonicalizeReference[O]
+	if locked {
+		resolve = resolveAndCanonicalizeLockedReference[O]
 	}
-	return items[0], nil
+	object, err := resolve(ctx, resourceDao, owner, reference, kind, notFoundCode)
+	if err == nil || grpcstatus.Code(err) != notFoundCode {
+		return object, err
+	}
+	key := reference.GetId()
+	if key == "" {
+		key = reference.GetName()
+	}
+	found, findErr := findInScope(ctx, resourceDao, owner.GetTenant(), owner.GetProject(), key)
+	if findErr != nil {
+		return object, findErr
+	}
+	if found.GetId() == "" || found.GetMetadata().GetLabels()[defaultLabel] != "true" {
+		return object, err
+	}
+	if locked {
+		if found, err = lockRecord(ctx, resourceDao, found.GetId()); err != nil {
+			return found, err
+		}
+	}
+	if err := validateResourceNotDeleted(kind, found.GetId(), "", found.GetMetadata()); err != nil {
+		return found, err
+	}
+	canonicalizeResourceReference(reference, found)
+	return found, nil
 }

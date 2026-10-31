@@ -75,7 +75,7 @@ var _ = Describe("NewProvider", func() {
 			}
 			instance.SetGroupVersionKind(v1alpha1.GroupVersion.WithKind("ComputeInstance"))
 
-			result, err := provider.TriggerDeprovision(ctx, instance, instance.Status.ProvisioningJobs)
+			result, err := provider.TriggerDeprovision(ctx, instance, nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
 			Expect(result.JobID).To(Equal("200"))

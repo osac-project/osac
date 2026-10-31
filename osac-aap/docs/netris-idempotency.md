@@ -60,7 +60,8 @@ has already disappeared, so a retry can finish cleanup after a partial delete.
 
 - Netris object names are unique within the relevant API list.
 - OSAC CR `metadata.name` maps to Netris VPC / V-Net / IPAM / ACL / NAT names
-  (NAT uses `{name}-snat` or `{name}-dnat`).
+  (NATGateway uses `osac-natgw-<id>`, ExternalIPAttachment `osac-eipa-<id>`,
+  ExternalIP `osac-eip-<id>`, ExternalIPPool `osac-pool-<id>`).
 - Auth uses `netris_session_cookie` from `netris.controller.auth`.
 - Operator re-launches the **create** job when desired config version changes;
   there are no separate Update playbooks for tenant networking.
@@ -71,8 +72,6 @@ has already disappeared, so a retry can finish cleanup after a partial delete.
 
 - `netris_immutable_mismatch(existing, expected_fields)` — returns a list of
   `{field, expected, actual}` dicts for differing fields (empty = match).
-- `osac_is_default_networking_resource(resource)` — true when label
-  `osac.openshift.io/default` is `"true"`.
 - `netris_port_on_vnet(vnet_detail, port_id)` — true when port id is in
   V-Net ports (int/string tolerant).
 - `netris_ports_excluding(ports, port_id)` — ports list without the matching
@@ -95,20 +94,19 @@ Refusing delete-and-recreate. Correct Netris state or recreate the OSAC
 resource with a new name after cleanup.
 ```
 
-The top-level Netris AAP playbooks rescue provider failures and report the
-operation, OSAC resource kind/name, failed task, HTTP status when present, and
-a bounded provider error summary. Common cookie, authorization, token,
-password, and secret values are redacted. This is AAP job output only; this
-change does not alter operator status or Fulfillment error propagation.
+Each Netris task file rescues its failures and publishes an `osac_error` with
+the task name, the failed step, the HTTP status when present, and a bounded
+provider error summary. Common cookie, authorization, token,
+password, and secret values are redacted. The operator reads the `osac_error` through the network manager contract.
 
 ## Testing
 
 - Unit: `uv run pytest tests/unit` (idempotency, ownership, diagnostic, and
   pool-membership filters).
-- Component: `tests/integration/targets/netris_idempotency/` runs top-level
-  playbooks against Kind and a stateful local Netris HTTP fixture. It covers
-  create/replay, immutable drift, detail reads, partial create/delete recovery,
-  default-resource refusal, delete ownership, ExternalIP pool membership,
-  move retries, post-conditions, and sanitized AAP diagnostics. It does not
+- Component: `tests/integration/targets/netris_fabric/` runs every Fabric task
+  through the generic playbook against a stateful local Netris HTTP fake. It
+  covers create/replay, immutable drift, detail reads, partial create/delete
+  recovery, delete ownership, ExternalIP pool membership, port-move retries,
+  lost responses and sanitized error messages. It does not
   prove response shapes against the pinned Netris 2.8.1 lab. Live Netris ACL
   prune coverage belongs to OSAC-4888 / provider suites.

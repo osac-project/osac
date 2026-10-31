@@ -18,7 +18,7 @@ class TestVirtualNetworkCrudOnly:
         vn_name = f"crud-only-{uuid.uuid4().hex[:8]}"
         vn_id: str | None = None
         try:
-            vn_id = jwt_grpc_tenant1.create_virtual_network(name=vn_name, ipv4_cidr="10.130.0.0/16")
+            vn_id = jwt_grpc_tenant1.create_virtual_network(name=vn_name, ipv4_cidr="172.18.0.0/16")
 
             with pytest.raises(subprocess.CalledProcessError) as exc_info:
                 jwt_grpc_tenant1.call(

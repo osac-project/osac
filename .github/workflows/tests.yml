@@ -437,6 +437,16 @@ jobs:
           --set metering.image.tag=it
           --set metering.image.pullPolicy=Never"
 
+      # Networking installation checks (NetworkClass step and private API,
+      # admission policy, provider networking flag):
+      # osac-installer/scripts/it-networking-checks.py.
+      - name: Check networking installation
+        if: inputs.kind == 'it-osac-installer'
+        run: |
+          export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
+          python3 osac-installer/scripts/it-networking-checks.py \
+            --namespace osac --release osac
+
       - name: Collect diagnostic logs
         if: inputs.kind == 'it-osac-installer' && always()
         run: |
@@ -499,6 +509,15 @@ jobs:
           --set metering.image.repository=localhost/metering-service
           --set metering.image.tag=it
           --set metering.image.pullPolicy=Never"
+
+      # The rerun of the NetworkClass step must leave the networking
+      # installation exactly as the first install did.
+      - name: Check networking installation after the upgrade
+        if: inputs.kind == 'it-osac-installer'
+        run: |
+          export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
+          python3 osac-installer/scripts/it-networking-checks.py \
+            --namespace osac --release osac
 
       # --- unit tests of the osac chart: helm-unittest (mocked cluster) and the offline preflight render script
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

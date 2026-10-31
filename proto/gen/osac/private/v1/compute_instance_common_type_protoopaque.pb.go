@@ -169,7 +169,8 @@ func (x *ComputeNetworkAttachment) ClearSubnet() {
 type ComputeNetworkAttachment_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// Reference to the Subnet for this NIC; must be in READY state (same tenant and region rules as ComputeInstance).
+	// Reference to the Subnet for this NIC; must be in READY state and in the same tenant and project as the
+	// ComputeInstance.
 	Subnet *SubnetLocalReference
 	// References to SecurityGroups for this NIC; each must be READY and belong to the same VirtualNetwork as subnet.
 	SecurityGroups []*SecurityGroupLocalReference

@@ -28,10 +28,10 @@ def test_security_group_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient) -
 
     try:
         vn_name: str = f"sg-test-vnet-{uuid4().hex[:8]}"
-        vn_id, vn_cr_name = create_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_name, "10.210.0.0/16")
+        vn_id, vn_cr_name = create_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_name, "172.26.0.0/16")
 
         subnet_id, subnet_cr_name = create_and_wait_for_subnet(
-            grpc, k8s_hub_client, vn_id, "10.210.1.0/24", name_prefix="sg-test-subnet"
+            grpc, k8s_hub_client, vn_id, "172.26.1.0/24", name_prefix="sg-test-subnet"
         )
 
         sg_name: str = f"sg-test-{uuid4().hex[:8]}"

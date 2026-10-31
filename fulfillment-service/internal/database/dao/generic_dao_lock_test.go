@@ -180,6 +180,24 @@ var _ = Describe("Lock", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
+	It("returns locked objects in identifier order when requested", func() {
+		err := tm.Run(
+			ctx,
+			func(ctx context.Context) {
+				createObject(ctx, "obj3", "my-tenant")
+				createObject(ctx, "obj1", "my-tenant")
+				response, err := generic.Lock().AddIds("obj3", "obj1", "obj1").SetReturnObjects(true).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				objects := response.GetObjects()
+				Expect(objects).To(HaveLen(2))
+				Expect(objects[0].GetId()).To(Equal("obj1"))
+				Expect(objects[1].GetId()).To(Equal("obj3"))
+				Expect(objects[0].GetMetadata().GetTenant()).To(Equal("my-tenant"))
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+	})
+
 	It("Fails with not found error when locking non-existent object", func() {
 		err := tm.Run(
 			ctx,

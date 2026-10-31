@@ -1,0 +1,8 @@
+---
+# A documented no-op: log what Netris would do and publish nothing.
+# Input: netris_noop, a short phrase ("apply an ACL").
+- name: Log the no-op
+  ansible.builtin.debug:
+    msg: >-
+      Netris {{ osac_job_vars.task | default('task') }} is a documented no-op;
+      Netris would {{ netris_noop | default('do nothing') }}.

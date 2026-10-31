@@ -48,6 +48,7 @@ readonly NIGHTLY_CI_OVERLAY_VALUES=(
     osac-installer/values/vmaas-ci/instance.yaml
     osac-installer/values/bmaas-ci/instance.yaml
     osac-installer/values/full-ci/instance.yaml
+    osac-installer/values/full-ci/netris.yaml
 )
 
 # Usage: append_chart_source <manifest_file> <chart_name> <version> [short_sha] [full_sha]
@@ -382,7 +383,7 @@ stamp_umbrella_nested_field() {
 
 # Usage: stamp_ci_overlay_if_present <values_yaml> <yq_path> <new_value>
 # Stamps an arbitrary-depth field (e.g. .metering.echoAdapter.image.tag) in a
-# CI overlay file (osac-installer/values/*/instance.yaml), only if that path
+# CI overlay file (osac-installer/values/*/instance.yaml or netris.yaml), only if that path
 # already resolves to a non-null value in the file -- `yq -e <path> <file>`
 # exits non-zero when the path is absent/null, which we use purely as an
 # existence check (its own stdout/stderr is discarded). This avoids yq -i's

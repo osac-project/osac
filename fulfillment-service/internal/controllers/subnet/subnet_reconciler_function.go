@@ -48,11 +48,12 @@ type FunctionBuilder struct {
 }
 
 type function struct {
-	logger              *slog.Logger
-	hubCache            controllers.HubCache
-	subnetsClient       privatev1.SubnetsClient
-	networkingHubReader controllers.NetworkingHubReader
-	maskCalculator      *masks.Calculator
+	logger               *slog.Logger
+	hubCache             controllers.HubCache
+	subnetsClient        privatev1.SubnetsClient
+	networkClassesClient privatev1.NetworkClassesClient
+	networkingHubReader  controllers.NetworkingHubReader
+	maskCalculator       *masks.Calculator
 }
 
 type task struct {
@@ -112,11 +113,12 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 
 	// Create and populate the object:
 	object := &function{
-		logger:              b.logger,
-		subnetsClient:       privatev1.NewSubnetsClient(b.connection),
-		networkingHubReader: networkingHubReader,
-		hubCache:            b.hubCache,
-		maskCalculator:      masks.NewCalculator().Build(),
+		logger:               b.logger,
+		subnetsClient:        privatev1.NewSubnetsClient(b.connection),
+		networkClassesClient: privatev1.NewNetworkClassesClient(b.connection),
+		networkingHubReader:  networkingHubReader,
+		hubCache:             b.hubCache,
+		maskCalculator:       masks.NewCalculator().Build(),
 	}
 	result = object.run
 	return
@@ -178,16 +180,12 @@ func (t *task) update(ctx context.Context) error {
 		return err
 	}
 
-	// Select the hub and return immediately if it was just selected. This ensures the hub is
-	// persisted before any Kubernetes objects are created.
-	hubJustSelected := t.subnet.GetStatus().GetHub() == ""
+	// Resolve the hub. The CR is created (or adopted by its label) before status.hub is written, at the end of the
+	// run, so a restart between the two never creates a second CR.
 	if err := t.selectHub(ctx); err != nil {
 		return err
 	}
 	t.subnet.GetStatus().SetHub(t.hubId)
-	if hubJustSelected {
-		return nil
-	}
 
 	// Get the K8S object:
 	object, err := t.getKubeObject(ctx)
@@ -200,6 +198,11 @@ func (t *task) update(ctx context.Context) error {
 
 	// Create or update the Kubernetes object:
 	if object == nil {
+		// The address plan is copied from the NetworkClass once, at create; it is immutable in the CR.
+		spec.AddressPlan, err = t.addressPlan(ctx)
+		if err != nil {
+			return err
+		}
 		object := &osacv1alpha1.Subnet{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace:    t.hubNamespace,
@@ -225,6 +228,7 @@ func (t *task) update(ctx context.Context) error {
 		)
 	} else {
 		update := object.DeepCopy()
+		spec.AddressPlan = object.Spec.AddressPlan
 		update.Spec = spec
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
 		if err != nil {
@@ -261,11 +265,15 @@ func (t *task) delete(ctx context.Context) (err error) {
 	// Do nothing if we don't know the hub yet:
 	t.hubId = t.subnet.GetStatus().GetHub()
 	if t.hubId == "" {
-		// No hub assigned, nothing to clean up on K8s side.
-		t.removeFinalizer()
-		return nil
+		// The CR may exist without status.hub when the controller restarted between its create and the hub
+		// write, so look it up in the canonical hub.
+		if selectErr := t.selectHub(ctx); selectErr != nil {
+			t.removeFinalizer()
+			return nil
+		}
+	} else {
+		err = t.getHub(ctx)
 	}
-	err = t.getHub(ctx)
 	if err != nil {
 		// Check if the hub has been decommissioned (deleted from database)
 		if errors.Is(err, controllers.ErrHubNotFound) {
@@ -418,6 +426,23 @@ func (t *task) setFailed(err error) {
 
 // buildSpec constructs the spec for the Kubernetes Subnet object based on the
 // subnet from the database.
+// addressPlan reads the address plan of the NetworkClass and converts its shares to sixteenths.
+func (t *task) addressPlan(ctx context.Context) (result osacv1alpha1.SubnetAddressPlan, err error) {
+	response, err := t.r.networkClassesClient.List(ctx, privatev1.NetworkClassesListRequest_builder{
+		Limit: new(int32(1)),
+	}.Build())
+	if err != nil {
+		err = fmt.Errorf("failed to read the NetworkClass address plan: %w", err)
+		return
+	}
+	if len(response.GetItems()) == 0 || !response.GetItems()[0].GetSpec().HasAddressPlan() {
+		err = errors.New("the NetworkClass has no address plan")
+		return
+	}
+	result = controllers.AddressPlanSixteenths(response.GetItems()[0].GetSpec().GetAddressPlan())
+	return
+}
+
 func (t *task) buildSpec() osacv1alpha1.SubnetSpec {
 	spec := osacv1alpha1.SubnetSpec{
 		VirtualNetwork: controllers.RefKeyStr(t.subnet.GetSpec().GetVirtualNetwork()),

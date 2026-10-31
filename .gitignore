@@ -246,5 +246,6 @@ cython_debug/
 **/osac-aap-secrets.env
 **/server-ssh-key
 **/server-ssh-bastion-key
+osac-installer/values/*/netris-runtime.yaml
 osac-installer/charts/osac/tmpcharts*/
 m360-local.yaml

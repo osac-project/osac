@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Iterator
 from typing import Any, ClassVar
 
 import pytest
@@ -36,9 +37,9 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
-from tests.e2e.networking.bmaas import bmi_ssh
+from tests.e2e.networking.bmaas import bmi_ssh, guest_ssh
 
-pytestmark = [pytest.mark.regression, pytest.mark.requires_netris, pytest.mark.requires_netris_bmaas]
+pytestmark = pytest.mark.regression
 
 _NETRIS_BMI_RUNNING_RETRIES = 240
 
@@ -47,6 +48,17 @@ def _require(state: dict[str, Any], *keys: str) -> None:
     missing = [k for k in keys if k not in state]
     if missing:
         pytest.skip(f"Prerequisite state missing: {', '.join(missing)}")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _guest_snapshot_source() -> Iterator[None]:
+    """Let a failure snapshot read the network state of the BMIs this class has recorded so far."""
+    guest_ssh.register_guest_snapshot(
+        "guests-bmaas",
+        lambda: [TestBmaasNetworking.state[k] for k in ("bmi1", "bmi2", "bmi3") if k in TestBmaasNetworking.state],
+    )
+    yield
+    guest_ssh.unregister_guest_snapshot("guests-bmaas")
 
 
 class TestBmaasNetworking:
@@ -61,9 +73,7 @@ class TestBmaasNetworking:
         external_ip_pool_name: str,
         external_ip_pool_cidr: str,
     ) -> None:
-        pool_id = private_grpc.create_external_ip_pool(
-            name=external_ip_pool_name, cidrs=[external_ip_pool_cidr], implementation_strategy="netris"
-        )
+        pool_id = private_grpc.create_external_ip_pool(name=external_ip_pool_name, cidrs=[external_ip_pool_cidr])
         pool_cr = wait_for_external_ip_pool_cr(k8s=k8s_hub_client, uuid=pool_id)
         wait_for_external_ip_pool_ready(k8s=k8s_hub_client, name=pool_cr)
         wait_for_external_ip_pool_grpc_ready(private_grpc=private_grpc, pool_id=pool_id)
@@ -75,7 +85,7 @@ class TestBmaasNetworking:
 
     def test_01_create_virtual_network(self, grpc: GRPCClient, k8s_hub_client: K8sClient, net_test_run_id: str) -> None:
         name = f"net-{net_test_run_id}"
-        vnet_id = grpc.create_virtual_network(name=name, ipv4_cidr="10.100.0.0/16")
+        vnet_id = grpc.create_virtual_network(name=name, ipv4_cidr="172.20.0.0/16")
         vnet_cr = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vnet_id)
         wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vnet_cr)
 
@@ -88,7 +98,7 @@ class TestBmaasNetworking:
 
         subnet_a_name = f"sub-a-{net_test_run_id}"
         subnet_a_id = grpc.create_subnet(
-            name=subnet_a_name, virtual_network=self.state["vnet_id"], ipv4_cidr="10.100.1.0/24"
+            name=subnet_a_name, virtual_network=self.state["vnet_id"], ipv4_cidr="172.20.1.0/24"
         )
         subnet_a_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_a_id)
         wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_a_cr)
@@ -96,7 +106,7 @@ class TestBmaasNetworking:
 
         subnet_b_name = f"sub-b-{net_test_run_id}"
         subnet_b_id = grpc.create_subnet(
-            name=subnet_b_name, virtual_network=self.state["vnet_id"], ipv4_cidr="10.100.2.0/24"
+            name=subnet_b_name, virtual_network=self.state["vnet_id"], ipv4_cidr="172.20.2.0/24"
         )
         subnet_b_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_b_id)
         wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_b_cr)
@@ -229,9 +239,9 @@ class TestBmaasNetworking:
 
         for bmi in bmis:
             if bmi["subnet"] == "a":
-                assert bmi["ip"].startswith("10.100.1."), f"BMI {bmi['name']} IP {bmi['ip']} not in subnet A"
+                assert bmi["ip"].startswith("172.20.1."), f"BMI {bmi['name']} IP {bmi['ip']} not in subnet A"
             else:
-                assert bmi["ip"].startswith("10.100.2."), f"BMI {bmi['name']} IP {bmi['ip']} not in subnet B"
+                assert bmi["ip"].startswith("172.20.2."), f"BMI {bmi['name']} IP {bmi['ip']} not in subnet B"
 
         self.__class__.state["bmi1"] = bmis[0]
         self.__class__.state["bmi2"] = bmis[1]

@@ -47,9 +47,11 @@ class OsacCLI:
         return self._config_dir
 
     def _run(self, *args: str, timeout: int = 300) -> str:
+        __tracebackhide__ = True  # args can hold the login token script
         return run(self.binary, "--config", self._config_dir, *args, timeout=timeout)
 
     def _run_unchecked(self, *args: str, timeout: int = 300) -> tuple[str, int]:
+        __tracebackhide__ = True
         return run_unchecked(self.binary, "--config", self._config_dir, *args, timeout=timeout)
 
     def relogin(self) -> None:

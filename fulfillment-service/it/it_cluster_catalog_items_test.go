@@ -301,6 +301,10 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			// This spec creates clusters without network attachments before creating its
 			// explicit network fixture, so ensure the deployment Hub is resolvable first.
 			networkClassID, _ := getOrCreateTenantDefaultNetworkClassFixture(ctx)
+			// The dry-run Creates below omit the network attachment, so they resolve the
+			// tenant defaults and require DefaultNetworkingReady. Seed that before the
+			// network and subnet snapshots, as the fixture may create default resources.
+			ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 			By("authoring a shared offering with Template and catalog defaults")
 			bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
@@ -1112,6 +1116,9 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 
 var _ = Describe("Cluster Catalog Item add-on operator policies", Label("catalog-items"), func() {
 	It("returns a shared operator policy and applies locked references to the cluster spec", func(ctx context.Context) {
+		// The catalog item sets no network attachment, so the Cluster resolves
+		// the tenant defaults, and Create requires them to be READY.
+		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 		operator := createCatalogItemAddOnOperatorFixture(ctx, catalogItemFixtureName())
 		bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 		version := createCatalogItemClusterVersionFixture(ctx, "4.20.0")

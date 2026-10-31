@@ -23,15 +23,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
+	"github.com/osac-project/osac/osac-operator/internal/networktask"
 )
 
 const (
@@ -39,7 +37,9 @@ const (
 	fabricDomainFailedEvent       = "FabricDomainProvisioningFailed"
 	fabricDomainDeletedEvent      = "FabricDomainDeleted"
 	fabricDomainTenantMetricLabel = "tenant"
-	fabricDomainTypeMetricLabel   = "type"
+
+	maxFabricDomainEventMessage = 200
+	fabricDomainTypeMetricLabel = "type"
 )
 
 // fabricDomainObservability has no process-global collectors: tests can register
@@ -64,12 +64,12 @@ func newFabricDomainObservability(reader client.Reader, namespace string) *fabri
 			[]string{fabricDomainTypeMetricLabel, fabricDomainTenantMetricLabel}, nil),
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "osac_fabric_domain_provisioning_duration_seconds",
-			Help:    "Seconds from CR creation to its first persisted Ready state; excludes later membership updates.",
+			Help:    "Seconds from CR creation to its first persisted Ready state after a task ran.",
 			Buckets: []float64{1, 5, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600},
 		}, []string{fabricDomainTypeMetricLabel}),
 		failures: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "osac_fabric_domain_provisioning_failures_total",
-			Help: "Persisted transitions into FabricDomain Failed or to a different failure reason; excludes repeated reconciles.",
+			Help: "Persisted transitions into FabricDomain Failed; excludes repeated reconciles.",
 		}, []string{fabricDomainTypeMetricLabel, "reason"}),
 	}
 }
@@ -106,135 +106,86 @@ func (o *fabricDomainObservability) Collect(ch chan<- prometheus.Metric) {
 }
 
 func (r *FabricDomainReconciler) setupFabricDomainObservability() error {
+	return r.registerObservability(metrics.Registry)
+}
+
+func (r *FabricDomainReconciler) registerObservability(reg prometheus.Registerer) error {
 	if r.observability == nil {
 		r.observability = newFabricDomainObservability(r.Client, r.NetworkingNamespace)
 	}
-	if err := metrics.Registry.Register(r.observability); err != nil {
+	if err := reg.Register(r.observability); err != nil {
 		return fmt.Errorf("registering FabricDomain metrics: %w", err)
 	}
 	return nil
 }
 
-func fabricDomainReady(status v1alpha1.FabricDomainStatus) bool {
-	return status.Phase == v1alpha1.FabricDomainPhaseReady &&
-		apimeta.IsStatusConditionTrue(status.Conditions, v1alpha1.ConditionReady)
+// fabricDomainProvisioned reports Ready after a task ran. Ready with
+// ProvisioningDisabled counts only if the create task already succeeded,
+// so toggling provisioning off and on is not a new first Ready.
+func fabricDomainProvisioned(fd *v1alpha1.FabricDomain) bool {
+	state, _ := networkFeedback(fd, fd.Status.Conditions)
+	ready := apimeta.FindStatusCondition(fd.Status.Conditions, v1alpha1.NetworkConditionReady)
+	return state == networkFeedbackReady && ready != nil &&
+		(ready.Reason != v1alpha1.ReasonProvisioningDisabled ||
+			networktask.Succeeded(fd, networktask.CreateFabricDomain, v1alpha1.NetworkJobManagerFabric))
 }
 
-// Restore the durable marker before the provisioning lifecycle's intermediate
-// status flushes. A stale cache snapshot must not clear it before the final
-// persistence/observation hook gets a chance to preserve it.
-func (r *FabricDomainReconciler) restoreFabricDomainProvisionedAt(
-	ctx context.Context, domain *v1alpha1.FabricDomain,
-) error {
-	if domain.Status.ProvisionedAt != nil || r.APIReader == nil {
-		return nil
-	}
-	latest := &v1alpha1.FabricDomain{}
-	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(domain), latest); err != nil {
-		return err
-	}
-	if latest.UID != domain.UID {
-		return fmt.Errorf("FabricDomain %q was replaced while reconciling", domain.Name)
-	}
-	domain.Status.ProvisionedAt = latest.Status.ProvisionedAt.DeepCopy()
-	return nil
-}
-
-// persistFabricDomainStatusAndObserve compares against the status actually
-// replaced by the successful write, not a potentially stale reconcile/cache
-// snapshot. Conflicts and failed writes emit nothing. The durable first-Ready
-// marker prevents resize/recovery/restart from adding a second duration sample.
-// Like normal Kubernetes events/Prometheus counters, observations are best effort:
-// a process crash between persistence and emission can lose an observation.
-func (r *FabricDomainReconciler) persistFabricDomainStatusAndObserve(
-	ctx context.Context, domain *v1alpha1.FabricDomain,
-) error {
-	reader := r.APIReader
-	if reader == nil {
-		reader = r.Client
-	}
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		latest := &v1alpha1.FabricDomain{}
-		if err := reader.Get(ctx, client.ObjectKeyFromObject(domain), latest); err != nil {
-			return err
-		}
-		if latest.UID != domain.UID {
-			return fmt.Errorf("FabricDomain %q was replaced while reconciling", domain.Name)
-		}
-		before := latest.Status
-		latest.Status = domain.Status
-		// Never replace a previously persisted timestamp with a stale snapshot.
-		latest.Status.ProvisionedAt = before.ProvisionedAt
-		if latest.DeletionTimestamp.IsZero() && before.ProvisionedAt == nil {
-			if fabricDomainReady(before) {
-				// Backfill pre-observability Ready objects without a new sample/event.
-				condition := apimeta.FindStatusCondition(before.Conditions, v1alpha1.ConditionReady)
-				latest.Status.ProvisionedAt = condition.LastTransitionTime.DeepCopy()
-			} else if fabricDomainReady(latest.Status) {
-				now := metav1.Now()
-				latest.Status.ProvisionedAt = &now
-			}
-		}
-		if equality.Semantic.DeepEqual(before, latest.Status) {
-			domain.Status = latest.Status
-			return nil
-		}
-		if err := r.Status().Update(ctx, latest); err != nil {
-			return err
-		}
-		domain.Status = latest.Status
-		r.observeFabricDomainTransition(latest, before)
-		return nil
-	})
-}
-
-func (r *FabricDomainReconciler) observeFabricDomainTransition(
-	domain *v1alpha1.FabricDomain, before v1alpha1.FabricDomainStatus,
-) {
-	if domain.DeletionTimestamp.IsZero() && fabricDomainReady(domain.Status) && !fabricDomainReady(before) {
-		if r.observability != nil && before.ProvisionedAt == nil && domain.Status.ProvisionedAt != nil &&
-			!domain.CreationTimestamp.IsZero() {
-			seconds := domain.Status.ProvisionedAt.Sub(domain.CreationTimestamp.Time).Seconds()
-			if seconds >= 0 {
-				r.observability.duration.WithLabelValues(string(domain.Spec.Type)).Observe(seconds)
+// observeTransition runs after the status write succeeded. A requeue that
+// leaves the state unchanged counts and emits nothing.
+func (r *FabricDomainReconciler) observeTransition(fd, before *v1alpha1.FabricDomain) {
+	stateBefore, _ := networkFeedback(before, before.Status.Conditions)
+	stateAfter, _ := networkFeedback(fd, fd.Status.Conditions)
+	if fabricDomainProvisioned(fd) && !fabricDomainProvisioned(before) {
+		if r.observability != nil && !fd.CreationTimestamp.IsZero() {
+			if seconds := time.Since(fd.CreationTimestamp.Time).Seconds(); seconds >= 0 {
+				r.observability.duration.WithLabelValues(string(fd.Spec.Type)).Observe(seconds)
 			}
 		}
 		if r.Recorder != nil {
-			r.Recorder.Eventf(domain, nil, corev1.EventTypeNormal, fabricDomainProvisionedEvent,
+			r.Recorder.Eventf(fd, nil, corev1.EventTypeNormal, fabricDomainProvisionedEvent,
 				"Provision", "FabricDomain reached Ready")
 		}
 	}
-	reason := fabricDomainFailureReason(domain.Status)
-	if domain.Status.Phase == v1alpha1.FabricDomainPhaseFailed &&
-		(before.Phase != v1alpha1.FabricDomainPhaseFailed || fabricDomainFailureReason(before) != reason) {
+	if stateAfter == networkFeedbackFailed && stateBefore != stateAfter {
+		reason := fabricDomainFailureReason(fd)
 		if r.observability != nil {
-			r.observability.failures.WithLabelValues(string(domain.Spec.Type), reason).Inc()
+			r.observability.failures.WithLabelValues(string(fd.Spec.Type), reason).Inc()
 		}
 		if r.Recorder != nil {
-			r.Recorder.Eventf(domain, nil, corev1.EventTypeWarning, fabricDomainFailedEvent,
-				"Provision", "FabricDomain entered Failed (reason: %s)", reason)
+			r.Recorder.Eventf(fd, nil, corev1.EventTypeWarning, fabricDomainFailedEvent,
+				"Provision", "FabricDomain entered Failed (reason: %s): %s", reason, fabricDomainFailureMessage(fd))
 		}
 	}
 }
 
-func fabricDomainFailureReason(status v1alpha1.FabricDomainStatus) string {
-	condition := apimeta.FindStatusCondition(status.Conditions, v1alpha1.ConditionReady)
+func fabricDomainFailureReason(fd *v1alpha1.FabricDomain) string {
+	condition := apimeta.FindStatusCondition(fd.Status.Conditions, v1alpha1.NetworkConditionReady)
 	if condition != nil && condition.Status == metav1.ConditionFalse && condition.Reason != "" {
 		return condition.Reason
 	}
-	return v1alpha1.ReasonProvisioningFailed
+	return v1alpha1.ReasonFailed
 }
 
-// Called only after this reconcile successfully persisted finalizer removal.
-// A terminal but unsuccessful non-blocking cleanup job is not successful cleanup.
-func (r *FabricDomainReconciler) recordFabricDomainDeleted(domain *v1alpha1.FabricDomain) {
+// fabricDomainFailureMessage is the Ready condition message, valid UTF-8 and
+// short enough for an Event.
+func fabricDomainFailureMessage(fd *v1alpha1.FabricDomain) string {
+	condition := apimeta.FindStatusCondition(fd.Status.Conditions, v1alpha1.NetworkConditionReady)
+	if condition == nil {
+		return ""
+	}
+	message := sanitizeFeedbackText(condition.Message)
+	if runes := []rune(message); len(runes) > maxFabricDomainEventMessage {
+		message = string(runes[:maxFabricDomainEventMessage]) + "..."
+	}
+	return message
+}
+
+// recordFabricDomainDeleted runs only after the finalizer removal persisted,
+// which the shared loop allows only once the delete task succeeded.
+func (r *FabricDomainReconciler) recordFabricDomainDeleted(fd *v1alpha1.FabricDomain) {
 	if r.Recorder == nil {
 		return
 	}
-	job := provisioning.FindLatestJobByType(domain.Status.ProvisioningJobs, v1alpha1.JobTypeDeprovision)
-	if job != nil && !job.State.IsSuccessful() {
-		return
-	}
-	r.Recorder.Eventf(domain, nil, corev1.EventTypeNormal, fabricDomainDeletedEvent,
+	r.Recorder.Eventf(fd, nil, corev1.EventTypeNormal, fabricDomainDeletedEvent,
 		"Delete", "FabricDomain cleanup completed")
 }

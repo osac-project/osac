@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // SecurityGroupProtocol represents network protocol types
@@ -38,7 +39,10 @@ const (
 	SecurityGroupProtocolAll SecurityGroupProtocol = "all"
 )
 
-// SecurityRule defines a single security rule for ingress or egress traffic
+// SecurityRule defines a single security rule for ingress or egress traffic.
+// Ports are set exactly for tcp and udp, both of them, with portFrom <= portTo.
+// +kubebuilder:validation:XValidation:rule="(self.protocol in ['tcp','udp']) ? (has(self.portFrom) && has(self.portTo)) : (!has(self.portFrom) && !has(self.portTo))",message="portFrom and portTo are set exactly for tcp and udp rules"
+// +kubebuilder:validation:XValidation:rule="!has(self.portFrom) || !has(self.portTo) || self.portFrom <= self.portTo",message="portFrom must not exceed portTo"
 type SecurityRule struct {
 	// Protocol specifies the network protocol
 	// +kubebuilder:validation:Required
@@ -73,8 +77,8 @@ type SecurityRule struct {
 	DestinationCIDR string `json:"destinationCidr,omitempty"`
 }
 
-// SecurityGroupSpec defines the desired state of SecurityGroup
-// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable after creation"
+// SecurityGroupSpec defines the desired state of SecurityGroup. The rules
+// change on a rule update; the VirtualNetwork never changes.
 type SecurityGroupSpec struct {
 	// VirtualNetwork is the ID of the parent VirtualNetwork
 	// +kubebuilder:validation:Required
@@ -95,55 +99,38 @@ type SecurityGroupSpec struct {
 	EgressRules []SecurityRule `json:"egressRules,omitempty"`
 }
 
-// SecurityGroupPhaseType is a valid value for .status.phase
-// +kubebuilder:validation:Enum=Progressing;Ready;Failed;Deleting
-type SecurityGroupPhaseType string
-
-const (
-	// SecurityGroupPhaseProgressing means an update is in progress
-	SecurityGroupPhaseProgressing SecurityGroupPhaseType = "Progressing"
-
-	// SecurityGroupPhaseReady means the security group and all associated resources are ready
-	SecurityGroupPhaseReady SecurityGroupPhaseType = "Ready"
-
-	// SecurityGroupPhaseFailed means the security group provisioning has failed
-	SecurityGroupPhaseFailed SecurityGroupPhaseType = "Failed"
-
-	// SecurityGroupPhaseDeleting means there has been a request to delete the SecurityGroup
-	SecurityGroupPhaseDeleting SecurityGroupPhaseType = "Deleting"
-)
-
 // SecurityGroupStatus defines the observed state of SecurityGroup
 type SecurityGroupStatus struct {
-	// Phase provides a single-value overview of the state of the SecurityGroup
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=Progressing;Ready;Failed;Deleting
-	Phase SecurityGroupPhaseType `json:"phase,omitempty"`
-
-	// DesiredConfigVersion is a hash of the spec, used to detect spec changes and control retry behavior.
-	// +kubebuilder:validation:Optional
-	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
-
-	// ProvisioningJobs holds an array of JobStatus tracking provisioning and deprovisioning operations
-	// +kubebuilder:validation:Optional
-	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
-
-	// BackendSecurityGroupID stores provider-specific security group identifier
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
-	BackendSecurityGroupID string `json:"backendSecurityGroupId,omitempty"`
-
-	// Conditions holds an array of metav1.Condition that describe the state of the SecurityGroup
+	// Conditions holds the Ready condition of the SecurityGroup.
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
+
+	// NetworkManagers records the managers copied from the parent at create.
+	// +kubebuilder:validation:Optional
+	NetworkManagers *NetworkManagers `json:"networkManagers,omitempty"`
+
+	// NetworkType records the network type copied from the parent at create; empty without a Kubernetes Manager.
+	// +kubebuilder:validation:Optional
+	NetworkType NetworkType `json:"networkType,omitempty"`
+
+	// TaskInput is the task input stored before the first job (contract §4.5).
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:pruning:PreserveUnknownFields
+	TaskInput *runtime.RawExtension `json:"taskInput,omitempty"`
+
+	// Jobs tracks the latest job per task and manager (contract §4.7).
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=task
+	// +listMapKey=manager
+	Jobs []NetworkJobStatus `json:"jobs,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=sg
 // +kubebuilder:printcolumn:name="VirtualNetwork",type=string,JSONPath=`.spec.virtualNetwork`
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // SecurityGroup is the Schema for the securitygroups API

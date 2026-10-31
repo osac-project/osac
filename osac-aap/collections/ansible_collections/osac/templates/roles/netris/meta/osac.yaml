@@ -3,8 +3,9 @@ name: netris
 title: Netris Network Implementation
 description: >
   Provisions networking resources using Netris Controller API.
-  Maps VirtualNetwork to VPC, Subnet to V-Net (L2VPN),
-  SecurityGroup to ACL.
+  Maps VirtualNetwork to VPC and Subnet to V-Net (L2VPN). SecurityGroups
+  are no-ops (the Kubernetes manager enforces them). A physical
+  NetworkAttachment moves the host's fabric ports to the Subnet's V-Net.
 
 template_type: network
 

@@ -36,11 +36,12 @@ var validExternalIPTransitions = map[privatev1.ExternalIPState][]privatev1.Exter
 }
 
 type PrivateExternalIPsServerBuilder struct {
-	logger            *slog.Logger
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	metricsRegisterer prometheus.Registerer
-	filterDesc        protoreflect.MessageDescriptor
+	logger             *slog.Logger
+	attributionLogic   auth.AttributionLogic
+	tenancyLogic       auth.TenancyLogic
+	metricsRegisterer  prometheus.Registerer
+	filterDesc         protoreflect.MessageDescriptor
+	networkingSettings *NetworkingSettings
 }
 
 var _ privatev1.ExternalIPsServer = (*PrivateExternalIPsServer)(nil)
@@ -53,6 +54,7 @@ type PrivateExternalIPsServer struct {
 	generic           *GenericServer[*privatev1.ExternalIP]
 	externalIPPoolDao *dao.GenericDAO[*privatev1.ExternalIPPool]
 	lifecycle         *externalIPLifecycle
+	settings          NetworkingSettings
 }
 
 func NewPrivateExternalIPsServer() *PrivateExternalIPsServerBuilder {
@@ -83,6 +85,13 @@ func (b *PrivateExternalIPsServerBuilder) SetMetricsRegisterer(value prometheus.
 // expressions. This is optional. When unset, the descriptor of this server's own private message type is used.
 func (b *PrivateExternalIPsServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateExternalIPsServerBuilder {
 	b.filterDesc = value
+	return b
+}
+
+// SetNetworkingSettings sets the networking installation settings. This is optional; the default is
+// DefaultNetworkingSettings.
+func (b *PrivateExternalIPsServerBuilder) SetNetworkingSettings(value NetworkingSettings) *PrivateExternalIPsServerBuilder {
+	b.networkingSettings = &value
 	return b
 }
 
@@ -175,6 +184,7 @@ func (b *PrivateExternalIPsServerBuilder) Build() (result *PrivateExternalIPsSer
 		tenancyLogic:      b.tenancyLogic,
 		generic:           generic,
 		externalIPPoolDao: externalIPPoolDao,
+		settings:          resolveNetworkingSettings(b.networkingSettings),
 	}
 	result.lifecycle = newExternalIPLifecycle(
 		generic.dao,
@@ -201,54 +211,56 @@ func (s *PrivateExternalIPsServer) Get(ctx context.Context,
 	return
 }
 
+// automaticExternalIPPrefix is the reserved name prefix of automatic ExternalIPs.
+const automaticExternalIPPrefix = "auto-eip-"
+
 func (s *PrivateExternalIPsServer) Create(ctx context.Context,
 	request *privatev1.ExternalIPsCreateRequest) (response *privatev1.ExternalIPsCreateResponse, err error) {
 	externalIP := request.GetObject()
 	if err = rejectOutputStatusOnCreate(externalIP != nil && externalIP.HasStatus()); err != nil {
 		return
 	}
-
+	if !s.settings.ProvisioningEnabled {
+		err = grpcstatus.Error(grpccodes.FailedPrecondition, "provider networking is disabled")
+		return
+	}
 	err = s.validateExternalIP(ctx, externalIP)
 	if err != nil {
 		return
 	}
-
-	poolKey := refKey(externalIP.GetSpec().GetPool())
-	pool, poolErr := s.validatePoolReference(ctx, poolKey)
-	if poolErr != nil {
-		err = poolErr
+	var poolID string
+	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response,
+		func(ctx context.Context, _, candidate *privatev1.ExternalIP) error {
+			if err := lockTenantForCreate(ctx, candidate.GetMetadata().GetTenant()); err != nil {
+				return err
+			}
+			if err := validateReservedCreate(ctx, candidate.GetMetadata(), automaticExternalIPPrefix); err != nil {
+				return err
+			}
+			poolKey := refKey(candidate.GetSpec().GetPool())
+			pool, err := s.validatePoolReference(ctx, poolKey)
+			if err != nil {
+				return err
+			}
+			if err = validateTenantOrShared(candidate.GetMetadata().GetTenant(), pool, "ExternalIPPool", poolKey,
+				auth.SharedTenant); err != nil {
+				return err
+			}
+			poolID = pool.GetId()
+			candidate.SetStatus(privatev1.ExternalIPStatus_builder{
+				State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
+			}.Build())
+			return nil
+		})
+	if err != nil || isDryRun(ctx) {
 		return
 	}
-	externalIPTenant, tenantErr := resolveObjectTenant(ctx, externalIP.GetMetadata(), s.tenancyLogic)
-	if tenantErr != nil {
-		err = tenantErr
-		return
-	}
-	if err = validateTenantOrShared(externalIPTenant, pool, "ExternalIPPool", poolKey, auth.SharedTenant); err != nil {
-		return
-	}
-
-	if externalIP.GetStatus() == nil {
-		externalIP.SetStatus(privatev1.ExternalIPStatus_builder{
-			State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
-		}.Build())
-	} else {
-		externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
-	}
-
-	err = s.generic.Create(ctx, request, &response)
-	if err != nil {
-		return
-	}
-
-	err = s.updatePoolCapacity(ctx, poolKey, 1)
-	if err != nil {
-		return
-	}
-
+	err = s.updatePoolCapacity(ctx, poolID, 1)
 	return
 }
 
+// Update writes status only. The state follows the allowed transitions, and fields that the fulfillment service owns
+// (pool, attached, attribution) can't be written.
 func (s *PrivateExternalIPsServer) Update(ctx context.Context,
 	request *privatev1.ExternalIPsUpdateRequest) (response *privatev1.ExternalIPsUpdateResponse, err error) {
 	id := request.GetObject().GetId()
@@ -256,38 +268,24 @@ func (s *PrivateExternalIPsServer) Update(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
-
-	getResponse, err := s.lifecycle.externalIPDao.Get().SetId(id).SetLock(true).Do(ctx)
-	if err != nil {
-		err = translateLifecycleError(err)
-		return
-	}
-
-	existingExternalIP := getResponse.GetObject()
 	mask := request.GetUpdateMask()
 	if err = validatePrivateLifecycleUpdateMask(mask,
 		[]string{"status.state", "status.message", "status.address", "status.hub", "status.state_transition_time"},
 		[]string{"status.pool", "status.attached", "status.attribution", "status.attachment_transition_time"}); err != nil {
 		return
 	}
-
-	if updateIncludesField(mask, "spec.pool") {
-		if err = validateImmutableFieldsExternalIP(request.GetObject(), existingExternalIP); err != nil {
-			return
-		}
-	}
-
-	if updateIncludesField(mask, "status.state") {
-		newState := request.GetObject().GetStatus().GetState()
-		existingState := existingExternalIP.GetStatus().GetState()
-		if newState != existingState {
-			if err = validateExternalIPStateTransition(existingState, newState); err != nil {
-				return
+	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response,
+		func(_ context.Context, current, candidate *privatev1.ExternalIP) error {
+			if err := validateNetworkingStatusOnlyUpdate("ExternalIP", current, candidate); err != nil {
+				return err
 			}
-		}
-	}
-
-	err = s.generic.Update(ctx, request, &response)
+			newState := candidate.GetStatus().GetState()
+			existingState := current.GetStatus().GetState()
+			if newState != existingState {
+				return validateExternalIPStateTransition(existingState, newState)
+			}
+			return nil
+		})
 	return
 }
 
@@ -304,24 +302,17 @@ func (s *PrivateExternalIPsServer) Delete(ctx context.Context,
 		err = translateLifecycleError(err)
 		return
 	}
-
 	existingExternalIP := getResponse.GetObject()
-
-	if err = validateNotDefault(ctx, existingExternalIP.GetMetadata().GetLabels(), "external IP"); err != nil {
-		return
-	}
-	if existingExternalIP.GetMetadata().GetDeletionTimestamp() != nil {
+	if deleteAlreadyAccepted(existingExternalIP.GetMetadata()) {
 		response = &privatev1.ExternalIPsDeleteResponse{}
 		return
 	}
-
-	state := existingExternalIP.GetStatus().GetState()
-	if state != privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING &&
-		state != privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED &&
-		state != privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED &&
-		state != privatev1.ExternalIPState_EXTERNAL_IP_STATE_DELETING {
+	if isAutomatic(existingExternalIP.GetMetadata()) && !auth.IsControllerServiceAccount(ctx) {
 		err = grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"cannot delete ExternalIP in state %s: must be in PENDING, ALLOCATED, FAILED, or DELETING state", state)
+			"cannot delete automatic ExternalIP '%s': it is deleted with its workload", id)
+		return
+	}
+	if err = validateNotDefault(ctx, existingExternalIP.GetMetadata().GetLabels(), "external IP"); err != nil {
 		return
 	}
 	err = translateLifecycleError(s.lifecycle.deleteExternalIP(ctx, id))
@@ -429,23 +420,6 @@ func (s *PrivateExternalIPsServer) updatePoolCapacity(ctx context.Context, poolI
 			return grpcstatus.Errorf(grpccodes.Aborted, "%s", conflictErr.Error())
 		}
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to update pool capacity")
-	}
-
-	return nil
-}
-
-func validateImmutableFieldsExternalIP(newExternalIP, existingExternalIP *privatev1.ExternalIP) error {
-	if existingExternalIP == nil {
-		return nil
-	}
-
-	newPool := newExternalIP.GetSpec().GetPool()
-	existingPool := existingExternalIP.GetSpec().GetPool()
-
-	if refKey(newPool) != refKey(existingPool) {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'spec.pool' is immutable and cannot be changed from '%s' to '%s'",
-			refKey(existingPool), refKey(newPool))
 	}
 
 	return nil

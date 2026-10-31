@@ -506,6 +506,7 @@ func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result
 			c.relname not like 'archived_%' and
 			c.relname not in (
 				'changes',
+				'installation_settings',
 				'project_membership_subjects',
 				'schema_migrations',
 				'storage_tier_backends',

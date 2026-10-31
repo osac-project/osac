@@ -1,0 +1,33 @@
+---
+# Read one V-Net by ID with the vendored read_by_id task (it retries the
+# intermittent 304) and append its detail to _netris_vnet_details.
+# Input: _netris_vnet_read_id; _netris_vnet_gone_ok (bool, default false).
+# A read that fails because the V-Net vanished after the list counts as absent
+# when _netris_vnet_gone_ok is true. The read task hides its response (no_log),
+# so the failure cannot be told from its status: the V-Nets are listed again
+# and the failure is raised unless the ID is gone from the list.
+- name: Read the V-Net by ID
+  block:
+    - name: Fetch the V-Net details
+      ansible.builtin.include_role:
+        name: netris.controller.vnet
+        tasks_from: read_by_id
+      vars:
+        vnet_id: "{{ _netris_vnet_read_id }}"
+
+    - name: Keep the V-Net details
+      ansible.builtin.set_fact:
+        _netris_vnet_details: "{{ _netris_vnet_details | default([]) + [netris_vnet_detail] }}"
+  rescue:
+    - name: List the V-Nets again
+      when: _netris_vnet_gone_ok | default(false) | bool
+      ansible.builtin.include_role:
+        name: netris.controller.vnet
+        tasks_from: read
+      vars:
+        vnet_name: "{{ netris_names.vnet }}"
+
+    - name: Stop unless the V-Net is gone
+      when: not (_netris_vnet_gone_ok | default(false) | bool) or (netris_vnets | map(attribute='id') | map('string') | list) is contains(_netris_vnet_read_id | string)
+      ansible.builtin.fail:
+        msg: "Netris V-Net {{ _netris_vnet_read_id }} could not be read."

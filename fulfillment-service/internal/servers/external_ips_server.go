@@ -28,10 +28,11 @@ import (
 )
 
 type ExternalIPsServerBuilder struct {
-	logger            *slog.Logger
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	metricsRegisterer prometheus.Registerer
+	logger             *slog.Logger
+	attributionLogic   auth.AttributionLogic
+	tenancyLogic       auth.TenancyLogic
+	metricsRegisterer  prometheus.Registerer
+	networkingSettings *NetworkingSettings
 }
 
 var _ publicv1.ExternalIPsServer = (*ExternalIPsServer)(nil)
@@ -66,6 +67,13 @@ func (b *ExternalIPsServerBuilder) SetTenancyLogic(value auth.TenancyLogic) *Ext
 
 func (b *ExternalIPsServerBuilder) SetMetricsRegisterer(value prometheus.Registerer) *ExternalIPsServerBuilder {
 	b.metricsRegisterer = value
+	return b
+}
+
+// SetNetworkingSettings sets the networking installation settings. This is optional; the default is
+// DefaultNetworkingSettings.
+func (b *ExternalIPsServerBuilder) SetNetworkingSettings(value NetworkingSettings) *ExternalIPsServerBuilder {
+	b.networkingSettings = &value
 	return b
 }
 
@@ -104,6 +112,7 @@ func (b *ExternalIPsServerBuilder) Build() (result *ExternalIPsServer, err error
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc((*publicv1.ExternalIP)(nil).ProtoReflect().Descriptor()).
+		SetNetworkingSettings(resolveNetworkingSettings(b.networkingSettings)).
 		Build()
 	if err != nil {
 		return

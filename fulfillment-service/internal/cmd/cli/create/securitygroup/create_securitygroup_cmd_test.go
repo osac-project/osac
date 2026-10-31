@@ -74,14 +74,6 @@ var _ = Describe("parseSecurityRules", func() {
 				Expect(rules[0].HasPortTo()).To(BeFalse())
 			},
 		),
-		Entry("dual-stack rule with both IPv4 and IPv6 CIDRs",
-			[]string{"protocol=tcp,port-from=443,port-to=443,ipv4-cidr=0.0.0.0/0,ipv6-cidr=::/0"},
-			func(rules []*publicv1.SecurityRule) {
-				Expect(rules).To(HaveLen(1))
-				Expect(rules[0].GetIpv4Cidr()).To(Equal("0.0.0.0/0"))
-				Expect(rules[0].GetIpv6Cidr()).To(Equal("::/0"))
-			},
-		),
 		Entry("multiple rules",
 			[]string{
 				"protocol=tcp,port-from=80,port-to=80",
@@ -137,7 +129,7 @@ var _ = Describe("parseSecurityRules", func() {
 		),
 		Entry("invalid protocol value",
 			[]string{"protocol=ftp"},
-			ContainSubstring("invalid protocol"),
+			ContainSubstring("must be one of tcp, udp, all"),
 		),
 		Entry("port below range (port-from=0)",
 			[]string{"protocol=tcp,port-from=0,port-to=80"},
@@ -171,9 +163,9 @@ var _ = Describe("parseSecurityRules", func() {
 			[]string{"protocol=tcp,ipv4-cidr=not-a-cidr"},
 			ContainSubstring("invalid ipv4-cidr"),
 		),
-		Entry("IPv4 address in ipv6-cidr field",
-			[]string{"protocol=tcp,ipv6-cidr=192.168.0.0/16"},
-			ContainSubstring("not IPv6"),
+		Entry("removed ipv6-cidr key",
+			[]string{"protocol=tcp,ipv6-cidr=::/0"},
+			ContainSubstring("ipv6-cidr"),
 		),
 		Entry("IPv6 address in ipv4-cidr field",
 			[]string{"protocol=tcp,ipv4-cidr=::/0"},
@@ -184,4 +176,12 @@ var _ = Describe("parseSecurityRules", func() {
 			ContainSubstring("invalid key=value pair"),
 		),
 	)
+})
+
+var _ = Describe("create securitygroup help", func() {
+	It("does not offer icmp in the help", func() {
+		Expect(longHelp).ToNot(ContainSubstring("protocol=icmp"))
+		Expect(longHelp).ToNot(ContainSubstring("{{ bt }}icmp"))
+		Expect(longHelp).To(ContainSubstring("matches every"))
+	})
 })

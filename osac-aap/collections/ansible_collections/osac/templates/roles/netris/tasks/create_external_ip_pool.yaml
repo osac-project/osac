@@ -1,51 +1,59 @@
 ---
-# ExternalIPPool maps to Netris IPAM allocations (CIDR containers)
-# Individual ExternalIPs create /32 subnets (purpose=nat) inside these allocations
+# ExternalIPPool -> Netris IPAM allocation osac-pool-<pool id> for the one CIDR
+# of spec.cidrs, owned by NETRIS_TENANT_ID. Get-or-create by name; an
+# allocation of the same name with another prefix or tenant is a final error.
+# The ExternalIPs are /32 nat reservations inside it (create_external_ip.yaml).
+- name: Register the ExternalIPPool on Netris
+  block:
+    - name: Check the settings
+      ansible.builtin.include_tasks: _settings.yaml
+      vars:
+        netris_require: [controller, credentials, site, tenant]
 
-- name: Extract ExternalIPPool configuration
-  ansible.builtin.set_fact:
-    pool_name: "{{ external_ip_pool.metadata.name }}"
-    pool_cidrs: "{{ external_ip_pool.spec.cidrs }}"
+    - name: Check the task input
+      ansible.builtin.include_tasks: _input.yaml
 
-- name: Display ExternalIPPool information
-  ansible.builtin.debug:
-    msg:
-      - "Creating Netris IPAM allocations for ExternalIPPool '{{ pool_name }}'"
-      - "CIDRs: {{ pool_cidrs }}"
+    - name: Build the object names
+      ansible.builtin.include_tasks: _names.yaml
 
-- name: Ensure Netris auth
-  ansible.builtin.include_role:
-    name: netris.controller.auth
-  when: netris_session_cookie is not defined
+    - name: Check the CIDR of the pool
+      ansible.builtin.set_fact:
+        _netris_pool: "{{ osac_job_vars | osac.templates.netris_pool_plan }}"
 
-- name: Create IPAM allocation for each CIDR
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: create_allocation
-  vars:
-    ipam_name: "{{ (pool_cidrs | length == 1) | ternary(pool_name, pool_name + '-' + (idx | string)) }}"
-    ipam_cidr: "{{ item }}"
-    ipam_tenant_id: "{{ netris_tenant_id }}"
-  loop: "{{ pool_cidrs }}"
-  loop_control:
-    index_var: idx
-    label: "{{ item }}"
+    - name: Stop on an invalid ExternalIPPool input
+      vars:
+        netris_fail:
+          message: "{{ _netris_pool.error }}"
+          retryable: false
+      when: _netris_pool.error | length > 0
+      ansible.builtin.include_tasks: _fail.yaml
 
-- name: Create common subnet inside each allocation (required for NAT on /32 subnets)
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: create_subnet
-  vars:
-    ipam_name: "{{ (pool_cidrs | length == 1) | ternary(pool_name, pool_name + '-' + (idx | string)) }}-common"
-    ipam_cidr: "{{ item }}"
-    ipam_purpose: "common"
-    ipam_site_id: "{{ netris_site_id }}"
-    ipam_tenant_id: "{{ netris_tenant_id }}"
-  loop: "{{ pool_cidrs }}"
-  loop_control:
-    index_var: idx
-    label: "{{ item }}"
+    - name: Create the IPAM allocation of the pool
+      block:
+        - name: Create the allocation
+          ansible.builtin.include_role:
+            name: netris.controller.ipam
+            tasks_from: create_allocation
+          vars:
+            ipam_name: "{{ netris_names.pool_ipam }}"
+            ipam_cidr: "{{ _netris_pool.cidr }}"
+            ipam_tenant_id: "{{ netris_tenant_id | int }}"
+      rescue:
+        # Netris refuses an overlapping or malformed prefix with a 4xx: the
+        # same request would fail again, so the error is final.
+        - name: Classify a refused CIDR as final
+          when: (ansible_failed_result.status | default(0)) in [400, 409, 422]
+          vars:
+            netris_fail:
+              message: >-
+                Netris refused the ExternalIPPool CIDR {{ _netris_pool.cidr }}
+                ({{ ansible_failed_result | netris.controller.netris_safe_error_detail }}); it can overlap another allocation.
+              retryable: false
+          ansible.builtin.include_tasks: _fail.yaml
 
-- name: Display ExternalIPPool creation result
-  ansible.builtin.debug:
-    msg: "ExternalIPPool '{{ pool_name }}' — {{ pool_cidrs | length }} IPAM allocation(s) with common subnets registered"
+        - name: Pass on any other failure
+          ansible.builtin.fail:
+            msg: "{{ ansible_failed_result.msg | default('IPAM allocation failed') }}"
+  rescue:
+    - name: Report the error
+      ansible.builtin.include_tasks: _rescue.yaml

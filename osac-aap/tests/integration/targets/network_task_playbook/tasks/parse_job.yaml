@@ -1,0 +1,83 @@
+---
+# Shared by Kind targets that launch the generic playbook_osac_network_task.yml in a
+# child process: cudn_evpn and netris_fabric.
+# Parse one finished child job of playbook_osac_network_task.yml and check
+# its outcome against the contract (§4.6).
+# Input:
+#   sft_label    the case name (printed in every message)
+#   sft_raw      {rc, stdout, stderr} of the child process
+#   sft_expect   success | final | retryable
+#   sft_message  optional exact osac_error message
+#   sft_message_search  optional regex the osac_error message must match
+# Output: sft_last {rc, stats, result, error, output}.
+- name: "Parse the job output - {{ sft_label }}"
+  vars:
+    _sft_doc: "{{ sft_raw.stdout | from_json if sft_raw.stdout is match('^\\s*\\{') else {} }}"
+  ansible.builtin.set_fact:
+    sft_last:
+      rc: "{{ sft_raw.rc | int }}"
+      parsed: "{{ _sft_doc | length > 0 }}"
+      stats: "{{ _sft_doc.global_custom_stats | default({}) }}"
+      result: "{{ (_sft_doc.global_custom_stats | default({})).osac_result | default(none) }}"
+      error: "{{ (_sft_doc.global_custom_stats | default({})).osac_error | default(none) }}"
+      output: "{{ sft_raw.stdout[-4000:] }}{{ sft_raw.stderr[-1500:] }}"
+
+- name: "Show the outcome - {{ sft_label }}"
+  ansible.builtin.debug:
+    msg: "{{ sft_label }}: rc={{ sft_last.rc }} stats={{ sft_last.stats }}"
+
+- name: "Check the job printed JSON - {{ sft_label }}"
+  ansible.builtin.assert:
+    that: sft_last.parsed | bool
+    fail_msg: "{{ sft_label }}: the job printed no JSON output (rc={{ sft_last.rc }}): {{ sft_last.output }}"
+    quiet: true
+
+- name: "Check the exit status - {{ sft_label }}"
+  ansible.builtin.assert:
+    that: (sft_last.rc | int == 0) == (sft_expect == 'success')
+    fail_msg: >-
+      {{ sft_label }}: expected {{ sft_expect }} but the job exited with rc={{ sft_last.rc }};
+      stats={{ sft_last.stats }} output={{ sft_last.output }}
+    quiet: true
+
+- name: "Check the job published only contract artifacts - {{ sft_label }}"
+  ansible.builtin.assert:
+    that: sft_last.stats.keys() | difference(['osac_result', 'osac_error']) | length == 0
+    fail_msg: "{{ sft_label }}: set_stats published {{ sft_last.stats.keys() | list }}"
+    quiet: true
+
+- name: "Check a successful job published no osac_error - {{ sft_label }}"
+  when: sft_expect == 'success'
+  ansible.builtin.assert:
+    that: "'osac_error' not in sft_last.stats"
+    fail_msg: "{{ sft_label }}: a successful job published osac_error {{ sft_last.error }}"
+    quiet: true
+
+- name: "Check the osac_error shape - {{ sft_label }}"
+  when: sft_expect != 'success'
+  ansible.builtin.assert:
+    that:
+      - sft_last.error is mapping
+      - sft_last.error.keys() | sort == ['message', 'retryable']
+      - sft_last.error.message is string
+      - sft_last.error.message | length > 0
+      - sft_last.error.retryable is boolean
+      - sft_last.error.retryable == (sft_expect == 'retryable')
+    fail_msg: >-
+      {{ sft_label }}: expected a {{ sft_expect }} osac_error {message, retryable};
+      got stats={{ sft_last.stats }} output={{ sft_last.output }}
+    quiet: true
+
+- name: "Check the error message - {{ sft_label }}"
+  when: sft_expect != 'success' and sft_message is defined
+  ansible.builtin.assert:
+    that: sft_last.error.message == sft_message
+    fail_msg: "{{ sft_label }}: osac_error.message is '{{ sft_last.error.message }}', expected '{{ sft_message }}'"
+    quiet: true
+
+- name: "Check the error message pattern - {{ sft_label }}"
+  when: sft_expect != 'success' and sft_message_search is defined
+  ansible.builtin.assert:
+    that: sft_last.error.message is search(sft_message_search)
+    fail_msg: "{{ sft_label }}: osac_error.message '{{ sft_last.error.message }}' does not match '{{ sft_message_search }}'"
+    quiet: true

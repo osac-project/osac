@@ -28,6 +28,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -44,6 +45,10 @@ const (
 	autoCreatedEndpointIngress = "ingress"
 	autoCreatedKindCluster     = "cluster"
 	autoCreatedKindBareMetal   = "bare_metal_instance"
+
+	// automaticExternalAccessRecheck is the recheck interval while an automatic
+	// ExternalIP of a workload has no ExternalIPAttachment (Unified design).
+	automaticExternalAccessRecheck = 30 * time.Second
 )
 
 type automaticExternalIPAttachmentsClient interface {
@@ -68,10 +73,12 @@ type automaticExternalIPAttachmentTarget struct {
 	availableEndpoints map[string]bool
 }
 
-// reconcileAutomaticExternalIPAttachments is called from the workload's existing
-// reconciler after it becomes ready. It asks Fulfillment to create the EIA record;
-// the normal Fulfillment projector and ExternalIPAttachment controller then create
-// and attach the Kubernetes resource.
+// reconcileAutomaticExternalIPAttachments asks the fulfillment service to
+// create the automatic ExternalIPAttachment of each ready endpoint whose
+// automatic ExternalIP is ALLOCATED (Unified design, Automatic external
+// access); the fulfillment controller then creates the CR and the networking
+// controller attaches it. It asks for a recheck while an endpoint waits; a
+// FAILED ExternalIP stops the recheck for that endpoint.
 func reconcileAutomaticExternalIPAttachments(
 	ctx context.Context,
 	k8sClient client.Client,
@@ -87,7 +94,7 @@ func reconcileAutomaticExternalIPAttachments(
 		return ctrl.Result{}, err
 	}
 	if pollInterval <= 0 {
-		pollInterval = defaultPreconditionRequeueInterval
+		pollInterval = automaticExternalAccessRecheck
 	}
 
 	ipsByEndpoint, err := listAutomaticExternalIPs(ctx, k8sClient, networkingNamespace, target)
@@ -175,10 +182,15 @@ func reconcileAutomaticExternalIPAttachment(
 	endpoint string,
 	target automaticExternalIPAttachmentTarget,
 ) (bool, error) {
-	if ip.Status.State == v1alpha1.ExternalIPStateFailed {
-		return false, fmt.Errorf("automatic ExternalIP %q failed allocation", ip.Name)
+	state, _ := networkFeedback(ip, ip.Status.Conditions)
+	if state == networkFeedbackFailed {
+		// The workload runs without this access; the ExternalIP message says why.
+		ctrllog.FromContext(ctx).Info("automatic ExternalIP failed; not requesting its ExternalIPAttachment",
+			"externalIP", ip.Name)
+		return false, nil
 	}
-	if ip.Status.State != v1alpha1.ExternalIPStateAllocated || ip.Status.Address == "" {
+	if state != networkFeedbackReady || ip.Status.Address == "" {
+		// Not ALLOCATED yet (or being deleted).
 		return true, nil
 	}
 

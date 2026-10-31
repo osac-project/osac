@@ -1,0 +1,60 @@
+{
+  "external_ip": {
+    "address": "203.0.113.1",
+    "id": "7b6a5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d"
+  },
+  "manager": {
+    "ansible_role": "osac.templates.netris",
+    "name": "netris",
+    "type": "fabric"
+  },
+  "nat_gateway_context": {
+    "external_ip": {
+      "address": "203.0.113.1",
+      "fulfillment_id": "7b6a5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
+      "kubernetes_uid": "00000000-0000-4000-8000-000000000004",
+      "name": "externalip-7b6a5c4d",
+      "namespace": "osac-networking",
+      "phase": "Ready",
+      "state": "Allocated",
+      "tenant_id": "tenant-a"
+    },
+    "virtual_network": {
+      "fulfillment_id": "3f1c9a2e-7b4d-4e8a-9c6f-0d2e4b6a8c10",
+      "ipv4_cidr": "10.0.0.0/16",
+      "kubernetes_uid": "00000000-0000-4000-8000-000000000001",
+      "name": "vn-3f1c9a2e",
+      "namespace": "osac-networking",
+      "phase": "Ready",
+      "tenant_id": "tenant-a"
+    }
+  },
+  "resource": {
+    "apiVersion": "osac.openshift.io/v1alpha1",
+    "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+    "kind": "NATGateway",
+    "metadata": {
+      "generation": 1,
+      "name": "natgateway-1a2b3c4d",
+      "namespace": "osac-networking",
+      "uid": "00000000-0000-4000-8000-000000000007"
+    },
+    "spec": {}
+  },
+  "task": "create_nat_gateway",
+  "tenant": "tenant-a",
+  "virtual_network": {
+    "apiVersion": "osac.openshift.io/v1alpha1",
+    "id": "3f1c9a2e-7b4d-4e8a-9c6f-0d2e4b6a8c10",
+    "kind": "VirtualNetwork",
+    "metadata": {
+      "generation": 1,
+      "name": "vn-3f1c9a2e",
+      "namespace": "osac-networking",
+      "uid": "00000000-0000-4000-8000-000000000001"
+    },
+    "spec": {
+      "ipv4Cidr": "10.0.0.0/16"
+    }
+  }
+}

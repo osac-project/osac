@@ -26,7 +26,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -80,6 +79,11 @@ func NewExternalIPFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.Client
 					feedbackStatusStatePath, feedbackStatusMessagePath, "status.address", feedbackStatusStateTransitionTimePath,
 				}},
 			}.Build())
+			if err != nil {
+				return err
+			}
+			// Signal on change, so the fulfillment service acts on the new state.
+			_, err = eipClient.Signal(ctx, privatev1.ExternalIPsSignalRequest_builder{Id: remote.GetId()}.Build())
 			return err
 		},
 		Signal: func(ctx context.Context, id string) error {
@@ -113,78 +117,51 @@ func (r *ExternalIPFeedbackReconciler) Reconcile(ctx context.Context, request ct
 	return r.bridge.Reconcile(ctx, request)
 }
 
-func syncExternalIPUpdate(ctx context.Context, obj *v1alpha1.ExternalIP, remote *privatev1.ExternalIP) error {
-	if remote.GetStatus().GetState() == privatev1.ExternalIPState_EXTERNAL_IP_STATE_DELETING {
-		ctrllog.FromContext(ctx).Info("ExternalIP is already deleting in Fulfillment, ignoring stale status update")
+func syncExternalIPUpdate(_ context.Context, obj *v1alpha1.ExternalIP, remote *privatev1.ExternalIP) error {
+	status := remote.GetStatus()
+	// The API marks an ExternalIP DELETING when it accepts the delete, before the CR has a deletion
+	// timestamp. Until then the CR still reports its old state, which the API would reject.
+	if obj.GetDeletionTimestamp().IsZero() && status.GetState() == privatev1.ExternalIPState_EXTERNAL_IP_STATE_DELETING {
 		return nil
 	}
-	syncExternalIPState(ctx, obj, remote)
-	syncExternalIPAddress(obj, remote)
-	return nil
-}
-
-// syncExternalIPDelete maps ExternalIP CR status during deletion. Failed addresses report
-// FAILED, and everything else reports DELETING: an address whose deletion timestamp is set
-// is going away whatever state its status still carries, including the empty state of an
-// address deleted before any controller status write.
-//
-// The state and its time come from the same place. The Failed state the CR records dates
-// its own transition, an event the controller observed. The DELETING reported for every
-// other state is forced: the state predates the deletion, so its time is not the
-// deletion's — the deletion started at the deletion timestamp, and dating the report at
-// the old state's time would erase the billed span up to the deletion. An address deleted
-// before any controller status write has no state time either, and the deletion timestamp
-// covers it.
-func syncExternalIPDelete(_ context.Context, obj *v1alpha1.ExternalIP, remote *privatev1.ExternalIP) error {
-	var at *timestamppb.Timestamp
-	switch obj.Status.State {
-	case v1alpha1.ExternalIPStateFailed:
-		remote.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
-		at = stateTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
-	default:
-		remote.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_DELETING)
-		at = laterTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
-	}
-	if at == nil {
-		if remote.GetStatus().GetStateTransitionTime() != nil {
-			return nil
+	state, message := networkFeedback(obj, obj.Status.Conditions)
+	switch state {
+	case networkFeedbackReady:
+		// ALLOCATED exactly when the address is set and the ExternalIP is not being deleted.
+		if obj.Status.Address != "" {
+			status.SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+		} else {
+			status.SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
 		}
-		return fmt.Errorf("external IP %s has no state transition time", remote.GetId())
+	case networkFeedbackFailed:
+		status.SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
+	case networkFeedbackDeleting:
+		status.SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_DELETING)
+	default:
+		status.SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
 	}
-	remote.GetStatus().SetStateTransitionTime(at)
+	feedbackMessage(message, status.SetMessage, status.ClearMessage)
+	if obj.Status.Address != "" {
+		status.SetAddress(obj.Status.Address)
+	}
+	if obj.Status.StateTransitionTime == nil {
+		status.ClearStateTransitionTime()
+	} else {
+		status.SetStateTransitionTime(timestamppb.New(obj.Status.StateTransitionTime.Time))
+	}
 	return nil
 }
 
-func syncExternalIPStateTransitionTime(obj *v1alpha1.ExternalIP, remote *privatev1.ExternalIP) {
-	at := stateTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
-	if at == nil {
-		remote.GetStatus().ClearStateTransitionTime()
-		return
+func syncExternalIPDelete(ctx context.Context, obj *v1alpha1.ExternalIP, remote *privatev1.ExternalIP) error {
+	stored := remote.GetStatus().GetStateTransitionTime()
+	if err := syncExternalIPUpdate(ctx, obj, remote); err != nil {
+		return err
+	}
+	at, err := deletingTransitionTime(obj.Status.StateTransitionTime, obj.DeletionTimestamp, stored,
+		"external IP", remote.GetId())
+	if err != nil {
+		return err
 	}
 	remote.GetStatus().SetStateTransitionTime(at)
-}
-
-func syncExternalIPState(ctx context.Context, obj *v1alpha1.ExternalIP, remote *privatev1.ExternalIP) {
-	switch obj.Status.State {
-	case v1alpha1.ExternalIPStatePending:
-		remote.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
-	case v1alpha1.ExternalIPStateAllocated:
-		remote.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
-	case v1alpha1.ExternalIPStateFailed:
-		remote.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
-	default:
-		log := ctrllog.FromContext(ctx)
-		log.Info("Unknown state, will ignore it", "state", obj.Status.State)
-	}
-
-	syncExternalIPStateTransitionTime(obj, remote)
-}
-
-func syncExternalIPAddress(obj *v1alpha1.ExternalIP, remote *privatev1.ExternalIP) {
-	// The controller writes a placeholder address when network provisioning is disabled, and
-	// fulfillment's address is set once. Copying the placeholder would block the real address
-	// forever, so fulfillment keeps no address until a real one exists.
-	if obj.Status.Address != "" && obj.Status.Address != externalIPNoProvisioningAddress {
-		remote.GetStatus().SetAddress(obj.Status.Address)
-	}
+	return nil
 }

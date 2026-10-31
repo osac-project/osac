@@ -3,18 +3,31 @@
 global:
   osacDeploymentId: "ci/osac"
   networking:
-    fabricManager: netris
-    k8sManager: ""
-    netris:
-      controllerUrl: "https://test-ctl.netris.io"
-      # CI uses a test endpoint with a certificate that is not trusted by the runner.
-      validateCerts: false
-      credentials:
-        username: "testuser"
-        externalSecret: true
-      siteId: "1"
-      tenantId: "1"
-      tenantName: "Admin"
+    provisioningEnabled: true
+    excludedIpv4Cidrs:
+    - 192.0.2.0/24
+    # Synthetic registration names keep this chart smoke fixture independent
+    # of provider-specific manager configuration owned by the manager teams.
+    fabricManager: test_fabric
+    k8sManager: cudn_evpn
+    networkClass:
+      defaults:
+        virtualNetworkIPv4CIDR: 10.200.0.0/16
+        subnetIPv4CIDR: 10.200.0.0/22
+        ingressRules:
+        - protocol: PROTOCOL_TCP
+          ipv4Cidr: 0.0.0.0/0
+          portFrom: 22
+          portTo: 22
+        egressRules:
+        - protocol: PROTOCOL_ALL
+          ipv4Cidr: 0.0.0.0/0
+      eastWestCapabilities:
+        supportsEastWestEthernet: true
+      addressPlan:
+        overlay: 0.5
+        fabric: 0.25
+        lbVip: 0.25
 
 ui:
   enabled: true
@@ -113,7 +126,8 @@ aap:
       secret: {}
     networkFulfillment:
       enabled: true
-      config: {}
+      config:
+        ACME_FABRIC_URL: "https://test-fabric.example.com"
       secret: {}
 
 bmf:

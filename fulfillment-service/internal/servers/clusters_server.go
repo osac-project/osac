@@ -30,10 +30,11 @@ import (
 )
 
 type ClustersServerBuilder struct {
-	logger            *slog.Logger
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	metricsRegisterer prometheus.Registerer
+	logger             *slog.Logger
+	attributionLogic   auth.AttributionLogic
+	tenancyLogic       auth.TenancyLogic
+	metricsRegisterer  prometheus.Registerer
+	networkingSettings *NetworkingSettings
 }
 
 var _ publicv1.ClustersServer = (*ClustersServer)(nil)
@@ -73,6 +74,13 @@ func (b *ClustersServerBuilder) SetTenancyLogic(value auth.TenancyLogic) *Cluste
 // access objects. This is optional. If not set, no metrics will be recorded.
 func (b *ClustersServerBuilder) SetMetricsRegisterer(value prometheus.Registerer) *ClustersServerBuilder {
 	b.metricsRegisterer = value
+	return b
+}
+
+// SetNetworkingSettings sets the networking installation settings. This is optional; the default is
+// DefaultNetworkingSettings.
+func (b *ClustersServerBuilder) SetNetworkingSettings(value NetworkingSettings) *ClustersServerBuilder {
+	b.networkingSettings = &value
 	return b
 }
 
@@ -121,6 +129,7 @@ func (b *ClustersServerBuilder) Build() (result *ClustersServer, err error) {
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetNetworkingSettings(resolveNetworkingSettings(b.networkingSettings)).
 		SetAddOnOperatorResolverFactory(newPublishedScopedAddOnOperatorResourceResolver).
 		SetFilterDesc(objectDesc).
 		Build()

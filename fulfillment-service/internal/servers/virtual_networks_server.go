@@ -28,10 +28,11 @@ import (
 )
 
 type VirtualNetworksServerBuilder struct {
-	logger            *slog.Logger
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	metricsRegisterer prometheus.Registerer
+	logger             *slog.Logger
+	attributionLogic   auth.AttributionLogic
+	tenancyLogic       auth.TenancyLogic
+	metricsRegisterer  prometheus.Registerer
+	networkingSettings *NetworkingSettings
 }
 
 var _ publicv1.VirtualNetworksServer = (*VirtualNetworksServer)(nil)
@@ -74,6 +75,13 @@ func (b *VirtualNetworksServerBuilder) SetMetricsRegisterer(value prometheus.Reg
 	return b
 }
 
+// SetNetworkingSettings sets the networking installation settings. This is optional; the default is
+// DefaultNetworkingSettings.
+func (b *VirtualNetworksServerBuilder) SetNetworkingSettings(value NetworkingSettings) *VirtualNetworksServerBuilder {
+	b.networkingSettings = &value
+	return b
+}
+
 func (b *VirtualNetworksServerBuilder) Build() (result *VirtualNetworksServer, err error) {
 	// Check parameters:
 	if b.logger == nil {
@@ -108,6 +116,7 @@ func (b *VirtualNetworksServerBuilder) Build() (result *VirtualNetworksServer, e
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc((*publicv1.VirtualNetwork)(nil).ProtoReflect().Descriptor()).
+		SetNetworkingSettings(resolveNetworkingSettings(b.networkingSettings)).
 		Build()
 	if err != nil {
 		return
@@ -214,11 +223,6 @@ func (s *VirtualNetworksServer) Create(ctx context.Context,
 		)
 		err = publicInputMappingError(err, "failed to process virtual network")
 		return
-	}
-
-	// Set default region if not provided (public API doesn't expose region):
-	if privateVirtualNetwork.HasSpec() && privateVirtualNetwork.GetSpec().GetRegion() == "" {
-		privateVirtualNetwork.GetSpec().SetRegion("default")
 	}
 
 	// Delegate to the private server:

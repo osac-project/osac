@@ -11,6 +11,15 @@
     missing_fulfillment_vnet_uuid: 55555555-5555-4555-8555-555555555555
     vnet_name: agentless-subnet-parent
     vnet_cidr: 10.250.0.0/16
+    vnet_ready_status:
+      status:
+        conditions:
+          - type: Ready
+            status: "True"
+            reason: Succeeded
+            message: fixture ready
+            observedGeneration: 1
+            lastTransitionTime: "2025-01-01T00:00:00Z"
     subnet:
       metadata:
         name: agentless-subnet-child
@@ -45,8 +54,6 @@
                 annotations:
                   osac.openshift.io/tenant: "{{ tenant_id }}"
               spec:
-                region: integration
-                networkClass: agentless_net
                 ipv4Cidr: "{{ vnet_cidr }}"
 
         - name: Set the parent status through the status subresource
@@ -61,7 +68,7 @@
               - --subresource=status
               - --type=merge
               - --patch
-              - '{"status":{"phase":"Ready"}}'
+              - "{{ vnet_ready_status | to_json }}"
           changed_when: true
 
         - name: Read the persisted parent Kubernetes UID and status
@@ -79,14 +86,18 @@
                 fulfillment_id: "{{ fulfillment_vnet_uuid }}"
                 kubernetes_uid: "{{ fixture_parent.resources[0].metadata.uid }}"
                 tenant_id: "{{ fixture_parent.resources[0].metadata.annotations['osac.openshift.io/tenant'] }}"
-                phase: "{{ fixture_parent.resources[0].status.phase }}"
+                phase: Ready
 
         - name: Confirm Kubernetes assigned a UID distinct from the Fulfillment UUID
           ansible.builtin.assert:
             that:
               - fixture_parent.resources | length == 1
               - fixture_parent.resources[0].metadata.uid != fulfillment_vnet_uuid
-              - fixture_parent.resources[0].status.phase == 'Ready'
+              - >-
+                fixture_parent.resources[0].status.conditions
+                | selectattr('type', 'equalto', 'Ready')
+                | selectattr('status', 'equalto', 'True')
+                | list | length == 1
 
         - name: Resolve the real Subnet parent lookup helper
           ansible.builtin.include_role:

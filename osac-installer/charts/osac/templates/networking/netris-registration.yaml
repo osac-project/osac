@@ -1,0 +1,27 @@
+{{- if eq (.Values.global.networking.fabricManager | default "") "netris" }}
+{{/*
+Registration of OSAC's Netris Fabric Manager. Network manager contract section
+4.2 has the installer create the registrations of OSAC's Kubernetes Managers;
+the OSAC-shipped Netris Fabric Manager registration is rendered the same way,
+with an osac.* ansible_role, the supported network_types and only the
+capabilities the operator defines. It is immutable; only metadata (Helm labels)
+changes on upgrade.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osac-network-fabric-manager-netris
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+    osac.openshift.io/network-fabric-manager: "true"
+immutable: true
+data:
+  name: netris
+  description: >-
+    Netris SDN controller for physical fabric management. Provides EVPN
+    networking and Ethernet east-west connectivity for bare-metal servers.
+  ansible_role: osac.templates.netris
+  network_types: evpn
+  capabilities: eastWestEthernet,security_group_icmp
+{{- end }}

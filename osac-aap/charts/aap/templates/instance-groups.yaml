@@ -9,51 +9,8 @@
 {{- if $ingressDomain }}
 {{- $baseDomain = printf "hosted.%s" ($ingressDomain | trimPrefix "apps.") }}
 {{- end }}
-{{- $globalNetworking := dict -}}
-{{- if .Values.global }}
-{{- $globalNetworking = .Values.global.networking | default dict -}}
-{{- end }}
-{{- $fabricManager := $globalNetworking.fabricManager | default "" -}}
-{{- $k8sManager := "" -}}
-{{- if hasKey $globalNetworking "k8sManager" -}}
-{{- $k8sManager = $globalNetworking.k8sManager | default "" -}}
-{{- else if eq $fabricManager "" -}}
-{{- $k8sManager = "k8s_only" -}}
-{{- end -}}
-{{- $netris := $globalNetworking.netris | default dict -}}
-{{- $netrisEnabled := eq $fabricManager "netris" -}}
-{{- $agentlessEnabled := eq $k8sManager "k8s_only" -}}
-{{- $netExpert := false -}}
-{{- if and .Values.global .Values.global.expertOverrides }}
-{{- $netExpert = .Values.global.expertOverrides.aap | default false -}}
-{{- end }}
-{{- $explicitCfg := .Values.instanceGroups.clusterFulfillment.config | default dict -}}
-{{- $explicitSec := .Values.instanceGroups.clusterFulfillment.secret | default dict -}}
-{{- range $key, $value := $explicitCfg -}}
-{{- if eq (include "osac-aap.isProtectedNetrisKey" (dict "root" $ "key" $key)) "true" -}}
-{{- fail (printf "instanceGroups.clusterFulfillment.config.%s is managed by global.networking.netris" $key) -}}
-{{- end -}}
-{{- end -}}
-{{- range $key, $value := $explicitSec -}}
-{{- if eq (include "osac-aap.isProtectedNetrisKey" (dict "root" $ "key" $key)) "true" -}}
-{{- fail (printf "instanceGroups.clusterFulfillment.secret.%s is managed by global.networking.netris" $key) -}}
-{{- end -}}
-{{- end -}}
-{{- $cfg := $explicitCfg -}}
-{{- $sec := $explicitSec -}}
-{{- if not $netExpert -}}
-{{- if $netrisEnabled -}}
-{{- $creds := $netris.credentials | default dict -}}
-{{- $derived := include "osac-aap.netrisConfig" (dict "netris" $netris "cluster" true) | fromYaml -}}
-{{/* The facade is authoritative unless expertOverrides.aap disables derivation. */}}
-{{- $cfg = merge $derived $explicitCfg -}}
-{{- if $creds.password }}
-{{- $sec = merge (dict "NETRIS_PASSWORD" $creds.password) $explicitSec -}}
-{{- end }}
-{{- else if $agentlessEnabled -}}
-{{- $cfg = merge (dict "NETWORK_CLASS" "agentless_net" "NETWORK_STEPS_COLLECTION" "agentless_net.steps") $explicitCfg -}}
-{{- end }}
-{{- end }}
+{{- $cfg := .Values.instanceGroups.clusterFulfillment.config | default dict -}}
+{{- $sec := .Values.instanceGroups.clusterFulfillment.secret | default dict -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -109,42 +66,10 @@ data: {}
 {{- end }}
 ---
 {{- if .Values.instanceGroups.networkFulfillment.enabled }}
-{{- $globalNetworking := dict -}}
-{{- if .Values.global }}
-{{- $globalNetworking = .Values.global.networking | default dict -}}
-{{- end }}
-{{- $fabricManager := $globalNetworking.fabricManager | default "" -}}
-{{- $netris := $globalNetworking.netris | default dict -}}
-{{- $netrisEnabled := eq $fabricManager "netris" -}}
-{{- $netExpert := false -}}
-{{- if and .Values.global .Values.global.expertOverrides }}
-{{- $netExpert = .Values.global.expertOverrides.aap | default false -}}
-{{- end }}
-{{- $explicitCfg := .Values.instanceGroups.networkFulfillment.config | default dict -}}
-{{- $explicitSec := .Values.instanceGroups.networkFulfillment.secret | default dict -}}
-{{- range $key, $value := $explicitCfg -}}
-{{- if eq (include "osac-aap.isProtectedNetrisKey" (dict "root" $ "key" $key)) "true" -}}
-{{- fail (printf "instanceGroups.networkFulfillment.config.%s is managed by global.networking.netris" $key) -}}
-{{- end -}}
-{{- end -}}
-{{- range $key, $value := $explicitSec -}}
-{{- if eq (include "osac-aap.isProtectedNetrisKey" (dict "root" $ "key" $key)) "true" -}}
-{{- fail (printf "instanceGroups.networkFulfillment.secret.%s is managed by global.networking.netris" $key) -}}
-{{- end -}}
-{{- end -}}
-{{- $cfg := $explicitCfg -}}
-{{- $sec := $explicitSec -}}
-{{- if not $netExpert -}}
-{{- if $netrisEnabled -}}
-{{- $creds := $netris.credentials | default dict -}}
-{{- $derived := include "osac-aap.netrisConfig" (dict "netris" $netris "cluster" false) | fromYaml -}}
-{{/* The facade is authoritative unless expertOverrides.aap disables derivation. */}}
-{{- $cfg = merge $derived $explicitCfg -}}
-{{- if $creds.password }}
-{{- $sec = merge (dict "NETRIS_PASSWORD" $creds.password) $explicitSec -}}
-{{- end }}
-{{- end }}
-{{- end }}
+{{/* Settings and credentials of the network managers, written verbatim
+     (network manager contract §4.3). */}}
+{{- $cfg := .Values.instanceGroups.networkFulfillment.config | default dict -}}
+{{- $sec := .Values.instanceGroups.networkFulfillment.secret | default dict -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:

@@ -4,6 +4,11 @@
 
 global:
   osacDeploymentId: "ci/osac"
+  networking:
+    # The Fabric Manager registration is applied by the admin; rendering only
+    # needs its name.
+    fabricManager: netris
+    k8sManager: cudn_evpn
 
 ui:
   enabled: true

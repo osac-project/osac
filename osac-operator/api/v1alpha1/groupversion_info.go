@@ -60,6 +60,10 @@ func addKnownTypes(s *runtime.Scheme) error {
 		&NATGatewayList{},
 		&FabricDomain{},
 		&FabricDomainList{},
+		&NetworkClass{},
+		&NetworkClassList{},
+		&NetworkAttachment{},
+		&NetworkAttachmentList{},
 		&Volume{},
 		&VolumeList{},
 	)

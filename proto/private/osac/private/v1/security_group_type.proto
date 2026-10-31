@@ -49,8 +49,9 @@ message SecurityGroup {
   // hierarchy for garbage collection.
   Metadata metadata = 2;
 
-  // Desired configuration of the security group, immutable after creation.
-  SecurityGroupSpec spec = 3 [(google.api.field_behavior) = IMMUTABLE];
+  // Desired configuration. virtual_network is immutable; ingress and egress are replaced only by
+  // SecurityGroups.Update.
+  SecurityGroupSpec spec = 3;
 
   // Current state of the security group (system-provided, read-only).
   SecurityGroupStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
@@ -172,13 +173,10 @@ enum SecurityGroupState {
   // The security group will be archived once deletion completes successfully.
   SECURITY_GROUP_STATE_DELETING = 4;
 
-  // The security group deletion has failed.
-  //
-  // The deprovision operation encountered an error and could not complete.
-  // The status.message field will contain specific error details.
-  // Manual intervention may be required to resolve the underlying issue
-  // before retrying deletion.
-  SECURITY_GROUP_STATE_DELETE_FAILED = 5;
+  // DELETE_FAILED was removed: a delete that fails keeps the DELETING state and reports the failure in
+  // status.message.
+  reserved 5;
+  reserved "SECURITY_GROUP_STATE_DELETE_FAILED";
 }
 
 // Local reference to a SecurityGroup resource.

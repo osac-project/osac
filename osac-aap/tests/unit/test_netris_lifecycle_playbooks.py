@@ -83,40 +83,23 @@ def test_lifecycle_playbooks_issue_create_delete_only_provider_writes() -> None:
                 )
 
 
-def test_attachment_and_natgateway_playbooks_resolve_allocated_address_from_the_external_ip_cr() -> None:
-    for create_file in ["attach_external_ip", "create_nat_gateway"]:
-        tasks = _lifecycle_tasks(create_file)
-        lookup = next(
-            task
-            for task in tasks
-            if task.get("name") == "Look up ExternalIP CR to get allocated address"
-        )
-        k8s_info = lookup["kubernetes.core.k8s_info"]
-        assert k8s_info["kind"] == "ExternalIP"
-        assert k8s_info["api_version"] == "osac.openshift.io/v1alpha1"
-        assert k8s_info["name"] == (
-            "{{ attachment_externalip_name }}"
-            if create_file == "attach_external_ip"
-            else "{{ natgw_externalip_name }}"
-        )
-        assert k8s_info["namespace"] == (
-            "{{ attachment_namespace }}"
-            if create_file == "attach_external_ip"
-            else "{{ natgw_namespace }}"
-        )
+def test_attachment_and_natgateway_tasks_make_no_kubernetes_calls() -> None:
+    for name in ["attach_external_ip", "detach_external_ip", "create_nat_gateway", "delete_nat_gateway",
+                 "create_external_ip", "delete_external_ip", "create_external_ip_pool", "delete_external_ip_pool"]:
+        text = (ROLE_ROOT / "tasks" / f"{name}.yaml").read_text(encoding="utf-8")
+        assert "kubernetes.core" not in text, f"{name} must take every input from osac_job_vars"
+        assert "annotations" not in text
 
 
 def test_delete_playbooks_release_through_the_expected_provider_operations() -> None:
-    # delete_external_ip's provider write now lives behind the versioned
-    # dispatch wrapper in _delete_external_ip_legacy.yaml.
+    # delete_external_ip releases through the netris_external_ip module, not a role.
     for delete_file, expected_inclusions in [
         (
             "delete_virtual_network",
             [("netris.controller.ipam", "delete_allocation"), ("netris.controller.vpc", "delete")],
         ),
         ("delete_subnet", [("netris.controller.vnet", "delete"), ("netris.controller.ipam", "delete_subnet")]),
-        ("delete_security_group", [("netris.controller.acl", "delete")]),
-        ("_delete_external_ip_legacy", [("netris.controller.ipam", "delete_subnet")]),
+        ("delete_external_ip_pool", [("netris.controller.ipam", "delete_allocation")]),
         ("detach_external_ip", [("netris.controller.nat", "delete")]),
         ("delete_nat_gateway", [("netris.controller.nat", "delete")]),
     ]:

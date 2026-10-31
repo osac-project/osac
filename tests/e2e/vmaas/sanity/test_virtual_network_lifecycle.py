@@ -24,14 +24,14 @@ def test_virtual_network_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient) 
     subnet_cr_name: str | None = None
 
     try:
-        vn_id, vn_cr_name = create_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_name, "10.100.0.0/16")
+        vn_id, vn_cr_name = create_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_name, "172.20.0.0/16")
 
         assert vn_id in grpc.list_virtual_network_ids()
 
         vn: dict = grpc.get_virtual_network(vn_id=vn_id)
         assert vn["object"]["metadata"]["name"] == vn_name
 
-        subnet_id, subnet_cr_name = create_and_wait_for_subnet(grpc, k8s_hub_client, vn_id, "10.100.1.0/24")
+        subnet_id, subnet_cr_name = create_and_wait_for_subnet(grpc, k8s_hub_client, vn_id, "172.20.1.0/24")
         delete_and_wait_for_subnet(grpc, k8s_hub_client, subnet_id, subnet_cr_name)
         subnet_id = None
         subnet_cr_name = None

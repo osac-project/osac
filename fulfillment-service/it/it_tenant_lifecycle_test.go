@@ -313,6 +313,50 @@ func waitForTenantDefaultNetworkingReady(ctx context.Context, client privatev1.T
 	).Should(Succeed())
 }
 
+func setTenantDefaultNetworkingResourcesReady(
+	ctx context.Context,
+	tenantName string,
+	virtualNetworksClient privatev1.VirtualNetworksClient,
+	subnetsClient privatev1.SubnetsClient,
+	securityGroupsClient privatev1.SecurityGroupsClient,
+) {
+	GinkgoHelper()
+
+	var virtualNetworkID string
+	virtualNetworkFilter := ndDefaultFilter(tenantName, "default")
+	Eventually(func(g Gomega) {
+		response, err := virtualNetworksClient.List(ctx, privatev1.VirtualNetworksListRequest_builder{
+			Filter: &virtualNetworkFilter,
+		}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(response.GetItems()).To(HaveLen(1))
+		virtualNetworkID = response.GetItems()[0].GetId()
+	}, time.Minute, time.Second).Should(Succeed())
+	setComputeInstanceFixtureVirtualNetworkReady(ctx, virtualNetworksClient, virtualNetworkID)
+
+	var subnetID string
+	var securityGroupID string
+	subnetFilter := ndDefaultFilter(tenantName, "default-ipv4")
+	securityGroupFilter := ndDefaultFilter(tenantName, "default")
+	Eventually(func(g Gomega) {
+		subnets, err := subnetsClient.List(ctx, privatev1.SubnetsListRequest_builder{
+			Filter: &subnetFilter,
+		}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(subnets.GetItems()).To(HaveLen(1))
+		subnetID = subnets.GetItems()[0].GetId()
+
+		securityGroups, err := securityGroupsClient.List(ctx, privatev1.SecurityGroupsListRequest_builder{
+			Filter: &securityGroupFilter,
+		}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(securityGroups.GetItems()).To(HaveLen(1))
+		securityGroupID = securityGroups.GetItems()[0].GetId()
+	}, time.Minute, time.Second).Should(Succeed())
+	setSubnetReady(ctx, subnetsClient, subnetID)
+	setSecurityGroupReady(ctx, securityGroupsClient, securityGroupID)
+}
+
 func verifyTenantInKeycloak(ctx context.Context, name string) {
 	code, body, err := tool.KeycloakAdminRequest(ctx, http.MethodGet,
 		fmt.Sprintf("/organizations?exact=true&search=%s", name), nil)
@@ -475,11 +519,18 @@ var _ = Describe("Tenant lifecycle", func() {
 	})
 
 	It("deletes a tenant with domains configured", func(ctx context.Context) {
+		getOrCreateTenantDefaultNetworkClassFixture(ctx)
 		name := fmt.Sprintf("test-%s", uuid.New())
 		id := createTenant(ctx, tenantsClient, name)
+		virtualNetworksClient := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
+		subnetsClient := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
+		securityGroupsClient := privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
 
-		By("Waiting for the tenant and its default networking to become ready")
+		By("Waiting for the tenant to sync")
 		waitForTenantSynced(ctx, tenantsClient, id)
+		By("Simulating operator readiness for the tenant's default networking")
+		setTenantDefaultNetworkingResourcesReady(ctx, name, virtualNetworksClient, subnetsClient, securityGroupsClient)
+		By("Waiting for the tenant's default networking readiness condition")
 		waitForTenantDefaultNetworkingReady(ctx, tenantsClient, id)
 
 		By("Recording the automatically created root project")
@@ -1044,32 +1095,11 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 
 		// The public VirtualNetworks API no longer accepts a network_class, so creation
 		// resolves the deployment singleton. Seed one for the duration of each test.
-		ncResp, err := networkClassClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-			Object: privatev1.NetworkClass_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("test-default-nc-%s", uuid.New()),
-				}.Build(),
-				Title:         "Deployment Network Class",
-				FabricManager: new("netris"),
-			}.Build(),
-		}.Build())
+		ncResp, err := sharedNetworkClass(ctx, networkClassClient)
 		Expect(err).ToNot(HaveOccurred())
 		networkClassID := ncResp.GetObject().GetId()
 		waitForNetworkClassReady(ctx, networkClassClient, networkClassID)
-		// Use a fresh context for cleanup: the ctx from this BeforeEach is cancelled by Ginkgo as soon as this
-		// node returns, so reusing it here would make the Delete call fail with "context canceled" and leak the
-		// NetworkClass — which is fatal now that only one NetworkClass may exist per deployment (OSAC-4073).
-		DeferCleanup(func(cleanupCtx context.Context) {
-			deleteAndWaitForComputeInstanceFixtureResource(cleanupCtx,
-				func(deleteCtx context.Context) error {
-					_, err := networkClassClient.Delete(deleteCtx, privatev1.NetworkClassesDeleteRequest_builder{Id: networkClassID}.Build())
-					return err
-				},
-				func(getCtx context.Context) error {
-					_, err := networkClassClient.Get(getCtx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassID}.Build())
-					return err
-				})
-		})
+		// The NetworkClass is the installer's deployment singleton: the spec never deletes it.
 	})
 
 	It("Resources created by tenant-A are not visible to tenant-B", func(ctx context.Context) {

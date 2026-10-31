@@ -50,6 +50,7 @@ type PrivateTenantsServer struct {
 	generic    *GenericServer[*privatev1.Tenant]
 	dao        *dao.GenericDAO[*privatev1.Tenant]
 	secretsDao *dao.GenericDAO[*privatev1.Secret]
+	guards     *networkingGuards
 }
 
 func NewPrivateTenantsServer() *PrivateTenantsServerBuilder {
@@ -131,7 +132,12 @@ func (b *PrivateTenantsServerBuilder) Build() (result *PrivateTenantsServer, err
 	}
 
 	// Create and populate the object:
+	guards, err := newNetworkingGuards(b.logger)
+	if err != nil {
+		return
+	}
 	result = &PrivateTenantsServer{
+		guards:     guards,
 		logger:     b.logger,
 		generic:    generic,
 		dao:        tenantsDao,
@@ -251,6 +257,10 @@ func (s *PrivateTenantsServer) Update(ctx context.Context,
 
 func (s *PrivateTenantsServer) Delete(ctx context.Context,
 	request *privatev1.TenantsDeleteRequest) (response *privatev1.TenantsDeleteResponse, err error) {
+	// Lock the Tenant, so the guard and the creates in the tenant, which lock it too, run one after the other.
+	if err = s.rejectDeleteWhileResourcesExist(ctx, request.GetId()); err != nil {
+		return
+	}
 	getResponse, getErr := s.dao.Get().SetId(request.GetId()).Do(ctx)
 	// Delete the break-glass secret before generic.Delete so its project and
 	// tenant FKs cannot deadlock teardown (projects cannot be removed while
@@ -436,3 +446,57 @@ func (s *PrivateTenantsServer) validateBreakGlassCredentialsSecret(ctx context.C
 // - At least two labels (CEL: min_two_labels, checks for '.')
 // - Valid DNS labels (CEL: valid_dns_labels, validates each segment)
 // - No duplicates (unique: true)
+
+// rejectDeleteWhileResourcesExist locks the Tenant record and rejects its delete while any workload, or any networking
+// resource without the default label, exists in the tenant. The default networking resources are deleted by the tenant
+// reconciler after the delete is accepted.
+func (s *PrivateTenantsServer) rejectDeleteWhileResourcesExist(ctx context.Context, tenant string) error {
+	locked, err := lockRecord(ctx, s.guards.tenants, tenant)
+	if err != nil {
+		if grpcstatus.Code(err) == grpccodes.NotFound {
+			return grpcstatus.Errorf(grpccodes.NotFound, "tenant '%s' not found", tenant)
+		}
+		return err
+	}
+	if deleteAlreadyAccepted(locked.GetMetadata()) {
+		return nil
+	}
+	nonDefault := fmt.Sprintf(`this.metadata.tenant == %q && this.metadata.labels["%s"] != "true"`, tenant, defaultLabel)
+	inTenant := fmt.Sprintf(`this.metadata.tenant == %q`, tenant)
+	checks := []struct {
+		kind  string
+		count func() (int, string, error)
+	}{
+		{"ComputeInstance", func() (int, string, error) { return countRecords(ctx, s.guards.computeInstances, inTenant) }},
+		{"BareMetalInstance", func() (int, string, error) {
+			return countRecords(ctx, s.guards.bareMetalInstances, inTenant)
+		}},
+		{"Cluster", func() (int, string, error) { return countRecords(ctx, s.guards.clusters, inTenant) }},
+		{"ExternalIPAttachment", func() (int, string, error) {
+			return countRecords(ctx, s.guards.externalIPAttachments, nonDefault)
+		}},
+		{"NATGateway", func() (int, string, error) { return countRecords(ctx, s.guards.natGateways, nonDefault) }},
+		{"ExternalIP", func() (int, string, error) { return countRecords(ctx, s.guards.externalIPs, nonDefault) }},
+		{"FabricDomain", func() (int, string, error) { return countRecords(ctx, s.guards.fabricDomains, inTenant) }},
+		{"SecurityGroup", func() (int, string, error) {
+			return countRecords(ctx, s.guards.securityGroups, nonDefault)
+		}},
+		{"Subnet", func() (int, string, error) { return countRecords(ctx, s.guards.subnets, nonDefault) }},
+		{"VirtualNetwork", func() (int, string, error) {
+			return countRecords(ctx, s.guards.virtualNetworks, nonDefault)
+		}},
+	}
+	for _, check := range checks {
+		count, firstID, err := check.count()
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Failed to check tenant resources", slog.Any("error", err))
+			return grpcstatus.Errorf(grpccodes.Internal, "failed to check the resources of tenant '%s'", tenant)
+		}
+		if count > 0 {
+			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+				"cannot delete tenant '%s': %d %s resource(s) still exist (including '%s')",
+				tenant, count, check.kind, firstID)
+		}
+	}
+	return nil
+}

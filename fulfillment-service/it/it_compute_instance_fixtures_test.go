@@ -79,24 +79,7 @@ func createComputeInstanceFixtureSecurityGroup(
 	}.Build())
 	Expect(err).ToNot(HaveOccurred())
 
-	Eventually(func(g Gomega) {
-		response, getErr := client.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
-		g.Expect(getErr).ToNot(HaveOccurred())
-		g.Expect(response.GetObject().GetStatus().GetState()).To(
-			Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
-	}, time.Minute, time.Second).Should(Succeed())
-
-	response, err := client.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
-	Expect(err).ToNot(HaveOccurred())
-	securityGroup := response.GetObject()
-	securityGroup.SetStatus(privatev1.SecurityGroupStatus_builder{
-		State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
-	}.Build())
-	_, err = client.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
-		Object:     securityGroup,
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
-	}.Build())
-	Expect(err).ToNot(HaveOccurred())
+	setSecurityGroupReady(ctx, client, id)
 	return id
 }
 
@@ -165,15 +148,20 @@ func setSubnetReady(ctx context.Context, client privatev1.SubnetsClient, id stri
 		g.Expect(resp.GetObject().GetStatus().GetState()).To(
 			Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
 	}, time.Minute, time.Second).Should(Succeed())
+	expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
+		response, err := client.Get(getCtx, privatev1.SubnetsGetRequest_builder{Id: id}.Build())
+		if err != nil {
+			return "", err
+		}
+		return response.GetObject().GetStatus().GetHub(), nil
+	})
 
 	getCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
 	resp, err := client.Get(getCtx, privatev1.SubnetsGetRequest_builder{Id: id}.Build())
 	cancel()
 	Expect(err).ToNot(HaveOccurred())
 	sub := resp.GetObject()
-	sub.SetStatus(privatev1.SubnetStatus_builder{
-		State: privatev1.SubnetState_SUBNET_STATE_READY,
-	}.Build())
+	sub.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_READY)
 	updateCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
 	_, err = client.Update(updateCtx, privatev1.SubnetsUpdateRequest_builder{
 		Object:     sub,
@@ -192,15 +180,20 @@ func setSecurityGroupReady(ctx context.Context, client privatev1.SecurityGroupsC
 		g.Expect(resp.GetObject().GetStatus().GetState()).To(
 			Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
 	}, time.Minute, time.Second).Should(Succeed())
+	expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
+		response, err := client.Get(getCtx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
+		if err != nil {
+			return "", err
+		}
+		return response.GetObject().GetStatus().GetHub(), nil
+	})
 
 	getCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
 	resp, err := client.Get(getCtx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
 	cancel()
 	Expect(err).ToNot(HaveOccurred())
 	sgObj := resp.GetObject()
-	sgObj.SetStatus(privatev1.SecurityGroupStatus_builder{
-		State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
-	}.Build())
+	sgObj.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY)
 	updateCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
 	_, err = client.Update(updateCtx, privatev1.SecurityGroupsUpdateRequest_builder{
 		Object:     sgObj,
@@ -266,26 +259,8 @@ func cleanupComputeInstanceFixture(
 			return err
 		})
 	}
-	if networkClassID != "" {
-		// The class delete rejects with FailedPrecondition while its active
-		// VirtualNetwork is still counted server-side after the resource's own
-		// deletion completed; retry until the active count clears.
-		Eventually(func() error {
-			probeCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
-			defer cancel()
-			_, err := clients.networkClasses.Delete(probeCtx, privatev1.NetworkClassesDeleteRequest_builder{Id: networkClassID}.Build())
-			if grpcstatus.Code(err) == grpccodes.NotFound {
-				return nil
-			}
-			return err
-		}, time.Minute, time.Second).Should(Succeed())
-		waitForNotFound(func() error {
-			probeCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
-			defer cancel()
-			_, err := clients.networkClasses.Get(probeCtx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassID}.Build())
-			return err
-		})
-	}
+	// networkClassID is the installer's deployment singleton NetworkClass, which the fixtures never delete.
+	_ = networkClassID
 	if computeInstanceTemplateID != "" {
 		deleteAndWaitForComputeInstanceFixtureResource(ctx,
 			func(deleteCtx context.Context) error {

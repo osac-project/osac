@@ -1,0 +1,8 @@
+{
+  "osac_result": {
+    "network_segment": {
+      "l2_vni": 10101,
+      "type": "evpn"
+    }
+  }
+}

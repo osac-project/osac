@@ -25,7 +25,6 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -77,9 +76,14 @@ func NewFabricDomainFeedbackReconciler(
 			_, err := domainClient.Update(ctx, privatev1.FabricDomainsUpdateRequest_builder{
 				Object: remote,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
-					feedbackStatusConditionsPath, "status.backend_id", "status.vpc_id", "status.members",
+					feedbackStatusConditionsPath, "status.backend_id",
 				}},
 			}.Build())
+			if err != nil {
+				return err
+			}
+			// Signal on change, so the fulfillment service acts on the new state.
+			_, err = domainClient.Signal(ctx, privatev1.FabricDomainsSignalRequest_builder{Id: remote.GetId()}.Build())
 			return err
 		},
 		Signal: func(ctx context.Context, id string) error {
@@ -112,62 +116,24 @@ func (r *FabricDomainFeedbackReconciler) Reconcile(ctx context.Context, request 
 func syncFabricDomainUpdate(_ context.Context, obj *v1alpha1.FabricDomain, remote *privatev1.FabricDomain) error {
 	status := remote.GetStatus()
 	status.SetBackendId(obj.Status.BackendID)
-	status.SetVpcId(obj.Status.VPCID)
 
-	conditionType, conditionStatus := fabricDomainConditionForPhase(obj.Status.Phase)
-
-	var reason, message string
-	var lastTransitionTime metav1.Time
-	if condition := apimeta.FindStatusCondition(obj.Status.Conditions, v1alpha1.ConditionReady); condition != nil {
-		reason = condition.Reason
-		message = condition.Message
-		lastTransitionTime = condition.LastTransitionTime
-	}
-	if lastTransitionTime.IsZero() {
-		if condition := matchingRemoteFabricDomainCondition(status.GetConditions(), conditionType, conditionStatus, "", false); condition != nil {
-			if transitionTime := condition.GetLastTransitionTime(); transitionTime != nil {
-				lastTransitionTime = metav1.NewTime(transitionTime.AsTime())
-			}
-		}
-	}
-	if lastTransitionTime.IsZero() {
-		lastTransitionTime = metav1.Now()
-	}
-	status.SetConditions([]*privatev1.FabricDomainCondition{privatev1.FabricDomainCondition_builder{
-		Type:               conditionType,
-		Status:             conditionStatus,
-		LastTransitionTime: timestamppb.New(lastTransitionTime.Time),
-		Reason:             ptr.To(reason),
-		Message:            ptr.To(message),
-	}.Build()})
-
-	members := make([]*privatev1.FabricDomainMemberStatus, len(obj.Status.Members))
-	for i, member := range obj.Status.Members {
-		state := privatev1.FabricDomainMemberState_FABRIC_DOMAIN_MEMBER_STATE_UNSPECIFIED
-		switch member.State {
-		case v1alpha1.FabricDomainMemberStatePending:
-			state = privatev1.FabricDomainMemberState_FABRIC_DOMAIN_MEMBER_STATE_PENDING
-		case v1alpha1.FabricDomainMemberStateActive:
-			state = privatev1.FabricDomainMemberState_FABRIC_DOMAIN_MEMBER_STATE_ACTIVE
-		case v1alpha1.FabricDomainMemberStateFailed:
-			state = privatev1.FabricDomainMemberState_FABRIC_DOMAIN_MEMBER_STATE_FAILED
-		}
-		members[i] = privatev1.FabricDomainMemberStatus_builder{
-			Server: member.Server, State: state, Message: member.Message,
-		}.Build()
-	}
-	status.SetMembers(members)
-	return nil
-}
-
-func syncFabricDomainDelete(ctx context.Context, obj *v1alpha1.FabricDomain, remote *privatev1.FabricDomain) error {
-	if obj.Status.Phase == v1alpha1.FabricDomainPhaseFailed {
-		return syncFabricDomainUpdate(ctx, obj, remote)
-	}
-	status := remote.GetStatus()
+	state, message := networkFeedback(obj, obj.Status.Conditions)
 	conditionType := privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_PROGRESSING
+	reason := v1alpha1.ReasonProgressing
+	switch state {
+	case networkFeedbackReady:
+		conditionType = privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_READY
+		reason = v1alpha1.ReasonSucceeded
+	case networkFeedbackFailed:
+		conditionType = privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_FAILED
+		reason = v1alpha1.ReasonFailed
+	case networkFeedbackDeleting:
+		reason = v1alpha1.ReasonDeleting
+	}
+	if ready := apimeta.FindStatusCondition(obj.Status.Conditions, v1alpha1.NetworkConditionReady); ready != nil && state != networkFeedbackDeleting {
+		reason = ready.Reason
+	}
 	conditionStatus := privatev1.ConditionStatus_CONDITION_STATUS_TRUE
-	const reason = "Deleting"
 	lastTransitionTime := timestamppb.Now()
 	if condition := matchingRemoteFabricDomainCondition(status.GetConditions(), conditionType, conditionStatus, reason, true); condition != nil {
 		if transitionTime := condition.GetLastTransitionTime(); transitionTime != nil {
@@ -179,26 +145,13 @@ func syncFabricDomainDelete(ctx context.Context, obj *v1alpha1.FabricDomain, rem
 		Status:             conditionStatus,
 		LastTransitionTime: lastTransitionTime,
 		Reason:             ptr.To(reason),
-		Message:            ptr.To("FabricDomain cleanup is in progress"),
+		Message:            ptr.To(sanitizeFeedbackText(message)),
 	}.Build()})
 	return nil
 }
 
-func fabricDomainConditionForPhase(phase v1alpha1.FabricDomainPhase) (privatev1.FabricDomainConditionType, privatev1.ConditionStatus) {
-	switch phase {
-	case v1alpha1.FabricDomainPhaseReady:
-		return privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_READY,
-			privatev1.ConditionStatus_CONDITION_STATUS_TRUE
-	case v1alpha1.FabricDomainPhaseProgressing, v1alpha1.FabricDomainPhaseDeleting:
-		return privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_PROGRESSING,
-			privatev1.ConditionStatus_CONDITION_STATUS_TRUE
-	case v1alpha1.FabricDomainPhaseFailed:
-		return privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_FAILED,
-			privatev1.ConditionStatus_CONDITION_STATUS_TRUE
-	default:
-		return privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_UNSPECIFIED,
-			privatev1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED
-	}
+func syncFabricDomainDelete(ctx context.Context, obj *v1alpha1.FabricDomain, remote *privatev1.FabricDomain) error {
+	return syncFabricDomainUpdate(ctx, obj, remote)
 }
 
 func matchingRemoteFabricDomainCondition(

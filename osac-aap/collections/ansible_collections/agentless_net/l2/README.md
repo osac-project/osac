@@ -31,12 +31,10 @@ Configure switch ports as access ports or reset them.
     vlan_id: 100
 ```
 
-The AgentlessNet BMaaS `move_network_attachment` adapter uses these shared
-port tasks to place a mapped host interface on its Subnet VLAN and return it to
-the provider's provisioning VLAN. The host/interface-to-switch-port mapping
-and provisioning VLAN are provider-owned entries in
-`AGENTLESS_NET_VN_INVENTORY` under `all.vars`; they are not BareMetalInstance
-fields. Mapped access ports must not overlap a switch's declared `trunk_ports`.
+The AgentlessNet BMaaS host/interface-to-switch-port mapping and provisioning
+VLAN are provider-owned entries in `AGENTLESS_NET_VN_INVENTORY` under
+`all.vars`; they are not BareMetalInstance fields. Mapped access ports must not
+overlap a switch's declared `trunk_ports`.
 
 The AgentlessNet `query_dhcp_lease` adapter reads the saved VirtualNetwork DHCP
 lease file and matches the expected interface MAC within the requested

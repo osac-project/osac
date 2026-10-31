@@ -260,6 +260,7 @@ var _ = Describe("Role binding reconciler", func() {
 			Expect(tool.ensureUserInOrg(ctx, "my-user", tenant)).To(Succeed())
 
 			assets := createReaderTestAssets(ctx)
+			ensureTenantDefaultNetworkingFixture(ctx, tenant, "")
 			oldTokenSource, err := tool.makeKeycloakTokenSource(ctx, "my-user", usersPassword)
 			Expect(err).ToNot(HaveOccurred())
 			oldToken, err := oldTokenSource.Token(ctx)

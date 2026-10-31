@@ -79,6 +79,9 @@ func createComputeInstanceInState(
 	status := privatev1.ComputeInstanceStatus_builder{State: state, Hub: hubID}
 	if state == privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING {
 		status.InternalIpAddress = "10.0.0.10"
+		status.ComputeNetworkAttachmentStatuses = []*privatev1.ComputeNetworkAttachmentStatus{
+			privatev1.ComputeNetworkAttachmentStatus_builder{IpAddress: "10.0.0.10"}.Build(),
+		}
 		status.Conditions = []*privatev1.ComputeInstanceCondition{privatev1.ComputeInstanceCondition_builder{
 			Type:   privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_READY,
 			Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
@@ -156,116 +159,12 @@ func createTenant(id string) {
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
 }
 
-// seedTenantDefaultNetworking seeds a READY default Subnet and SecurityGroup (plus backing
-// VirtualNetwork) so BareMetalInstance Create can inject omitted attachments. Reuses the
-// deployment-singleton NetworkClass when one already exists; otherwise creates one with the
-// optional fabricManager.
-func seedTenantDefaultNetworking(tenant, project string, fabricManager *string) (
-	subnetID, securityGroupID, virtualNetworkID string,
-) {
-	ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-		SetLogger(logger).
-		SetTenancyLogic(tenancy).
-		Build()
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	ncList, err := ncDao.List().SetFilter("!has(this.metadata.deletion_timestamp)").SetLimit(1).Do(ctx)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	var ncID string
-	if items := ncList.GetItems(); len(items) > 0 {
-		ncID = items[0].GetId()
-	} else {
-		ncResp, createErr := ncDao.Create().SetObject(privatev1.NetworkClass_builder{
-			FabricManager: fabricManager,
-			Metadata: privatev1.Metadata_builder{
-				Name:   fmt.Sprintf("default-nc-%s", uuid.NewString()[:8]),
-				Tenant: tenant,
-			}.Build(),
-			Status: privatev1.NetworkClassStatus_builder{
-				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
-				Hub:   "network-hub-a",
-			}.Build(),
-		}.Build()).Do(ctx)
-		ExpectWithOffset(1, createErr).ToNot(HaveOccurred())
-		ncID = ncResp.GetObject().GetId()
-	}
-
-	vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
-		SetLogger(logger).
-		SetTenancyLogic(tenancy).
-		Build()
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	vnResp, err := vnDao.Create().SetObject(privatev1.VirtualNetwork_builder{
-		Metadata: privatev1.Metadata_builder{
-			Name:    fmt.Sprintf("default-vn-%s", uuid.NewString()[:8]),
-			Tenant:  tenant,
-			Project: project,
-			Labels: map[string]string{
-				"osac.openshift.io/default": "true",
-			},
-		}.Build(),
-		Spec: privatev1.VirtualNetworkSpec_builder{
-			NetworkClass: privatev1.NetworkClassReference_builder{Id: ncID}.Build(),
-		}.Build(),
-		Status: privatev1.VirtualNetworkStatus_builder{
-			State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
-			Hub:   "network-hub-a",
-		}.Build(),
-	}.Build()).Do(ctx)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	virtualNetworkID = vnResp.GetObject().GetId()
-
-	subnetDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
-		SetLogger(logger).
-		SetTenancyLogic(tenancy).
-		Build()
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	ipv4Cidr := "10.200.0.0/24"
-	subnetResp, err := subnetDao.Create().SetObject(privatev1.Subnet_builder{
-		Metadata: privatev1.Metadata_builder{
-			Name:    fmt.Sprintf("default-subnet-%s", uuid.NewString()[:8]),
-			Tenant:  tenant,
-			Project: project,
-			Labels: map[string]string{
-				"osac.openshift.io/default": "true",
-			},
-		}.Build(),
-		Spec: privatev1.SubnetSpec_builder{
-			Ipv4Cidr:       &ipv4Cidr,
-			VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
-		}.Build(),
-		Status: privatev1.SubnetStatus_builder{
-			State: privatev1.SubnetState_SUBNET_STATE_READY,
-			Hub:   "network-hub-a",
-		}.Build(),
-	}.Build()).Do(ctx)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	subnetID = subnetResp.GetObject().GetId()
-
-	sgDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
-		SetLogger(logger).
-		SetTenancyLogic(tenancy).
-		Build()
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	sgResp, err := sgDao.Create().SetObject(privatev1.SecurityGroup_builder{
-		Metadata: privatev1.Metadata_builder{
-			Name:    fmt.Sprintf("default-sg-%s", uuid.NewString()[:8]),
-			Tenant:  tenant,
-			Project: project,
-			Labels: map[string]string{
-				"osac.openshift.io/default": "true",
-			},
-		}.Build(),
-		Spec: privatev1.SecurityGroupSpec_builder{
-			VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
-		}.Build(),
-		Status: privatev1.SecurityGroupStatus_builder{
-			State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
-			Hub:   "network-hub-a",
-		}.Build(),
-	}.Build()).Do(ctx)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	securityGroupID = sgResp.GetObject().GetId()
-	return subnetID, securityGroupID, virtualNetworkID
+// seedTenantDefaultNetworking seeds READY default networking for the tenant (see seedReadyDefaultNetworking) and
+// returns the default Subnet, SecurityGroup and VirtualNetwork. Defaults are per tenant; the project and the fabric
+// manager are ignored.
+func seedTenantDefaultNetworking(tenant, _ string, _ *string) (subnetID, securityGroupID, virtualNetworkID string) {
+	fixture := seedReadyDefaultNetworking(tenant, 0)
+	return fixture.subnetID, fixture.securityGroupID, fixture.virtualNetworkID
 }
 
 // createAvailableDiskImageInTenant seeds an AVAILABLE DiskImage with an explicit id, name, and

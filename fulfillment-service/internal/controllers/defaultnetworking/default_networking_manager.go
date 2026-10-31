@@ -41,6 +41,16 @@ var (
 	// ErrResourcesDeleting tells the owning controller to retry while a child
 	// resource controller finishes asynchronous cleanup.
 	ErrResourcesDeleting = errors.New("default networking resources are still being deleted")
+
+	// ErrNoPoolCapacity tells the owning controller that every READY IPv4
+	// ExternalIPPool is full, so the default ExternalIP can't be created. It is
+	// a final failure: the controller reports it and doesn't retry.
+	ErrNoPoolCapacity = errors.New("no READY IPv4 ExternalIPPool has capacity")
+
+	// ErrNoReadyPool tells the owning controller that the default ExternalIP
+	// waits for a READY IPv4 ExternalIPPool. The other default resources are
+	// still ensured; the controller retries later.
+	ErrNoReadyPool = errors.New("no READY IPv4 ExternalIPPool")
 )
 
 type networkClassesReader interface {
@@ -89,8 +99,9 @@ type Manager interface {
 
 // ManagerBuilder contains the data needed to create a default-networking manager.
 type ManagerBuilder struct {
-	logger     *slog.Logger
-	connection *grpc.ClientConn
+	logger              *slog.Logger
+	connection          *grpc.ClientConn
+	provisioningEnabled *bool
 }
 
 // NewManager creates a builder for the shared default-networking manager.
@@ -110,6 +121,13 @@ func (b *ManagerBuilder) SetConnection(value *grpc.ClientConn) *ManagerBuilder {
 	return b
 }
 
+// SetProvisioningEnabled sets the value of global.networking.provisioningEnabled. With provider networking disabled
+// the manager creates no ExternalIP and no NATGateway. The default is true.
+func (b *ManagerBuilder) SetProvisioningEnabled(value bool) *ManagerBuilder {
+	b.provisioningEnabled = &value
+	return b
+}
+
 // Build creates a manager backed by the private fulfillment API.
 func (b *ManagerBuilder) Build() (Manager, error) {
 	if b.logger == nil {
@@ -118,35 +136,44 @@ func (b *ManagerBuilder) Build() (Manager, error) {
 	if b.connection == nil {
 		return nil, errors.New("connection is mandatory")
 	}
+	provisioningEnabled := true
+	if b.provisioningEnabled != nil {
+		provisioningEnabled = *b.provisioningEnabled
+	}
 	return &manager{
-		logger:          b.logger,
-		networkClasses:  privatev1.NewNetworkClassesClient(b.connection),
-		virtualNetworks: privatev1.NewVirtualNetworksClient(b.connection),
-		subnets:         privatev1.NewSubnetsClient(b.connection),
-		securityGroups:  privatev1.NewSecurityGroupsClient(b.connection),
-		externalIPPools: privatev1.NewExternalIPPoolsClient(b.connection),
-		externalIPs:     privatev1.NewExternalIPsClient(b.connection),
-		natGateways:     privatev1.NewNATGatewaysClient(b.connection),
+		provisioningEnabled: provisioningEnabled,
+		logger:              b.logger,
+		networkClasses:      privatev1.NewNetworkClassesClient(b.connection),
+		virtualNetworks:     privatev1.NewVirtualNetworksClient(b.connection),
+		subnets:             privatev1.NewSubnetsClient(b.connection),
+		securityGroups:      privatev1.NewSecurityGroupsClient(b.connection),
+		externalIPPools:     privatev1.NewExternalIPPoolsClient(b.connection),
+		externalIPs:         privatev1.NewExternalIPsClient(b.connection),
+		natGateways:         privatev1.NewNATGatewaysClient(b.connection),
 	}, nil
 }
 
 type manager struct {
-	logger          *slog.Logger
-	networkClasses  networkClassesReader
-	virtualNetworks virtualNetworksClient
-	subnets         subnetsClient
-	securityGroups  securityGroupsClient
-	externalIPPools externalIPPoolsReader
-	externalIPs     externalIPsClient
-	natGateways     natGatewaysClient
+	provisioningEnabled bool
+	logger              *slog.Logger
+	networkClasses      networkClassesReader
+	virtualNetworks     virtualNetworksClient
+	subnets             subnetsClient
+	securityGroups      securityGroupsClient
+	externalIPPools     externalIPPoolsReader
+	externalIPs         externalIPsClient
+	natGateways         natGatewaysClient
 }
 
-// Ensure creates the default resources for a tenant when the singleton
-// NetworkClass contains defaults and returns those defaults for readiness
-// evaluation. It waits for the NetworkClass, VirtualNetwork, configured
-// Subnets, and SecurityGroup to become Ready before creating each dependent
-// stage. Every operation is idempotent; reconciliation can safely resume
-// after any API or controller failure.
+// Ensure creates the default resources of a tenant from the defaults of the
+// NetworkClass and returns those defaults. With provider networking enabled it
+// creates the VirtualNetwork and the ExternalIP default-nat first, then the
+// Subnet default-ipv4 and the SecurityGroup default once the VirtualNetwork is
+// READY, then the NATGateway default once the VirtualNetwork is READY and the
+// ExternalIP ALLOCATED. With provider networking disabled it creates no
+// ExternalIP and no NATGateway. Every step is idempotent, so reconciliation can
+// resume after any failure. The creates lock the Tenant record and fail while
+// the tenant is being deleted.
 func (m *manager) Ensure(ctx context.Context, tenantName string) (*privatev1.NetworkDefaults, error) {
 	if tenantName == "system" || tenantName == "shared" {
 		return nil, nil
@@ -164,42 +191,40 @@ func (m *manager) Ensure(ctx context.Context, tenantName string) (*privatev1.Net
 		networkClass.GetMetadata().HasDeletionTimestamp() {
 		return defaults, nil
 	}
-	vn, err := m.ensureVirtualNetwork(ctx, tenantName, networkClass, defaults)
+	vn, err := m.ensureVirtualNetwork(ctx, tenantName, defaults)
 	if err != nil {
 		return nil, fmt.Errorf("failed to ensure default VirtualNetwork: %w", err)
 	}
+	var externalIP *privatev1.ExternalIP
+	var waitErr error
+	if m.provisioningEnabled {
+		externalIP, err = m.ensureExternalIP(ctx, tenantName)
+		switch {
+		case errors.Is(err, ErrNoPoolCapacity):
+			return defaults, err
+		case errors.Is(err, ErrNoReadyPool):
+			waitErr = err
+		case err != nil:
+			return nil, fmt.Errorf("failed to ensure default ExternalIP: %w", err)
+		}
+	}
 	if vn.GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {
-		return defaults, nil
+		return defaults, waitErr
 	}
 
-	subnetsReady := true
-	if defaults.GetSubnetIpv4Cidr() != "" {
-		subnet, err := m.ensureSubnet(ctx, tenantName, vn.GetId(), defaults.GetSubnetIpv4Cidr(), "", "default-ipv4")
-		if err != nil {
-			return nil, fmt.Errorf("failed to ensure default IPv4 Subnet: %w", err)
-		}
-		subnetsReady = subnet.GetStatus().GetState() == privatev1.SubnetState_SUBNET_STATE_READY
+	if _, err := m.ensureSubnet(ctx, tenantName, vn.GetId(), defaults.GetSubnetIpv4Cidr(), "default-ipv4"); err != nil {
+		return nil, fmt.Errorf("failed to ensure default IPv4 Subnet: %w", err)
 	}
-	if defaults.GetSubnetIpv6Cidr() != "" {
-		subnet, err := m.ensureSubnet(ctx, tenantName, vn.GetId(), "", defaults.GetSubnetIpv6Cidr(), "default-ipv6")
-		if err != nil {
-			return nil, fmt.Errorf("failed to ensure default IPv6 Subnet: %w", err)
-		}
-		subnetsReady = subnetsReady && subnet.GetStatus().GetState() == privatev1.SubnetState_SUBNET_STATE_READY
-	}
-	securityGroup, err := m.ensureSecurityGroup(ctx, tenantName, vn.GetId(), defaults)
-	if err != nil {
+	if _, err := m.ensureSecurityGroup(ctx, tenantName, vn.GetId(), defaults); err != nil {
 		return nil, fmt.Errorf("failed to ensure default SecurityGroup: %w", err)
 	}
-	if !subnetsReady || securityGroup.GetStatus().GetState() != privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY {
-		return defaults, nil
-	}
-	if defaults.GetEnableNatGateway() {
-		if err := m.ensureNATGateway(ctx, tenantName, vn.GetId()); err != nil {
+	if externalIP != nil &&
+		externalIP.GetStatus().GetState() == privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED {
+		if err := m.ensureNATGateway(ctx, tenantName, vn.GetId(), externalIP.GetId()); err != nil {
 			return nil, fmt.Errorf("failed to ensure default NATGateway: %w", err)
 		}
 	}
-	return defaults, nil
+	return defaults, waitErr
 }
 
 func listExistingAfterAlreadyExists[T any](resourceName string, list func() ([]*T, error)) (*T, error) {
@@ -231,7 +256,7 @@ func (m *manager) findNetworkClass(ctx context.Context) (*privatev1.NetworkClass
 	return response.GetItems()[0], nil
 }
 
-func (m *manager) ensureVirtualNetwork(ctx context.Context, tenantName string, networkClass *privatev1.NetworkClass,
+func (m *manager) ensureVirtualNetwork(ctx context.Context, tenantName string,
 	defaults *privatev1.NetworkDefaults) (*privatev1.VirtualNetwork, error) {
 	filter := resourceFilter(tenantName, defaultResourceName)
 	response, err := m.virtualNetworks.List(ctx, privatev1.VirtualNetworksListRequest_builder{Filter: &filter}.Build())
@@ -248,16 +273,11 @@ func (m *manager) ensureVirtualNetwork(ctx context.Context, tenantName string, n
 			Labels: map[string]string{defaultLabel: "true"},
 		}.Build(),
 		Spec: privatev1.VirtualNetworkSpec_builder{
-			Region:       "default",
-			NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClass.GetId()}.Build(),
+			Ipv4Cidr: new(defaults.GetVirtualNetworkIpv4Cidr()),
 		}.Build(),
 	}.Build()
-	if defaults.GetVirtualNetworkIpv4Cidr() != "" {
-		object.GetSpec().SetIpv4Cidr(defaults.GetVirtualNetworkIpv4Cidr())
-	}
-	if defaults.GetVirtualNetworkIpv6Cidr() != "" {
-		object.GetSpec().SetIpv6Cidr(defaults.GetVirtualNetworkIpv6Cidr())
-	}
+	m.logger.InfoContext(ctx, "CreatingDefaultNetworking",
+		slog.String("tenant", tenantName), slog.String("kind", "VirtualNetwork"))
 	created, err := m.virtualNetworks.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{Object: object}.Build())
 	if status.Code(err) == codes.AlreadyExists {
 		return m.getVirtualNetwork(ctx, tenantName)
@@ -280,7 +300,7 @@ func (m *manager) getVirtualNetwork(ctx context.Context, tenantName string) (*pr
 	return response.GetItems()[0], nil
 }
 
-func (m *manager) ensureSubnet(ctx context.Context, tenantName, virtualNetworkID, ipv4CIDR, ipv6CIDR, name string) (*privatev1.Subnet, error) {
+func (m *manager) ensureSubnet(ctx context.Context, tenantName, virtualNetworkID, ipv4CIDR, name string) (*privatev1.Subnet, error) {
 	filter := resourceFilter(tenantName, name)
 	response, err := m.subnets.List(ctx, privatev1.SubnetsListRequest_builder{Filter: &filter}.Build())
 	if err != nil {
@@ -297,14 +317,9 @@ func (m *manager) ensureSubnet(ctx context.Context, tenantName, virtualNetworkID
 		}.Build(),
 		Spec: privatev1.SubnetSpec_builder{
 			VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
+			Ipv4Cidr:       new(ipv4CIDR),
 		}.Build(),
 	}.Build()
-	if ipv4CIDR != "" {
-		object.GetSpec().SetIpv4Cidr(ipv4CIDR)
-	}
-	if ipv6CIDR != "" {
-		object.GetSpec().SetIpv6Cidr(ipv6CIDR)
-	}
 	created, err := m.subnets.Create(ctx, privatev1.SubnetsCreateRequest_builder{Object: object}.Build())
 	if status.Code(err) == codes.AlreadyExists {
 		return listExistingAfterAlreadyExists("subnet", func() ([]*privatev1.Subnet, error) {
@@ -359,7 +374,7 @@ func (m *manager) ensureSecurityGroup(ctx context.Context, tenantName, virtualNe
 	return created.GetObject(), nil
 }
 
-func (m *manager) ensureNATGateway(ctx context.Context, tenantName, virtualNetworkID string) error {
+func (m *manager) ensureNATGateway(ctx context.Context, tenantName, virtualNetworkID, externalIPID string) error {
 	filter := resourceFilter(tenantName, defaultResourceName)
 	gateways, err := m.natGateways.List(ctx, privatev1.NATGatewaysListRequest_builder{Filter: &filter}.Build())
 	if err != nil {
@@ -368,14 +383,8 @@ func (m *manager) ensureNATGateway(ctx context.Context, tenantName, virtualNetwo
 	if len(gateways.GetItems()) > 0 {
 		return nil
 	}
-
-	externalIP, err := m.ensureExternalIP(ctx, tenantName)
-	if err != nil {
-		return err
-	}
-	if externalIP.GetStatus().GetState() != privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED {
-		return nil
-	}
+	m.logger.InfoContext(ctx, "CreatingDefaultNetworking",
+		slog.String("tenant", tenantName), slog.String("kind", "NATGateway"))
 	object := privatev1.NATGateway_builder{
 		Metadata: privatev1.Metadata_builder{
 			Name: defaultResourceName, Tenant: tenantName, Creator: controllerCreator,
@@ -384,7 +393,7 @@ func (m *manager) ensureNATGateway(ctx context.Context, tenantName, virtualNetwo
 		}.Build(),
 		Spec: privatev1.NATGatewaySpec_builder{
 			VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
-			ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: externalIP.GetId()}.Build(),
+			ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: externalIPID}.Build(),
 		}.Build(),
 	}.Build()
 	_, err = m.natGateways.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{Object: object}.Build())
@@ -408,29 +417,46 @@ func (m *manager) ensureExternalIP(ctx context.Context, tenantName string) (*pri
 	if err != nil {
 		return nil, err
 	}
-	available := make([]*privatev1.ExternalIPPool, 0, len(pools.GetItems()))
+	ready := make([]*privatev1.ExternalIPPool, 0, len(pools.GetItems()))
 	for _, pool := range pools.GetItems() {
 		if pool.GetSpec().GetIpFamily() == privatev1.IPFamily_IP_FAMILY_IPV4 &&
 			pool.GetStatus().GetState() == privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY &&
-			pool.GetStatus().GetAvailable() > 0 {
-			available = append(available, pool)
+			!pool.GetMetadata().HasDeletionTimestamp() {
+			ready = append(ready, pool)
 		}
 	}
-	if len(available) == 0 {
-		return nil, errors.New("no ready IPv4 ExternalIPPool has available capacity")
+	// Without a READY pool, wait: the pool may still be provisioning.
+	if len(ready) == 0 {
+		return nil, ErrNoReadyPool
 	}
-	sort.Slice(available, func(i, j int) bool { return available[i].GetId() < available[j].GetId() })
+	sort.Slice(ready, func(i, j int) bool { return ready[i].GetId() < ready[j].GetId() })
 
-	object := privatev1.ExternalIP_builder{
-		Metadata: privatev1.Metadata_builder{
-			Name: defaultExternalIPName, Tenant: tenantName, Creator: controllerCreator,
-			Labels: map[string]string{defaultLabel: "true"},
-		}.Build(),
-		Spec: privatev1.ExternalIPSpec_builder{
-			Pool: privatev1.ExternalIPPoolReference_builder{Id: available[0].GetId()}.Build(),
-		}.Build(),
-	}.Build()
-	created, err := m.externalIPs.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{Object: object}.Build())
+	m.logger.InfoContext(ctx, "CreatingDefaultNetworking",
+		slog.String("tenant", tenantName), slog.String("kind", "ExternalIP"))
+	var created *privatev1.ExternalIPsCreateResponse
+	for _, pool := range ready {
+		if pool.GetStatus().GetAvailable() <= 0 {
+			continue
+		}
+		object := privatev1.ExternalIP_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name: defaultExternalIPName, Tenant: tenantName, Creator: controllerCreator,
+				Labels: map[string]string{defaultLabel: "true"},
+			}.Build(),
+			Spec: privatev1.ExternalIPSpec_builder{
+				Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
+			}.Build(),
+		}.Build()
+		created, err = m.externalIPs.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{Object: object}.Build())
+		// The create rechecks the capacity under the pool lock; when the pool filled meanwhile, try the next one.
+		if status.Code(err) == codes.FailedPrecondition {
+			continue
+		}
+		break
+	}
+	if created == nil && err == nil || status.Code(err) == codes.FailedPrecondition {
+		return nil, ErrNoPoolCapacity
+	}
 	if status.Code(err) == codes.AlreadyExists {
 		return listExistingAfterAlreadyExists("ExternalIP", func() ([]*privatev1.ExternalIP, error) {
 			response, err := m.externalIPs.List(ctx, privatev1.ExternalIPsListRequest_builder{Filter: &filter}.Build())

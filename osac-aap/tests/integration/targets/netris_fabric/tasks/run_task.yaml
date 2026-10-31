@@ -1,0 +1,88 @@
+---
+# Run one Netris Fabric Manager task through playbook_osac_network_task.yml in
+# a child ansible-playbook process, as AAP runs a networking job
+# (-e @extravars), with the job pod's NETRIS_* settings as environment
+# variables pointing at the fake Netris, and with an unusable kubeconfig (the
+# Netris manager must not need the hub API). Then read the fake's state and the
+# requests this run sent.
+# Input:
+#   sft_label, sft_expect, sft_message, sft_message_search   (parse_job.yaml)
+#   nf_job       osac_job_vars without manager (added here)
+#   nf_env       optional settings overriding nf_settings (the role treats an
+#                empty value as an unset setting)
+#   nf_no_requests  optional: true asserts that the task sent no request to Netris
+# Output: sft_last (parse_job.yaml), nf_state (the fake's state), nf_calls
+#   (every request of this run), nf_writes (POST/PUT/DELETE of this run as
+#   "METHOD /path" strings, login excluded), nf_write_kinds (the same without
+#   object IDs).
+- name: "Empty the request log - {{ sft_label }}"
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps: [{path: calls/clear}]
+
+- name: "Write the launch extra vars - {{ sft_label }}"
+  ansible.builtin.copy:
+    dest: "{{ nf.root }}/{{ sft_label | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
+    mode: "0600"
+    content: "{{ {'osac_job_vars': {'manager': nf_manager} | combine(nf_job)} | to_json }}"
+
+- name: "Run the generic playbook - {{ sft_label }}"
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
+      - -i
+      - inventory/localhost.yml   # the AAP inventory: localhost with a local connection
+      - playbook_osac_network_task.yml
+      - -e
+      - "@{{ nf.root }}/{{ sft_label | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
+    chdir: "{{ nf.repo }}"
+  environment: "{{ nf_child_env | combine(nf_settings) | combine(nf_env | default({})) }}"
+  register: nf_run
+  changed_when: false
+  failed_when: false
+
+- name: "Check the outcome - {{ sft_label }}"
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/../../network_task_playbook/tasks/parse_job.yaml"
+  vars:
+    sft_raw: "{{ nf_run }}"
+
+- name: "Check the published result - {{ sft_label }}"
+  when: (nf_result | default(none)) is not none
+  ansible.builtin.assert:
+    that: >-
+      (nf_result == {} and not sft_last.result)
+      or (nf_result != {} and sft_last.result == nf_result)
+    fail_msg: "{{ sft_label }}: osac_result is {{ sft_last.result }}, expected {{ nf_result }}"
+    quiet: true
+
+- name: "Read the fake Netris state - {{ sft_label }}"
+  ansible.builtin.uri:
+    url: "{{ nf.url }}/__admin/state"
+    use_proxy: false
+    return_content: true
+  register: _nf_state_resp
+
+- name: "Read the requests of the run - {{ sft_label }}"
+  ansible.builtin.uri:
+    url: "{{ nf.url }}/__admin/calls"
+    use_proxy: false
+    return_content: true
+  register: _nf_calls_resp
+
+- name: "Record the fake Netris state and requests - {{ sft_label }}"
+  vars:
+    _writes: >-
+      {{ _nf_calls_resp.json | rejectattr(0, 'equalto', 'GET')
+         | rejectattr(1, 'equalto', '/api/auth') | list }}
+  ansible.builtin.set_fact:
+    nf_state: "{{ _nf_state_resp.json }}"
+    nf_calls: "{{ _nf_calls_resp.json }}"
+    nf_writes: "{{ _writes | map('reject', 'mapping') | map('join', ' ') | list }}"
+    nf_write_kinds: "{{ _writes | map('reject', 'mapping') | map('join', ' ') | map('regex_replace', '/[0-9]+$', '') | list }}"
+
+- name: "Check the task sent no request to Netris - {{ sft_label }}"
+  when: nf_no_requests | default(false) | bool
+  ansible.builtin.assert:
+    that: nf_calls == []
+    fail_msg: "{{ sft_label }}: the task sent requests to Netris: {{ nf_calls }}"
+    quiet: true

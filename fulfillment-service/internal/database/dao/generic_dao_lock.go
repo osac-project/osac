@@ -30,12 +30,21 @@ import (
 // LockRequest represents a request to lock one or multiple objects.
 type LockRequest[O Object] struct {
 	request[O]
-	ids []string
+	ids           []string
+	idSet         map[string]struct{}
+	returnObjects bool
 }
 
 // AddId adds an identifier of the object to lock.
 func (r *LockRequest[O]) AddId(value string) *LockRequest[O] {
-	if !slices.Contains(r.ids, value) {
+	if r.idSet == nil {
+		r.idSet = make(map[string]struct{}, len(r.ids)+1)
+		for _, id := range r.ids {
+			r.idSet[id] = struct{}{}
+		}
+	}
+	if _, found := r.idSet[value]; !found {
+		r.idSet[value] = struct{}{}
 		r.ids = append(r.ids, value)
 	}
 	return r
@@ -44,10 +53,14 @@ func (r *LockRequest[O]) AddId(value string) *LockRequest[O] {
 // AddIds adds multple identifiers of the objects to lock.
 func (r *LockRequest[O]) AddIds(values ...string) *LockRequest[O] {
 	for _, value := range values {
-		if !slices.Contains(r.ids, value) {
-			r.ids = append(r.ids, value)
-		}
+		r.AddId(value)
 	}
+	return r
+}
+
+// SetReturnObjects sets whether Do returns the locked objects with the lock response.
+func (r *LockRequest[O]) SetReturnObjects(value bool) *LockRequest[O] {
+	r.returnObjects = value
 	return r
 }
 
@@ -85,7 +98,11 @@ func (r *LockRequest[O]) do(ctx context.Context) (response *LockResponse[O], err
 	// Prepare the SQL statement that will lock the rows. Note that the 'order by id' clause is important to avoid
 	// potential deadlocks.
 	var buffer strings.Builder
-	fmt.Fprintf(&buffer, "select id from %s", r.dao.table)
+	columns := "id"
+	if r.returnObjects {
+		columns = `id, name, creation_timestamp, deletion_timestamp, finalizers, creator, tenant, project, labels, annotations, version, data`
+	}
+	fmt.Fprintf(&buffer, "select %s from %s", columns, r.dao.table)
 	if r.sql.filter.Len() > 0 {
 		buffer.WriteString(" where ")
 		buffer.WriteString(r.sql.filter.String())
@@ -95,6 +112,7 @@ func (r *LockRequest[O]) do(ctx context.Context) (response *LockResponse[O], err
 	// Execute the SQL query:
 	sql := buffer.String()
 	ids := make([]string, 0, len(r.ids))
+	var objects []O
 	err = func() (err error) {
 		start := time.Now()
 		rows, err := r.query(ctx, lockOpType, sql, r.sql.params...)
@@ -107,7 +125,22 @@ func (r *LockRequest[O]) do(ctx context.Context) (response *LockResponse[O], err
 		defer rows.Close()
 		for rows.Next() {
 			var id string
-			err = rows.Scan(&id)
+			var stored storedObject
+			if !r.returnObjects {
+				err = rows.Scan(&id)
+			} else {
+				err = rows.Scan(&id, &stored.name, &stored.creationTs, &stored.deletionTs, &stored.finalizers,
+					&stored.creator, &stored.tenant, &stored.project, &stored.labelsData, &stored.annotationsData,
+					&stored.version, &stored.data)
+				if err == nil {
+					stored.id = id
+					var object O
+					object, err = r.objectFromRow(stored)
+					if err == nil {
+						objects = append(objects, object)
+					}
+				}
+			}
 			if err != nil {
 				return err
 			}
@@ -140,12 +173,19 @@ func (r *LockRequest[O]) do(ctx context.Context) (response *LockResponse[O], err
 	}
 
 	// Create and return the response:
-	response = &LockResponse[O]{}
+	response = &LockResponse[O]{objects: objects}
 	return
 }
 
 // LockResponse represents the result of a lock operation.
 type LockResponse[O Object] struct {
+	objects []O
+}
+
+// GetObjects returns the objects locked by the request in identifier order.
+// It returns nil unless the request enabled SetReturnObjects.
+func (r *LockResponse[O]) GetObjects() []O {
+	return r.objects
 }
 
 // Lock creates and returns a new lock request.

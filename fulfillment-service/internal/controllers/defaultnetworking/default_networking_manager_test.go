@@ -202,6 +202,32 @@ func (f *fakeNATGateways) Delete(context.Context, *privatev1.NATGatewaysDeleteRe
 	return privatev1.NATGatewaysDeleteResponse_builder{}.Build(), nil
 }
 
+func readyPool(id string, available int64) *privatev1.ExternalIPPool {
+	return privatev1.ExternalIPPool_builder{
+		Id: id,
+		Spec: privatev1.ExternalIPPoolSpec_builder{
+			IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
+		}.Build(),
+		Status: privatev1.ExternalIPPoolStatus_builder{
+			State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
+			Available: available,
+		}.Build(),
+	}.Build()
+}
+
+func readyNetworkClass(defaults *privatev1.NetworkDefaults) *fakeNetworkClasses {
+	return &fakeNetworkClasses{items: []*privatev1.NetworkClass{
+		privatev1.NetworkClass_builder{
+			Id:   "nc-1",
+			Spec: privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
+			Status: privatev1.NetworkClassStatus_builder{
+				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+				Hub:   "hub-a",
+			}.Build(),
+		}.Build(),
+	}}
+}
+
 var _ = Describe("default networking manager", func() {
 	var (
 		ctx context.Context
@@ -211,19 +237,21 @@ var _ = Describe("default networking manager", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		m = &manager{
-			logger:          slog.Default(),
-			networkClasses:  &fakeNetworkClasses{},
-			virtualNetworks: &fakeVirtualNetworks{},
-			subnets:         &fakeSubnets{},
-			securityGroups:  &fakeSecurityGroups{},
-			natGateways:     &fakeNATGateways{},
-			externalIPs:     &fakeExternalIPs{},
+			provisioningEnabled: true,
+			logger:              slog.Default(),
+			networkClasses:      &fakeNetworkClasses{},
+			virtualNetworks:     &fakeVirtualNetworks{},
+			subnets:             &fakeSubnets{},
+			securityGroups:      &fakeSecurityGroups{},
+			natGateways:         &fakeNATGateways{},
+			externalIPs:         &fakeExternalIPs{},
+			externalIPPools:     &fakeExternalIPPools{items: []*privatev1.ExternalIPPool{readyPool("pool-a", 10)}},
 		}
 	})
 
 	It("returns configured defaults for tenant readiness evaluation", func() {
 		defaults := privatev1.NetworkDefaults_builder{
-			SubnetIpv4Cidr: "10.0.1.0/24", EnableNatGateway: true,
+			SubnetIpv4Cidr: "10.0.1.0/24",
 		}.Build()
 		m.networkClasses = &fakeNetworkClasses{items: []*privatev1.NetworkClass{
 			privatev1.NetworkClass_builder{
@@ -254,6 +282,7 @@ var _ = Describe("default networking manager", func() {
 
 		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
 		Expect(m.virtualNetworks.(*fakeVirtualNetworks).creates).To(BeEmpty())
+		Expect(m.externalIPs.(*fakeExternalIPs).items).To(BeEmpty())
 
 		m.networkClasses.(*fakeNetworkClasses).items[0].SetStatus(privatev1.NetworkClassStatus_builder{
 			State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
@@ -262,82 +291,47 @@ var _ = Describe("default networking manager", func() {
 		Expect(m.virtualNetworks.(*fakeVirtualNetworks).creates).To(HaveLen(1))
 	})
 
-	It("waits for each default resource dependency across repeated Ensure calls", func() {
-		m.networkClasses = &fakeNetworkClasses{items: []*privatev1.NetworkClass{
-			privatev1.NetworkClass_builder{
-				Id: "nc-1",
-				Spec: privatev1.NetworkClassSpec_builder{Defaults: privatev1.NetworkDefaults_builder{
-					SubnetIpv4Cidr: "10.0.1.0/24", SubnetIpv6Cidr: "fd00::/64", EnableNatGateway: true,
-				}.Build()}.Build(),
-				Status: privatev1.NetworkClassStatus_builder{
-					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
-				}.Build(),
-			}.Build(),
-		}}
-		m.externalIPPools = &fakeExternalIPPools{items: []*privatev1.ExternalIPPool{
-			privatev1.ExternalIPPool_builder{
-				Id: "pool-a", Spec: privatev1.ExternalIPPoolSpec_builder{
-					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
-				}.Build(), Status: privatev1.ExternalIPPoolStatus_builder{
-					State: privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, Available: 1,
-				}.Build(),
-			}.Build(),
-		}}
+	It("creates the resources in dependency order across repeated Ensure calls", func() {
+		m.networkClasses = readyNetworkClass(privatev1.NetworkDefaults_builder{
+			VirtualNetworkIpv4Cidr: "10.0.0.0/16",
+			SubnetIpv4Cidr:         "10.0.1.0/24",
+		}.Build())
 		vns := m.virtualNetworks.(*fakeVirtualNetworks)
 		subnets := m.subnets.(*fakeSubnets)
 		groups := m.securityGroups.(*fakeSecurityGroups)
 		ips := m.externalIPs.(*fakeExternalIPs)
 		gateways := m.natGateways.(*fakeNATGateways)
 
+		// The VirtualNetwork and the ExternalIP default-nat come first:
 		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
 		Expect(vns.creates).To(HaveLen(1))
+		Expect(ips.items).To(HaveLen(1))
+		Expect(ips.items[0].GetMetadata().GetName()).To(Equal(defaultExternalIPName))
+		Expect(ips.items[0].GetMetadata().GetLabels()).To(HaveKeyWithValue(defaultLabel, "true"))
 		Expect(subnets.creates).To(BeEmpty())
 		Expect(groups.creates).To(BeEmpty())
+
+		// A FAILED VirtualNetwork doesn't get children:
 		vns.items[0].SetStatus(privatev1.VirtualNetworkStatus_builder{
 			State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_FAILED,
 		}.Build())
 		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
 		Expect(subnets.creates).To(BeEmpty())
+
+		// The Subnet and the SecurityGroup follow once the VirtualNetwork is READY:
 		vns.items[0].SetStatus(privatev1.VirtualNetworkStatus_builder{
 			State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
 		}.Build())
-
 		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
-		Expect(subnets.creates).To(HaveLen(2))
-		Expect(groups.creates).To(HaveLen(1))
-		Expect(ips.items).To(BeEmpty())
+		Expect(subnets.creates).To(HaveLen(1))
+		Expect(subnets.creates[0].GetMetadata().GetName()).To(Equal("default-ipv4"))
 		Expect(subnets.creates[0].GetMetadata().GetTenant()).To(Equal("tenant-a"))
 		Expect(subnets.creates[0].GetMetadata().GetLabels()).To(HaveKeyWithValue(defaultLabel, "true"))
 		Expect(subnets.creates[0].GetMetadata().GetAnnotations()).To(HaveKeyWithValue(ownerReferenceAnnotation, "vn-default"))
-
-		subnets.items[0].SetStatus(privatev1.SubnetStatus_builder{
-			State: privatev1.SubnetState_SUBNET_STATE_READY,
-		}.Build())
-		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
-		Expect(ips.items).To(BeEmpty())
-
-		subnets.items[1].SetStatus(privatev1.SubnetStatus_builder{
-			State: privatev1.SubnetState_SUBNET_STATE_FAILED,
-		}.Build())
-		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
-		Expect(ips.items).To(BeEmpty())
-
-		subnets.items[1].SetStatus(privatev1.SubnetStatus_builder{
-			State: privatev1.SubnetState_SUBNET_STATE_READY,
-		}.Build())
-		groups.items[0].SetStatus(privatev1.SecurityGroupStatus_builder{
-			State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED,
-		}.Build())
-		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
-		Expect(ips.items).To(BeEmpty())
-
-		groups.items[0].SetStatus(privatev1.SecurityGroupStatus_builder{
-			State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
-		}.Build())
-		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
-		Expect(ips.items).To(HaveLen(1))
+		Expect(groups.creates).To(HaveLen(1))
 		Expect(gateways.creates).To(BeEmpty())
 
+		// The NATGateway waits for the ExternalIP to be ALLOCATED:
 		ips.items[0].SetStatus(privatev1.ExternalIPStatus_builder{
 			State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED,
 		}.Build())
@@ -350,65 +344,30 @@ var _ = Describe("default networking manager", func() {
 		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
 		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
 		Expect(vns.creates).To(HaveLen(1))
-		Expect(subnets.creates).To(HaveLen(2))
+		Expect(subnets.creates).To(HaveLen(1))
 		Expect(groups.creates).To(HaveLen(1))
 		Expect(ips.items).To(HaveLen(1))
 		Expect(gateways.creates).To(HaveLen(1))
 		Expect(gateways.creates[0].GetSpec().GetExternalIp().GetId()).To(Equal("eip-default"))
 	})
 
-	It("creates the default resources asynchronously and idempotently", func() {
-		m.networkClasses = &fakeNetworkClasses{items: []*privatev1.NetworkClass{
-			privatev1.NetworkClass_builder{
-				Id: "nc-1",
-				Spec: privatev1.NetworkClassSpec_builder{
-					Defaults: privatev1.NetworkDefaults_builder{
-						VirtualNetworkIpv4Cidr: "10.0.0.0/16",
-						SubnetIpv4Cidr:         "10.0.1.0/24",
-					}.Build(),
-				}.Build(),
-				Status: privatev1.NetworkClassStatus_builder{
-					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
-					Hub:   "hub-a",
-				}.Build(),
-			}.Build(),
-		}}
-
-		vns := m.virtualNetworks.(*fakeVirtualNetworks)
-		subnets := m.subnets.(*fakeSubnets)
-		securityGroups := m.securityGroups.(*fakeSecurityGroups)
-		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
-		vns.items[0].SetStatus(privatev1.VirtualNetworkStatus_builder{
-			State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+	It("creates an IPv4-only VirtualNetwork without NetworkClass reference", func() {
+		m.networkClasses = readyNetworkClass(privatev1.NetworkDefaults_builder{
+			VirtualNetworkIpv4Cidr: "10.0.0.0/16",
+			SubnetIpv4Cidr:         "10.0.1.0/24",
 		}.Build())
 		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
-		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
-
+		vns := m.virtualNetworks.(*fakeVirtualNetworks)
 		Expect(vns.creates).To(HaveLen(1))
+		Expect(vns.creates[0].GetMetadata().GetName()).To(Equal(defaultResourceName))
 		Expect(vns.creates[0].GetMetadata().GetLabels()).To(HaveKeyWithValue(defaultLabel, "true"))
-		Expect(vns.creates[0].GetSpec().GetNetworkClass().GetId()).To(Equal("nc-1"))
 		Expect(vns.creates[0].GetSpec().GetIpv4Cidr()).To(Equal("10.0.0.0/16"))
-		Expect(vns.creates[0].GetSpec().GetIpv6Cidr()).To(BeEmpty())
-		Expect(subnets.creates).To(HaveLen(1))
-		Expect(subnets.creates[0].GetMetadata().GetName()).To(Equal("default-ipv4"))
-		Expect(subnets.creates[0].GetMetadata().GetAnnotations()).To(HaveKeyWithValue(ownerReferenceAnnotation, "vn-default"))
-		Expect(subnets.creates[0].GetSpec().GetIpv4Cidr()).To(Equal("10.0.1.0/24"))
-		Expect(subnets.creates[0].GetSpec().GetIpv6Cidr()).To(BeEmpty())
-		Expect(securityGroups.creates).To(HaveLen(1))
 	})
 
 	It("re-reads default resources after concurrent creation", func() {
-		m.networkClasses = &fakeNetworkClasses{items: []*privatev1.NetworkClass{
-			privatev1.NetworkClass_builder{
-				Id: "nc-1",
-				Spec: privatev1.NetworkClassSpec_builder{Defaults: privatev1.NetworkDefaults_builder{
-					SubnetIpv4Cidr: "10.0.1.0/24", EnableNatGateway: true,
-				}.Build()}.Build(),
-				Status: privatev1.NetworkClassStatus_builder{
-					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
-				}.Build(),
-			}.Build(),
-		}}
+		m.networkClasses = readyNetworkClass(privatev1.NetworkDefaults_builder{
+			SubnetIpv4Cidr: "10.0.1.0/24",
+		}.Build())
 		m.virtualNetworks = &fakeVirtualNetworks{items: []*privatev1.VirtualNetwork{
 			privatev1.VirtualNetwork_builder{
 				Id: "vn-default",
@@ -420,116 +379,28 @@ var _ = Describe("default networking manager", func() {
 		m.subnets = &fakeSubnets{alreadyExists: true}
 		m.securityGroups = &fakeSecurityGroups{alreadyExists: true}
 		m.externalIPs = &fakeExternalIPs{alreadyExists: true}
-		m.externalIPPools = &fakeExternalIPPools{items: []*privatev1.ExternalIPPool{
-			privatev1.ExternalIPPool_builder{
-				Id: "pool-a", Spec: privatev1.ExternalIPPoolSpec_builder{
-					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
-				}.Build(), Status: privatev1.ExternalIPPoolStatus_builder{
-					State: privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, Available: 1,
-				}.Build(),
-			}.Build(),
-		}}
 
 		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
 		Expect(m.externalIPs.(*fakeExternalIPs).items).To(HaveLen(1))
 		Expect(m.natGateways.(*fakeNATGateways).creates).To(BeEmpty())
 	})
 
-	It("allocates a default NAT ExternalIP from the first ready IPv4 pool with capacity", func() {
-		m.networkClasses = &fakeNetworkClasses{items: []*privatev1.NetworkClass{
-			privatev1.NetworkClass_builder{
-				Id: "nc-1",
-				Spec: privatev1.NetworkClassSpec_builder{
-					Defaults: privatev1.NetworkDefaults_builder{EnableNatGateway: true}.Build(),
-				}.Build(),
-				Status: privatev1.NetworkClassStatus_builder{
-					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
-					Hub:   "hub-a",
-				}.Build(),
-			}.Build(),
-		}}
+	It("allocates the default ExternalIP from the READY pool with the lowest ID that has capacity", func() {
+		m.networkClasses = readyNetworkClass(privatev1.NetworkDefaults_builder{}.Build())
 		m.externalIPPools = &fakeExternalIPPools{items: []*privatev1.ExternalIPPool{
-			privatev1.ExternalIPPool_builder{
-				Id: "pool-b",
-				Spec: privatev1.ExternalIPPoolSpec_builder{
-					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
-				}.Build(),
-				Status: privatev1.ExternalIPPoolStatus_builder{
-					State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
-					Available: 10,
-				}.Build(),
-			}.Build(),
-			privatev1.ExternalIPPool_builder{
-				Id: "pool-a",
-				Spec: privatev1.ExternalIPPoolSpec_builder{
-					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
-				}.Build(),
-				Status: privatev1.ExternalIPPoolStatus_builder{
-					State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
-					Available: 1,
-				}.Build(),
-			}.Build(),
-			privatev1.ExternalIPPool_builder{
-				Id: "pool-0-ipv6",
-				Spec: privatev1.ExternalIPPoolSpec_builder{
-					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV6,
-				}.Build(),
-				Status: privatev1.ExternalIPPoolStatus_builder{
-					State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
-					Available: 100,
-				}.Build(),
-			}.Build(),
+			readyPool("pool-c", 10),
+			readyPool("pool-a", 0),
+			readyPool("pool-b", 1),
 		}}
 
+		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
 		externalIPs := m.externalIPs.(*fakeExternalIPs)
-		natGateways := m.natGateways.(*fakeNATGateways)
-		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
-		m.virtualNetworks.(*fakeVirtualNetworks).items[0].SetStatus(privatev1.VirtualNetworkStatus_builder{
-			State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
-		}.Build())
-		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
-		m.securityGroups.(*fakeSecurityGroups).items[0].SetStatus(privatev1.SecurityGroupStatus_builder{
-			State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
-		}.Build())
-		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
-		Expect(natGateways.creates).To(BeEmpty())
-		externalIPs.items[0].SetStatus(privatev1.ExternalIPStatus_builder{
-			State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
-		}.Build())
-		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
 		Expect(externalIPs.items).To(HaveLen(1))
-		Expect(externalIPs.items[0].GetSpec().GetPool().GetId()).To(Equal("pool-a"))
-		Expect(natGateways.creates).To(HaveLen(1))
-		Expect(natGateways.creates[0].GetSpec().GetExternalIp().GetId()).To(Equal("eip-default"))
+		Expect(externalIPs.items[0].GetSpec().GetPool().GetId()).To(Equal("pool-b"))
 	})
 
-	It("does not allocate a default NAT ExternalIP from an IPv6-only pool", func() {
-		m.networkClasses = &fakeNetworkClasses{items: []*privatev1.NetworkClass{
-			privatev1.NetworkClass_builder{
-				Id: "nc-1",
-				Spec: privatev1.NetworkClassSpec_builder{
-					Defaults: privatev1.NetworkDefaults_builder{EnableNatGateway: true}.Build(),
-				}.Build(),
-				Status: privatev1.NetworkClassStatus_builder{
-					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
-				}.Build(),
-			}.Build(),
-		}}
-		m.virtualNetworks.(*fakeVirtualNetworks).items = []*privatev1.VirtualNetwork{
-			privatev1.VirtualNetwork_builder{
-				Id: "vn-default",
-				Status: privatev1.VirtualNetworkStatus_builder{
-					State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
-				}.Build(),
-			}.Build(),
-		}
-		m.securityGroups.(*fakeSecurityGroups).items = []*privatev1.SecurityGroup{
-			privatev1.SecurityGroup_builder{
-				Status: privatev1.SecurityGroupStatus_builder{
-					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
-				}.Build(),
-			}.Build(),
-		}
+	It("waits without failing when there is no READY IPv4 pool", func() {
+		m.networkClasses = readyNetworkClass(privatev1.NetworkDefaults_builder{}.Build())
 		m.externalIPPools = &fakeExternalIPPools{items: []*privatev1.ExternalIPPool{
 			privatev1.ExternalIPPool_builder{
 				Id: "pool-ipv6",
@@ -544,8 +415,34 @@ var _ = Describe("default networking manager", func() {
 		}}
 
 		_, err := m.Ensure(ctx, "tenant-a")
-		Expect(err).To(MatchError("failed to ensure default NATGateway: no ready IPv4 ExternalIPPool has available capacity"))
+		Expect(err).To(MatchError(ErrNoReadyPool))
 		Expect(m.externalIPs.(*fakeExternalIPs).items).To(BeEmpty())
+		Expect(m.virtualNetworks.(*fakeVirtualNetworks).creates).To(HaveLen(1),
+			"the other default resources are still created")
+	})
+
+	It("fails when every READY pool is full", func() {
+		m.networkClasses = readyNetworkClass(privatev1.NetworkDefaults_builder{}.Build())
+		m.externalIPPools = &fakeExternalIPPools{items: []*privatev1.ExternalIPPool{readyPool("pool-a", 0)}}
+
+		_, err := m.Ensure(ctx, "tenant-a")
+		Expect(err).To(MatchError(ErrNoPoolCapacity))
+		Expect(m.externalIPs.(*fakeExternalIPs).items).To(BeEmpty())
+	})
+
+	It("creates no ExternalIP and no NATGateway when provider networking is disabled", func() {
+		m.provisioningEnabled = false
+		m.networkClasses = readyNetworkClass(privatev1.NetworkDefaults_builder{}.Build())
+		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
+		vns := m.virtualNetworks.(*fakeVirtualNetworks)
+		vns.items[0].SetStatus(privatev1.VirtualNetworkStatus_builder{
+			State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+		}.Build())
+		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
+		Expect(m.subnets.(*fakeSubnets).creates).To(HaveLen(1))
+		Expect(m.securityGroups.(*fakeSecurityGroups).creates).To(HaveLen(1))
+		Expect(m.externalIPs.(*fakeExternalIPs).items).To(BeEmpty())
+		Expect(m.natGateways.(*fakeNATGateways).creates).To(BeEmpty())
 	})
 
 	It("does not create resources for reserved tenants", func() {

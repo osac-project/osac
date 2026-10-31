@@ -59,6 +59,7 @@ WORKFLOWS=(
 # list each scenario file separately in ROLE_SCENARIO_TESTS.
 ROLE_TESTS=(
   "config_as_code_pod_specs"
+  "config_as_code_job_templates"
   "finalizer"
   "fulfillment_trust_sync"
   "lease"
@@ -71,11 +72,10 @@ ROLE_TESTS=(
   "agentless_net_attachment"
   "compute_instance_delete_vmi_recovery"
   "metallb_l2_detach_annotation"
-  "netris_subnet_delete"
-  "netris_parent_delete"
   "netris_protected_launch"
-  "netris_external_ip"
-  "netris_idempotency"
+  "netris_fabric"
+  "cudn_evpn"
+  "network_task_playbook"
 )
 
 ROLE_SCENARIO_TESTS=(

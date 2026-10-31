@@ -117,6 +117,7 @@ var _ = Describe("Public NAT gateways server", func() {
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+			_ = networkClassDao
 
 			poolResp, err := externalIPPoolDao.Create().SetObject(
 				privatev1.ExternalIPPool_builder{
@@ -140,9 +141,9 @@ var _ = Describe("Public NAT gateways server", func() {
 
 		createVirtualNetwork := func() string {
 			if sharedNetworkClass == nil {
-				ncResp, err := networkClassDao.Create().SetObject(
+				ncResp, err := reuseNetworkClassDAO.Create().SetObject(
 					privatev1.NetworkClass_builder{
-						FabricManager: new("netris"),
+						FabricManager: "netris",
 						Metadata: privatev1.Metadata_builder{
 							Tenant: auth.SharedTenant,
 							Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
@@ -163,9 +164,7 @@ var _ = Describe("Public NAT gateways server", func() {
 						Tenant: testTenant,
 						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: sharedNetworkClass.GetId()}.Build(),
-					}.Build(),
+					Spec: privatev1.VirtualNetworkSpec_builder{}.Build(),
 					Status: privatev1.VirtualNetworkStatus_builder{
 						State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
 						Hub:   "network-hub-a",
@@ -186,7 +185,7 @@ var _ = Describe("Public NAT gateways server", func() {
 			eip := createAllocatedExternalIP()
 			createResp, err := publicServer.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 				Object: publicv1.NATGateway_builder{
-					Metadata: publicv1.Metadata_builder{Tenant: testTenant}.Build(),
+					Metadata: publicv1.Metadata_builder{Name: "nat-1", Tenant: testTenant}.Build(),
 					Spec: publicv1.NATGatewaySpec_builder{
 						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
 						ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
@@ -209,7 +208,7 @@ var _ = Describe("Public NAT gateways server", func() {
 			message := "malicious status"
 			_, err := publicServer.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 				Object: publicv1.NATGateway_builder{
-					Metadata: publicv1.Metadata_builder{Tenant: testTenant}.Build(),
+					Metadata: publicv1.Metadata_builder{Name: "nat-2", Tenant: testTenant}.Build(),
 					Spec: publicv1.NATGatewaySpec_builder{
 						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
 						ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
@@ -253,6 +252,7 @@ var _ = Describe("Public NAT gateways server", func() {
 			createResp, err := publicServer.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 				Object: publicv1.NATGateway_builder{
 					Metadata: publicv1.Metadata_builder{
+						Name:   "nat-delete",
 						Tenant: testTenant,
 					}.Build(),
 					Spec: publicv1.NATGatewaySpec_builder{

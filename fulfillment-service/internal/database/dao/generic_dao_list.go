@@ -190,66 +190,28 @@ func (r *ListRequest[O]) do(ctx context.Context) (response *ListResponse[O], err
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var (
-				id              string
-				name            string
-				creationTs      time.Time
-				deletionTs      time.Time
-				finalizers      []string
-				creator         string
-				tenant          string
-				project         string
-				labelsData      []byte
-				annotationsData []byte
-				version         int32
-				data            []byte
-			)
+			var stored storedObject
 			err = rows.Scan(
-				&id,
-				&name,
-				&creationTs,
-				&deletionTs,
-				&finalizers,
-				&creator,
-				&tenant,
-				&project,
-				&labelsData,
-				&annotationsData,
-				&version,
-				&data,
+				&stored.id,
+				&stored.name,
+				&stored.creationTs,
+				&stored.deletionTs,
+				&stored.finalizers,
+				&stored.creator,
+				&stored.tenant,
+				&stored.project,
+				&stored.labelsData,
+				&stored.annotationsData,
+				&stored.version,
+				&stored.data,
 			)
 			if err != nil {
 				return err
 			}
-			item := r.cloneObject(r.newObject())
-			err = r.unmarshalData(data, item)
+			item, err := r.objectFromRow(stored)
 			if err != nil {
 				return err
 			}
-			var labels map[string]string
-			labels, err = r.unmarshalMap(labelsData)
-			if err != nil {
-				return err
-			}
-			var annotations map[string]string
-			annotations, err = r.unmarshalMap(annotationsData)
-			if err != nil {
-				return err
-			}
-			md := r.makeMetadata(makeMetadataArgs{
-				creationTs:  creationTs,
-				deletionTs:  deletionTs,
-				finalizers:  finalizers,
-				creator:     creator,
-				tenant:      tenant,
-				project:     project,
-				name:        name,
-				labels:      labels,
-				annotations: annotations,
-				version:     version,
-			})
-			item.SetId(id)
-			r.setMetadata(item, md)
 			items = append(items, item)
 		}
 		return rows.Err()

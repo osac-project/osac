@@ -192,6 +192,9 @@ var _ = Describe("Updateless networking API contract", Label("updateless-network
 	)
 
 	It("keeps the ExternalIPPool provider lifecycle working through the private API", func(ctx context.Context) {
+		By("making sure the deployment NetworkClass is READY: ExternalIPPool creates need it")
+		ndReadyNetworkClass(ctx, newNDClients())
+
 		By("creating a disposable provider pool")
 		pools := privatev1.NewExternalIPPoolsClient(admin)
 		name := fmt.Sprintf("updateless-pool-%s", uuid.New()[24:])

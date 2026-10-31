@@ -13,7 +13,6 @@ package it
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -21,8 +20,6 @@ import (
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -47,7 +44,6 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 	BeforeEach(func(setupCtx context.Context) {
 		createdDomainIDs = nil
 		createdVirtualNetIDs = nil
-		requireFabricDomainProvisioningDisabled(setupCtx)
 
 		adminConn := tool.InternalView().AdminConn()
 		tenants := privatev1.NewTenantsClient(adminConn)
@@ -102,30 +98,9 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 			})).To(Succeed())
 		}
 
-		manager := "netris"
-		response, err := networkClasses.Create(setupCtx, privatev1.NetworkClassesCreateRequest_builder{
-			Object: privatev1.NetworkClass_builder{
-				Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("fd-it-%s", uuid.New()[24:])}.Build(),
-				Title:         "FabricDomain API integration NetworkClass",
-				FabricManager: &manager,
-				Capabilities: privatev1.NetworkClassCapabilities_builder{
-					SupportsIpv4:             true,
-					SupportsEastWestEthernet: true,
-				}.Build(),
-			}.Build(),
-		}.Build())
+		response, err := sharedNetworkClass(setupCtx, networkClasses)
 		Expect(err).ToNot(HaveOccurred())
 		networkClassID = response.GetObject().GetId()
-
-		DeferCleanup(func(cleanupCtx context.Context) {
-			_, deleteErr := networkClasses.Delete(cleanupCtx, privatev1.NetworkClassesDeleteRequest_builder{
-				Id: networkClassID,
-			}.Build())
-			if isGRPCCode(deleteErr, grpccodes.NotFound) {
-				return
-			}
-			Expect(deleteErr).ToNot(HaveOccurred())
-		})
 
 		DeferCleanup(func(cleanupCtx context.Context) {
 			for i := len(createdVirtualNetIDs) - 1; i >= 0; i-- {
@@ -141,6 +116,7 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 	})
 
 	createVirtualNetwork := func(ctx context.Context, tenant string) string {
+		c := newNDClients()
 		response, err := virtualNetworks.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 			Object: privatev1.VirtualNetwork_builder{
 				Metadata: privatev1.Metadata_builder{
@@ -148,27 +124,15 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 					Tenant: tenant,
 				}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassID}.Build(),
-					Region:       "us-east-1",
-					Ipv4Cidr:     new(uniqueCIDR()),
+					Ipv4Cidr: new(ndVirtualNetworkCIDR()),
 				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		id := response.GetObject().GetId()
 		createdVirtualNetIDs = append(createdVirtualNetIDs, id)
-		virtualNetworkResponse, err := virtualNetworks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		virtualNetwork := virtualNetworkResponse.GetObject()
-		if !virtualNetwork.HasStatus() {
-			virtualNetwork.SetStatus(&privatev1.VirtualNetworkStatus{})
-		}
-		virtualNetwork.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY)
-		_, err = virtualNetworks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
-			Object:     virtualNetwork,
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
+		ndWaitVirtualNetworkPlaced(ctx, c, id)
+		ndSetVirtualNetworkState(ctx, c, id, privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY)
 		return id
 	}
 
@@ -197,32 +161,94 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 		return publicv1.NewFabricDomainsClient(conn), conn
 	}
 
-	It("validates type, membership, and VirtualNetwork references through the public API", func(ctx context.Context) {
-		for _, testCase := range []struct {
-			name       string
-			fabricType publicv1.FabricDomainType
-			servers    []string
-			vnet       string
-			wantCode   grpccodes.Code
-		}{
-			{name: "unknown type", fabricType: publicv1.FabricDomainType(999), servers: []string{"server-a"}, vnet: "unused", wantCode: grpccodes.InvalidArgument},
-			{name: "empty server list", fabricType: publicv1.FabricDomainType_FABRIC_DOMAIN_TYPE_ETHERNET_EW, vnet: "unused", wantCode: grpccodes.InvalidArgument},
-			{name: "missing virtual network", fabricType: publicv1.FabricDomainType_FABRIC_DOMAIN_TYPE_ETHERNET_EW, servers: []string{"server-a"}, vnet: "missing", wantCode: grpccodes.NotFound},
-		} {
-			By(testCase.name)
-			_, err := adminDomains.Create(ctx, publicv1.FabricDomainsCreateRequest_builder{
-				Object: publicv1.FabricDomain_builder{
-					Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("fd-invalid-%s", uuid.New()[24:]), Tenant: tenantA}.Build(),
-					Spec: publicv1.FabricDomainSpec_builder{
-						Type: testCase.fabricType, Servers: testCase.servers, VirtualNetwork: testCase.vnet,
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(testCase.wantCode))
+	// requireEastWest skips the specs that store a FabricDomain: a create needs a NetworkClass with
+	// supports_east_west_ethernet and servers that are BareMetalInstance hosts of the tenant. The installer's
+	// NetworkClass of the dev profile doesn't enable east-west Ethernet, so in the SUITE=fulfillment target these
+	// creates fail with INVALID_ARGUMENT, which TC-FD-01 checks.
+	requireEastWest := func(ctx context.Context) {
+		response, err := networkClasses.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		if !response.GetObject().GetSpec().GetEastWestCapabilities().GetSupportsEastWestEthernet() {
+			Skip("FabricDomain creates need a NetworkClass with supports_east_west_ethernet and BareMetalInstance " +
+				"hosts; this deployment's NetworkClass doesn't enable east-west Ethernet")
 		}
+	}
+
+	It("TC-FD-01 validates type, servers, VirtualNetwork and the east-west gate through the public API",
+		func(ctx context.Context) {
+			vnetA := createVirtualNetwork(ctx, tenantA)
+			response, err := networkClasses.Get(ctx, privatev1.NetworkClassesGetRequest_builder{
+				Id: networkClassID,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			eastWest := response.GetObject().GetSpec().GetEastWestCapabilities().GetSupportsEastWestEthernet()
+			for _, testCase := range []struct {
+				name       string
+				fabricType publicv1.FabricDomainType
+				servers    []string
+				vnet       string
+				wantCode   grpccodes.Code
+				fragment   string
+			}{
+				{name: "unknown type", fabricType: publicv1.FabricDomainType(999), servers: []string{"server-a"},
+					vnet: vnetA, wantCode: grpccodes.InvalidArgument},
+				{name: "InfiniBand type", fabricType: publicv1.FabricDomainType_FABRIC_DOMAIN_TYPE_INFINIBAND_EW,
+					servers: []string{"server-a"}, vnet: vnetA, wantCode: grpccodes.Unimplemented},
+				{name: "empty server list", fabricType: publicv1.FabricDomainType_FABRIC_DOMAIN_TYPE_ETHERNET_EW,
+					vnet: vnetA, wantCode: grpccodes.InvalidArgument, fragment: "servers"},
+				{name: "missing virtual network", fabricType: publicv1.FabricDomainType_FABRIC_DOMAIN_TYPE_ETHERNET_EW,
+					servers: []string{"server-a"}, vnet: "missing", wantCode: grpccodes.InvalidArgument,
+					fragment: "does not exist"},
+				{name: "server that is not a bare-metal host of the tenant (or east-west not enabled)",
+					fabricType: publicv1.FabricDomainType_FABRIC_DOMAIN_TYPE_ETHERNET_EW,
+					servers:    []string{"server-a.example.test"}, vnet: vnetA, wantCode: grpccodes.InvalidArgument,
+					fragment: map[bool]string{
+						true:  "is not a bare-metal host of this tenant",
+						false: "does not set east_west_capabilities.supports_east_west_ethernet",
+					}[eastWest]},
+			} {
+				By(testCase.name)
+				name := fmt.Sprintf("fd-invalid-%s", uuid.New()[24:])
+				_, err := adminDomains.Create(ctx, publicv1.FabricDomainsCreateRequest_builder{
+					Object: publicv1.FabricDomain_builder{
+						Metadata: publicv1.Metadata_builder{Name: name, Tenant: tenantA}.Build(),
+						Spec: publicv1.FabricDomainSpec_builder{
+							Type: testCase.fabricType, Servers: testCase.servers, VirtualNetwork: testCase.vnet,
+						}.Build(),
+					}.Build(),
+				}.Build())
+				ndExpectCode(err, testCase.wantCode, testCase.fragment)
+			}
+
+			By("checking that no FabricDomain was stored")
+			list, err := adminDomains.List(ctx, &publicv1.FabricDomainsListRequest{})
+			Expect(err).ToNot(HaveOccurred())
+			for _, item := range list.GetItems() {
+				Expect(item.GetMetadata().GetName()).ToNot(HavePrefix("fd-invalid-"), "stored: %s", ndText(item))
+			}
+		})
+
+	It("TC-FD-02 denies tenant users the FabricDomain create", func(ctx context.Context) {
+		vnetA := createVirtualNetwork(ctx, tenantA)
+		clientA, connA := clientForTenant(ctx, "alice", tenantA)
+		DeferCleanup(func() { Expect(connA.Close()).To(Succeed()) })
+		created, err := clientA.Create(ctx, publicv1.FabricDomainsCreateRequest_builder{
+			Object: publicv1.FabricDomain_builder{
+				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("fd-denied-%s", uuid.New()[24:])}.Build(),
+				Spec: publicv1.FabricDomainSpec_builder{
+					Type:    publicv1.FabricDomainType_FABRIC_DOMAIN_TYPE_ETHERNET_EW,
+					Servers: []string{"server-b.example.test"}, VirtualNetwork: vnetA,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		if err == nil {
+			createdDomainIDs = append(createdDomainIDs, created.GetObject().GetId())
+		}
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied), "error: %v", err)
 	})
 
 	It("limits tenant reads to owned domains while allowing platform-admin CRUD", func(ctx context.Context) {
+		requireEastWest(ctx)
 		vnetA := createVirtualNetwork(ctx, tenantA)
 		vnetB := createVirtualNetwork(ctx, tenantB)
 		domainA := createDomain(ctx, tenantA, fmt.Sprintf("fd-a-%s", uuid.New()[24:]), vnetA)
@@ -232,27 +258,6 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 		DeferCleanup(func() { Expect(connA.Close()).To(Succeed()) })
 		clientB, connB := clientForTenant(ctx, "carol", tenantB)
 		DeferCleanup(func() { Expect(connB.Close()).To(Succeed()) })
-
-		updateResponse, err := adminDomains.Update(ctx, publicv1.FabricDomainsUpdateRequest_builder{
-			Object: publicv1.FabricDomain_builder{
-				Id: domainA,
-				Spec: publicv1.FabricDomainSpec_builder{
-					Servers: []string{"server-a.example.test", "server-b.example.test"},
-				}.Build(),
-			}.Build(),
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.servers"}},
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		Expect(updateResponse.GetObject().GetSpec().GetServers()).To(Equal([]string{"server-a.example.test", "server-b.example.test"}))
-
-		_, err = adminDomains.Update(ctx, publicv1.FabricDomainsUpdateRequest_builder{
-			Object: publicv1.FabricDomain_builder{
-				Id:   domainA,
-				Spec: publicv1.FabricDomainSpec_builder{Type: publicv1.FabricDomainType_FABRIC_DOMAIN_TYPE_INFINIBAND_EW}.Build(),
-			}.Build(),
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.type"}},
-		}.Build())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument), "FabricDomain type is immutable")
 
 		listA, err := clientA.List(ctx, &publicv1.FabricDomainsListRequest{})
 		Expect(err).ToNot(HaveOccurred())
@@ -280,7 +285,8 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 		Expect(fabricDomainIDs(listB.GetItems())).To(ContainElement(domainB))
 	})
 
-	It("denies tenant users create, update, and delete", func(ctx context.Context) {
+	It("denies tenant users create and delete", func(ctx context.Context) {
+		requireEastWest(ctx)
 		vnetA := createVirtualNetwork(ctx, tenantA)
 		domainID := createDomain(ctx, tenantA, fmt.Sprintf("fd-protected-%s", uuid.New()[24:]), vnetA)
 		clientA, connA := clientForTenant(ctx, "alice", tenantA)
@@ -300,14 +306,6 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 		}
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
 
-		_, err = clientA.Update(ctx, publicv1.FabricDomainsUpdateRequest_builder{
-			Object: publicv1.FabricDomain_builder{
-				Id:   domainID,
-				Spec: publicv1.FabricDomainSpec_builder{Servers: []string{"server-b.example.test"}}.Build(),
-			}.Build(),
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.servers"}},
-		}.Build())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
 		_, err = clientA.Delete(ctx, publicv1.FabricDomainsDeleteRequest_builder{Id: domainID}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
 
@@ -316,21 +314,6 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 		Expect(persisted.GetObject().GetSpec().GetServers()).To(Equal([]string{"server-a.example.test"}))
 	})
 })
-
-func requireFabricDomainProvisioningDisabled(ctx context.Context) {
-	GinkgoHelper()
-	deployments := &appsv1.DeploymentList{}
-	Expect(tool.KubeClient().List(ctx, deployments, client.InNamespace("osac"))).To(Succeed())
-	for _, deployment := range deployments.Items {
-		for _, container := range deployment.Spec.Template.Spec.Containers {
-			for _, envVar := range container.Env {
-				if envVar.Name == "OSAC_ENABLE_NETWORKING_PROVISIONING" && strings.EqualFold(envVar.Value, "true") {
-					Skip(fmt.Sprintf("FabricDomain API integration requires networking provisioning disabled; %s/%s is enabled", deployment.Namespace, deployment.Name))
-				}
-			}
-		}
-	}
-}
 
 func deleteAndWaitForFabricDomain(ctx context.Context, domains publicv1.FabricDomainsClient, id string) {
 	GinkgoHelper()

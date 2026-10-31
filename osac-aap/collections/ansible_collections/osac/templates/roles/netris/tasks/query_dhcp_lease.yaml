@@ -1,140 +1,108 @@
 ---
-# Query DHCP leases for a network attachment against IPAM host entries in
-# the target subnet. Bare-metal hosts are matched by NIC MAC address (they
-# are not registered as named fabric servers); named fabric servers (e.g.
-# CaaS agents) fall back to matching by server name.
-#
-# Input: network_attachment dict with host_name, logical_interface_name,
-#        subnet_ref. The subnet-ref → MAC map is supplied by the operator as
-#        osac_job_vars.network_attachment_macs.
-# Output: accumulates one entry per attachment into the _dhcp_leases fact,
-#         which the playbook publishes as the job's leases artifact.
+# The DHCP lease of the interface MAC of a physical NetworkAttachment: the one
+# host of the IPAM subnet osac-sn-<Subnet ID> (this tenant and VPC) whose MAC
+# matches. Read-only. No lease yet, or several matches, is retryable. The
+# result's mac_address is the input MAC as it came.
+- name: Query the DHCP lease on Netris
+  block:
+    - name: Check the interface of the attachment
+      ansible.builtin.set_fact:
+        _netris_att: "{{ osac_job_vars | osac.templates.netris_attachment_plan }}"
 
-- name: Extract network attachment configuration
-  ansible.builtin.set_fact:
-    _dq_host_name: "{{ network_attachment.host_name }}"
-    _dq_subnet_ref: "{{ network_attachment.subnet_ref }}"
-    _dq_interface: "{{ network_attachment.logical_interface_name | default('') }}"
+    - name: Stop on an invalid attachment input
+      vars:
+        netris_fail:
+          message: "{{ _netris_att.error if _netris_att.error | length > 0 else 'Netris invalid task input: query_dhcp_lease needs a physical interface' }}"
+          retryable: false
+      when: _netris_att.kind != 'physical'
+      ansible.builtin.include_tasks: _fail.yaml
 
-- name: Look up Subnet CR by UUID label
-  kubernetes.core.k8s_info:
-    api_version: osac.openshift.io/v1alpha1
-    kind: Subnet
-    label_selectors:
-      - "osac.openshift.io/subnet-uuid={{ _dq_subnet_ref }}"
-  register: _dq_subnet_lookup
+    - name: Check the settings
+      ansible.builtin.include_tasks: _settings.yaml
+      vars:
+        netris_require: [controller, credentials, tenant]
 
-- name: Fail if Subnet CR not found
-  ansible.builtin.fail:
-    msg: >-
-      Subnet with UUID '{{ _dq_subnet_ref }}' not found.
-  when: _dq_subnet_lookup.resources | length == 0
+    - name: Check the task input
+      ansible.builtin.include_tasks: _input.yaml
+      vars:
+        netris_require_parents: [virtual_network, subnet]
 
-- name: Set subnet name
-  ansible.builtin.set_fact:
-    _dq_subnet_name: "{{ _dq_subnet_lookup.resources[0].metadata.name }}"
+    - name: Check the network type
+      ansible.builtin.include_tasks: _network_type.yaml
 
-- name: Display DHCP lease query parameters
-  ansible.builtin.debug:
-    msg:
-      - "Querying DHCP lease for host '{{ _dq_host_name }}'"
-      - "Subnet: {{ _dq_subnet_name }} (UUID: {{ _dq_subnet_ref }})"
+    - name: Build the object names
+      ansible.builtin.include_tasks: _names.yaml
 
-# --- Find IPAM subnet ID ---
+    - name: Look up the VPC of the VirtualNetwork
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: read
+      vars:
+        vpc_name: "{{ netris_names.vpc }}"
+        vpc_tenant_id: "{{ netris_tenant_id | int }}"
 
-- name: Find IPAM subnet by name
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: read_subnets
-  vars:
-    ipam_subnet_name: "{{ _dq_subnet_name }}"
+    - name: Wait for the VPC of the VirtualNetwork
+      vars:
+        netris_fail:
+          message: "Netris VPC {{ netris_names.vpc }} does not exist yet. OSAC retries the task."
+          retryable: true
+      when: netris_vpc is not mapping
+      ansible.builtin.include_tasks: _fail.yaml
 
-- name: Set IPAM subnet reference
-  ansible.builtin.set_fact:
-    _dq_ipam_subnet: "{{ netris_ipam_subnet }}"
+    - name: List the IPAM subnets
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+        tasks_from: read_subnets
 
-- name: Fail if IPAM subnet not found
-  ansible.builtin.fail:
-    msg: >-
-      IPAM subnet '{{ _dq_subnet_name }}' not found in Netris controller.
-  when: _dq_ipam_subnet is none
+    - name: Pick the IPAM subnet of this tenant and VPC
+      ansible.builtin.set_fact:
+        _netris_ipam_pick: "{{ netris_ipam_subnets | osac.templates.netris_owned_pick(netris_names.subnet_ipam, netris_vpc.id, netris_tenant_id) }}"
 
-# --- Match IPAM host by server name ---
+    - name: Stop on an IPAM subnet that is not ours or is ambiguous
+      vars:
+        netris_fail:
+          message: >-
+            Netris IPAM subnet {{ netris_names.subnet_ipam }}:
+            {{ _netris_ipam_pick.error if _netris_ipam_pick.error | length > 0 else 'its VPC or tenant is not reported; refusing to use it' }}.
+            OSAC does not retry.
+          retryable: false
+      when: _netris_ipam_pick.error | length > 0 or _netris_ipam_pick.unverified
+      ansible.builtin.include_tasks: _fail.yaml
 
-- name: Query IPAM hosts for subnet
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: read_hosts
-  vars:
-    ipam_subnet_id: "{{ _dq_ipam_subnet.id }}"
+    - name: Wait for the IPAM subnet
+      vars:
+        netris_fail:
+          message: "Netris IPAM subnet {{ netris_names.subnet_ipam }} does not exist yet. OSAC retries the task."
+          retryable: true
+      when: _netris_ipam_pick.id | string | length == 0
+      ansible.builtin.include_tasks: _fail.yaml
 
-# The operator supplies the NIC MAC per subnet-ref. Netris stores lease MACs
-# lowercase (sourced from the DHCP request), so normalise for comparison.
-- name: Determine expected MAC for this attachment
-  ansible.builtin.set_fact:
-    _dq_mac: >-
-      {{ ((osac_job_vars.network_attachment_macs | default({}))[_dq_subnet_ref]
-          | default('')) | lower }}
+    - name: Read the hosts of the IPAM subnet
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+        tasks_from: read_hosts
+      vars:
+        ipam_subnet_id: "{{ _netris_ipam_pick.id }}"
 
-# A Netris IPAM host's `mac` is a list of dicts
-# ([{address, source, state, ...}]), so match _dq_mac against the lowercased
-# mac[].address values rather than the list of dicts itself. Reset first so a
-# non-match does not leak a previous attachment's host across the playbook loop.
-- name: Reset matched IPAM host (MAC branch)
-  ansible.builtin.set_fact:
-    _dq_matched_host: "{{ none }}"
-  when: _dq_mac | length > 0
+    - name: Find the host with the interface MAC
+      ansible.builtin.set_fact:
+        _netris_lease: "{{ netris_ipam_hosts | osac.templates.netris_dhcp_lease(_netris_att.mac) }}"
 
-- name: Find IPAM host matching MAC address
-  ansible.builtin.set_fact:
-    _dq_matched_host: "{{ item }}"
-  loop: >-
-    {{ (netris_ipam_hosts | default([]))
-       | selectattr('mac', 'defined')
-       | selectattr('mac', 'truthy')
-       | list }}
-  loop_control:
-    label: "{{ item.name | default('') }}"
-  when:
-    - _dq_mac | length > 0
-    - _dq_mac in (item.mac | map(attribute='address', default='') | map('lower') | list)
+    - name: Wait for the lease
+      vars:
+        netris_fail:
+          message: "Netris has {{ _netris_lease.error }} in {{ netris_names.subnet_ipam }}. OSAC retries the task."
+          retryable: true
+      when: _netris_lease.error | length > 0
+      ansible.builtin.include_tasks: _fail.yaml
 
-- name: Find IPAM host matching server name
-  ansible.builtin.set_fact:
-    _dq_matched_host: >-
-      {{ (netris_ipam_hosts | default([]))
-         | selectattr('name', 'equalto', _dq_host_name)
-         | list | first | default(none) }}
-  when: _dq_mac | length == 0
-
-- name: Set discovered IP address
-  ansible.builtin.set_fact:
-    discovered_ip_address: >-
-      {{ (_dq_matched_host is not none and _dq_matched_host is mapping)
-         | ternary(_dq_matched_host.address | default(''), '') }}
-
-- name: Fail if no DHCP lease found yet
-  ansible.builtin.fail:
-    msg: >-
-      No DHCP lease found for host '{{ _dq_host_name }}'
-      (interface '{{ _dq_interface }}', mac '{{ _dq_mac }}')
-      in subnet '{{ _dq_subnet_name }}'.
-      The server may not have booted yet or DHCP has not assigned a lease.
-  when: discovered_ip_address | length == 0
-
-# Accumulate across the playbook's per-attachment loop; the playbook publishes
-# the aggregated list once as the job's leases artifact. Keys match the
-# operator's DHCPLease struct (subnet_ref, interface, ip_address, mac_address).
-- name: Accumulate discovered lease for this attachment
-  ansible.builtin.set_fact:
-    _dhcp_leases: >-
-      {{ (_dhcp_leases | default([])) + [{
-           'subnet_ref': _dq_subnet_ref,
-           'interface': _dq_interface,
-           'ip_address': discovered_ip_address,
-           'mac_address': _dq_mac,
-         }] }}
-
-- name: Display DHCP lease query result
-  ansible.builtin.debug:
-    msg: "DHCP lease found: host '{{ _dq_host_name }}' → IP '{{ discovered_ip_address }}' in subnet '{{ _dq_subnet_name }}'"
+    - name: Return the lease to OSAC
+      ansible.builtin.include_tasks: _publish.yaml
+      vars:
+        netris_result:
+          dhcp_lease:
+            ip_address: "{{ _netris_lease.ip_address }}"
+            mac_address: "{{ osac_job_vars.network_attachment.interface.mac_address }}"
+  rescue:
+    - name: Report the error
+      ansible.builtin.include_tasks: _rescue.yaml

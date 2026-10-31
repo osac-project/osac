@@ -45,7 +45,7 @@ type ComputeInstanceBootDiskInput struct {
 // ComputeInstanceNetworkAttachmentInput is one NIC. Subnet and security group
 // IDs must come from the caller's tenant-visible list_resources results.
 type ComputeInstanceNetworkAttachmentInput struct {
-	SubnetID         string   `json:"subnet_id" jsonschema:"ID from list_resources(subnet)"`
+	SubnetID         string   `json:"subnet_id,omitempty" jsonschema:"optional ID from list_resources(subnet); omit to use the tenant default Subnet"`
 	SecurityGroupIDs []string `json:"security_group_ids,omitempty" jsonschema:"optional IDs from list_resources(security_group)"`
 }
 
@@ -174,18 +174,17 @@ func computeInstanceBootDiskFromInput(input ComputeInstanceBootDiskInput) (*publ
 }
 
 func computeInstanceNetworkAttachmentsFromInput(input []ComputeInstanceNetworkAttachmentInput) ([]*publicv1.ComputeNetworkAttachment, error) {
+	// An empty list means the tenant defaults, like an omitted one.
 	if len(input) == 0 {
-		return nil, fmt.Errorf("network_attachments must contain at least one attachment when supplied")
+		return nil, nil
 	}
 	if len(input) > 1 {
 		return nil, fmt.Errorf("network_attachments must contain at most one attachment")
 	}
 	attachments := make([]*publicv1.ComputeNetworkAttachment, len(input))
 	for i, attachment := range input {
+		// An omitted subnet_id means the tenant's default Subnet.
 		subnetID := strings.TrimSpace(attachment.SubnetID)
-		if subnetID == "" {
-			return nil, fmt.Errorf("network_attachments[%d].subnet_id is required", i)
-		}
 		securityGroups := make([]*publicv1.SecurityGroupLocalReference, len(attachment.SecurityGroupIDs))
 		for j, securityGroupID := range attachment.SecurityGroupIDs {
 			securityGroupID = strings.TrimSpace(securityGroupID)
@@ -194,10 +193,11 @@ func computeInstanceNetworkAttachmentsFromInput(input []ComputeInstanceNetworkAt
 			}
 			securityGroups[j] = publicv1.SecurityGroupLocalReference_builder{Id: securityGroupID}.Build()
 		}
-		attachments[i] = publicv1.ComputeNetworkAttachment_builder{
-			Subnet:         publicv1.SubnetLocalReference_builder{Id: subnetID}.Build(),
-			SecurityGroups: securityGroups,
-		}.Build()
+		builder := publicv1.ComputeNetworkAttachment_builder{SecurityGroups: securityGroups}
+		if subnetID != "" {
+			builder.Subnet = publicv1.SubnetLocalReference_builder{Id: subnetID}.Build()
+		}
+		attachments[i] = builder.Build()
 	}
 	return attachments, nil
 }

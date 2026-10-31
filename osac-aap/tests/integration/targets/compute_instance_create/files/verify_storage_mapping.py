@@ -135,7 +135,21 @@ class StorageMappingTests(unittest.TestCase):
         mapping: list[dict[str, str]] | None,
         definitions: list[dict[str, str]] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        job = {"resource": copy.deepcopy(self.resource)}
+        job = {
+            "resource": copy.deepcopy(self.resource),
+            # As the operator sends it with provider networking disabled: the
+            # default pod network with masquerade in the VM namespace.
+            "vm_network": {
+                "namespace": self.namespace,
+                "networks": [{"name": "default", "pod": {}}],
+                "interfaces": [{"name": "default", "masquerade": {}}],
+                "labels": {
+                    "osac.openshift.io/compute-instance-id": (
+                        "3c0b9d2e-3333-4a5b-9c7d-2e4f6a8b0c12"
+                    )
+                },
+            },
+        }
         if mapping is not None:
             job["tenant_storage_classes"] = mapping
         if definitions is not None:
@@ -233,7 +247,8 @@ class StorageMappingTests(unittest.TestCase):
                     disk["spec"]["source"],
                     {
                         "registry": {
-                            "url": "docker://quay.io/containerdisks/fedora:latest"
+                            "pullMethod": "node",
+                            "url": "docker://quay.io/containerdisks/fedora:latest",
                         }
                     },
                 )

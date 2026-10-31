@@ -348,18 +348,19 @@ unit-tests-osac-installer:
 # the current osac-operator image for its focused NetworkClass capability
 # integration spec, so changes anywhere under osac-operator/** must rerun
 # that job. osac-aap (pure Python/Ansible) has no Go/osac-installer coupling,
-# so it's the only one narrowed to just its own directory.
+# so it is narrowed to its own directory and the shared operator/AAP wire goldens
+# (tests/contract/network-task), which the operator and AAP legs both read.
 # integration-tests.yml's own `osac-installer` job (the umbrella smoke test)
 # is deliberately left unscoped in the workflow itself -- it deploys the
 # full stack by design -- so no filter for it exists here.
 integration-tests-fulfillment-service:
   - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 integration-tests-osac-operator:
-  - '{osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
+  - '{osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,osac-installer/**,tests/contract/network-task/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 integration-tests-bare-metal-fulfillment-operator:
   - '{bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 integration-tests-osac-aap:
-  - '{osac-aap/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
+  - '{osac-aap/**,tests/contract/network-task/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
 # The install preflight Kind test (a preflight-only copy of the osac chart, not the full stack).
 integration-tests-osac-installer-preflight:
   - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/test-preflight-kind.py,osac-aap/charts/**,osac-csi-driver/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'

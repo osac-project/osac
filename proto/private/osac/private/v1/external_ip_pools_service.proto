@@ -141,7 +141,7 @@ service ExternalIPPools {
     };
   }
   // Updates an existing external IP pool. Only metadata fields (name, labels, annotations) are mutable.
-  // All spec fields (cidrs, ip_family, implementation_strategy) are immutable after creation.
+  // All spec fields (cidrs, ip_family) are immutable after creation.
   rpc Update(ExternalIPPoolsUpdateRequest) returns (ExternalIPPoolsUpdateResponse) {
     option (cleanapi.method).private = true;
     option (google.api.http) = {

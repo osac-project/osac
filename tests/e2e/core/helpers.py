@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 _POOL_READY_STATE = "EXTERNAL_IP_POOL_STATE_READY"
 _SUBNET_READY_STATE = "SUBNET_STATE_READY"
+_VIRTUAL_NETWORK_READY_STATE = "VIRTUAL_NETWORK_STATE_READY"
 _SECURITY_GROUP_READY_STATE = "SECURITY_GROUP_STATE_READY"
 _BMI_RUNNING_RETRIES = 180
 _BMI_RUNNING_DELAY = 10
@@ -151,7 +152,7 @@ def wait_for_cr(*, k8s: K8sClient, uuid: str) -> str:
         until=lambda v: v != "",
         retries=30,
         delay=2,
-        description=f"CR for {uuid}",
+        description=f"CR for {uuid} to appear",
     )
 
 
@@ -183,7 +184,7 @@ def wait_for_vmi_ip(*, k8s: K8sClient, vmi_namespace: str, compute_instance_name
         until=lambda v: v != "",
         retries=60,
         delay=5,
-        description=f"VMI IP for {compute_instance_name}",
+        description=f"VMI IP for {compute_instance_name} to be set",
     )
 
 
@@ -246,14 +247,14 @@ def wait_for_virtual_network_cr(*, k8s: K8sClient, uuid: str) -> str:
         until=lambda v: v != "",
         retries=30,
         delay=2,
-        description=f"VirtualNetwork CR for {uuid}",
+        description=f"VirtualNetwork CR for {uuid} to appear",
     )
 
 
 def wait_for_virtual_network_ready(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: k8s.get_virtual_network_phase(name=name, checked=False),
-        until=lambda v: v == "Ready",
+        fn=lambda: k8s.get_ready_condition(resource="virtualnetwork", name=name, checked=False),
+        until=lambda v: v == "True",
         retries=60,
         delay=5,
         description=f"{name} VirtualNetwork Ready",
@@ -276,17 +277,40 @@ def wait_for_subnet_cr(*, k8s: K8sClient, uuid: str) -> str:
         until=lambda v: v != "",
         retries=30,
         delay=2,
-        description=f"Subnet CR for {uuid}",
+        description=f"Subnet CR for {uuid} to appear",
     )
 
 
 def wait_for_subnet_ready(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: k8s.get_subnet_phase(name=name, checked=False),
-        until=lambda v: v == "Ready",
+        fn=lambda: k8s.get_ready_condition(resource="subnet", name=name, checked=False),
+        until=lambda v: v == "True",
         retries=60,
         delay=5,
         description=f"{name} Subnet Ready",
+    )
+
+
+def wait_for_grpc_virtual_network_ready(*, grpc: GRPCClient, vn_id: str) -> None:
+    """Poll the gRPC API until the VirtualNetwork state is READY.
+
+    The CR can report Ready before the database has the controller feedback; a Subnet or SecurityGroup
+    created in that window is rejected with FailedPrecondition.
+    """
+
+    def _state() -> str:
+        try:
+            vn = grpc.get_virtual_network(vn_id=vn_id)
+        except subprocess.CalledProcessError:
+            return ""
+        return vn.get("object", {}).get("status", {}).get("state", "")
+
+    poll_until(
+        fn=_state,
+        until=lambda v: v == _VIRTUAL_NETWORK_READY_STATE,
+        retries=60,
+        delay=2,
+        description=f"VirtualNetwork {vn_id} gRPC READY",
     )
 
 
@@ -356,14 +380,14 @@ def wait_for_external_ip_pool_cr(*, k8s: K8sClient, uuid: str) -> str:
         until=lambda v: v != "",
         retries=30,
         delay=1,
-        description=f"ExternalIPPool CR for {uuid}",
+        description=f"ExternalIPPool CR for {uuid} to appear",
     )
 
 
 def wait_for_external_ip_pool_ready(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: k8s.get_external_ip_pool_phase(name=name, checked=False),
-        until=lambda v: v == "Ready",
+        fn=lambda: k8s.get_ready_condition(resource="externalippool", name=name, checked=False),
+        until=lambda v: v == "True",
         retries=60,
         delay=5,
         description=f"{name} ExternalIPPool Ready",
@@ -411,14 +435,14 @@ def wait_for_external_ip_cr(*, k8s: K8sClient, uuid: str) -> str:
         until=lambda v: v != "",
         retries=30,
         delay=1,
-        description=f"ExternalIP CR for {uuid}",
+        description=f"ExternalIP CR for {uuid} to appear",
     )
 
 
 def wait_for_external_ip_allocated(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: k8s.get_external_ip_state(name=name, checked=False),
-        until=lambda v: v == "Allocated",
+        fn=lambda: k8s.get_ready_condition(resource="externalip", name=name, checked=False),
+        until=lambda v: v == "True",
         retries=60,
         delay=5,
         description=f"{name} ExternalIP Allocated",
@@ -442,14 +466,14 @@ def wait_for_external_ip_attachment_cr(*, k8s: K8sClient, uuid: str) -> str:
         until=lambda v: v != "",
         retries=30,
         delay=1,
-        description=f"ExternalIPAttachment CR for {uuid}",
+        description=f"ExternalIPAttachment CR for {uuid} to appear",
     )
 
 
 def wait_for_external_ip_attachment_ready(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: k8s.get_external_ip_attachment_phase(name=name, checked=False),
-        until=lambda v: v == "Ready",
+        fn=lambda: k8s.get_ready_condition(resource="externalipattachment", name=name, checked=False),
+        until=lambda v: v == "True",
         retries=60,
         delay=5,
         description=f"{name} ExternalIPAttachment Ready",
@@ -471,8 +495,8 @@ def wait_for_external_ip_attachment_deletion(*, k8s: K8sClient, name: str) -> No
 
 def wait_for_nat_gateway_ready(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: k8s.get_jsonpath(resource="natgateway", name=name, jsonpath="{.status.state}"),
-        until=lambda state: state == "Ready",
+        fn=lambda: k8s.get_ready_condition(resource="natgateway", name=name, checked=False),
+        until=lambda status: status == "True",
         retries=30,
         delay=5,
         description=f"NATGateway {name} to become Ready",
@@ -495,7 +519,7 @@ def wait_for_cluster_order_cr(*, k8s: K8sClient, uuid: str) -> str:
         until=lambda v: v != "",
         retries=30,
         delay=2,
-        description=f"ClusterOrder CR for {uuid}",
+        description=f"ClusterOrder CR for {uuid} to appear",
         retry_on_error=True,
     )
 
@@ -905,17 +929,41 @@ def wait_for_security_group_cr(*, k8s: K8sClient, uuid: str) -> str:
         until=lambda v: v != "",
         retries=30,
         delay=2,
-        description=f"SecurityGroup CR for {uuid}",
+        description=f"SecurityGroup CR for {uuid} to appear",
     )
 
 
 def wait_for_security_group_ready(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: k8s.get_security_group_phase(name=name, checked=False),
-        until=lambda v: v == "Ready",
+        fn=lambda: k8s.get_ready_condition(resource="securitygroup", name=name, checked=False),
+        until=lambda v: v == "True",
         retries=60,
         delay=5,
         description=f"{name} SecurityGroup Ready",
+    )
+
+
+def wait_for_security_group_update(*, grpc: GRPCClient, sg_id: str) -> None:
+    """Wait until a rule update is applied: READY again and no longer "Updating".
+
+    A rule update on a READY group keeps READY and sets status.message to
+    "Updating"; a second update during it is rejected with FailedPrecondition.
+    """
+
+    def _status() -> tuple[str, str]:
+        status = grpc.get_security_group(sg_id=sg_id).get("object", {}).get("status", {})
+        state = status.get("state", "")
+        message = status.get("message", "")
+        if state == "SECURITY_GROUP_STATE_FAILED":
+            raise RuntimeError(f"SecurityGroup {sg_id} update failed: {message}")
+        return state, message
+
+    poll_until(
+        fn=_status,
+        until=lambda value: value[0] == _SECURITY_GROUP_READY_STATE and value[1] != "Updating",
+        retries=60,
+        delay=5,
+        description=f"SecurityGroup {sg_id} rule update applied",
     )
 
 
@@ -938,7 +986,7 @@ def wait_for_tenant_cr(*, k8s: K8sClient, name: str) -> None:
         until=lambda v: v is True,
         retries=30,
         delay=2,
-        description=f"Tenant CR {name}",
+        description=f"Tenant CR {name} to appear",
         retry_on_error=True,
     )
 
@@ -1073,7 +1121,7 @@ def wait_for_bmi_cr(*, k8s: K8sClient, uuid: str) -> str:
         until=lambda v: v != "",
         retries=30,
         delay=2,
-        description=f"BareMetalInstance CR for {uuid}",
+        description=f"BareMetalInstance CR for {uuid} to appear",
     )
 
 

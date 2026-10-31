@@ -1,3 +1,19 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package controller
 
 import (
@@ -5,372 +21,174 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
-	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
-	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/networktask"
 )
 
-const osacNATGatewayContractVersionAnnotation = "osac.openshift.io/natgateway-contract-version"
+const (
+	// inputNATGatewayContext is the stored input key of the dependency snapshot.
+	inputNATGatewayContext = "nat_gateway_context"
+	// The role records a dependency's readiness with these values. The networking
+	// CRs have a Ready condition and no phase or state, so a snapshot that is
+	// built at all carries exactly these.
+	natGatewayContextPhaseReady     = "Ready"
+	natGatewayContextStateAllocated = "Allocated"
+)
 
-var errNATGatewayContract = errors.New("NATGateway contract validation failed")
-
-type natGatewayJobInputs struct {
-	name            string
-	namespace       string
-	uid             string
-	fulfillmentID   string
-	generation      int64
-	virtualNetwork  string
-	externalIP      string
-	tenant          string
-	strategy        string
-	contractVersion string
-	deleting        bool
-	context         *provisioning.NATGatewayContext
+// natGatewayContext is the controller-resolved dependency snapshot of a
+// NATGateway task: managers that keep provider state by Kubernetes UID use it
+// without querying Kubernetes (osac.templates.agentless_net does).
+type natGatewayContext struct {
+	ExternalIP     natGatewayExternalIPContext     `json:"external_ip"`
+	VirtualNetwork natGatewayVirtualNetworkContext `json:"virtual_network"`
 }
 
-type natGatewayUpdateDependencies struct {
-	virtualNetwork         *v1alpha1.VirtualNetwork
-	externalIP             *v1alpha1.ExternalIP
-	implementationStrategy string
-	contractVersion        string
-	context                provisioning.NATGatewayContext
+type natGatewayExternalIPContext struct {
+	Name          string `json:"name"`
+	Namespace     string `json:"namespace"`
+	FulfillmentID string `json:"fulfillment_id"`
+	KubernetesUID string `json:"kubernetes_uid"`
+	TenantID      string `json:"tenant_id"`
+	Address       string `json:"address"`
+	State         string `json:"state"`
+	Phase         string `json:"phase"`
 }
 
-func resolveNATGatewayManager(
-	ctx context.Context,
-	resolver *dispatcher.Resolver,
-	networkClassID string,
-	virtualNetworkStrategy string,
-	pinnedStrategy string,
-	pinnedVersion string,
-) (string, string, error) {
-	if pinnedVersion != "" && pinnedVersion != networkmanager.NATGatewayContractVersionV1 {
-		return "", "", fmt.Errorf("%w: unsupported NATGateway contract version %q", errNATGatewayContract, pinnedVersion)
-	}
-	if pinnedVersion == networkmanager.NATGatewayContractVersionV1 {
-		if pinnedStrategy == "" {
-			return "", "", fmt.Errorf("%w: pinned NATGateway contract v1 has no implementation strategy", errNATGatewayContract)
-		}
-		return pinnedStrategy, pinnedVersion, nil
-	}
-
-	strategy := virtualNetworkStrategy
-	version := pinnedVersion
-	plan, err := resolveDispatchPlan(ctx, resolver, "NATGateway", networkClassID)
-	if err != nil {
-		if errors.Is(err, networkmanager.ErrUnsupportedNATGatewayContractVersion) {
-			return "", "", fmt.Errorf("%w: %v", errNATGatewayContract, err)
-		}
-		return "", "", err
-	}
-	if plan != nil {
-		target := plan.FabricTarget()
-		if target == nil {
-			target = plan.K8sTarget()
-		}
-		if target != nil {
-			strategy = target.Manager.Name
-			if version == "" {
-				version = target.Manager.NATGatewayContractVersion
-			}
-		}
-	}
-	if version != "" && version != networkmanager.NATGatewayContractVersionV1 {
-		return "", "", fmt.Errorf("%w: unsupported NATGateway contract version %q", errNATGatewayContract, version)
-	}
-	return strategy, version, nil
+type natGatewayVirtualNetworkContext struct {
+	Name          string `json:"name"`
+	Namespace     string `json:"namespace"`
+	FulfillmentID string `json:"fulfillment_id"`
+	KubernetesUID string `json:"kubernetes_uid"`
+	TenantID      string `json:"tenant_id"`
+	IPv4CIDR      string `json:"ipv4_cidr"`
+	Phase         string `json:"phase"`
 }
 
+// buildNATGatewayContext validates the dependencies of a NATGateway and returns
+// their snapshot. pending is true while a dependency is not ready yet or any of
+// the three is being deleted. An error is an identity, tenant or address
+// violation that waiting does not fix.
 func buildNATGatewayContext(
 	natgw *v1alpha1.NATGateway,
-	virtualNetwork *v1alpha1.VirtualNetwork,
-	externalIP *v1alpha1.ExternalIP,
-) (provisioning.NATGatewayContext, bool, error) {
-	if natgw == nil || virtualNetwork == nil || externalIP == nil {
-		return provisioning.NATGatewayContext{}, false, fmt.Errorf("NATGateway dependencies are required")
+	vn *v1alpha1.VirtualNetwork,
+	eip *v1alpha1.ExternalIP,
+) (natGatewayContext, bool, error) {
+	if natgw == nil || vn == nil || eip == nil {
+		return natGatewayContext{}, false, errors.New("NATGateway dependencies are required")
 	}
-	if natgw.UID == "" || natgw.Labels[osacNATGatewayIDLabel] == "" || virtualNetwork.UID == "" || externalIP.UID == "" {
-		return provisioning.NATGatewayContext{}, false, fmt.Errorf("NATGateway identity and dependency UIDs are required")
+	if natgw.UID == "" || natgw.Labels[osacNATGatewayIDLabel] == "" || vn.UID == "" || eip.UID == "" {
+		return natGatewayContext{}, false, errors.New("NATGateway identity and dependency UIDs are required")
 	}
-	tenantID := natgw.Annotations[osacTenantKey]
-	if tenantID == "" || virtualNetwork.Annotations[osacTenantKey] != tenantID ||
-		externalIP.Annotations[osacTenantKey] != tenantID {
-		return provisioning.NATGatewayContext{}, false, fmt.Errorf("NATGateway dependency tenant ownership does not match")
+	tenantID := natgw.Annotations[networktask.TenantAnnotation]
+	if tenantID == "" || vn.Annotations[networktask.TenantAnnotation] != tenantID ||
+		eip.Annotations[networktask.TenantAnnotation] != tenantID {
+		return natGatewayContext{}, false, errors.New("NATGateway dependency tenant ownership does not match")
 	}
-	if natgw.Namespace != virtualNetwork.Namespace || natgw.Namespace != externalIP.Namespace {
-		return provisioning.NATGatewayContext{}, false, fmt.Errorf("NATGateway dependencies must share the networking namespace")
+	if natgw.Namespace != vn.Namespace || natgw.Namespace != eip.Namespace {
+		return natGatewayContext{}, false, errors.New("NATGateway dependencies must share the networking namespace")
 	}
-	if virtualNetwork.Labels[osacVirtualNetworkIDLabel] != natgw.Spec.VirtualNetwork ||
-		externalIP.Labels[osacExternalIPIDLabel] != natgw.Spec.ExternalIP {
-		return provisioning.NATGatewayContext{}, false, fmt.Errorf("NATGateway dependency identity does not match its references")
+	if vn.Labels[osacVirtualNetworkIDLabel] != natgw.Spec.VirtualNetwork ||
+		eip.Labels[osacExternalIPIDLabel] != natgw.Spec.ExternalIP {
+		return natGatewayContext{}, false, errors.New("NATGateway dependency identity does not match its references")
 	}
-	if !natgw.DeletionTimestamp.IsZero() || !virtualNetwork.DeletionTimestamp.IsZero() || !externalIP.DeletionTimestamp.IsZero() {
-		return provisioning.NATGatewayContext{}, true, nil
+	if !natgw.DeletionTimestamp.IsZero() || !isReady(vn) || !allocated(eip) {
+		return natGatewayContext{}, true, nil
 	}
-	if virtualNetwork.Status.Phase != v1alpha1.VirtualNetworkPhaseReady ||
-		externalIP.Status.Phase != v1alpha1.ExternalIPPhaseReady ||
-		externalIP.Status.State != v1alpha1.ExternalIPStateAllocated || externalIP.Status.Address == "" {
-		return provisioning.NATGatewayContext{}, true, nil
+	if address, err := netip.ParseAddr(eip.Status.Address); err != nil || !address.Is4() ||
+		address.IsUnspecified() || address.String() != eip.Status.Address {
+		return natGatewayContext{}, false, errors.New("NATGateway ExternalIP address must be canonical IPv4")
 	}
-	if _, err := canonicalIPv4Address(externalIP.Status.Address); err != nil {
-		return provisioning.NATGatewayContext{}, false, fmt.Errorf(
-			"NATGateway ExternalIP address: %w", err,
-		)
+	if prefix, err := netip.ParsePrefix(vn.Spec.IPv4CIDR); err != nil || !prefix.Addr().Is4() ||
+		prefix != prefix.Masked() || prefix.String() != vn.Spec.IPv4CIDR {
+		return natGatewayContext{}, false, errors.New("NATGateway VirtualNetwork IPv4 CIDR must be canonical IPv4")
 	}
-	if _, err := provisioning.ValidateExternalIPPoolCIDR(
-		[]string{virtualNetwork.Spec.IPv4CIDR},
-	); err != nil {
-		return provisioning.NATGatewayContext{}, false, fmt.Errorf(
-			"NATGateway VirtualNetwork IPv4 CIDR: %w", err,
-		)
-	}
-
-	return provisioning.NATGatewayContext{
-		ExternalIP: provisioning.NATGatewayExternalIPContext{
-			Name: externalIP.Name, Namespace: externalIP.Namespace,
-			FulfillmentID: externalIP.Labels[osacExternalIPIDLabel],
-			KubernetesUID: string(externalIP.UID), TenantID: tenantID,
-			Address: externalIP.Status.Address, State: string(externalIP.Status.State),
-			Phase: string(externalIP.Status.Phase),
+	return natGatewayContext{
+		ExternalIP: natGatewayExternalIPContext{
+			Name: eip.Name, Namespace: eip.Namespace,
+			FulfillmentID: eip.Labels[osacExternalIPIDLabel],
+			KubernetesUID: string(eip.UID), TenantID: tenantID,
+			Address: eip.Status.Address, State: natGatewayContextStateAllocated,
+			Phase: natGatewayContextPhaseReady,
 		},
-		VirtualNetwork: provisioning.NATGatewayVirtualNetworkContext{
-			Name: virtualNetwork.Name, Namespace: virtualNetwork.Namespace,
-			FulfillmentID: virtualNetwork.Labels[osacVirtualNetworkIDLabel],
-			KubernetesUID: string(virtualNetwork.UID), TenantID: tenantID,
-			IPv4CIDR: virtualNetwork.Spec.IPv4CIDR, Phase: string(virtualNetwork.Status.Phase),
+		VirtualNetwork: natGatewayVirtualNetworkContext{
+			Name: vn.Name, Namespace: vn.Namespace,
+			FulfillmentID: vn.Labels[osacVirtualNetworkIDLabel],
+			KubernetesUID: string(vn.UID), TenantID: tenantID,
+			IPv4CIDR: vn.Spec.IPv4CIDR, Phase: natGatewayContextPhaseReady,
 		},
 	}, false, nil
 }
 
-func (r *NATGatewayReconciler) currentNATGatewayContext(
-	ctx context.Context,
-	natgw *v1alpha1.NATGateway,
-) (provisioning.NATGatewayContext, bool, error) {
-	reader := r.APIReader
-	if reader == nil {
-		reader = r.Client
-	}
-	virtualNetworks := &v1alpha1.VirtualNetworkList{}
-	if err := reader.List(ctx, virtualNetworks,
-		client.InNamespace(natgw.Namespace),
-		client.MatchingLabels{osacVirtualNetworkIDLabel: natgw.Spec.VirtualNetwork},
-	); err != nil {
-		return provisioning.NATGatewayContext{}, false, err
-	}
-	if len(virtualNetworks.Items) == 0 {
-		return provisioning.NATGatewayContext{}, true, nil
-	}
-	if len(virtualNetworks.Items) != 1 {
-		return provisioning.NATGatewayContext{}, false, fmt.Errorf("VirtualNetwork reference is ambiguous")
-	}
-	externalIPs := &v1alpha1.ExternalIPList{}
-	if err := reader.List(ctx, externalIPs,
-		client.InNamespace(natgw.Namespace),
-		client.MatchingLabels{osacExternalIPIDLabel: natgw.Spec.ExternalIP},
-	); err != nil {
-		return provisioning.NATGatewayContext{}, false, err
-	}
-	if len(externalIPs.Items) == 0 {
-		return provisioning.NATGatewayContext{}, true, nil
-	}
-	if len(externalIPs.Items) != 1 {
-		return provisioning.NATGatewayContext{}, false, fmt.Errorf("ExternalIP reference is ambiguous")
-	}
-	return buildNATGatewayContext(natgw, &virtualNetworks.Items[0], &externalIPs.Items[0])
-}
-
-func decodeNATGatewayJobInputs(inputs map[string]any) (natGatewayJobInputs, error) {
-	if len(inputs) == 0 {
-		return natGatewayJobInputs{}, fmt.Errorf("NATGateway job inputs are missing")
-	}
-	encoded, err := json.Marshal(inputs)
+// natGatewayContextVars is the snake_case form of the snapshot in a task input.
+func natGatewayContextVars(value natGatewayContext) (map[string]any, error) {
+	encoded, err := json.Marshal(value)
 	if err != nil {
-		return natGatewayJobInputs{}, fmt.Errorf("NATGateway job inputs are malformed")
+		return nil, fmt.Errorf("encoding the NATGateway context: %w", err)
 	}
-	var submitted struct {
-		JobVars *struct {
-			Resource *struct {
-				Metadata *struct {
-					Name              string            `json:"name"`
-					Namespace         string            `json:"namespace"`
-					UID               string            `json:"uid"`
-					Generation        *int64            `json:"generation"`
-					Labels            map[string]string `json:"labels"`
-					Annotations       map[string]string `json:"annotations"`
-					DeletionTimestamp *metav1.Time      `json:"deletionTimestamp"`
-				} `json:"metadata"`
-				Spec *struct {
-					VirtualNetwork string `json:"virtualNetwork"`
-					ExternalIP     string `json:"externalIP"`
-				} `json:"spec"`
-			} `json:"resource"`
-			NATGatewayContext *provisioning.NATGatewayContext `json:"nat_gateway_context"`
-		} `json:"osac_job_vars"`
+	vars := map[string]any{}
+	if err := json.Unmarshal(encoded, &vars); err != nil {
+		return nil, fmt.Errorf("encoding the NATGateway context: %w", err)
 	}
-	if err := json.Unmarshal(encoded, &submitted); err != nil {
-		return natGatewayJobInputs{}, fmt.Errorf("NATGateway job inputs are malformed")
-	}
-	if submitted.JobVars == nil || submitted.JobVars.Resource == nil ||
-		submitted.JobVars.Resource.Metadata == nil || submitted.JobVars.Resource.Spec == nil {
-		return natGatewayJobInputs{}, fmt.Errorf("NATGateway job inputs omit the resource identity")
-	}
-	metadata := submitted.JobVars.Resource.Metadata
-	spec := submitted.JobVars.Resource.Spec
-	result := natGatewayJobInputs{
-		name: metadata.Name, namespace: metadata.Namespace, uid: metadata.UID,
-		fulfillmentID:  metadata.Labels[osacNATGatewayIDLabel],
-		virtualNetwork: spec.VirtualNetwork, externalIP: spec.ExternalIP,
-		tenant:          metadata.Annotations[osacTenantKey],
-		strategy:        metadata.Annotations[osacImplementationStrategyAnnotation],
-		contractVersion: metadata.Annotations[osacNATGatewayContractVersionAnnotation],
-		deleting:        metadata.DeletionTimestamp != nil && !metadata.DeletionTimestamp.IsZero(),
-		context:         submitted.JobVars.NATGatewayContext,
-	}
-	if metadata.Generation == nil {
-		return natGatewayJobInputs{}, fmt.Errorf("NATGateway job inputs omit generation")
-	}
-	result.generation = *metadata.Generation
-	if result.name == "" || result.namespace == "" || result.uid == "" || result.fulfillmentID == "" || result.generation < 0 ||
-		result.virtualNetwork == "" || result.externalIP == "" || result.tenant == "" ||
-		result.strategy == "" || result.contractVersion != networkmanager.NATGatewayContractVersionV1 {
-		return natGatewayJobInputs{}, fmt.Errorf("NATGateway job inputs omit required identity")
-	}
-	return result, nil
+	return vars, nil
 }
 
-func validateNATGatewaySubmittedIdentity(
-	current *v1alpha1.NATGateway,
-	expected *v1alpha1.NATGateway,
-	submitted natGatewayJobInputs,
-	jobType v1alpha1.JobType,
-	status provisioning.ProvisionStatusWithExtraVars,
+// natGatewaySubmitted is the part of the stored input the result is checked against.
+type natGatewaySubmitted struct {
+	Resource struct {
+		Metadata struct {
+			Generation int64 `json:"generation"`
+		} `json:"metadata"`
+	} `json:"resource"`
+	Context natGatewayContext `json:"nat_gateway_context"`
+}
+
+func decodeNATGatewaySubmitted(input map[string]any) (natGatewaySubmitted, error) {
+	var submitted natGatewaySubmitted
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return submitted, err
+	}
+	err = json.Unmarshal(encoded, &submitted)
+	return submitted, err
+}
+
+// acceptDependencies accepts a create_nat_gateway result only while the
+// NATGateway and its dependencies still match the input the job received. It
+// reads through the API server, not the cache. A rejection leaves the provider
+// state to the delete task.
+func (r *NATGatewayReconciler) acceptDependencies(
+	ctx context.Context, natgw *v1alpha1.NATGateway, input map[string]any,
 ) error {
-	if current.UID != expected.UID || current.Generation != expected.Generation ||
-		current.Spec != expected.Spec || current.Annotations[osacTenantKey] != expected.Annotations[osacTenantKey] ||
-		current.Annotations[osacNATGatewayContractVersionAnnotation] != networkmanager.NATGatewayContractVersionV1 {
-		return fmt.Errorf("NATGateway changed while provider operation was running")
+	submitted, err := decodeNATGatewaySubmitted(input)
+	if err != nil {
+		return networktask.Reject("the stored NATGateway input cannot be read")
 	}
-	if submitted.name != current.Name || submitted.namespace != current.Namespace ||
-		submitted.uid != string(current.UID) || submitted.fulfillmentID != current.Labels[osacNATGatewayIDLabel] ||
-		submitted.generation != current.Generation ||
-		submitted.virtualNetwork != current.Spec.VirtualNetwork || submitted.externalIP != current.Spec.ExternalIP ||
-		submitted.tenant != current.Annotations[osacTenantKey] ||
-		submitted.strategy != current.Annotations[osacImplementationStrategyAnnotation] ||
-		submitted.contractVersion != networkmanager.NATGatewayContractVersionV1 {
-		return fmt.Errorf("NATGateway job inputs do not match the current resource")
+	if submitted.Resource.Metadata.Generation != natgw.Generation {
+		return networktask.Reject("NATGateway changed while the provider operation was running")
 	}
-	if jobType == v1alpha1.JobTypeProvision && (!current.DeletionTimestamp.IsZero() || submitted.deleting) {
-		return fmt.Errorf("NATGateway is terminating")
-	}
-	if jobType == v1alpha1.JobTypeDeprovision && (current.DeletionTimestamp.IsZero() || !submitted.deleting) {
-		return fmt.Errorf("NATGateway is not deleting")
-	}
-	if err := provisioning.ValidateProviderJobResult(
-		expected.Status.ProvisioningJobs,
-		jobType,
-		status,
-		expected.Status.DesiredConfigVersion,
-	); err != nil {
-		return fmt.Errorf("NATGateway provider result is invalid: %w", err)
-	}
-	return nil
-}
-
-func (r *NATGatewayReconciler) validateNATGatewayProvisionResult(
-	ctx context.Context,
-	expected *v1alpha1.NATGateway,
-	expectedContext provisioning.NATGatewayContext,
-	status provisioning.ProvisionStatusWithExtraVars,
-) error {
-	current := &v1alpha1.NATGateway{}
-	reader := r.APIReader
-	if reader == nil {
-		reader = r.Client
-	}
-	if err := reader.Get(ctx, client.ObjectKeyFromObject(expected), current); err != nil {
-		return fmt.Errorf("could not read NATGateway after provider operation: %w", err)
-	}
-	submitted, err := decodeNATGatewayJobInputs(status.InputExtraVars)
+	reader := r.Engine.APIReader()
+	vn, err := findVirtualNetwork(ctx, reader, natgw.Namespace, natgw.Spec.VirtualNetwork)
 	if err != nil {
 		return err
 	}
-	if err := validateNATGatewaySubmittedIdentity(current, expected, submitted, v1alpha1.JobTypeProvision, status); err != nil {
-		return err
-	}
-	if submitted.context == nil || *submitted.context != expectedContext {
-		return fmt.Errorf("NATGateway job context does not match the dispatched snapshot")
-	}
-	currentContext, pending, err := r.currentNATGatewayContext(ctx, current)
+	eip, err := findExternalIP(ctx, reader, natgw.Namespace, natgw.Spec.ExternalIP)
 	if err != nil {
 		return err
+	}
+	if vn == nil || eip == nil {
+		return networktask.Reject("NATGateway dependencies are no longer Ready")
+	}
+	current, pending, err := buildNATGatewayContext(natgw, vn, eip)
+	if err != nil {
+		return networktask.Reject("%s", err.Error())
 	}
 	if pending {
-		return fmt.Errorf("NATGateway dependencies are no longer Ready")
+		return networktask.Reject("NATGateway dependencies are no longer Ready")
 	}
-	if currentContext != expectedContext {
-		return fmt.Errorf("NATGateway dependencies changed while provider operation was running")
+	if current != submitted.Context {
+		return networktask.Reject("NATGateway dependencies changed while the provider operation was running")
 	}
-	return provisioning.ValidateNATGatewayResult(
-		status.ExtraVars, provisioning.NATGatewayEnsureOperation, submitted.uid, submitted.generation,
-	)
-}
-
-func (r *NATGatewayReconciler) validateNATGatewayDeprovisionResult(
-	ctx context.Context,
-	expected *v1alpha1.NATGateway,
-) error {
-	job := provisioning.FindLatestJobByType(expected.Status.ProvisioningJobs, v1alpha1.JobTypeDeprovision)
-	if job == nil {
-		return fmt.Errorf("NATGateway delete job is missing")
-	}
-	outputProvider, ok := r.ProvisioningProvider.(provisioning.ProvisioningProviderWithDeprovisionOutputs)
-	if !ok {
-		return fmt.Errorf("provisioning provider does not return NATGateway delete results")
-	}
-	status, err := outputProvider.GetDeprovisionStatusWithExtraVars(ctx, expected, job.JobID)
-	if err != nil {
-		return err
-	}
-	current := &v1alpha1.NATGateway{}
-	reader := r.APIReader
-	if reader == nil {
-		reader = r.Client
-	}
-	if err := reader.Get(ctx, client.ObjectKeyFromObject(expected), current); err != nil {
-		return fmt.Errorf("could not read NATGateway after provider cleanup: %w", err)
-	}
-	submitted, err := decodeNATGatewayJobInputs(status.InputExtraVars)
-	if err != nil {
-		return err
-	}
-	if err := validateNATGatewaySubmittedIdentity(current, expected, submitted, v1alpha1.JobTypeDeprovision, status); err != nil {
-		return err
-	}
-	return provisioning.ValidateNATGatewayResult(
-		status.ExtraVars, provisioning.NATGatewayDeleteOperation, submitted.uid, submitted.generation,
-	)
-}
-
-func failNATGatewayProvisionAttempt(natgw *v1alpha1.NATGateway, message string) {
-	if job := provisioning.FindLatestJobByType(natgw.Status.ProvisioningJobs, v1alpha1.JobTypeProvision); job != nil {
-		job.State = v1alpha1.JobStateFailed
-		job.Message = message
-	}
-	setNATGatewayPhase(&natgw.Status, v1alpha1.NATGatewayPhaseFailed)
-	setReadyConditionFailed(&natgw.Status.Conditions, message)
-}
-
-func failNATGatewayDeprovisionAttempt(natgw *v1alpha1.NATGateway, message string) {
-	if job := provisioning.FindLatestJobByType(natgw.Status.ProvisioningJobs, v1alpha1.JobTypeDeprovision); job != nil {
-		job.State = v1alpha1.JobStateFailed
-		job.Message = message
-		job.BlockDeletionOnFailure = true
-	}
-	setReadyConditionFailed(&natgw.Status.Conditions, message)
+	return nil
 }

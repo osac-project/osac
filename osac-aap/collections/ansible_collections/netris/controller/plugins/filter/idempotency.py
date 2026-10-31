@@ -150,15 +150,6 @@ def netris_immutable_mismatch(
     return mismatches
 
 
-def osac_is_default_networking_resource(resource: Any) -> bool:
-    """True when the OSAC CR has label osac.openshift.io/default=true."""
-    if not resource or not isinstance(resource, dict):
-        return False
-    metadata = resource.get("metadata") or {}
-    labels = metadata.get("labels") or {}
-    return _norm(labels.get("osac.openshift.io/default")).lower() == "true"
-
-
 def netris_port_on_vnet(vnet_detail: Any, port_id: Any) -> bool:
     """True when ``port_id`` appears in ``vnet_detail.ports``."""
     if not vnet_detail or not isinstance(vnet_detail, dict):
@@ -279,7 +270,6 @@ class FilterModule:
         return {
             "netris_immutable_mismatch": netris_immutable_mismatch,
             "netris_immutable_missing_fields": netris_immutable_missing_fields,
-            "osac_is_default_networking_resource": osac_is_default_networking_resource,
             "netris_port_on_vnet": netris_port_on_vnet,
             "netris_ports_excluding": netris_ports_excluding,
             "format_immutable_mismatch_message": format_immutable_mismatch_message,

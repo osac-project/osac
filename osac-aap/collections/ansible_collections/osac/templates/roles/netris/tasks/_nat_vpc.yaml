@@ -1,0 +1,47 @@
+---
+# Find the Netris VPC that holds a NAT rule (DNAT of an ExternalIPAttachment or
+# SNAT of a NATGateway).
+# Input: netris_nat_domain, tenant_virtual_network (the VPC osac-vn-<VN id>
+#   from netris_names.vpc), provider_management (NETRIS_MGMT_VPC_ID) or "" (not
+#   known); netris_nat_vpc_required, true for a create. Needs netris_names.
+# Sets netris_nat_vpc {id, name}; both "" when the VPC is not known, which is
+# only allowed on a delete. A create whose VPC is missing fails as final: the
+# VirtualNetwork is Ready, so the VPC was removed outside OSAC.
+- name: Check the management VPC setting
+  when: netris_nat_domain == 'provider_management' and netris_nat_vpc_required
+  ansible.builtin.include_tasks: _settings.yaml
+  vars:
+    netris_require: [mgmt_vpc]
+
+- name: Look up the VPC of the VirtualNetwork
+  when: netris_nat_domain == 'tenant_virtual_network' and netris_names.vpc | length > 0
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+    tasks_from: read
+  vars:
+    vpc_name: "{{ netris_names.vpc }}"
+    vpc_tenant_id: "{{ netris_tenant_id | int }}"
+
+- name: Stop when the VPC of a create does not exist
+  vars:
+    netris_fail:
+      message: >-
+        Netris VPC {{ netris_names.vpc }} does not exist; it was removed outside OSAC.
+        OSAC does not retry.
+      retryable: false
+  when:
+    - netris_nat_vpc_required
+    - netris_nat_domain == 'tenant_virtual_network'
+    - (netris_vpc | default(none)) is not mapping
+  ansible.builtin.include_tasks: _fail.yaml
+
+- name: Set the VPC of the NAT rule
+  ansible.builtin.set_fact:
+    netris_nat_vpc: >-
+      {%- if netris_nat_domain == 'provider_management' and (netris_mgmt_vpc_id | int(0)) > 0 -%}
+      {{ {'id': netris_mgmt_vpc_id | int, 'name': ''} }}
+      {%- elif netris_nat_domain == 'tenant_virtual_network' and (netris_vpc | default(none)) is mapping -%}
+      {{ {'id': netris_vpc.id | int, 'name': netris_vpc.name | default('')} }}
+      {%- else -%}
+      {{ {'id': '', 'name': ''} }}
+      {%- endif -%}

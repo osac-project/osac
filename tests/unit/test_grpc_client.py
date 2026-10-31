@@ -129,3 +129,27 @@ def test_create_and_delete_shared_baremetal_instance_type(monkeypatch: pytest.Mo
         },
         {"service": f"{PRIVATE_API}.BareMetalInstanceTypes/Delete", "data": {"id": "bmit-123"}},
     ]
+
+
+def test_update_security_group_rules_uses_public_update_and_replaces_both_lists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = GRPCClient(address="fulfillment-api.example.test:443", token="test-token")
+    calls: list[dict[str, Any]] = []
+
+    def capture_call(*, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        calls.append({"service": service, "data": data})
+        return {}
+
+    monkeypatch.setattr(client, "call", capture_call)
+    ingress = [{"protocol": "PROTOCOL_TCP", "port_from": 22, "port_to": 22, "ipv4_cidr": "0.0.0.0/0"}]
+
+    client.update_security_group_rules(sg_id="sg-id", ingress=ingress, egress=[])
+
+    assert calls == [
+        {
+            "service": "osac.public.v1.SecurityGroups/Update",
+            "data": {"object": {"id": "sg-id", "spec": {"ingress": ingress, "egress": []}}},
+        }
+    ]
+    assert "updateMask" not in calls[0]["data"]

@@ -1,0 +1,256 @@
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "namespace": "osac",
+    "name": "fulfillment-grpc-server"
+  },
+  "spec": {
+    "selector": {
+      "matchLabels": {
+        "app": "fulfillment-grpc-server"
+      }
+    },
+    "replicas": 1,
+    "strategy": {
+      "type": "RollingUpdate"
+    },
+    "template": {
+      "metadata": {
+        "labels": {
+          "app": "fulfillment-grpc-server"
+        }
+      },
+      "spec": {
+        "volumes": [
+          {
+            "name": "cas",
+            "configMap": {
+              "name": "ci-ca-bundle"
+            }
+          },
+          {
+            "name": "tls",
+            "secret": {
+              "secretName": "fulfillment-grpc-server-tls"
+            }
+          },
+          {
+            "name": "token-signer",
+            "secret": {
+              "secretName": "fulfillment-token-signer-keypair"
+            }
+          },
+          {
+            "name": "token-encryption-cert",
+            "secret": {
+              "secretName": "fulfillment-token-encryption-keypair",
+              "items": [
+                {
+                  "key": "tls.crt",
+                  "path": "tls.crt"
+                }
+              ]
+            }
+          },
+          {
+            "name": "vault-credentials",
+            "projected": {
+              "sources": [
+                {
+                  "secret": {
+                    "name": "ci-vault-credentials",
+                    "items": [
+                      {
+                        "key": "client-secret",
+                        "path": "client-secret"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "database",
+            "projected": {
+              "sources": [
+                {
+                  "secret": {
+                    "name": "ci-db-credentials",
+                    "items": [
+                      {
+                        "key": "uri",
+                        "path": "url"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "kafka",
+            "projected": {
+              "sources": [
+                {
+                  "secret": {
+                    "name": "ci-kafka",
+                    "items": [
+                      {
+                        "key": "brokers",
+                        "path": "brokers"
+                      },
+                      {
+                        "key": "user",
+                        "path": "user"
+                      },
+                      {
+                        "key": "password",
+                        "path": "password"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "securityContext": {
+          "runAsNonRoot": true,
+          "seccompProfile": {
+            "type": "RuntimeDefault"
+          }
+        },
+        "containers": [
+          {
+            "name": "grpc-server",
+            "image": "ghcr.io/osac-project/fulfillment-service:latest",
+            "imagePullPolicy": "Always",
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "readOnlyRootFilesystem": true,
+              "capabilities": {
+                "drop": [
+                  "ALL"
+                ]
+              }
+            },
+            "volumeMounts": [
+              {
+                "name": "cas",
+                "mountPath": "/etc/fulfillment-grpc-server/tls/cas"
+              },
+              {
+                "name": "vault-credentials",
+                "mountPath": "/etc/fulfillment-grpc-server/vault",
+                "readOnly": true
+              },
+              {
+                "name": "database",
+                "mountPath": "/etc/fulfillment-grpc-server/db",
+                "readOnly": true
+              },
+              {
+                "name": "kafka",
+                "mountPath": "/etc/fulfillment-grpc-server/kafka",
+                "readOnly": true
+              },
+              {
+                "name": "tls",
+                "mountPath": "/etc/fulfillment-grpc-server/tls"
+              },
+              {
+                "name": "token-signer",
+                "mountPath": "/etc/fulfillment-token-signer",
+                "readOnly": true
+              },
+              {
+                "name": "token-encryption-cert",
+                "mountPath": "/etc/fulfillment-token-encryption",
+                "readOnly": true
+              }
+            ],
+            "command": [
+              "/usr/local/bin/fulfillment-service",
+              "start",
+              "grpc-server",
+              "--log-level=info",
+              "--log-headers=false",
+              "--log-bodies=false",
+              "--ca-file=/etc/fulfillment-grpc-server/tls/cas",
+              "--db-url-file=/etc/fulfillment-grpc-server/db",
+              "--kafka-properties-file=/etc/fulfillment-grpc-server/kafka",
+              "--grpc-listener-address=0.0.0.0:8000",
+              "--grpc-listener-tls-crt=/etc/fulfillment-grpc-server/tls/tls.crt",
+              "--grpc-listener-tls-key=/etc/fulfillment-grpc-server/tls/tls.key",
+              "--grpc-authn-trusted-token-issuers=https://issuer.ci.example.com",
+              "--emergency-service-accounts=admin",
+              "--token-signer-crt=/etc/fulfillment-token-signer/tls.crt",
+              "--token-signer-key=/etc/fulfillment-token-signer/tls.key",
+              "--token-encryption-crt=/etc/fulfillment-token-encryption/tls.crt",
+              "--token-issuer=https://fulfillment-api.ci.example.com:8000",
+              "--metrics-listener-address=0.0.0.0:8002",
+              "--enable-caas=true",
+              "--enable-vmaas=true",
+              "--enable-bmaas=true",
+              "--enable-maas=true",
+              "--networking-provisioning-enabled=true",
+              "--networking-excluded-ipv4-cidrs=192.0.2.0/24",
+              "--vault-endpoint=https://vault.ci.example.com",
+              "--vault-namespace=osac",
+              "--vault-kv-mount-path=secret",
+              "--vault-keycloak-issuer-url=https://idp.ci.example.com/realms/osac",
+              "--vault-keycloak-client-id=ci-vault-client",
+              "--vault-keycloak-client-secret-file=/etc/fulfillment-grpc-server/vault/client-secret"
+            ],
+            "ports": [
+              {
+                "name": "grpc",
+                "containerPort": 8000,
+                "protocol": "TCP"
+              },
+              {
+                "name": "metrics",
+                "containerPort": 8002,
+                "protocol": "TCP"
+              }
+            ],
+            "livenessProbe": {
+              "exec": {
+                "command": [
+                  "/usr/local/bin/fulfillment-service",
+                  "probe",
+                  "grpc-server",
+                  "--ca-file=/etc/fulfillment-grpc-server/tls/ca.crt",
+                  "--grpc-server-address=localhost:8000",
+                  "--grpc-server-timeout=1s"
+                ]
+              },
+              "initialDelaySeconds": 5,
+              "periodSeconds": 10,
+              "timeoutSeconds": 5,
+              "failureThreshold": 5
+            },
+            "readinessProbe": {
+              "exec": {
+                "command": [
+                  "/usr/local/bin/fulfillment-service",
+                  "probe",
+                  "grpc-server",
+                  "--ca-file=/etc/fulfillment-grpc-server/tls/ca.crt",
+                  "--grpc-server-address=localhost:8000",
+                  "--grpc-server-timeout=1s"
+                ]
+              },
+              "initialDelaySeconds": 5,
+              "periodSeconds": 10,
+              "timeoutSeconds": 5,
+              "failureThreshold": 5
+            }
+          }
+        ]
+      }
+    }
+  }
+}

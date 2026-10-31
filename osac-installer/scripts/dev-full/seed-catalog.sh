@@ -10,7 +10,7 @@
 #     (the old inline cores/memory/image fields were removed)
 #   - CatalogItem.template is a reference object ({id}), not a bare string
 # The default NetworkClass is created by the chart's create-network-class hook
-# (networkClass.enabled=true). Per-tenant networking (VirtualNetwork/Subnet/
+# (whenever the fulfillment service is enabled). Per-tenant networking (VirtualNetwork/Subnet/
 # SecurityGroup) is auto-provisioned by tenant onboarding (see provision-tenant.sh),
 # so it is NOT seeded here.
 #
@@ -151,6 +151,6 @@ echo "$resp" | has_id && log "  catalog-item: linux-vm" || warn "  catalog-item 
 # tenant by tenant onboarding when the tenant is created (see provision-tenant.sh),
 # using the default NetworkClass onboarding defaults. Seeding them here would place
 # them in the reserved 'shared' tenant, which the API rejects. The NetworkClass
-# itself is created by the chart's create-network-class hook (networkClass.enabled).
+# itself is created by the chart's create-network-class hook.
 
 log "Catalog seeded — ready to create compute instances"

@@ -13,10 +13,9 @@ OSAC's API.
 
 - [Prerequisites](#prerequisites)
 - [Overview](#overview)
-- [Step 1: Identify the NetworkClass](#step-1-identify-the-networkclass)
-- [Step 2: Create a VirtualNetwork](#step-2-create-a-virtualnetwork)
-- [Step 3: Create a Subnet](#step-3-create-a-subnet)
-- [Step 4: Create a SecurityGroup (optional)](#step-4-create-a-securitygroup-optional)
+- [Step 1: Create a VirtualNetwork](#step-1-create-a-virtualnetwork)
+- [Step 2: Create a Subnet](#step-2-create-a-subnet)
+- [Step 3: Create a SecurityGroup (optional)](#step-3-create-a-securitygroup-optional)
 - [Resource lifecycle and updates](#resource-lifecycle-and-updates)
 - [Troubleshooting](#troubleshooting)
 - [Next steps](#next-steps)
@@ -54,16 +53,14 @@ OSAC's API.
 OSAC networking follows a hierarchical model:
 
 ```text
-NetworkClass (platform-defined, read-only)
-└── VirtualNetwork (tenant L2 network with CIDR)
-      ├── Subnet (CIDR range within VirtualNetwork)
-      └── SecurityGroup (optional — firewall rules scoped to VirtualNetwork)
+VirtualNetwork (tenant network with an IPv4 CIDR)
+├── Subnet (CIDR range within VirtualNetwork)
+└── SecurityGroup (optional — firewall rules scoped to VirtualNetwork)
 ```
 
-- A **NetworkClass** is a platform-level resource that defines the type of network
-  infrastructure available. It is read-only for tenants.
-- A **VirtualNetwork** is a tenant-scoped L2 network associated with a NetworkClass.
-  It defines an overall IPv4 CIDR range.
+- The provider configures one **NetworkClass** for the deployment at installation;
+  tenants do not select or see it.
+- A **VirtualNetwork** is a tenant-scoped network. It defines an overall IPv4 CIDR range.
 - A **Subnet** is a CIDR range within a VirtualNetwork. Compute instances attach to
   subnets via network attachments.
 - A **SecurityGroup** defines ingress and egress firewall rules scoped to a
@@ -73,45 +70,16 @@ NetworkClass (platform-defined, read-only)
 
 ---
 
-## Step 1: Identify the NetworkClass
+## Step 1: Create a VirtualNetwork
 
-List the available network classes to find the one you will use for your VirtualNetwork:
-
-**CLI:**
-
-```bash
-osac get networkclass
-```
-
-**gRPC:**
-
-```bash
-grpcurl $GRPCURL_FLAGS -H "Authorization: Bearer $TOKEN" \
-  $OSAC_API osac.public.v1.NetworkClasses/List
-```
-
-**REST:**
-
-```bash
-curl -fsS $CURL_FLAGS -H "Authorization: Bearer $TOKEN" \
-  "https://$OSAC_API/api/fulfillment/v1/network_classes"
-```
-
-Note the `ID` of the NetworkClass you want to use — you will need it in the next step.
-
----
-
-## Step 2: Create a VirtualNetwork
-
-Create a VirtualNetwork associated with the NetworkClass. The `--ipv4-cidr` defines the
-overall IP address range for the network:
+Create a VirtualNetwork. The `--ipv4-cidr` defines the overall IP address range for
+the network:
 
 **CLI:**
 
 ```bash
 osac create virtualnetwork \
   --name <virtualnetwork_name> \
-  --network-class <networkclass-id> \
   --ipv4-cidr 192.168.0.0/16
 ```
 
@@ -124,11 +92,7 @@ grpcurl $GRPCURL_FLAGS -H "Authorization: Bearer $TOKEN" -d '{
       "name": "<virtualnetwork_name>"
     },
     "spec": {
-      "network_class": "<networkclass-id>",
-      "ipv4_cidr": "192.168.0.0/16",
-      "capabilities": {
-        "enable_ipv4": true
-      }
+      "ipv4_cidr": "192.168.0.0/16"
     }
   }
 }' $OSAC_API osac.public.v1.VirtualNetworks/Create
@@ -143,20 +107,13 @@ curl -fsS $CURL_FLAGS -X POST -H "Authorization: Bearer $TOKEN" \
     "name": "<virtualnetwork_name>"
   },
   "spec": {
-    "network_class": "<networkclass-id>",
-    "ipv4_cidr": "192.168.0.0/16",
-    "capabilities": {
-      "enable_ipv4": true
-    }
+    "ipv4_cidr": "192.168.0.0/16"
   }
 }' "https://$OSAC_API/api/fulfillment/v1/virtual_networks"
 ```
 
 > **Note (API users):** The REST body is the VirtualNetwork object directly.
-> The gRPC request wraps it in an `object` field. The `capabilities` field is
-> derived automatically by the CLI; when calling the API directly, set
-> `enable_ipv4`, `enable_ipv6`, or `enable_dual_stack` to match the CIDRs
-> you provide.
+> The gRPC request wraps it in an `object` field. Only IPv4 is supported.
 
 Note the VirtualNetwork `ID` from the output — you will need it when creating Subnets
 and SecurityGroups.
@@ -188,7 +145,7 @@ curl -fsS $CURL_FLAGS -H "Authorization: Bearer $TOKEN" \
 
 ---
 
-## Step 3: Create a Subnet
+## Step 2: Create a Subnet
 
 Create a Subnet under the VirtualNetwork. The Subnet CIDR must fall within the
 VirtualNetwork's CIDR range (e.g., `192.168.1.0/24` is within `192.168.0.0/16`):
@@ -265,7 +222,7 @@ curl -fsS $CURL_FLAGS -H "Authorization: Bearer $TOKEN" \
 
 ---
 
-## Step 4: Create a SecurityGroup (optional)
+## Step 3: Create a SecurityGroup (optional)
 
 SecurityGroups are optional. Create one only when you need firewall rules to control
 traffic to and from compute instances. They are scoped to a VirtualNetwork and follow a
@@ -340,8 +297,10 @@ curl -fsS $CURL_FLAGS -X POST -H "Authorization: Bearer $TOKEN" \
 ```
 
 > **Note (API users):** Protocol values in the API use the enum names:
-> `PROTOCOL_TCP`, `PROTOCOL_UDP`, `PROTOCOL_ICMP`, `PROTOCOL_ALL`. The CLI
-> accepts the short forms `tcp`, `udp`, `icmp`, `all`.
+> `PROTOCOL_TCP`, `PROTOCOL_UDP`, `PROTOCOL_ALL`. The CLI accepts the short
+> forms `tcp`, `udp`, `all`. With provider networking enabled, `PROTOCOL_ICMP`
+> works only where every network manager declares `security_group_icmp`;
+> otherwise the API returns InvalidArgument. `PROTOCOL_ALL` includes ICMP.
 
 The example above allows inbound SSH (port 22), HTTP (port 80), and HTTPS (port 443)
 from any IPv4 address, and permits all outbound traffic.
@@ -381,15 +340,12 @@ following keys:
 
 | Key | Required | Description | API enum / field |
 |-----|----------|-------------|------------------|
-| `protocol` | Yes | One of: `tcp`, `udp`, `icmp`, `all` | `PROTOCOL_TCP`, `PROTOCOL_UDP`, `PROTOCOL_ICMP`, `PROTOCOL_ALL` |
+| `protocol` | Yes | One of: `tcp`, `udp`, `all` | `PROTOCOL_TCP`, `PROTOCOL_UDP`, `PROTOCOL_ALL` |
 | `port-from` | For `tcp`/`udp` | Start of port range (1–65535) | `port_from` |
 | `port-to` | For `tcp`/`udp` | End of port range (1–65535), must be >= `port-from` | `port_to` |
-| `ipv4-cidr` | No | IPv4 CIDR block (e.g., `0.0.0.0/0` for all, `10.0.0.0/8` for private) | `ipv4_cidr` |
-| `ipv6-cidr` | No | IPv6 CIDR block (e.g., `::/0` for all) | `ipv6_cidr` |
+| `ipv4-cidr` | Yes | IPv4 CIDR block (e.g., `0.0.0.0/0` for all, `10.0.0.0/8` for private) | `ipv4_cidr` |
 
-- For `icmp` and `all` protocols, port fields are ignored.
-- Both `ipv4-cidr` and `ipv6-cidr` can be set on a single rule to create a dual-stack
-  rule.
+- `all` rules must not set ports. `all` matches every protocol, ICMP included.
 - The `--ingress` and `--egress` flags can each be repeated to add multiple rules.
   In the API, use arrays of rule objects.
 
@@ -621,9 +577,9 @@ curl -fsS $CURL_FLAGS -X PATCH -H "Authorization: Bearer $TOKEN" \
 > command supports only SecurityGroups for the same reason; `osac edit` on any
 > other networking resource is refused before any write.
 
-Storing a rule change does not guarantee the fabric manager has reprogrammed
-backend ACLs — that reconciliation gap is tracked separately
-([OSAC-4888](https://redhat.atlassian.net/browse/OSAC-4888)). Broader selective
+A rule change runs the network managers' SecurityGroup task again with the new
+rules; the group stays `READY` while they apply it. Fabric enforcement depends
+on the registered manager; consult its owner documentation. Broader selective
 updates to other networking resources or fields are future scope
 ([OSAC-5281](https://redhat.atlassian.net/browse/OSAC-5281)).
 

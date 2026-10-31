@@ -104,11 +104,6 @@ func RenderSubnet(w io.Writer, s *publicv1.Subnet) {
 		ipv4Cidr = v
 	}
 
-	ipv6Cidr := "-"
-	if v := s.GetSpec().GetIpv6Cidr(); v != "" {
-		ipv6Cidr = v
-	}
-
 	state := "-"
 	message := "-"
 	if s.GetStatus() != nil {
@@ -122,7 +117,6 @@ func RenderSubnet(w io.Writer, s *publicv1.Subnet) {
 	fmt.Fprintf(writer, "Name:\t%s\n", name)
 	fmt.Fprintf(writer, "Virtual Network:\t%s\n", s.GetSpec().GetVirtualNetwork())
 	fmt.Fprintf(writer, "IPv4 CIDR:\t%s\n", ipv4Cidr)
-	fmt.Fprintf(writer, "IPv6 CIDR:\t%s\n", ipv6Cidr)
 	fmt.Fprintf(writer, "State:\t%s\n", state)
 	fmt.Fprintf(writer, "Message:\t%s\n", message)
 	writer.Flush()

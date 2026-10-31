@@ -1,0 +1,10 @@
+---
+# The last job's osac_error must not carry a response body field other than
+# `message`, a cookie value or a password. Input: nf_leaks, a list of strings that must not appear.
+- name: "The error message does not contain {{ item }}"
+  ansible.builtin.assert:
+    that:
+      - sft_last.error.message is not search(item)
+    fail_msg: "the error message contains '{{ item }}': {{ sft_last.error.message }}"
+    quiet: true
+  loop: "{{ nf_leaks | default(['LEAKED-BODY', 'fake-session', 'pw-not-a-secret']) }}"

@@ -1,44 +1,62 @@
 ---
+# Every entry point takes only osac_job_vars, the network manager contract
+# task input (contract section 4.5). Its keys are checked by the
+# osac.templates.cudn_evpn_plan filter, which fails as final on an input
+# OSAC never sends.
 argument_specs:
+  create_virtual_network:
+    short_description: Kubernetes Manager task create_virtual_network
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: Network manager contract task input
+  delete_virtual_network:
+    short_description: Kubernetes Manager task delete_virtual_network
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: Network manager contract task input
   create_subnet:
+    short_description: Kubernetes Manager task create_subnet
     options:
-      subnet:
+      osac_job_vars:
         type: dict
         required: true
-        description: Subnet resource passed to the K8s manager playbook
-      subnet_name:
-        type: str
-        required: true
-        description: Name of the Subnet resource
-      template_parameters:
-        type: dict
-        required: false
-        default: {}
-        description: Template-specific parameters
-      l2_vni:
-        type: str
-        required: true
-        description: Layer 2 VNI returned by the fabric manager
-      l3_vni:
-        type: str
-        required: true
-        description: Layer 3 VNI returned by the fabric manager
-      fabric_reserved_range:
-        type: str
-        required: true
-        description: Address range reserved for fabric-managed interfaces
+        description: Network manager contract task input
   delete_subnet:
+    short_description: Kubernetes Manager task delete_subnet
     options:
-      subnet:
+      osac_job_vars:
         type: dict
         required: true
-        description: Subnet resource passed to the K8s manager playbook
-      subnet_name:
-        type: str
-        required: true
-        description: Name of the Subnet resource
-      template_parameters:
+        description: Network manager contract task input
+  create_security_group:
+    short_description: Kubernetes Manager task create_security_group
+    options:
+      osac_job_vars:
         type: dict
-        required: false
-        default: {}
-        description: Template-specific parameters
+        required: true
+        description: Network manager contract task input
+  delete_security_group:
+    short_description: Kubernetes Manager task delete_security_group
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: Network manager contract task input
+  apply_network_attachment:
+    short_description: Kubernetes Manager task apply_network_attachment
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: Network manager contract task input
+  delete_network_attachment:
+    short_description: Kubernetes Manager task delete_network_attachment
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: Network manager contract task input

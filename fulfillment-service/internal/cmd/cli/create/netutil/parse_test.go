@@ -42,3 +42,39 @@ var _ = Describe("ExtractSecurityGroupListSuffix", func() {
 		Expect(groups).To(BeNil())
 	})
 })
+
+var _ = Describe("ParseNetworkAttachmentFlag", func() {
+	DescribeTable("when input is valid it should parse",
+		func(input string, allowInterface bool, want NetworkAttachmentFlag) {
+			got, err := ParseNetworkAttachmentFlag(input, allowInterface)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got).To(Equal(want))
+		},
+		Entry("bare subnet name", "  sub-1  ", false, NetworkAttachmentFlag{Subnet: "sub-1"}),
+		Entry("subnet key", "subnet=sub-2", false, NetworkAttachmentFlag{Subnet: "sub-2"}),
+		Entry("only security groups selects the default subnet", "security-groups=g1,g2", false,
+			NetworkAttachmentFlag{SecurityGroups: []string{"g1", "g2"}}),
+		Entry("subnet and security groups", "subnet=a,security_groups=g1", false,
+			NetworkAttachmentFlag{Subnet: "a", SecurityGroups: []string{"g1"}}),
+		Entry("bare subnet and security groups", "a,security-groups=g1", false,
+			NetworkAttachmentFlag{Subnet: "a", SecurityGroups: []string{"g1"}}),
+		Entry("interface allowed", "interface=data-0,subnet=s1", true,
+			NetworkAttachmentFlag{Subnet: "s1", Interface: "data-0"}),
+		Entry("interface only", "interface=data-0", true, NetworkAttachmentFlag{Interface: "data-0"}),
+	)
+
+	DescribeTable("when input is invalid it should error",
+		func(input string, allowInterface bool) {
+			_, err := ParseNetworkAttachmentFlag(input, allowInterface)
+			Expect(err).To(HaveOccurred())
+		},
+		Entry("empty", "   ", false),
+		Entry("unknown key", "subnet=a,foo=bar", false),
+		Entry("interface not allowed", "subnet=a,interface=x", false),
+		Entry("empty value", "subnet=", false),
+		Entry("duplicate subnet", "subnet=a,subnet=b", false),
+		Entry("duplicate interface", "subnet=a,interface=x,interface=y", true),
+		Entry("primary keyword removed", "subnet=a,primary", true),
+		Entry("empty security groups", "subnet=a,security-groups=", false),
+	)
+})

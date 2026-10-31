@@ -166,28 +166,32 @@ var _ = Describe("FabricDomain fulfillment reconciler", func() {
 		Expect(listCRs()).To(BeEmpty())
 	})
 
-	It("persists the VN hub before creating the CR on a later pass", func() {
+	It("creates the CR and persists the VN hub in the same pass", func() {
 		allowVN()
 		allowHub()
 		allowEmptyHubSearch()
 		domain.GetStatus().SetHub("")
 		Expect(r.run(ctx, domain)).To(Succeed())
-		Expect(updates).To(HaveLen(1))
-		Expect(updates[0].GetUpdateMask().GetPaths()).To(ConsistOf("status.hub"))
-		Expect(listCRs()).To(BeEmpty())
+		Expect(listCRs()).To(HaveLen(1))
+		Expect(updates).ToNot(BeEmpty())
+		Expect(updates[len(updates)-1].GetObject().GetStatus().GetHub()).ToNot(BeEmpty())
+		count := len(updates)
 		Expect(r.run(ctx, domain)).To(Succeed())
 		Expect(listCRs()).To(HaveLen(1))
-		Expect(updates).To(HaveLen(1))
+		Expect(updates).To(HaveLen(count))
 	})
 
-	It("does not create a CR if saving placement fails", func() {
+	It("adopts the CR on the next pass when saving placement fails", func() {
 		allowVN()
 		allowHub()
 		allowEmptyHubSearch()
 		domain.GetStatus().SetHub("")
 		updateError = errors.New("connection lost")
 		Expect(r.run(ctx, domain)).To(MatchError(updateError))
-		Expect(listCRs()).To(BeEmpty())
+		Expect(listCRs()).To(HaveLen(1))
+		updateError = nil
+		Expect(r.run(ctx, domain)).To(Succeed())
+		Expect(listCRs()).To(HaveLen(1))
 	})
 
 	It("creates and resizes one CR with authoritative isolation metadata, preserving finalizers and operator status", func() {

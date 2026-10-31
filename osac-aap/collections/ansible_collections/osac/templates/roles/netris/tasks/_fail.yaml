@@ -1,0 +1,19 @@
+---
+# Stop the task with a classified error.
+# Input: netris_fail {message, retryable}. Publishes osac_error and fails.
+- name: Record the error
+  ansible.builtin.set_fact:
+    netris_error:
+      message: "{{ netris_fail.message }}"
+      retryable: "{{ netris_fail.retryable | bool }}"
+
+- name: Report the error to OSAC
+  ansible.builtin.set_stats:
+    aggregate: false
+    per_host: false
+    data:
+      osac_error: "{{ netris_error }}"
+
+- name: Fail the play
+  ansible.builtin.fail:
+    msg: "{{ netris_error.message }}"

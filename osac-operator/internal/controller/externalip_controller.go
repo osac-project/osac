@@ -18,915 +18,154 @@ package controller
 
 import (
 	"context"
-	"fmt"
-	"time"
+	"errors"
 
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
-	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
-	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
-	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
-	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
-	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
-	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/internal/networktask"
 )
 
-const (
-	osacExternalIPFinalizer       = "osac.openshift.io/externalip-finalizer"
-	externalIPReferenceIndexField = "spec.externalIP"
-)
-
-// ExternalIPReconciler reconciles ExternalIP CRs created by the fulfillment-service.
-//
-// Each ExternalIP belongs to a parent ExternalIPPool (referenced by UUID in spec.pool).
-// The controller adds a finalizer, resolves the implementation strategy exclusively
-// from the deployment NetworkClass singleton via the dispatcher, then delegates to the shared
-// provisioning lifecycle to trigger AAP jobs for allocation and deallocation.
-// When no manager is configured the controller blocks with ReasonNoManagerConfigured
-// rather than falling back to a hardcoded default.
-//
-// Attach/detach is handled by the ExternalIPAttachment controller.
-//
-// Phase transitions: "" -> Progressing -> Ready/Failed; on delete: Deleting.
+// ExternalIPReconciler runs the Fabric create_external_ip and
+// delete_external_ip tasks (contract §4.10). It writes status.address only
+// from an accepted result; the API state is ALLOCATED exactly when the
+// address is set and the ExternalIP is not being deleted.
 type ExternalIPReconciler struct {
-	client.Client
-	APIReader            client.Reader
-	Scheme               *runtime.Scheme
-	mgr                  mcmanager.Manager
-	NetworkingNamespace  string
-	ProvisioningProvider provisioning.ProvisioningProvider
-	StatusPollInterval   time.Duration
-	MaxJobHistory        int
-	targetCluster        mc.ClusterName
-	// Resolver resolves a NetworkClass to its registered managers. Nil when the
-	// two-manager model isn't configured (no gRPC connection / networking namespace),
-	// in which case the controller always uses the legacy implementation-strategy path.
-	Resolver *dispatcher.Resolver
-	// networkClassesClient lists NetworkClasses to find the deployment singleton used
-	// as the dispatcher input. Nil when gRPC is not configured.
-	networkClassesClient privatev1.NetworkClassesClient
-	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
-	// provisioning jobs. When false, resources are set to Ready immediately
-	// with a placeholder address.
-	NetworkProvisioningEnabled bool
+	Client              client.Client
+	Engine              *networktask.Engine
+	NetworkingNamespace string
 }
 
-// NewExternalIPReconciler creates a new reconciler for ExternalIP resources.
-func NewExternalIPReconciler(
-	mgr mcmanager.Manager,
-	networkingNamespace string,
-	provisioningProvider provisioning.ProvisioningProvider,
-	statusPollInterval time.Duration,
-	maxJobHistory int,
-	targetCluster mc.ClusterName,
-	resolver *dispatcher.Resolver,
-	networkClassesClient privatev1.NetworkClassesClient,
-) *ExternalIPReconciler {
-	if mgr == nil {
-		panic("mgr must not be nil")
-	}
-	if statusPollInterval <= 0 {
-		statusPollInterval = provisioning.DefaultStatusPollInterval
-	}
-	if maxJobHistory <= 0 {
-		maxJobHistory = provisioning.DefaultMaxJobHistory
-	}
-	return &ExternalIPReconciler{
-		Client:               mgr.GetLocalManager().GetClient(),
-		APIReader:            mgr.GetLocalManager().GetAPIReader(),
-		Scheme:               mgr.GetLocalManager().GetScheme(),
-		mgr:                  mgr,
-		NetworkingNamespace:  networkingNamespace,
-		ProvisioningProvider: provisioningProvider,
-		StatusPollInterval:   statusPollInterval,
-		MaxJobHistory:        maxJobHistory,
-		targetCluster:        targetCluster,
-		Resolver:             resolver,
-		networkClassesClient: networkClassesClient,
-	}
+// Reconcile advances the create or delete of an ExternalIP.
+func (r *ExternalIPReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return reconcileNetworkResource(ctx, r.Client, r.Engine, req.NamespacedName, networkingHandlers[*v1alpha1.ExternalIP]{
+		kind:      kindExternalIP,
+		finalizer: osacExternalIPFinalizer,
+		newObject: func() *v1alpha1.ExternalIP { return &v1alpha1.ExternalIP{} },
+		status:    func(o *v1alpha1.ExternalIP) any { return &o.Status },
+		create:    r.create,
+		remove:    r.remove,
+		stateTransition: func(o *v1alpha1.ExternalIP, before, after networkFeedbackState) {
+			stampTransition(o, &o.Status.StateTransitionTime, before, after)
+		},
+	})
 }
 
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips/finalizers,verbs=update
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalippools,verbs=get;list;watch
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalipattachments,verbs=list
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=natgateways,verbs=list
-// +kubebuilder:rbac:groups="",resources=services,verbs=get
-
-// Reconcile handles create/update/delete for a ExternalIP CR.
-// On create/update it ensures a finalizer, resolves the parent pool, and runs provisioning.
-// On delete it triggers deprovisioning and removes the finalizer when complete.
-func (r *ExternalIPReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	externalIP := &v1alpha1.ExternalIP{}
-	err := r.Get(ctx, req.NamespacedName, externalIP)
-	if err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-
-	// Skip unmanaged resources, but still allow deletion to proceed
-	val, exists := externalIP.Annotations[osacManagementStateAnnotation]
-	if externalIP.ObjectMeta.DeletionTimestamp.IsZero() && exists && val == ManagementStateUnmanaged {
-		log.Info("ignoring ExternalIP due to management-state annotation", "management-state", val)
+func (r *ExternalIPReconciler) create(ctx context.Context, eip *v1alpha1.ExternalIP) (ctrl.Result, error) {
+	if !r.Engine.ProvisioningEnabled() {
+		// ExternalIPs never exist with provider networking disabled.
+		networktask.SetFailed(eip, networktask.MessageNetworkingDisabled)
 		return ctrl.Result{}, nil
 	}
-
-	log.Info("start reconcile", "pool", externalIP.Spec.Pool, "phase", externalIP.Status.Phase)
-
-	oldstatus := externalIP.Status.DeepCopy()
-	hadFinalizer := controllerutil.ContainsFinalizer(externalIP, osacExternalIPFinalizer)
-
-	var res ctrl.Result
-	if externalIP.ObjectMeta.DeletionTimestamp.IsZero() {
-		res, err = r.handleUpdate(ctx, externalIP)
-	} else {
-		res, err = r.handleDelete(ctx, externalIP)
+	pool, err := findExternalIPPool(ctx, r.Client, eip.Namespace, eip.Spec.Pool)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
-
-	statusPersistedBeforeFinalizerRemoval := !externalIP.ObjectMeta.DeletionTimestamp.IsZero() &&
-		hadFinalizer && !controllerutil.ContainsFinalizer(externalIP, osacExternalIPFinalizer)
-	if !statusPersistedBeforeFinalizerRemoval && !equality.Semantic.DeepEqual(externalIP.Status, *oldstatus) {
-		log.Info("status requires update", "phase", externalIP.Status.Phase)
-		if updateErr := r.updateStatusWithRetry(ctx, req.NamespacedName, externalIP.UID, externalIP.Generation, externalIP.Status); updateErr != nil {
-			log.Error(updateErr, "failed to update status")
-			return res, updateErr
+	if eip.Status.TaskInput == nil {
+		if pool == nil || !isReady(pool) {
+			networktask.SetProgressing(eip, msgWaitingForParent(kindExternalIPPool, eip.Spec.Pool))
+			return waitResult(), nil
 		}
+		copyManagers(eip, pool.Status.NetworkManagers, true)
 	}
-
-	log.Info("end reconcile", "phase", externalIP.Status.Phase)
-	return res, err
-}
-
-func (r *ExternalIPReconciler) updateStatusWithRetry(
-	ctx context.Context,
-	key client.ObjectKey,
-	expectedUID types.UID,
-	expectedGeneration int64,
-	computed v1alpha1.ExternalIPStatus,
-) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		latest := &v1alpha1.ExternalIP{}
-		if err := r.APIReader.Get(ctx, key, latest); err != nil {
+	input, store, err := inputOf(eip, func() (map[string]any, error) {
+		resource, err := networktask.Snapshot(eip, kindExternalIP, eip.Spec, "pool")
+		if err != nil {
+			return nil, err
+		}
+		poolSnapshot, err := parentSnapshot(pool, kindExternalIPPool, pool.Spec, "cidrs", nil)
+		if err != nil {
+			return nil, err
+		}
+		input := networktask.NewInput(eip, kindExternalIP, resource)
+		input["external_ip_pool"] = poolSnapshot
+		return input, nil
+	}, nil)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	req := taskRequest(eip, kindExternalIP, networktask.CreateExternalIP, v1alpha1.NetworkJobManagerFabric, input)
+	req.BeforeLaunch = store
+	req.Accept = func(_ context.Context, result networktask.Result) error {
+		address, err := networktask.ParseExternalIP(result, poolCIDR(input))
+		if err != nil {
 			return err
 		}
-		if latest.UID != expectedUID || latest.Generation != expectedGeneration {
-			return fmt.Errorf("ExternalIP changed while status was being reconciled")
-		}
-		if latest.Annotations[osacExternalIPContractVersionAnnotation] == networkmanager.ExternalIPContractVersionV1 &&
-			computed.State == v1alpha1.ExternalIPStateAllocated && computed.Phase == v1alpha1.ExternalIPPhaseReady {
-			latestJob := provisioning.FindLatestJobByType(latest.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
-			expectedJob := provisioning.FindLatestJobByType(computed.ProvisioningJobs, v1alpha1.JobTypeProvision)
-			if latestJob == nil || expectedJob == nil || latestJob.JobID != expectedJob.JobID ||
-				latestJob.ConfigVersion == "" || latestJob.ConfigVersion != latest.Status.DesiredConfigVersion {
-				return fmt.Errorf("ExternalIP allocation job changed before status was written")
-			}
-		}
-		if latest.Status.Phase == v1alpha1.ExternalIPPhaseDeleting && computed.Phase != v1alpha1.ExternalIPPhaseDeleting {
-			computed.Phase = latest.Status.Phase
-			computed.State = latest.Status.State
-			computed.Address = latest.Status.Address
-			computed.Conditions = latest.Status.Conditions
-		}
-		computed.Attached = latest.Status.Attached
-		computed.AttachmentTransitionTime = latest.Status.AttachmentTransitionTime
-		latest.Status = computed
-		return r.Status().Update(ctx, latest)
-	})
-}
-
-// handleUpdate processes a non-deleted ExternalIP: adds finalizer, resolves the parent
-// ExternalIPPool, inherits the implementation strategy, and runs provisioning.
-func (r *ExternalIPReconciler) handleUpdate(ctx context.Context, externalIP *v1alpha1.ExternalIP) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	// Add finalizer if not present
-	if controllerutil.AddFinalizer(externalIP, osacExternalIPFinalizer) {
-		log.Info("adding finalizer")
-		if err := r.Update(ctx, externalIP); err != nil {
-			return ctrl.Result{}, err
-		}
-		// Re-fetch to get the latest resourceVersion after the metadata update
-		if err := r.Get(ctx, client.ObjectKeyFromObject(externalIP), externalIP); err != nil {
-			return ctrl.Result{}, err
-		}
+		eip.Status.Address = address
+		return nil
 	}
-
-	if externalIP.Status.Phase == "" {
-		externalIP.Status.Phase = v1alpha1.ExternalIPPhaseProgressing
-		setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStatePending)
-	}
-
-	if !r.NetworkProvisioningEnabled {
-		return r.handleProvisioningDisabled(ctx, externalIP)
-	}
-
-	// Resolve the parent ExternalIPPool by the fulfillment-service UUID stored in spec.pool.
-	// The fulfillment-service creates pool CRs with a UUID label; spec.pool contains that
-	// UUID, not the K8s object name.
-	poolList := &v1alpha1.ExternalIPPoolList{}
-	var poolReader client.Reader = r.Client
-	if externalIPContractVersion(externalIP) == networkmanager.ExternalIPContractVersionV1 && r.APIReader != nil {
-		poolReader = r.APIReader
-	}
-	err := poolReader.List(ctx, poolList,
-		client.InNamespace(externalIP.Namespace),
-		client.MatchingLabels{osacExternalIPPoolIDLabel: externalIP.Spec.Pool},
-	)
+	out, err := r.Engine.Run(ctx, eip, req)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(poolList.Items) == 0 {
-		log.Info("parent ExternalIPPool not found, requeueing", "poolUUID", externalIP.Spec.Pool)
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-	}
-	pool := &poolList.Items[0]
-	log.Info("resolved parent ExternalIPPool", "poolName", pool.Name, "poolUUID", externalIP.Spec.Pool)
-
-	implementationStrategy, contractVersion, err := r.resolveExternalIPManager(ctx, externalIP)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if implementationStrategy == "" {
-		networkClassID, _ := lookupDefaultNetworkClassID(ctx, r.networkClassesClient)
-		msg := fmt.Sprintf("no fabric_manager or k8s_manager configured for ExternalIP (default NetworkClass %q)", networkClassID)
-		setReadyConditionBlocked(&externalIP.Status.Conditions, v1alpha1.ReasonNoManagerConfigured, msg)
-		log.Info("implementation strategy not set", "externalIP", externalIP.Name)
-		return ctrl.Result{}, fmt.Errorf("cannot reconcile ExternalIP %q: %s", externalIP.Name, msg)
-	}
-
-	poolContext := provisioning.ExternalIPPoolContext{}
-	if contractVersion == networkmanager.ExternalIPContractVersionV1 {
-		if !pool.DeletionTimestamp.IsZero() || pool.Status.Phase != v1alpha1.ExternalIPPoolPhaseReady {
-			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-		}
-		poolContext, err = externalIPPoolContext(externalIP, pool)
-		if err != nil {
-			setReadyConditionFailed(&externalIP.Status.Conditions, err.Error())
-			return ctrl.Result{}, err
-		}
-	}
-
-	return r.reconcileExternalIPProvisioning(
-		ctx, externalIP, pool, implementationStrategy, contractVersion, poolContext,
-	)
-}
-
-func (r *ExternalIPReconciler) handleProvisioningDisabled(
-	ctx context.Context,
-	externalIP *v1alpha1.ExternalIP,
-) (ctrl.Result, error) {
-	strategy, contractVersion, err := r.resolveExternalIPManager(ctx, externalIP)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if contractVersion != networkmanager.ExternalIPContractVersionV1 {
-		setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStateAllocated)
-		externalIP.Status.Address = externalIPNoProvisioningAddress
-		externalIP.Status.Phase = v1alpha1.ExternalIPPhaseReady
-		setReadyConditionTrue(&externalIP.Status.Conditions)
+	if out.Succeeded() {
+		networktask.SetSucceeded(eip)
 		return ctrl.Result{}, nil
 	}
-	if externalIP.Annotations == nil {
-		externalIP.Annotations = make(map[string]string)
-	}
-	needsUpdate := false
-	if strategy != "" && externalIP.Annotations[osacImplementationStrategyAnnotation] != strategy {
-		externalIP.Annotations[osacImplementationStrategyAnnotation] = strategy
-		needsUpdate = true
-	}
-	if externalIP.Annotations[osacExternalIPContractVersionAnnotation] == "" {
-		externalIP.Annotations[osacExternalIPContractVersionAnnotation] = contractVersion
-		needsUpdate = true
-	}
-	if needsUpdate {
-		if err := r.Update(ctx, externalIP); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
-	}
-	if externalIP.Status.Address == externalIPNoProvisioningAddress {
-		externalIP.Status.Address = ""
-		setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStatePending)
-	}
-	if externalIP.Status.Address == "" {
-		externalIP.Status.Phase = v1alpha1.ExternalIPPhaseProgressing
-		setReadyConditionBlocked(&externalIP.Status.Conditions, v1alpha1.ReasonProgressing,
-			"network provisioning is disabled; ExternalIP allocation is pending")
-	}
-	return ctrl.Result{}, nil
+	reportOutcome(eip, out)
+	return outcomeResult(out), nil
 }
 
-func (r *ExternalIPReconciler) reconcileExternalIPProvisioning(
-	ctx context.Context,
-	externalIP *v1alpha1.ExternalIP,
-	pool *v1alpha1.ExternalIPPool,
-	implementationStrategy string,
-	contractVersion string,
-	poolContext provisioning.ExternalIPPoolContext,
-) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-	if externalIP.Annotations == nil {
-		externalIP.Annotations = make(map[string]string)
-	}
-
-	// Annotate the CR so AAP playbooks can select the appropriate role without
-	// having to look up the parent pool themselves.
-	needsUpdate := false
-	if externalIP.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy {
-		externalIP.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
-		log.Info("setting implementation-strategy annotation", "strategy", implementationStrategy)
-		needsUpdate = true
-	}
-	if externalIP.Annotations[osacExternalIPPoolNameAnnotation] != pool.Name {
-		externalIP.Annotations[osacExternalIPPoolNameAnnotation] = pool.Name
-		log.Info("setting externalippool-name annotation", "poolName", pool.Name)
-		needsUpdate = true
-	}
-	if contractVersion == networkmanager.ExternalIPContractVersionV1 &&
-		externalIP.Annotations[osacExternalIPContractVersionAnnotation] == "" {
-		externalIP.Annotations[osacExternalIPContractVersionAnnotation] = contractVersion
-		needsUpdate = true
-	}
-	if needsUpdate {
-		if err := r.Update(ctx, externalIP); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
-	}
-
-	// Compute desired config version from spec and inherited implementation strategy.
-	// This hash drives the provisioning lifecycle: a new version triggers re-provisioning.
-	var desiredInput any = struct {
-		Spec                   v1alpha1.ExternalIPSpec
-		ImplementationStrategy string
-	}{externalIP.Spec, implementationStrategy}
-	if contractVersion == networkmanager.ExternalIPContractVersionV1 {
-		desiredInput = struct {
-			Spec                   v1alpha1.ExternalIPSpec
-			ImplementationStrategy string
-			ContractVersion        string
-			PoolUID                string
-			PoolCIDR               string
-		}{externalIP.Spec, implementationStrategy, contractVersion, poolContext.KubernetesUID, poolContext.CIDR}
-	}
-	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(desiredInput)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to compute desired config version: %w", err)
-	}
-	externalIP.Status.DesiredConfigVersion = desiredVersion
-
-	v1alpha1.SetExternalIPStatusCondition(externalIP, metav1.Condition{
-		Type:               string(v1alpha1.ExternalIPConditionConfigurationApplied),
-		Status:             metav1.ConditionTrue,
-		Reason:             conditionReasonConfigurationApplied,
-		Message:            conditionMessageConfigurationApplied,
-		LastTransitionTime: metav1.Now(),
-	})
-
-	// Transition to Progressing on first provision or when spec changed after a previous
-	// success. Don't override Failed during backoff (the provisioning lifecycle handles retry).
-	if externalIP.Status.Phase == "" || (externalIP.Status.Phase == v1alpha1.ExternalIPPhaseReady &&
-		!provisioning.IsConfigApplied(&externalIP.Status.ProvisioningJobs, externalIP.Status.DesiredConfigVersion)) {
-		externalIP.Status.Phase = v1alpha1.ExternalIPPhaseProgressing
-		if externalIP.Status.State == "" {
-			setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStatePending)
-		}
-	}
-
-	if contractVersion == networkmanager.ExternalIPContractVersionV1 {
-		if externalIP.Status.Address == externalIPNoProvisioningAddress {
-			externalIP.Status.Address = ""
-			setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStatePending)
-			externalIP.Status.Phase = v1alpha1.ExternalIPPhaseProgressing
-		}
-	} else {
-		r.populateAddressIfMissing(ctx, externalIP)
-	}
-
-	provisioningContext := ctx
-	if contractVersion == networkmanager.ExternalIPContractVersionV1 {
-		provisioningContext = provisioning.WithExternalIPPool(ctx, poolContext)
-	}
-	result, err := r.handleProvisioning(provisioningContext, externalIP)
-	if err != nil || result.RequeueAfter > 0 {
-		return result, err
-	}
-
-	if externalIP.Status.State == v1alpha1.ExternalIPStateAllocated && externalIP.Status.Address == "" {
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	return result, nil
-}
-
-// populateAddressIfMissing fills status.address from legacy manager output after
-// initial provisioning succeeds, and transitions to Ready once the address is known.
-//
-// This function handles legacy, unversioned managers that publish the address in
-// an annotation or a LoadBalancer Service. V1 managers publish a validated job
-// result that the controller writes directly to status.
-//
-// State == Allocated is set exclusively by OnSuccess after the AAP provisioning
-// job reports success, so this guard ensures address population happens strictly
-// after provisioning completes.
-func (r *ExternalIPReconciler) populateAddressIfMissing(ctx context.Context, externalIP *v1alpha1.ExternalIP) {
-	if externalIP.Status.State != v1alpha1.ExternalIPStateAllocated || externalIP.Status.Address != "" {
-		return
-	}
-	log := ctrllog.FromContext(ctx)
-
-	if addr, ok := externalIP.Annotations[osacExternalIPAllocatedAddressAnnotation]; ok && addr != "" {
-		externalIP.Status.Address = addr
-		externalIP.Status.Phase = v1alpha1.ExternalIPPhaseReady
-		log.Info("populated ExternalIP address from allocated-address annotation", "address", addr)
-		return
-	}
-
-	// Legacy managers may publish the address through a LoadBalancer Service.
-	targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
-	if err != nil {
-		log.V(1).Info("allocated-address annotation not set and target client unavailable, will retry")
-		return
-	}
-	ipAddress := r.getExternalIPAddress(ctx, targetClient, externalIP.Name)
-	if ipAddress != "" {
-		externalIP.Status.Address = ipAddress
-		externalIP.Status.Phase = v1alpha1.ExternalIPPhaseReady
-		log.Info("populated ExternalIP address from LoadBalancer Service (fallback)", "address", ipAddress)
-	}
-}
-
-// handleDelete sets the Deleting phase, runs deprovisioning, and removes the finalizer
-// once deprovisioning completes (or is skipped).
-func (r *ExternalIPReconciler) handleDelete(ctx context.Context, externalIP *v1alpha1.ExternalIP) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-	log.Info("deleting external IP")
-
-	statusChanged := setExternalIPDeleting(&externalIP.Status)
-
-	if !controllerutil.ContainsFinalizer(externalIP, osacExternalIPFinalizer) {
-		return ctrl.Result{}, nil
-	}
-	if statusChanged {
-		groupVersionKind := externalIP.GetObjectKind().GroupVersionKind()
-		if err := r.Status().Update(ctx, externalIP); err != nil {
-			return ctrl.Result{}, err
-		}
-		latest := &v1alpha1.ExternalIP{}
-		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(externalIP), latest); err != nil {
-			return ctrl.Result{}, err
-		}
-		*externalIP = *latest
-		if groupVersionKind.Kind != "" {
-			externalIP.SetGroupVersionKind(groupVersionKind)
-		}
-	}
-	result, waitingForProvision, err := r.waitForExternalIPProvisionLaunch(ctx, externalIP)
-	if err != nil || waitingForProvision {
-		return result, err
-	}
-
-	// Gate: wait for all child resources referencing this ExternalIP to be fully removed.
-	eipName := externalIP.Name
-	ns := externalIP.Namespace
-	attachmentList := &v1alpha1.ExternalIPAttachmentList{}
-	if err := r.Client.List(ctx, attachmentList,
-		client.InNamespace(ns),
-		client.MatchingFields{externalIPReferenceIndexField: eipName},
-	); err != nil {
-		return ctrl.Result{}, fmt.Errorf("listing ExternalIPAttachments: %w", err)
-	}
-	if len(attachmentList.Items) > 0 {
-		log.Info("waiting for child ExternalIPAttachment to be deleted before deprovisioning ExternalIP",
-			"attachment", attachmentList.Items[0].Name)
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-	}
-
-	natgwList := &v1alpha1.NATGatewayList{}
-	if err := r.Client.List(ctx, natgwList,
-		client.InNamespace(ns),
-		client.MatchingFields{externalIPReferenceIndexField: eipName},
-	); err != nil {
-		return ctrl.Result{}, fmt.Errorf("listing NATGateways: %w", err)
-	}
-	if len(natgwList.Items) > 0 {
-		log.Info("waiting for child NATGateway to be deleted before deprovisioning ExternalIP",
-			"natGateway", natgwList.Items[0].Name)
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-	}
-
-	contracted := externalIPContractVersion(externalIP) == networkmanager.ExternalIPContractVersionV1
-	if contracted && !r.NetworkProvisioningEnabled {
-		log.Info("skipping provider release while network provisioning is disabled")
-	} else if externalIP.Annotations[osacImplementationStrategyAnnotation] == "" {
-		if contracted {
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
-		log.Info("skipping deprovisioning — resource was never provisioned")
-	} else {
-		deprovisionContext := ctx
-		if contracted {
-			poolList := &v1alpha1.ExternalIPPoolList{}
-			if err := r.APIReader.List(ctx, poolList,
-				client.InNamespace(externalIP.Namespace),
-				client.MatchingLabels{osacExternalIPPoolIDLabel: externalIP.Spec.Pool},
-			); err != nil {
-				return ctrl.Result{}, err
-			}
-			if len(poolList.Items) != 1 {
-				return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-			}
-			poolContext, err := externalIPPoolContext(externalIP, &poolList.Items[0])
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-			deprovisionContext = provisioning.WithExternalIPPool(ctx, poolContext)
-		}
-		result, err := r.handleDeprovisioning(deprovisionContext, externalIP)
-		if err != nil || result.RequeueAfter > 0 {
-			return result, err
-		}
-	}
-
-	// Deprovisioning complete, remove finalizer to allow K8s garbage collection
-	log.Info("removing finalizer after successful deprovisioning")
-	controllerutil.RemoveFinalizer(externalIP, osacExternalIPFinalizer)
-	if err := r.Update(ctx, externalIP); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	return ctrl.Result{}, nil
-}
-
-func (r *ExternalIPReconciler) waitForExternalIPProvisionLaunch(
-	ctx context.Context,
-	externalIP *v1alpha1.ExternalIP,
-) (ctrl.Result, bool, error) {
-	claim, err := providerJobLaunchClaimFromObject(externalIP)
-	if err != nil || claim == nil || claim.JobType != v1alpha1.JobTypeProvision {
-		return ctrl.Result{}, false, err
-	}
-	if providerJobLaunchClaimIsFresh(claim, time.Now()) {
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, true, nil
-	}
-	claim, acquired, resumed, err := acquireProviderJobLaunchClaim(
-		ctx, r.Client, r.APIReader, externalIP, v1alpha1.JobTypeProvision, claim.ConfigVersion,
-	)
-	if err != nil {
-		return ctrl.Result{}, false, err
-	}
-	if !acquired {
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, true, nil
-	}
-	if !resumed {
-		if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, externalIP, claim.ID); err != nil {
-			return ctrl.Result{}, false, err
-		}
-		return ctrl.Result{}, false, nil
-	}
-	found, err := recoverProviderJobFromClaim(
-		ctx, r.ProvisioningProvider, externalIP, claim, &externalIP.Status.ProvisioningJobs, r.MaxJobHistory,
-	)
-	if err != nil {
-		return ctrl.Result{}, false, err
-	}
-	if found {
-		if err := r.updateStatusWithRetry(
-			ctx, client.ObjectKeyFromObject(externalIP), externalIP.UID, externalIP.Generation, externalIP.Status,
-		); err != nil {
-			return ctrl.Result{}, false, err
-		}
-	}
-	if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, externalIP, claim.ID); err != nil {
-		return ctrl.Result{}, false, err
-	}
-	return ctrl.Result{}, false, nil
-}
-
-// handleProvisioning delegates ExternalIP provisioning to the shared job lifecycle.
-func (r *ExternalIPReconciler) handleProvisioning(ctx context.Context, externalIP *v1alpha1.ExternalIP) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-	contracted := externalIPContractVersion(externalIP) == networkmanager.ExternalIPContractVersionV1
-	if r.ProvisioningProvider == nil {
-		if contracted {
-			setReadyConditionBlocked(&externalIP.Status.Conditions, v1alpha1.ReasonProgressing,
-				"ExternalIP allocation is waiting for a provisioning provider")
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
-		log.Info("no provisioning provider configured, skipping provisioning")
-		return ctrl.Result{}, nil
-	}
-
-	if contracted {
-		latest := provisioning.FindLatestJobByType(externalIP.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
-		if latest != nil && latest.State == v1alpha1.JobStateSucceeded &&
-			(externalIP.Status.State != v1alpha1.ExternalIPStateAllocated || externalIP.Status.Address == "") {
-			outputProvider, ok := r.ProvisioningProvider.(provisioning.ProvisioningProviderWithProvisionOutputs)
-			if !ok {
-				r.failExternalIPProvisionAttempt(externalIP, "provisioning provider does not return ExternalIP results")
-				return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-			}
-			status, err := outputProvider.GetProvisionStatusWithExtraVars(ctx, externalIP, latest.JobID)
-			if err == nil {
-				err = r.acceptExternalIPAllocation(ctx, externalIP, provisioning.ExternalIPPoolFromContext(ctx), status)
-			}
-			if err != nil {
-				r.failExternalIPProvisionAttempt(externalIP, err.Error())
-				return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-			}
-			return ctrl.Result{}, nil
-		}
-	}
-
-	callbacks := &provisioning.PollCallbacks{
-		OnFailed: func(message string) {
-			externalIP.Status.Phase = v1alpha1.ExternalIPPhaseFailed
-			setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStateFailed)
-			setReadyConditionFailed(&externalIP.Status.Conditions, message)
-		},
-		OnSuccess: func(_ provisioning.ProvisionStatus) {
-			setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStateAllocated)
-			if !contracted && externalIP.Status.Address == "" {
-				if addr, ok := externalIP.Annotations[osacExternalIPAllocatedAddressAnnotation]; ok && addr != "" {
-					externalIP.Status.Address = addr
-				} else if targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster); err == nil {
-					if ip := r.getExternalIPAddress(ctx, targetClient, externalIP.Name); ip != "" {
-						externalIP.Status.Address = ip
-					}
-				}
-			}
-			if externalIP.Status.Address != "" {
-				externalIP.Status.Phase = v1alpha1.ExternalIPPhaseReady
-			}
-			setReadyConditionTrue(&externalIP.Status.Conditions)
-		},
-	}
-	if contracted {
-		callbacks.OnSuccessWithExtraVars = func(status provisioning.ProvisionStatusWithExtraVars) error {
-			return r.acceptExternalIPAllocation(ctx, externalIP, provisioning.ExternalIPPoolFromContext(ctx), status)
-		}
-		callbacks.OnOutputError = func(message string) {
-			r.failExternalIPProvisionAttempt(externalIP, message)
-		}
-	}
-
-	checkAPIServer := func() bool {
-		return provisioning.CheckAPIServerForNonTerminalProvisionJob(
-			ctx, r.APIReader, client.ObjectKeyFromObject(externalIP), &v1alpha1.ExternalIP{}, func(obj client.Object) []v1alpha1.JobStatus {
-				return obj.(*v1alpha1.ExternalIP).Status.ProvisioningJobs
-			})
-	}
-	state := &provisioning.State{Jobs: &externalIP.Status.ProvisioningJobs, DesiredConfigVersion: externalIP.Status.DesiredConfigVersion}
-	runCtx, claim, previousProvisionJobID, result, done, err := r.prepareExternalIPProvisionLaunch(ctx, externalIP, state, checkAPIServer)
-	if err != nil || done {
-		return result, err
-	}
-
-	result, err = provisioning.RunProvisioningLifecycle(runCtx, r.ProvisioningProvider, externalIP,
-		state,
-		r.MaxJobHistory, r.StatusPollInterval,
-		callbacks,
-		checkAPIServer,
-		func() error {
-			return r.updateStatusWithRetry(runCtx, client.ObjectKeyFromObject(externalIP), externalIP.UID, externalIP.Generation, externalIP.Status)
-		},
-	)
-	if err != nil || claim == nil {
-		return result, err
-	}
-	latestProvisionJob := provisioning.FindLatestJobByType(externalIP.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
-	triggered := latestProvisionJob != nil && latestProvisionJob.JobID != previousProvisionJobID
-	if triggered {
-		if err := r.updateStatusWithRetry(
-			ctx, client.ObjectKeyFromObject(externalIP), externalIP.UID, externalIP.Generation, externalIP.Status,
-		); err != nil {
-			return result, err
-		}
-	}
-	if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, externalIP, claim.ID); err != nil {
-		return result, err
-	}
-	return result, nil
-}
-
-func (r *ExternalIPReconciler) prepareExternalIPProvisionLaunch(
-	ctx context.Context,
-	externalIP *v1alpha1.ExternalIP,
-	state *provisioning.State,
-	checkAPIServer func() bool,
-) (context.Context, *providerJobLaunchClaim, string, ctrl.Result, bool, error) {
-	action, _ := provisioning.EvaluateAction(state, checkAPIServer)
-	if action != provisioning.Trigger && action != provisioning.Backoff {
-		return ctx, nil, "", ctrl.Result{}, false, nil
-	}
-	latest := provisioning.FindLatestJobByType(externalIP.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
-	previousJobID := ""
-	if latest != nil {
-		previousJobID = latest.JobID
-	}
-	claim, acquired, resumed, err := acquireProviderJobLaunchClaim(
-		ctx, r.Client, r.APIReader, externalIP, v1alpha1.JobTypeProvision, externalIP.Status.DesiredConfigVersion,
-	)
-	if err != nil {
-		return ctx, nil, "", ctrl.Result{}, true, err
-	}
-	if !acquired {
-		return ctx, nil, "", ctrl.Result{RequeueAfter: r.StatusPollInterval}, true, nil
-	}
-	if resumed {
-		found, err := recoverProviderJobFromClaim(
-			ctx, r.ProvisioningProvider, externalIP, claim, &externalIP.Status.ProvisioningJobs, r.MaxJobHistory,
-		)
-		if err != nil {
-			return ctx, nil, "", ctrl.Result{}, true, err
-		}
-		if found {
-			if err := r.updateStatusWithRetry(
-				ctx, client.ObjectKeyFromObject(externalIP), externalIP.UID, externalIP.Generation, externalIP.Status,
-			); err != nil {
-				return ctx, nil, "", ctrl.Result{}, true, err
-			}
-			if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, externalIP, claim.ID); err != nil {
-				return ctx, nil, "", ctrl.Result{}, true, err
-			}
-			return ctx, nil, "", ctrl.Result{RequeueAfter: r.StatusPollInterval}, true, nil
-		}
-	}
-	return provisioning.WithAAPJobLaunchID(ctx, claim.ID), claim, previousJobID, ctrl.Result{}, false, nil
-}
-
-func (r *ExternalIPReconciler) failExternalIPProvisionAttempt(externalIP *v1alpha1.ExternalIP, message string) {
-	markExternalIPJobFailed(externalIP, v1alpha1.JobTypeProvision, message)
-	externalIP.Status.Phase = v1alpha1.ExternalIPPhaseFailed
-	setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStateFailed)
-	setReadyConditionFailed(&externalIP.Status.Conditions, message)
-}
-
-// handleDeprovisioning triggers and validates ExternalIP provider cleanup.
-func (r *ExternalIPReconciler) handleDeprovisioning(ctx context.Context, externalIP *v1alpha1.ExternalIP) (ctrl.Result, error) {
-	contracted := externalIPContractVersion(externalIP) == networkmanager.ExternalIPContractVersionV1
-	if r.ProvisioningProvider == nil {
-		if contracted {
-			return ctrl.Result{}, fmt.Errorf("cannot release contracted ExternalIP without a provisioning provider")
-		}
-		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
-		return ctrl.Result{}, nil
-	}
-	if contracted {
-		for i := range externalIP.Status.ProvisioningJobs {
-			if externalIP.Status.ProvisioningJobs[i].Type == v1alpha1.JobTypeDeprovision {
-				externalIP.Status.ProvisioningJobs[i].BlockDeletionOnFailure = true
-			}
-		}
-	}
-	var claim *providerJobLaunchClaim
-	runCtx := ctx
-	if provisioning.DeprovisionJobLaunchNeeded(externalIP.Status.ProvisioningJobs, time.Now()) {
-		var acquired, resumed bool
-		var err error
-		claim, acquired, resumed, err = acquireProviderJobLaunchClaim(
-			ctx, r.Client, r.APIReader, externalIP, v1alpha1.JobTypeDeprovision, "",
-		)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if !acquired {
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
-		if resumed {
-			found, err := recoverProviderJobFromClaim(
-				ctx, r.ProvisioningProvider, externalIP, claim, &externalIP.Status.ProvisioningJobs, r.MaxJobHistory,
-			)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-			if found {
-				if err := r.updateStatusWithRetry(
-					ctx, client.ObjectKeyFromObject(externalIP), externalIP.UID, externalIP.Generation, externalIP.Status,
-				); err != nil {
-					return ctrl.Result{}, err
-				}
-				if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, externalIP, claim.ID); err != nil {
-					return ctrl.Result{}, err
-				}
-				return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-			}
-		}
-		runCtx = provisioning.WithAAPJobLaunchID(ctx, claim.ID)
-	}
-	beforeStatus := externalIP.Status.DeepCopy()
-	result, done, err := provisioning.RunDeprovisioningLifecycle(runCtx, r.ProvisioningProvider, externalIP,
-		&externalIP.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
-	if err != nil {
-		return result, err
-	}
-	if !equality.Semantic.DeepEqual(externalIP.Status, *beforeStatus) {
-		if err := r.updateStatusWithRetry(
-			ctx, client.ObjectKeyFromObject(externalIP), externalIP.UID, externalIP.Generation, externalIP.Status,
-		); err != nil {
-			return result, err
-		}
-	}
-	if claim != nil {
-		if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, externalIP, claim.ID); err != nil {
-			return result, err
-		}
-	}
-	if !done {
-		if contracted && result.RequeueAfter == 0 {
-			result.RequeueAfter = r.StatusPollInterval
-		}
-		return result, nil
-	}
-	if !contracted {
-		return ctrl.Result{}, nil
-	}
-
-	job := provisioning.FindLatestJobByType(externalIP.Status.ProvisioningJobs, v1alpha1.JobTypeDeprovision)
-	outputProvider, ok := r.ProvisioningProvider.(provisioning.ProvisioningProviderWithDeprovisionOutputs)
-	if job == nil || !ok {
-		message := "provider did not return the current ExternalIP release result"
-		markExternalIPJobFailed(externalIP, v1alpha1.JobTypeDeprovision, message)
-		setReadyConditionFailed(&externalIP.Status.Conditions, message)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-	status, err := outputProvider.GetDeprovisionStatusWithExtraVars(ctx, externalIP, job.JobID)
-	if err == nil {
-		err = r.validateExternalIPReleaseResult(ctx, externalIP, status)
-	}
-	if err != nil {
-		markExternalIPJobFailed(externalIP, v1alpha1.JobTypeDeprovision, err.Error())
-		setReadyConditionFailed(&externalIP.Status.Conditions, err.Error())
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-	return ctrl.Result{}, nil
-}
-
-// getExternalIPAddress fetches the LoadBalancer Service address used by legacy,
-// unversioned managers that do not write the allocated-address annotation.
-func (r *ExternalIPReconciler) getExternalIPAddress(ctx context.Context, targetClient client.Client, externalIPName string) string {
-	log := ctrllog.FromContext(ctx)
-
-	svc := &corev1.Service{}
-	serviceName := externalIPServiceNamePrefix + externalIPName
-	if err := targetClient.Get(ctx, types.NamespacedName{Namespace: externalIPDefaultMetalLBNamespace, Name: serviceName}, svc); err != nil {
-		log.V(1).Info("LoadBalancer Service not found (may not be a MetalLB strategy)", "name", serviceName)
+// poolCIDR is the pool CIDR of the stored input (external_ip_pool.spec.cidrs[0]).
+func poolCIDR(input map[string]any) string {
+	pool, _ := input["external_ip_pool"].(map[string]any)
+	spec, _ := pool["spec"].(map[string]any)
+	cidrs, _ := spec["cidrs"].([]any)
+	if len(cidrs) == 0 {
 		return ""
 	}
-
-	if len(svc.Status.LoadBalancer.Ingress) == 0 {
-		return ""
-	}
-
-	return svc.Status.LoadBalancer.Ingress[0].IP
+	cidr, _ := cidrs[0].(string)
+	return cidr
 }
 
-// SetupWithManager registers this controller with the multicluster manager.
-// It watches ExternalIP CRs in the networking namespace on the local cluster only.
+func (r *ExternalIPReconciler) remove(ctx context.Context, eip *v1alpha1.ExternalIP) (bool, ctrl.Result, error) {
+	if id := eip.Labels[osacExternalIPIDLabel]; id != "" {
+		attached, err := anyItem(ctx, r.Client, &v1alpha1.ExternalIPAttachmentList{}, eip.Namespace, func(o client.Object) bool {
+			return o.(*v1alpha1.ExternalIPAttachment).Spec.ExternalIP == id
+		})
+		if err != nil || attached {
+			return false, waitResult(), err
+		}
+		used, err := anyItem(ctx, r.Client, &v1alpha1.NATGatewayList{}, eip.Namespace, func(o client.Object) bool {
+			return o.(*v1alpha1.NATGateway).Spec.ExternalIP == id
+		})
+		if err != nil || used {
+			return false, waitResult(), err
+		}
+	}
+	input := cleanupInput(eip)
+	return runCleanup(ctx, r.Engine, eip, kindExternalIP,
+		cleanupTask{create: networktask.CreateExternalIP, manager: v1alpha1.NetworkJobManagerFabric,
+			request: func() networktask.Request {
+				return taskRequest(eip, kindExternalIP, networktask.DeleteExternalIP, v1alpha1.NetworkJobManagerFabric, input)
+			}},
+	)
+}
+
+// SetupWithManager registers the controller. Pool events re-queue its
+// ExternalIPs; ExternalIPAttachment and NATGateway events re-queue their ExternalIP.
 func (r *ExternalIPReconciler) SetupWithManager(mgr mcmanager.Manager) error {
-	ctx := context.Background()
 	localMgr := mgr.GetLocalManager()
-	if err := localMgr.GetFieldIndexer().IndexField(ctx,
-		&v1alpha1.ExternalIPAttachment{}, externalIPReferenceIndexField,
-		func(obj client.Object) []string {
-			attachment := obj.(*v1alpha1.ExternalIPAttachment)
-			if attachment.Spec.ExternalIP == "" {
-				return nil
-			}
-			return []string{attachment.Spec.ExternalIP}
-		}); err != nil {
-		return fmt.Errorf("failed to index ExternalIPAttachments by ExternalIP: %w", err)
+	if localMgr == nil {
+		return errors.New("local manager is nil")
 	}
-	if err := localMgr.GetFieldIndexer().IndexField(ctx,
-		&v1alpha1.NATGateway{}, externalIPReferenceIndexField,
-		func(obj client.Object) []string {
-			natGateway := obj.(*v1alpha1.NATGateway)
-			if natGateway.Spec.ExternalIP == "" {
-				return nil
-			}
-			return []string{natGateway.Spec.ExternalIP}
-		}); err != nil {
-		return fmt.Errorf("failed to index NATGateways by ExternalIP: %w", err)
-	}
-
-	return mcbuilder.ControllerManagedBy(mgr).
-		For(&v1alpha1.ExternalIP{},
-			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
-			mcbuilder.WithEngageWithLocalCluster(true),
-			mcbuilder.WithEngageWithProviderClusters(false)).
+	ns := r.NetworkingNamespace
+	inNamespace := builder.WithPredicates(NetworkingNamespacePredicate(ns))
+	eipList := func() client.ObjectList { return &v1alpha1.ExternalIPList{} }
+	return ctrl.NewControllerManagedBy(localMgr).
+		Named("externalip").
+		For(&v1alpha1.ExternalIP{}, inNamespace).
+		Watches(&v1alpha1.ExternalIPPool{}, enqueueWhere(r.Client, ns, eipList, func(obj, trigger client.Object) bool {
+			return obj.(*v1alpha1.ExternalIP).Spec.Pool == triggerID(trigger, kindExternalIPPool)
+		}), inNamespace).
+		Watches(&v1alpha1.ExternalIPAttachment{}, enqueueWhere(r.Client, ns, eipList, func(obj, trigger client.Object) bool {
+			return triggerID(obj, kindExternalIP) == trigger.(*v1alpha1.ExternalIPAttachment).Spec.ExternalIP
+		}), inNamespace).
+		Watches(&v1alpha1.NATGateway{}, enqueueWhere(r.Client, ns, eipList, func(obj, trigger client.Object) bool {
+			return triggerID(obj, kindExternalIP) == trigger.(*v1alpha1.NATGateway).Spec.ExternalIP
+		}), inNamespace).
 		Complete(r)
 }

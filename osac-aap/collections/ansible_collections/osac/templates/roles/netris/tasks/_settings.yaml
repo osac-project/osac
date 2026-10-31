@@ -1,0 +1,25 @@
+---
+# Check the NETRIS_* settings a task needs.
+# Input: netris_require, a list of setting groups: controller, credentials,
+#   site, tenant, mgmt_vpc, bm_provisioning_vnet, resource_class_map.
+# A missing or malformed setting fails as retryable: the operator can fix the
+# ConfigMap or Secret network-fulfillment-ig. The class map is checked as the raw
+# NETRIS_RESOURCE_CLASS_MAP text, so a malformed map cannot break tasks that
+# do not need it (netris_resource_class_map parses it with from_json).
+- name: Check the settings of the task
+  vars:
+    _netris_settings:
+      controller_url: "{{ netris_controller_url }}"
+      username: "{{ netris_username }}"
+      has_password: "{{ (netris_password | length) > 0 }}"
+      site_id: "{{ netris_site_id | int(0) }}"
+      tenant_id: "{{ netris_tenant_id | int(0) }}"
+      mgmt_vpc_id: "{{ netris_mgmt_vpc_id | int(0) }}"
+      bm_provisioning_vnet: "{{ netris_bm_provisioning_vnet }}"
+      resource_class_map: "{{ lookup('ansible.builtin.env', 'NETRIS_RESOURCE_CLASS_MAP', default='') }}"
+    _netris_settings_error: "{{ _netris_settings | osac.templates.netris_contract_settings_error(netris_require | default([])) }}"
+    netris_fail:
+      message: "{{ _netris_settings_error }}"
+      retryable: true
+  when: _netris_settings_error | length > 0
+  ansible.builtin.include_tasks: _fail.yaml

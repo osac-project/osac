@@ -87,7 +87,8 @@ var _ = Describe("External IP attachments server", func() {
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			_, err = networkClassesDao.Create().SetObject(privatev1.NetworkClass_builder{
+			_ = networkClassesDao
+			_, err = reuseNetworkClassDAO.Create().SetObject(privatev1.NetworkClass_builder{
 				Metadata: privatev1.Metadata_builder{Name: "test-network-class", Tenant: testTenant}.Build(),
 				Status: privatev1.NetworkClassStatus_builder{
 					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,

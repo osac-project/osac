@@ -50,6 +50,8 @@ var _ = Describe("Reader API access", func() {
 	})
 
 	It("keeps tenant-reader reads in scope and denies cluster mutations", func(ctx context.Context) {
+		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
+		ensureTenantDefaultNetworkingFixture(ctx, "development", "")
 		oldConn, oldTokenSource := newReaderTestConnection(ctx, userUsername)
 		Expect(readerTokenRoles(ctx, oldTokenSource)).ToNot(ContainElement("tenant-reader"))
 		readerCluster := createReaderTestCluster(
@@ -125,6 +127,8 @@ var _ = Describe("Reader API access", func() {
 	})
 
 	It("keeps cloud-provider-reader in the user's existing scope", func(ctx context.Context) {
+		ensureTenantDefaultNetworkingFixture(ctx, "sales", "")
+		ensureTenantDefaultNetworkingFixture(ctx, "development", "")
 		oldConn, _ := newReaderTestConnection(ctx, "charles")
 		inScopeCluster := createReaderTestCluster(
 			ctx, oldConn, "sales", "cloud-reader-in-scope-"+uuid.New()[24:], assets,
@@ -185,6 +189,11 @@ func readerTestClusterCreateRequest(name, tenant string, assets readerTestAssets
 	}.Build()
 }
 
+// createReaderTestCluster requires READY default networking for tenant; call
+// ensureTenantDefaultNetworkingFixture once per tenant before the spec's first
+// cluster. Its cleanup then runs after every cluster deletion, because
+// DeferCleanup runs in reverse order and the SecurityGroup delete guard rejects
+// a group that a cluster still references.
 func createReaderTestCluster(
 	ctx context.Context,
 	conn *grpc.ClientConn,

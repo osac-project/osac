@@ -27,6 +27,10 @@ import (
 )
 
 var _ = Describe("Public external IP pools server", func() {
+	BeforeEach(func() {
+		seedNetworkClass(privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+	})
+
 	var privatePool *PrivateExternalIPPoolsServer
 
 	BeforeEach(func() {
@@ -144,20 +148,12 @@ var _ = Describe("Public external IP pools server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 
-			_, err = privatePool.Update(ctx, privatev1.ExternalIPPoolsUpdateRequest_builder{
-				Object: privatev1.ExternalIPPool_builder{
-					Id: createResp.GetObject().GetId(),
-					Status: privatev1.ExternalIPPoolStatus_builder{
-						State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
-						Total:     10,
-						Available: 0,
-						Allocated: 10,
-					}.Build(),
-				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"status"},
-				},
-			}.Build())
+			// The capacity is computed by the fulfillment service, so the fixture writes it through the DAO:
+			full := createResp.GetObject()
+			full.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY)
+			full.GetStatus().SetAvailable(0)
+			full.GetStatus().SetAllocated(full.GetStatus().GetTotal())
+			_, err = fixtureDAO[*privatev1.ExternalIPPool]().Update().SetObject(full).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 
 			publicServer, err := NewExternalIPPoolsServer().

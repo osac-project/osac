@@ -14,29 +14,14 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
-	"context"
-
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type tenantMetadataObject interface {
 	GetMetadata() *privatev1.Metadata
-}
-
-func resolveObjectTenant(ctx context.Context, metadata *privatev1.Metadata,
-	tenancyLogic auth.TenancyLogic) (string, error) {
-	if metadata != nil && metadata.GetTenant() != "" {
-		return metadata.GetTenant(), nil
-	}
-	tenant, err := tenancyLogic.DetermineDefaultTenant(ctx)
-	if err != nil {
-		return "", grpcstatus.Errorf(grpccodes.Internal, "failed to determine tenant")
-	}
-	return tenant, nil
 }
 
 func validateTenantMatch(parentTenant string, referenced tenantMetadataObject,

@@ -1,0 +1,12 @@
+---
+# Nothing is reserved on Netris (see reserve_cluster_ingress_ip), so there is
+# nothing to release. The task publishes nothing.
+- name: Release the cluster ingress address on Netris
+  block:
+    - name: Skip the release
+      ansible.builtin.include_tasks: _noop.yaml
+      vars:
+        netris_noop: release nothing, no cluster ingress address is reserved
+  rescue:
+    - name: Report the error
+      ansible.builtin.include_tasks: _rescue.yaml

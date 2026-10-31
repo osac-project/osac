@@ -30,6 +30,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -203,7 +204,10 @@ var _ = Describe("ExternalIPAttachment target lock ordering", func() {
 		go func() {
 			var operationErr error
 			if deleteAttachment {
-				_, operationErr = attachmentServer.Delete(attachmentCtx, privatev1.ExternalIPAttachmentsDeleteRequest_builder{
+				// Automatic attachments are deleted by the controller with their workload.
+				controllerCtx := auth.ContextWithSubject(attachmentCtx,
+					&auth.Subject{User: "service-account-osac-controller"})
+				_, operationErr = attachmentServer.Delete(controllerCtx, privatev1.ExternalIPAttachmentsDeleteRequest_builder{
 					Id: attachmentID,
 				}.Build())
 			} else {

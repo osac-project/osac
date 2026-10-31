@@ -246,10 +246,15 @@ func (t *task) validateTenant() error {
 func (t *task) delete(ctx context.Context) (err error) {
 	t.hubId = t.natGateway.GetStatus().GetHub()
 	if t.hubId == "" {
-		t.removeFinalizer()
-		return nil
+		// The CR may exist without status.hub when the controller restarted between its create and the hub
+		// write, so look it up in the canonical hub.
+		if selectErr := t.selectHub(ctx); selectErr != nil {
+			t.removeFinalizer()
+			return nil
+		}
+	} else {
+		err = t.getHub(ctx)
 	}
-	err = t.getHub(ctx)
 	if err != nil {
 		if errors.Is(err, controllers.ErrHubNotFound) {
 			controllers.RemoveFinalizerOnDecommissionedHub(ctx, t.r.logger, t.hubId, "nat_gateway_id", t.natGateway.GetId(), t.removeFinalizer)

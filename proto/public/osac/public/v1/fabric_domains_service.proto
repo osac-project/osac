@@ -57,9 +57,6 @@ service FabricDomains {
   rpc Create(FabricDomainsCreateRequest) returns (FabricDomainsCreateResponse) {
     option (google.api.http) = {post: "/api/fulfillment/v1/fabric_domains" body: "object" response_body: "object"};
   }
-  rpc Update(FabricDomainsUpdateRequest) returns (FabricDomainsUpdateResponse) {
-    option (google.api.http) = {patch: "/api/fulfillment/v1/fabric_domains/{object.id}" body: "object" response_body: "object"};
-  }
   rpc Delete(FabricDomainsDeleteRequest) returns (FabricDomainsDeleteResponse) {
     option (google.api.http) = {delete: "/api/fulfillment/v1/fabric_domains/{id}"};
   }

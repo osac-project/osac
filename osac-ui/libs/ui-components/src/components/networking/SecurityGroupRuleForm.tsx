@@ -16,12 +16,16 @@ export interface RuleFormValues {
 
 export const SecurityGroupRuleForm = () => {
   const { t } = useTranslation();
-  const { values } = useFormikContext<RuleFormValues>();
+  const { values, initialValues } = useFormikContext<RuleFormValues>();
 
+  // ICMP is not offered: the API rejects it when a network manager lacks the ICMP capability, and All
+  // includes it. A stored ICMP rule keeps its option while it is edited.
   const protocolOptions = [
     { value: Protocol.TCP, label: protocolToString(Protocol.TCP, t) },
     { value: Protocol.UDP, label: protocolToString(Protocol.UDP, t) },
-    { value: Protocol.ICMP, label: protocolToString(Protocol.ICMP, t) },
+    ...(initialValues.protocol === Protocol.ICMP
+      ? [{ value: Protocol.ICMP, label: protocolToString(Protocol.ICMP, t) }]
+      : []),
     { value: Protocol.ALL, label: protocolToString(Protocol.ALL, t) },
   ];
 

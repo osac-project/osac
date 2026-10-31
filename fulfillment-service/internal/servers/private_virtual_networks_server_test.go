@@ -14,1934 +14,226 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
-	"context"
-	"fmt"
+	"net/netip"
 
-	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 var _ = Describe("Private virtual networks server", func() {
-	BeforeEach(func() {
-		var err error
+	var server *PrivateVirtualNetworksServer
 
-		// Create the tenants used in the tests:
-		tenantsDao, err := dao.NewGenericDAO[*privatev1.Tenant]().
+	newServer := func(settings NetworkingSettings) *PrivateVirtualNetworksServer {
+		result, err := NewPrivateVirtualNetworksServer().
 			SetLogger(logger).
-			SetTableName("tenants").
+			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
+			SetNetworkingSettings(settings).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
-		createTenant := func(name string) {
-			_, err = tenantsDao.Create().
-				SetObject(privatev1.Tenant_builder{
-					Id: name,
-					Metadata: privatev1.Metadata_builder{
-						Name:   name,
-						Tenant: name,
-					}.Build(),
-				}.Build()).
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-		}
-		createTenant("tenant-a")
-		createTenant("tenant-b")
-	})
-
-	// Helper function to create a NetworkClass for validation tests
-	createNetworkClass := func(ctx context.Context, state privatev1.NetworkClassState) *privatev1.NetworkClass {
-		// Create NetworkClass DAO
-		ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-			SetLogger(logger).
-			SetTenancyLogic(tenancy).
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-
-		nc := privatev1.NetworkClass_builder{
-			FabricManager: new("test-strategy"),
-			Metadata: privatev1.Metadata_builder{
-				Tenant: auth.SharedTenant,
-				Name:   fmt.Sprintf("test-network-class-%s", uuid.NewString()[:8]),
-			}.Build(),
-			Capabilities: privatev1.NetworkClassCapabilities_builder{
-				SupportsIpv4:      true,
-				SupportsIpv6:      true,
-				SupportsDualStack: true,
-			}.Build(),
-			Status: privatev1.NetworkClassStatus_builder{
-				State: state,
-			}.Build(),
-		}.Build()
-
-		response, err := ncDao.Create().
-			SetObject(nc).
-			Do(ctx)
-		Expect(err).ToNot(HaveOccurred())
-
-		return response.GetObject()
+		return result
 	}
 
-	Describe("Creation", func() {
-		It("Can be built if all the required parameters are set", func() {
-			server, err := NewPrivateVirtualNetworksServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-			Expect(server).ToNot(BeNil())
-		})
+	create := func(cidr string, labels map[string]string) (*privatev1.VirtualNetwork, error) {
+		response, err := server.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+			Object: privatev1.VirtualNetwork_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   "vn",
+					Tenant: "tenant-a",
+					Labels: labels,
+				}.Build(),
+				Spec: privatev1.VirtualNetworkSpec_builder{
+					Ipv4Cidr: new(cidr),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		return response.GetObject(), err
+	}
 
-		It("Fails if logger is not set", func() {
-			server, err := NewPrivateVirtualNetworksServer().
+	BeforeEach(func() {
+		createTenant("tenant-a")
+		server = newServer(DefaultNetworkingSettings())
+	})
+
+	Describe("Building", func() {
+		It("fails without a logger", func() {
+			_, err := NewPrivateVirtualNetworksServer().
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).To(MatchError("logger is mandatory"))
-			Expect(server).To(BeNil())
 		})
 
-		It("Fails if tenancy logic is not set", func() {
-			server, err := NewPrivateVirtualNetworksServer().
+		It("fails without tenancy logic", func() {
+			_, err := NewPrivateVirtualNetworksServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
 				Build()
 			Expect(err).To(MatchError("tenancy logic is mandatory"))
-			Expect(server).To(BeNil())
 		})
 	})
 
-	Describe("Canonical networking Hub resolution", func() {
-		It("does not expose the NetworkClass ID while Hub assignment is pending", func() {
-			networkClass := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-			networkClassesDAO, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-
-			hubID, err := canonicalNetworkingHubID(ctx, logger, networkClassesDAO)
-			Expect(hubID).To(BeEmpty())
+	Describe("Create", func() {
+		It("fails when no NetworkClass is configured", func() {
+			_, err := create("10.1.0.0/16", nil)
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("canonical networking Hub assignment is pending"))
-			Expect(err.Error()).ToNot(ContainSubstring(networkClass.GetId()))
-		})
-	})
-
-	Describe("Validation tests", func() {
-		var server *PrivateVirtualNetworksServer
-
-		BeforeEach(func() {
-			var err error
-
-			// Create the server:
-			server, err = NewPrivateVirtualNetworksServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("no NetworkClass is configured"))
 		})
 
-		Context("VN-VAL-01: IPv4 CIDR validation", func() {
-			It("accepts valid IPv4 CIDR", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+		It("fails while the NetworkClass isn't READY", func() {
+			seedNetworkClass(privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING)
+			_, err := create("10.1.0.0/16", nil)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("the NetworkClass is not READY"))
+		})
 
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("192.168.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
+		Context("with a READY NetworkClass", func() {
+			BeforeEach(func() {
+				seedNetworkClass(privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+			})
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+			It("creates the VirtualNetwork in PENDING state", func() {
+				object, err := create("10.1.0.0/16", nil)
 				Expect(err).ToNot(HaveOccurred())
+				Expect(object.GetStatus().GetState()).To(Equal(
+					privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
 			})
 
-			It("rejects invalid IPv4 CIDR format", func() {
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("not-a-cidr"),
-						Region:   "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("invalid IPv4 CIDR"))
-			})
-
-			It("rejects IPv4 with invalid mask", func() {
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("192.168.0.0/33"),
-						Region:   "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("invalid IPv4 CIDR"))
-			})
-
-			It("rejects IPv6 address in IPv4 field", func() {
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("2001:db8::/32"),
-						Region:   "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("contains IPv6 address"))
-			})
-		})
-
-		Context("IPv6-only and dual-stack requests", func() {
-			It("rejects a valid IPv6 CIDR", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv6Cidr:     new("2001:db8::/32"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
-			})
-
-			It("rejects invalid IPv6 CIDR format", func() {
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv6Cidr: new("not-ipv6"),
-						Region:   "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
-			})
-
-			It("rejects IPv6 with invalid mask", func() {
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv6Cidr: new("2001:db8::/129"),
-						Region:   "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
-			})
-
-			It("rejects IPv4 address in IPv6 field", func() {
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv6Cidr: new("192.168.0.0/16"),
-						Region:   "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
-			})
-		})
-
-		Context("CIDR canonical form", func() {
-			It("rejects non-canonical IPv4 and legacy IPv6 CIDRs on Create", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				ipv4VN := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.1.5/24"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-				err := server.validateVirtualNetwork(ctx, ipv4VN, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("canonical"))
-
-				ipv6VN := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv6Cidr:     new("2001:db8::1/32"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-				err = server.validateVirtualNetwork(ctx, ipv6VN, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
-			})
-
-			It("rejects a non-canonical IPv4 CIDR on Create before persistence", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
+			It("rejects status on create", func() {
 				_, err := server.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 					Object: privatev1.VirtualNetwork_builder{
-						Metadata: privatev1.Metadata_builder{
-							Name:   "test-virtual-network",
-							Tenant: testTenant,
-						}.Build(),
-						Spec: privatev1.VirtualNetworkSpec_builder{
-							Ipv4Cidr:     new("10.0.1.5/24"),
-							NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-							Region:       "us-west-1",
+						Metadata: privatev1.Metadata_builder{Tenant: "tenant-a"}.Build(),
+						Spec:     privatev1.VirtualNetworkSpec_builder{Ipv4Cidr: new("10.1.0.0/16")}.Build(),
+						Status: privatev1.VirtualNetworkStatus_builder{
+							State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
 						}.Build(),
 					}.Build(),
 				}.Build())
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("canonical"))
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 			})
 
-			It("preserves canonical CIDRs on Update when omitted", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				existing := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Ipv4Cidr:     new("10.0.1.0/24"),
-					}.Build(),
-				}.Build()
-
-				equivalentRewrite := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Ipv4Cidr:     new("10.0.1.0/24"),
-					}.Build(),
-				}.Build()
-				err := server.validateVirtualNetwork(ctx, equivalentRewrite, existing)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(equivalentRewrite.GetSpec().GetIpv4Cidr()).To(Equal("10.0.1.0/24"))
-
-				omittedField := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-					}.Build(),
-				}.Build()
-				err = server.validateVirtualNetwork(ctx, omittedField, existing)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(omittedField.GetSpec().GetIpv4Cidr()).To(Equal("10.0.1.0/24"))
-			})
-		})
-
-		Context("VN-VAL-03: At least one CIDR required", func() {
-			It("rejects empty IPv4 and IPv6 CIDRs", func() {
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region: "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("spec.ipv4_cidr"))
-			})
-
-			It("accepts IPv4-only configuration", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
-			})
-
-			It("rejects IPv6-only configuration", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv6Cidr:     new("2001:db8::/32"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
-			})
-
-			It("rejects dual-stack configuration", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						Ipv6Cidr:     new("2001:db8::/32"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
-			})
-		})
-
-		Context("VN-VAL-04: NetworkClass reference validation", func() {
-			It("accepts valid NetworkClass reference", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
-			})
-
-			It("rejects non-existent NetworkClass", func() {
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "non-existent-class"}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("does not exist"))
-			})
-
-			It("accepts a NetworkClass reference by metadata.name", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Name: nc.GetMetadata().GetName()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
-			})
-
-			It("rejects an empty NetworkClass reference when no singleton exists", func() {
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("10.0.0.0/16"),
-						Region:   "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("no NetworkClass is configured"))
-			})
-		})
-
-		Context("NetworkClass readiness", func() {
-			It("accepts NetworkClass in READY state", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
-			})
-
-			It("rejects NetworkClass in PENDING state", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING)
-
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-				Expect(err.Error()).To(ContainSubstring("NetworkClass"))
-				Expect(err.Error()).To(ContainSubstring("PENDING"))
-			})
-
-			It("rejects NetworkClass in FAILED state", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED)
-
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-				Expect(err.Error()).To(ContainSubstring("NetworkClass"))
-				Expect(err.Error()).To(ContainSubstring("FAILED"))
-			})
-		})
-
-		Context("VN-VAL-06: Capabilities matching (derived from CIDR fields)", func() {
-			// createNetworkClassWithCapabilities creates a READY NetworkClass with the given capabilities.
-			createNetworkClassWithCapabilities := func(caps *privatev1.NetworkClassCapabilities) *privatev1.NetworkClass {
-				ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-					SetLogger(logger).
-					SetTenancyLogic(tenancy).
-					Build()
-				Expect(err).ToNot(HaveOccurred())
-
-				nc := privatev1.NetworkClass_builder{
-					FabricManager: new("test-strategy"),
-					Metadata: privatev1.Metadata_builder{
-						Tenant: auth.SharedTenant,
-					}.Build(),
-					Capabilities: caps,
-					Status: privatev1.NetworkClassStatus_builder{
-						State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
-					}.Build(),
-				}.Build()
-				response, err := ncDao.Create().
-					SetObject(nc).
-					Do(ctx)
-				Expect(err).ToNot(HaveOccurred())
-				return response.GetObject()
-			}
-
-			It("accepts an IPv4-only VirtualNetwork with no capabilities field set", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
-			})
-
-			It("rejects an IPv4-only VirtualNetwork when NetworkClass doesn't support IPv4", func() {
-				nc := createNetworkClassWithCapabilities(privatev1.NetworkClassCapabilities_builder{
-					SupportsIpv4: false,
-					SupportsIpv6: true,
-				}.Build())
-
-				vn := privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Tenant: testTenant,
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("does not support IPv4"))
-			})
-
-			It("rejects an IPv6-only VirtualNetwork when NetworkClass doesn't support IPv6", func() {
-				nc := createNetworkClassWithCapabilities(privatev1.NetworkClassCapabilities_builder{
-					SupportsIpv4: true,
-					SupportsIpv6: false,
-				}.Build())
-
-				vn := privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Tenant: testTenant,
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv6Cidr:     new("2001:db8::/48"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
-			})
-
-			It("accepts a dual-stack VirtualNetwork when NetworkClass supports dual-stack", func() {
-				nc := createNetworkClassWithCapabilities(privatev1.NetworkClassCapabilities_builder{
-					SupportsIpv4:      true,
-					SupportsIpv6:      true,
-					SupportsDualStack: true,
-				}.Build())
-
-				vn := privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Tenant: testTenant,
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						Ipv6Cidr:     new("2001:db8::/48"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
-			})
-
-			It("rejects a dual-stack VirtualNetwork when NetworkClass supports each family individually but not dual-stack", func() {
-				nc := createNetworkClassWithCapabilities(privatev1.NetworkClassCapabilities_builder{
-					SupportsIpv4:      true,
-					SupportsIpv6:      true,
-					SupportsDualStack: false,
-				}.Build())
-
-				vn := privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Tenant: testTenant,
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						Ipv6Cidr:     new("2001:db8::/48"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
-			})
-
-			It("accepts any addressing mode when NetworkClass has no capabilities set", func() {
-				ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-					SetLogger(logger).
-					SetTenancyLogic(tenancy).
-					Build()
-				Expect(err).ToNot(HaveOccurred())
-
-				nc := privatev1.NetworkClass_builder{
-					FabricManager: new("no-capabilities-class"),
-					Metadata: privatev1.Metadata_builder{
-						Tenant: auth.SharedTenant,
-					}.Build(),
-					Status: privatev1.NetworkClassStatus_builder{
-						State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
-					}.Build(),
-				}.Build()
-				response, err := ncDao.Create().
-					SetObject(nc).
-					Do(ctx)
-				Expect(err).ToNot(HaveOccurred())
-				nc = response.GetObject()
-
-				vn := privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Tenant: testTenant,
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						Ipv6Cidr:     new("2001:db8::/48"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err = server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
-			})
-		})
-
-		Context("VN-VAL-08: Region field required", func() {
-			It("rejects empty region", func() {
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("10.0.0.0/16"),
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("region"))
-				Expect(err.Error()).To(ContainSubstring("required"))
-			})
-
-			It("accepts non-empty region", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
-			})
-		})
-
-		Context("VN-VAL-09: Region immutability on Update", func() {
-			It("prevents region modification", func() {
-				existing := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
-					}.Build(),
-				}.Build()
-
-				updated := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-east-1",
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, updated, existing)
-				Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(err.Error()).To(ContainSubstring("region"))
-				Expect(err.Error()).To(ContainSubstring("immutable"))
-			})
-
-			It("allows region to stay same", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				existing := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-					}.Build(),
-				}.Build()
-
-				updated := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, updated, existing)
-				Expect(err).ToNot(HaveOccurred())
-			})
-		})
-
-		Context("VN-VAL-10: NetworkClass immutability on Update", func() {
-			It("prevents network_class modification", func() {
-				existing := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-1"}.Build(),
-					}.Build(),
-				}.Build()
-
-				updated := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-2"}.Build(),
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, updated, existing)
-				Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(err.Error()).To(ContainSubstring("network_class"))
-				Expect(err.Error()).To(ContainSubstring("immutable"))
-			})
-
-			It("allows network_class to stay same", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				existing := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-					}.Build(),
-				}.Build()
-
-				updated := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, updated, existing)
-				Expect(err).ToNot(HaveOccurred())
-			})
-		})
-
-		Context("VN-VAL-11: IPv4 CIDR immutability on Update", func() {
-			It("prevents ipv4_cidr field modification", func() {
-				// Fake NetworkClass: immutability check for NC fires before the NC reference lookup
-				// guard, so a fake NC ID is fine here. Region and NC stay identical so those
-				// immutability checks do not fire.
-				existing := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
-						Ipv4Cidr:     new("10.0.0.0/16"),
-					}.Build(),
-				}.Build()
-
-				updated := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
-						Ipv4Cidr:     new("192.168.0.0/16"),
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, updated, existing)
-				Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(err.Error()).To(ContainSubstring("ipv4_cidr"))
-				Expect(err.Error()).To(ContainSubstring("immutable"))
-			})
-
-			It("allows ipv4_cidr to stay same on Update", func() {
-				// NC reference lookup guard: skips DB lookup when NC is unchanged.
-				// Using a real NC so the guard's equality check works cleanly.
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				existing := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Ipv4Cidr:     new("10.0.0.0/16"),
-					}.Build(),
-				}.Build()
-
-				updated := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Ipv4Cidr:     new("10.0.0.0/16"),
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, updated, existing)
-				Expect(err).ToNot(HaveOccurred())
-			})
-
-			It("rejects an IPv4 update that also carries a legacy IPv6 CIDR", func() {
-				// Legacy IPv6 data is rejected before immutable-field comparison.
-				existing := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
-						Ipv6Cidr:     new("2001:db8::/32"),
-					}.Build(),
-				}.Build()
-
-				updated := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						Ipv6Cidr:     new("2001:db8::/32"),
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, updated, existing)
-				Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(err.Error()).To(ContainSubstring("ipv6_cidr"))
-				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
-			})
-
-			It("rejects explicit empty ipv4_cidr on Update when existing ipv4_cidr is set (empty string edge case)", func() {
-				// HasIpv4Cidr() returns true for explicitly-set empty string.
-				// Immutability fires first: HasIpv4Cidr() true and "" != existing → rejected.
-				existing := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
-						Ipv4Cidr:     new("10.0.0.0/16"),
-					}.Build(),
-				}.Build()
-
-				updated := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
-						Ipv4Cidr:     new(""),
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, updated, existing)
-				Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(err.Error()).To(ContainSubstring("ipv4_cidr"))
-				Expect(err.Error()).To(ContainSubstring("immutable"))
-			})
-		})
-
-		Context("VN-VAL-12: IPv6 CIDR immutability on Update", func() {
-			It("rejects an IPv6 CIDR field modification", func() {
-				existing := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
-						Ipv6Cidr:     new("2001:db8::/32"),
-					}.Build(),
-				}.Build()
-
-				updated := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
-						Ipv6Cidr:     new("fd00:1234::/32"),
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, updated, existing)
-				Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(err.Error()).To(ContainSubstring("ipv6_cidr"))
-				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
-			})
-
-			It("rejects an unchanged legacy ipv6_cidr on Update", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				existing := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Ipv6Cidr:     new("2001:db8::/32"),
-					}.Build(),
-				}.Build()
-
-				updated := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Ipv6Cidr:     new("2001:db8::/32"),
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, updated, existing)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
-			})
-
-			It("rejects adding ipv6_cidr to an IPv4-only VirtualNetwork", func() {
-				// existing: IPv4-only (no ipv6_cidr set).
-				// updated: explicitly sets ipv6_cidr — HasIpv6Cidr() returns true,
-				// existing.GetIpv6Cidr() == "" != new value → reject.
-				// ipv4_cidr is identical so the ipv4 check does not fire first.
-				existing := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
-						Ipv4Cidr:     new("10.0.0.0/16"),
-					}.Build(),
-				}.Build()
-
-				updated := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						Ipv6Cidr:     new("2001:db8::/32"),
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, updated, existing)
-				Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(err.Error()).To(ContainSubstring("ipv6_cidr"))
-				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
-			})
-
-			It("rejects explicit empty ipv6_cidr on Update when existing ipv6_cidr is set (empty string edge case)", func() {
-				// Symmetric case of the ipv4 empty-string test above.
-				// existing has both CIDRs set. updated keeps ipv4_cidr identical
-				// (so VN-VAL-11 doesn't fire), sets ipv6_cidr to "" explicitly.
-				existing := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						Ipv6Cidr:     new("2001:db8::/32"),
-					}.Build(),
-				}.Build()
-
-				updated := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						Ipv6Cidr:     new(""),
-					}.Build(),
-				}.Build()
-
-				err := server.validateVirtualNetwork(ctx, updated, existing)
-				Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(err.Error()).To(ContainSubstring("ipv6_cidr"))
-				Expect(err.Error()).To(ContainSubstring("immutable"))
-			})
-		})
-
-		Context("Round-trip: server.Update preserves CIDRs", func() {
-			It("preserves CIDRs when Update omits CIDR fields (sec-1 regression)", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				// Create a VN with IPv4 CIDR via the server:
-				createResponse, err := server.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-					Object: privatev1.VirtualNetwork_builder{
-						Metadata: privatev1.Metadata_builder{
-							Name:   "test-virtual-network",
-							Tenant: testTenant,
-						}.Build(),
-						Spec: privatev1.VirtualNetworkSpec_builder{
-							Ipv4Cidr:     new("10.0.0.0/16"),
-							NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-							Region:       "us-west-1",
-						}.Build(),
-					}.Build(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				created := createResponse.GetObject()
-
-				// Update with only labels changed; no CIDR fields in the request:
-				updateResponse, err := server.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
-					Object: privatev1.VirtualNetwork_builder{
-						Id: created.GetId(),
-						Metadata: privatev1.Metadata_builder{
-							Name:   created.GetMetadata().GetName(),
-							Labels: map[string]string{"env": "test"},
-						}.Build(),
-						Spec: privatev1.VirtualNetworkSpec_builder{
-							NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-							Region:       "us-west-1",
-						}.Build(),
-					}.Build(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				updated := updateResponse.GetObject()
-
-				// CIDRs must be preserved from the existing record:
-				Expect(updated.GetSpec().GetIpv4Cidr()).To(Equal("10.0.0.0/16"))
-			})
-		})
-
-		Context("Metadata tenant immutability on Update", func() {
-			It("rejects moving a stored VirtualNetwork into a reserved tenant and preserves the stored object", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-				createResponse, err := server.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-					Object: privatev1.VirtualNetwork_builder{
-						Metadata: privatev1.Metadata_builder{Name: "tenant-immutable-vn", Tenant: testTenant}.Build(),
-						Spec: privatev1.VirtualNetworkSpec_builder{
-							NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-							Region:       "us-west-1",
-							Ipv4Cidr:     new("10.0.0.0/16"),
-						}.Build(),
-					}.Build(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				id := createResponse.GetObject().GetId()
-
-				_, err = server.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
-					Object: privatev1.VirtualNetwork_builder{
-						Id:       id,
-						Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
-					}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
-				}.Build())
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
-				Expect(err.Error()).To(ContainSubstring("objects cannot be placed in the 'shared' tenant"))
-
-				stored, getErr := server.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
-				Expect(getErr).ToNot(HaveOccurred())
-				Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
-				Expect(stored.GetObject().GetSpec().GetIpv4Cidr()).To(Equal("10.0.0.0/16"))
-			})
-		})
-	})
-
-	Describe("GenericDAO VirtualNetwork operations", func() {
-		var generic *dao.GenericDAO[*privatev1.VirtualNetwork]
-
-		BeforeEach(func() {
-			var err error
-
-			// Create DAO
-			generic, err = dao.NewGenericDAO[*privatev1.VirtualNetwork]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		It("creates VirtualNetwork and generates ID", func() {
-			vn := privatev1.VirtualNetwork_builder{
-				Metadata: privatev1.Metadata_builder{
-					Tenant: testTenant,
-				}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					Ipv4Cidr:     new("10.0.0.0/16"),
-					Region:       "us-west-1",
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-id"}.Build(),
-				}.Build(),
-			}.Build()
-
-			response, err := generic.Create().
-				SetObject(vn).
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			vn = response.GetObject()
-			Expect(vn.GetId()).ToNot(BeEmpty())
-			Expect(vn.GetMetadata()).ToNot(BeNil())
-			Expect(vn.GetMetadata().GetCreationTimestamp()).ToNot(BeNil())
-		})
-
-		It("retrieves VirtualNetwork by ID", func() {
-			vn := privatev1.VirtualNetwork_builder{
-				Metadata: privatev1.Metadata_builder{
-					Tenant: testTenant,
-				}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					Ipv4Cidr:     new("10.0.0.0/16"),
-					Region:       "us-west-1",
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-id"}.Build(),
-				}.Build(),
-			}.Build()
-
-			createResponse, err := generic.Create().
-				SetObject(vn).
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			vn = createResponse.GetObject()
-
-			getResponse, err := generic.Get().
-				SetId(vn.GetId()).
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			retrieved := getResponse.GetObject()
-			Expect(proto.Equal(vn, retrieved)).To(BeTrue())
-		})
-
-		It("lists VirtualNetworks with pagination", func() {
-			// Create multiple VirtualNetworks
-			const count = 10
-			for i := range count {
-				vn := privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name:   fmt.Sprintf("vn-%d", i),
-						Tenant: testTenant,
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new(fmt.Sprintf("10.%d.0.0/16", i)),
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-id"}.Build(),
-					}.Build(),
-				}.Build()
-
-				_, err := generic.Create().
-					SetObject(vn).
-					Do(ctx)
-				Expect(err).ToNot(HaveOccurred())
-			}
-
-			// List with limit
-			response, err := generic.List().
-				SetLimit(5).
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetItems()).To(HaveLen(5))
-			Expect(response.GetTotal()).To(Equal(int32(count)))
-		})
-
-		It("lists with SQL filtering", func() {
-			// Create test data
-			for i := range 5 {
-				vn := privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name:   fmt.Sprintf("vn-%d", i),
-						Tenant: testTenant,
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new(fmt.Sprintf("10.%d.0.0/16", i)),
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-id"}.Build(),
-					}.Build(),
-				}.Build()
-
-				_, err := generic.Create().
-					SetObject(vn).
-					Do(ctx)
-				Expect(err).ToNot(HaveOccurred())
-			}
-
-			// List with filter
-			response, err := generic.List().
-				SetFilter("this.metadata.name == 'vn-2'").
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetItems()).To(HaveLen(1))
-			Expect(response.GetItems()[0].GetMetadata().GetName()).To(Equal("vn-2"))
-		})
-
-		It("updates VirtualNetwork", func() {
-			vn := privatev1.VirtualNetwork_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name:   "original-name",
-					Tenant: testTenant,
-				}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					Ipv4Cidr:     new("10.0.0.0/16"),
-					Region:       "us-west-1",
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-id"}.Build(),
-				}.Build(),
-			}.Build()
-
-			createResponse, err := generic.Create().
-				SetObject(vn).
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			vn = createResponse.GetObject()
-
-			// Update a mutable field (labels); the name is immutable:
-			vn.GetMetadata().Labels = map[string]string{"env": "test"}
-			updateResponse, err := generic.Update().
-				SetObject(vn).
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			vn = updateResponse.GetObject()
-
-			// Verify update
-			getResponse, err := generic.Get().
-				SetId(vn.GetId()).
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			retrieved := getResponse.GetObject()
-			Expect(retrieved.GetMetadata().GetLabels()).To(HaveKeyWithValue("env", "test"))
-		})
-
-		It("soft deletes VirtualNetwork", func() {
-			vn := privatev1.VirtualNetwork_builder{
-				Metadata: privatev1.Metadata_builder{
-					Finalizers: []string{"test-finalizer"},
-					Tenant:     testTenant,
-				}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					Ipv4Cidr:     new("10.0.0.0/16"),
-					Region:       "us-west-1",
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-id"}.Build(),
-				}.Build(),
-			}.Build()
-
-			createResponse, err := generic.Create().
-				SetObject(vn).
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			vn = createResponse.GetObject()
-
-			// Delete
-			_, err = generic.Delete().
-				SetId(vn.GetId()).
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			// Verify soft delete (deletion_timestamp set, object still retrievable)
-			getResponse, err := generic.Get().
-				SetId(vn.GetId()).
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			retrieved := getResponse.GetObject()
-			Expect(retrieved.GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
-		})
-
-		It("enforces tenant isolation", func() {
-			// Create VirtualNetwork with tenant-a
-			vn1 := privatev1.VirtualNetwork_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name:   "vn-tenant-a",
-					Tenant: "tenant-a",
-				}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					Ipv4Cidr:     new("10.1.0.0/16"),
-					Region:       "us-west-1",
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-id"}.Build(),
-				}.Build(),
-			}.Build()
-
-			_, err := generic.Create().
-				SetObject(vn1).
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			// Create VirtualNetwork with tenant-b
-			vn2 := privatev1.VirtualNetwork_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name:   "vn-tenant-b",
-					Tenant: "tenant-b",
-				}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					Ipv4Cidr:     new("10.2.0.0/16"),
-					Region:       "us-west-1",
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-id"}.Build(),
-				}.Build(),
-			}.Build()
-
-			_, err = generic.Create().
-				SetObject(vn2).
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			// List should return both (tenancy logic allows all in test context)
-			response, err := generic.List().Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetItems()).To(HaveLen(2))
-		})
-	})
-
-	Describe("Singleton NetworkClass resolution", func() {
-		var vnServer *PrivateVirtualNetworksServer
-
-		BeforeEach(func() {
-			var err error
-			vnServer, err = NewPrivateVirtualNetworksServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		It("Create VN without network_class persists the singleton NetworkClass reference", func() {
-			networkClass := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-			// Create VN without network_class:
-			createResponse, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-				Object: privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("10.0.0.0/16"),
-						Region:   "us-west-1",
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(createResponse.GetObject().GetSpec().GetNetworkClass().GetId()).To(Equal(networkClass.GetId()))
-		})
-
-		It("Create VN without network_class when no singleton exists returns an error", func() {
-			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-				Object: privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("10.0.0.0/16"),
-						Region:   "us-west-1",
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("no NetworkClass is configured"))
-		})
-
-		It("accepts an explicit reference to the singleton NetworkClass", func() {
-			networkClass := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-			// Create VN with explicit network_class=NC-B:
-			createResponse, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-				Object: privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClass.GetId()}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(createResponse.GetObject().GetSpec().GetNetworkClass().GetId()).To(Equal(networkClass.GetId()))
-		})
-
-		It("requires the singleton NetworkClass to be Ready before admitting a VirtualNetwork", func() {
-			createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING)
-
-			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-				Object: privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("10.0.0.0/16"),
-						Region:   "us-west-1",
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("NetworkClass"))
-			Expect(err.Error()).To(ContainSubstring("must be READY"))
-		})
-
-		It("requires an explicitly referenced NetworkClass to be Ready before admitting a VirtualNetwork", func() {
-			networkClass := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING)
-
-			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-				Object: privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClass.GetId()}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("NetworkClass"))
-			Expect(err.Error()).To(ContainSubstring("must be READY"))
-		})
-
-		It("Default NC capability mismatch is rejected", func() {
-			// Create the singleton NC that supports only IPv4 (not IPv6):
-			ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-
-			nc := privatev1.NetworkClass_builder{
-				FabricManager: new("test-strategy"),
-				Metadata: privatev1.Metadata_builder{
-					Tenant: auth.SharedTenant,
-				}.Build(),
-				Capabilities: privatev1.NetworkClassCapabilities_builder{
-					SupportsIpv4: true,
-					SupportsIpv6: false,
-				}.Build(),
-				Status: privatev1.NetworkClassStatus_builder{
-					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
-				}.Build(),
-			}.Build()
-			_, err = ncDao.Create().SetObject(nc).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			// Create VN without network_class but with an IPv6 CIDR, which the singleton above
-			// doesn't support:
-			_, err = vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-				Object: privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv6Cidr: new("2001:db8::/32"),
-						Region:   "us-west-1",
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
-		})
-
-		It("Create VN without network_class after the singleton is deleted", func() {
-			networkClass := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-			ncDao, ncErr := dao.NewGenericDAO[*privatev1.NetworkClass]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(ncErr).ToNot(HaveOccurred())
-			_, ncErr = ncDao.Delete().SetId(networkClass.GetId()).Do(ctx)
-			Expect(ncErr).ToNot(HaveOccurred())
-
-			// Attempt to create VN without network_class (no singleton exists now):
-			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-				Object: privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("10.0.0.0/16"),
-						Region:   "us-west-1",
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("no NetworkClass is configured"))
-		})
-
-		It("Create VN without network_class ignores a soft-deleted singleton", func() {
-			networkClass := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-			// Soft-delete the singleton NC by setting deletion_timestamp via SQL:
-			tx, err := database.TxFromContext(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			_, sqlErr := tx.Exec(ctx,
-				"UPDATE network_classes SET deletion_timestamp = now() WHERE id = $1",
-				networkClass.GetId(),
-			)
-			Expect(sqlErr).ToNot(HaveOccurred())
-
-			// Create VN without network_class. The singleton lookup excludes
-			// soft-deleted rows, so no active NetworkClass is found and creation fails.
-			_, err = vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-				Object: privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("10.0.0.0/16"),
-						Region:   "us-west-1",
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("no NetworkClass is configured"))
-		})
-
-		It("keeps the persisted singleton reference immutable on Update", func() {
-			networkClass := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-			// Create VN without network_class (resolved to the singleton):
-			createResponse, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-				Object: privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("10.0.0.0/16"),
-						Region:   "us-west-1",
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			vn := createResponse.GetObject()
-			Expect(vn.GetSpec().GetNetworkClass().GetId()).To(Equal(networkClass.GetId()))
-
-			// Attempt Update changing network_class:
-			_, err = vnServer.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
-				Object: privatev1.VirtualNetwork_builder{
-					Id: vn.GetId(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "another-network-class"}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(err.Error()).To(ContainSubstring("network_class"))
-			Expect(err.Error()).To(ContainSubstring("immutable"))
-		})
-	})
-
-	Describe("Deletion validation", func() {
-		var (
-			vnServer  *PrivateVirtualNetworksServer
-			subnetDao *dao.GenericDAO[*privatev1.Subnet]
-			sgDao     *dao.GenericDAO[*privatev1.SecurityGroup]
-		)
-
-		BeforeEach(func() {
-			var err error
-			vnServer, err = NewPrivateVirtualNetworksServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-
-			subnetDao, err = dao.NewGenericDAO[*privatev1.Subnet]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-
-			sgDao, err = dao.NewGenericDAO[*privatev1.SecurityGroup]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		createVirtualNetwork := func() *privatev1.VirtualNetwork {
-			nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-			createResp, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-				Object: privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name:   "test-virtual-network",
-						Tenant: testTenant,
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     proto.String("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			return createResp.GetObject()
-		}
-
-		setVirtualNetworkReady := func(vn *privatev1.VirtualNetwork) {
-			vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-			vn.SetStatus(privatev1.VirtualNetworkStatus_builder{
-				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
-			}.Build())
-			_, err = vnDao.Update().SetObject(vn).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-		}
-
-		It("allows deletion when no child resources exist", func() {
-			vn := createVirtualNetwork()
-
-			_, err := vnServer.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: vn.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		It("blocks deletion when a Subnet references the VirtualNetwork", func() {
-			vn := createVirtualNetwork()
-			setVirtualNetworkReady(vn)
-
-			subnet := privatev1.Subnet_builder{
-				Metadata: privatev1.Metadata_builder{
-					Tenant: testTenant,
-				}.Build(),
-				Spec: privatev1.SubnetSpec_builder{
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
-					Ipv4Cidr:       proto.String("10.0.1.0/24"),
-				}.Build(),
-			}.Build()
-			_, err := subnetDao.Create().SetObject(subnet).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = vnServer.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: vn.GetId(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("Subnet"))
-			Expect(err.Error()).To(ContainSubstring(vn.GetId()))
-		})
-
-		It("blocks deletion when a SecurityGroup references the VirtualNetwork", func() {
-			vn := createVirtualNetwork()
-
-			sg := privatev1.SecurityGroup_builder{
-				Metadata: privatev1.Metadata_builder{
-					Tenant: testTenant,
-				}.Build(),
-				Spec: privatev1.SecurityGroupSpec_builder{
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
-				}.Build(),
-			}.Build()
-			_, err := sgDao.Create().SetObject(sg).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = vnServer.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: vn.GetId(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("SecurityGroup"))
-			Expect(err.Error()).To(ContainSubstring(vn.GetId()))
-		})
-
-		It("blocks deletion when both Subnets and SecurityGroups reference the VirtualNetwork", func() {
-			vn := createVirtualNetwork()
-			setVirtualNetworkReady(vn)
-
-			subnet := privatev1.Subnet_builder{
-				Metadata: privatev1.Metadata_builder{
-					Tenant: testTenant,
-				}.Build(),
-				Spec: privatev1.SubnetSpec_builder{
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
-					Ipv4Cidr:       proto.String("10.0.1.0/24"),
-				}.Build(),
-			}.Build()
-			_, err := subnetDao.Create().SetObject(subnet).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			sg := privatev1.SecurityGroup_builder{
-				Metadata: privatev1.Metadata_builder{
-					Tenant: testTenant,
-				}.Build(),
-				Spec: privatev1.SecurityGroupSpec_builder{
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
-				}.Build(),
-			}.Build()
-			_, err = sgDao.Create().SetObject(sg).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = vnServer.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: vn.GetId(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("Subnet"))
-		})
-
-		It("allows deletion after all child resources are removed", func() {
-			vn := createVirtualNetwork()
-
-			sg := privatev1.SecurityGroup_builder{
-				Metadata: privatev1.Metadata_builder{
-					Tenant: testTenant,
-				}.Build(),
-				Spec: privatev1.SecurityGroupSpec_builder{
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
-				}.Build(),
-			}.Build()
-			sgResp, err := sgDao.Create().SetObject(sg).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = sgDao.Delete().SetId(sgResp.GetObject().GetId()).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = vnServer.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: vn.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		It("reports the correct count of referencing Subnets", func() {
-			vn := createVirtualNetwork()
-			setVirtualNetworkReady(vn)
-
-			for i := range 3 {
-				subnet := privatev1.Subnet_builder{
-					Metadata: privatev1.Metadata_builder{
-						Tenant: testTenant,
-						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.SubnetSpec_builder{
-						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
-						Ipv4Cidr:       proto.String(fmt.Sprintf("10.0.%d.0/24", i)),
-					}.Build(),
-				}.Build()
-				_, err := subnetDao.Create().SetObject(subnet).Do(ctx)
-				Expect(err).ToNot(HaveOccurred())
-			}
-
-			_, err := vnServer.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: vn.GetId(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("3 active Subnet"))
-		})
-
-		It("blocks deletion of default-labeled VirtualNetwork", func() {
-			nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-			createResp, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-				Object: privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name:   "default-virtual-network",
-						Tenant: testTenant,
-						Labels: map[string]string{
-							"osac.openshift.io/default": "true",
-						},
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     proto.String("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			stateBeforeDelete := createResp.GetObject().GetStatus().GetState()
-
-			_, err = vnServer.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: createResp.GetObject().GetId(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("default"))
-			Expect(err.Error()).To(ContainSubstring("system-managed"))
-
-			getResp, err := vnServer.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
-				Id: createResp.GetObject().GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(getResp.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
-			Expect(getResp.GetObject().GetStatus().GetState()).To(Equal(stateBeforeDelete))
-		})
-
-		It("blocks deletion after an update omits the default label", func() {
-			nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-			createResp, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-				Object: privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name:   "default-virtual-network-update",
-						Tenant: testTenant,
-						Labels: map[string]string{"osac.openshift.io/default": "true"},
-					}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     proto.String("10.10.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-
-			object := createResp.GetObject()
-			object.GetMetadata().SetLabels(map[string]string{"env": "test"})
-			_, err = vnServer.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{Object: object}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-
-			_, err = vnServer.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: object.GetId()}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok = grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-
-			getResp, err := vnServer.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: object.GetId()}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(getResp.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
-		})
-
-		// Regression: OSAC-6544 — VN cleanup times out when a controller
-		// finalizer prevents archival after Delete.
-		It("remains retrievable after Delete when a finalizer is present and archives on finalizer removal", func() {
-			vn := createVirtualNetwork()
-			id := vn.GetId()
-
-			// Simulate the controller adding its finalizer.
-			tx, err := database.TxFromContext(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			_, err = tx.Exec(ctx,
-				`update virtual_networks set finalizers = '{"fulfillment-controller"}' where id = $1`, id)
-			Expect(err).ToNot(HaveOccurred())
-
-			// Delete sets deletion_timestamp but does not archive.
-			_, err = vnServer.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: id}.Build())
-			Expect(err).ToNot(HaveOccurred())
-
-			// Get still succeeds — the VN is soft-deleted.
-			getResp, err := vnServer.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(getResp.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
-			Expect(getResp.GetObject().GetMetadata().GetFinalizers()).To(
-				ContainElement("fulfillment-controller"))
-
-			// Signal succeeds on the soft-deleted object.
-			_, err = vnServer.Signal(ctx,
-				privatev1.VirtualNetworksSignalRequest_builder{Id: id}.Build())
-			Expect(err).ToNot(HaveOccurred())
-
-			// Simulate the reconciler clearing the finalizer.
-			vn = getResp.GetObject()
-			vn.GetMetadata().SetFinalizers(nil)
-			_, err = vnServer.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
-				Object: vn,
-				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"metadata.finalizers"},
+			DescribeTable("rejects invalid CIDRs",
+				func(cidr, message string) {
+					_, err := create(cidr, nil)
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(err.Error()).To(ContainSubstring(message))
 				},
+				Entry("missing", "", "spec.ipv4_cidr"),
+				Entry("host bits", "10.1.0.1/16", "canonical"),
+				Entry("IPv6", "2001:db8::/32", "IPv6"),
+			)
+
+			It("accepts a prefix at the address plan prefix limit", func() {
+				_, err := create("10.1.0.0/25", nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("rejects a prefix beyond the address plan prefix limit", func() {
+				_, err := create("10.1.0.0/26", nil)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("prefix /26 exceeds the address plan prefix limit /25"))
+			})
+
+			It("rejects a range that overlaps an excluded range", func() {
+				server = newServer(NetworkingSettings{
+					ProvisioningEnabled: true,
+					ExcludedIPv4CIDRs:   []netip.Prefix{netip.MustParsePrefix("10.1.128.0/17")},
+				})
+				_, err := create("10.1.0.0/16", nil)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("overlaps the excluded range 10.1.128.0/17"))
+			})
+
+			It("rejects a range that overlaps an ExternalIPPool and names the pool", func() {
+				pool := seedExternalIPPool("10.1.2.0/24", 256)
+				_, err := create("10.1.0.0/16", nil)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring(pool.GetId()))
+			})
+
+			It("rejects the default label from a tenant", func() {
+				_, err := create("10.1.0.0/16", defaultLabels())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("is set only by the system"))
+			})
+
+			It("rejects creates in a tenant that is being deleted", func() {
+				markTenantDeleting("tenant-a")
+				_, err := create("10.1.0.0/16", nil)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(err.Error()).To(ContainSubstring("tenant 'tenant-a' is being deleted"))
+			})
+		})
+	})
+
+	Describe("Update and Delete", func() {
+		var vn *privatev1.VirtualNetwork
+
+		BeforeEach(func() {
+			seedNetworkClass(privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+			vn = seedVirtualNetwork("tenant-a", "10.1.0.0/16",
+				privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY, nil)
+		})
+
+		It("rejects a spec change", func() {
+			object := vn
+			object.GetSpec().SetIpv4Cidr("10.2.0.0/16")
+			_, err := server.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+				Object:     object,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.ipv4_cidr"}},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("spec is immutable; delete and recreate the VirtualNetwork"))
+		})
+
+		It("accepts a status write", func() {
+			object := vn
+			object.GetStatus().SetMessage("ready")
+			_, err := server.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+				Object:     object,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.message"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+		})
 
-			// After the finalizer is removed the object is archived;
-			// Get now returns NotFound.
-			_, err = vnServer.Get(ctx,
-				privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
-			Expect(err).To(HaveOccurred())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+		It("marks the VirtualNetwork DELETING, keeps it DELETING and accepts a second delete", func() {
+			_, err := server.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: vn.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			got, err := server.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vn.GetId()}.Build())
+			if err == nil {
+				Expect(got.GetObject().GetStatus().GetState()).To(Equal(
+					privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_DELETING))
+				object := got.GetObject()
+				object.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY)
+				_, err = server.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+					Object:     object,
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("cannot change after delete was accepted"))
+			}
+			_, err = server.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: vn.GetId()}.Build())
+			Expect(grpcstatus.Code(err)).To(BeElementOf(grpccodes.OK, grpccodes.NotFound))
+		})
+
+		It("rejects the delete while a Subnet exists and names it", func() {
+			subnet := seedSubnet(vn, "", "10.1.0.0/24", privatev1.SubnetState_SUBNET_STATE_READY, nil)
+			_, err := server.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: vn.GetId()}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring(subnet.GetId()))
+		})
+
+		It("rejects a tenant delete of the default VirtualNetwork", func() {
+			defaultVN := seedVirtualNetwork("tenant-a", "10.0.0.0/16",
+				privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY, defaultLabels())
+			_, err := server.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: defaultVN.GetId()}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("cannot delete default virtual network"))
 		})
 	})
 })

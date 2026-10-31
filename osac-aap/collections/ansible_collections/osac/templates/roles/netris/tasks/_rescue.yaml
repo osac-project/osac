@@ -1,0 +1,30 @@
+---
+# Rescue of every task file: publish osac_error {message, retryable} and fail.
+# An error classified by _fail.yaml (netris_error) is published as it is. Any
+# other failure is retryable; its message has only the failed step's name and
+# the sanitized provider detail, never the response body or the cookies.
+- name: Build the unclassified error
+  when: netris_error is not defined
+  vars:
+    _task: "{{ osac_job_vars.task | default('task') }}"
+    _step: "{{ ansible_failed_task.name | default('a step') }}"
+    _detail: "{{ ansible_failed_result | default({}) | netris.controller.netris_safe_error_detail }}"
+    # The controller roles refuse an object of another tenant, VPC or site, or
+    # an ambiguous one. Retrying cannot fix that: final. The pattern couples to
+    # netris.controller.format_immutable_mismatch_message ("immutable field
+    # mismatch", "immutable fields that could not be verified", "immutable
+    # drift", "Refusing delete-and-recreate") and to the role asserts
+    # ("Refusing to reuse/delete an ambiguous ...", "Refuse to delete ...").
+    _refused: "{{ (ansible_failed_result.msg | default('')) is search('immutable (field|drift)|Refusing (to|delete)|Refuse to') }}"
+  ansible.builtin.set_fact:
+    netris_error:
+      message: >-
+        Netris {{ _task }}: step "{{ _step }}" failed ({{ _detail }});
+        {{ 'the object does not belong to this resource, OSAC does not retry.' if _refused | bool else 'OSAC retries the task.' }}
+        The job log has the details.
+      retryable: "{{ not (_refused | bool) }}"
+
+- name: Report the error and fail
+  ansible.builtin.include_tasks: _fail.yaml
+  vars:
+    netris_fail: "{{ netris_error }}"

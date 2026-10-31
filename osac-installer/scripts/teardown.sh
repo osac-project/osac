@@ -106,6 +106,11 @@ for wh in $(timeout 10 oc get mutatingwebhookconfiguration --no-headers 2>/dev/n
     | awk "/${MWH_PATTERN}/ {print \$1}"); do
     timeout 30 oc delete mutatingwebhookconfiguration "${wh}" --ignore-not-found
 done
+# The installer's ValidatingAdmissionPolicy rejects CR deletes and finalizer
+# removal from this identity; remove it before deleting OSAC CRs.
+echo "Removing the OSAC admission policy..."
+timeout 30 oc delete validatingadmissionpolicybinding "${INSTALLER_NAMESPACE}-osac-managed-resources" --ignore-not-found
+timeout 30 oc delete validatingadmissionpolicy "${INSTALLER_NAMESPACE}-osac-managed-resources" --ignore-not-found
 # Phase 1: Delete OSAC CRs while the operator is still running
 #
 # The operator must be alive to process finalizers on its CRs.

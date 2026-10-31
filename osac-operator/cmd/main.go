@@ -36,7 +36,6 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
-	ovnv1 "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/userdefinednetwork/v1"
 	"golang.org/x/oauth2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -68,11 +67,8 @@ import (
 	"github.com/osac-project/osac/osac-operator/helpers"
 	"github.com/osac-project/osac/osac-operator/internal/controller"
 	"github.com/osac-project/osac/osac-operator/internal/controller/baremetalworker"
-	"github.com/osac-project/osac/osac-operator/internal/dispatcheradapter"
-	"github.com/osac-project/osac/osac-operator/internal/migrations"
+	"github.com/osac-project/osac/osac-operator/internal/networktask"
 	"github.com/osac-project/osac/osac-operator/pkg/aap"
-	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
-	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	// +kubebuilder:scaffold:imports
@@ -136,9 +132,6 @@ const (
 	// Job history configuration
 	envMaxJobHistory = "OSAC_MAX_JOB_HISTORY"
 
-	// NetworkClass capabilities sync configuration
-	envNetworkClassSyncInterval = "OSAC_NETWORK_CLASS_SYNC_INTERVAL"
-
 	// Tenant configuration
 	envTenantNamespace = "OSAC_TENANT_NAMESPACE"
 
@@ -154,16 +147,13 @@ const (
 	envEnableNetworkingController        = "OSAC_ENABLE_NETWORKING_CONTROLLER"
 	envEnableBareMetalInstanceController = "OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER"
 
-	// Networking provisioning feature gate
-	envEnableNetworkingProvisioning = "OSAC_ENABLE_NETWORKING_PROVISIONING"
+	// global.networking.provisioningEnabled
+	envNetworkingProvisioningEnabled = "OSAC_PROVISIONING_ENABLED"
+
+	// AAP organization where networking job labels are created
+	envAAPOrganization = "OSAC_AAP_ORGANIZATION"
 
 	remoteClusterName = "remote"
-
-	// defaultNetworkClassSyncInterval is the fallback periodic resync interval for
-	// NetworkClass capabilities when OSAC_NETWORK_CLASS_SYNC_INTERVAL is unset or
-	// non-positive. Recommended range: 1m (avoid excessive gRPC load from an overly
-	// aggressive interval) to 1h (avoid capabilities going too stale).
-	defaultNetworkClassSyncInterval = 5 * time.Minute
 )
 
 // controllerFlags holds the enable flags for all controllers.
@@ -266,10 +256,8 @@ func addSchemesForLocalControllers(
 	if enableComputeInstance {
 		utilruntime.Must(kubevirtv1.AddToScheme(localScheme))
 	}
-	if enableTenant {
-		utilruntime.Must(ovnv1.AddToScheme(localScheme))
-	}
-	if enableBareMetalInstance || enableNetworking {
+	// The ClusterOrder controller reads the worker BareMetalInstance CRs.
+	if enableBareMetalInstance || enableNetworking || enableCluster {
 		utilruntime.Must(bmfov1alpha1.AddToScheme(localScheme))
 	}
 	// +kubebuilder:scaffold:scheme
@@ -294,9 +282,6 @@ func addSchemesForRemoteControllers(
 	utilruntime.Must(clientgoscheme.AddToScheme(remoteScheme))
 	if enableComputeInstance {
 		utilruntime.Must(kubevirtv1.AddToScheme(remoteScheme))
-	}
-	if enableTenant {
-		utilruntime.Must(ovnv1.AddToScheme(remoteScheme))
 	}
 	// +kubebuilder:scaffold:scheme
 }
@@ -460,7 +445,7 @@ func setupAddOnOperatorController(mgr mcmanager.Manager, maxJobHistory int) erro
 // when grpcConn is set, the cluster Feedback controller.
 func setupClusterControllers(
 	mgr mcmanager.Manager, grpcConn grpc.ClientConnInterface,
-	maxJobHistory int,
+	maxJobHistory int, engine *networktask.Engine,
 ) error {
 	localMgr := mgr.GetLocalManager()
 
@@ -582,17 +567,17 @@ func clusterUpgradeTimeoutsFromEnv() controller.ClusterUpgradeTimeouts {
 func setupComputeInstanceControllers(
 	mgr mcmanager.Manager,
 	grpcConn grpc.ClientConnInterface,
-	maxJobHistory int,
+	engine *networktask.Engine,
 ) error {
 	localMgr := mgr.GetLocalManager()
 	computeInstanceNamespace := os.Getenv(envComputeInstanceNamespace)
 	tenantNamespace := os.Getenv(envTenantNamespace)
 	networkingNamespace := os.Getenv(envNetworkingNamespace)
 	targetCluster := targetClusterFromManager(mgr)
-	computeInstanceProvider, statusPollInterval, err := createAAPProviderFromEnv("", "")
-	if err != nil {
-		return fmt.Errorf("create provisioning provider: %w", err)
-	}
+	templatePrefix := helpers.GetEnvWithDefault(envAAPTemplatePrefix, "osac")
+	provisionTemplate := helpers.GetEnvWithDefault(envAAPProvisionTemplate, templatePrefix+"-create-compute-instance")
+	deprovisionTemplate := helpers.GetEnvWithDefault(envAAPDeprovisionTemplate, templatePrefix+"-delete-compute-instance")
+	statusPollInterval := helpers.GetEnvWithDefault(envAAPStatusPollInterval, provisioning.DefaultStatusPollInterval)
 	if grpcConn != nil {
 		if err := (controller.NewComputeInstanceFeedbackReconciler(
 			localMgr.GetClient(),
@@ -607,9 +592,10 @@ func setupComputeInstanceControllers(
 		computeInstanceNamespace,
 		tenantNamespace,
 		networkingNamespace,
-		computeInstanceProvider,
+		engine,
+		provisionTemplate,
+		deprovisionTemplate,
 		statusPollInterval,
-		maxJobHistory,
 		targetCluster,
 	)
 	if grpcConn != nil {
@@ -727,8 +713,15 @@ func setupControllers(
 			return fmt.Errorf("register ExternalIPAttachment owner index: %w", err)
 		}
 	}
+	// One network task engine is shared by every controller that runs networking
+	// tasks: its in-memory clocks, backoff counters and locks are operator-wide.
+	var engine *networktask.Engine
+	if flags.Cluster || flags.ComputeInstance || flags.Networking {
+		engine = newNetworkTaskEngine(mgr.GetLocalManager())
+		setupLog.Info("network task engine ready", "provisioningEnabled", engine.ProvisioningEnabled())
+	}
 	if flags.Cluster {
-		if err := setupClusterControllers(mgr, grpcConn, maxJobHistory); err != nil {
+		if err := setupClusterControllers(mgr, grpcConn, maxJobHistory, engine); err != nil {
 			return fmt.Errorf("cluster controllers: %w", err)
 		}
 		if helpers.GetEnvWithDefault(envEnableFulfillmentTrust, false) {
@@ -757,7 +750,7 @@ func setupControllers(
 		}
 	}
 	if flags.ComputeInstance {
-		if err := setupComputeInstanceControllers(mgr, grpcConn, maxJobHistory); err != nil {
+		if err := setupComputeInstanceControllers(mgr, grpcConn, engine); err != nil {
 			return fmt.Errorf("computeinstance controllers: %w", err)
 		}
 	}
@@ -777,7 +770,7 @@ func setupControllers(
 		}
 	}
 	if flags.Networking {
-		if err := setupNetworkingControllers(mgr, grpcConn, maxJobHistory, flags.BareMetalInstance); err != nil {
+		if err := setupNetworkingControllers(mgr, grpcConn, engine); err != nil {
 			return fmt.Errorf("networking controllers: %w", err)
 		}
 	}
@@ -919,377 +912,94 @@ func parseVendorControllers(s string) (map[string]string, error) {
 	return result, nil
 }
 
-// setupNetworkingControllers registers all networking controllers along with their
-// feedback controllers when grpcConn is set.
+// networkingProvisioningEnabled reads global.networking.provisioningEnabled
+// (OSAC_PROVISIONING_ENABLED, default true). When false no
+// networking job runs (Unified design, Provider networking control).
+func networkingProvisioningEnabled() bool {
+	return helpers.GetEnvWithDefault(envNetworkingProvisioningEnabled, true)
+}
+
+// newNetworkTaskEngine creates the network task engine shared by the
+// networking, ClusterOrder and ComputeInstance controllers (network manager
+// contract §4.3-§4.7).
+func newNetworkTaskEngine(localMgr ctrl.Manager) *networktask.Engine {
+	aapClient := aap.NewClient(
+		os.Getenv(envAAPURL),
+		os.Getenv(envAAPToken),
+		helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false),
+	)
+	return networktask.New(localMgr.GetClient(), localMgr.GetAPIReader(), aapClient, networktask.Config{
+		TemplatePrefix:      helpers.GetEnvWithDefault(envAAPTemplatePrefix, "osac"),
+		Organization:        helpers.GetEnvWithDefault(envAAPOrganization, "osac"),
+		ProvisioningEnabled: networkingProvisioningEnabled(),
+		PollInterval:        helpers.GetEnvWithDefault(envAAPStatusPollInterval, provisioning.DefaultStatusPollInterval),
+	})
+}
+
+// setupNetworkingControllers registers the NetworkClass controllers, the
+// networking resource controllers, which run on the shared network task
+// engine, and the networking feedback controllers.
 func setupNetworkingControllers(
 	mgr mcmanager.Manager,
 	grpcConn grpc.ClientConnInterface,
-	maxJobHistory int,
-	enableBareMetalInstance bool,
+	engine *networktask.Engine,
 ) error {
 	localMgr := mgr.GetLocalManager()
-	targetCluster := targetClusterFromManager(mgr)
-
 	networkingNamespace := os.Getenv(envNetworkingNamespace)
-	computeInstanceNamespace := os.Getenv(envComputeInstanceNamespace)
-	clusterOrderNamespace := os.Getenv(envClusterOrderNamespace)
-	bareMetalInstanceNamespace := os.Getenv(envBareMetalInstanceNamespace)
 
-	networkProvisioningEnabled := helpers.GetEnvWithDefault(envEnableNetworkingProvisioning, false)
-	setupLog.Info("networking provisioning feature gate", "enabled", networkProvisioningEnabled)
-
-	aapURL := os.Getenv(envAAPURL)
-	aapToken := os.Getenv(envAAPToken)
-	aapInsecureSkipVerify := helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false)
-	statusPollInterval := helpers.GetEnvWithDefault(envAAPStatusPollInterval, provisioning.DefaultStatusPollInterval)
-
-	// Create a single prefix-based AAP provider shared by most networking controllers.
-	// Template names are derived from the resource Kind at call time:
-	//   {prefix}-create-{kind-kebab} / {prefix}-delete-{kind-kebab}
-	templatePrefix := helpers.GetEnvWithDefault(envAAPTemplatePrefix, "osac")
-	aapClient := aap.NewClient(aapURL, aapToken, aapInsecureSkipVerify)
-	networkingProvider := provisioning.NewAAPProviderWithPrefix(aapClient, templatePrefix)
-
-	// Create a dedicated provider for ExternalIP attach/detach operations.
-	externalIPAttachmentProvider, err := provisioning.NewProvider(provisioning.ProviderConfig{
-		AAPClient:           aapClient,
-		ProvisionTemplate:   fmt.Sprintf("%s-attach-external-ip", templatePrefix),
-		DeprovisionTemplate: fmt.Sprintf("%s-detach-external-ip", templatePrefix),
-	})
-	if err != nil {
-		return fmt.Errorf("externalip attachment provider: %w", err)
+	if err := (&controller.NetworkClassReconciler{
+		Client:                localMgr.GetClient(),
+		APIReader:             localMgr.GetAPIReader(),
+		NetworkingNamespace:   networkingNamespace,
+		RegistrationNamespace: networkingNamespace,
+		ProvisioningEnabled:   networkingProvisioningEnabled(),
+	}).SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("networkclass controller: %w", err)
 	}
 
-	// Build a shared dispatcher Resolver for controllers that support the two-manager
-	// model (VirtualNetwork, Subnet, SecurityGroup, ExternalIP family). Only available
-	// when a fulfillment-service connection and networking namespace are both configured;
-	// nil otherwise, in which case those controllers always use the legacy
-	// implementation-strategy path.
-	var resolver *dispatcher.Resolver
-	var networkClassesClient privatev1.NetworkClassesClient
-
-	if grpcConn != nil && networkingNamespace != "" {
-		networkClassesClient = privatev1.NewNetworkClassesClient(grpcConn)
-
-		disc, err := networkmanager.NewDiscovery(localMgr.GetClient(), networkingNamespace)
-		if err != nil {
-			return fmt.Errorf("network manager discovery: %w", err)
-		}
-		networkClassAdapter := dispatcheradapter.NewNetworkClassAdapter(networkClassesClient)
-		resolver = dispatcher.NewResolver(networkClassAdapter, disc)
-
-		if err := setupNetworkClassCapabilitiesController(
-			mgr, localMgr, networkClassesClient, networkingNamespace, resolver,
-		); err != nil {
-			return err
+	hubClient := localMgr.GetClient()
+	c, e, ns := hubClient, engine, networkingNamespace
+	fabricDomain := &controller.FabricDomainReconciler{Client: c, Engine: e, NetworkingNamespace: ns,
+		Recorder: localMgr.GetEventRecorder("fabricdomain-controller")}
+	resources := map[string]interface {
+		SetupWithManager(mcmanager.Manager) error
+	}{
+		"virtualnetwork":       &controller.VirtualNetworkReconciler{Client: c, Engine: e, NetworkingNamespace: ns},
+		"subnet":               &controller.SubnetReconciler{Client: c, Engine: e, NetworkingNamespace: ns},
+		"securitygroup":        &controller.SecurityGroupReconciler{Client: c, Engine: e, NetworkingNamespace: ns},
+		"externalippool":       &controller.ExternalIPPoolReconciler{Client: c, Engine: e, NetworkingNamespace: ns},
+		"externalip":           &controller.ExternalIPReconciler{Client: c, Engine: e, NetworkingNamespace: ns},
+		"externalipattachment": &controller.ExternalIPAttachmentReconciler{Client: c, Engine: e, NetworkingNamespace: ns},
+		"natgateway":           &controller.NATGatewayReconciler{Client: c, Engine: e, NetworkingNamespace: ns},
+		"fabricdomain":         fabricDomain,
+		"networkattachment":    &controller.NetworkAttachmentReconciler{Client: c, Engine: e, NetworkingNamespace: ns},
+	}
+	for name, reconciler := range resources {
+		if err := reconciler.SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("%s controller: %w", name, err)
 		}
 	}
 
-	if err := setupVirtualNetworkControllers(
-		mgr, localMgr, grpcConn, networkingNamespace,
-		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
-		networkProvisioningEnabled,
-	); err != nil {
-		return err
+	if grpcConn == nil {
+		return nil
 	}
-	fabricDomainProvider := provisioning.NewAAPProvider(
-		aapClient,
-		fmt.Sprintf("%s-create-fabric-domain", templatePrefix),
-		fmt.Sprintf("%s-delete-fabric-domain", templatePrefix),
-	)
-	if err := setupFabricDomainControllers(
-		mgr, localMgr, grpcConn, networkingNamespace, fabricDomainProvider,
-		networkClassesClient, statusPollInterval, maxJobHistory,
-		networkProvisioningEnabled,
-	); err != nil {
-		return err
+	feedbacks := map[string]interface {
+		SetupWithManager(mcmanager.Manager) error
+	}{
+		"networkclass":         controller.NewNetworkClassFeedbackReconciler(hubClient, grpcConn, networkingNamespace),
+		"virtualnetwork":       controller.NewVirtualNetworkFeedbackReconciler(hubClient, grpcConn, networkingNamespace),
+		"subnet":               controller.NewSubnetFeedbackReconciler(hubClient, grpcConn, networkingNamespace),
+		"securitygroup":        controller.NewSecurityGroupFeedbackReconciler(hubClient, grpcConn, networkingNamespace),
+		"externalippool":       controller.NewExternalIPPoolFeedbackReconciler(hubClient, grpcConn, networkingNamespace),
+		"externalip":           controller.NewExternalIPFeedbackReconciler(hubClient, grpcConn, networkingNamespace),
+		"externalipattachment": controller.NewExternalIPAttachmentFeedbackReconciler(hubClient, grpcConn, ns),
+		"natgateway":           controller.NewNATGatewayFeedbackReconciler(hubClient, grpcConn, networkingNamespace),
+		"fabricdomain":         controller.NewFabricDomainFeedbackReconciler(hubClient, grpcConn, networkingNamespace),
 	}
-
-	if err := setupSubnetControllers(
-		mgr, localMgr, grpcConn, networkingNamespace,
-		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
-		networkClassesClient, networkProvisioningEnabled,
-	); err != nil {
-		return err
-	}
-	if err := setupSecurityGroupControllers(
-		mgr, localMgr, grpcConn, networkingNamespace,
-		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
-		networkProvisioningEnabled,
-	); err != nil {
-		return err
-	}
-	if err := setupExternalIPPoolControllers(
-		mgr, localMgr, grpcConn, networkingNamespace,
-		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
-		networkClassesClient, networkProvisioningEnabled,
-	); err != nil {
-		return err
-	}
-	if err := setupExternalIPControllers(
-		mgr, localMgr, grpcConn, networkingNamespace,
-		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
-		networkClassesClient, networkProvisioningEnabled,
-	); err != nil {
-		return err
-	}
-	if err := setupExternalIPAttachmentControllers(
-		mgr, localMgr, grpcConn,
-		networkingNamespace, computeInstanceNamespace, clusterOrderNamespace, bareMetalInstanceNamespace,
-		externalIPAttachmentProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
-		networkClassesClient, networkProvisioningEnabled, enableBareMetalInstance,
-	); err != nil {
-		return err
-	}
-	if err := setupNATGatewayControllers(
-		mgr, localMgr, grpcConn, networkingNamespace,
-		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
-		networkProvisioningEnabled,
-	); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// setupNetworkClassCapabilitiesController registers the NetworkClass capabilities
-// reconciler (ConfigMap-triggered) and its periodic resync runnable. Both require the
-// gRPC connection (via networkClassesClient) and a manager resolver built from
-// ConfigMap-based discovery, so this is only called when grpcConn is set and a
-// networking namespace is configured. networkClassesClient is passed in rather than
-// constructed here since the caller already builds one from the same grpcConn for resolver.
-func setupNetworkClassCapabilitiesController(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, networkClassesClient privatev1.NetworkClassesClient,
-	networkingNamespace string, resolver *dispatcher.Resolver,
-) error {
-	ncReconciler := controller.NewNetworkClassCapabilitiesReconciler(
-		networkClassesClient, resolver, networkingNamespace,
-	)
-	if err := ncReconciler.SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("networkclass capabilities controller: %w", err)
-	}
-
-	syncInterval := helpers.GetEnvWithDefault(
-		envNetworkClassSyncInterval, defaultNetworkClassSyncInterval, func(v time.Duration) bool {
-			return v > 0
-		},
-	)
-	if err := localMgr.Add(controller.NewNetworkClassCapabilitiesSyncRunnable(ncReconciler, syncInterval)); err != nil {
-		return fmt.Errorf("networkclass capabilities sync runnable: %w", err)
-	}
-	return nil
-}
-
-func setupVirtualNetworkControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn grpc.ClientConnInterface,
-	networkingNamespace string, provider provisioning.ProvisioningProvider,
-	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
-	resolver *dispatcher.Resolver, networkProvisioningEnabled bool,
-) error {
-	if grpcConn != nil {
-		if err := controller.NewVirtualNetworkFeedbackReconciler(
-			localMgr.GetClient(), grpcConn, networkingNamespace,
-		).SetupWithManager(mgr); err != nil {
-			return fmt.Errorf("virtualnetwork feedback controller: %w", err)
+	for name, reconciler := range feedbacks {
+		if err := reconciler.SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("%s feedback controller: %w", name, err)
 		}
-	}
-	reconciler := controller.NewVirtualNetworkReconciler(
-		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster, resolver,
-	)
-	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
-	if err := reconciler.SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("virtualnetwork controller: %w", err)
-	}
-	return nil
-}
-
-func setupFabricDomainControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn grpc.ClientConnInterface,
-	networkingNamespace string, provider provisioning.ProvisioningProvider,
-	networkClassesClient privatev1.NetworkClassesClient,
-	statusPollInterval time.Duration, maxJobHistory int,
-	networkProvisioningEnabled bool,
-) error {
-	var instanceTypesClient privatev1.BareMetalInstanceTypesClient
-	var fabricDomainsClient privatev1.FabricDomainsClient
-	var virtualNetworksClient privatev1.VirtualNetworksClient
-	if grpcConn != nil {
-		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(grpcConn)
-		fabricDomainsClient = privatev1.NewFabricDomainsClient(grpcConn)
-		virtualNetworksClient = privatev1.NewVirtualNetworksClient(grpcConn)
-		if err := controller.NewFabricDomainFeedbackReconciler(
-			localMgr.GetClient(), grpcConn, networkingNamespace,
-		).SetupWithManager(mgr); err != nil {
-			return fmt.Errorf("fabricdomain feedback controller: %w", err)
-		}
-	}
-	reconciler := controller.NewFabricDomainReconciler(
-		mgr, networkingNamespace, provider, networkClassesClient, instanceTypesClient,
-		statusPollInterval, maxJobHistory,
-	)
-	reconciler.FabricDomainsClient = fabricDomainsClient
-	reconciler.VirtualNetworksClient = virtualNetworksClient
-	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
-	if err := reconciler.SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("fabricdomain controller: %w", err)
-	}
-	return nil
-}
-
-func setupSubnetControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn grpc.ClientConnInterface,
-	networkingNamespace string, provider provisioning.ProvisioningProvider,
-	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
-	resolver *dispatcher.Resolver,
-	networkClassesClient privatev1.NetworkClassesClient, networkProvisioningEnabled bool,
-) error {
-	if grpcConn != nil {
-		if err := controller.NewSubnetFeedbackReconciler(
-			localMgr.GetClient(), grpcConn, networkingNamespace,
-		).SetupWithManager(mgr); err != nil {
-			return fmt.Errorf("subnet feedback controller: %w", err)
-		}
-	}
-	reconciler := controller.NewSubnetReconciler(
-		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster, resolver,
-		networkClassesClient,
-	)
-	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
-	if err := reconciler.SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("subnet controller: %w", err)
-	}
-	return nil
-}
-
-func setupSecurityGroupControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn grpc.ClientConnInterface,
-	networkingNamespace string, provider provisioning.ProvisioningProvider,
-	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
-	resolver *dispatcher.Resolver, networkProvisioningEnabled bool,
-) error {
-	if grpcConn != nil {
-		if err := controller.NewSecurityGroupFeedbackReconciler(
-			localMgr.GetClient(), grpcConn, networkingNamespace,
-		).SetupWithManager(mgr); err != nil {
-			return fmt.Errorf("securitygroup feedback controller: %w", err)
-		}
-	}
-	reconciler := controller.NewSecurityGroupReconciler(
-		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster, resolver,
-	)
-	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
-	if err := reconciler.SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("securitygroup controller: %w", err)
-	}
-	return nil
-}
-
-func setupExternalIPPoolControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn grpc.ClientConnInterface,
-	networkingNamespace string, provider provisioning.ProvisioningProvider,
-	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
-	resolver *dispatcher.Resolver, networkClassesClient privatev1.NetworkClassesClient,
-	networkProvisioningEnabled bool,
-) error {
-	if grpcConn != nil {
-		if err := controller.NewExternalIPPoolFeedbackReconciler(
-			localMgr.GetClient(), grpcConn, networkingNamespace,
-		).SetupWithManager(mgr); err != nil {
-			return fmt.Errorf("externalippool feedback controller: %w", err)
-		}
-	}
-	reconciler := controller.NewExternalIPPoolReconciler(
-		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster,
-		resolver, networkClassesClient,
-	)
-	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
-	if err := reconciler.SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("externalippool controller: %w", err)
-	}
-	return nil
-}
-
-func setupExternalIPControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn grpc.ClientConnInterface,
-	networkingNamespace string, provider provisioning.ProvisioningProvider,
-	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
-	resolver *dispatcher.Resolver, networkClassesClient privatev1.NetworkClassesClient,
-	networkProvisioningEnabled bool,
-) error {
-	reconciler := controller.NewExternalIPReconciler(
-		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster,
-		resolver, networkClassesClient,
-	)
-	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
-	if err := reconciler.SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("externalip controller: %w", err)
-	}
-	if grpcConn != nil {
-		if err := controller.NewExternalIPFeedbackReconciler(
-			localMgr.GetClient(), grpcConn, networkingNamespace,
-		).SetupWithManager(mgr); err != nil {
-			return fmt.Errorf("externalip feedback controller: %w", err)
-		}
-	}
-	return nil
-}
-
-func setupExternalIPAttachmentControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn grpc.ClientConnInterface,
-	networkingNamespace, computeInstanceNamespace, clusterOrderNamespace, baremetalInstanceNamespace string,
-	provider provisioning.ProvisioningProvider,
-	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
-	resolver *dispatcher.Resolver, networkClassesClient privatev1.NetworkClassesClient,
-	networkProvisioningEnabled bool, enableBareMetalInstance bool,
-) error {
-	var bareMetalInstancesClient privatev1.BareMetalInstancesClient
-	if grpcConn != nil {
-		bareMetalInstancesClient = privatev1.NewBareMetalInstancesClient(grpcConn)
-	}
-	var computeInstancesClient privatev1.ComputeInstancesClient
-	if grpcConn != nil {
-		computeInstancesClient = privatev1.NewComputeInstancesClient(grpcConn)
-	}
-	reconciler := controller.NewExternalIPAttachmentReconciler(
-		mgr, networkingNamespace, computeInstanceNamespace,
-		clusterOrderNamespace, baremetalInstanceNamespace,
-		provider, statusPollInterval, maxJobHistory, targetCluster,
-		resolver, networkClassesClient, bareMetalInstancesClient, computeInstancesClient,
-	)
-	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
-	reconciler.BareMetalInstanceEnabled = enableBareMetalInstance
-	if err := reconciler.SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("externalipattachment controller: %w", err)
-	}
-	if grpcConn != nil {
-		if err := controller.NewExternalIPAttachmentFeedbackReconciler(
-			localMgr.GetClient(), grpcConn, networkingNamespace,
-		).SetupWithManager(mgr); err != nil {
-			return fmt.Errorf("externalipattachment feedback controller: %w", err)
-		}
-	}
-	return nil
-}
-
-func setupNATGatewayControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn grpc.ClientConnInterface,
-	networkingNamespace string, provider provisioning.ProvisioningProvider,
-	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
-	resolver *dispatcher.Resolver, networkProvisioningEnabled bool,
-) error {
-	if grpcConn != nil {
-		if err := controller.NewNATGatewayFeedbackReconciler(
-			localMgr.GetClient(), grpcConn, networkingNamespace,
-		).SetupWithManager(mgr); err != nil {
-			return fmt.Errorf("natgateway feedback controller: %w", err)
-		}
-	}
-	reconciler := controller.NewNATGatewayReconciler(
-		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster, resolver,
-	)
-	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
-	if err := reconciler.SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("natgateway controller: %w", err)
 	}
 	return nil
 }
@@ -1392,6 +1102,14 @@ func main() {
 
 	if err := ctrlFlags.validate(); err != nil {
 		setupLog.Error(err, "invalid controller flag combination")
+		os.Exit(1)
+	}
+
+	// Network managers run on the hub, so VMs must too: a remote cluster for
+	// ComputeInstances works only with provider networking disabled.
+	if remoteClusterKubeconfig != "" && networkingProvisioningEnabled() {
+		setupLog.Error(nil, "remote cluster kubeconfig is not supported with provider networking "+
+			"enabled; set global.networking.provisioningEnabled=false or remove the remote cluster")
 		os.Exit(1)
 	}
 
@@ -1575,18 +1293,6 @@ func main() {
 	}
 
 	// +kubebuilder:scaffold:builder
-
-	// Register data migrations as a leader-election runnable.
-	// Migrations run once after this instance becomes leader.
-	migrationClient, err := client.New(cfg, client.Options{})
-	if err != nil {
-		setupLog.Error(err, "unable to create client for migrations")
-		os.Exit(1)
-	}
-	if err := mgr.GetLocalManager().Add(migrations.NewRunnable(migrationClient)); err != nil {
-		setupLog.Error(err, "unable to register migrations")
-		os.Exit(1)
-	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

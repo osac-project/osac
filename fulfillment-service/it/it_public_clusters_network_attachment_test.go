@@ -101,7 +101,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 		})
 
 		// Create a template for testing:
-		templateId = fmt.Sprintf("my-template-%s", uuid.New())
+		templateId = newTemplateID("my_template")
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:    templateId,
@@ -120,13 +120,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 		})
 
 		// Create a NetworkClass:
-		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-			Object: privatev1.NetworkClass_builder{
-				Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("test-nc-%s", uuid.New())}.Build(),
-				Title:         "Test Network Class for cluster attachment",
-				FabricManager: new("netris"),
-			}.Build(),
-		}.Build())
+		ncResp, err := sharedNetworkClass(ctx, networkClassesClient)
 		Expect(err).ToNot(HaveOccurred())
 		networkClassId = ncResp.GetObject().GetId()
 		DeferCleanup(func(cleanupCtx context.Context) {
@@ -143,9 +137,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				}.Build(),
 				Id: virtualNetworkId,
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
-					Region:       "us-east-1",
-					Ipv4Cidr:     new("10.100.0.0/16"),
+					Ipv4Cidr: new("10.100.0.0/16"),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -371,9 +363,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				}.Build(),
 				Id: crossVnId,
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
-					Region:       "us-east-1",
-					Ipv4Cidr:     new("10.200.0.0/16"),
+					Ipv4Cidr: new("10.200.0.0/16"),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -583,4 +573,5 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 		Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
 		Expect(attachment.GetSecurityGroups()[0].GetId()).To(Equal(securityGroupId))
 	})
+
 })

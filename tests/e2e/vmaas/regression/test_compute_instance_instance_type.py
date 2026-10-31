@@ -131,7 +131,7 @@ def _instance_type_name(compute_instance: dict[str, Any]) -> str:
 
 def _configuration_snapshot(compute_instance: dict[str, Any]) -> tuple[Any, ...]:
     status = compute_instance.get("status", {})
-    job_ids = tuple(job.get("jobID", "") for job in status.get("provisioningJobs", []))
+    job_ids = tuple(job.get("jobID", "") for job in status.get("jobs", []))
     return (compute_instance.get("metadata", {}).get("generation"), status.get("desiredConfigVersion", ""), job_ids)
 
 

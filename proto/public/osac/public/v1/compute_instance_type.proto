@@ -44,6 +44,12 @@ message ComputeInstance {
 
 // The spec contains the details of a compute instance as desired by the user.
 message ComputeInstanceSpec {
+  option (buf.validate.message).cel = {
+    id: "compute_instance_single_attachment"
+    message: "at most one network attachment is supported"
+    expression: "this.network_attachments.size() <= 1"
+  };
+
   // Reference to the compute instance template. Either `template` or `catalog_item` is required on create.
   //
   // Mutually exclusive with `catalog_item`.
@@ -137,10 +143,10 @@ message ComputeInstanceSpec {
   reserved 12, 13;
   reserved "subnet", "security_groups";
 
-  // Optional: clients may omit this field or send an empty list to request the
-  // tenant's default Subnet and SecurityGroup. At most one network attachment
-  // is accepted. The complete attachment list, including subnet and security
-  // group references, is immutable after creation.
+  // Optional. Clients may omit this field or send an empty list to request
+  // the tenant's default Subnet and SecurityGroup. At most one network
+  // attachment is accepted. The complete attachment, including Subnet and
+  // SecurityGroup references, is immutable after creation.
   repeated ComputeNetworkAttachment network_attachments = 14 [(google.api.field_behavior) = IMMUTABLE];
 
   // Reference to a compute instance catalog item. Mutually exclusive with template on Create; retained as immutable provenance afterward.
@@ -399,6 +405,15 @@ enum ComputeInstanceConditionType {
   //
   // When `status` is `FALSE`, no restart is required.
   COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_REQUIRED = 6;
+
+  // Values 7 and 8 are not used.
+  reserved 7, 8;
+
+  // Whether the VM's network attachment is ready: the networking jobs succeeded and the VM has its address.
+  //
+  // Reasons: NetworkAttachmentProgressing, NetworkAttachmentFailed, VMNotRunning, WaitingForIPAddress,
+  // WaitingForFabricBinding, IPDiscovered, ProvisioningDisabled.
+  COMPUTE_INSTANCE_CONDITION_TYPE_NETWORK_READY = 9;
 }
 
 // Local reference to a ComputeInstance resource.

@@ -18,17 +18,12 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // VirtualNetworkSpec defines the desired state of VirtualNetwork
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable after creation"
 type VirtualNetworkSpec struct {
-	// Region is the cloud region where this VirtualNetwork will be provisioned
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="region is immutable"
-	Region string `json:"region"`
-
 	// IPv4CIDR is the required canonical IPv4 CIDR block for this virtual network.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Type=string
@@ -37,71 +32,51 @@ type VirtualNetworkSpec struct {
 	// +kubebuilder:validation:XValidation:rule="string(cidr(self).masked()) == self && !self.contains(':')",message="ipv4Cidr must be a canonical IPv4 CIDR"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ipv4Cidr is immutable"
 	IPv4CIDR string `json:"ipv4Cidr,omitempty"`
-
-	// IPv6CIDR is retained for wire compatibility, but IPv6 and dual-stack
-	// networking are not supported. Non-empty values are rejected.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:XValidation:rule="self == ''",message="IPv6 and dual-stack networking are not supported"
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ipv6Cidr is immutable"
-	IPv6CIDR string `json:"ipv6Cidr,omitempty"`
-
-	// NetworkClass is the name of the NetworkClass that defines implementation strategy.
-	// When omitted, the deployment NetworkClass singleton is used.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkClass is immutable"
-	NetworkClass string `json:"networkClass,omitempty"`
 }
-
-// VirtualNetworkPhaseType is a valid value for .status.phase
-// +kubebuilder:validation:Enum=Progressing;Ready;Failed;Deleting
-type VirtualNetworkPhaseType string
-
-const (
-	// VirtualNetworkPhaseProgressing means an update is in progress
-	VirtualNetworkPhaseProgressing VirtualNetworkPhaseType = "Progressing"
-
-	// VirtualNetworkPhaseReady means the virtual network and all associated resources are ready
-	VirtualNetworkPhaseReady VirtualNetworkPhaseType = "Ready"
-
-	// VirtualNetworkPhaseFailed means the virtual network provisioning has failed
-	VirtualNetworkPhaseFailed VirtualNetworkPhaseType = "Failed"
-
-	// VirtualNetworkPhaseDeleting means there has been a request to delete the VirtualNetwork
-	VirtualNetworkPhaseDeleting VirtualNetworkPhaseType = "Deleting"
-)
 
 // VirtualNetworkStatus defines the observed state of VirtualNetwork
 type VirtualNetworkStatus struct {
-	// Phase provides a single-value overview of the state of the VirtualNetwork
+	// Conditions holds the Ready condition of the VirtualNetwork.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=Progressing;Ready;Failed;Deleting
-	Phase VirtualNetworkPhaseType `json:"phase,omitempty"`
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 
-	// DesiredConfigVersion is a hash of the spec, used to detect spec changes and control retry behavior.
+	// NetworkManagers records the managers taken from the NetworkClass at create.
 	// +kubebuilder:validation:Optional
-	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
+	NetworkManagers *NetworkManagers `json:"networkManagers,omitempty"`
 
-	// ProvisioningJobs holds an array of JobStatus tracking provisioning and deprovisioning operations
+	// NetworkType records the NetworkClass network type at create; empty without a Kubernetes Manager.
 	// +kubebuilder:validation:Optional
-	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
+	NetworkType NetworkType `json:"networkType,omitempty"`
 
-	// BackendNetworkID stores provider-specific network identifier
+	// TaskInput is the task input stored before the first job (contract §4.5).
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:pruning:PreserveUnknownFields
+	TaskInput *runtime.RawExtension `json:"taskInput,omitempty"`
+
+	// Jobs tracks the latest job per task and manager (contract §4.7).
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=task
+	// +listMapKey=manager
+	Jobs []NetworkJobStatus `json:"jobs,omitempty"`
+
+	// BackendNetworkID is the backend_id the Fabric Manager returned.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
 	BackendNetworkID string `json:"backendNetworkId,omitempty"`
-	// Conditions holds an array of metav1.Condition that describe the state of the VirtualNetwork
+
+	// L3VNI is the accepted l3_vni of the Fabric create_virtual_network (contract §4.9).
 	// +kubebuilder:validation:Optional
-	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=16777215
+	L3VNI int32 `json:"l3Vni,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=vnet
-// +kubebuilder:printcolumn:name="NetworkClass",type=string,JSONPath=`.spec.networkClass`
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="IPv4CIDR",type=string,JSONPath=`.spec.ipv4Cidr`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // VirtualNetwork is the Schema for the virtualnetworks API

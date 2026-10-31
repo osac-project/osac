@@ -1,0 +1,74 @@
+---
+# Run one cudn_evpn task through playbook_osac_network_task.yml in a child
+# ansible-playbook process, as AAP runs a networking job (-e @extravars), with
+# the job pod's settings as environment variables. The child is started
+# asynchronously so that, while create_subnet waits for the hub network to
+# become ready, this play can play OVN-Kubernetes and set the CUDN conditions
+# (the fake CRD has no controller behind it).
+# Input:
+#   sft_label, sft_expect, sft_message, sft_message_search (parse_job.yaml)
+#   sft_job          osac_job_vars without manager (added here)
+#   sft_env          optional settings overriding sft_settings
+#   sft_ready_cudn   optional CUDN name: once it exists, report it ready
+# Output: sft_last (parse_job.yaml).
+- name: "Write the launch extra vars - {{ sft_label }}"
+  ansible.builtin.copy:
+    dest: "{{ sft.root }}/{{ sft_label | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
+    mode: "0600"
+    content: "{{ {'osac_job_vars': {'manager': sft_manager} | combine(sft_job)} | to_json }}"
+
+- name: "Start the generic playbook - {{ sft_label }}"
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
+      - -i
+      - inventory/localhost.yml   # the AAP inventory: localhost with a local connection
+      - playbook_osac_network_task.yml
+      - -e
+      - "@{{ sft.root }}/{{ sft_label | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
+    chdir: "{{ sft.repo }}"
+  environment: "{{ sft_child_env | combine(sft_settings) | combine(sft_env | default({})) }}"
+  async: 600
+  poll: 0
+  register: sft_started
+  changed_when: false
+
+- name: "Play OVN-Kubernetes for the hub network - {{ sft_label }}"
+  when: sft_ready_cudn is defined
+  block:
+    - name: "Wait for the hub network to be created - {{ sft_label }}"
+      kubernetes.core.k8s_info:
+        api_version: k8s.ovn.org/v1
+        kind: ClusterUserDefinedNetwork
+        name: "{{ sft_ready_cudn }}"
+      register: _sft_cudn
+      until: _sft_cudn.resources | length > 0
+      retries: 120
+      delay: 1
+
+    - name: "Report the hub network ready - {{ sft_label }}"
+      kubernetes.core.k8s:
+        state: patched
+        definition:
+          apiVersion: k8s.ovn.org/v1
+          kind: ClusterUserDefinedNetwork
+          metadata: {name: "{{ sft_ready_cudn }}"}
+          status:
+            conditions:
+              - {type: TransportAccepted, status: "True", reason: Accepted}
+              - {type: NetworkCreated, status: "True", reason: Created}
+              - {type: NetworkAllocationSucceeded, status: "True", reason: Allocated}
+
+- name: "Wait for the job - {{ sft_label }}"
+  ansible.builtin.async_status:
+    jid: "{{ sft_started.ansible_job_id }}"
+  register: sft_run
+  until: (sft_run.finished | default(0)) == 1
+  retries: 300
+  delay: 2
+  failed_when: false
+
+- name: "Check the outcome - {{ sft_label }}"
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/../../network_task_playbook/tasks/parse_job.yaml"
+  vars:
+    sft_raw: "{{ sft_run }}"

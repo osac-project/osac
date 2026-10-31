@@ -26,28 +26,17 @@ func ValidateVirtualNetwork(virtualNetwork string) error {
 	return nil
 }
 
-// ValidateCIDRs checks that at least one CIDR is provided and that each is valid for its address family.
-func ValidateCIDRs(ipv4Cidr, ipv6Cidr string) error {
-	if ipv4Cidr == "" && ipv6Cidr == "" {
-		return fmt.Errorf("at least one of --ipv4-cidr or --ipv6-cidr is required")
+// ValidateIPv4CIDR checks that an IPv4 CIDR is provided and valid.
+func ValidateIPv4CIDR(ipv4Cidr string) error {
+	if ipv4Cidr == "" {
+		return fmt.Errorf("--ipv4-cidr is required")
 	}
-	if ipv4Cidr != "" {
-		prefix, err := netip.ParsePrefix(ipv4Cidr)
-		if err != nil || !prefix.Addr().Is4() {
-			if err == nil {
-				err = fmt.Errorf("address is not IPv4")
-			}
-			return fmt.Errorf("invalid IPv4 CIDR %q: %w", ipv4Cidr, err)
+	prefix, err := netip.ParsePrefix(ipv4Cidr)
+	if err != nil || !prefix.Addr().Is4() {
+		if err == nil {
+			err = fmt.Errorf("address is not IPv4")
 		}
-	}
-	if ipv6Cidr != "" {
-		prefix, err := netip.ParsePrefix(ipv6Cidr)
-		if err != nil || !prefix.Addr().Is6() {
-			if err == nil {
-				err = fmt.Errorf("address is not IPv6")
-			}
-			return fmt.Errorf("invalid IPv6 CIDR %q: %w", ipv6Cidr, err)
-		}
+		return fmt.Errorf("invalid IPv4 CIDR %q: %w", ipv4Cidr, err)
 	}
 	return nil
 }

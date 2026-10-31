@@ -24,10 +24,14 @@ import (
 	"testing"
 	"time"
 
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -36,10 +40,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/networktask"
 )
 
 func observabilityDomain(name, namespace, tenant string) *v1alpha1.FabricDomain {
@@ -69,7 +73,7 @@ func observabilityReconciler(c client.Client) (*FabricDomainReconciler, *prometh
 	registry.MustRegister(o)
 	recorder := events.NewFakeRecorder(20)
 	return &FabricDomainReconciler{
-		Client: c, APIReader: c, NetworkingNamespace: "networking", Recorder: recorder, observability: o,
+		Client: c, NetworkingNamespace: "networking", Recorder: recorder, observability: o,
 	}, registry, recorder
 }
 
@@ -121,19 +125,12 @@ func observabilityNoEvent(t *testing.T, recorder *events.FakeRecorder) {
 	}
 }
 
-func observabilityPersist(t *testing.T, r *FabricDomainReconciler, domain *v1alpha1.FabricDomain) {
-	t.Helper()
-	if err := r.persistFabricDomainStatusAndObserve(context.Background(), domain); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestFabricDomainObservabilityInventory(t *testing.T) {
 	a := observabilityDomain("a", "networking", "tenant-a")
 	b := observabilityDomain("b", "networking", "tenant-a")
 	b.Annotations[osacManagementStateAnnotation] = ManagementStateUnmanaged
 	c := observabilityDomain("c", "networking", "tenant-b")
-	c.Spec.Type = v1alpha1.FabricDomainTypeNVLink
+	c.Spec.Type = v1alpha1.FabricDomainType("nvlink")
 	deleting := observabilityDomain("deleting", "networking", "tenant-a")
 	now := metav1.Now()
 	deleting.DeletionTimestamp = &now
@@ -142,17 +139,17 @@ func TestFabricDomainObservabilityInventory(t *testing.T) {
 	noTenant := observabilityDomain("no-tenant", "networking", "")
 	cached := observabilityClient(t, a, b, c, deleting, other, noTenant)
 	_, registry, _ := observabilityReconciler(cached)
-	labels := map[string]string{"type": "EthernetEW", "tenant": "tenant-a"}
+	labels := map[string]string{"type": "ethernet_ew", "tenant": "tenant-a"}
 	metric := observabilityMetric(t, registry, "osac_fabric_domains_total", labels)
 	if metric.GetGauge().GetValue() != 2 {
 		t.Fatalf("expected two existing domains without reconciling: %v", metric)
 	}
 	if metric := observabilityMetric(t, registry, "osac_fabric_domains_total",
-		map[string]string{"type": "NVLink", "tenant": "tenant-b"}); metric.GetGauge().GetValue() != 1 {
+		map[string]string{"type": "nvlink", "tenant": "tenant-b"}); metric.GetGauge().GetValue() != 1 {
 		t.Fatalf("missing second type/tenant: %v", metric)
 	}
 	if metric := observabilityMetric(t, registry, "osac_fabric_domains_total",
-		map[string]string{"type": "EthernetEW", "tenant": ""}); metric.GetGauge().GetValue() != 1 {
+		map[string]string{"type": "ethernet_ew", "tenant": ""}); metric.GetGauge().GetValue() != 1 {
 		t.Fatalf("missing unannotated domain: %v", metric)
 	}
 	if err := cached.Delete(context.Background(), a); err != nil {
@@ -188,233 +185,336 @@ func TestFabricDomainObservabilityListError(t *testing.T) {
 	}
 }
 
-func TestFabricDomainObservabilityFirstReadyAndRestart(t *testing.T) {
-	domain := observabilityDomain("domain", "networking", "tenant-a")
-	c := observabilityClient(t, domain)
-	r, registry, recorder := observabilityReconciler(c)
-	domain.Status.Phase = v1alpha1.FabricDomainPhaseReady
-	setReadyConditionTrue(&domain.Status.Conditions)
-	stale := domain.DeepCopy()
-	observabilityPersist(t, r, domain)
+func observabilityConditioned(status metav1.ConditionStatus, reason string) *v1alpha1.FabricDomain {
+	fd := observabilityDomain("domain", "networking", "tenant-a")
+	meta.SetStatusCondition(&fd.Status.Conditions, metav1.Condition{
+		Type: v1alpha1.NetworkConditionReady, Status: status, Reason: reason, Message: "m"})
+	return fd
+}
+
+func TestFabricDomainObserveTransitions(t *testing.T) {
+	durationLabels := map[string]string{"type": "ethernet_ew"}
+	failureLabels := map[string]string{"type": "ethernet_ew", "reason": v1alpha1.ReasonFailed}
+	r, registry, recorder := observabilityReconciler(observabilityClient(t))
+	pending := observabilityConditioned(metav1.ConditionFalse, v1alpha1.ReasonProgressing)
+	ready := observabilityConditioned(metav1.ConditionTrue, v1alpha1.ReasonSucceeded)
+	failed := observabilityConditioned(metav1.ConditionFalse, v1alpha1.ReasonFailed)
+
+	r.observeTransition(ready, pending)
 	observabilityEvent(t, recorder, corev1.EventTypeNormal, fabricDomainProvisionedEvent)
-	if domain.Status.ProvisionedAt == nil {
-		t.Fatal("first Ready timestamp was not persisted")
+	metric := observabilityMetric(t, registry, "osac_fabric_domain_provisioning_duration_seconds", durationLabels)
+	if metric.GetHistogram().GetSampleCount() != 1 || math.Abs(metric.GetHistogram().GetSampleSum()-120) > 5 {
+		t.Fatalf("expected one creation-to-Ready sample of about 120s: %v", metric)
 	}
-	labels := map[string]string{"type": "EthernetEW"}
-	metric := observabilityMetric(t, registry, "osac_fabric_domain_provisioning_duration_seconds", labels)
-	wantSeconds := domain.Status.ProvisionedAt.Sub(domain.CreationTimestamp.Time).Seconds()
-	if metric.GetHistogram().GetSampleCount() != 1 || math.Abs(metric.GetHistogram().GetSampleSum()-wantSeconds) > 1 {
-		t.Fatalf("expected one creation-to-Ready sample (%f seconds): %v", wantSeconds, metric)
-	}
-	observabilityPersist(t, r, stale)
+	r.observeTransition(ready, ready)
 	observabilityNoEvent(t, recorder)
-	if metric := observabilityMetric(t, registry, "osac_fabric_domain_provisioning_duration_seconds", labels); metric.GetHistogram().GetSampleCount() != 1 {
-		t.Fatalf("stale reconcile duplicated duration: %v", metric)
+	if metric := observabilityMetric(t, registry, "osac_fabric_domain_provisioning_duration_seconds", durationLabels); metric.GetHistogram().GetSampleCount() != 1 {
+		t.Fatalf("requeue in Ready added a sample: %v", metric)
 	}
-	r, restarted, recorder := observabilityReconciler(c)
-	observabilityPersist(t, r, stale)
-	observabilityNoEvent(t, recorder)
-	// Resize/recovery has another Ready event but no second initial-duration sample.
-	domain.Status.Phase = v1alpha1.FabricDomainPhaseProgressing
-	setFabricDomainCondition(domain, metav1.ConditionFalse, "Provisioning", "membership update")
-	observabilityPersist(t, r, domain)
-	domain.Status.Phase = v1alpha1.FabricDomainPhaseReady
-	setReadyConditionTrue(&domain.Status.Conditions)
-	observabilityPersist(t, r, domain)
-	observabilityEvent(t, recorder, corev1.EventTypeNormal, fabricDomainProvisionedEvent)
-	if metric := observabilityMetric(t, restarted, "osac_fabric_domain_provisioning_duration_seconds", labels); metric != nil {
-		t.Fatalf("restart/resize duplicated duration: %v", metric)
-	}
-}
 
-func TestFabricDomainObservabilityFailures(t *testing.T) {
-	domain := observabilityDomain("domain", "networking", "tenant-a")
-	c := observabilityClient(t, domain)
-	r, registry, recorder := observabilityReconciler(c)
-	domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
-	setFabricDomainCondition(domain, metav1.ConditionFalse, "InvalidHardwareBinding", "invalid binding")
-	observabilityPersist(t, r, domain)
+	r.observeTransition(failed, pending)
 	observabilityEvent(t, recorder, corev1.EventTypeWarning, fabricDomainFailedEvent)
-	setFabricDomainCondition(domain, metav1.ConditionFalse, "InvalidHardwareBinding", "retry message changed")
-	observabilityPersist(t, r, domain)
+	r.observeTransition(failed, failed)
 	observabilityNoEvent(t, recorder)
-	labels := map[string]string{"type": "EthernetEW", "reason": "InvalidHardwareBinding"}
-	if metric := observabilityMetric(t, registry, "osac_fabric_domain_provisioning_failures_total", labels); metric.GetCounter().GetValue() != 1 {
-		t.Fatalf("repeated failure counted more than once: %v", metric)
+	if metric := observabilityMetric(t, registry, "osac_fabric_domain_provisioning_failures_total", failureLabels); metric.GetCounter().GetValue() != 1 {
+		t.Fatalf("failure counted other than once: %v", metric)
 	}
-	r, restarted, recorder := observabilityReconciler(c)
-	observabilityPersist(t, r, domain)
+	// A different failure message in the same state is a repeat, not a transition.
+	changed := observabilityConditioned(metav1.ConditionFalse, v1alpha1.ReasonFailed)
+	changed.Status.Conditions[0].Message = "other"
+	r.observeTransition(changed, failed)
 	observabilityNoEvent(t, recorder)
-	if metric := observabilityMetric(t, restarted, "osac_fabric_domain_provisioning_failures_total", labels); metric != nil {
-		t.Fatalf("restart duplicated failure: %v", metric)
-	}
-	setFabricDomainCondition(domain, metav1.ConditionFalse, "UnsupportedType", "different failure")
-	observabilityPersist(t, r, domain)
-	observabilityEvent(t, recorder, corev1.EventTypeWarning, fabricDomainFailedEvent)
-	labels["reason"] = "UnsupportedType"
-	if metric := observabilityMetric(t, restarted, "osac_fabric_domain_provisioning_failures_total", labels); metric.GetCounter().GetValue() != 1 {
-		t.Fatalf("reason transition was not counted: %v", metric)
+
+	// Ready with ProvisioningDisabled provisioned nothing: no sample, no event.
+	disabled := observabilityConditioned(metav1.ConditionTrue, v1alpha1.ReasonProvisioningDisabled)
+	r.observeTransition(disabled, pending)
+	observabilityNoEvent(t, recorder)
+	if metric := observabilityMetric(t, registry, "osac_fabric_domain_provisioning_duration_seconds", durationLabels); metric.GetHistogram().GetSampleCount() != 1 {
+		t.Fatalf("disabled provisioning counted as provisioned: %v", metric)
 	}
 }
 
-func TestFabricDomainObservabilityPersistenceFailureAndConflict(t *testing.T) {
-	for _, ready := range []bool{false, true} {
-		t.Run(map[bool]string{false: "Failed", true: "Ready"}[ready], func(t *testing.T) {
-			domain := observabilityDomain("domain", "networking", "tenant-a")
-			base := observabilityClient(t, domain)
-			writeErr := errors.New("status update unavailable")
-			attempts := 0
-			c := interceptor.NewClient(base, interceptor.Funcs{
-				SubResourceUpdate: func(ctx context.Context, c client.Client, subresource string,
-					obj client.Object, opts ...client.SubResourceUpdateOption) error {
-					attempts++
-					if writeErr != nil {
-						return writeErr
-					}
-					if attempts == 2 {
-						return apierrors.NewConflict(schema.GroupResource{Resource: "fabricdomains"}, domain.Name,
-							errors.New("concurrent update"))
-					}
-					return c.SubResource(subresource).Update(ctx, obj, opts...)
-				},
-			})
-			r, registry, recorder := observabilityReconciler(c)
-			domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
-			setReadyConditionFailed(&domain.Status.Conditions, "failed")
-			metricName := "osac_fabric_domain_provisioning_failures_total"
-			labels := map[string]string{"type": "EthernetEW", "reason": v1alpha1.ReasonProvisioningFailed}
-			if ready {
-				domain.Status.Phase = v1alpha1.FabricDomainPhaseReady
-				setReadyConditionTrue(&domain.Status.Conditions)
-				metricName = "osac_fabric_domain_provisioning_duration_seconds"
-				delete(labels, "reason")
-			}
-			if err := r.persistFabricDomainStatusAndObserve(context.Background(), domain); !errors.Is(err, writeErr) {
-				t.Fatalf("expected write failure, got %v", err)
-			}
-			observabilityNoEvent(t, recorder)
-			if metric := observabilityMetric(t, registry, metricName, labels); metric != nil {
-				t.Fatalf("unsaved status emitted metric: %v", metric)
-			}
-			writeErr = nil
-			observabilityPersist(t, r, domain)
-			if attempts != 3 {
-				t.Fatalf("expected retry after conflict, got %d attempts", attempts)
-			}
-			if ready {
-				observabilityEvent(t, recorder, corev1.EventTypeNormal, fabricDomainProvisionedEvent)
-			} else {
-				observabilityEvent(t, recorder, corev1.EventTypeWarning, fabricDomainFailedEvent)
-			}
-			observabilityNoEvent(t, recorder)
-			metric := observabilityMetric(t, registry, metricName, labels)
-			if ready && metric.GetHistogram().GetSampleCount() != 1 || !ready && metric.GetCounter().GetValue() != 1 {
-				t.Fatalf("successful retry must emit once: %v", metric)
-			}
-		})
-	}
-}
-
-func TestFabricDomainObservabilityReadyBackfill(t *testing.T) {
-	domain := observabilityDomain("legacy", "networking", "tenant-a")
-	domain.Status.Phase = v1alpha1.FabricDomainPhaseReady
-	setReadyConditionTrue(&domain.Status.Conditions)
-	r, registry, recorder := observabilityReconciler(observabilityClient(t, domain))
-	observabilityPersist(t, r, domain)
-	if domain.Status.ProvisionedAt == nil {
-		t.Fatal("missing backfilled marker")
-	}
-	observabilityNoEvent(t, recorder)
-	if metric := observabilityMetric(t, registry, "osac_fabric_domain_provisioning_duration_seconds",
-		map[string]string{"type": "EthernetEW"}); metric != nil {
-		t.Fatalf("backfill invented an initial Ready observation: %v", metric)
-	}
-}
-
-func TestFabricDomainObservabilityRequiresDomainReady(t *testing.T) {
-	domain := observabilityDomain("domain", "networking", "tenant-a")
-	r, registry, recorder := observabilityReconciler(observabilityClient(t, domain))
-	domain.Status.Phase = v1alpha1.FabricDomainPhaseProgressing
-	setFabricDomainCondition(domain, metav1.ConditionFalse, "ProvisioningDisabled", "enable provisioning")
-	// A job-level success is not sufficient to declare the domain provisioned.
-	domain.Status.ProvisioningJobs = []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded}}
-	observabilityPersist(t, r, domain)
-	observabilityNoEvent(t, recorder)
-	domain.Status.Phase = v1alpha1.FabricDomainPhaseReady
-	observabilityPersist(t, r, domain)
-	observabilityNoEvent(t, recorder)
-	if domain.Status.ProvisionedAt != nil {
-		t.Fatal("phase/job success without Ready=True must not set first-Ready timestamp")
-	}
-	if metric := observabilityMetric(t, registry, "osac_fabric_domain_provisioning_duration_seconds",
-		map[string]string{"type": "EthernetEW"}); metric != nil {
-		t.Fatalf("unready domain emitted duration: %v", metric)
-	}
-}
-
-func TestFabricDomainObservabilityStaleIntermediateFlush(t *testing.T) {
-	domain := observabilityDomain("domain", "networking", "tenant-a")
-	stale := domain.DeepCopy()
-	// metav1.Time is serialized at second precision by the status update.
-	now := metav1.NewTime(time.Now().UTC().Truncate(time.Second))
-	domain.Status.ProvisionedAt = &now
-	c := observabilityClient(t, domain)
-	r, _, recorder := observabilityReconciler(c)
-	if err := r.restoreFabricDomainProvisionedAt(context.Background(), stale); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.updateStatusWithRetry(context.Background(), client.ObjectKeyFromObject(stale), stale.Status); err != nil {
-		t.Fatal(err)
-	}
-	persisted := &v1alpha1.FabricDomain{}
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(stale), persisted); err != nil {
-		t.Fatal(err)
-	}
-	if persisted.Status.ProvisionedAt == nil || !persisted.Status.ProvisionedAt.Equal(&now) {
-		t.Fatalf("intermediate status flush changed first-Ready marker: got %v, want %v", persisted.Status.ProvisionedAt, now)
-	}
-	observabilityNoEvent(t, recorder)
-}
-
-func TestFabricDomainObservabilityCleanup(t *testing.T) {
-	for _, failUpdate := range []bool{false, true} {
-		t.Run(map[bool]string{false: "success", true: "write-failure"}[failUpdate], func(t *testing.T) {
-			domain := observabilityDomain("deleting", "networking", "tenant-a")
-			now := metav1.Now()
-			domain.DeletionTimestamp = &now
-			domain.Finalizers = []string{osacFabricDomainFinalizer, "test/retain"}
-			base := observabilityClient(t, domain)
-			c := interceptor.NewClient(base, interceptor.Funcs{
-				Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
-					if failUpdate {
-						return errors.New("finalizer update unavailable")
-					}
-					return c.Update(ctx, obj, opts...)
-				},
-			})
-			r, _, recorder := observabilityReconciler(c)
-			request := mcreconcile.Request{Request: reconcile.Request{NamespacedName: client.ObjectKeyFromObject(domain)}}
-			_, err := r.Reconcile(context.Background(), request)
-			if failUpdate {
-				if err == nil {
-					t.Fatal("expected finalizer update failure")
-				}
-				observabilityNoEvent(t, recorder)
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			observabilityEvent(t, recorder, corev1.EventTypeNormal, fabricDomainDeletedEvent)
-			if _, err := r.Reconcile(context.Background(), request); err != nil {
-				t.Fatal(err)
-			}
-			observabilityNoEvent(t, recorder)
-		})
-	}
+func TestFabricDomainObserveDeleted(t *testing.T) {
 	r, _, recorder := observabilityReconciler(observabilityClient(t))
-	domain := observabilityDomain("unsuccessful-cleanup", "networking", "tenant-a")
-	domain.Status.ProvisioningJobs = []v1alpha1.JobStatus{{Type: v1alpha1.JobTypeDeprovision, State: v1alpha1.JobStateFailed}}
-	r.recordFabricDomainDeleted(domain)
-	observabilityNoEvent(t, recorder)
+	r.recordFabricDomainDeleted(observabilityDomain("gone", "networking", "tenant-a"))
+	observabilityEvent(t, recorder, corev1.EventTypeNormal, fabricDomainDeletedEvent)
+	r.Recorder = nil
+	r.recordFabricDomainDeleted(observabilityDomain("gone", "networking", "tenant-a"))
 }
+
+var _ = Describe("FabricDomain observability through the reconciler", func() {
+	It("observes Ready, Failed and Deleted once, after the write", func() {
+		h := newNetHarness(true)
+		h.readyVirtualNetwork("vn-1", true)
+		h.networkClass(true, true)
+		recorder := events.NewFakeRecorder(20)
+		o := newFabricDomainObservability(k8sClient, h.ns)
+		registry := prometheus.NewPedanticRegistry()
+		registry.MustRegister(o)
+		r := &FabricDomainReconciler{Client: k8sClient, Engine: h.engine, NetworkingNamespace: h.ns,
+			Recorder: recorder, observability: o}
+		newDomain := func(id string) *v1alpha1.FabricDomain {
+			fd := &v1alpha1.FabricDomain{ObjectMeta: h.meta(kindFabricDomain, id),
+				Spec: v1alpha1.FabricDomainSpec{Type: v1alpha1.FabricDomainTypeEthernetEW, Servers: []string{"host-a"}, VirtualNetwork: "vn-1"}}
+			Expect(k8sClient.Create(ctx, fd)).To(Succeed())
+			return fd
+		}
+		count := func(name string, labels map[string]string) float64 {
+			families, err := registry.Gather()
+			Expect(err).NotTo(HaveOccurred())
+			for _, family := range families {
+				for _, metric := range family.Metric {
+					if family.GetName() != name || len(metric.Label) != len(labels) {
+						continue
+					}
+					match := true
+					for _, label := range metric.Label {
+						match = match && labels[label.GetName()] == label.GetValue()
+					}
+					if match && metric.Histogram != nil {
+						return float64(metric.Histogram.GetSampleCount())
+					}
+					if match {
+						return metric.Counter.GetValue()
+					}
+				}
+			}
+			return 0
+		}
+		durationLabels := map[string]string{"type": "ethernet_ew"}
+		failureLabels := map[string]string{"type": "ethernet_ew", "reason": v1alpha1.ReasonFailed}
+
+		fd := newDomain("fd-ok")
+		reconcileNet(r, fd)
+		Expect(recorder.Events).To(BeEmpty())
+		h.aap.succeed(networktask.CreateFabricDomain, netFabric)
+		reconcileNet(r, fd)
+		reconcileNet(r, fd)
+		Expect(recorder.Events).To(Receive(ContainSubstring(fabricDomainProvisionedEvent)))
+		Expect(recorder.Events).To(BeEmpty())
+		Expect(count("osac_fabric_domain_provisioning_duration_seconds", durationLabels)).To(Equal(1.0))
+
+		deleteNet(fd)
+		reconcileNet(r, fd)
+		Expect(recorder.Events).To(BeEmpty())
+		h.aap.succeed(networktask.DeleteFabricDomain, netFabric)
+		_, found := reconcileNet(r, fd)
+		Expect(found).To(BeFalse())
+		Expect(recorder.Events).To(Receive(ContainSubstring(fabricDomainDeletedEvent)))
+
+		bad := newDomain("fd-bad")
+		reconcileNet(r, bad)
+		h.aap.finish(networktask.CreateFabricDomain, netFabric, "failed", `{"osac_error": {"message": "no", "retryable": false}}`)
+		reconcileNet(r, bad)
+		reconcileNet(r, bad)
+		Expect(recorder.Events).To(Receive(And(ContainSubstring("Warning"), ContainSubstring(fabricDomainFailedEvent))))
+		Expect(recorder.Events).To(BeEmpty())
+		Expect(count("osac_fabric_domain_provisioning_failures_total", failureLabels)).To(Equal(1.0))
+	})
+})
+
+func TestFabricDomainRegisterObservability(t *testing.T) {
+	r := &FabricDomainReconciler{Client: observabilityClient(t, observabilityDomain("a", "networking", "tenant-a")),
+		NetworkingNamespace: "networking"}
+	registry := prometheus.NewPedanticRegistry()
+	if err := r.registerObservability(registry); err != nil {
+		t.Fatal(err)
+	}
+	if r.observability == nil {
+		t.Fatal("registration must build the collector from the reconciler client")
+	}
+	if metric := observabilityMetric(t, registry, "osac_fabric_domains_total",
+		map[string]string{"type": "ethernet_ew", "tenant": "tenant-a"}); metric.GetGauge().GetValue() != 1 {
+		t.Fatalf("registered collector does not report the inventory: %v", metric)
+	}
+	if err := r.registerObservability(registry); err == nil {
+		t.Fatal("a second registration must fail, not panic")
+	}
+}
+
+var _ = Describe("FabricDomain observability registration", func() {
+	It("SetupWithManager registers the collector on the manager metrics registry", func() {
+		h := newNetHarness(true)
+		r := &FabricDomainReconciler{Client: indexedClient, Engine: h.engine, NetworkingNamespace: h.ns}
+		Expect(r.SetupWithManager(testMcManager)).To(Succeed())
+		Expect(r.observability).NotTo(BeNil(), "SetupWithManager must register the collector")
+		DeferCleanup(func() { metrics.Registry.Unregister(r.observability) })
+		fd := &v1alpha1.FabricDomain{ObjectMeta: h.meta(kindFabricDomain, "fd-reg"),
+			Spec: v1alpha1.FabricDomainSpec{Type: v1alpha1.FabricDomainTypeEthernetEW, Servers: []string{"h"}, VirtualNetwork: "vn-x"}}
+		Expect(k8sClient.Create(ctx, fd)).To(Succeed())
+		Eventually(func(g Gomega) {
+			families, err := metrics.Registry.Gather()
+			g.Expect(err).NotTo(HaveOccurred())
+			found := false
+			for _, family := range families {
+				if family.GetName() == "osac_fabric_domains_total" {
+					for _, m := range family.Metric {
+						found = found || m.GetGauge().GetValue() >= 1
+					}
+				}
+			}
+			g.Expect(found).To(BeTrue())
+		}).Should(Succeed())
+	})
+})
+
+// fabricDomainConflicts wraps k8sClient so the next status update, or the next
+// update of a deleting object, fails with a conflict. The engine keeps the
+// plain client, so only the reconcile loop's own writes are hit.
+type fabricDomainConflicts struct{ status, finalizer bool }
+
+func (f *fabricDomainConflicts) client() client.Client {
+	wc, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+	Expect(err).NotTo(HaveOccurred())
+	conflict := func(name string) error {
+		return apierrors.NewConflict(schema.GroupResource{Resource: "fabricdomains"}, name, errors.New("injected"))
+	}
+	return interceptor.NewClient(wc, interceptor.Funcs{
+		SubResourceUpdate: func(c context.Context, cl client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			if f.status {
+				f.status = false
+				return conflict(obj.GetName())
+			}
+			return cl.SubResource(sub).Update(c, obj, opts...)
+		},
+		Update: func(c context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if f.finalizer && obj.GetDeletionTimestamp() != nil {
+				f.finalizer = false
+				return conflict(obj.GetName())
+			}
+			return cl.Update(c, obj, opts...)
+		},
+	})
+}
+
+var _ = Describe("FabricDomain observability conflicts, restarts and toggles", func() {
+	var (
+		h        *netHarness
+		r        *FabricDomainReconciler
+		recorder *events.FakeRecorder
+		registry *prometheus.Registry
+		inject   *fabricDomainConflicts
+	)
+	samples := func(reg *prometheus.Registry) int {
+		families, err := reg.Gather()
+		Expect(err).NotTo(HaveOccurred())
+		for _, family := range families {
+			if family.GetName() == "osac_fabric_domain_provisioning_duration_seconds" {
+				return int(family.Metric[0].Histogram.GetSampleCount())
+			}
+		}
+		return 0
+	}
+	newReconciler := func(c client.Client) (*FabricDomainReconciler, *prometheus.Registry, *events.FakeRecorder) {
+		o := newFabricDomainObservability(c, h.ns)
+		reg := prometheus.NewPedanticRegistry()
+		reg.MustRegister(o)
+		rec := events.NewFakeRecorder(20)
+		return &FabricDomainReconciler{Client: c, Engine: h.engine, NetworkingNamespace: h.ns,
+			Recorder: rec, observability: o}, reg, rec
+	}
+	newDomain := func(id string) *v1alpha1.FabricDomain {
+		fd := &v1alpha1.FabricDomain{ObjectMeta: h.meta(kindFabricDomain, id),
+			Spec: v1alpha1.FabricDomainSpec{Type: v1alpha1.FabricDomainTypeEthernetEW, Servers: []string{"host-a"}, VirtualNetwork: "vn-1"}}
+		Expect(k8sClient.Create(ctx, fd)).To(Succeed())
+		return fd
+	}
+	BeforeEach(func() {
+		h = newNetHarness(true)
+		h.readyVirtualNetwork("vn-1", true)
+		h.networkClass(true, true)
+		inject = &fabricDomainConflicts{}
+		r, registry, recorder = newReconciler(inject.client())
+	})
+
+	It("emits nothing for a conflicted final status write, then once on retry", func() {
+		fd := newDomain("fd-c1")
+		reconcileNet(r, fd)
+		h.aap.succeed(networktask.CreateFabricDomain, netFabric)
+		inject.status = true
+		result, _ := reconcileNet(r, fd)
+		Expect(result.RequeueAfter).NotTo(BeZero())
+		Expect(recorder.Events).To(BeEmpty())
+		Expect(samples(registry)).To(Equal(0))
+		reconcileNet(r, fd)
+		Expect(recorder.Events).To(Receive(ContainSubstring(fabricDomainProvisionedEvent)))
+		Expect(recorder.Events).To(BeEmpty())
+		Expect(samples(registry)).To(Equal(1))
+	})
+
+	It("emits Deleted only after the finalizer removal persisted", func() {
+		fd := newDomain("fd-c2")
+		reconcileNet(r, fd)
+		h.aap.succeed(networktask.CreateFabricDomain, netFabric)
+		reconcileNet(r, fd)
+		<-recorder.Events
+		deleteNet(fd)
+		reconcileNet(r, fd)
+		h.aap.succeed(networktask.DeleteFabricDomain, netFabric)
+		inject.finalizer = true
+		_, found := reconcileNet(r, fd)
+		Expect(found).To(BeTrue())
+		Expect(recorder.Events).To(BeEmpty())
+		_, found = reconcileNet(r, fd)
+		Expect(found).To(BeFalse())
+		Expect(recorder.Events).To(Receive(ContainSubstring(fabricDomainDeletedEvent)))
+		Expect(recorder.Events).To(BeEmpty())
+	})
+
+	It("emits no Deleted Event while the delete task fails", func() {
+		fd := newDomain("fd-c3")
+		reconcileNet(r, fd)
+		h.aap.succeed(networktask.CreateFabricDomain, netFabric)
+		reconcileNet(r, fd)
+		<-recorder.Events
+		deleteNet(fd)
+		reconcileNet(r, fd)
+		h.aap.finish(networktask.DeleteFabricDomain, netFabric, "failed", `{"osac_error": {"message": "x", "retryable": false}}`)
+		_, found := reconcileNet(r, fd)
+		Expect(found).To(BeTrue())
+		reconcileNet(r, fd)
+		Expect(recorder.Events).To(BeEmpty())
+	})
+
+	It("does not sample or emit again for a Ready domain after a restart", func() {
+		fd := newDomain("fd-c4")
+		reconcileNet(r, fd)
+		h.aap.succeed(networktask.CreateFabricDomain, netFabric)
+		reconcileNet(r, fd)
+		Expect(samples(registry)).To(Equal(1))
+		restarted, restartedRegistry, restartedRecorder := newReconciler(k8sClient)
+		reconcileNet(restarted, fd)
+		reconcileNet(restarted, fd)
+		Expect(restartedRecorder.Events).To(BeEmpty())
+		Expect(samples(restartedRegistry)).To(Equal(0))
+
+	})
+
+	It("counts a provisioning toggle on a provisioned domain as no new first Ready", func() {
+		fd := newDomain("fd-c5")
+		reconcileNet(r, fd)
+		h.aap.succeed(networktask.CreateFabricDomain, netFabric)
+		reconcileNet(r, fd)
+		<-recorder.Events
+		enabled := r.Engine
+		r.Engine = networktask.New(k8sClient, k8sClient, h.aap, networktask.Config{
+			TemplatePrefix: "osac", Organization: "osac", ProvisioningEnabled: false})
+		reconcileNet(r, fd)
+		expectReady(fd, metav1.ConditionTrue, v1alpha1.ReasonProvisioningDisabled)
+		r.Engine = enabled
+		reconcileNet(r, fd)
+		expectReady(fd, metav1.ConditionTrue, v1alpha1.ReasonSucceeded)
+		Expect(recorder.Events).To(BeEmpty())
+		Expect(samples(registry)).To(Equal(1))
+	})
+
+	It("does not count Ready with provisioning disabled as provisioned", func() {
+		r.Engine = networktask.New(k8sClient, k8sClient, h.aap, networktask.Config{
+			TemplatePrefix: "osac", Organization: "osac", ProvisioningEnabled: false})
+		fd := newDomain("fd-c6")
+		reconcileNet(r, fd)
+		expectReady(fd, metav1.ConditionTrue, v1alpha1.ReasonProvisioningDisabled)
+		Expect(recorder.Events).To(BeEmpty())
+		Expect(samples(registry)).To(Equal(0))
+	})
+})

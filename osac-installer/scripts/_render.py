@@ -13,7 +13,7 @@ from collections.abc import Callable
 
 INSTALLER = pathlib.Path(__file__).resolve().parents[1]
 CHART = INSTALLER / "charts/osac"
-PROFILES = ("vmaas-ci", "bmaas-ci", "caas-ci", "full-ci", "cudn-evpn-netris-test")
+PROFILES = ("vmaas-ci", "bmaas-ci", "caas-ci", "full-ci")
 
 
 def template_command(profile: str) -> list[str]:

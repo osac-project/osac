@@ -1,0 +1,27 @@
+---
+# Kubernetes delete_security_group: remove the group's NetworkPolicy. OSAC
+# runs it after no NetworkAttachment selects the group.
+- name: Run cudn_evpn delete_security_group
+  block:
+    - name: Plan the task
+      ansible.builtin.include_tasks: _plan.yaml
+
+    - name: Read the SecurityGroup policy
+      kubernetes.core.k8s_info:
+        api_version: networking.k8s.io/v1
+        kind: NetworkPolicy
+        namespace: "{{ cudn_evpn.namespace }}"
+        name: "{{ cudn_evpn.policy_name }}"
+      register: _cudn_evpn_policy
+
+    - name: Delete the policy and wait until it is gone
+      when:
+        - _cudn_evpn_policy.resources | length > 0
+        - _cudn_evpn_policy.resources[0] | osac.templates.cudn_evpn_owned('securitygroup', cudn_evpn.sg_id, cudn_evpn.tenant)
+      ansible.builtin.include_tasks: _delete.yaml
+      vars:
+        cudn_evpn_object: "{{ _cudn_evpn_policy.resources[0] | combine({'apiVersion': 'networking.k8s.io/v1', 'kind': 'NetworkPolicy'}) }}"
+
+  rescue:
+    - name: Report the failure to OSAC
+      ansible.builtin.include_tasks: _fail.yaml

@@ -237,6 +237,10 @@ spec:
 				output, err := exec.Command("kubectl", "delete", workload.kind, name,
 					"-n", operatorNamespace, "--wait=false").CombinedOutput()
 				Expect(err).NotTo(HaveOccurred(), string(output))
+				if workload.kind == "ComputeInstance" {
+					By("Fulfillment requesting deletion of the ComputeInstance attachment")
+					cleanupRequestDelete(attachment)
+				}
 				Eventually(func(g Gomega) {
 					current, getErr := cleanupGet(attachment)
 					g.Expect(getErr).NotTo(HaveOccurred())
@@ -281,6 +285,10 @@ spec:
 				By("finishing attachment provider cleanup and observing EIP deletion")
 				cleanupRelease(attachment)
 				Eventually(func() (bool, error) { return cleanupAbsent(attachment) }, time.Minute, time.Second).Should(BeTrue())
+				if workload.kind == "ComputeInstance" {
+					By("Fulfillment requesting deletion of the ComputeInstance ExternalIP")
+					cleanupRequestDelete(ip)
+				}
 				Eventually(func(g Gomega) {
 					current, getErr := cleanupGet(ip)
 					g.Expect(getErr).NotTo(HaveOccurred())
@@ -343,8 +351,16 @@ func cleanupDelete(object *unstructured.Unstructured) {
 	testhelpers.DeleteAndWaitForCleanup(operatorNamespace, object.GetKind(), object.GetName())
 }
 
+func cleanupRequestDelete(object *unstructured.Unstructured) {
+	output, err := exec.Command("kubectl", "delete", object.GetKind(), object.GetName(),
+		"-n", operatorNamespace, "--wait=false").CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), string(output))
+}
+
 func restartCleanupManager() {
-	selector := "control-plane=controller-manager"
+	// BMF's deployment carries control-plane=controller-manager too; select
+	// osac-operator's own deployment.
+	selector := "control-plane=controller-manager,app.kubernetes.io/name=operator"
 	output, err := exec.Command("kubectl", "get", "deployments", "-n", operatorNamespace,
 		"-l", selector, "-o", "jsonpath={.items[0].metadata.name}").CombinedOutput()
 	Expect(err).NotTo(HaveOccurred(), string(output))

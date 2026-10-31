@@ -1,0 +1,403 @@
+---
+# The Netris Fabric Manager (osac.templates.netris) on the network manager
+# contract. Every case runs one Fabric task through
+# playbook_osac_network_task.yml in a child ansible-playbook process launched
+# like an AAP job (-e @extravars), with the job pod's NETRIS_* settings as
+# environment variables pointing at fixtures/netris/fake_netris.py (a stateful
+# in-process fake of the Netris controller, started here as a background
+# process) and an unusable KUBECONFIG, which proves the manager needs no hub
+# access. The target creates no Kubernetes objects. Checks:
+#   - lifecycle: all 21 tasks of the Fabric set run once with valid input and
+#     publish their contract result, or nothing for the documented no-ops;
+#   - VirtualNetwork / Subnet: result keys, VNIs, V-Net gateway and DHCP,
+#     reruns that write nothing, a parent l3Vni that differs from the VPC;
+#   - NetworkAttachment: physical port move with DHCP over the physical range
+#     on an EVPN Subnet, DHCP lease lookup by MAC, ports moved back on delete;
+#   - ExternalIPPool / ExternalIP / ExternalIPAttachment / NATGateway names,
+#     /32 address, refused deletes on an address mismatch;
+#   - FabricDomain, cluster ingress (final "not supported" and a no-op);
+#   - ordered, absent-tolerant deletes and the VNIs freed last;
+#   - 5xx is retryable, 4xx is final, error messages carry no response body
+#     and no cookie;
+#   - tenant isolation, drift, fail-closed owner proof, lost-response and
+#     partial-create recovery.
+# Not covered: a real Netris controller (the lab E2E, OSAC-4843 for the
+# ExternalIP path), AAP and the operator.
+- name: The Netris Fabric Manager
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    nf_manager: {name: netris, type: fabric, ansible_role: osac.templates.netris}
+    nf_tenant: 5d6a0f1e-2b3c-4d5e-8f90-a1b2c3d4e5f6
+    nf_uid: 0e9d8c7b-6a5f-4e3d-8c2b-1a0f9e8d7c6b
+    nf_ids:
+      vn: 3f1c9a2e-7b4d-4e8a-9c6f-0d2e4b6a8c10
+      subnet: 8a2b4c6d-1e3f-4a5b-9c7d-2e4f6a8b0c12
+      subnet2: 1b2c3d4e-5f60-4a71-8b82-93a4b5c6d7e8
+      sg: 2f4e6a8c-0b1d-4c3e-9a5f-7b9d1e3f5a70
+      att: 6c1d2e3f-4a5b-4c6d-8e7f-90a1b2c3d4e5
+      bmi: 9e8d7c6b-5a49-4382-9160-5f4e3d2c1b0a
+      pool: 4d6a0f1e-2b3c-4d5e-8f90-a1b2c3d4e5f6
+      eip: 7b6a5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d
+      eip2: 0a1b2c3d-4e5f-4a6b-8c7d-9e8f7a6b5c4d
+      eipa: 9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+      natgw: 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d
+      fd: 6e1d2c3b-4a59-4f68-8b7a-9c0d1e2f3a4b
+    nf_vpc_name: "osac-vn-{{ nf_ids.vn }}"
+    nf_sn_name: "osac-sn-{{ nf_ids.subnet }}"
+    nf_vn_cidr: 10.20.0.0/16
+    nf_subnet_cidr: 10.20.1.0/24
+    nf_pool_cidr: 203.0.113.0/30
+    nf_address: 203.0.113.1
+    nf_target: 10.20.1.10
+    nf_mac: "AA:BB:CC:DD:EE:01"
+    nf_l3_vni: 10001
+    nf_ipam:
+      gateway_ipv4: 10.20.1.1
+      physical_ipv4_cidrs: ["10.20.1.8/29", "10.20.1.16/28"]
+    # The job pod environment (ConfigMap/Secret network-fulfillment-ig).
+    nf_settings:
+      NETRIS_CONTROLLER_URL: "{{ nf.url }}"
+      NETRIS_USERNAME: osac
+      NETRIS_PASSWORD: pw-not-a-secret
+      NETRIS_VALIDATE_CERTS: "false"
+      NETRIS_SITE_ID: "1"
+      NETRIS_TENANT_ID: "2"
+      NETRIS_MGMT_VPC_ID: "3"
+      NETRIS_BM_PROVISIONING_VNET: provisioning
+      NETRIS_RESOURCE_CLASS_MAP: '{"gpu": {"server_cluster_template_id": 7}}'
+      NETRIS_PORT_SETTLE_SECONDS: "0"
+      # No hub API: a Netris task that reached for it would fail.
+      KUBECONFIG: /nonexistent/osac-no-hub/kubeconfig
+      K8S_AUTH_KUBECONFIG: /nonexistent/osac-no-hub/kubeconfig
+    nf_child_env:
+      ANSIBLE_STDOUT_CALLBACK: ansible.posix.json
+      ANSIBLE_SHOW_CUSTOM_STATS: "true"
+      ANSIBLE_COLLECTIONS_PATH: "./vendor:./collections:/usr/share/ansible/collections"
+      ANSIBLE_PYTHON_INTERPRETER: "{{ ansible_playbook_python }}"
+      ANSIBLE_LOCALHOST_WARNING: "False"
+      ANSIBLE_INVENTORY_UNPARSED_WARNING: "False"
+    nf_evpn: {network_type: evpn}
+    # Snapshots and inputs, shaped as osac-operator input.go builds them.
+    nf_vn_res:
+      apiVersion: osac.openshift.io/v1alpha1
+      kind: VirtualNetwork
+      id: "{{ nf_ids.vn }}"
+      metadata: {name: "vn-{{ nf_ids.vn[:8] }}", namespace: osac-networking, uid: "{{ nf_uid }}", generation: 1}
+      spec: {ipv4Cidr: "{{ nf_vn_cidr }}"}
+    nf_vn_parent: "{{ nf_vn_res | combine({'status': {'l3Vni': nf_l3_vni}}) }}"
+    nf_subnet_res:
+      apiVersion: osac.openshift.io/v1alpha1
+      kind: Subnet
+      id: "{{ nf_ids.subnet }}"
+      metadata: {name: "subnet-{{ nf_ids.subnet[:8] }}", namespace: osac-networking, uid: "{{ nf_uid }}", generation: 1}
+      spec: {ipv4Cidr: "{{ nf_subnet_cidr }}"}
+    nf_vn_job:
+      task: "{{ nf_task }}"
+      tenant: "{{ nf_tenant }}"
+      resource: "{{ nf_vn_res }}"
+    nf_subnet_job:
+      task: "{{ nf_task }}"
+      tenant: "{{ nf_tenant }}"
+      resource: "{{ nf_subnet_res }}"
+      virtual_network: "{{ nf_vn_parent }}"
+      ipam: "{{ nf_ipam }}"
+    nf_sg_job:
+      task: "{{ nf_task }}"
+      tenant: "{{ nf_tenant }}"
+      resource:
+        apiVersion: osac.openshift.io/v1alpha1
+        kind: SecurityGroup
+        id: "{{ nf_ids.sg }}"
+        metadata: {name: web, namespace: osac-networking, uid: "{{ nf_uid }}", generation: 1}
+        spec:
+          ingressRules: [{protocol: tcp, portFrom: 22, portTo: 22, sourceCidr: 0.0.0.0/0}]
+          egressRules: [{protocol: all, destinationCidr: 0.0.0.0/0}]
+      virtual_network: "{{ nf_vn_parent }}"
+    nf_na_job:
+      task: "{{ nf_task }}"
+      tenant: "{{ nf_tenant }}"
+      resource:
+        apiVersion: osac.openshift.io/v1alpha1
+        kind: NetworkAttachment
+        id: "{{ nf_ids.att }}"
+        metadata: {name: "na-{{ nf_ids.att[:8] }}", namespace: osac-networking, uid: "{{ nf_uid }}", generation: 1}
+        spec: {}
+      target: {kind: BareMetalInstance, id: "{{ nf_ids.bmi }}", host_name: host1}
+      network_attachment:
+        subnet: "{{ nf_ids.subnet }}"
+        interface: "{{ nf_iface | default(nf_physical) }}"
+        security_group_ids: []
+      virtual_network: "{{ nf_vn_parent }}"
+      subnet: "{{ nf_subnet_res }}"
+      ipam: "{{ nf_ipam }}"
+    nf_pool_res:
+      apiVersion: osac.openshift.io/v1alpha1
+      kind: ExternalIPPool
+      id: "{{ nf_ids.pool }}"
+      metadata: {name: pool, namespace: osac-networking, uid: "{{ nf_uid }}", generation: 1}
+      spec: {cidrs: ["{{ nf_pool_cidr }}"]}
+    nf_pool_job:
+      task: "{{ nf_task }}"
+      tenant: "{{ nf_tenant }}"
+      resource: "{{ nf_pool_res }}"
+    nf_eip_job:
+      task: "{{ nf_task }}"
+      tenant: "{{ nf_tenant }}"
+      resource:
+        apiVersion: osac.openshift.io/v1alpha1
+        kind: ExternalIP
+        id: "{{ nf_eip_id | default(nf_ids.eip) }}"
+        metadata: {name: eip, namespace: osac-networking, uid: "{{ nf_uid }}", generation: 1}
+        spec: {pool: "{{ nf_ids.pool }}"}
+      external_ip_pool: "{{ nf_pool_res }}"
+    nf_eipa_job:
+      task: "{{ nf_task }}"
+      tenant: "{{ nf_tenant }}"
+      resource:
+        apiVersion: osac.openshift.io/v1alpha1
+        kind: ExternalIPAttachment
+        id: "{{ nf_ids.eipa }}"
+        metadata: {name: eipa, namespace: osac-networking, uid: "{{ nf_uid }}", generation: 1}
+        spec: {}
+      external_ip: {id: "{{ nf_ids.eip }}", address: "{{ nf_address }}"}
+      destination:
+        address: "{{ nf_dnat_target | default(nf_target) }}"
+        routing_domain: {type: tenant_virtual_network, virtual_network_id: "{{ nf_ids.vn }}", subnet_id: "{{ nf_ids.subnet }}"}
+    nf_natgw_job:
+      task: "{{ nf_task }}"
+      tenant: "{{ nf_tenant }}"
+      resource:
+        apiVersion: osac.openshift.io/v1alpha1
+        kind: NATGateway
+        id: "{{ nf_ids.natgw }}"
+        metadata: {name: natgw, namespace: osac-networking, uid: "{{ nf_uid }}", generation: 1}
+        spec: {}
+      virtual_network: "{{ nf_vn_res }}"
+      external_ip: {id: "{{ nf_ids.eip }}", address: "{{ nf_address }}"}
+      # Sent to every manager; Netris ignores it.
+      nat_gateway_context:
+        external_ip:
+          name: eip
+          namespace: osac-networking
+          fulfillment_id: "{{ nf_ids.eip }}"
+          kubernetes_uid: "{{ nf_uid }}"
+          tenant_id: "{{ nf_tenant }}"
+          address: "{{ nf_address }}"
+          state: Allocated
+          phase: Ready
+        virtual_network:
+          name: vn
+          namespace: osac-networking
+          fulfillment_id: "{{ nf_ids.vn }}"
+          kubernetes_uid: "{{ nf_uid }}"
+          tenant_id: "{{ nf_tenant }}"
+          ipv4_cidr: "{{ nf_vn_cidr }}"
+          phase: Ready
+    nf_fd_job:
+      task: "{{ nf_task }}"
+      tenant: "{{ nf_tenant }}"
+      resource:
+        apiVersion: osac.openshift.io/v1alpha1
+        kind: FabricDomain
+        id: "{{ nf_ids.fd }}"
+        metadata: {name: fd, namespace: osac-networking, uid: "{{ nf_uid }}", generation: 1}
+        spec: {type: ethernet_ew, servers: [server-a, server-b]}
+      virtual_network: "{{ nf_vn_res }}"
+    nf_ingress_job:
+      task: "{{ nf_task }}"
+      tenant: "{{ nf_tenant }}"
+      resource: "{{ nf_subnet_res | combine({'id': nf_ids.fd}) }}"
+      virtual_network: "{{ nf_vn_res }}"
+    # Fixtures the fake serves: a registered bare-metal host with two fabric
+    # ports on the provisioning V-Net, two servers for a FabricDomain.
+    nf_seed_host:
+      - path: seed
+        body: {collection: servers, objects: [{id: 50, name: host1, site: {id: 1}}]}
+      - path: seed
+        body: {collection: server_ports, objects: [{key: "50", rows: [{id: 61, port: eth0}, {id: 62, port: eth1}]}]}
+      - path: seed
+        body:
+          collection: vnets
+          objects:
+            - {id: 900, name: provisioning, state: active, vpc: {id: 3}, tenant: {id: 2}, gateways: [],
+               ports: [{id: 61, state: active, accessMode: true}, {id: 62, state: active, accessMode: true}]}
+    nf_seed_servers:
+      - path: seed
+        body:
+          collection: servers
+          objects: [{id: 1, name: server-a, site: {id: 1}}, {id: 2, name: server-b, site: {id: 1}}]
+    nf_lease:
+      - path: seed
+        body:
+          collection: ipam_hosts
+          objects:
+            - key: "301"
+              rows: [{name: bm-host, address: 10.20.1.10, mac: [{address: aa:bb:cc:dd:ee:01, source: dhcp, state: active}]},
+                     {name: other, address: 10.20.1.11, mac: [{address: aa:bb:cc:dd:ee:02, source: dhcp, state: active}]}]
+    nf_reset: [{path: reset}]
+    nf_fabric_tasks:
+      - create_virtual_network
+      - delete_virtual_network
+      - create_subnet
+      - delete_subnet
+      - create_security_group
+      - delete_security_group
+      - apply_network_attachment
+      - delete_network_attachment
+      - query_dhcp_lease
+      - create_external_ip_pool
+      - delete_external_ip_pool
+      - create_external_ip
+      - delete_external_ip
+      - attach_external_ip
+      - detach_external_ip
+      - create_nat_gateway
+      - delete_nat_gateway
+      - create_fabric_domain
+      - delete_fabric_domain
+      - reserve_cluster_ingress_ip
+      - release_cluster_ingress_ip
+    nf_overlay: {type: overlay}
+    nf_physical: {type: physical, name: eth1, mac_address: "{{ nf_mac }}"}
+    # The 21 tasks, in an order that gives each its parents. The fake hands out
+    # IDs from fixed counters after a reset, so results are exact.
+    nf_lifecycle:
+      - {name: create_virtual_network, task: create_virtual_network, job: nf_vn_job, evpn: true,
+         result: {backend_id: "101", l3_vni: 10001}}
+      - {name: create_subnet, task: create_subnet, job: nf_subnet_job, evpn: true,
+         result: {network_segment: {type: evpn, l2_vni: 5000001}}}
+      - {name: create_security_group, noreq: true, task: create_security_group, job: nf_sg_job, evpn: true, result: {}}
+      - {name: apply_overlay, noreq: true, task: apply_network_attachment, job: nf_na_job, evpn: true, result: {},
+         iface: "{{ nf_overlay }}"}
+      - {name: apply_physical, task: apply_network_attachment, job: nf_na_job, evpn: true, result: {}}
+      - {name: query_dhcp_lease, task: query_dhcp_lease, job: nf_na_job, evpn: true,
+         result: {dhcp_lease: {ip_address: 10.20.1.10, mac_address: "AA:BB:CC:DD:EE:01"}}}
+      - {name: create_external_ip_pool, task: create_external_ip_pool, job: nf_pool_job, result: {}}
+      - {name: create_external_ip, task: create_external_ip, job: nf_eip_job, result: {external_ip: {address: 203.0.113.1}}}
+      - {name: attach_external_ip, task: attach_external_ip, job: nf_eipa_job, result: {}}
+      - {name: create_nat_gateway, task: create_nat_gateway, job: nf_natgw_job, result: {}}
+      - {name: create_fabric_domain, task: create_fabric_domain, job: nf_fd_job, result: {backend_id: "601"}}
+      - {name: reserve_cluster_ingress_ip, task: reserve_cluster_ingress_ip, job: nf_ingress_job, expect: final,
+         search: "not supported by the Netris Fabric Manager yet"}
+      - {name: release_cluster_ingress_ip, noreq: true, task: release_cluster_ingress_ip, job: nf_ingress_job, result: {}}
+      - {name: delete_nat_gateway, task: delete_nat_gateway, job: nf_natgw_job, result: {}}
+      - {name: detach_external_ip, task: detach_external_ip, job: nf_eipa_job, result: {}}
+      - {name: delete_external_ip, task: delete_external_ip, job: nf_eip_job, result: {}}
+      - {name: delete_external_ip_pool, task: delete_external_ip_pool, job: nf_pool_job, result: {}}
+      - {name: delete_fabric_domain, task: delete_fabric_domain, job: nf_fd_job, result: {}}
+      - {name: delete_network_attachment_physical, task: delete_network_attachment, job: nf_na_job, evpn: true, result: {}}
+      - {name: delete_network_attachment_overlay, noreq: true, task: delete_network_attachment, job: nf_na_job, evpn: true, result: {},
+         iface: "{{ nf_overlay }}"}
+      - {name: delete_security_group, noreq: true, task: delete_security_group, job: nf_sg_job, evpn: true, result: {}}
+      - {name: delete_subnet, task: delete_subnet, job: nf_subnet_job, evpn: true, result: {}}
+      - {name: delete_virtual_network, task: delete_virtual_network, job: nf_vn_job, evpn: true, result: {}}
+  tasks:
+    - name: Prepare a working directory
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: -netris-fabric
+      register: _nf_tmp
+      tags: [always]
+
+    - name: Record the paths
+      ansible.builtin.set_fact:
+        nf:
+          root: "{{ _nf_tmp.path }}"
+          repo: "{{ (playbook_dir ~ '/../../../../..') | realpath }}"
+          fake: "{{ (playbook_dir ~ '/../../../fixtures/netris/fake_netris.py') | realpath }}"
+      tags: [always]
+
+    - name: Run the cases
+      block:
+        - name: Start the fake Netris
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - "{{ nf.fake }}"
+              - --port-file
+              - "{{ nf.root }}/port"
+              - --state-file
+              - "{{ nf.root }}/state.json"
+          async: 7200
+          poll: 0
+          register: _nf_server
+          changed_when: false
+          tags: [always]
+
+        - name: Wait for the fake Netris port
+          ansible.builtin.slurp:
+            src: "{{ nf.root }}/port"
+          register: _nf_port
+          until: _nf_port is succeeded
+          retries: 30
+          delay: 1
+          tags: [always]
+
+        - name: Record the fake Netris URL
+          ansible.builtin.set_fact:
+            nf: "{{ nf | combine({'url': 'http://127.0.0.1:' ~ (_nf_port.content | b64decode | trim)}) }}"
+          tags: [always]
+
+        - name: Check the fake Netris answers
+          ansible.builtin.uri:
+            url: "{{ nf.url }}/__admin/state"
+            use_proxy: false
+          tags: [always]
+
+        - name: Case 1 - all 21 Fabric tasks run and publish their contract result
+          ansible.builtin.import_tasks: cases_lifecycle.yaml
+          tags: [lifecycle]
+
+        - name: Cases 2 and 3 - VirtualNetwork and Subnet
+          ansible.builtin.import_tasks: cases_vn_subnet.yaml
+          tags: [vn_subnet]
+
+        - name: Cases 4 and 5 - NetworkAttachment
+          ansible.builtin.import_tasks: cases_attachment.yaml
+          tags: [attachment]
+
+        - name: Cases 6 and 7 - ExternalIP, NAT, FabricDomain
+          ansible.builtin.import_tasks: cases_eip_nat_fd.yaml
+          tags: [eip_nat_fd]
+
+        - name: Case 8 - ordered, absent-tolerant deletes
+          ansible.builtin.import_tasks: cases_delete.yaml
+          tags: [delete]
+
+        - name: Case 9 - error classes and sanitised messages
+          ansible.builtin.import_tasks: cases_errors.yaml
+          tags: [errors]
+
+        - name: Case 10 - tenant isolation, drift and fail-closed owner proof
+          ansible.builtin.import_tasks: cases_isolation.yaml
+          tags: [isolation]
+
+        - name: Case 10 - partial creates and lost responses
+          ansible.builtin.import_tasks: cases_recovery.yaml
+          tags: [recovery]
+
+      always:
+        - name: Stop the fake Netris
+          ansible.builtin.uri:
+            url: "{{ nf.url }}/__admin/shutdown"
+            method: POST
+            use_proxy: false
+          when: nf.url is defined
+          failed_when: false
+          tags: [always]
+
+        # The port file may never have appeared: stop the process by its command line.
+        - name: Make sure no fake Netris is left
+          ansible.builtin.command:
+            argv: [pkill, -f, "{{ nf.fake }} --port-file {{ nf.root }}/port"]
+          failed_when: false
+          changed_when: false
+          tags: [always]
+
+        - name: Remove the working directory
+          ansible.builtin.file:
+            path: "{{ nf.root }}"
+            state: absent
+          tags: [always]

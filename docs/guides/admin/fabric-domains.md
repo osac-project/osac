@@ -137,13 +137,13 @@ The operator exports these Prometheus metrics:
 
 | Metric | Labels | Meaning |
 |---|---|---|
-| `osac_fabric_domains_total` | `type`, `tenant` | Current non-deleting FabricDomain objects in the configured networking namespace, including unready or unmanaged objects. |
-| `osac_fabric_domain_provisioning_duration_seconds` | `type` | Time from CR creation to its first persisted Ready state. Resize operations do not add samples. |
-| `osac_fabric_domain_provisioning_failures_total` | `type`, `reason` | Persisted transitions into Failed or to a different failure reason; repeated reconciles do not increment it. |
+| `osac_fabric_domains_total` | `type`, `tenant` | Current non-deleting FabricDomain objects in the configured networking namespace, including unready or unmanaged objects. `type` is the API value, for example `ethernet_ew`. |
+| `osac_fabric_domain_provisioning_duration_seconds` | `type` | Time from CR creation to its first persisted Ready state after a task ran. Ready with provisioning disabled adds none. |
+| `osac_fabric_domain_provisioning_failures_total` | `type`, `reason` | Persisted transitions into Failed, labeled with the Ready condition reason; repeated reconciles do not increment it. |
 
 Kubernetes events report `FabricDomainProvisioned` (Normal) on the first Ready
-transition, `FabricDomainProvisioningFailed` (Warning) when a persisted failure
-reason changes, and `FabricDomainDeleted` (Normal) after successful cleanup.
+transition, `FabricDomainProvisioningFailed` (Warning) on each transition into
+Failed, and `FabricDomainDeleted` (Normal) after successful cleanup.
 The metrics and events describe control-plane state; they do not measure
 per-server attachment health or dataplane reachability.
 

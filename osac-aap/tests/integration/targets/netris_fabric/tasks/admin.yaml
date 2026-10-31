@@ -1,0 +1,15 @@
+---
+# Steer the fake Netris through its admin endpoints.
+# Input: nf_steps, a list of {path, body}: POST /__admin/<path> with the body.
+- name: "Call the fake Netris admin endpoint"
+  ansible.builtin.uri:
+    url: "{{ nf.url }}/__admin/{{ _nf_admin.path }}"
+    method: POST
+    body_format: json
+    body: "{{ _nf_admin.body | default({}) }}"
+    use_proxy: false
+    status_code: 200
+  loop: "{{ nf_steps }}"
+  loop_control:
+    loop_var: _nf_admin
+    label: "{{ _nf_admin.path }}"

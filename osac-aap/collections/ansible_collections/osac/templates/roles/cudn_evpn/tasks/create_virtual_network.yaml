@@ -1,0 +1,80 @@
+---
+# Kubernetes create_virtual_network: the VirtualNetwork's namespace
+# osac-vn-<VN API ID> and its baseline deny. Every VM of the VirtualNetwork
+# runs in this namespace; the owner Subnet's hub network selects it, and
+# SecurityGroup policies live in it. The primary-network label must be set
+# when the namespace is created; OVN-Kubernetes ignores it when added later.
+- name: Run cudn_evpn create_virtual_network
+  block:
+    - name: Plan the task
+      ansible.builtin.include_tasks: _plan.yaml
+
+    - name: Read the VirtualNetwork namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ cudn_evpn.namespace }}"
+      register: _cudn_evpn_ns
+
+    - name: Check an existing namespace
+      when: _cudn_evpn_ns.resources | length > 0
+      vars:
+        _ns: "{{ _cudn_evpn_ns.resources[0] }}"
+      block:
+        - name: Stop when the namespace belongs to something else
+          when: >-
+            not (_ns | osac.templates.cudn_evpn_owned('virtualnetwork', cudn_evpn.vn_id, cudn_evpn.tenant))
+            or (_ns.metadata.labels | default({}))['k8s.ovn.org/primary-user-defined-network'] is not defined
+          ansible.builtin.include_tasks: _stop.yaml
+          vars:
+            cudn_evpn_stop:
+              message: >-
+                cudn_evpn create_virtual_network: Namespace {{ cudn_evpn.namespace }} already exists
+                without this VirtualNetwork's owner labels or the primary-network label, so it cannot
+                host the VirtualNetwork. A cluster administrator must remove it.
+              retryable: false
+
+        - name: Stop while the namespace is being deleted
+          when: _ns.metadata.deletionTimestamp is defined
+          ansible.builtin.include_tasks: _stop.yaml
+          vars:
+            cudn_evpn_stop:
+              message: >-
+                cudn_evpn create_virtual_network: Namespace {{ cudn_evpn.namespace }} is still being
+                deleted; OSAC retries the task.
+              retryable: true
+
+        - name: Restore the namespace annotations
+          vars:
+            _live: "{{ _ns.metadata.annotations | default({}) }}"
+          when: (_live | combine(cudn_evpn.namespace_manifest.metadata.annotations)) != _live
+          kubernetes.core.k8s:
+            state: patched
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: "{{ cudn_evpn.namespace }}"
+                annotations: "{{ cudn_evpn.namespace_manifest.metadata.annotations }}"
+
+    # Server-side apply without force under this VirtualNetwork's field manager,
+    # so a namespace that appeared since the read conflicts instead of being merged.
+    - name: Create the VirtualNetwork namespace
+      when: _cudn_evpn_ns.resources | length == 0
+      kubernetes.core.k8s:
+        state: present
+        apply: true
+        server_side_apply:
+          field_manager: "cudn-evpn-{{ cudn_evpn.vn_id }}"
+          force_conflicts: false
+        definition: "{{ cudn_evpn.namespace_manifest }}"
+
+    - name: Create or restore the baseline deny policy
+      kubernetes.core.k8s:
+        state: present
+        force: true
+        definition: "{{ cudn_evpn.baseline_manifest }}"
+
+  rescue:
+    - name: Report the failure to OSAC
+      ansible.builtin.include_tasks: _fail.yaml

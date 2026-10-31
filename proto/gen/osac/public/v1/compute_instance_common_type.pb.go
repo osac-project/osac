@@ -99,7 +99,8 @@ func (x ComputeInstanceRunStrategy) Number() protoreflect.EnumNumber {
 // Groups one subnet with security groups for that network attachment (multi-NIC VMs).
 type ComputeNetworkAttachment struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// Reference to the Subnet for this NIC; must be in READY state (same tenant and region rules as ComputeInstance).
+	// Reference to the Subnet for this NIC; must be in READY state and in the same tenant and project as the
+	// ComputeInstance.
 	Subnet *SubnetLocalReference `protobuf:"bytes,1,opt,name=subnet,proto3" json:"subnet,omitempty"`
 	// References to SecurityGroups for this NIC; each must be READY and belong to the same VirtualNetwork as subnet.
 	SecurityGroups []*SecurityGroupLocalReference `protobuf:"bytes,2,rep,name=security_groups,json=securityGroups,proto3" json:"security_groups,omitempty"`
@@ -168,7 +169,8 @@ func (x *ComputeNetworkAttachment) ClearSubnet() {
 type ComputeNetworkAttachment_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// Reference to the Subnet for this NIC; must be in READY state (same tenant and region rules as ComputeInstance).
+	// Reference to the Subnet for this NIC; must be in READY state and in the same tenant and project as the
+	// ComputeInstance.
 	Subnet *SubnetLocalReference
 	// References to SecurityGroups for this NIC; each must be READY and belong to the same VirtualNetwork as subnet.
 	SecurityGroups []*SecurityGroupLocalReference

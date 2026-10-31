@@ -46,3 +46,33 @@ resources to take effect. Request that restart separately by updating
 `spec.restart_requested_at` to a UTC timestamp later than
 `status.last_restarted_at`. This timestamp is a declarative restart signal,
 not a scheduled time.
+
+# ComputeInstances API: network attachment
+
+A ComputeInstance has at most one entry in `spec.network_attachments`. Each
+part of the entry is optional:
+
+- Without a Subnet, the VM uses the tenant's default Subnet `default-ipv4`.
+- Without SecurityGroups, the VM uses the tenant's default SecurityGroup, but
+  only when the Subnet is in the tenant's default VirtualNetwork. A Subnet in
+  another VirtualNetwork needs explicit SecurityGroups.
+- Without an entry at all, both defaults apply.
+
+The create fails with INVALID_ARGUMENT when a reference doesn't exist, when a
+SecurityGroup is listed twice or belongs to another VirtualNetwork, or when a
+default the request needs doesn't exist. It fails with FAILED_PRECONDITION
+when the Subnet or a SecurityGroup isn't READY, or when the request uses a
+default and the tenant's `DEFAULT_NETWORKING_READY` condition isn't true.
+The stored spec holds the resolved IDs. The CLI accepts names or IDs in
+`--network-attachment subnet=NAME[,security-groups=NAME,NAME...]` and
+resolves them before the create.
+
+With provider networking enabled and `spec.auto_external_ip_attachment` set,
+the create also creates the automatic ExternalIP `auto-eip-<VM ID>`. Once that
+ExternalIP is ALLOCATED and the VM is RUNNING, READY and reports its address,
+the fulfillment controller creates the automatic ExternalIPAttachment
+`auto-eipa-<ExternalIP ID>`. Tenants can't change or delete the automatic
+resources; they're deleted with the VM.
+
+The condition `NETWORK_READY` reports whether the VM's network attachment is
+in place. The OSAC operator sets it from the provisioning result.

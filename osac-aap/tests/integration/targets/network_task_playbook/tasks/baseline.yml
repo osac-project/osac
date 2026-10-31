@@ -1,0 +1,298 @@
+---
+# Network manager contract §4.3 / TC-INVOKE-01 and TC-RESULT-01 for the generic
+# playbook itself, each case in its own child ansible-playbook process launched
+# like an AAP job (`-e @extravars`). Checks:
+#   - the playbook's fixed task sets are exactly the contract's 21 Fabric and
+#     8 Kubernetes tasks;
+#   - the playbook includes the registered role's task file named by the job;
+#     a task of the set runs that task file of a real role (the Netris
+#     SecurityGroup no-op) and publishes no osac_result/osac_error;
+#   - a task outside the manager type's set, an unknown manager type and a
+#     malformed input fail with a final osac_error and run no manager task;
+#   - launch extra vars other than osac_job_vars fail with a final osac_error
+#     (AAP's awx_*/tower_* job metadata is accepted);
+#   - a missing role or task file fails with the retryable osac_error of §4.3.
+# Running every task of each set against a manager is covered by the manager
+# targets: netris_fabric runs all 21 Fabric tasks and cudn_evpn runs all 8
+# Kubernetes tasks through this same playbook.
+# No Kubernetes, AAP, or network backend is involved.
+- name: Generic network task playbook
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ntp_fabric_tasks:
+      - create_virtual_network
+      - delete_virtual_network
+      - create_subnet
+      - delete_subnet
+      - create_security_group
+      - delete_security_group
+      - apply_network_attachment
+      - delete_network_attachment
+      - query_dhcp_lease
+      - create_external_ip_pool
+      - delete_external_ip_pool
+      - create_external_ip
+      - delete_external_ip
+      - attach_external_ip
+      - detach_external_ip
+      - create_nat_gateway
+      - delete_nat_gateway
+      - create_fabric_domain
+      - delete_fabric_domain
+      - reserve_cluster_ingress_ip
+      - release_cluster_ingress_ip
+    ntp_kubernetes_tasks:
+      - create_virtual_network
+      - delete_virtual_network
+      - create_subnet
+      - delete_subnet
+      - create_security_group
+      - delete_security_group
+      - apply_network_attachment
+      - delete_network_attachment
+    # A role that does not exist: a job rejected before the role lookup must run no manager task.
+    ntp_absent_role: osac.test_overrides.absent_network
+    # A real role with a task that needs no backend: the Netris SecurityGroup no-op.
+    ntp_real_role: osac.templates.netris
+    ntp_tenant: 5d6a0f1e-2b3c-4d5e-8f90-a1b2c3d4e5f6
+  tasks:
+    - name: Prepare a working directory
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: -network-task-playbook
+      register: _ntp_tmp
+
+    - name: Record the paths
+      ansible.builtin.set_fact:
+        ntp:
+          root: "{{ _ntp_tmp.path }}"
+          repo: "{{ (playbook_dir ~ '/../../../../..') | realpath }}"
+
+    - name: Run the cases
+      block:
+        - name: Read the generic playbook
+          ansible.builtin.set_fact:
+            _ntp_play: "{{ (lookup('ansible.builtin.file', ntp.repo ~ '/playbook_osac_network_task.yml') | from_yaml)[0] }}"
+
+        - name: Check the playbook's Fabric task set is the contract's 21 tasks
+          ansible.builtin.assert:
+            that:
+              - _ntp_play.vars.osac_network_fabric_tasks | length == 21
+              - _ntp_play.vars.osac_network_fabric_tasks | sort == ntp_fabric_tasks | sort
+            fail_msg: >-
+              osac_network_fabric_tasks is {{ _ntp_play.vars.osac_network_fabric_tasks }};
+              missing {{ ntp_fabric_tasks | difference(_ntp_play.vars.osac_network_fabric_tasks) }},
+              unexpected {{ _ntp_play.vars.osac_network_fabric_tasks | difference(ntp_fabric_tasks) }}
+
+        - name: Check the playbook's Kubernetes task set is the contract's 8 tasks
+          ansible.builtin.assert:
+            that:
+              - _ntp_play.vars.osac_network_kubernetes_tasks | length == 8
+              - _ntp_play.vars.osac_network_kubernetes_tasks | sort == ntp_kubernetes_tasks | sort
+            fail_msg: >-
+              osac_network_kubernetes_tasks is {{ _ntp_play.vars.osac_network_kubernetes_tasks }};
+              missing {{ ntp_kubernetes_tasks | difference(_ntp_play.vars.osac_network_kubernetes_tasks) }},
+              unexpected {{ _ntp_play.vars.osac_network_kubernetes_tasks | difference(ntp_kubernetes_tasks) }}
+
+        - name: Check the playbook includes the registered role's task file
+          vars:
+            _ntp_text: "{{ lookup('ansible.builtin.file', ntp.repo ~ '/playbook_osac_network_task.yml') }}"
+          ansible.builtin.assert:
+            that:
+              - _ntp_text is search('ansible\\.builtin\\.include_role:\\s+name:\\s+"\\{\\{ osac_job_vars\\.manager\\.ansible_role \\}\\}"')
+              - _ntp_text is search('tasks_from:\\s+"\\{\\{ osac_job_vars\\.task \\}\\}"')
+            fail_msg: >-
+              playbook_osac_network_task.yml must include_role osac_job_vars.manager.ansible_role
+              with tasks_from osac_job_vars.task (contract §4.3)
+
+        - name: Run a task of the Fabric set through a real manager role
+          ansible.builtin.include_tasks: run_job.yaml
+          vars:
+            ntp_label: fabric-runs-the-registered-role-task
+            ntp_expect: success
+            ntp_ran: create_security_group
+            ntp_job:
+              osac_job_vars:
+                manager: {name: netris, type: fabric, ansible_role: "{{ ntp_real_role }}"}
+                task: create_security_group
+                tenant: "{{ ntp_tenant }}"
+                resource: {kind: SecurityGroup, id: fabric-sg-id, spec: {}}
+
+        - name: Reject every Fabric-only task on a Kubernetes Manager as final
+          ansible.builtin.include_tasks: run_job.yaml
+          loop: "{{ ntp_fabric_tasks | difference(ntp_kubernetes_tasks) }}"
+          loop_control:
+            loop_var: _ntp_task
+            label: "kubernetes {{ _ntp_task }}"
+          vars:
+            ntp_label: "kubernetes-rejects-{{ _ntp_task }}"
+            ntp_expect: final
+            ntp_message: "task {{ _ntp_task }} is not in the kubernetes manager task set"
+            ntp_job:
+              osac_job_vars:
+                manager: {name: absent_network, type: kubernetes, ansible_role: "{{ ntp_absent_role }}"}
+                task: "{{ _ntp_task }}"
+                tenant: "{{ ntp_tenant }}"
+                resource: {kind: Generic, id: "rejected-{{ _ntp_task }}-id", spec: {}}
+
+        - name: Reject a task outside the Fabric task set as final
+          ansible.builtin.include_tasks: run_job.yaml
+          vars:
+            ntp_label: fabric-rejects-unknown-task
+            ntp_expect: final
+            ntp_message: task create_load_balancer is not in the fabric manager task set
+            ntp_job:
+              osac_job_vars:
+                manager: {name: absent_network, type: fabric, ansible_role: "{{ ntp_absent_role }}"}
+                task: create_load_balancer
+                tenant: "{{ ntp_tenant }}"
+
+        - name: Reject a missing task as final
+          ansible.builtin.include_tasks: run_job.yaml
+          vars:
+            ntp_label: fabric-rejects-missing-task
+            ntp_expect: final
+            ntp_message: "task  is not in the fabric manager task set"
+            ntp_job:
+              osac_job_vars:
+                manager: {name: absent_network, type: fabric, ansible_role: "{{ ntp_absent_role }}"}
+                tenant: "{{ ntp_tenant }}"
+
+        - name: Reject an unknown manager type as final
+          ansible.builtin.include_tasks: run_job.yaml
+          vars:
+            ntp_label: rejects-unknown-manager-type
+            ntp_expect: final
+            ntp_message: osac_job_vars.manager.type must be fabric or kubernetes
+            ntp_job:
+              osac_job_vars:
+                manager: {name: absent_network, type: storage, ansible_role: "{{ ntp_absent_role }}"}
+                task: create_subnet
+
+        - name: Reject an input without a manager as final
+          ansible.builtin.include_tasks: run_job.yaml
+          vars:
+            ntp_label: rejects-missing-manager
+            ntp_expect: final
+            ntp_message: osac_job_vars.manager.type must be fabric or kubernetes
+            ntp_job:
+              osac_job_vars:
+                task: create_subnet
+
+        - name: Reject an osac_job_vars that is not a mapping as final
+          ansible.builtin.include_tasks: run_job.yaml
+          vars:
+            ntp_label: rejects-scalar-osac-job-vars
+            ntp_expect: final
+            ntp_message: the job input has no osac_job_vars mapping
+            ntp_job:
+              osac_job_vars: create_subnet
+
+        - name: Reject a launch without osac_job_vars as final
+          ansible.builtin.include_tasks: run_job.yaml
+          vars:
+            ntp_label: rejects-empty-input
+            ntp_expect: final
+            ntp_message: the job input has no osac_job_vars mapping
+            ntp_job: {}
+
+        - name: Reject launch extra vars besides osac_job_vars as final
+          ansible.builtin.include_tasks: run_job.yaml
+          vars:
+            ntp_label: rejects-extra-vars-besides-osac-job-vars
+            ntp_expect: final
+            ntp_message: "the job input has extra vars other than osac_job_vars: ansible_python_interpreter, netris_controller_url"
+            ntp_job:
+              osac_job_vars:
+                manager: {name: absent_network, type: fabric, ansible_role: "{{ ntp_absent_role }}"}
+                task: create_subnet
+                tenant: "{{ ntp_tenant }}"
+              netris_controller_url: https://attacker.example
+              ansible_python_interpreter: /usr/bin/python3
+
+        - name: Reject a setting override without osac_job_vars as final
+          ansible.builtin.include_tasks: run_job.yaml
+          vars:
+            ntp_label: rejects-only-extra-vars
+            ntp_expect: final
+            ntp_message: "the job input has extra vars other than osac_job_vars: netris_site_id"
+            ntp_job:
+              netris_site_id: 99
+
+        - name: Accept AAP job metadata next to osac_job_vars
+          ansible.builtin.include_tasks: run_job.yaml
+          vars:
+            ntp_label: accepts-awx-job-metadata
+            ntp_expect: success
+            ntp_ran: create_security_group
+            ntp_job:
+              osac_job_vars:
+                manager: {name: netris, type: fabric, ansible_role: "{{ ntp_real_role }}"}
+                task: create_security_group
+                tenant: "{{ ntp_tenant }}"
+                resource: {kind: SecurityGroup, id: awx-metadata-id, spec: {}}
+              awx_job_id: 42
+              awx_job_template_name: osac-create-security-group
+              tower_job_id: 42
+
+        - name: Fail a missing role as retryable
+          ansible.builtin.include_tasks: run_job.yaml
+          vars:
+            ntp_label: retryable-missing-role
+            ntp_expect: retryable
+            ntp_message: >-
+              role osac.test_overrides.no_such_manager or task file create_subnet
+              not found in the execution environment
+            ntp_job:
+              osac_job_vars:
+                manager: {name: no_such_manager, type: fabric, ansible_role: osac.test_overrides.no_such_manager}
+                task: create_subnet
+                tenant: "{{ ntp_tenant }}"
+
+        - name: Fail a missing collection as retryable
+          ansible.builtin.include_tasks: run_job.yaml
+          vars:
+            ntp_label: retryable-missing-collection
+            ntp_expect: retryable
+            ntp_message: >-
+              role acme.network.fabric or task file delete_subnet
+              not found in the execution environment
+            ntp_job:
+              osac_job_vars:
+                manager: {name: acme, type: kubernetes, ansible_role: acme.network.fabric}
+                task: delete_subnet
+                tenant: "{{ ntp_tenant }}"
+
+        - name: Fail a role without the task file as retryable
+          ansible.builtin.include_tasks: run_job.yaml
+          vars:
+            ntp_label: retryable-missing-task-file
+            ntp_expect: retryable
+            ntp_message: >-
+              role osac.test_overrides.noop_template or task file create_subnet
+              not found in the execution environment
+            ntp_job:
+              osac_job_vars:
+                manager: {name: noop_template, type: fabric, ansible_role: osac.test_overrides.noop_template}
+                task: create_subnet
+                tenant: "{{ ntp_tenant }}"
+
+        - name: Fail a manager without a role as retryable
+          ansible.builtin.include_tasks: run_job.yaml
+          vars:
+            ntp_label: retryable-no-ansible-role
+            ntp_expect: retryable
+            ntp_message: role  or task file create_subnet not found in the execution environment
+            ntp_job:
+              osac_job_vars:
+                manager: {name: absent_network, type: fabric}
+                task: create_subnet
+                tenant: "{{ ntp_tenant }}"
+
+      always:
+        - name: Remove the working directory
+          ansible.builtin.file:
+            path: "{{ ntp.root }}"
+            state: absent

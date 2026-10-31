@@ -1,0 +1,115 @@
+---
+# Case 9: 5xx is retryable, 4xx is final. An error message carries the provider's
+# `message` field (bounded, with cookies and secrets redacted) but no other part of
+# the response body and no cookie: the fake answers with an extra `internal` field
+# and puts a cookie in `message`.
+- name: Errors - start empty
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: reset}
+      - path: faults
+        body:
+          key: "POST /api/v2/vpc"
+          status: 503
+          body: {message: "overlap connect.sid=fake-session; boom", internal: LEAKED-BODY}
+          sticky: true
+
+- name: Errors - a 5xx from Netris is retryable
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: err-5xx
+    sft_expect: retryable
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Errors - the 5xx message carries no body, cookie or password
+  ansible.builtin.include_tasks: assert_clean_error.yaml
+
+- name: Errors - a 400 from Netris on the VirtualNetwork CIDR
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults/clear}
+      - path: faults
+        body:
+          key: "POST /api/v2/ipam/allocation"
+          status: 400
+          body: {message: "overlap connect.sid=fake-session; boom", internal: LEAKED-BODY}
+          sticky: true
+
+- name: Errors - a 400 is final and names the CIDR
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: err-400
+    sft_expect: final
+    sft_message_search: "10.20.0.0/16"
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Errors - the 400 message carries no body, cookie or password
+  ansible.builtin.include_tasks: assert_clean_error.yaml
+
+- name: Errors - a failing login is retryable
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: reset}
+      - path: faults
+        body:
+          key: "POST /api/auth"
+          status: 500
+          body: {message: "overlap connect.sid=fake-session; boom", internal: LEAKED-BODY}
+          sticky: true
+
+- name: Errors - the login fails with 500
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: err-login-500
+    sft_expect: retryable
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Errors - the login failure message carries no body, cookie or password
+  ansible.builtin.include_tasks: assert_clean_error.yaml
+
+- name: Errors - an unreachable controller is retryable
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    nf_env: {NETRIS_CONTROLLER_URL: "http://127.0.0.1:1"}
+    sft_label: err-unreachable
+    sft_expect: retryable
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Errors - the unreachable message carries no cookie or password
+  ansible.builtin.include_tasks: assert_clean_error.yaml
+
+- name: Errors - a missing setting is retryable and named, and Netris is not called
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    nf_env: {NETRIS_SITE_ID: ""}
+    sft_label: err-missing-setting
+    sft_expect: retryable
+    sft_message_search: "NETRIS_SITE_ID"
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Errors - the missing setting stopped the task before any request
+  ansible.builtin.assert:
+    that: nf_calls == []
+    quiet: true
+
+- name: Errors - a malformed input is final and Netris is not called
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: err-malformed-input
+    sft_expect: final
+    sft_message_search: "Netris invalid task input"
+    nf_job: "{{ nf_subnet_job | combine({'resource': nf_subnet_res | combine({'id': 'not-a-uuid'})}) }}"
+
+- name: Errors - the malformed input stopped the task before any request
+  ansible.builtin.assert:
+    that: nf_calls == []
+    quiet: true

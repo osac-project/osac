@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // NATGatewaySpec defines the desired state of NATGateway.
@@ -25,55 +26,40 @@ import (
 // delete the NATGateway and create a new one.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable after creation"
 type NATGatewaySpec struct {
-	// VirtualNetwork is the name of the parent VirtualNetwork whose egress
+	// VirtualNetwork is the API ID of the parent VirtualNetwork whose egress
 	// traffic is source-NATted through this gateway.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	VirtualNetwork string `json:"virtualNetwork"`
 
-	// ExternalIP is the name of the ExternalIP resource to use as the SNAT
+	// ExternalIP is the API ID of the ExternalIP to use as the SNAT
 	// source address for outbound traffic.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	ExternalIP string `json:"externalIP"`
 }
 
-// NATGatewayPhaseType is a valid value for .status.phase
-type NATGatewayPhaseType string
-
-const (
-	// NATGatewayPhaseProgressing means the SNAT rule is being configured
-	NATGatewayPhaseProgressing NATGatewayPhaseType = "Progressing"
-
-	// NATGatewayPhaseFailed means the SNAT rule configuration has failed
-	NATGatewayPhaseFailed NATGatewayPhaseType = "Failed"
-
-	// NATGatewayPhaseReady means the SNAT rule is active and egress traffic is being NATted
-	NATGatewayPhaseReady NATGatewayPhaseType = "Ready"
-
-	// NATGatewayPhaseDeleting means the SNAT rule is being removed
-	NATGatewayPhaseDeleting NATGatewayPhaseType = "Deleting"
-)
-
 // NATGatewayStatus defines the observed state of NATGateway
 type NATGatewayStatus struct {
-	// Phase provides a single-value overview of the state of the NATGateway
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=Progressing;Ready;Failed;Deleting
-	Phase NATGatewayPhaseType `json:"phase,omitempty"`
-
-	// DesiredConfigVersion is a hash of the spec, used to detect spec changes and control retry behavior.
-	// +kubebuilder:validation:Optional
-	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
-
-	// ProvisioningJobs holds an array of JobStatus tracking provisioning and deprovisioning operations
-	// +kubebuilder:validation:Optional
-	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
-
-	// Conditions holds an array of metav1.Condition that describe the state of the NATGateway
+	// Conditions holds the Ready condition of the NATGateway.
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
+
+	// NetworkManagers records only the Fabric Manager, copied from the VirtualNetwork at create.
+	// +kubebuilder:validation:Optional
+	NetworkManagers *NetworkManagers `json:"networkManagers,omitempty"`
+
+	// TaskInput is the task input stored before the first job (contract §4.5).
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:pruning:PreserveUnknownFields
+	TaskInput *runtime.RawExtension `json:"taskInput,omitempty"`
+
+	// Jobs tracks the latest job per task and manager (contract §4.7).
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=task
+	// +listMapKey=manager
+	Jobs []NetworkJobStatus `json:"jobs,omitempty"`
 
 	// StateTransitionTime records when the NATGateway entered its current state.
 	// It is authoritative for lifecycle consumers and is populated by the operator.
@@ -86,7 +72,7 @@ type NATGatewayStatus struct {
 // +kubebuilder:resource:shortName=natgw
 // +kubebuilder:printcolumn:name="VirtualNetwork",type=string,JSONPath=`.spec.virtualNetwork`
 // +kubebuilder:printcolumn:name="ExternalIP",type=string,JSONPath=`.spec.externalIP`
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // NATGateway is the Schema for the natgateways API

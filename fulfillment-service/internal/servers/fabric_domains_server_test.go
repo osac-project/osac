@@ -21,8 +21,6 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
@@ -174,70 +172,10 @@ var _ = Describe("Fabric domains public metadata visibility", func() {
 		}
 	})
 
-	It("rejects reserved labels and annotations on public update without writing", func() {
-		domainsDAO, err := dao.NewGenericDAO[*privatev1.FabricDomain]().
-			SetLogger(logger).
-			SetTenancyLogic(tenancy).
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-
-		publicServer, err := NewFabricDomainsServer().
-			SetLogger(logger).
-			SetAttributionLogic(attribution).
-			SetTenancyLogic(tenancy).
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-
-		storedResponse, err := domainsDAO.Create().SetObject(privatev1.FabricDomain_builder{
-			Metadata: privatev1.Metadata_builder{
-				Name:   fmt.Sprintf("public-reserved-update-%s", uuid.New()[24:32]),
-				Tenant: testTenant,
-				Labels: map[string]string{
-					"ordinary":                        "visible",
-					"admin.osac.openshift.io/managed": "system",
-				},
-				Annotations: map[string]string{
-					"ordinary":                            "visible",
-					"provider.admin.osac.openshift.io/id": "provider",
-				},
-			}.Build(),
-		}.Build()).Do(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		stored := storedResponse.GetObject()
-		before := proto.Clone(stored).(*privatev1.FabricDomain)
-
-		for _, testCase := range []struct {
-			key  string
-			path string
-		}{
-			{key: "admin.osac.openshift.io/managed", path: "metadata.labels"},
-			{key: "provider.admin.osac.openshift.io/id", path: "metadata.annotations"},
-		} {
-			labels := map[string]string{}
-			annotations := map[string]string{}
-			if testCase.path == "metadata.labels" {
-				labels[testCase.key] = "changed"
-			} else {
-				annotations[testCase.key] = "changed"
-			}
-
-			response, err := publicServer.Update(ctx, publicv1.FabricDomainsUpdateRequest_builder{
-				Object: publicv1.FabricDomain_builder{
-					Id: stored.GetId(),
-					Metadata: publicv1.Metadata_builder{
-						Labels:      labels,
-						Annotations: annotations,
-					}.Build(),
-				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{testCase.path}},
-			}.Build())
-			Expect(response).To(BeNil())
-			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-			Expect(status.Convert(err).Message()).To(Equal(reservedMetadataError))
-
-			updated, err := domainsDAO.Get().SetId(stored.GetId()).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(proto.Equal(updated.GetObject(), before)).To(BeTrue())
-		}
+	It("does not expose a public Update RPC", func() {
+		service := publicv1.File_osac_public_v1_fabric_domains_service_proto.
+			Services().ByName("FabricDomains")
+		Expect(service).ToNot(BeNil())
+		Expect(service.Methods().ByName("Update")).To(BeNil())
 	})
 })

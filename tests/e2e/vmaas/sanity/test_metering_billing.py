@@ -93,7 +93,7 @@ def metering_network_attachment(
     sg_cr_name: str | None = None
     try:
         vn_id = grpc.create_virtual_network(
-            name=unique_name("e2e-metering-vn"), ipv4_cidr="10.215.0.0/16", project=metering_project
+            name=unique_name("e2e-metering-vn"), ipv4_cidr="172.31.0.0/16", project=metering_project
         )
         vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
         wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vn_cr_name)
@@ -101,7 +101,7 @@ def metering_network_attachment(
         subnet_id = grpc.create_subnet(
             name=unique_name("e2e-metering-subnet"),
             virtual_network=vn_id,
-            ipv4_cidr="10.215.100.0/24",
+            ipv4_cidr="172.31.100.0/24",
             project=metering_project,
         )
         subnet_cr_name = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)

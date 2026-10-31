@@ -48,6 +48,39 @@ fields are treated as **create-only**. When the named object already exists:
 Move-network-attachment is the supported mutable operation (port membership).
 SecurityGroup ingress/egress desired-state prune remains deferred.
 
+### Contract physical attachments (OSAC-6754)
+
+The contract apply isolates every fabric port of the host, not just the
+selected tenant interface. Fabric ports are identified by their provisioning
+V-Net membership while the host is idle. Interfaces outside that set,
+including FabricDomain ports, are left alone.
+
+Before disconnecting any port, apply saves the exact port IDs in a
+`osac-na-target:<target-api-id>:<port-ids>` tag on the management-scoped provisioning
+V-Net and confirms the tag survived a provider read. That snapshot survives
+separate AAP jobs, hub CR UID changes, and interrupted apply/delete operations.
+The ownership key is `target.id`, which also equals the NetworkAttachment's
+`resource.id`, not its Kubernetes UID. Delete restores
+every saved port and removes the tag only after all membership checks pass.
+Unrelated tags and other hosts' ports are preserved. Do not remove or edit an
+active attachment's snapshot manually. The provisioning V-Net must support
+persisting tags; apply fails without disconnecting ports if it cannot.
+
+Legacy `osac-na:<attachment-uid>:<port-ids>` snapshots are accepted only when
+their UID matches the supplied CR UID and their ports belong to the current
+host, including the selected interface. Apply replaces such a snapshot with
+the stable target-ID tag before detaching ports; delete restores its full port
+set before removing the legacy tag. An overlapping legacy snapshot with an
+unknown UID blocks apply and delete without changing ports. If a legacy
+attachment's hub CR was replaced, an administrator must verify the original
+owner and migrate the snapshot to the target-ID tag before retrying. Do not
+discard the tag or infer the missing port set from current membership.
+
+Both contract entry points use `netris_bm_provisioning_vnet`, backed by
+`NETRIS_BM_PROVISIONING_VNET` with the deprecated `NETRIS_BM_PARKING_VNET`
+fallback. They do not require the legacy playbook's `provisioning_vnet` alias.
+The legacy move entry point remains a single-interface move.
+
 Delete operations verify the provider object against the OSAC resource before
 deleting it. Checks include tenant, prefix, site, purpose, VPC, and NAT binding
 fields when those values are available from the resource. A missing provider
@@ -98,8 +131,17 @@ resource with a new name after cleanup.
 The top-level Netris AAP playbooks rescue provider failures and report the
 operation, OSAC resource kind/name, failed task, HTTP status when present, and
 a bounded provider error summary. Common cookie, authorization, token,
-password, and secret values are redacted. This is AAP job output only; this
-change does not alter operator status or Fulfillment error propagation.
+password, and secret values are redacted, including quoted JSON-style
+key/value diagnostics. Intermediate legacy rethrows use the same sanitizer,
+so earlier task output cannot bypass the final reporter. Contract failures
+also publish sanitized `osac_error.message` artifacts.
+
+Provider HTTP and transport failures use the shared retry classifier. DHCP
+lease acceptance separately retries absent or multiple active leases; it does
+not turn a provider HTTP 400 into a transient error. Missing or malformed
+`NETRIS_CONTROLLER_URL` settings fail before authentication with a named,
+retryable setting error. Provider authentication rejections remain subject to
+the normal HTTP classifier.
 
 ## Testing
 

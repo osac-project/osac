@@ -1,52 +1,20 @@
 ---
-# Move a server's fabric port between Netris V-Nets: detach from from_vnet_name
-# (if set) then attach to to_vnet_name (if set). Either may be empty for a pure
-# detach or attach. Backend/lifecycle-agnostic — callers decide what the V-Nets
-# mean (tenant, provisioning, ...), so this is reusable across BMaaS and CaaS.
-#
-# Idempotent / interrupt-safe (OSAC-4923):
-# - Port already off source → detach is a no-op success
-# - Port already on target → attach is a no-op success
-# - Interrupted after detach before attach → rerun completes attach
-# Attach/detach helpers assert membership post-conditions.
+# Legacy attachment entry point: move a server's fabric port between the
+# V-Nets named by the caller.
 
-- name: Extract move configuration
-  ansible.builtin.set_fact:
-    na_host_name: "{{ network_attachment.host_name }}"
-    na_logical_interface: "{{ network_attachment.logical_interface_name }}"
-    _na_from: "{{ network_attachment.from_vnet_name | default('', true) }}"
-    _na_to: "{{ network_attachment.to_vnet_name | default('', true) }}"
-
-- name: Resolve server port
-  ansible.builtin.include_tasks: _resolve_server_port.yaml
-
-- name: Fail if server port not found
-  ansible.builtin.fail:
-    msg: >-
-      Port '{{ na_logical_interface }}' not found on server '{{ na_host_name }}'
-      (ensure the host is registered in Netris and the interface name is correct).
-  when: _target_port is none
-
-- name: Detach from source V-Net
-  ansible.builtin.include_tasks: _detach_port_from_vnet.yaml
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
   vars:
-    _op_vnet_name: "{{ _na_from }}"
-  when: _na_from | length > 0
+    _osac_task_name: move_network_attachment
 
-- name: Wait for fabric to settle after detach
-  ansible.builtin.pause:
-    seconds: 15
-  when: _na_from | length > 0 and _na_to | length > 0
-
-- name: Attach to target V-Net
-  ansible.builtin.include_tasks: _attach_port_to_vnet.yaml
-  vars:
-    _op_vnet_name: "{{ _na_to }}"
-  when: _na_to | length > 0
-
-- name: Display move completion
-  ansible.builtin.debug:
-    msg: >-
-      Move of '{{ na_host_name }}/{{ na_logical_interface }}'
-      from '{{ _na_from | default('(none)') }}' to '{{ _na_to | default('(none)') }}'
-      completed with post-conditions satisfied.
+- name: Move the server port
+  block:
+    - name: Move the server port
+      ansible.builtin.include_tasks: _move_port.yaml
+  rescue:
+    - name: Preserve the underlying provider failure for the legacy report
+      ansible.builtin.include_tasks: _preserve_failure.yaml
+    - name: Publish the sanitized NetworkAttachment move error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
+      vars:
+        _osac_error_label: NetworkAttachment move

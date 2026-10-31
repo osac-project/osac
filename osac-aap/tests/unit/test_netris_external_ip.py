@@ -851,3 +851,132 @@ def test_client_fails_closed_on_unknown_record_shape(monkeypatch, raw):
 
     with pytest.raises(netris_eip.NetrisExternalIPError):
         client.list_subnets()
+
+
+# --- Contract snapshot shape (osac_job_vars) -----------------------------
+
+
+def contract_resource(**overrides):
+    resource = {
+        "apiVersion": "osac.openshift.io/v1alpha1",
+        "kind": "ExternalIP",
+        "id": EXTERNAL_IP_ID,
+        "metadata": {
+            "name": "eip-test",
+            "namespace": "osac",
+            "uid": RESOURCE_UID,
+            "generation": 2,
+        },
+        "spec": {"pool": POOL_FULFILLMENT_ID},
+    }
+    resource.update(overrides)
+    return resource
+
+
+def contract_pool(**overrides):
+    pool = {
+        "apiVersion": "osac.openshift.io/v1alpha1",
+        "kind": "ExternalIPPool",
+        "id": POOL_FULFILLMENT_ID,
+        "metadata": {
+            "name": "pool-test",
+            "namespace": "osac",
+            "uid": POOL_UID,
+            "generation": 1,
+        },
+        "spec": {"cidrs": [POOL_CIDR]},
+    }
+    pool.update(overrides)
+    return pool
+
+
+def contract_request(**overrides):
+    values = {
+        "resource": contract_resource(),
+        "pool": contract_pool(),
+        "operation": "external_ip.allocate",
+    }
+    values.update(overrides)
+    return netris_eip.validate_request(
+        values["resource"], values["pool"], values["operation"], "contract"
+    )
+
+
+def test_contract_allocate_request_is_keyed_by_the_api_id():
+    request = contract_request()
+
+    assert request == {
+        "operation": "external_ip.allocate",
+        "uid": RESOURCE_UID,
+        "generation": 2,
+        "reservation_name": f"osac-eip-{EXTERNAL_IP_ID}",
+        "resource_id": EXTERNAL_IP_ID,
+        "tenant_id": "",
+        "pool_id": POOL_FULFILLMENT_ID,
+        "pool_uid": "",
+        "pool_tenant_id": "",
+        "cidr": POOL_CIDR,
+        "phase": "Ready",
+    }
+
+
+def test_contract_release_needs_no_deletion_timestamp():
+    request = contract_request(operation="external_ip.release")
+
+    assert request["operation"] == "external_ip.release"
+    assert request["reservation_name"] == f"osac-eip-{EXTERNAL_IP_ID}"
+    assert request["phase"] == "Deleting"
+
+
+def test_contract_reservation_survives_a_recreated_cr_uid():
+    first = contract_request()
+    recreated = contract_request(
+        resource=contract_resource(
+            metadata={
+                "name": "eip-test",
+                "namespace": "osac",
+                "uid": "22222222-2222-4222-8222-222222222222",
+                "generation": 1,
+            }
+        )
+    )
+
+    assert recreated["uid"] != first["uid"]
+    assert recreated["reservation_name"] == first["reservation_name"]
+
+
+@pytest.mark.parametrize(
+    "pool, message",
+    [
+        (contract_pool(spec={"cidrs": []}), "exactly one IPv4 CIDR"),
+        (contract_pool(spec={"cidrs": [POOL_CIDR, "10.21.0.0/24"]}), "exactly one IPv4 CIDR"),
+        (contract_pool(spec={"cidrs": ["10.20.0.5/24"]}), "canonical IPv4 CIDR"),
+        (contract_pool(spec={"cidrs": ["2001:db8::/64"]}), "must be an IPv4 CIDR"),
+        (contract_pool(id="other-pool"), "does not match the pool snapshot"),
+    ],
+)
+def test_contract_request_rejects_a_pool_it_cannot_serve(pool, message):
+    with pytest.raises(ValueError, match=message):
+        contract_request(pool=pool)
+
+
+@pytest.mark.parametrize(
+    "resource, message",
+    [
+        (contract_resource(id=""), "ExternalIP API ID must be a nonempty string"),
+        (contract_resource(id=None), "ExternalIP API ID must be a nonempty string"),
+        (contract_resource(metadata={"uid": RESOURCE_UID}), "generation must be a positive integer"),
+        (contract_resource(spec={}), "ExternalIP pool reference"),
+        (contract_resource(spec=None), "omits spec"),
+    ],
+)
+def test_contract_request_rejects_a_malformed_resource(resource, message):
+    with pytest.raises(ValueError, match=message):
+        contract_request(resource=resource)
+
+
+def test_unknown_input_shape_is_rejected():
+    with pytest.raises(ValueError, match="unsupported ExternalIP input shape"):
+        netris_eip.validate_request(
+            contract_resource(), contract_pool(), "external_ip.allocate", "v2"
+        )

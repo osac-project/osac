@@ -27,12 +27,31 @@ VPC_ROLE_ROOT = (
 )
 
 
+def _flatten_blocks(tasks: list[dict]) -> list[dict]:
+    """Return the success-path tasks, descending into block-nested tasks."""
+    flattened: list[dict] = []
+    for task in tasks:
+        flattened.append(task)
+        flattened.extend(_flatten_blocks(task.get("block", [])))
+    return flattened
+
+
 def _virtual_network_tasks() -> list[dict]:
-    return yaml.safe_load((ROLE_ROOT / "tasks" / "create_virtual_network.yaml").read_text(encoding="utf-8"))
+    return _flatten_blocks(
+        yaml.safe_load(
+            (ROLE_ROOT / "tasks" / "create_virtual_network.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+    )
 
 
 def _subnet_tasks() -> list[dict]:
-    return yaml.safe_load((ROLE_ROOT / "tasks" / "create_subnet.yaml").read_text(encoding="utf-8"))
+    return _flatten_blocks(
+        yaml.safe_load(
+            (ROLE_ROOT / "tasks" / "_create_subnet_work.yaml").read_text(encoding="utf-8")
+        )
+    )
 
 
 def test_virtual_network_provisioning_uses_idempotent_vpc_create_or_find() -> None:

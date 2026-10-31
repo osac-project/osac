@@ -1,0 +1,36 @@
+---
+# Publishes a sanitized osac_error for a failed contract task, then re-fails.
+# Callers set _osac_error_label (plain words) and may set
+# _osac_error_retryable_default when the task's failures are transient.
+#
+# ansible_failed_result holds the failed module's arguments, including
+# authentication headers, and ansible-core does not honour no_log for it. Only
+# the bounded, redacted text from netris_safe_error_detail is published or
+# rendered; the raw result never reaches osac_error, a fact, or a message.
+
+- name: Build the sanitized contract error
+  ansible.builtin.set_fact:
+    _osac_rescue_message: >-
+      {{ ansible_failed_result | netris.controller.netris_safe_error_detail }}
+    _osac_rescue_retryable: >-
+      {{ ansible_failed_result.retryable
+         | default(_osac_error_retryable_default
+                   | default(ansible_failed_result
+                             | netris.controller.netris_retryable_error)) }}
+  when: _osac_contract | default(false) | bool
+
+- name: Publish the sanitized contract error
+  ansible.builtin.set_stats:
+    data: >-
+      {{ {'osac_error': {'message': _osac_rescue_message,
+                         'retryable': _osac_rescue_retryable | bool}} }}
+    per_host: false
+    aggregate: false
+  when: _osac_contract | default(false) | bool
+
+- name: Fail the task after the rescue
+  ansible.builtin.fail:
+    msg: >-
+      {{ _osac_rescue_message
+         if (_osac_contract | default(false) | bool)
+         else (ansible_failed_result | netris.controller.netris_safe_error_detail) }}

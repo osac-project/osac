@@ -241,12 +241,15 @@ def test_reserved_prefix_reconciliation_is_idempotent_and_checks_identity(tmp_pa
 
 
 def test_gateway_creation_waits_for_reserved_ipam_and_cleanup_removes_child_first() -> None:
-    tasks = yaml.safe_load((TASKS / "create_subnet.yaml").read_text())
+    tasks = yaml.safe_load((TASKS / "_create_subnet_work.yaml").read_text())
     names = [task["name"] for task in tasks]
     helper = tasks[names.index("Ensure the reserved EVPN fabric prefix exists in Netris IPAM")]
-    assert helper["when"] == "is_cudn_evpn"
+    conditions = helper["when"]
+    if isinstance(conditions, str):
+        conditions = [conditions]
+    assert "is_cudn_evpn" in conditions
     assert names.index(helper["name"]) < names.index("Create V-Net in Netris controller")
-    tasks = yaml.safe_load((TASKS / "delete_subnet.yaml").read_text())
+    tasks = yaml.safe_load((TASKS / "_delete_subnet_work.yaml").read_text())
     names = [task["name"] for task in tasks]
     assert names.index("Delete V-Net from Netris controller") < names.index("Delete the reserved EVPN fabric IPAM subnet")
     assert names.index("Delete the reserved EVPN fabric IPAM subnet") < names.index("Delete IPAM subnet from Netris controller")
@@ -261,7 +264,7 @@ def test_every_fabric_ipam_request_uses_the_configured_ca_path() -> None:
 
 
 def test_subnet_delete_resolves_ipam_parent_through_identity_scoped_role() -> None:
-    tasks = yaml.safe_load((TASKS / "delete_subnet.yaml").read_text())
+    tasks = yaml.safe_load((TASKS / "_delete_subnet_work.yaml").read_text())
     lookup = next(task for task in tasks if task.get("name") == "Find the exact IPAM parent for this Subnet")
     assert lookup["ansible.builtin.include_role"] == {
         "name": "netris.controller.ipam",

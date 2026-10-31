@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 
 def _dig(obj: Any, path: str) -> Any:
@@ -221,12 +222,25 @@ def format_immutable_mismatch_message(
     return "\n".join(lines)
 
 
+def _http_status(result: dict[str, Any]) -> int | None:
+    """Return a real HTTP status, ignoring the URI no-response sentinel (-1).
+
+    ``ansible.builtin.uri`` reports a connection that closed before any
+    response as ``status: -1``. That is a transport failure, not an HTTP
+    status, so retry classification must inspect the error text instead.
+    """
+    status = result.get("status")
+    if isinstance(status, int) and not isinstance(status, bool) and status >= 100:
+        return status
+    return None
+
+
 def netris_safe_error_detail(result: Any) -> str:
     """Return a bounded provider/task error summary without request secrets."""
     if not isinstance(result, dict):
         return "provider response details are unavailable"
 
-    status = result.get("status")
+    status = _http_status(result)
     body = result.get("json")
     detail = body.get("message") if isinstance(body, dict) else None
     if not isinstance(detail, str) or not detail.strip():
@@ -234,18 +248,212 @@ def netris_safe_error_detail(result: Any) -> str:
     if not isinstance(detail, str) or not detail.strip():
         detail = "provider returned no diagnostic message"
 
-    detail = re.sub(r"[\r\n\t]+", " ", detail).strip()
+    # Authorization schemes can contain spaces and comma-separated parameters.
+    # Without a quoted boundary, discard the remainder rather than forwarding
+    # an unverified part of a credential (including folded header lines).
     detail = re.sub(
-        r"(?i)\b(connect\.sid|cookie|authorization|token|password|secret)\b\s*[:=]\s*(?:Bearer\s+)?[^\s,;]+",
+        r"""(?ix)\b((?:proxy[-_])?authorization)\b
+        ["']?\s*[:=]\s*
+        (?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[\s\S]*)""",
         r"\1=<redacted>",
         detail,
     )
-    detail = re.sub(r"(?i)\bBearer\s+[^\s,;]+", "Bearer <redacted>", detail)
+    detail = re.sub(
+        r"""(?ix)\b(connect\.sid|cookie|password|passwd|(?:client[_-]?)?secret|
+        api[_-]?key|(?:(?:access|refresh|id|api|auth|bearer|session)[_-]?)?token)\b
+        ["']?\s*[:=]\s*
+        (?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|["'][\s\S]*|
+        (?:(?:Bearer|Basic)\s+)?[^\s,;}\]]+)""",
+        r"\1=<redacted>",
+        detail,
+    )
+    detail = re.sub(r"(?i)\b(Bearer|Basic)\s+[^\s,;]+", r"\1 <redacted>", detail)
+    detail = re.sub(r"[\r\n\t]+", " ", detail).strip()
     detail = detail[:240]
 
     if status is None:
         return f"no HTTP status was received; {detail}"
     return f"HTTP {status}; {detail}"
+
+
+RETRYABLE_HTTP_STATUSES = frozenset({408, 425, 429})
+
+TRANSIENT_ERROR_MARKERS = (
+    "connection failure",
+    "connection refused",
+    "connection reset",
+    "temporary failure",
+    "timed out",
+    "timeout",
+    "bad gateway",
+    "gateway timeout",
+    "service unavailable",
+    "eof occurred",
+    "remote end closed connection",
+    "broken pipe",
+)
+
+# Contract 4.3/4.6: a missing or malformed setting is retryable, because an
+# administrator can repair it and job pods read settings at start. Role tasks
+# prefix those failures with this marker so classification does not have to
+# guess from unrelated assertion text.
+MISSING_SETTING_MARKER = "netris setting error"
+
+# Contract 4.10: a MAC match alone may be a historical or reservation-only
+# record, so only a DHCP-sourced active binding is a lease.
+ACTIVE_DHCP_SOURCE = "dhcp"
+ACTIVE_DHCP_STATE = "active"
+
+
+def netris_attachment_port_plan(
+    vnet: dict,
+    server_ports: list,
+    target_id: str,
+    selected_id: Any,
+    deleting=False,
+    legacy_uid: str | None = None,
+    tenant_vnet: dict | None = None,
+) -> dict:
+    """Remember only this host's provisioning ports across jobs and retries.
+
+    Ports outside provisioning are not candidates, notably FabricDomain ports.
+    A resource-scoped provider tag is saved before disconnecting any port, so
+    delete can restore the exact set even in a fresh AAP job after interruption.
+    """
+    if not isinstance(target_id, str) or not re.fullmatch(r"[A-Za-z0-9-]+", target_id):
+        raise ValueError("NetworkAttachment requires a stable target API ID")
+    host_ids = {_norm(port.get("id")) for port in server_ports}
+    if any(not re.fullmatch(r"[1-9][0-9]*", value) for value in host_ids):
+        raise ValueError("Host inventory contains an invalid port ID")
+    prefix = f"osac-na-target:{target_id}:"
+    tags = vnet.get("tags") or []
+    if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+        raise ValueError("Provider returned malformed provisioning V-Net tags")
+    saved = [tag for tag in tags if tag.startswith(prefix)]
+    # OSAC-6754: only the supplied UID can prove ownership of a legacy tag.
+    # Never guess from port overlap after a hub CR has been replaced: refusing
+    # the operation preserves the only record of already-disconnected ports.
+    legacy_prefix = f"osac-na:{legacy_uid}:" if legacy_uid else None
+    for tag in tags:
+        if not tag.startswith("osac-na:"):
+            continue
+        if legacy_prefix and tag.startswith(legacy_prefix):
+            saved.append(tag)
+        elif host_ids.intersection(tag.rsplit(":", 1)[-1].split(",")):
+            raise ValueError(
+                "Unverified legacy NetworkAttachment snapshot overlaps this host; "
+                "verify its owner and migrate it to the target API ID before retrying"
+            )
+    if len(saved) > 1:
+        raise ValueError("Ambiguous saved NetworkAttachment port identity")
+    ids = set(saved[0].rsplit(":", 1)[-1].split(",")) if saved else set()
+    if not ids <= host_ids:
+        raise ValueError("Saved NetworkAttachment ports do not belong to this host")
+    selected = _norm(selected_id)
+    if selected not in host_ids:
+        raise ValueError("Selected port does not belong to this host")
+    if saved and selected not in ids:
+        raise ValueError("Selected port differs from the saved fabric port identity")
+    ids.update(port_id for port_id in host_ids if netris_port_on_vnet(vnet, port_id))
+    if not deleting and selected not in ids:
+        raise ValueError("Selected port is not a provisioning fabric port")
+    if deleting and selected not in ids:
+        # Legacy single-port attachments have no snapshot. Only the caller's
+        # independently resolved, scoped tenant segment can prove membership;
+        # the inventory ID alone must never pull a FabricDomain port back.
+        if not netris_port_on_vnet(tenant_vnet, selected):
+            raise ValueError(
+                "Selected port is not a verified fabric port: no saved snapshot "
+                "or membership in provisioning or the intended tenant segment"
+            )
+        ids.add(selected)
+    port_ids = sorted(int(port_id) for port_id in ids)
+    tag = prefix + ",".join(str(port_id) for port_id in port_ids)
+    return {
+        "port_ids": port_ids,
+        "tag": tag,
+        "tags": [value for value in tags if value not in saved] + [tag],
+        "had_snapshot": bool(saved),
+        "saved_tag": saved[0] if saved else "",
+    }
+
+
+def netris_controller_url_valid(value: Any) -> bool:
+    """Validate the installation's HTTP(S) base URL before attempting auth."""
+    if not isinstance(value, str) or re.search(r"[\s\\]", value):
+        return False
+    try:
+        url = urlsplit(value)
+        return bool(
+            url.scheme in ("http", "https")
+            and url.hostname
+            and not url.username
+            and not url.password
+            and "@" not in url.netloc
+            and not url.netloc.endswith(":")
+            and (url.port is None or 0 < url.port <= 65535)
+            and not url.query
+            and not url.fragment
+        )
+    except ValueError:
+        return False
+
+
+def netris_active_dhcp_addresses(host: Any, mac_address: Any) -> list[str]:
+    """Return the addresses active DHCP leases hold for ``mac_address``.
+
+    The IP is the enclosing IPAM host's address, not ``mac[].address``.
+    MAC history only establishes whether that host has an active DHCP binding.
+    """
+    if not isinstance(host, dict):
+        return []
+    if not isinstance(mac_address, str) or not mac_address.strip():
+        return []
+    if not isinstance(host.get("address"), str):
+        return []
+    want = mac_address.strip().lower()
+    try:
+        address = str(ipaddress.IPv4Address(host.get("address")))
+    except (ValueError, TypeError):
+        return []
+    for entry in host.get("mac") or []:
+        if not isinstance(entry, dict):
+            continue
+        mac = entry.get("address")
+        if not isinstance(mac, str) or mac.strip().lower() != want:
+            continue
+        source = str(entry.get("source", "")).strip().lower()
+        state = str(entry.get("state", "")).strip().lower()
+        if source != ACTIVE_DHCP_SOURCE or state != ACTIVE_DHCP_STATE:
+            continue
+        return [address]
+    return []
+
+
+def netris_retryable_error(result: Any) -> bool:
+    """Return whether a failed task is transient enough for OSAC to retry.
+
+    An explicit ``retryable`` field wins. Otherwise a real HTTP status decides:
+    5xx and 408/425/429 are transient, every other status is final. A missing
+    HTTP status (including the URI ``-1`` no-response sentinel) falls back to
+    transport markers and then to the missing-setting marker; an assert or an
+    explicit ``fail`` is a permanent input or contract problem.
+    """
+    if not isinstance(result, dict):
+        return False
+    explicit = result.get("retryable")
+    if isinstance(explicit, bool):
+        return explicit
+    status = _http_status(result)
+    if status is not None:
+        return status >= 500 or status in RETRYABLE_HTTP_STATUSES
+    message = result.get("msg")
+    if not isinstance(message, str):
+        return False
+    lowered = message.lower()
+    if MISSING_SETTING_MARKER in lowered:
+        return True
+    return any(marker in lowered for marker in TRANSIENT_ERROR_MARKERS)
 
 
 def netris_ip_in_cidrs(address: Any, cidrs: Any) -> bool:
@@ -284,5 +492,9 @@ class FilterModule:
             "netris_ports_excluding": netris_ports_excluding,
             "format_immutable_mismatch_message": format_immutable_mismatch_message,
             "netris_safe_error_detail": netris_safe_error_detail,
+            "netris_retryable_error": netris_retryable_error,
+            "netris_active_dhcp_addresses": netris_active_dhcp_addresses,
+            "netris_attachment_port_plan": netris_attachment_port_plan,
+            "netris_controller_url_valid": netris_controller_url_valid,
             "netris_ip_in_cidrs": netris_ip_in_cidrs,
         }

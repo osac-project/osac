@@ -1,5 +1,8 @@
 ---
 # Attach _target_port to the Netris V-Net named _op_vnet_name (idempotent).
+# Pass vnet_vpc_id and/or vnet_tenant_id whenever another tenant can own a
+# V-Net with the same name; without a scope the name-only read is used only
+# when it is unambiguous.
 # Fails if the V-Net is not found or _target_port is none.
 # Waits for the V-Net to become active after attaching.
 # Asserts post-condition: port is a member of the target V-Net.
@@ -9,12 +12,8 @@
     msg: "Cannot attach: server port not resolved for '{{ na_host_name }}' / '{{ na_logical_interface }}'."
   when: _target_port is none
 
-- name: Find V-Net by name
-  ansible.builtin.include_role:
-    name: netris.controller.vnet
-    tasks_from: read
-  vars:
-    vnet_name: "{{ _op_vnet_name }}"
+- name: Resolve the port V-Net identity
+  ansible.builtin.include_tasks: _resolve_port_vnet.yaml
 
 - name: Fail if V-Net not found
   ansible.builtin.fail:

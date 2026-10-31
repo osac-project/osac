@@ -295,6 +295,115 @@ class TestFormatImmutableMismatchMessage:
 
 
 class TestNetrisSafeErrorDetail:
+
+    @pytest.mark.parametrize(
+        "scheme", ["Basic", "Bearer", "Digest", "Negotiate", "Custom"]
+    )
+    @pytest.mark.parametrize("key", ["Authorization", "Proxy-Authorization"])
+    def test_redacts_complete_unquoted_authorization(self, scheme, key):
+        message = (
+            f"backend unavailable; {key}: {scheme} SYNTHETIC_CREDENTIAL "
+            'realm="SYNTHETIC_REALM", nonce="SYNTHETIC_NONCE"'
+        )
+        detail = idempotency.netris_safe_error_detail(
+            {"status": 503, "json": {"message": message}}
+        )
+        assert detail.startswith("HTTP 503; backend unavailable;")
+        assert "<redacted>" in detail
+        assert "SYNTHETIC_" not in detail
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "access_token",
+            "refresh_token",
+            "id_token",
+            "api_token",
+            "auth_token",
+            "session_token",
+            "accessToken",
+            "refreshToken",
+            "client_secret",
+            "api_key",
+        ],
+    )
+    def test_redacts_common_structured_credentials(self, key):
+        detail = idempotency.netris_safe_error_detail(
+            {
+                "status": 401,
+                "json": {
+                    "message": f'backend rejected {{"{key}": "SYNTHETIC_SECRET"}}'
+                },
+            }
+        )
+        assert detail.startswith("HTTP 401; backend rejected")
+        assert "<redacted>" in detail
+        assert "SYNTHETIC_SECRET" not in detail
+
+    @pytest.mark.parametrize("scheme", ["Bearer", "Basic"])
+    @pytest.mark.parametrize("key", ["token", "access_token", "password"])
+    def test_unquoted_scheme_prefixed_credentials_remain_redacted(self, scheme, key):
+        detail = idempotency.netris_safe_error_detail(
+            {"status": 401, "msg": f"backend rejected {key}={scheme} SYNTHETIC_SECRET"}
+        )
+        assert detail == f"HTTP 401; backend rejected {key}=<redacted>"
+
+    def test_folded_authorization_never_forwards_the_credential_continuation(self):
+        detail = idempotency.netris_safe_error_detail(
+            {
+                "status": 401,
+                "msg": "backend rejected Authorization: Basic\r\n SYNTHETIC_SECRET",
+            }
+        )
+        assert detail == "HTTP 401; backend rejected Authorization=<redacted>"
+
+    def test_quoted_authorization_keeps_the_safe_diagnostic_after_the_value(self):
+        detail = idempotency.netris_safe_error_detail(
+            {
+                "status": 401,
+                "msg": '{"Authorization": "Basic SYNTHETIC_SECRET", "reason": "invalid credentials"}',
+            }
+        )
+        assert "SYNTHETIC_SECRET" not in detail
+        assert "invalid credentials" in detail
+        assert "Authorization=<redacted>" in detail
+
+    @pytest.mark.parametrize(
+        "key", ["token", "access_token", "password", "Authorization"]
+    )
+    @pytest.mark.parametrize("quote", ['"', "'"])
+    def test_unterminated_quoted_secret_discards_the_untrusted_remainder(
+        self, key, quote
+    ):
+        detail = idempotency.netris_safe_error_detail(
+            {
+                "msg": f"backend rejected {key}={quote}SYNTHETIC_FIRST SYNTHETIC_REMAINDER"
+            }
+        )
+        assert "backend rejected" in detail
+        assert "<redacted>" in detail
+        assert "SYNTHETIC_" not in detail
+
+    @pytest.mark.parametrize(
+        "key", ["token", "password", "secret", "Cookie", "connect.sid", "Authorization"]
+    )
+    @pytest.mark.parametrize("quote", ['"', "'"])
+    def test_redacts_quoted_keys_and_complete_quoted_values(self, key, quote):
+        marker = (
+            "SYNTHETIC_VALUE with spaces, separators; and escaped \\" + quote + "quote"
+        )
+        message = (
+            f"backend unavailable: {{{quote}{key}{quote}: {quote}{marker}{quote}}}"
+        )
+        detail = idempotency.netris_safe_error_detail(
+            {"status": 503, "json": {"message": message}}
+        )
+        assert "backend unavailable" in detail
+        assert "<redacted>" in detail
+        assert "SYNTHETIC_VALUE" not in detail
+        assert "with spaces" not in detail
+        assert "quote" not in detail
+
     def test_includes_http_status_and_redacts_credentials(self):
         detail = idempotency.netris_safe_error_detail(
             {
@@ -321,6 +430,16 @@ class TestNetrisSafeErrorDetail:
     def test_truncates_long_error(self):
         detail = idempotency.netris_safe_error_detail({"msg": "x" * 400})
         assert len(detail) == len("no HTTP status was received; ") + 240
+
+    def test_no_response_sentinel_is_not_rendered_as_an_http_status(self):
+        detail = idempotency.netris_safe_error_detail(
+            {
+                "status": -1,
+                "msg": "Connection failure: Remote end closed connection without response",
+            }
+        )
+        assert detail.startswith("no HTTP status was received;")
+        assert "HTTP -1" not in detail
 
 
 class TestNetrisIPInCIDRs:
@@ -349,4 +468,276 @@ class TestFilterModuleRegistration:
         assert "format_immutable_mismatch_message" in filters
         assert "netris_immutable_missing_fields" in filters
         assert "netris_safe_error_detail" in filters
+        assert "netris_retryable_error" in filters
+        assert "netris_active_dhcp_addresses" in filters
         assert "netris_ip_in_cidrs" in filters
+
+
+class TestNetrisRetryableError:
+    def test_explicit_retryable_wins(self):
+        assert idempotency.netris_retryable_error(
+            {"retryable": False, "status": 503, "msg": "provider unavailable"}
+        ) is False
+        assert idempotency.netris_retryable_error(
+            {"retryable": True, "status": 400, "msg": "bad request"}
+        ) is True
+
+    def test_server_and_throttling_statuses_are_retryable(self):
+        for status in (500, 502, 503, 504, 408, 425, 429):
+            assert idempotency.netris_retryable_error({"status": status}) is True
+
+    def test_client_statuses_are_final(self):
+        for status in (400, 401, 403, 404, 409, 422):
+            assert idempotency.netris_retryable_error({"status": status}) is False
+
+    def test_transport_failure_without_status_is_retryable(self):
+        assert idempotency.netris_retryable_error(
+            {"msg": "Status code was 503 and not [200]: HTTP Error 503: Service Unavailable"}
+        ) is True
+        assert idempotency.netris_retryable_error(
+            {"msg": "Connection failure: [Errno 111] Connection refused"}
+        ) is True
+
+    def test_assert_and_tls_failures_are_final(self):
+        assert idempotency.netris_retryable_error(
+            {"failed": True, "msg": "Netris VPC 'demo' was not found"}
+        ) is False
+        assert idempotency.netris_retryable_error(
+            {"msg": "TLS certificate verification failed"}
+        ) is False
+
+    def test_non_mapping_result_is_final(self):
+        assert idempotency.netris_retryable_error("boom") is False
+
+    def test_no_response_sentinel_falls_back_to_transport_classification(self):
+        assert idempotency.netris_retryable_error(
+            {
+                "status": -1,
+                "msg": "Status code was -1 and not [200]: Connection failure: Remote end closed connection without response",
+            }
+        ) is True
+        assert idempotency.netris_retryable_error(
+            {"status": -1, "msg": "Invalid JSON returned"}
+        ) is False
+
+    def test_missing_setting_failure_is_retryable(self):
+        assert idempotency.netris_retryable_error(
+            {
+                "failed": True,
+                "msg": "Netris setting error: NETRIS_BM_PROVISIONING_VNET must be set",
+            }
+        ) is True
+
+
+class TestNetrisActiveDhcpAddresses:
+    MAC = "aa:bb:cc:dd:ee:ff"
+
+    def test_active_dhcp_binding_is_a_lease(self):
+        host = {
+            "address": "10.0.1.130",
+            "mac": [
+                {"address": self.MAC.upper(), "source": "dhcp", "state": "active"},
+                {"address": "11:22:33:44:55:66", "source": "dhcp", "state": "active"},
+            ]
+        }
+        assert idempotency.netris_active_dhcp_addresses(host, self.MAC) == [
+            "10.0.1.130"
+        ]
+
+    def test_inactive_and_reservation_only_records_are_not_leases(self):
+        host = {
+            "address": "10.0.1.130",
+            "mac": [
+                {"address": self.MAC, "source": "dhcp", "state": "inactive"},
+                {"address": self.MAC, "source": "reservation", "state": "active"},
+            ]
+        }
+        assert idempotency.netris_active_dhcp_addresses(host, self.MAC) == []
+
+    def test_mixed_records_count_only_active_dhcp(self):
+        host = {
+            "address": "10.0.1.130",
+            "mac": [
+                {"address": self.MAC, "source": "reservation", "state": "active"},
+                {"address": self.MAC, "source": "dhcp", "state": "inactive"},
+                {"address": self.MAC, "source": "dhcp", "state": "active"},
+            ]
+        }
+        assert idempotency.netris_active_dhcp_addresses(host, self.MAC) == ["10.0.1.130"]
+
+    def test_repeated_mac_history_counts_the_host_address_once(self):
+        host = {
+            "address": "10.0.1.130",
+            "mac": [{"address": self.MAC, "source": "dhcp", "state": "active"}] * 2,
+        }
+        assert idempotency.netris_active_dhcp_addresses(host, self.MAC) == ["10.0.1.130"]
+
+    @pytest.mark.parametrize("address", [None, "invalid", "aa:bb:cc:dd:ee:ff", "2001:db8::1"])
+    def test_invalid_or_non_ipv4_host_address_is_not_a_lease(self, address):
+        host = {
+            "address": address,
+            "mac": [{"address": self.MAC, "source": "dhcp", "state": "active"}],
+        }
+        assert idempotency.netris_active_dhcp_addresses(host, self.MAC) == []
+
+    def test_malformed_input_is_ignored(self):
+        assert idempotency.netris_active_dhcp_addresses(None, self.MAC) == []
+        assert idempotency.netris_active_dhcp_addresses({"mac": []}, "") == []
+        assert idempotency.netris_active_dhcp_addresses(
+            {"mac": ["not-a-dict", {"address": self.MAC}]}, self.MAC
+        ) == []
+
+
+class TestNetrisAttachmentPortPlan:
+    PORTS = [{"id": 101}, {"id": 102}, {"id": 103}]
+
+    def test_captures_only_host_ports_on_provisioning(self):
+        vnet = {"ports": [{"id": "101"}, {"id": 102}, {"id": 201}], "tags": ["keep"]}
+        plan = idempotency.netris_attachment_port_plan(
+            vnet, self.PORTS, "target-id", 101
+        )
+        assert plan["port_ids"] == [101, 102]
+        assert plan["tags"] == ["keep", "osac-na-target:target-id:101,102"]
+
+    def test_fresh_job_recovers_detached_ports_and_preserves_other_snapshots(self):
+        vnet = {
+            "ports": [],
+            "tags": ["osac-na-target:target-id:101,102", "osac-na:other:201"],
+        }
+        plan = idempotency.netris_attachment_port_plan(
+            vnet, self.PORTS, "target-id", 101, True
+        )
+        assert plan["port_ids"] == [101, 102]
+        assert plan["tags"] == ["osac-na:other:201", "osac-na-target:target-id:101,102"]
+
+    @pytest.mark.parametrize(
+        "tags",
+        [
+            ["osac-na-target:target-id:201"],
+            ["osac-na-target:target-id:101", "osac-na-target:target-id:102"],
+            ["osac-na-target:target-id:102"],
+            ["osac-na-target:target-id:"],
+        ],
+    )
+    def test_invalid_or_changed_saved_identity_is_refused(self, tags):
+        with pytest.raises(ValueError):
+            idempotency.netris_attachment_port_plan(
+                {"ports": [], "tags": tags}, self.PORTS, "target-id", 101
+            )
+
+    def test_verified_legacy_snapshot_is_migrated(self):
+        vnet = {
+            "ports": [],
+            "tags": ["keep", "osac-na:uid-1:101,102", "osac-na:other:201"],
+        }
+        plan = idempotency.netris_attachment_port_plan(
+            vnet, self.PORTS, "target-id", 101, legacy_uid="uid-1"
+        )
+        assert plan["port_ids"] == [101, 102]
+        assert plan["tags"] == [
+            "keep",
+            "osac-na:other:201",
+            "osac-na-target:target-id:101,102",
+        ]
+        assert plan["saved_tag"] == "osac-na:uid-1:101,102"
+
+    @pytest.mark.parametrize("deleting", [False, True])
+    def test_unknown_legacy_owner_refuses_incomplete_restoration(self, deleting):
+        with pytest.raises(ValueError, match="legacy"):
+            idempotency.netris_attachment_port_plan(
+                {"ports": [], "tags": ["osac-na:old-uid:101,102"]},
+                self.PORTS,
+                "target-id",
+                101,
+                deleting,
+                legacy_uid="new-uid",
+            )
+
+    def test_stable_and_legacy_snapshots_are_ambiguous(self):
+        with pytest.raises(ValueError, match="Ambiguous"):
+            idempotency.netris_attachment_port_plan(
+                {"tags": ["osac-na-target:target-id:101,102", "osac-na:uid-1:101,102"]},
+                self.PORTS,
+                "target-id",
+                101,
+                legacy_uid="uid-1",
+            )
+
+    def test_apply_refuses_an_interface_outside_provisioning(self):
+        with pytest.raises(ValueError, match="not a provisioning fabric port"):
+            idempotency.netris_attachment_port_plan(
+                {"ports": [{"id": 101}]}, self.PORTS, "uid-1", 103
+            )
+
+    def test_delete_without_snapshot_refuses_an_unverified_port(self):
+        with pytest.raises(ValueError, match="not a verified fabric port"):
+            idempotency.netris_attachment_port_plan(
+                {"ports": [{"id": 101}]}, self.PORTS, "target-id", 103, True
+            )
+
+    def test_delete_without_snapshot_accepts_verified_tenant_membership(self):
+        plan = idempotency.netris_attachment_port_plan(
+            {"ports": [{"id": 102}]},
+            self.PORTS,
+            "target-id",
+            101,
+            True,
+            tenant_vnet={"ports": [{"id": "101"}]},
+        )
+        assert plan["port_ids"] == [101, 102]
+        assert plan["had_snapshot"] is False
+
+    def test_idle_delete_does_not_need_a_tenant_segment_or_snapshot(self):
+        plan = idempotency.netris_attachment_port_plan(
+            {"ports": [{"id": 101}, {"id": 102}]}, self.PORTS, "target-id", 101, True
+        )
+        assert plan["port_ids"] == [101, 102]
+        assert plan["had_snapshot"] is False
+
+    def test_apply_cannot_use_tenant_membership_to_bypass_the_fabric_guard(self):
+        with pytest.raises(ValueError, match="not a provisioning fabric port"):
+            idempotency.netris_attachment_port_plan(
+                {"ports": [{"id": 102}]},
+                self.PORTS,
+                "target-id",
+                101,
+                tenant_vnet={"ports": [{"id": 101}]},
+            )
+
+
+class TestNetrisControllerURLValid:
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://localhost:8080",
+            "https://controller.example/",
+            "https://controller.example/netris",
+            "https://[::1]:443",
+        ],
+    )
+    def test_supported_base_url(self, url):
+        assert idempotency.netris_controller_url_valid(url)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            None,
+            "",
+            "not-a-url",
+            "ftp://controller",
+            "https://",
+            "http://host:bad",
+            "https://host:0",
+            "https://host:65536",
+            "http://host:",
+            "https://bad host",
+            "https://host\\path",
+            "https://host?query=value",
+            "https://host#fragment",
+            "https://user:password@host",
+            "https://[broken",
+            " http://host",
+        ],
+    )
+    def test_malformed_or_unsupported_url(self, url):
+        assert not idempotency.netris_controller_url_valid(url)

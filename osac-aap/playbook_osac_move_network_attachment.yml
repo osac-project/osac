@@ -135,7 +135,7 @@
             _netris_failure_resource_type: network attachment
             _netris_failure_resource_name: "{{ resource_name }}"
             _netris_failure_task: "{{ ansible_failed_task.name | default('unknown provider task') }}"
-            _netris_failure_result: "{{ ansible_failed_result | default({}) }}"
+            _netris_failure_detail: "{{ ansible_failed_result | netris.controller.netris_safe_error_detail }}"
           when: implementation_strategy == 'netris'
         - name: Re-raise original failure for another networking manager
           ansible.builtin.fail:

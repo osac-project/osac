@@ -359,11 +359,13 @@ def test_fabric_domain_delete_rejects_malformed_backend_id(tmp_path, netris_serv
     assert writes == []
 
 
-def test_fabric_domain_create_rejects_non_numeric_vpc_id(tmp_path, netris_server):
+@pytest.mark.parametrize("vpc_id", ["vpc-7", "0", "-1", True, "", None])
+def test_fabric_domain_create_rejects_non_numeric_vpc_id(tmp_path, netris_server, inventory, read_requests, vpc_id):
     url, _clusters, writes = netris_server
+    inventory.append(server(1, site_id=2))
     resource = {
         "metadata": {"name": "shared-name"},
-        "spec": {"servers": ["server-a"], "templateId": "42", "vpcId": "vpc-7", "region": "region-b"},
+        "spec": {"servers": ["server-a"], "templateId": "42", "vpcId": vpc_id, "region": "region-b"},
     }
     result = run_role(
         tmp_path, url, "create_server_cluster", role_name="osac.templates.netris",
@@ -371,6 +373,7 @@ def test_fabric_domain_create_rejects_non_numeric_vpc_id(tmp_path, netris_server
     )
     assert result.returncode != 0
     assert writes == []
+    assert read_requests == []
 
 
 @pytest.mark.parametrize("backend_id", ["not-a-number", "0"])

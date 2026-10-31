@@ -1,9 +1,14 @@
 ---
 # NATGateway deletion — removes the SNAT rule from Netris
 
+- name: Normalize task input
+  ansible.builtin.include_tasks: _contract_input.yaml
+  vars:
+    _osac_task_name: delete_nat_gateway
+
 - name: Extract NATGateway name
   ansible.builtin.set_fact:
-    natgw_name: "{{ nat_gateway.metadata.name }}"
+    natgw_name: "{{ _osac_resource.metadata.name }}"
 
 - name: Refuse delete of default NATGateway
   ansible.builtin.include_tasks: _refuse_if_default.yaml
@@ -13,102 +18,166 @@
     _default_refuse_name: "{{ natgw_name }}"
     _default_refuse_allow_override: false
 
-- name: Validate NATGateway ownership annotations
-  ansible.builtin.assert:
-    that:
-      - nat_gateway.metadata.annotations is defined
-      - "'osac.openshift.io/externalip-name' in nat_gateway.metadata.annotations"
-      - "'osac.openshift.io/vn-ipv4-cidr' in nat_gateway.metadata.annotations"
-    fail_msg: >-
-      Cannot safely delete Netris SNAT rule for NATGateway '{{ natgw_name }}':
-      required ownership annotations
-      'osac.openshift.io/externalip-name' and
-      'osac.openshift.io/vn-ipv4-cidr' are missing.
+- name: Delete the NATGateway from the contract snapshot
+  when: _osac_contract | default(false) | bool
+  block:
+    - name: Require the NATGateway identity and ownership inputs
+      ansible.builtin.assert:
+        that:
+          - _osac_resource.id | default('') | length > 0
+          - _osac_virtual_network.metadata.name | default('') | length > 0
+          - _osac_virtual_network.spec.ipv4Cidr | default('') | length > 0
+          - _osac_external_ip_ref.address | default('') | length > 0
+        fail_msg: >-
+          A NATGateway delete needs the gateway API ID, the VirtualNetwork
+          name and IPv4 CIDR, and the external_ip address, so the SNAT rule
+          can be verified before deletion.
 
-- name: Display NATGateway deletion info
-  ansible.builtin.debug:
-    msg: "Deleting Netris SNAT rule for NATGateway '{{ natgw_name }}'"
+    - name: Ensure Netris auth
+      ansible.builtin.include_role:
+        name: netris.controller.auth
+      when:
+        - netris_session_cookie is not defined
+        - not ansible_check_mode
 
-- name: Read the ExternalIP when it is still available
-  kubernetes.core.k8s_info:
-    api_version: osac.openshift.io/v1alpha1
-    kind: ExternalIP
-    name: "{{ nat_gateway.metadata.annotations['osac.openshift.io/externalip-name'] }}"
-    namespace: "{{ nat_gateway.metadata.namespace }}"
-  register: _natgw_eip_lookup
-  when:
-    - nat_gateway.metadata.annotations is defined
-    - nat_gateway.metadata.annotations['osac.openshift.io/externalip-name'] is defined
+    - name: Look up the tenant VPC by VirtualNetwork name
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: read
+      vars:
+        vpc_name: "{{ _osac_virtual_network.metadata.name }}"
+        vpc_tenant_id: "{{ netris_tenant_id }}"
 
-- name: Set Netris VPC lookup name for delete ownership check
-  ansible.builtin.set_fact:
-    _natgw_delete_vn_name: >-
-      {{ nat_gateway.metadata.annotations['osac.openshift.io/virtual-network-name']
-         | default('', true) }}
+    - name: Require the tenant VPC
+      ansible.builtin.assert:
+        that:
+          - netris_vpc is mapping
+          - netris_vpc.id is defined
+        fail_msg: >-
+          VirtualNetwork '{{ _osac_virtual_network.metadata.name }}' has no
+          Netris VPC; refusing to delete an SNAT rule without a VPC scope.
 
-- name: Default NATGateway delete VPC to management VPC
-  ansible.builtin.set_fact:
-    _natgw_delete_vpc_id: "{{ netris_mgmt_vpc_id }}"
+    - name: Delete the SNAT rule for the NATGateway
+      ansible.builtin.include_role:
+        name: netris.controller.nat
+        tasks_from: delete
+      vars:
+        nat_name: "{{ _osac_resource.id }}-snat"
+        nat_site_id: "{{ netris_site_id }}"
+        nat_expected_fields:
+          action: SNAT
+          "site.id": "{{ netris_site_id }}"
+          "vpc.id": "{{ netris_vpc.id }}"
+          sourceAddress: "{{ _osac_virtual_network.spec.ipv4Cidr }}"
+          snatToIP: "{{ _osac_external_ip_ref.address }}/32"
 
-- name: Look up tenant VPC for NATGateway delete ownership check
-  ansible.builtin.include_role:
-    name: netris.controller.vpc
-    tasks_from: read
-  vars:
-    vpc_name: "{{ _natgw_delete_vn_name }}"
-  when: _natgw_delete_vn_name | length > 0
+    - name: Display deletion result
+      ansible.builtin.debug:
+        msg: "SNAT rule '{{ natgw_name }}-snat' deletion completed"
+  rescue:
+    - name: Publish the sanitized NATGateway delete error and fail
+      ansible.builtin.include_tasks: _contract_rescue.yaml
+      vars:
+        _osac_error_label: NATGateway delete
+- name: Run the legacy natgateway delete path
+  when: not _osac_contract | default(false) | bool
+  block:
+    - name: Validate NATGateway ownership annotations
+      ansible.builtin.assert:
+        that:
+          - nat_gateway.metadata.annotations is defined
+          - "'osac.openshift.io/externalip-name' in nat_gateway.metadata.annotations"
+          - "'osac.openshift.io/vn-ipv4-cidr' in nat_gateway.metadata.annotations"
+        fail_msg: >-
+          Cannot safely delete Netris SNAT rule for NATGateway '{{ natgw_name }}':
+          required ownership annotations
+          'osac.openshift.io/externalip-name' and
+          'osac.openshift.io/vn-ipv4-cidr' are missing.
 
-- name: Use tenant VPC for NATGateway delete ownership check
-  ansible.builtin.set_fact:
-    _natgw_delete_vpc_id: "{{ netris_vpc.id }}"
-  when:
-    - _natgw_delete_vn_name | length > 0
-    - netris_vpc is defined
-    - netris_vpc is not none
+    - name: Display NATGateway deletion info
+      ansible.builtin.debug:
+        msg: "Deleting Netris SNAT rule for NATGateway '{{ natgw_name }}'"
 
-- name: Build NATGateway SNAT ownership fields
-  ansible.builtin.set_fact:
-    _natgw_expected_fields:
-      action: SNAT
-      "site.id": "{{ netris_site_id }}"
-      "vpc.id": "{{ _natgw_delete_vpc_id }}"
+    - name: Read the ExternalIP when it is still available
+      kubernetes.core.k8s_info:
+        api_version: osac.openshift.io/v1alpha1
+        kind: ExternalIP
+        name: "{{ nat_gateway.metadata.annotations['osac.openshift.io/externalip-name'] }}"
+        namespace: "{{ nat_gateway.metadata.namespace }}"
+      register: _natgw_eip_lookup
+      when:
+        - nat_gateway.metadata.annotations is defined
+        - nat_gateway.metadata.annotations['osac.openshift.io/externalip-name'] is defined
 
-- name: Add SNAT source CIDR to ownership fields when available
-  ansible.builtin.set_fact:
-    _natgw_expected_fields: >-
-      {{ _natgw_expected_fields | combine({
-           'sourceAddress': nat_gateway.metadata.annotations['osac.openshift.io/vn-ipv4-cidr']
-         }) }}
-  when:
-    - nat_gateway.metadata.annotations is defined
-    - nat_gateway.metadata.annotations['osac.openshift.io/vn-ipv4-cidr'] is defined
+    - name: Set Netris VPC lookup name for delete ownership check
+      ansible.builtin.set_fact:
+        _natgw_delete_vn_name: >-
+          {{ nat_gateway.metadata.annotations['osac.openshift.io/virtual-network-name']
+             | default('', true) }}
 
-- name: Add SNAT target IP to ownership fields when ExternalIP remains available
-  ansible.builtin.set_fact:
-    _natgw_expected_fields: >-
-      {{ _natgw_expected_fields | combine({
-           'snatToIP': _natgw_eip_lookup.resources[0].metadata.annotations['osac.openshift.io/allocated-address'] ~ '/32'
-         }) }}
-  when:
-    - _natgw_eip_lookup is defined
-    - _natgw_eip_lookup.resources | default([]) | length > 0
-    - _natgw_eip_lookup.resources[0].metadata.annotations is defined
-    - _natgw_eip_lookup.resources[0].metadata.annotations['osac.openshift.io/allocated-address'] is defined
+    - name: Default NATGateway delete VPC to management VPC
+      ansible.builtin.set_fact:
+        _natgw_delete_vpc_id: "{{ netris_mgmt_vpc_id }}"
 
-- name: Ensure Netris auth
-  ansible.builtin.include_role:
-    name: netris.controller.auth
-  when: netris_session_cookie is not defined
+    - name: Look up tenant VPC for NATGateway delete ownership check
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: read
+      vars:
+        vpc_name: "{{ _natgw_delete_vn_name }}"
+      when: _natgw_delete_vn_name | length > 0
 
-- name: Delete SNAT rule for NATGateway
-  ansible.builtin.include_role:
-    name: netris.controller.nat
-    tasks_from: delete
-  vars:
-    nat_name: "{{ natgw_name }}-snat"
-    nat_site_id: "{{ netris_site_id }}"
-    nat_expected_fields: "{{ _natgw_expected_fields }}"
+    - name: Use tenant VPC for NATGateway delete ownership check
+      ansible.builtin.set_fact:
+        _natgw_delete_vpc_id: "{{ netris_vpc.id }}"
+      when:
+        - _natgw_delete_vn_name | length > 0
+        - netris_vpc is defined
+        - netris_vpc is not none
 
-- name: Display deletion result
-  ansible.builtin.debug:
-    msg: "SNAT rule '{{ natgw_name }}-snat' deletion completed"
+    - name: Build NATGateway SNAT ownership fields
+      ansible.builtin.set_fact:
+        _natgw_expected_fields:
+          action: SNAT
+          "site.id": "{{ netris_site_id }}"
+          "vpc.id": "{{ _natgw_delete_vpc_id }}"
+
+    - name: Add SNAT source CIDR to ownership fields when available
+      ansible.builtin.set_fact:
+        _natgw_expected_fields: >-
+          {{ _natgw_expected_fields | combine({
+               'sourceAddress': nat_gateway.metadata.annotations['osac.openshift.io/vn-ipv4-cidr']
+             }) }}
+      when:
+        - nat_gateway.metadata.annotations is defined
+        - nat_gateway.metadata.annotations['osac.openshift.io/vn-ipv4-cidr'] is defined
+
+    - name: Add SNAT target IP to ownership fields when ExternalIP remains available
+      ansible.builtin.set_fact:
+        _natgw_expected_fields: >-
+          {{ _natgw_expected_fields | combine({
+               'snatToIP': _natgw_eip_lookup.resources[0].metadata.annotations['osac.openshift.io/allocated-address'] ~ '/32'
+             }) }}
+      when:
+        - _natgw_eip_lookup is defined
+        - _natgw_eip_lookup.resources | default([]) | length > 0
+        - _natgw_eip_lookup.resources[0].metadata.annotations is defined
+        - _natgw_eip_lookup.resources[0].metadata.annotations['osac.openshift.io/allocated-address'] is defined
+
+    - name: Ensure Netris auth
+      ansible.builtin.include_role:
+        name: netris.controller.auth
+      when: netris_session_cookie is not defined
+
+    - name: Delete SNAT rule for NATGateway
+      ansible.builtin.include_role:
+        name: netris.controller.nat
+        tasks_from: delete
+      vars:
+        nat_name: "{{ natgw_name }}-snat"
+        nat_site_id: "{{ netris_site_id }}"
+        nat_expected_fields: "{{ _natgw_expected_fields }}"
+
+    - name: Display deletion result
+      ansible.builtin.debug:
+        msg: "SNAT rule '{{ natgw_name }}-snat' deletion completed"

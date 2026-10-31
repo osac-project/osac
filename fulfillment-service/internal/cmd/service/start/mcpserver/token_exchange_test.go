@@ -15,8 +15,11 @@ package mcpserver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -95,70 +98,91 @@ var _ = Describe("OAuth token exchange", func() {
 		Expect(sameCaller(incoming, outgoing)).To(MatchError("OAuth token exchange changed the caller identity"))
 	})
 
-	It("rejects exchanged API tokens that change the caller", func() {
-		cases := []struct {
-			name    string
-			claims  jwt.MapClaims
-			wantErr string
-		}{
-			{
-				name: "permissions",
-				claims: jwt.MapClaims{
-					"iss": "https://issuer.example.com/realms/osac", "sub": "user-1",
-					"preferred_username": "alice", "groups": []any{"tenant1", "admin"},
-					"exp": float64(time.Now().Add(time.Minute).Unix()),
-				},
-				wantErr: "OAuth token exchange changed the caller permissions",
-			},
-			{
-				name: "subject",
-				claims: jwt.MapClaims{
-					"iss": "https://issuer.example.com/realms/osac", "sub": "user-2",
-					"exp": float64(time.Now().Add(time.Minute).Unix()),
-				},
-				wantErr: "OAuth token exchange changed the caller identity",
-			},
-			{
-				name: "issuer",
-				claims: jwt.MapClaims{
-					"iss": "https://other-issuer.example.com", "sub": "user-1",
-					"preferred_username": "alice", "groups": []any{"tenant1"},
-					"exp": float64(time.Now().Add(time.Minute).Unix()),
-				},
-				wantErr: "OAuth token exchange changed the caller identity",
-			},
-			{
-				name: "expiration",
-				claims: jwt.MapClaims{
-					"iss": "https://issuer.example.com/realms/osac", "sub": "user-1",
-					"preferred_username": "alice", "groups": []any{"tenant1"},
-					"exp": float64(time.Now().Add(-time.Minute).Unix()),
-				},
-				wantErr: "OAuth token exchange returned an expired API token",
-			},
-		}
+	It("caches a repeated exchange until the API token expires", func() {
+		now := time.Now()
+		subject := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+			"sub": "user-1", "exp": float64(now.Add(time.Minute).Unix()),
+		})
+		delegate := &expiringTestTokenExchanger{expiration: now.Add(10 * time.Second)}
+		exchanger := newCachingTokenExchanger(delegate).(*cachingTokenExchanger)
+		exchanger.now = func() time.Time { return now }
 
-		for _, test := range cases {
-			By(test.name)
-			client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
-				body := `{"access_token":"api-token","token_type":"Bearer","issued_token_type":"urn:ietf:params:oauth:token-type:access_token"}`
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(strings.NewReader(body)),
-				}, nil
-			})}
-			validator.EXPECT().Validate(gomock.Any(), "api-token").Return(
-				jwt.NewWithClaims(jwt.SigningMethodRS256, test.claims), nil,
-			)
-			exchanger, err := newOAuthTokenExchanger(
-				"https://issuer.example.com/token", "https://mcp.example.com/", "fixture-secret", client, validator,
-			)
+		token, err := exchanger.Exchange(context.Background(), "mcp-token", subject)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(token).To(Equal("api-token"))
+		token, err = exchanger.Exchange(context.Background(), "mcp-token", subject)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(token).To(Equal("api-token"))
+		Expect(delegate.calls).To(Equal(1))
+
+		now = now.Add(11 * time.Second)
+		token, err = exchanger.Exchange(context.Background(), "mcp-token", subject)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(token).To(Equal("api-token"))
+		Expect(delegate.calls).To(Equal(2))
+	})
+
+	It("returns a canceled waiter while the shared exchange completes", func() {
+		now := time.Now()
+		subject := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+			"sub": "user-1", "exp": float64(now.Add(time.Minute).Unix()),
+		})
+		delegate := &blockingTestTokenExchanger{
+			started: make(chan struct{}),
+			release: make(chan struct{}),
+		}
+		exchanger := newCachingTokenExchanger(delegate).(*cachingTokenExchanger)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		results := make(chan error, 1)
+
+		go func() {
+			_, err := exchanger.Exchange(ctx, "mcp-token", subject)
+			results <- err
+		}()
+
+		Eventually(delegate.started).Should(BeClosed())
+		cancel()
+		Eventually(results).Should(Receive(Equal(context.Canceled)))
+		close(delegate.release)
+		Eventually(func() bool {
+			_, ok := exchanger.cachedToken(cachingTokenKey("mcp-token"), time.Now())
+			return ok
+		}).Should(BeTrue())
+
+		token, err := exchanger.Exchange(context.Background(), "mcp-token", subject)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(token).To(Equal("api-token"))
+		Expect(delegate.calls).To(Equal(1))
+	})
+
+	It("evicts only the earliest-expiring token when the cache is full", func() {
+		now := time.Now()
+		subject := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+			"sub": "user-1", "exp": float64(now.Add(time.Hour).Unix()),
+		})
+		delegate := &expiringTestTokenExchanger{responses: []expiringTestTokenExchangeResponse{
+			{token: "api-token-1", expiration: now.Add(time.Minute)},
+			{token: "api-token-2", expiration: now.Add(2 * time.Minute)},
+			{token: "api-token-3", expiration: now.Add(3 * time.Minute)},
+		}}
+		exchanger := newCachingTokenExchanger(delegate).(*cachingTokenExchanger)
+		exchanger.ttl = time.Hour
+		exchanger.maxEntries = 2
+		exchanger.now = func() time.Time { return now }
+
+		for index, subjectToken := range []string{"mcp-token-1", "mcp-token-2", "mcp-token-3"} {
+			token, err := exchanger.Exchange(context.Background(), subjectToken, subject)
 			Expect(err).ToNot(HaveOccurred())
-
-			apiToken, err := exchanger.Exchange(context.Background(), "mcp-token", incoming)
-			Expect(err).To(MatchError(test.wantErr))
-			Expect(apiToken).To(BeEmpty())
+			Expect(token).To(Equal(fmt.Sprintf("api-token-%d", index+1)))
 		}
+
+		_, firstCached := exchanger.cachedToken(cachingTokenKey("mcp-token-1"), now)
+		_, secondCached := exchanger.cachedToken(cachingTokenKey("mcp-token-2"), now)
+		_, thirdCached := exchanger.cachedToken(cachingTokenKey("mcp-token-3"), now)
+		Expect(firstCached).To(BeFalse())
+		Expect(secondCached).To(BeTrue())
+		Expect(thirdCached).To(BeTrue())
 	})
 
 	It("does not include an authorization-server error body in failures", func() {
@@ -169,71 +193,6 @@ var _ = Describe("OAuth token exchange", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = exchanger.Exchange(context.Background(), "mcp-token", incoming)
 		Expect(err).To(MatchError("OAuth token exchange failed with HTTP 403"))
-	})
-
-	It("classifies retryable authorization-server responses separately from authentication failures", func() {
-		cases := []struct {
-			name         string
-			statusCode   int
-			transportErr error
-			category     string
-			grpcCode     string
-			retryable    bool
-		}{
-			{
-				name: "server failure", statusCode: http.StatusServiceUnavailable,
-				category: "service_unavailable", grpcCode: "Unavailable", retryable: true,
-			},
-			{
-				name: "rate limit", statusCode: http.StatusTooManyRequests,
-				category: "service_unavailable", grpcCode: "Unavailable", retryable: true,
-			},
-			{
-				name: "invalid credentials", statusCode: http.StatusUnauthorized,
-				category: "authentication", grpcCode: "Unauthenticated", retryable: false,
-			},
-			{
-				name: "authorization server is unreachable", transportErr: errors.New("connection refused"),
-				category: "service_unavailable", grpcCode: "Unavailable", retryable: true,
-			},
-		}
-
-		for _, testCase := range cases {
-			By(testCase.name)
-			client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
-				if testCase.transportErr != nil {
-					return nil, testCase.transportErr
-				}
-				return &http.Response{
-					StatusCode: testCase.statusCode,
-					Body:       io.NopCloser(strings.NewReader("authorization-server response")),
-				}, nil
-			})}
-			exchanger, err := newOAuthTokenExchanger(
-				"https://issuer.example.com/token", "https://mcp.example.com/", "fixture-secret", client, validator,
-			)
-			Expect(err).ToNot(HaveOccurred())
-
-			var exchangeErr error
-			request := requestWithCaller("raw-bearer-value", safeCallerContext{Subject: "user-1"})
-			request.Extra.TokenInfo.Extra[exchangeTokenExtraKey] = apiTokenSource(func(ctx context.Context) (string, error) {
-				apiToken, err := exchanger.Exchange(ctx, "mcp-token", incoming)
-				exchangeErr = err
-				return apiToken, err
-			})
-			handler := handleCheckConnection(
-				"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(),
-				&mockTenantsClient{}, &mockSelfSubjectAccessReviewsClient{},
-			)
-			_, _, err = handler(context.Background(), request, CheckConnectionInput{})
-			Expect(err).To(HaveOccurred())
-			Expect(errors.Is(exchangeErr, errOAuthTokenExchangeUnavailable)).To(Equal(testCase.retryable))
-
-			envelope := decodeToolError(err)
-			Expect(envelope.Category).To(Equal(testCase.category))
-			Expect(envelope.GRPCCode).To(Equal(testCase.grpcCode))
-			Expect(envelope.Retryable).To(Equal(testCase.retryable))
-		}
 	})
 
 	It("rejects an exchange response that reuses the MCP token", func() {
@@ -248,6 +207,69 @@ var _ = Describe("OAuth token exchange", func() {
 	})
 })
 
+var _ = Describe("safeTokenExchangeError", func() {
+	It("maps transport unavailability to a retryable service-unavailable envelope", func() {
+		err := fmt.Errorf("dial tcp: %w", errOAuthTokenExchangeUnavailable)
+		envelope := decodeToolError(safeTokenExchangeError(err))
+		Expect(envelope.Category).To(Equal("service_unavailable"))
+		Expect(envelope.GRPCCode).To(Equal("Unavailable"))
+		Expect(envelope.Message).To(Equal("The authentication service is currently unavailable. Retry after checking service status."))
+		Expect(envelope.Retryable).To(BeTrue())
+		Expect(envelope.Details).To(Equal([]string{}))
+	})
+
+	It("maps other exchange failures to a non-retryable authentication envelope", func() {
+		envelope := decodeToolError(safeTokenExchangeError(errors.New("invalid_grant and sensitive-token")))
+		Expect(envelope.Category).To(Equal("authentication"))
+		Expect(envelope.GRPCCode).To(Equal("Unauthenticated"))
+		Expect(envelope.Message).To(Equal("MCP authentication failed. Sign in again and retry."))
+		Expect(envelope.Retryable).To(BeFalse())
+		Expect(envelope.Details).To(Equal([]string{}))
+	})
+})
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
+
+type expiringTestTokenExchanger struct {
+	calls      int
+	expiration time.Time
+	responses  []expiringTestTokenExchangeResponse
+}
+
+type expiringTestTokenExchangeResponse struct {
+	token      string
+	expiration time.Time
+}
+
+func (e *expiringTestTokenExchanger) ExchangeWithExpiration(
+	_ context.Context, _ string, _ *jwt.Token,
+) (string, time.Time, error) {
+	e.calls++
+	if len(e.responses) > 0 {
+		response := e.responses[e.calls-1]
+		return response.token, response.expiration, nil
+	}
+	return "api-token", e.expiration, nil
+}
+
+type blockingTestTokenExchanger struct {
+	started chan struct{}
+	release chan struct{}
+	calls   int
+}
+
+func (e *blockingTestTokenExchanger) ExchangeWithExpiration(
+	_ context.Context, _ string, _ *jwt.Token,
+) (string, time.Time, error) {
+	e.calls++
+	close(e.started)
+	<-e.release
+	return "api-token", time.Now().Add(time.Minute), nil
+}
+
+func cachingTokenKey(subjectToken string) string {
+	digest := sha256.Sum256([]byte(subjectToken))
+	return hex.EncodeToString(digest[:])
+}

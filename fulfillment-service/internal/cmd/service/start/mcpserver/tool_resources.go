@@ -20,9 +20,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
 )
 
 type ResourceType string
@@ -33,11 +32,11 @@ const (
 	ResourceTypeInstanceType               ResourceType = "instance_type"
 	ResourceTypeDiskImage                  ResourceType = "disk_image"
 	ResourceTypeStorageTier                ResourceType = "storage_tier"
+	ResourceTypeProject                    ResourceType = "project"
 	ResourceTypeVirtualNetwork             ResourceType = "virtual_network"
 	ResourceTypeSubnet                     ResourceType = "subnet"
 	ResourceTypeSecurityGroup              ResourceType = "security_group"
 	ResourceTypeComputeInstance            ResourceType = "compute_instance"
-	ResourceTypeProject                    ResourceType = "project"
 	ResourceTypeSecretReference            ResourceType = "secret_reference"
 )
 
@@ -49,12 +48,11 @@ type ListResourcesInput struct {
 }
 
 type ResourceSummary struct {
-	ID          string `json:"id"`
-	Name        string `json:"name,omitempty"`
-	Title       string `json:"title,omitempty"`
-	Description string `json:"description,omitempty"`
-	State       string `json:"state,omitempty"`
-	Type        string `json:"type,omitempty"`
+	ID      string `json:"id"`
+	Name    string `json:"name,omitempty"`
+	Version int32  `json:"version"`
+	State   string `json:"state,omitempty"`
+	Type    string `json:"type,omitempty"`
 }
 
 type ListResourcesOutput struct {
@@ -121,36 +119,104 @@ func handleGetResource(resources resourceRegistry) mcp.ToolHandlerFor[GetResourc
 		if err != nil {
 			return nil, GetResourceOutput{}, err
 		}
-		message, err := operations.get(ctx, input.ID)
+		summary, err := operations.get(ctx, input.ID)
 		if err != nil {
 			return nil, GetResourceOutput{}, safePublicAPIError(err)
 		}
-		resource, err := messageToMap(message)
+		resource, err := summaryToMap(summary)
 		if err != nil {
 			return nil, GetResourceOutput{}, safePublicAPIError(fmt.Errorf("failed to encode %s: %w", operations.label, err))
-		}
-		switch input.ResourceType {
-		case ResourceTypeComputeInstance:
-			if spec, ok := resource["spec"].(map[string]any); ok && hasInlineUserDataSource(spec["userDataSource"]) {
-				delete(spec, "userDataSource")
-			}
-		case ResourceTypeComputeInstanceCatalogItem:
-			if fields, ok := resource["fields"].(map[string]any); ok {
-				policy, _ := fields["userDataSource"].(map[string]any)
-				editable, _ := policy["editable"].(map[string]any)
-				if hasInlineUserDataSource(policy["locked"]) || hasInlineUserDataSource(editable["defaultValue"]) {
-					delete(fields, "userDataSource")
-				}
-			}
 		}
 		return nil, GetResourceOutput{Resource: resource}, nil
 	}
 }
 
-func hasInlineUserDataSource(value any) bool {
-	source, _ := value.(map[string]any)
-	_, inline := source["inline"]
-	return inline
+func handleGetResourceTool(resources resourceRegistry) mcp.ToolHandler {
+	typedHandler := handleGetResource(resources)
+	inputSchema := resolveResourceToolSchema[GetResourceInput](resources.resourceTypes())
+	outputSchema := resolveToolSchema[GetResourceOutput]()
+
+	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		arguments := req.Params.Arguments
+		if len(arguments) == 0 {
+			arguments = []byte("{}")
+		}
+		var document any
+		if err := json.Unmarshal(arguments, &document); err != nil {
+			return invalidArgumentsResult(), nil
+		}
+		if err := inputSchema.Validate(document); err != nil {
+			return invalidArgumentsResult(), nil
+		}
+		var input GetResourceInput
+		if err := json.Unmarshal(arguments, &input); err != nil {
+			return invalidArgumentsResult(), nil
+		}
+
+		result, output, err := typedHandler(ctx, req, input)
+		if err != nil {
+			if result == nil {
+				result = &mcp.CallToolResult{}
+			}
+			result.SetError(err)
+			return result, nil
+		}
+		if result == nil {
+			result = &mcp.CallToolResult{}
+		}
+		encodedOutput, err := json.Marshal(output)
+		if err != nil {
+			return internalOutputResult(err), nil
+		}
+		var outputDocument any
+		if err := json.Unmarshal(encodedOutput, &outputDocument); err != nil {
+			return internalOutputResult(err), nil
+		}
+		if err := outputSchema.Validate(outputDocument); err != nil {
+			return internalOutputResult(err), nil
+		}
+		result.StructuredContent = outputDocument
+		if result.Content == nil {
+			result.Content = []mcp.Content{&mcp.TextContent{Text: string(encodedOutput)}}
+		}
+		return result, nil
+	}
+}
+
+func invalidArgumentsResult() *mcp.CallToolResult {
+	result := &mcp.CallToolResult{}
+	result.SetError(safeInvalidRequestError(errors.New("arguments do not match the get_resource schema")))
+	return result
+}
+
+func internalOutputResult(err error) *mcp.CallToolResult {
+	result := &mcp.CallToolResult{}
+	result.SetError(safePublicAPIError(fmt.Errorf("failed to encode get_resource response: %w", err)))
+	return result
+}
+
+func resolveResourceToolSchema[T any](resourceTypes []ResourceType) *jsonschema.Resolved {
+	var schema jsonschema.Schema
+	if err := json.Unmarshal(resourceToolSchema[T](resourceTypes), &schema); err != nil {
+		panic(fmt.Errorf("decode resource tool schema: %w", err))
+	}
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		panic(fmt.Errorf("resolve resource tool schema: %w", err))
+	}
+	return resolved
+}
+
+func resolveToolSchema[T any]() *jsonschema.Resolved {
+	schema, err := jsonschema.For[T](nil)
+	if err != nil {
+		panic(fmt.Errorf("infer tool schema: %w", err))
+	}
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		panic(fmt.Errorf("resolve tool schema: %w", err))
+	}
+	return resolved
 }
 
 const (
@@ -200,11 +266,8 @@ func supportedResourceTypesDescription(supportedResourceTypes []ResourceType) st
 	return strings.Join(resourceTypes, ", ")
 }
 
-func messageToMap(message proto.Message) (map[string]any, error) {
-	if message == nil {
-		return map[string]any{}, nil
-	}
-	encoded, err := protojson.Marshal(message)
+func summaryToMap(summary ResourceSummary) (map[string]any, error) {
+	encoded, err := json.Marshal(summary)
 	if err != nil {
 		return nil, err
 	}

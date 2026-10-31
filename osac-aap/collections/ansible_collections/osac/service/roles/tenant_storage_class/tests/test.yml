@@ -16,11 +16,17 @@
 #   Test 3 (empty storageClasses list):
 #     ansible-playbook ... -e test_empty_list=true
 #
-#   Test 4 (duplicate tiers -- first-match semantics):
+#   Test 4 (conflicting duplicate tiers -- fail closed):
 #     ansible-playbook ... -e test_duplicate_tier=true
 #
 #   Test 5 (disk label appears in tier-not-available error):
 #     ansible-playbook ... -e test_disk_label=true
+#
+#   Test 6 (identical duplicate {name, tier} entries -- deduplicated):
+#     ansible-playbook ... -e test_identical_duplicate_tier=true
+#
+#   Test 7 (CSP-filtered multi-disk tiers + playbook_osac_create_compute_instance.yml pre_tasks validation):
+#     ansible-playbook ... -e test_csp_filtered_tiers=true
 
 # ──────────────────────────────────────────────────────────────
 # Test 1: Resolve requested tier (happy path)
@@ -125,35 +131,42 @@
             success_msg: "Role failed as expected: {{ ansible_failed_result.msg }}"
 
 # ──────────────────────────────────────────────────────────────
-# Test 4: Duplicate tiers in list -- first-match semantics
-# Expected: role returns the first matching entry
+# Test 4: Conflicting duplicate tiers in list -- fail-closed
+# Expected: role fails listing all conflicting StorageClass names
 # ──────────────────────────────────────────────────────────────
-- name: Test tenant_storage_class role -- duplicate tiers (first-match)
+- name: Test tenant_storage_class role -- conflicting duplicate tiers (should fail)
   hosts: localhost
   gather_facts: false
 
   tasks:
-    - name: Resolve StorageClass when duplicate tiers exist
-      ansible.builtin.include_role:
-        name: osac.service.tenant_storage_class
-      vars:
-        tenant_storage_class_tenant_name: "tenant-acme"
-        tenant_storage_class_storage_classes:
-          - name: "ceph-fast-primary"
-            tier: "fast"
-          - name: "ceph-fast-secondary"
-            tier: "fast"
-        tenant_storage_class_storage_tier: "fast"
+    - name: Run conflicting duplicate-tier failure test
       when: test_duplicate_tier | default(false) | bool
+      block:
+        - name: Attempt to resolve StorageClass when conflicting duplicate tiers exist (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.tenant_storage_class
+          vars:
+            tenant_storage_class_tenant_name: "tenant-acme"
+            tenant_storage_class_storage_classes:
+              - name: "ceph-fast-primary"
+                tier: "fast"
+              - name: "ceph-fast-secondary"
+                tier: "fast"
+            tenant_storage_class_storage_tier: "fast"
 
-    - name: Verify first match is returned
-      ansible.builtin.assert:
-        that:
-          - tenant_storage_class_name is defined
-          - tenant_storage_class_name == "ceph-fast-primary"
-        fail_msg: "Expected 'ceph-fast-primary' but got '{{ tenant_storage_class_name | default('undefined') }}'"
-        success_msg: "First-match semantics confirmed: {{ tenant_storage_class_name }}"
-      when: test_duplicate_tier | default(false) | bool
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when conflicting duplicate tiers exist"
+
+      rescue:
+        - name: Verify role failed with expected ambiguous-tier message
+          ansible.builtin.assert:
+            that:
+              - "'is ambiguous' in ansible_failed_result.msg"
+              - "'ceph-fast-primary' in ansible_failed_result.msg"
+              - "'ceph-fast-secondary' in ansible_failed_result.msg"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg }}"
+            success_msg: "Conflicting duplicate tier rejected as expected: {{ ansible_failed_result.msg }}"
 
 # ──────────────────────────────────────────────────────────────
 # Test 5: Disk label included in tier-not-available error
@@ -190,3 +203,338 @@
               - "'is not available' in ansible_failed_result.msg"
             fail_msg: "Error message missing disk label: {{ ansible_failed_result.msg }}"
             success_msg: "Disk label found in error: {{ ansible_failed_result.msg }}"
+
+# ──────────────────────────────────────────────────────────────
+# Test 6: Identical duplicate {name, tier} entries -- deduplicated
+# Expected: role succeeds when pre-resolved and JIT entries are identical
+# ──────────────────────────────────────────────────────────────
+- name: Test tenant_storage_class role -- identical duplicate tier entries
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Resolve StorageClass when identical duplicate {name, tier} entries exist
+      ansible.builtin.include_role:
+        name: osac.service.tenant_storage_class
+      vars:
+        tenant_storage_class_tenant_name: "tenant-acme"
+        tenant_storage_class_storage_classes:
+          - name: "ceph-fast-primary"
+            tier: "fast"
+          - name: "ceph-fast-primary"
+            tier: "fast"
+        tenant_storage_class_storage_tier: "fast"
+      when: test_identical_duplicate_tier | default(false) | bool
+
+    - name: Verify deduplicated StorageClass name is set
+      ansible.builtin.assert:
+        that:
+          - tenant_storage_class_name is defined
+          - tenant_storage_class_name == "ceph-fast-primary"
+        fail_msg: "Expected 'ceph-fast-primary' but got '{{ tenant_storage_class_name | default('undefined') }}'"
+        success_msg: "Identical duplicate tier deduplicated: {{ tenant_storage_class_name }}"
+      when: test_identical_duplicate_tier | default(false) | bool
+
+# ──────────────────────────────────────────────────────────────
+# Test 7: CSP-filtered multi-disk tiers + playbook_osac_create_compute_instance.yml pre_tasks validation
+# Expected: role resolves CSP boot disk and OSAC additional disk; playbook pre_tasks pass on valid
+#           deduplicated tiers and fail closed before tasks:/finalizer on missing, ambiguous, or
+#           whitespace-only StorageClass names
+# ──────────────────────────────────────────────────────────────
+- name: Test tenant_storage_class role and create_compute_instance pre_tasks -- CSP-filtered tiers
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run CSP-filtered multi-disk and playbook pre_tasks validation
+      when: test_csp_filtered_tiers | default(false) | bool
+      block:
+        - name: Resolve CSP-managed boot disk StorageClass (gold)
+          ansible.builtin.include_role:
+            name: osac.service.tenant_storage_class
+          vars:
+            tenant_storage_class_tenant_name: "tenant-acme"
+            tenant_storage_class_storage_classes:
+              - name: "netapp-gold-sc"
+                tier: "gold"
+              - name: "vast-fast-sc"
+                tier: "fast"
+            tenant_storage_class_storage_tier: "gold"
+            tenant_storage_class_disk_label: "bootDisk"
+
+        - name: Assert CSP boot disk StorageClass resolved
+          ansible.builtin.assert:
+            that:
+              - tenant_storage_class_name == "netapp-gold-sc"
+            fail_msg: "Expected 'netapp-gold-sc' for boot disk tier 'gold', got '{{ tenant_storage_class_name | default('undefined') }}'"
+
+        - name: Resolve OSAC-managed additional disk StorageClass (fast)
+          ansible.builtin.include_role:
+            name: osac.service.tenant_storage_class
+          vars:
+            tenant_storage_class_tenant_name: "tenant-acme"
+            tenant_storage_class_storage_classes:
+              - name: "netapp-gold-sc"
+                tier: "gold"
+              - name: "vast-fast-sc"
+                tier: "fast"
+            tenant_storage_class_storage_tier: "fast"
+            tenant_storage_class_disk_label: "additional disk 1"
+
+        - name: Assert OSAC additional disk StorageClass resolved
+          ansible.builtin.assert:
+            that:
+              - tenant_storage_class_name == "vast-fast-sc"
+            fail_msg: "Expected 'vast-fast-sc' for additional disk tier 'fast', got '{{ tenant_storage_class_name | default('undefined') }}'"
+
+        - name: Execute playbook_osac_create_compute_instance.yml with valid CSP + OSAC + identical JIT duplicate
+          ansible.builtin.command:
+            argv:
+              - ansible-playbook
+              - --inventory
+              - localhost,
+              - --connection
+              - local
+              - "{{ playbook_dir }}/../../../../../../../playbook_osac_create_compute_instance.yml"
+              - -e
+              - >-
+                {{
+                  {
+                    "osac_job_vars": {
+                      "resource": {
+                        "metadata": {"name": "vm-csp-test", "namespace": "default"},
+                        "status": {"tenantReference": {"name": "tenant-acme", "namespace": "default"}},
+                        "spec": {
+                          "templateID": "osac.templates.ocp_virt_vm",
+                          "bootDisk": {"sizeGiB": 30, "storageTier": "gold"},
+                          "additionalDisks": [{"sizeGiB": 50, "storageTier": "fast"}]
+                        }
+                      },
+                      "tenant_storage_classes": [
+                        {"name": "netapp-gold-sc", "tier": "gold"},
+                        {"name": "vast-fast-sc", "tier": "fast"}
+                      ]
+                    },
+                    "storage_provider_storage_class_names": [
+                      {"name": "vast-fast-sc", "tier": "fast"}
+                    ]
+                  } | to_json
+                }}
+            chdir: "{{ playbook_dir }}/../../../../../../../"
+          environment:
+            KUBECONFIG: "/dev/null"
+            K8S_AUTH_KUBECONFIG: "/dev/null"
+          register: _valid_playbook_run
+          changed_when: false
+          failed_when: false
+
+        - name: Assert valid CSP + OSAC + JIT duplicate passed pre_tasks and reached Display compute instance information
+          ansible.builtin.assert:
+            that:
+              - "'Compute instance name: vm-csp-test' in (_valid_playbook_run.stdout + _valid_playbook_run.stderr)"
+            fail_msg: >-
+              Expected playbook pre_tasks to succeed and reach 'Display compute instance information',
+              got: {{ _valid_playbook_run.stdout + _valid_playbook_run.stderr }}
+
+        - name: Execute playbook_osac_create_compute_instance.yml with missing requested tier (silver)
+          ansible.builtin.command:
+            argv:
+              - ansible-playbook
+              - --inventory
+              - localhost,
+              - --connection
+              - local
+              - "{{ playbook_dir }}/../../../../../../../playbook_osac_create_compute_instance.yml"
+              - -e
+              - >-
+                {{
+                  {
+                    "osac_job_vars": {
+                      "resource": {
+                        "metadata": {"name": "vm-csp-test", "namespace": "default"},
+                        "status": {"tenantReference": {"name": "tenant-acme", "namespace": "default"}},
+                        "spec": {
+                          "templateID": "osac.templates.ocp_virt_vm",
+                          "bootDisk": {"sizeGiB": 30, "storageTier": "gold"},
+                          "additionalDisks": [{"sizeGiB": 20, "storageTier": "silver"}]
+                        }
+                      },
+                      "tenant_storage_classes": [
+                        {"name": "netapp-gold-sc", "tier": "gold"},
+                        {"name": "vast-fast-sc", "tier": "fast"}
+                      ]
+                    }
+                  } | to_json
+                }}
+            chdir: "{{ playbook_dir }}/../../../../../../../"
+          environment:
+            KUBECONFIG: "/dev/null"
+            K8S_AUTH_KUBECONFIG: "/dev/null"
+          register: _missing_tier_playbook_run
+          changed_when: false
+          failed_when: false
+
+        - name: Assert missing requested tier failed in pre_tasks before tasks:/finalizer
+          ansible.builtin.assert:
+            that:
+              - _missing_tier_playbook_run.rc != 0
+              - "'silver' in (_missing_tier_playbook_run.stdout + _missing_tier_playbook_run.stderr)"
+              - "'fast, gold' in (_missing_tier_playbook_run.stdout + _missing_tier_playbook_run.stderr)"
+              - "'Display compute instance information' not in (_missing_tier_playbook_run.stdout + _missing_tier_playbook_run.stderr)"
+            fail_msg: >-
+              Expected missing tier 'silver' to fail in pre_tasks before tasks:,
+              got (rc={{ _missing_tier_playbook_run.rc }}):
+              {{ _missing_tier_playbook_run.stdout + _missing_tier_playbook_run.stderr }}
+
+        - name: Execute playbook_osac_create_compute_instance.yml with ambiguous requested tier (fast)
+          ansible.builtin.command:
+            argv:
+              - ansible-playbook
+              - --inventory
+              - localhost,
+              - --connection
+              - local
+              - "{{ playbook_dir }}/../../../../../../../playbook_osac_create_compute_instance.yml"
+              - -e
+              - >-
+                {{
+                  {
+                    "osac_job_vars": {
+                      "resource": {
+                        "metadata": {"name": "vm-csp-test", "namespace": "default"},
+                        "status": {"tenantReference": {"name": "tenant-acme", "namespace": "default"}},
+                        "spec": {
+                          "templateID": "osac.templates.ocp_virt_vm",
+                          "bootDisk": {"sizeGiB": 30, "storageTier": "gold"},
+                          "additionalDisks": [{"sizeGiB": 20, "storageTier": "fast"}]
+                        }
+                      },
+                      "tenant_storage_classes": [
+                        {"name": "netapp-gold-sc", "tier": "gold"},
+                        {"name": "vast-fast-1", "tier": "fast"},
+                        {"name": "vast-fast-2", "tier": "fast"}
+                      ]
+                    }
+                  } | to_json
+                }}
+            chdir: "{{ playbook_dir }}/../../../../../../../"
+          environment:
+            KUBECONFIG: "/dev/null"
+            K8S_AUTH_KUBECONFIG: "/dev/null"
+          register: _ambiguous_tier_playbook_run
+          changed_when: false
+          failed_when: false
+
+        - name: Assert ambiguous requested tier failed in pre_tasks before tasks:/finalizer
+          ansible.builtin.assert:
+            that:
+              - _ambiguous_tier_playbook_run.rc != 0
+              - "'is ambiguous for tenant' in (_ambiguous_tier_playbook_run.stdout + _ambiguous_tier_playbook_run.stderr)"
+              - "'vast-fast-1, vast-fast-2' in (_ambiguous_tier_playbook_run.stdout + _ambiguous_tier_playbook_run.stderr)"
+              - "'Display compute instance information' not in (_ambiguous_tier_playbook_run.stdout + _ambiguous_tier_playbook_run.stderr)"
+            fail_msg: >-
+              Expected ambiguous tier 'fast' to fail in pre_tasks before tasks:,
+              got (rc={{ _ambiguous_tier_playbook_run.rc }}):
+              {{ _ambiguous_tier_playbook_run.stdout + _ambiguous_tier_playbook_run.stderr }}
+
+        - name: Execute playbook_osac_create_compute_instance.yml with a whitespace-only StorageClass name for requested tier (fast)
+          ansible.builtin.command:
+            argv:
+              - ansible-playbook
+              - --inventory
+              - localhost,
+              - --connection
+              - local
+              - "{{ playbook_dir }}/../../../../../../../playbook_osac_create_compute_instance.yml"
+              - -e
+              - >-
+                {{
+                  {
+                    "osac_job_vars": {
+                      "resource": {
+                        "metadata": {"name": "vm-csp-test", "namespace": "default"},
+                        "status": {"tenantReference": {"name": "tenant-acme", "namespace": "default"}},
+                        "spec": {
+                          "templateID": "osac.templates.ocp_virt_vm",
+                          "bootDisk": {"sizeGiB": 30, "storageTier": "gold"},
+                          "additionalDisks": [{"sizeGiB": 20, "storageTier": "fast"}]
+                        }
+                      },
+                      "tenant_storage_classes": [
+                        {"name": "netapp-gold-sc", "tier": "gold"},
+                        {"name": "   ", "tier": "fast"}
+                      ]
+                    }
+                  } | to_json
+                }}
+            chdir: "{{ playbook_dir }}/../../../../../../../"
+          environment:
+            KUBECONFIG: "/dev/null"
+            K8S_AUTH_KUBECONFIG: "/dev/null"
+          register: _blank_name_playbook_run
+          changed_when: false
+          failed_when: false
+
+        - name: Assert whitespace-only StorageClass name failed in pre_tasks before tasks:/finalizer
+          ansible.builtin.assert:
+            that:
+              - _blank_name_playbook_run.rc != 0
+              - "'is not available for tenant' in (_blank_name_playbook_run.stdout + _blank_name_playbook_run.stderr)"
+              - "'Available tiers: gold.' in (_blank_name_playbook_run.stdout + _blank_name_playbook_run.stderr)"
+              - "'Display compute instance information' not in (_blank_name_playbook_run.stdout + _blank_name_playbook_run.stderr)"
+            fail_msg: >-
+              Expected whitespace-only StorageClass name for tier 'fast' to fail in pre_tasks before tasks:,
+              got (rc={{ _blank_name_playbook_run.rc }}):
+              {{ _blank_name_playbook_run.stdout + _blank_name_playbook_run.stderr }}
+
+        - name: Execute playbook_osac_create_compute_instance.yml with already-mapped custom StorageClass names and matching storage_tier_definitions
+          ansible.builtin.command:
+            argv:
+              - ansible-playbook
+              - --inventory
+              - localhost,
+              - --connection
+              - local
+              - "{{ playbook_dir }}/../../../../../../../playbook_osac_create_compute_instance.yml"
+              - -e
+              - >-
+                {{
+                  {
+                    "osac_job_vars": {
+                      "resource": {
+                        "metadata": {"name": "vm-csp-test", "namespace": "default"},
+                        "status": {"tenantReference": {"name": "tenant-acme", "namespace": "default"}},
+                        "spec": {
+                          "templateID": "osac.templates.ocp_virt_vm",
+                          "bootDisk": {"sizeGiB": 30, "storageTier": "gold"},
+                          "additionalDisks": [{"sizeGiB": 20, "storageTier": "fast"}]
+                        }
+                      },
+                      "tenant_storage_classes": [
+                        {"name": "custom-gold-sc", "tier": "gold"},
+                        {"name": "custom-fast-sc", "tier": "fast"}
+                      ],
+                      "storage_tier_definitions": [
+                        {"name": "gold", "provider": "lvms", "protocol": "block"},
+                        {"name": "fast", "provider": "lvms", "protocol": "block"}
+                      ]
+                    }
+                  } | to_json
+                }}
+            chdir: "{{ playbook_dir }}/../../../../../../../"
+          environment:
+            KUBECONFIG: "/dev/null"
+            K8S_AUTH_KUBECONFIG: "/dev/null"
+          register: _already_mapped_jit_skip_run
+          changed_when: false
+          failed_when: false
+
+        - name: Assert already-mapped tiers are excluded from JIT provisioning and reach Display compute instance information
+          ansible.builtin.assert:
+            that:
+              - "'JIT storage provisioning will be skipped.' in (_already_mapped_jit_skip_run.stdout + _already_mapped_jit_skip_run.stderr)"
+              - "'osac.service.storage_provider :' not in (_already_mapped_jit_skip_run.stdout + _already_mapped_jit_skip_run.stderr)"
+              - "'Compute instance name: vm-csp-test' in (_already_mapped_jit_skip_run.stdout + _already_mapped_jit_skip_run.stderr)"
+            fail_msg: >-
+              Expected already-mapped tiers to be excluded from JIT provisioning,
+              got: {{ _already_mapped_jit_skip_run.stdout + _already_mapped_jit_skip_run.stderr }}

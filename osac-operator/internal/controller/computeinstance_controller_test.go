@@ -24,6 +24,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -69,6 +71,36 @@ func createReadyTenant(ctx context.Context, namespace, name string) {
 	tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
 	tenant.Status.Namespace = namespace
 	Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+}
+
+// testTenantCondition builds a Tenant status condition fixture.
+func testTenantCondition(condType osacv1alpha1.TenantConditionType, condStatus metav1.ConditionStatus, reason string) metav1.Condition {
+	return metav1.Condition{Type: string(condType), Status: condStatus, Reason: reason, Message: reason}
+}
+
+// testTierDefinitions builds resolved tier definitions served by provider.
+func testTierDefinitions(provider string, names ...string) []provisioning.TierDefinition {
+	defs := make([]provisioning.TierDefinition, 0, len(names))
+	for _, name := range names {
+		defs = append(defs, provisioning.TierDefinition{Name: name, Provider: provider})
+	}
+	return defs
+}
+
+// storageReadinessCase is one checkStorageReadiness decision: the Tenant
+// storage status, the requested tiers, and what catalog resolution returned
+// on this provisioning pass. A tier listed in neither osacTiers nor cspTiers
+// with skipped set was dropped by a backend or credential lookup failure.
+type storageReadinessCase struct {
+	conditions []metav1.Condition
+	classes    []osacv1alpha1.ResolvedStorageClass
+	requested  []string
+	osacTiers  []string
+	cspTiers   []string
+	skipped    bool
+	catalogErr bool
+	wantReady  bool
+	wantMsg    []string
 }
 
 // deleteTenantInNamespace removes a Tenant by name in the given namespace (clears finalizers first).
@@ -2080,7 +2112,15 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(gotTiers).To(BeEmpty())
 		})
 
-		It("should proceed without tier data when tier resolution fails (non-fatal)", func() {
+		failingTiersClient := func() *mockStorageTiersLister {
+			return &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return nil, fmt.Errorf("tier API unavailable")
+				},
+			}
+		}
+
+		It("should defer provisioning when tier resolution fails and the target cluster has no StorageClass for a requested tier", func() {
 			const resourceName = "test-tier-ctx-resolve-error"
 			const tenantName = "tenant-tier-ctx-resolve-error"
 			DeferCleanup(func() {
@@ -2088,28 +2128,65 @@ var _ = Describe("ComputeInstance Controller", func() {
 				deleteTenantInNamespace(ctx, namespaceName, tenantName)
 			})
 
+			var triggerCount int
+			provider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					triggerCount++
+					return &provisioning.ProvisionResult{JobID: "unexpected-job", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+
+			createCIAndReconcile(resourceName, tenantName, provider, func(r *ComputeInstanceReconciler) {
+				r.TiersClient = failingTiersClient()
+				r.BackendsClient = tierDefsBackendsClient()
+			})
+
+			Expect(triggerCount).To(BeZero())
+			updated := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: namespaceName}, updated)).To(Succeed())
+			cond := updated.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			Expect(cond.Message).To(ContainSubstring("storage tier catalog resolution failed"))
+			Expect(cond.Message).To(ContainSubstring("have no StorageClass on the target cluster: standard"))
+		})
+
+		It("should proceed without tier data when tier resolution fails and the target cluster already has the requested StorageClass", func() {
+			const resourceName = "test-tier-ctx-resolve-error-fallback"
+			const tenantName = "tenant-tier-ctx-resolve-error-fallback"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			createLabeledStorageClass(ctx, "sc-resolve-error-standard", tenantName, "standard")
+			waitForStorageClassInCache("sc-resolve-error-standard")
+
 			var gotTiers []provisioning.TierDefinition
+			var gotSCs []osacv1alpha1.ResolvedStorageClass
 			var sawTiers bool
 			provider := &mockProvisioningProvider{
 				name: "aap",
 				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
 					gotTiers = provisioning.StorageTierDefinitionsFromContext(ctx)
+					gotSCs = provisioning.TenantStorageClassesFromContext(ctx)
 					sawTiers = true
 					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
 				},
 			}
 
 			createCIAndReconcile(resourceName, tenantName, provider, func(r *ComputeInstanceReconciler) {
-				r.TiersClient = &mockStorageTiersLister{
-					listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
-						return nil, fmt.Errorf("tier API unavailable")
-					},
-				}
+				r.TiersClient = failingTiersClient()
 				r.BackendsClient = tierDefsBackendsClient()
 			})
 
 			Expect(sawTiers).To(BeTrue())
 			Expect(gotTiers).To(BeEmpty())
+			Expect(gotSCs).To(Equal([]osacv1alpha1.ResolvedStorageClass{
+				{Name: "sc-resolve-error-standard", Tier: "standard"},
+			}))
 		})
 	})
 
@@ -2413,6 +2490,1932 @@ var _ = Describe("ComputeInstance Controller", func() {
 				ContainSubstring("all matched tiers are ambiguous"),
 			)))
 		})
+	})
+
+	Context("CSP-managed and mixed CSP/OSAC storage provisioning (OSAC-6596)", func() {
+		const namespaceName = "default"
+
+		ctx := context.Background()
+
+		deleteCI := func(name string) {
+			ci := &osacv1alpha1.ComputeInstance{}
+			nn := types.NamespacedName{Name: name, Namespace: namespaceName}
+			if err := k8sClient.Get(ctx, nn, ci); err == nil {
+				ci.Finalizers = nil
+				Expect(client.IgnoreNotFound(k8sClient.Update(ctx, ci))).To(Succeed())
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, ci))).To(Succeed())
+			}
+		}
+
+		waitForTenantInCache := func(tenantName string, check func(Gomega, *osacv1alpha1.Tenant)) {
+			mgrClient := testMcManager.GetLocalManager().GetClient()
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.Tenant{}
+				g.Expect(mgrClient.Get(ctx, types.NamespacedName{Name: tenantName, Namespace: namespaceName}, cached)).To(Succeed())
+				check(g, cached)
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+		}
+
+		It("should provision a pure-CSP NetApp ComputeInstance with filtered tenant_storage_classes and no JIT tier definitions or backend connections", func() {
+			const resourceName = "test-ci-pure-csp-netapp"
+			const tenantName = "tenant-ci-pure-csp-netapp"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tenant.Status.Namespace = namespaceName
+			tenant.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue,
+				osacv1alpha1.TenantReasonFound, "CSP storage ready")
+			tenant.Status.StorageClasses = []osacv1alpha1.ResolvedStorageClass{
+				{Name: "netapp-gold-sc", Tier: "gold"},
+				{Name: "netapp-silver-sc", Tier: "silver"},
+			}
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+			waitForTenantInCache(tenantName, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				g.Expect(t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)).NotTo(BeNil())
+				g.Expect(t.Status.StorageClasses).To(HaveLen(2))
+			})
+
+			var triggerCount int
+			var gotSCs []osacv1alpha1.ResolvedStorageClass
+			var gotTiers []provisioning.TierDefinition
+			var gotConns map[string]provisioning.BackendConnection
+			provider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					triggerCount++
+					gotSCs = provisioning.TenantStorageClassesFromContext(ctx)
+					gotTiers = provisioning.StorageTierDefinitionsFromContext(ctx)
+					gotConns = provisioning.StorageBackendConnectionsFromContext(ctx)
+					return &provisioning.ProvisionResult{JobID: "mock-csp-job", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+
+			spec := newTestComputeInstanceSpec("test_template")
+			spec.BootDisk.StorageTier = "gold"
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+					},
+				},
+				Spec: spec,
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("gold", "be-netapp"),
+							newTestStorageTier("silver", "be-netapp"),
+						},
+					}.Build(), nil
+				},
+			}
+			reconciler.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					Expect(in.GetId()).To(Equal("be-netapp"))
+					return newTestCSPManagedBackendGetResponse("netapp"), nil
+				},
+			}
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(triggerCount).To(Equal(1))
+			Expect(gotSCs).To(Equal([]osacv1alpha1.ResolvedStorageClass{
+				{Name: "netapp-gold-sc", Tier: "gold"},
+			}))
+			Expect(gotTiers).To(BeEmpty())
+			Expect(gotConns).To(BeEmpty())
+		})
+
+		It("should provision a mixed CSP/OSAC ComputeInstance with filtered tenant_storage_classes and only OSAC-managed JIT tiers/connections", func() {
+			const resourceName = "test-ci-mixed-storage"
+			const tenantName = "tenant-ci-mixed-storage"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tenant.Status.Namespace = namespaceName
+			tenant.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue,
+				osacv1alpha1.TenantReasonFound, "CSP storage ready")
+			tenant.SetStatusCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue,
+				osacv1alpha1.TenantReasonFound, "Cluster storage ready")
+			// The OSAC-managed tier fast has no StorageClass yet, so it needs JIT
+			// tier data next to the mapped CSP tiers.
+			tenant.Status.StorageClasses = []osacv1alpha1.ResolvedStorageClass{
+				{Name: "netapp-gold-sc", Tier: "gold"},
+				{Name: "netapp-silver-sc", Tier: "silver"},
+			}
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+			waitForTenantInCache(tenantName, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				g.Expect(t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)).NotTo(BeNil())
+				g.Expect(t.Status.StorageClasses).To(HaveLen(2))
+			})
+
+			var triggerCount int
+			var gotSCs []osacv1alpha1.ResolvedStorageClass
+			var gotTiers []provisioning.TierDefinition
+			var gotConns map[string]provisioning.BackendConnection
+			provider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					triggerCount++
+					gotSCs = provisioning.TenantStorageClassesFromContext(ctx)
+					gotTiers = provisioning.StorageTierDefinitionsFromContext(ctx)
+					gotConns = provisioning.StorageBackendConnectionsFromContext(ctx)
+					return &provisioning.ProvisionResult{JobID: "mock-mixed-storage-job", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+
+			spec := newTestComputeInstanceSpec("test_template")
+			spec.BootDisk.StorageTier = "gold"
+			spec.AdditionalDisks = []osacv1alpha1.DiskSpec{
+				{SizeGiB: 50, StorageTier: "fast"},
+			}
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+					},
+				},
+				Spec: spec,
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("gold", "be-netapp"),
+							newTestStorageTier("silver", "be-netapp"),
+							newTestStorageTier("fast", "be-vast"),
+						},
+					}.Build(), nil
+				},
+			}
+			reconciler.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					switch in.GetId() {
+					case "be-netapp":
+						return newTestCSPManagedBackendGetResponse("netapp"), nil
+					case "be-vast":
+						return newTestStorageBackendGetResponse("vast"), nil
+					default:
+						return nil, status.Error(codes.NotFound, "not found")
+					}
+				},
+			}
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(triggerCount).To(Equal(1))
+			Expect(gotSCs).To(Equal([]osacv1alpha1.ResolvedStorageClass{
+				{Name: "netapp-gold-sc", Tier: "gold"},
+			}))
+			Expect(gotTiers).To(HaveLen(1))
+			Expect(gotTiers[0].Name).To(Equal("fast"))
+			Expect(gotTiers[0].BackendID).To(Equal("be-vast"))
+			Expect(gotConns).To(HaveLen(1))
+			Expect(gotConns).To(HaveKeyWithValue("be-vast", provisioning.BackendConnection{
+				Endpoint: "https://vast.example.com",
+				Username: testBackendUsername,
+				Password: testBackendPassword,
+			}))
+		})
+
+		It("should block ComputeInstance provisioning and set ReasonTenantNotReady when StorageReady is absent or False", func() {
+			By("Subcase A: StorageReady condition is absent while a CSP tier is requested")
+			const resourceAbsent = "test-ci-sr-absent"
+			const tenantAbsent = "tenant-ci-sr-absent"
+			DeferCleanup(func() {
+				deleteCI(resourceAbsent)
+				deleteTenantInNamespace(ctx, namespaceName, tenantAbsent)
+			})
+
+			createReadyTenant(ctx, namespaceName, tenantAbsent)
+			waitForTenantInCache(tenantAbsent, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				g.Expect(t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)).To(BeNil())
+			})
+
+			var triggerCount int
+			provider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					triggerCount++
+					return &provisioning.ProvisionResult{JobID: "unexpected-job", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+
+			specAbsent := newTestComputeInstanceSpec("test_template")
+			specAbsent.BootDisk.StorageTier = "gold"
+			nnAbsent := types.NamespacedName{Name: resourceAbsent, Namespace: namespaceName}
+			ciAbsent := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceAbsent,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantAbsent,
+					},
+				},
+				Spec: specAbsent,
+			}
+			Expect(k8sClient.Create(ctx, ciAbsent)).To(Succeed())
+
+			fakeRecorderAbsent := events.NewFakeRecorder(100)
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler.Recorder = fakeRecorderAbsent
+			reconciler.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{newTestStorageTier("gold", "be-netapp")},
+					}.Build(), nil
+				},
+			}
+			reconciler.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestCSPManagedBackendGetResponse("netapp"), nil
+				},
+			}
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nnAbsent, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			res, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnAbsent}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(triggerCount).To(BeZero())
+
+			updatedAbsent := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nnAbsent, updatedAbsent)).To(Succeed())
+			Expect(updatedAbsent.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+			provCond := updatedAbsent.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(provCond).NotTo(BeNil())
+			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(provCond.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			Expect(provCond.Message).To(ContainSubstring("StorageReady"))
+			Eventually(fakeRecorderAbsent.Events).Should(Receive(And(
+				ContainSubstring(eventReasonTenantNotReady),
+				ContainSubstring("StorageReady"),
+			)))
+
+			// Wait for cache to see ReasonTenantNotReady before second Reconcile
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(reconciler.Client.Get(ctx, nnAbsent, cached)).To(Succeed())
+				c := cached.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+				g.Expect(c).NotTo(BeNil())
+				g.Expect(c.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+
+			res, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnAbsent}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(triggerCount).To(BeZero())
+			Expect(fakeRecorderAbsent.Events).NotTo(Receive())
+
+			By("Subcase B: StorageReady=False with Reason NotFound")
+			const resourceFalse = "test-ci-sr-false"
+			const tenantFalse = "tenant-ci-sr-false"
+			DeferCleanup(func() {
+				deleteCI(resourceFalse)
+				deleteTenantInNamespace(ctx, namespaceName, tenantFalse)
+			})
+
+			tenantObj := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantFalse, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenantObj)).To(Succeed())
+			tenantObj.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tenantObj.Status.Namespace = namespaceName
+			tenantObj.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionFalse,
+				osacv1alpha1.TenantReasonNotFound, "Missing StorageClass for tier gold")
+			Expect(k8sClient.Status().Update(ctx, tenantObj)).To(Succeed())
+			waitForTenantInCache(tenantFalse, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				sr := t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)
+				g.Expect(sr).NotTo(BeNil())
+				g.Expect(sr.Status).To(Equal(metav1.ConditionFalse))
+			})
+
+			nnFalse := types.NamespacedName{Name: resourceFalse, Namespace: namespaceName}
+			ciFalse := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceFalse,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantFalse,
+					},
+				},
+				Spec: specAbsent,
+			}
+			Expect(k8sClient.Create(ctx, ciFalse)).To(Succeed())
+
+			fakeRecorderFalse := events.NewFakeRecorder(100)
+			reconciler.Recorder = fakeRecorderFalse
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nnFalse, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			res, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnFalse}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(triggerCount).To(BeZero())
+
+			updatedFalse := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nnFalse, updatedFalse)).To(Succeed())
+			Expect(updatedFalse.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+			provCondFalse := updatedFalse.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(provCondFalse).NotTo(BeNil())
+			Expect(provCondFalse.Status).To(Equal(metav1.ConditionFalse))
+			Expect(provCondFalse.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			Expect(provCondFalse.Message).To(ContainSubstring("StorageReady"))
+			Expect(provCondFalse.Message).To(ContainSubstring("Missing StorageClass for tier gold"))
+			Eventually(fakeRecorderFalse.Events).Should(Receive(And(
+				ContainSubstring(eventReasonTenantNotReady),
+				ContainSubstring("StorageReady"),
+			)))
+
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(reconciler.Client.Get(ctx, nnFalse, cached)).To(Succeed())
+				c := cached.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+				g.Expect(c).NotTo(BeNil())
+				g.Expect(c.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+
+			res, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnFalse}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(triggerCount).To(BeZero())
+			Expect(fakeRecorderFalse.Events).NotTo(Receive())
+		})
+
+		It("should block ComputeInstance provisioning when StorageReady is latched True but a requested CSP tier is missing or ambiguous in Tenant.status.storageClasses, without falling back to cluster lookup", func() {
+			const resourceName = "test-ci-latched-missing-tier"
+			const tenantName = "tenant-ci-latched-missing-tier"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			// Create a target-cluster StorageClass labeled for tenantName to prove the
+			// target-cluster fallback is not used when StorageReady is set / CSP tiers are requested.
+			createLabeledStorageClass(ctx, "sc-cluster-fallback-silver", tenantName, "silver")
+
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tenant.Status.Namespace = namespaceName
+			tenant.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue,
+				osacv1alpha1.TenantReasonFound, "CSP storage ready")
+			tenant.Status.StorageClasses = []osacv1alpha1.ResolvedStorageClass{
+				{Name: "netapp-gold-sc", Tier: "gold"},
+			}
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+			waitForTenantInCache(tenantName, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				g.Expect(t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)).NotTo(BeNil())
+				g.Expect(t.Status.StorageClasses).To(HaveLen(1))
+			})
+
+			By("Subcase A: missing requested tier in Tenant.status.storageClasses via envtest Reconcile")
+			var triggerCount int
+			provider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					triggerCount++
+					return &provisioning.ProvisionResult{JobID: "unexpected-job", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+
+			spec := newTestComputeInstanceSpec("test_template")
+			spec.BootDisk.StorageTier = "gold"
+			spec.AdditionalDisks = []osacv1alpha1.DiskSpec{
+				{SizeGiB: 20, StorageTier: "silver"},
+			}
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+					},
+				},
+				Spec: spec,
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("gold", "be-netapp"),
+							newTestStorageTier("silver", "be-netapp"),
+						},
+					}.Build(), nil
+				},
+			}
+			reconciler.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestCSPManagedBackendGetResponse("netapp"), nil
+				},
+			}
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			res, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(triggerCount).To(BeZero())
+
+			updated := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nn, updated)).To(Succeed())
+			provCond := updated.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(provCond).NotTo(BeNil())
+			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(provCond.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			Expect(provCond.Message).To(ContainSubstring("missing tier(s): silver"))
+
+			By("Subcase B: ambiguous duplicate tier via direct unit call on checkStorageReadiness")
+			inMemoryTenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+				Status: osacv1alpha1.TenantStatus{
+					Phase: osacv1alpha1.TenantPhaseReady,
+					StorageClasses: []osacv1alpha1.ResolvedStorageClass{
+						{Name: "netapp-gold-sc", Tier: "gold"},
+						{Name: "sc-1", Tier: "silver"},
+						{Name: "sc-2", Tier: "silver"},
+					},
+				},
+			}
+			inMemoryTenant.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue,
+				osacv1alpha1.TenantReasonFound, "CSP storage ready")
+
+			ready, msg := checkStorageReadiness(inMemoryTenant, []string{"gold", "silver"}, []string{"gold", "silver"}, nil, nil)
+			Expect(ready).To(BeFalse())
+			Expect(msg).To(ContainSubstring("ambiguous tier(s): silver"))
+
+			By("Subcase C: requestedCSPTiers classifies non-OSAC tiers as CSP tiers when cspTiers is non-empty even before StorageReady is set")
+			preOnboardTenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(requestedCSPTiers(
+				preOnboardTenant,
+				[]string{"platinum", "fast"},
+				[]provisioning.TierDefinition{{Name: "fast", Provider: "vast"}},
+				[]provisioning.TierDefinition{{Name: "gold", Provider: "netapp"}},
+			)).To(Equal([]string{"platinum"}))
+		})
+
+		It("should fail closed with ReasonTenantNotReady when tier resolution fails and a requested tier has no StorageClass in Tenant status, or when an unmapped requested tier is skipped in the catalog", func() {
+			var triggerCount int
+			provider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					triggerCount++
+					return &provisioning.ProvisionResult{JobID: "unexpected-job", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+
+			By("Subcase A: Tenant has StorageReady=True, TiersClient returns codes.Unavailable, and requested tier silver has no StorageClass")
+			const resourceA = "test-ci-tiererr-sr-set"
+			const tenantA = "tenant-ci-tiererr-sr-set"
+			DeferCleanup(func() {
+				deleteCI(resourceA)
+				deleteTenantInNamespace(ctx, namespaceName, tenantA)
+			})
+
+			tA := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantA, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tA)).To(Succeed())
+			tA.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tA.Status.Namespace = namespaceName
+			tA.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue,
+				osacv1alpha1.TenantReasonFound, "CSP storage ready")
+			tA.Status.StorageClasses = []osacv1alpha1.ResolvedStorageClass{
+				{Name: "netapp-gold-sc", Tier: "gold"},
+			}
+			Expect(k8sClient.Status().Update(ctx, tA)).To(Succeed())
+			waitForTenantInCache(tenantA, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				g.Expect(t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)).NotTo(BeNil())
+			})
+
+			specA := newTestComputeInstanceSpec("test_template")
+			specA.BootDisk.StorageTier = "gold"
+			specA.AdditionalDisks = []osacv1alpha1.DiskSpec{
+				{SizeGiB: 20, StorageTier: "silver"},
+			}
+			nnA := types.NamespacedName{Name: resourceA, Namespace: namespaceName}
+			ciA := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        resourceA,
+					Namespace:   namespaceName,
+					Annotations: map[string]string{osacTenantKey: tenantA},
+				},
+				Spec: specA,
+			}
+			Expect(k8sClient.Create(ctx, ciA)).To(Succeed())
+
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return nil, status.Error(codes.Unavailable, "fulfillment service unavailable")
+				},
+			}
+			reconciler.BackendsClient = &mockStorageBackendsClient{}
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nnA, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			res, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnA}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(triggerCount).To(BeZero())
+
+			updatedA := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nnA, updatedA)).To(Succeed())
+			condA := updatedA.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(condA).NotTo(BeNil())
+			Expect(condA.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condA.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			Expect(condA.Message).To(ContainSubstring("storage tier catalog resolution failed"))
+			Expect(condA.Message).To(ContainSubstring("have no StorageClass in Tenant status: silver"))
+			Expect(condA.Message).NotTo(ContainSubstring("gold"))
+
+			By("Subcase B: Newly Ready Tenant has StorageReady absent and StorageBackendReady=False (Reason=TierResolutionFailed)")
+			const resourceB = "test-ci-tiererr-sbr-failed"
+			const tenantB = "tenant-ci-tiererr-sbr-failed"
+			DeferCleanup(func() {
+				deleteCI(resourceB)
+				deleteTenantInNamespace(ctx, namespaceName, tenantB)
+			})
+
+			tB := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantB, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tB)).To(Succeed())
+			tB.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tB.Status.Namespace = namespaceName
+			tB.SetStatusCondition(osacv1alpha1.TenantConditionStorageBackendReady, metav1.ConditionFalse,
+				"TierResolutionFailed", "failed to resolve storage tier definitions")
+			Expect(k8sClient.Status().Update(ctx, tB)).To(Succeed())
+			waitForTenantInCache(tenantB, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				sb := t.GetStatusCondition(osacv1alpha1.TenantConditionStorageBackendReady)
+				g.Expect(sb).NotTo(BeNil())
+				g.Expect(sb.Reason).To(Equal("TierResolutionFailed"))
+			})
+
+			nnB := types.NamespacedName{Name: resourceB, Namespace: namespaceName}
+			ciB := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        resourceB,
+					Namespace:   namespaceName,
+					Annotations: map[string]string{osacTenantKey: tenantB},
+				},
+				Spec: specA,
+			}
+			Expect(k8sClient.Create(ctx, ciB)).To(Succeed())
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nnB, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			res, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnB}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(triggerCount).To(BeZero())
+
+			updatedB := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nnB, updatedB)).To(Succeed())
+			condB := updatedB.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(condB).NotTo(BeNil())
+			Expect(condB.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condB.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			Expect(condB.Message).To(ContainSubstring("storage tier catalog resolution failed"))
+
+			By("Subcase C: TiersClient returns a tier whose backend is NotFound (setting skippedTiers=true) and ComputeInstance requests that skipped tier")
+			const resourceC = "test-ci-skipped-tier"
+			const tenantC = "tenant-ci-skipped-tier"
+			DeferCleanup(func() {
+				deleteCI(resourceC)
+				deleteTenantInNamespace(ctx, namespaceName, tenantC)
+			})
+
+			tC := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantC, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tC)).To(Succeed())
+			tC.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tC.Status.Namespace = namespaceName
+			tC.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue,
+				osacv1alpha1.TenantReasonFound, "CSP storage ready")
+			tC.Status.StorageClasses = []osacv1alpha1.ResolvedStorageClass{
+				{Name: "netapp-gold-sc", Tier: "gold"},
+			}
+			Expect(k8sClient.Status().Update(ctx, tC)).To(Succeed())
+			waitForTenantInCache(tenantC, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				g.Expect(t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)).NotTo(BeNil())
+			})
+
+			specC := newTestComputeInstanceSpec("test_template")
+			specC.BootDisk.StorageTier = "gold"
+			specC.AdditionalDisks = []osacv1alpha1.DiskSpec{
+				{SizeGiB: 40, StorageTier: "fast-skipped"},
+			}
+			nnC := types.NamespacedName{Name: resourceC, Namespace: namespaceName}
+			ciC := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        resourceC,
+					Namespace:   namespaceName,
+					Annotations: map[string]string{osacTenantKey: tenantC},
+				},
+				Spec: specC,
+			}
+			Expect(k8sClient.Create(ctx, ciC)).To(Succeed())
+
+			reconciler.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("gold", "be-netapp"),
+							newTestStorageTier("fast-skipped", "be-missing"),
+						},
+					}.Build(), nil
+				},
+			}
+			reconciler.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					if in.GetId() == "be-netapp" {
+						return newTestCSPManagedBackendGetResponse("netapp"), nil
+					}
+					return nil, status.Error(codes.NotFound, "backend not found")
+				},
+			}
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nnC, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			res, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnC}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(triggerCount).To(BeZero())
+
+			updatedC := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nnC, updatedC)).To(Succeed())
+			condC := updatedC.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(condC).NotTo(BeNil())
+			Expect(condC.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condC.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			Expect(condC.Message).To(ContainSubstring("unresolved backend references for requested tier(s): fast-skipped"))
+			Expect(condC.Message).NotTo(ContainSubstring("missing tier(s)"))
+		})
+
+		It("should bypass checkStorageReadiness on non-trigger paths when CSP storage is unready", func() {
+			const tenantName = "tenant-ci-nontrigger-unready"
+			DeferCleanup(func() {
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tenant.Status.Namespace = namespaceName
+			tenant.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionFalse,
+				"ProvisioningFailed", "Missing StorageClass for tier gold")
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+			waitForTenantInCache(tenantName, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				sr := t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)
+				g.Expect(sr).NotTo(BeNil())
+				g.Expect(sr.Status).To(Equal(metav1.ConditionFalse))
+			})
+
+			var triggerCount int
+			var tiersListCalls int
+			var backendsGetCalls int
+			provider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					triggerCount++
+					return &provisioning.ProvisionResult{JobID: "unexpected-job", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+				getProvisionStatusFunc: func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+					return provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateRunning}, nil
+				},
+			}
+
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					tiersListCalls++
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{newTestStorageTier("gold", "be-netapp")},
+					}.Build(), nil
+				},
+			}
+			reconciler.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					backendsGetCalls++
+					return newTestCSPManagedBackendGetResponse("netapp"), nil
+				},
+			}
+
+			By("Subcase A: unit checks on willTriggerProvisioning for nil provider, ManagementStateManual, Poll, Skip, Backoff, Trigger, and a stale succeeded job; storageGateCondition by VM presence")
+			baseCI := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "unit-gate-ci", Namespace: namespaceName},
+				Status: osacv1alpha1.ComputeInstanceStatus{
+					DesiredConfigVersion: "v1",
+				},
+			}
+			Expect(reconciler.willTriggerProvisioning(baseCI)).To(BeTrue())
+
+			nilProviderReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", nil, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			Expect(nilProviderReconciler.willTriggerProvisioning(baseCI)).To(BeFalse())
+
+			manualCI := baseCI.DeepCopy()
+			manualCI.Annotations = map[string]string{osacComputeInstanceManagementStateAnnotation: ManagementStateManual}
+			Expect(reconciler.willTriggerProvisioning(manualCI)).To(BeFalse())
+
+			for _, job := range []osacv1alpha1.JobStatus{
+				{Type: osacv1alpha1.JobTypeProvision, JobID: "job-running", State: osacv1alpha1.JobStateRunning, ConfigVersion: "v1"},
+				{Type: osacv1alpha1.JobTypeProvision, JobID: "job-succeeded", State: osacv1alpha1.JobStateSucceeded, ConfigVersion: "v1"},
+				{Type: osacv1alpha1.JobTypeProvision, JobID: "job-failed", State: osacv1alpha1.JobStateFailed, ConfigVersion: "v1", Timestamp: metav1.Now()},
+			} {
+				ciWithJob := baseCI.DeepCopy()
+				ciWithJob.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{job}
+				Expect(reconciler.willTriggerProvisioning(ciWithJob)).To(BeFalse(), "expected false for job state %s", job.State)
+			}
+
+			// Once the backoff delay has elapsed since a failed job on the current
+			// config version, handleBackoffForTarget triggers a retry job, so storage
+			// preparation and readiness gating must run.
+			elapsedBackoffCI := baseCI.DeepCopy()
+			elapsedBackoffCI.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				Type:          osacv1alpha1.JobTypeProvision,
+				JobID:         "job-failed-elapsed",
+				State:         osacv1alpha1.JobStateFailed,
+				ConfigVersion: "v1",
+				Timestamp:     metav1.NewTime(time.Now().Add(-provisioning.BackoffBaseDelay - time.Second)),
+			}}
+			Expect(reconciler.willTriggerProvisioning(elapsedBackoffCI)).To(BeTrue())
+
+			// A day-2 spec change on an existing VM leaves the last succeeded job on
+			// a stale config version, which triggers (and therefore gates) a new job.
+			staleCI := baseCI.DeepCopy()
+			staleCI.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
+				{Type: osacv1alpha1.JobTypeProvision, JobID: "job-succeeded-v0", State: osacv1alpha1.JobStateSucceeded, ConfigVersion: "v0"},
+			}
+			Expect(reconciler.willTriggerProvisioning(staleCI)).To(BeTrue())
+
+			Expect(storageGateCondition(nil)).To(Equal(osacv1alpha1.ComputeInstanceConditionProvisioned))
+			Expect(storageGateCondition(&kubevirtv1.VirtualMachine{})).To(Equal(osacv1alpha1.ComputeInstanceConditionConfigurationApplied))
+
+			By("Subcase B: envtest Reconcile with ManagementStateManual bypasses CSP gate when CSP storage is unready")
+			const manualName = "test-ci-nontrigger-manual"
+			DeferCleanup(func() { deleteCI(manualName) })
+			spec := newTestComputeInstanceSpec("test_template")
+			spec.BootDisk.StorageTier = "gold"
+			nnManual := types.NamespacedName{Name: manualName, Namespace: namespaceName}
+			ciManual := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      manualName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+						osacComputeInstanceManagementStateAnnotation: ManagementStateManual,
+					},
+				},
+				Spec: spec,
+			}
+			Expect(k8sClient.Create(ctx, ciManual)).To(Succeed())
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nnManual, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			res, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnManual}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeZero())
+			Expect(triggerCount).To(BeZero())
+			Expect(tiersListCalls).To(BeZero())
+			Expect(backendsGetCalls).To(BeZero())
+
+			updatedManual := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nnManual, updatedManual)).To(Succeed())
+			condManual := updatedManual.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(condManual).NotTo(BeNil())
+			Expect(condManual.Reason).To(Equal(osacv1alpha1.ReasonWaitingForVM))
+
+			By("Subcase C: envtest Reconcile with in-flight, completed, and failed ProvisioningJobs bypasses CSP gate when CSP storage is unready")
+			desiredVer, err := provisioning.ComputeDesiredConfigVersion(spec)
+			Expect(err).NotTo(HaveOccurred())
+
+			for _, tc := range []struct {
+				name        string
+				jobState    osacv1alpha1.JobState
+				wantRequeue bool
+			}{
+				{name: "test-ci-nontrigger-running", jobState: osacv1alpha1.JobStateRunning, wantRequeue: true},
+				{name: "test-ci-nontrigger-succeeded", jobState: osacv1alpha1.JobStateSucceeded, wantRequeue: false},
+				{name: "test-ci-nontrigger-failed", jobState: osacv1alpha1.JobStateFailed, wantRequeue: true},
+			} {
+				DeferCleanup(func() { deleteCI(tc.name) })
+				nnJob := types.NamespacedName{Name: tc.name, Namespace: namespaceName}
+				ciJob := &osacv1alpha1.ComputeInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:        tc.name,
+						Namespace:   namespaceName,
+						Annotations: map[string]string{osacTenantKey: tenantName},
+						Finalizers:  []string{osacComputeInstanceFinalizer},
+					},
+					Spec: spec,
+				}
+				Expect(k8sClient.Create(ctx, ciJob)).To(Succeed())
+				ciJob.Status.DesiredConfigVersion = desiredVer
+				ciJob.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+					JobID:         "existing-job-" + string(tc.jobState),
+					Type:          osacv1alpha1.JobTypeProvision,
+					State:         tc.jobState,
+					ConfigVersion: desiredVer,
+					Timestamp:     metav1.Now(),
+				}}
+				Expect(k8sClient.Status().Update(ctx, ciJob)).To(Succeed())
+
+				Eventually(func(g Gomega) {
+					cached := &osacv1alpha1.ComputeInstance{}
+					g.Expect(reconciler.Client.Get(ctx, nnJob, cached)).To(Succeed())
+					g.Expect(cached.Status.ProvisioningJobs).To(HaveLen(1))
+					g.Expect(cached.Status.ProvisioningJobs[0].State).To(Equal(tc.jobState))
+				}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+
+				res, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnJob}})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(triggerCount).To(BeZero())
+				Expect(tiersListCalls).To(BeZero())
+				Expect(backendsGetCalls).To(BeZero())
+				if tc.wantRequeue {
+					Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+				} else {
+					Expect(res.RequeueAfter).To(BeZero())
+				}
+
+				updatedJob := &osacv1alpha1.ComputeInstance{}
+				Expect(k8sClient.Get(ctx, nnJob, updatedJob)).To(Succeed())
+				condJob := updatedJob.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+				Expect(condJob).NotTo(BeNil())
+				Expect(condJob.Reason).NotTo(Equal(osacv1alpha1.ReasonTenantNotReady))
+			}
+		})
+
+		It("should reconcile StorageReconciler into Tenant.Status and hand off cleanly to ComputeInstanceReconciler", func() {
+			const resourceName = "test-ci-storage-handoff"
+			const tenantName = "tenant-ci-storage-handoff"
+			const cspGoldSC = "sc-handoff-netapp-gold"
+			const cspBronzeSC = "sc-handoff-netapp-bronze"
+			const osacFastSC = "sc-handoff-vast-fast"
+
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tenant.Status.Namespace = namespaceName
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+			waitForTenantInCache(tenantName, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+			})
+
+			sharedTiersClient := &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("gold", "be-netapp"),
+							newTestStorageTier("bronze", "be-netapp"),
+							newTestStorageTier("fast", "be-vast"),
+						},
+					}.Build(), nil
+				},
+			}
+			sharedBackendsClient := &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					switch in.GetId() {
+					case "be-netapp":
+						return newTestCSPManagedBackendGetResponse("netapp"), nil
+					case "be-vast":
+						return newTestStorageBackendGetResponse("vast"), nil
+					default:
+						return nil, status.Error(codes.NotFound, "backend not found")
+					}
+				},
+			}
+
+			var ciTriggerCount int
+			var gotSCs []osacv1alpha1.ResolvedStorageClass
+			var gotTiers []provisioning.TierDefinition
+			var gotConns map[string]provisioning.BackendConnection
+			ciProvider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					ciTriggerCount++
+					gotSCs = provisioning.TenantStorageClassesFromContext(ctx)
+					gotTiers = provisioning.StorageTierDefinitionsFromContext(ctx)
+					gotConns = provisioning.StorageBackendConnectionsFromContext(ctx)
+					return &provisioning.ProvisionResult{JobID: "handoff-job-1", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+
+			ciReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", ciProvider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			ciReconciler.TiersClient = sharedTiersClient
+			ciReconciler.BackendsClient = sharedBackendsClient
+
+			spec := newTestComputeInstanceSpec("test_template")
+			spec.BootDisk.StorageTier = "gold"
+			spec.AdditionalDisks = []osacv1alpha1.DiskSpec{
+				{SizeGiB: 50, StorageTier: "fast"},
+			}
+			nnCI := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			ci := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        resourceName,
+					Namespace:   namespaceName,
+					Annotations: map[string]string{osacTenantKey: tenantName},
+				},
+				Spec: spec,
+			}
+			Expect(k8sClient.Create(ctx, ci)).To(Succeed())
+			Eventually(func() error {
+				return ciReconciler.Client.Get(ctx, nnCI, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			By("Step 1: ComputeInstanceReconciler gates before StorageReconciler has populated Tenant.Status")
+			res, err := ciReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnCI}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(ciTriggerCount).To(BeZero())
+
+			By("Step 2: Create real labeled StorageClasses and run StorageReconciler to populate Tenant.Status")
+			for _, scDef := range []struct {
+				name, tenantLabel, tier string
+			}{
+				{name: cspGoldSC, tenantLabel: cspManagedTenantValue, tier: "gold"},
+				{name: cspBronzeSC, tenantLabel: cspManagedTenantValue, tier: "bronze"},
+				{name: osacFastSC, tenantLabel: tenantName, tier: "fast"},
+			} {
+				createLabeledStorageClass(ctx, scDef.name, scDef.tenantLabel, scDef.tier)
+				waitForStorageClassInCache(scDef.name)
+			}
+
+			storageReconciler := NewStorageReconciler(
+				testMcManager, namespaceName, mcmanager.LocalCluster,
+				nil, nil, 100*time.Millisecond, provisioning.DefaultMaxJobHistory,
+			)
+			storageReconciler.Client = k8sClient
+			storageReconciler.TiersClient = sharedTiersClient
+			storageReconciler.BackendsClient = sharedBackendsClient
+
+			nnTenant := types.NamespacedName{Name: tenantName, Namespace: namespaceName}
+			_, err = storageReconciler.Reconcile(ctx, storageReconcileRequest(nnTenant))
+			Expect(err).NotTo(HaveOccurred())
+
+			waitForTenantInCache(tenantName, func(g Gomega, t *osacv1alpha1.Tenant) {
+				sr := t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)
+				g.Expect(sr).NotTo(BeNil())
+				g.Expect(sr.Status).To(Equal(metav1.ConditionTrue))
+				g.Expect(t.Status.StorageClasses).To(ConsistOf(
+					osacv1alpha1.ResolvedStorageClass{Name: cspGoldSC, Tier: "gold"},
+					osacv1alpha1.ResolvedStorageClass{Name: cspBronzeSC, Tier: "bronze"},
+					osacv1alpha1.ResolvedStorageClass{Name: osacFastSC, Tier: "fast"},
+				))
+			})
+
+			By("Step 3: ComputeInstanceReconciler consumes StorageReconciler's Tenant.Status, filters out bronze, and triggers provisioning without tier or backend data for the already-mapped tiers")
+			_, err = ciReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnCI}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ciTriggerCount).To(Equal(1))
+			Expect(gotSCs).To(ConsistOf(
+				osacv1alpha1.ResolvedStorageClass{Name: cspGoldSC, Tier: "gold"},
+				osacv1alpha1.ResolvedStorageClass{Name: osacFastSC, Tier: "fast"},
+			))
+			Expect(gotTiers).To(BeEmpty())
+			Expect(gotConns).To(BeEmpty())
+
+			By("Step 4: A ComputeInstance on the mixed CSP/OSAC tenant requesting only OSAC tier 'fast' filters out unrequested CSP StorageClasses")
+			const osacOnlyName = "test-ci-storage-handoff-osac-only"
+			DeferCleanup(func() { deleteCI(osacOnlyName) })
+			specOSACOnly := newTestComputeInstanceSpec("test_template")
+			specOSACOnly.BootDisk.StorageTier = "fast"
+			nnOSACOnly := types.NamespacedName{Name: osacOnlyName, Namespace: namespaceName}
+			ciOSACOnly := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        osacOnlyName,
+					Namespace:   namespaceName,
+					Annotations: map[string]string{osacTenantKey: tenantName},
+				},
+				Spec: specOSACOnly,
+			}
+			Expect(k8sClient.Create(ctx, ciOSACOnly)).To(Succeed())
+			Eventually(func() error {
+				return ciReconciler.Client.Get(ctx, nnOSACOnly, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, err = ciReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnOSACOnly}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ciTriggerCount).To(Equal(2))
+			Expect(gotSCs).To(Equal([]osacv1alpha1.ResolvedStorageClass{
+				{Name: osacFastSC, Tier: "fast"},
+			}))
+
+			By("Step 5: Day-2 re-provisioning (kv != nil and EvaluateAction == Trigger) injects filtered tenant_storage_classes while keeping Provisioned=True")
+			vm := &kubevirtv1.VirtualMachine{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Labels: map[string]string{
+						osacComputeInstanceNameLabel: resourceName,
+					},
+				},
+				Status: kubevirtv1.VirtualMachineStatus{
+					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
+				},
+			}
+			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vm))).To(Succeed())
+			})
+			Eventually(func(g Gomega) {
+				cachedVM := &kubevirtv1.VirtualMachine{}
+				g.Expect(ciReconciler.Client.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: namespaceName}, cachedVM)).To(Succeed())
+				g.Expect(cachedVM.Status.PrintableStatus).To(Equal(kubevirtv1.VirtualMachineStatusRunning))
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			latestCI := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nnCI, latestCI)).To(Succeed())
+			now := metav1.Now()
+			latestCI.Spec.RestartRequestedAt = &now
+			Expect(k8sClient.Update(ctx, latestCI)).To(Succeed())
+			latestCI.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID:         "handoff-job-1",
+				Type:          osacv1alpha1.JobTypeProvision,
+				State:         osacv1alpha1.JobStateSucceeded,
+				ConfigVersion: latestCI.Status.DesiredConfigVersion,
+				Timestamp:     now,
+			}}
+			Expect(k8sClient.Status().Update(ctx, latestCI)).To(Succeed())
+			Eventually(func(g Gomega) {
+				cachedCI := &osacv1alpha1.ComputeInstance{}
+				g.Expect(ciReconciler.Client.Get(ctx, nnCI, cachedCI)).To(Succeed())
+				g.Expect(cachedCI.Spec.RestartRequestedAt).NotTo(BeNil())
+				g.Expect(cachedCI.Status.ProvisioningJobs).To(HaveLen(1))
+				g.Expect(cachedCI.Status.ProvisioningJobs[0].State).To(Equal(osacv1alpha1.JobStateSucceeded))
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			gotSCs = nil
+			_, err = ciReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnCI}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ciTriggerCount).To(Equal(3))
+			Expect(gotSCs).To(ConsistOf(
+				osacv1alpha1.ResolvedStorageClass{Name: cspGoldSC, Tier: "gold"},
+				osacv1alpha1.ResolvedStorageClass{Name: osacFastSC, Tier: "fast"},
+			))
+			Expect(k8sClient.Get(ctx, nnCI, latestCI)).To(Succeed())
+			provCond := latestCI.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(provCond).NotTo(BeNil())
+			Expect(provCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(provCond.Reason).To(Equal(osacv1alpha1.ReasonInfrastructureReady))
+		})
+
+		// triggerCapture records what each TriggerProvision call received.
+		type triggerCapture struct {
+			count int
+			scs   []osacv1alpha1.ResolvedStorageClass
+			tiers []provisioning.TierDefinition
+			conns map[string]provisioning.BackendConnection
+		}
+
+		capturingProvider := func(c *triggerCapture) *mockProvisioningProvider {
+			return &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+					c.count++
+					c.scs = provisioning.TenantStorageClassesFromContext(ctx)
+					c.tiers = provisioning.StorageTierDefinitionsFromContext(ctx)
+					c.conns = provisioning.StorageBackendConnectionsFromContext(ctx)
+					return &provisioning.ProvisionResult{JobID: fmt.Sprintf("capture-job-%d", c.count), InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+		}
+
+		catalogTiersClient := func(tiers ...*privatev1.StorageTier) *mockStorageTiersLister {
+			return &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{Items: tiers}.Build(), nil
+				},
+			}
+		}
+
+		unavailableTiersClient := func() *mockStorageTiersLister {
+			return &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return nil, status.Error(codes.Unavailable, "fulfillment service unavailable")
+				},
+			}
+		}
+
+		// mixedBackendsClient serves a CSP-managed NetApp backend, an OSAC-managed
+		// VAST backend with an inline password, and an OSAC-managed VAST backend
+		// whose password comes from a Secret.
+		mixedBackendsClient := func() *mockStorageBackendsClient {
+			return &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					switch in.GetId() {
+					case "be-netapp":
+						return newTestCSPManagedBackendGetResponse("netapp"), nil
+					case "be-vast":
+						return newTestStorageBackendGetResponse("vast"), nil
+					case "be-vast-secret":
+						return newTestStorageBackendGetResponseWithSecret("vast", "secret-vast-password"), nil
+					default:
+						return nil, status.Error(codes.NotFound, "backend not found")
+					}
+				},
+			}
+		}
+
+		failingSecretsClient := func() *mockSecretsClient {
+			return &mockSecretsClient{
+				getFunc: func(context.Context, *privatev1.SecretsGetRequest, ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
+					return nil, status.Error(codes.Unavailable, "secrets service unavailable")
+				},
+			}
+		}
+
+		createStorageTenant := func(tenantName string, classes []osacv1alpha1.ResolvedStorageClass, conditions ...metav1.Condition) {
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			DeferCleanup(func() { deleteTenantInNamespace(ctx, namespaceName, tenantName) })
+			tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tenant.Status.Namespace = namespaceName
+			tenant.Status.StorageClasses = classes
+			for _, cond := range conditions {
+				tenant.SetStatusCondition(osacv1alpha1.TenantConditionType(cond.Type), cond.Status, cond.Reason, cond.Message)
+			}
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+			waitForTenantInCache(tenantName, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				g.Expect(t.Status.StorageClasses).To(HaveLen(len(classes)))
+				g.Expect(t.Status.Conditions).To(HaveLen(len(conditions)))
+			})
+		}
+
+		setTenantStorageClasses := func(tenantName string, classes []osacv1alpha1.ResolvedStorageClass) {
+			tenant := &osacv1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: tenantName, Namespace: namespaceName}, tenant)).To(Succeed())
+			tenant.Status.StorageClasses = classes
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+			waitForTenantInCache(tenantName, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.StorageClasses).To(ConsistOf(classes))
+			})
+		}
+
+		storageSpec := func(bootTier string, additionalTiers ...string) osacv1alpha1.ComputeInstanceSpec {
+			spec := newTestComputeInstanceSpec("test_template")
+			spec.BootDisk.StorageTier = bootTier
+			for _, tier := range additionalTiers {
+				spec.AdditionalDisks = append(spec.AdditionalDisks, osacv1alpha1.DiskSpec{SizeGiB: 20, StorageTier: tier})
+			}
+			return spec
+		}
+
+		createStorageCI := func(name, tenantName string, spec osacv1alpha1.ComputeInstanceSpec) types.NamespacedName {
+			nn := types.NamespacedName{Name: name, Namespace: namespaceName}
+			Expect(k8sClient.Create(ctx, &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        name,
+					Namespace:   namespaceName,
+					Annotations: map[string]string{osacTenantKey: tenantName},
+				},
+				Spec: spec,
+			})).To(Succeed())
+			DeferCleanup(func() { deleteCI(name) })
+			Eventually(func() error {
+				return testMcManager.GetLocalManager().GetClient().Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+			return nn
+		}
+
+		reconcileCI := func(r *ComputeInstanceReconciler, nn types.NamespacedName) reconcile.Result {
+			res, err := r.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+			return res
+		}
+
+		getCI := func(nn types.NamespacedName) *osacv1alpha1.ComputeInstance {
+			ci := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+			return ci
+		}
+
+		expectCondition := func(ci *osacv1alpha1.ComputeInstance, condType osacv1alpha1.ComputeInstanceConditionType,
+			condStatus metav1.ConditionStatus, reason string) *metav1.Condition {
+			cond := ci.GetStatusCondition(condType)
+			Expect(cond).NotTo(BeNil(), "condition %s is missing", condType)
+			Expect(cond.Status).To(Equal(condStatus), "condition %s status", condType)
+			Expect(cond.Reason).To(Equal(reason), "condition %s reason", condType)
+			return cond
+		}
+
+		goldSC := osacv1alpha1.ResolvedStorageClass{Name: "netapp-gold-sc", Tier: "gold"}
+		silverSC := osacv1alpha1.ResolvedStorageClass{Name: "netapp-silver-sc", Tier: "silver"}
+		fastSC := osacv1alpha1.ResolvedStorageClass{Name: "vast-fast-sc", Tier: "fast"}
+
+		It("should reuse existing Tenant.status.storageClasses mappings for requested tiers without calling the storage tier catalog, which may be unavailable", func() {
+			By("Subcase A: mixed CSP/OSAC tenant with StorageReady=True and every requested tier mapped")
+			const resourceA = "test-ci-reuse-catalog-down-mixed"
+			const tenantA = "tenant-ci-reuse-catalog-down-mixed"
+			createStorageTenant(tenantA, []osacv1alpha1.ResolvedStorageClass{fastSC, goldSC, silverSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound),
+				testTenantCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnA := createStorageCI(resourceA, tenantA, storageSpec("gold", "fast"))
+
+			var capA triggerCapture
+			tiers := unavailableTiersClient()
+			backends := mixedBackendsClient()
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", capturingProvider(&capA), 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler.TiersClient = tiers
+			reconciler.BackendsClient = backends
+
+			reconcileCI(reconciler, nnA)
+			Expect(capA.count).To(Equal(1))
+			Expect(capA.scs).To(ConsistOf(goldSC, fastSC))
+			Expect(capA.tiers).To(BeEmpty())
+			Expect(capA.conns).To(BeEmpty())
+			Expect(tiers.listCallCount).To(BeZero())
+			Expect(backends.getCallCount).To(BeZero())
+			expectCondition(getCI(nnA), osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonWaitingForVM)
+
+			By("Subcase B: pure-OSAC tenant whose StorageReconciler also hit the outage (StorageBackendReady=TierResolutionFailed) keeps its existing mapping")
+			const resourceB = "test-ci-reuse-catalog-down-osac"
+			const tenantB = "tenant-ci-reuse-catalog-down-osac"
+			createStorageTenant(tenantB, []osacv1alpha1.ResolvedStorageClass{fastSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageBackendReady, metav1.ConditionFalse, "TierResolutionFailed"),
+				testTenantCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnB := createStorageCI(resourceB, tenantB, storageSpec("fast"))
+
+			var capB triggerCapture
+			reconciler.ProvisioningProvider = capturingProvider(&capB)
+			reconcileCI(reconciler, nnB)
+			Expect(capB.count).To(Equal(1))
+			Expect(capB.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{fastSC}))
+			Expect(capB.tiers).To(BeEmpty())
+			Expect(capB.conns).To(BeEmpty())
+		})
+
+		It("should reuse an existing mapping without resolving its backend credential, and still resolve credentials for a requested tier that needs JIT", func() {
+			catalog := catalogTiersClient(
+				newTestStorageTier("gold", "be-netapp"),
+				newTestStorageTier("fast", "be-vast-secret"),
+				newTestStorageTier("bronze", "be-vast"),
+			)
+
+			By("Subcase A: mixed CSP/OSAC tenant with every requested tier mapped never reads fast's password Secret")
+			const resourceA = "test-ci-reuse-secret-down-mixed"
+			const tenantA = "tenant-ci-reuse-secret-down-mixed"
+			createStorageTenant(tenantA, []osacv1alpha1.ResolvedStorageClass{fastSC, goldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound),
+				testTenantCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnA := createStorageCI(resourceA, tenantA, storageSpec("gold", "fast"))
+
+			var capA triggerCapture
+			secrets := failingSecretsClient()
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", capturingProvider(&capA), 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler.TiersClient = catalog
+			reconciler.BackendsClient = mixedBackendsClient()
+			reconciler.SecretsClient = secrets
+
+			reconcileCI(reconciler, nnA)
+			Expect(secrets.getCallCount).To(BeZero())
+			Expect(capA.count).To(Equal(1))
+			Expect(capA.scs).To(ConsistOf(goldSC, fastSC))
+			Expect(capA.tiers).To(BeEmpty())
+			Expect(capA.conns).To(BeEmpty())
+
+			By("Subcase B: pure-OSAC tenant whose only requested tier is mapped never reads the Secret either")
+			const resourceB = "test-ci-reuse-secret-down-osac"
+			const tenantB = "tenant-ci-reuse-secret-down-osac"
+			createStorageTenant(tenantB, []osacv1alpha1.ResolvedStorageClass{fastSC},
+				testTenantCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnB := createStorageCI(resourceB, tenantB, storageSpec("fast"))
+
+			var capB triggerCapture
+			reconciler.ProvisioningProvider = capturingProvider(&capB)
+			reconcileCI(reconciler, nnB)
+			Expect(secrets.getCallCount).To(BeZero())
+			Expect(capB.count).To(Equal(1))
+			Expect(capB.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{fastSC}))
+			Expect(capB.tiers).To(BeEmpty())
+			Expect(capB.conns).To(BeEmpty())
+
+			By("Subcase C: an unmapped tier forces the lookup, and a mapped tier whose Secret cannot be read does not block it")
+			const resourceC = "test-ci-reuse-secret-down-jit"
+			const tenantC = "tenant-ci-reuse-secret-down-jit"
+			createStorageTenant(tenantC, []osacv1alpha1.ResolvedStorageClass{fastSC, goldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound),
+				testTenantCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnC := createStorageCI(resourceC, tenantC, storageSpec("gold", "fast", "bronze"))
+
+			var capC triggerCapture
+			reconciler.ProvisioningProvider = capturingProvider(&capC)
+			reconcileCI(reconciler, nnC)
+			Expect(secrets.getCallCount).To(Equal(1))
+			Expect(capC.count).To(Equal(1))
+			Expect(capC.scs).To(ConsistOf(goldSC, fastSC))
+			Expect(capC.tiers).To(HaveLen(1))
+			Expect(capC.tiers[0].Name).To(Equal("bronze"))
+			Expect(capC.conns).To(HaveKey("be-vast"))
+			Expect(capC.conns).NotTo(HaveKey("be-vast-secret"))
+		})
+
+		It("should keep gating requested tiers that still need catalog data during a lookup failure, while unmapped OSAC tiers keep JIT provisioning when the catalog resolves", func() {
+			By("Subcase A: pure-OSAC tenant requesting unmapped OSAC tier bronze while the catalog is unavailable")
+			const resourceA = "test-ci-gate-catalog-down-jit"
+			const tenantA = "tenant-ci-gate-catalog-down-jit"
+			createStorageTenant(tenantA, []osacv1alpha1.ResolvedStorageClass{fastSC},
+				testTenantCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnA := createStorageCI(resourceA, tenantA, storageSpec("fast", "bronze"))
+
+			var capA triggerCapture
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", capturingProvider(&capA), 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler.TiersClient = unavailableTiersClient()
+			reconciler.BackendsClient = mixedBackendsClient()
+
+			res := reconcileCI(reconciler, nnA)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capA.count).To(BeZero())
+			condA := expectCondition(getCI(nnA), osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)
+			Expect(condA.Message).To(ContainSubstring("storage tier catalog resolution failed"))
+			Expect(condA.Message).To(ContainSubstring("have no StorageClass in Tenant status: bronze"))
+
+			By("Subcase B: mixed tenant with StorageReady=False cannot classify mapped tiers as OSAC-managed while the catalog is unavailable")
+			const resourceB = "test-ci-gate-catalog-down-sr-false"
+			const tenantB = "tenant-ci-gate-catalog-down-sr-false"
+			createStorageTenant(tenantB, []osacv1alpha1.ResolvedStorageClass{fastSC, goldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionFalse, osacv1alpha1.TenantReasonNotFound),
+				testTenantCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnB := createStorageCI(resourceB, tenantB, storageSpec("fast"))
+
+			res = reconcileCI(reconciler, nnB)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capA.count).To(BeZero())
+			condB := expectCondition(getCI(nnB), osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)
+			Expect(condB.Message).To(ContainSubstring("StorageReady=False"))
+
+			By("Subcase C: with the catalog resolving, an unmapped OSAC tier proceeds with JIT tier data next to a mapped CSP tier")
+			const resourceC = "test-ci-jit-unmapped-osac"
+			const tenantC = "tenant-ci-jit-unmapped-osac"
+			createStorageTenant(tenantC, []osacv1alpha1.ResolvedStorageClass{goldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnC := createStorageCI(resourceC, tenantC, storageSpec("gold", "fast"))
+
+			var capC triggerCapture
+			reconciler.ProvisioningProvider = capturingProvider(&capC)
+			reconciler.TiersClient = catalogTiersClient(
+				newTestStorageTier("gold", "be-netapp"),
+				newTestStorageTier("fast", "be-vast"),
+			)
+			reconcileCI(reconciler, nnC)
+			Expect(capC.count).To(Equal(1))
+			Expect(capC.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{goldSC}))
+			Expect(capC.tiers).To(HaveLen(1))
+			Expect(capC.tiers[0].Name).To(Equal("fast"))
+			Expect(capC.conns).To(HaveKey("be-vast"))
+			Expect(capC.conns).NotTo(HaveKey("be-netapp"))
+		})
+
+		// settleRunningCI records a succeeded provisioning job for the current spec
+		// on a ComputeInstance whose VM is running, then reconciles it to steady
+		// state so a later spec change becomes a day-2 provisioning trigger.
+		settleRunningCI := func(r *ComputeInstanceReconciler, nn types.NamespacedName, vmName string) {
+			vm := &kubevirtv1.VirtualMachine{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      vmName,
+					Namespace: namespaceName,
+					Labels:    map[string]string{osacComputeInstanceNameLabel: nn.Name},
+				},
+				Status: kubevirtv1.VirtualMachineStatus{
+					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
+					Conditions: []kubevirtv1.VirtualMachineCondition{
+						{Type: kubevirtv1.VirtualMachineReady, Status: corev1.ConditionTrue},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vm))).To(Succeed())
+			})
+			Eventually(func(g Gomega) {
+				cachedVM := &kubevirtv1.VirtualMachine{}
+				g.Expect(r.Client.Get(ctx, types.NamespacedName{Name: vmName, Namespace: namespaceName}, cachedVM)).To(Succeed())
+				g.Expect(cachedVM.Status.PrintableStatus).To(Equal(kubevirtv1.VirtualMachineStatusRunning))
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+
+			ci := getCI(nn)
+			version, err := provisioning.ComputeDesiredConfigVersion(ci.Spec)
+			Expect(err).NotTo(HaveOccurred())
+			ci.Status.DesiredConfigVersion = version
+			ci.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID:         "initial-provision-job",
+				Type:          osacv1alpha1.JobTypeProvision,
+				State:         osacv1alpha1.JobStateSucceeded,
+				ConfigVersion: version,
+				Timestamp:     metav1.Now(),
+			}}
+			Expect(k8sClient.Status().Update(ctx, ci)).To(Succeed())
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(r.Client.Get(ctx, nn, cached)).To(Succeed())
+				g.Expect(cached.Status.ProvisioningJobs).To(HaveLen(1))
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+
+			reconcileCI(r, nn)
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(r.Client.Get(ctx, nn, cached)).To(Succeed())
+				g.Expect(cached.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseRunning))
+				g.Expect(cached.IsStatusConditionTrue(osacv1alpha1.ComputeInstanceConditionProvisioned)).To(BeTrue())
+				g.Expect(cached.IsStatusConditionTrue(osacv1alpha1.ComputeInstanceConditionConfigurationApplied)).To(BeTrue())
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+		}
+
+		// resizeCI changes memoryGiB (a mutable field), which moves the desired
+		// config version and makes the next reconcile trigger a day-2 job.
+		resizeCI := func(r *ComputeInstanceReconciler, nn types.NamespacedName) {
+			ci := getCI(nn)
+			ci.Spec.MemoryGiB *= 2
+			Expect(k8sClient.Update(ctx, ci)).To(Succeed())
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(r.Client.Get(ctx, nn, cached)).To(Succeed())
+				g.Expect(cached.Spec.MemoryGiB).To(Equal(ci.Spec.MemoryGiB))
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+		}
+
+		expectRunningVMStatus := func(ci *osacv1alpha1.ComputeInstance) {
+			Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseRunning))
+			expectCondition(ci, osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionTrue, osacv1alpha1.ReasonInfrastructureReady)
+			expectCondition(ci, osacv1alpha1.ComputeInstanceConditionReady, metav1.ConditionTrue, osacv1alpha1.ReasonAsExpected)
+		}
+
+		It("should gate a day-2 provisioning job on an existing VM when a requested CSP tier has lost its StorageClass mapping, without overwriting the running VM's status", func() {
+			const resourceName = "test-ci-day2-csp-gate"
+			const tenantName = "tenant-ci-day2-csp-gate"
+			// StorageReady is latched True, so it stays True after the silver
+			// CSP-managed StorageClass disappears from Tenant.status.storageClasses.
+			createStorageTenant(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC, silverSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nn := createStorageCI(resourceName, tenantName, storageSpec("gold", "silver"))
+
+			var capture triggerCapture
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", capturingProvider(&capture), 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler.TiersClient = catalogTiersClient(
+				newTestStorageTier("gold", "be-netapp"),
+				newTestStorageTier("silver", "be-netapp"),
+			)
+			reconciler.BackendsClient = mixedBackendsClient()
+
+			settleRunningCI(reconciler, nn, resourceName)
+			Expect(capture.count).To(BeZero())
+
+			setTenantStorageClasses(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC})
+			fakeRecorder := events.NewFakeRecorder(100)
+			reconciler.Recorder = fakeRecorder
+
+			By("Step 1: a resize triggers a day-2 job, which is gated on the missing silver mapping")
+			resizeCI(reconciler, nn)
+			res := reconcileCI(reconciler, nn)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(BeZero())
+
+			gated := getCI(nn)
+			expectRunningVMStatus(gated)
+			cfgCond := expectCondition(gated, osacv1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)
+			Expect(cfgCond.Message).To(ContainSubstring("missing tier(s): silver"))
+			Expect(gated.Status.ProvisioningJobs).To(HaveLen(1))
+			Expect(gated.Status.ProvisioningJobs[0].JobID).To(Equal("initial-provision-job"))
+			Eventually(fakeRecorder.Events).Should(Receive(And(
+				ContainSubstring(eventReasonTenantNotReady),
+				ContainSubstring("missing tier(s): silver"),
+			)))
+
+			By("Step 2: the next reconcile stays gated without emitting a duplicate TenantNotReady event")
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(reconciler.Client.Get(ctx, nn, cached)).To(Succeed())
+				c := cached.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionConfigurationApplied)
+				g.Expect(c).NotTo(BeNil())
+				g.Expect(c.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+			res = reconcileCI(reconciler, nn)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(BeZero())
+			Expect(fakeRecorder.Events).NotTo(Receive())
+			expectRunningVMStatus(getCI(nn))
+
+			By("Step 3: once the silver mapping returns, the day-2 job triggers with both requested StorageClasses")
+			setTenantStorageClasses(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC, silverSC})
+			reconcileCI(reconciler, nn)
+			Expect(capture.count).To(Equal(1))
+			Expect(capture.scs).To(ConsistOf(goldSC, silverSC))
+
+			triggered := getCI(nn)
+			expectRunningVMStatus(triggered)
+			cfgCond = expectCondition(triggered, osacv1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionFalse, osacv1alpha1.ReasonAsExpected)
+			Expect(cfgCond.Message).To(Equal("Applying configuration"))
+		})
+
+		It("should trigger a day-2 provisioning job on an existing VM with JIT tier data for an unmapped OSAC-managed tier", func() {
+			const resourceName = "test-ci-day2-osac-jit"
+			const tenantName = "tenant-ci-day2-osac-jit"
+			createStorageTenant(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nn := createStorageCI(resourceName, tenantName, storageSpec("gold", "fast"))
+
+			var capture triggerCapture
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", capturingProvider(&capture), 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler.TiersClient = catalogTiersClient(
+				newTestStorageTier("gold", "be-netapp"),
+				newTestStorageTier("fast", "be-vast"),
+			)
+			reconciler.BackendsClient = mixedBackendsClient()
+
+			settleRunningCI(reconciler, nn, resourceName)
+			resizeCI(reconciler, nn)
+			reconcileCI(reconciler, nn)
+
+			Expect(capture.count).To(Equal(1))
+			Expect(capture.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{goldSC}))
+			Expect(capture.tiers).To(HaveLen(1))
+			Expect(capture.tiers[0].Name).To(Equal("fast"))
+			Expect(capture.conns).To(HaveKey("be-vast"))
+			Expect(capture.conns).NotTo(HaveKey("be-netapp"))
+
+			triggered := getCI(nn)
+			expectRunningVMStatus(triggered)
+			expectCondition(triggered, osacv1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionFalse, osacv1alpha1.ReasonAsExpected)
+		})
+
+		It("should provision a CSP-managed VAST ComputeInstance with the supplied StorageClass and never resolve or forward the backend's credentials", func() {
+			vastGoldSC := osacv1alpha1.ResolvedStorageClass{Name: "vast-gold-sc", Tier: "gold"}
+			catalog := catalogTiersClient(
+				newTestStorageTier("gold", "be-vast-csp"),
+				newTestStorageTier("bronze", "be-vast"),
+			)
+			backends := &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					switch in.GetId() {
+					case "be-vast-csp":
+						return newTestCSPManagedBackendWithCredentialsGetResponse("vast", "secret-vast-csp-password"), nil
+					case "be-vast":
+						return newTestStorageBackendGetResponse("vast"), nil
+					default:
+						return nil, status.Error(codes.NotFound, "backend not found")
+					}
+				},
+			}
+			secrets := failingSecretsClient()
+
+			By("Subcase A: the CSP-managed VAST tier is mapped and StorageReady=True, so the job proceeds with no catalog, backend, or Secret lookup")
+			const resourceA = "test-ci-csp-vast-mapped"
+			const tenantA = "tenant-ci-csp-vast-mapped"
+			createStorageTenant(tenantA, []osacv1alpha1.ResolvedStorageClass{vastGoldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnA := createStorageCI(resourceA, tenantA, storageSpec("gold"))
+
+			var capA triggerCapture
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", capturingProvider(&capA), 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler.TiersClient = catalog
+			reconciler.BackendsClient = backends
+			reconciler.SecretsClient = secrets
+
+			reconcileCI(reconciler, nnA)
+			Expect(capA.count).To(Equal(1))
+			Expect(capA.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{vastGoldSC}))
+			Expect(capA.tiers).To(BeEmpty())
+			Expect(capA.conns).To(BeEmpty())
+			Expect(catalog.listCallCount).To(BeZero())
+			Expect(backends.getCallCount).To(BeZero())
+			Expect(secrets.getCallCount).To(BeZero())
+
+			By("Subcase B: an unmapped OSAC tier forces the catalog lookup, which excludes the CSP-managed VAST backend's tier definition, connection, and Secret")
+			const resourceB = "test-ci-csp-vast-with-jit"
+			const tenantB = "tenant-ci-csp-vast-with-jit"
+			createStorageTenant(tenantB, []osacv1alpha1.ResolvedStorageClass{vastGoldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnB := createStorageCI(resourceB, tenantB, storageSpec("gold", "bronze"))
+
+			var capB triggerCapture
+			reconciler.ProvisioningProvider = capturingProvider(&capB)
+			reconcileCI(reconciler, nnB)
+			Expect(capB.count).To(Equal(1))
+			Expect(capB.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{vastGoldSC}))
+			Expect(capB.tiers).To(HaveLen(1))
+			Expect(capB.tiers[0].Name).To(Equal("bronze"))
+			Expect(capB.conns).To(HaveKey("be-vast"))
+			Expect(capB.conns).NotTo(HaveKey("be-vast-csp"))
+			Expect(catalog.listCallCount).To(Equal(1))
+			Expect(secrets.getCallCount).To(BeZero())
+
+			By("Subcase C: StorageReady=False keeps a mapped CSP-managed VAST tier gated")
+			const resourceC = "test-ci-csp-vast-not-ready"
+			const tenantC = "tenant-ci-csp-vast-not-ready"
+			createStorageTenant(tenantC, []osacv1alpha1.ResolvedStorageClass{vastGoldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionFalse, osacv1alpha1.TenantReasonNotFound))
+			nnC := createStorageCI(resourceC, tenantC, storageSpec("gold"))
+
+			var capC triggerCapture
+			reconciler.ProvisioningProvider = capturingProvider(&capC)
+			res := reconcileCI(reconciler, nnC)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capC.count).To(BeZero())
+			condC := expectCondition(getCI(nnC), osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)
+			Expect(condC.Message).To(ContainSubstring("StorageReady=False"))
+			Expect(secrets.getCallCount).To(BeZero())
+		})
+
+		It("should prepare storage context and enforce CSP readiness gating when retrying a failed job after backoff elapses", func() {
+			const resourceName = "test-ci-backoff-retry-storage"
+			const tenantName = "tenant-ci-backoff-retry-storage"
+			createStorageTenant(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			spec := storageSpec("gold", "silver", "fast")
+			nn := createStorageCI(resourceName, tenantName, spec)
+
+			var capture triggerCapture
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", capturingProvider(&capture), 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler.TiersClient = catalogTiersClient(
+				newTestStorageTier("gold", "be-netapp"),
+				newTestStorageTier("silver", "be-netapp"),
+				newTestStorageTier("fast", "be-vast"),
+			)
+			reconciler.BackendsClient = mixedBackendsClient()
+
+			desiredVer, err := provisioning.ComputeDesiredConfigVersion(spec)
+			Expect(err).NotTo(HaveOccurred())
+			ci := getCI(nn)
+			ci.Status.DesiredConfigVersion = desiredVer
+			ci.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID:         "failed-job-1",
+				Type:          osacv1alpha1.JobTypeProvision,
+				State:         osacv1alpha1.JobStateFailed,
+				ConfigVersion: desiredVer,
+				Timestamp:     metav1.NewTime(time.Now().Add(-provisioning.BackoffBaseDelay - time.Second)),
+			}}
+			Expect(k8sClient.Status().Update(ctx, ci)).To(Succeed())
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(reconciler.Client.Get(ctx, nn, cached)).To(Succeed())
+				g.Expect(cached.Status.ProvisioningJobs).To(HaveLen(1))
+				g.Expect(cached.Status.ProvisioningJobs[0].State).To(Equal(osacv1alpha1.JobStateFailed))
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+
+			By("Step 1: when backoff has elapsed but CSP tier silver is unmapped, the retry is gated on storage readiness")
+			res := reconcileCI(reconciler, nn)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(BeZero())
+			gated := getCI(nn)
+			Expect(gated.Status.ProvisioningJobs).To(HaveLen(1))
+			cond := expectCondition(gated, osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)
+			Expect(cond.Message).To(ContainSubstring("missing tier(s): silver"))
+
+			By("Step 2: once silver is mapped in Tenant.status.storageClasses, the elapsed-backoff retry triggers with injected StorageClasses and JIT tier/backend data")
+			setTenantStorageClasses(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC, silverSC})
+			reconcileCI(reconciler, nn)
+			Expect(capture.count).To(Equal(1))
+			Expect(capture.scs).To(ConsistOf(goldSC, silverSC))
+			Expect(capture.tiers).To(HaveLen(1))
+			Expect(capture.tiers[0].Name).To(Equal("fast"))
+			Expect(capture.conns).To(HaveKey("be-vast"))
+			Expect(capture.conns).NotTo(HaveKey("be-netapp"))
+
+			retried := getCI(nn)
+			Expect(retried.Status.ProvisioningJobs).To(HaveLen(2))
+			Expect(retried.Status.ProvisioningJobs[1].JobID).To(Equal("capture-job-1"))
+		})
+	})
+
+	Context("Storage readiness gating decisions (OSAC-6596)", func() {
+		srTrue := testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound)
+		srFalse := testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionFalse, osacv1alpha1.TenantReasonNotFound)
+		csrTrue := testTenantCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound)
+		tierResolutionFailed := testTenantCondition(osacv1alpha1.TenantConditionStorageBackendReady, metav1.ConditionFalse, "TierResolutionFailed")
+
+		goldSC := osacv1alpha1.ResolvedStorageClass{Name: "netapp-gold-sc", Tier: "gold"}
+		fastSC := osacv1alpha1.ResolvedStorageClass{Name: "vast-fast-sc", Tier: "fast"}
+
+		DescribeTable("checkStorageReadiness",
+			func(tc storageReadinessCase) {
+				tenant := &osacv1alpha1.Tenant{
+					ObjectMeta: metav1.ObjectMeta{Name: "tenant-readiness"},
+					Status: osacv1alpha1.TenantStatus{
+						Phase:          osacv1alpha1.TenantPhaseReady,
+						StorageClasses: tc.classes,
+						Conditions:     tc.conditions,
+					},
+				}
+				osacTiers := testTierDefinitions("vast", tc.osacTiers...)
+				cspTiers := testTierDefinitions("netapp", tc.cspTiers...)
+				var tierErr error
+				if tc.catalogErr {
+					// resolveAndPartitionTierContext returns no tiers alongside a catalog error.
+					osacTiers, cspTiers = nil, nil
+					tierErr = status.Error(codes.Unavailable, "fulfillment service unavailable")
+				}
+				reqCSPTiers := requestedCSPTiers(tenant, tc.requested, osacTiers, cspTiers)
+				unresolvedTiers := unresolvedRequestedTiers(tc.requested, osacTiers, cspTiers, tc.skipped)
+
+				ready, msg := checkStorageReadiness(tenant, tc.requested, reqCSPTiers, unresolvedTiers, tierErr)
+				Expect(ready).To(Equal(tc.wantReady), "message: %s", msg)
+				if tc.wantReady {
+					Expect(msg).To(BeEmpty())
+				}
+				for _, want := range tc.wantMsg {
+					Expect(msg).To(ContainSubstring(want))
+				}
+			},
+			// Catalog resolves.
+			Entry("OSAC-only tier on a pure-OSAC tenant", storageReadinessCase{
+				conditions: []metav1.Condition{csrTrue}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC},
+				requested: []string{"fast"}, osacTiers: []string{"fast"}, wantReady: true,
+			}),
+			Entry("mapped CSP tier with StorageReady=True", storageReadinessCase{
+				conditions: []metav1.Condition{srTrue}, classes: []osacv1alpha1.ResolvedStorageClass{goldSC},
+				requested: []string{"gold"}, cspTiers: []string{"gold"}, wantReady: true,
+			}),
+			Entry("CSP tier before StorageReady is set", storageReadinessCase{
+				requested: []string{"gold"}, cspTiers: []string{"gold"},
+				wantMsg: []string{"StorageReady condition is not set"},
+			}),
+			Entry("CSP tier with StorageReady=False", storageReadinessCase{
+				conditions: []metav1.Condition{srFalse}, classes: []osacv1alpha1.ResolvedStorageClass{goldSC},
+				requested: []string{"gold"}, cspTiers: []string{"gold"},
+				wantMsg: []string{"StorageReady=False"},
+			}),
+			Entry("unmapped CSP tier while StorageReady is latched True", storageReadinessCase{
+				conditions: []metav1.Condition{srTrue}, classes: []osacv1alpha1.ResolvedStorageClass{goldSC},
+				requested: []string{"gold", "silver"}, cspTiers: []string{"gold", "silver"},
+				wantMsg: []string{"missing tier(s): silver"},
+			}),
+			Entry("CSP tier mapped only to a whitespace StorageClass name", storageReadinessCase{
+				conditions: []metav1.Condition{srTrue},
+				classes:    []osacv1alpha1.ResolvedStorageClass{goldSC, {Name: "   ", Tier: "silver"}},
+				requested:  []string{"silver"}, cspTiers: []string{"gold", "silver"},
+				wantMsg: []string{"missing tier(s): silver"},
+			}),
+			Entry("unmapped OSAC tier next to a mapped CSP tier keeps JIT", storageReadinessCase{
+				conditions: []metav1.Condition{srTrue}, classes: []osacv1alpha1.ResolvedStorageClass{goldSC},
+				requested: []string{"gold", "fast"}, osacTiers: []string{"fast"}, cspTiers: []string{"gold"}, wantReady: true,
+			}),
+			Entry("OSAC-only request on a mixed tenant with StorageReady=False", storageReadinessCase{
+				conditions: []metav1.Condition{srFalse}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC},
+				requested: []string{"fast"}, osacTiers: []string{"fast"}, cspTiers: []string{"gold"}, wantReady: true,
+			}),
+			// Catalog unavailable.
+			Entry("catalog unavailable: every requested tier mapped with StorageReady=True", storageReadinessCase{
+				conditions: []metav1.Condition{srTrue, csrTrue}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC, goldSC},
+				requested: []string{"gold", "fast"}, catalogErr: true, wantReady: true,
+			}),
+			Entry("catalog unavailable: requested tier without a mapping", storageReadinessCase{
+				conditions: []metav1.Condition{srTrue}, classes: []osacv1alpha1.ResolvedStorageClass{goldSC},
+				requested: []string{"gold", "silver"}, catalogErr: true,
+				wantMsg: []string{"storage tier catalog resolution failed", "have no StorageClass in Tenant status: silver"},
+			}),
+			Entry("catalog unavailable: requested tier with an ambiguous mapping", storageReadinessCase{
+				conditions: []metav1.Condition{csrTrue},
+				classes:    []osacv1alpha1.ResolvedStorageClass{{Name: "sc-fast-1", Tier: "fast"}, {Name: "sc-fast-2", Tier: "fast"}},
+				requested:  []string{"fast"}, catalogErr: true,
+				wantMsg: []string{"have no StorageClass in Tenant status: fast"},
+			}),
+			Entry("catalog unavailable: mapped tiers cannot be classified while StorageReady=False", storageReadinessCase{
+				conditions: []metav1.Condition{srFalse, csrTrue}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC, goldSC},
+				requested: []string{"fast"}, catalogErr: true,
+				wantMsg: []string{"StorageReady=False"},
+			}),
+			Entry("catalog unavailable: onboarded pure-OSAC tenant during a StorageReconciler outage", storageReadinessCase{
+				conditions: []metav1.Condition{tierResolutionFailed, csrTrue}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC},
+				requested: []string{"fast"}, catalogErr: true, wantReady: true,
+			}),
+			Entry("catalog unavailable: pure-OSAC tenant requesting an unmapped tier that needs JIT", storageReadinessCase{
+				conditions: []metav1.Condition{csrTrue}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC},
+				requested: []string{"fast", "bronze"}, catalogErr: true,
+				wantMsg: []string{"have no StorageClass in Tenant status: bronze"},
+			}),
+			Entry("catalog unavailable: newly Ready tenant whose storage onboarding failed tier resolution", storageReadinessCase{
+				conditions: []metav1.Condition{tierResolutionFailed},
+				requested:  []string{"fast"}, catalogErr: true,
+				wantMsg: []string{"have no StorageClass in Tenant status: fast"},
+			}),
+			Entry("catalog unavailable: tenant without storage status uses the target-cluster lookup", storageReadinessCase{
+				requested: []string{"standard"}, catalogErr: true, wantReady: true,
+			}),
+			// Backend or credential lookup skipped a catalog tier.
+			Entry("skipped OSAC tier with an existing mapping on a mixed tenant", storageReadinessCase{
+				conditions: []metav1.Condition{srTrue, csrTrue}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC, goldSC},
+				requested: []string{"gold", "fast"}, cspTiers: []string{"gold"}, skipped: true, wantReady: true,
+			}),
+			Entry("skipped OSAC tier with an existing mapping on a pure-OSAC tenant", storageReadinessCase{
+				conditions: []metav1.Condition{csrTrue}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC},
+				requested: []string{"fast"}, skipped: true, wantReady: true,
+			}),
+			Entry("skipped tier without a mapping", storageReadinessCase{
+				conditions: []metav1.Condition{srTrue}, classes: []osacv1alpha1.ResolvedStorageClass{goldSC},
+				requested: []string{"gold", "fast"}, cspTiers: []string{"gold"}, skipped: true,
+				wantMsg: []string{"unresolved backend references for requested tier(s): fast"},
+			}),
+			Entry("skipped mapped tier cannot be classified while StorageReady=False", storageReadinessCase{
+				conditions: []metav1.Condition{srFalse}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC, goldSC},
+				requested: []string{"fast"}, cspTiers: []string{"gold"}, skipped: true,
+				wantMsg: []string{"StorageReady=False"},
+			}),
+		)
+
+		DescribeTable("storageClassesCoverRequestedTiers",
+			func(conditions []metav1.Condition, classes []osacv1alpha1.ResolvedStorageClass, requested []string, want bool) {
+				tenant := &osacv1alpha1.Tenant{
+					ObjectMeta: metav1.ObjectMeta{Name: "tenant-coverage"},
+					Status:     osacv1alpha1.TenantStatus{Phase: osacv1alpha1.TenantPhaseReady, StorageClasses: classes, Conditions: conditions},
+				}
+				Expect(storageClassesCoverRequestedTiers(tenant, requested)).To(Equal(want))
+			},
+			Entry("no requested tiers", nil, nil, nil, false),
+			Entry("every tier mapped with StorageReady unset", []metav1.Condition{csrTrue},
+				[]osacv1alpha1.ResolvedStorageClass{fastSC}, []string{"fast"}, true),
+			Entry("every tier mapped with StorageReady=True", []metav1.Condition{srTrue},
+				[]osacv1alpha1.ResolvedStorageClass{fastSC, goldSC}, []string{"gold", "fast"}, true),
+			Entry("tier mapped but StorageReady=False", []metav1.Condition{srFalse},
+				[]osacv1alpha1.ResolvedStorageClass{fastSC}, []string{"fast"}, false),
+			Entry("one requested tier unmapped", []metav1.Condition{srTrue},
+				[]osacv1alpha1.ResolvedStorageClass{goldSC}, []string{"gold", "fast"}, false),
+			Entry("requested tier with an ambiguous mapping", []metav1.Condition{csrTrue},
+				[]osacv1alpha1.ResolvedStorageClass{{Name: "sc-fast-1", Tier: "fast"}, {Name: "sc-fast-2", Tier: "fast"}}, []string{"fast"}, false),
+			Entry("requested tier mapped only to a whitespace name", []metav1.Condition{srTrue},
+				[]osacv1alpha1.ResolvedStorageClass{{Name: "   ", Tier: "fast"}}, []string{"fast"}, false),
+			Entry("status tier names are matched trimmed and case-insensitively", []metav1.Condition{srTrue},
+				[]osacv1alpha1.ResolvedStorageClass{{Name: "vast-fast-sc", Tier: " FAST "}}, []string{"fast"}, true),
+		)
 	})
 
 	Context("handleKubeVirtVM", func() {
@@ -3029,6 +5032,63 @@ var _ = Describe("ComputeInstance Controller", func() {
 				g.Expect(cond.Reason).To(Equal("TenantNotReady"))
 				g.Expect(cond.Message).To(ContainSubstring("ClusterStorageReady"))
 				g.Expect(cond.Message).To(ContainSubstring("sc1, sc2"))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+		})
+
+		It("should include StorageReady condition in Provisioned message", func() {
+			const resourceName = "test-ci-tenant-sr-msg"
+			const tenantName = "tenant-sr-msg"
+			DeferCleanup(func() { deleteCI(resourceName) })
+			DeferCleanup(func() { deleteTenantInNamespace(ctx, namespaceName, tenantName) })
+
+			// Create tenant in Progressing state with a StorageReady condition
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			tenant.Status.Phase = osacv1alpha1.TenantPhaseProgressing
+			tenant.SetStatusCondition(
+				osacv1alpha1.TenantConditionStorageReady,
+				metav1.ConditionFalse,
+				"ProvisioningFailed",
+				"NetApp SVM creation failed for tenant "+tenantName,
+			)
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			Eventually(func(g Gomega) {
+				cachedTenant := &osacv1alpha1.Tenant{}
+				g.Expect(controllerReconciler.Client.Get(ctx, types.NamespacedName{Name: tenantName, Namespace: namespaceName}, cachedTenant)).To(Succeed())
+				g.Expect(cachedTenant.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseProgressing))
+				g.Expect(cachedTenant.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)).NotTo(BeNil())
+				g.Expect(controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})).To(Succeed())
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+
+			result, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+
+			ci := &osacv1alpha1.ComputeInstance{}
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+				cond := ci.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+				g.Expect(cond).NotTo(BeNil())
+				g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+				g.Expect(cond.Reason).To(Equal("TenantNotReady"))
+				g.Expect(cond.Message).To(ContainSubstring("StorageReady: NetApp SVM creation failed for tenant " + tenantName))
 			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 		})
 

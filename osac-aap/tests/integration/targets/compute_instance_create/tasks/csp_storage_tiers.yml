@@ -1,0 +1,402 @@
+---
+# CSP-managed + OSAC-managed multi-disk storage tier resolution — Kind component integration test (OSAC-6596).
+# Exercises the real top-level playbook_osac_create_compute_instance.yml and ocp_virt_vm
+# create_resources.yaml against Kind:
+#   1. Conflicting/ambiguous tier mappings fail in pre_tasks before attaching the
+#      ComputeInstance finalizer or creating DataVolumes in Kind.
+#   2. Valid CSP boot tier (gold -> netapp-gold-sc) + OSAC additional disk tier
+#      (fast -> vast-fast-sc, including an identical JIT entry) deduplicate cleanly,
+#      attach the ComputeInstance finalizer, and create root and additional-disk
+#      DataVolumes in Kind with the resolved storageClassNames.
+
+- name: "OSAC-6596 Setup — create ComputeInstance CR and verify fail-closed pre_tasks in Kind"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Read base ComputeInstance fixture
+      ansible.builtin.set_fact:
+        _base_ci_fixture: >-
+          {{ lookup('file', '../../../fixtures/computeinstance-test.yaml') | from_yaml }}
+
+    - name: Build multi-disk CSP + OSAC ComputeInstance CR definition
+      ansible.builtin.set_fact:
+        test_csp_compute_instance: >-
+          {{
+            _base_ci_fixture | combine({
+              'metadata': {
+                'name': 'test-vm-csp-tiers',
+                'namespace': 'osac-system',
+                'annotations': {
+                  'osac.openshift.io/tenant': 'integration-tenant',
+                  'osac.openshift.io/subnet-target-namespace': 'test-subnet'
+                }
+              },
+              'spec': _base_ci_fixture.spec | combine({
+                'bootDisk': {
+                  'sizeGiB': 20,
+                  'storageTier': 'gold'
+                },
+                'additionalDisks': [
+                  {
+                    'sizeGiB': 40,
+                    'storageTier': 'fast'
+                  }
+                ]
+              }),
+              'status': {
+                'desiredConfigVersion': '1',
+                'tenantReference': {
+                  'name': 'integration-tenant',
+                  'namespace': 'osac-system'
+                }
+              }
+            }, recursive=True)
+          }}
+
+    - name: Create test-vm-csp-tiers ComputeInstance CR in Kind
+      kubernetes.core.k8s:
+        state: present
+        definition: "{{ test_csp_compute_instance }}"
+
+    - name: Run playbook_osac_create_compute_instance.yml with conflicting tier mapping against Kind
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - --inventory
+          - localhost,
+          - --connection
+          - local
+          - "{{ playbook_dir }}/../../../../../playbook_osac_create_compute_instance.yml"
+          - -e
+          - "@{{ playbook_dir }}/../../../common_vars.yml"
+          - -e
+          - >-
+            {{
+              {
+                "ansible_connection": "local",
+                "ansible_become": false,
+                "ansible_python_interpreter": ansible_python_interpreter,
+                "osac_job_vars": {
+                  "resource": test_csp_compute_instance,
+                  "tenant_storage_classes": [
+                    {"name": "netapp-gold-sc", "tier": "gold"},
+                    {"name": "vast-fast-1", "tier": "fast"},
+                    {"name": "vast-fast-2", "tier": "fast"}
+                  ]
+                }
+              } | to_json
+            }}
+        chdir: "{{ playbook_dir }}/../../../../../"
+      register: _conflicting_tier_kind_run
+      changed_when: false
+      failed_when: false
+
+    - name: Verify conflicting tier failed in pre_tasks
+      ansible.builtin.assert:
+        that:
+          - _conflicting_tier_kind_run.rc != 0
+          - "'is ambiguous for tenant' in (_conflicting_tier_kind_run.stdout + _conflicting_tier_kind_run.stderr)"
+        fail_msg: >-
+          Expected conflicting tier mapping to fail in pre_tasks, got:
+          {{ _conflicting_tier_kind_run.stdout + _conflicting_tier_kind_run.stderr }}
+
+    - name: Read ComputeInstance CR from Kind after pre_tasks failure
+      kubernetes.core.k8s_info:
+        api_version: osac.openshift.io/v1alpha1
+        kind: ComputeInstance
+        name: "test-vm-csp-tiers"
+        namespace: "osac-system"
+      register: _ci_after_failure
+
+    - name: Verify no finalizer was attached to ComputeInstance CR on pre_tasks failure
+      ansible.builtin.assert:
+        that:
+          - _ci_after_failure.resources | length == 1
+          - (_ci_after_failure.resources[0].metadata.finalizers | default([])) | length == 0
+        fail_msg: >-
+          Expected ComputeInstance finalizers to remain empty after pre_tasks failure,
+          got: {{ _ci_after_failure.resources[0].metadata.finalizers | default([]) }}
+
+    - name: Verify created DataVolumes, VirtualMachine, and ComputeInstance finalizer in Kind
+      block:
+        - name: Run playbook_osac_create_compute_instance.yml with valid CSP + OSAC tiers against Kind
+          ansible.builtin.command:
+            argv:
+              - ansible-playbook
+              - --inventory
+              - localhost,
+              - --connection
+              - local
+              - "{{ playbook_dir }}/../../../../../playbook_osac_create_compute_instance.yml"
+              - -e
+              - "@{{ playbook_dir }}/../../../common_vars.yml"
+              - -e
+              - >-
+                {{
+                  {
+                    "ansible_connection": "local",
+                    "ansible_become": false,
+                    "ansible_python_interpreter": ansible_python_interpreter,
+                    "osac_job_vars": {
+                      "resource": test_csp_compute_instance,
+                      "tenant_storage_classes": [
+                        {"name": "netapp-gold-sc", "tier": "gold"},
+                        {"name": "vast-fast-sc", "tier": "fast"}
+                      ]
+                    },
+                    "storage_provider_storage_class_names": [
+                      {"name": "vast-fast-sc", "tier": "fast"}
+                    ],
+                    "create_step_wait_annotate_override": {
+                      "name": "osac.workflows.workflow_helpers",
+                      "tasks_from": "noop.yml"
+                    }
+                  } | to_json
+                }}
+            chdir: "{{ playbook_dir }}/../../../../../"
+          environment:
+            ANSIBLE_JINJA2_NATIVE: "true"
+          register: _valid_tier_kind_run
+          changed_when: false
+
+        - name: Read ComputeInstance CR from Kind
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ComputeInstance
+            name: "test-vm-csp-tiers"
+            namespace: "osac-system"
+          register: _ci_created
+
+        - name: Verify ComputeInstance finalizer was attached
+          ansible.builtin.assert:
+            that:
+              - _ci_created.resources | length == 1
+              - compute_instance_osac_finalizer in (_ci_created.resources[0].metadata.finalizers | default([]))
+            fail_msg: >-
+              Expected finalizer '{{ compute_instance_osac_finalizer }}' on ComputeInstance,
+              got: {{ _ci_created.resources[0].metadata.finalizers | default([]) }}
+
+        - name: Read root disk DataVolume from Kind
+          kubernetes.core.k8s_info:
+            api_version: cdi.kubevirt.io/v1beta1
+            kind: DataVolume
+            name: "test-vm-csp-tiers-root-disk"
+            namespace: "test-subnet"
+          register: _root_dv
+
+        - name: Verify root disk DataVolume uses CSP StorageClass netapp-gold-sc
+          ansible.builtin.assert:
+            that:
+              - _root_dv.resources | length == 1
+              - _root_dv.resources[0].spec.pvc.storageClassName == "netapp-gold-sc"
+              - _root_dv.resources[0].spec.pvc.resources.requests.storage == "20Gi"
+            fail_msg: >-
+              Expected root disk DataVolume storageClassName='netapp-gold-sc',
+              got: {{ _root_dv.resources }}
+
+        - name: Read additional disk DataVolume from Kind
+          kubernetes.core.k8s_info:
+            api_version: cdi.kubevirt.io/v1beta1
+            kind: DataVolume
+            name: "test-vm-csp-tiers-disk-1"
+            namespace: "test-subnet"
+          register: _add_dv
+
+        - name: Verify additional disk DataVolume uses OSAC StorageClass vast-fast-sc
+          ansible.builtin.assert:
+            that:
+              - _add_dv.resources | length == 1
+              - _add_dv.resources[0].spec.pvc.storageClassName == "vast-fast-sc"
+              - _add_dv.resources[0].spec.pvc.resources.requests.storage == "40Gi"
+            fail_msg: >-
+              Expected additional disk DataVolume storageClassName='vast-fast-sc',
+              got: {{ _add_dv.resources }}
+
+        - name: Read VirtualMachine from Kind
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachine
+            name: "test-vm-csp-tiers"
+            namespace: "test-subnet"
+          register: _created_vm
+
+        - name: Verify VirtualMachine references both DataVolumes
+          ansible.builtin.assert:
+            that:
+              - _created_vm.resources | length == 1
+              - >-
+                (_created_vm.resources[0].spec.template.spec.volumes
+                 | map(attribute='dataVolume.name')
+                 | select('defined')
+                 | list) == ['test-vm-csp-tiers-root-disk', 'test-vm-csp-tiers-disk-1']
+            fail_msg: >-
+              Expected VirtualMachine volumes to reference root and additional DataVolumes,
+              got: {{ _created_vm.resources[0].spec.template.spec.volumes | default([]) }}
+
+        - name: Remove DataVolumes and VirtualMachine before mixed mapped/unmapped JIT run
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ _cleanup_item.api_version }}"
+            kind: "{{ _cleanup_item.kind }}"
+            name: "{{ _cleanup_item.name }}"
+            namespace: "test-subnet"
+          loop:
+            - {api_version: "kubevirt.io/v1", kind: "VirtualMachine", name: "test-vm-csp-tiers"}
+            - {api_version: "cdi.kubevirt.io/v1beta1", kind: "DataVolume", name: "test-vm-csp-tiers-root-disk"}
+            - {api_version: "cdi.kubevirt.io/v1beta1", kind: "DataVolume", name: "test-vm-csp-tiers-disk-1"}
+          loop_control:
+            loop_var: _cleanup_item
+
+        - name: Run playbook_osac_create_compute_instance.yml with mapped custom-named gold tier and unmapped JIT fast tier
+          ansible.builtin.command:
+            argv:
+              - ansible-playbook
+              - --inventory
+              - localhost,
+              - --connection
+              - local
+              - "{{ playbook_dir }}/../../../../../playbook_osac_create_compute_instance.yml"
+              - -e
+              - "@{{ playbook_dir }}/../../../common_vars.yml"
+              - -e
+              - >-
+                {{
+                  {
+                    "ansible_connection": "local",
+                    "ansible_become": false,
+                    "ansible_python_interpreter": ansible_python_interpreter,
+                    "osac_job_vars": {
+                      "resource": test_csp_compute_instance,
+                      "tenant_storage_classes": [
+                        {"name": "custom-gold-sc", "tier": "gold"}
+                      ],
+                      "storage_tier_definitions": [
+                        {"name": "gold", "provider": "lvms", "protocol": "block"},
+                        {"name": "fast", "provider": "lvms", "protocol": "block"}
+                      ]
+                    },
+                    "create_step_wait_annotate_override": {
+                      "name": "osac.workflows.workflow_helpers",
+                      "tasks_from": "noop.yml"
+                    }
+                  } | to_json
+                }}
+            chdir: "{{ playbook_dir }}/../../../../../"
+          environment:
+            ANSIBLE_JINJA2_NATIVE: "true"
+          register: _mixed_mapped_unmapped_jit_run
+          changed_when: false
+
+        - name: Verify LVMS JIT did not create duplicate StorageClass for already-mapped gold tier
+          kubernetes.core.k8s_info:
+            api_version: storage.k8s.io/v1
+            kind: StorageClass
+            name: "osac-integration-tenant-gold"
+          register: _jit_gold_sc
+
+        - name: Assert osac-integration-tenant-gold StorageClass was not created
+          ansible.builtin.assert:
+            that:
+              - _jit_gold_sc.resources | length == 0
+            fail_msg: >-
+              Expected already-mapped gold tier to be excluded from JIT provisioning,
+              but found StorageClass: {{ _jit_gold_sc.resources }}
+
+        - name: Verify LVMS JIT created StorageClass for unmapped fast tier
+          kubernetes.core.k8s_info:
+            api_version: storage.k8s.io/v1
+            kind: StorageClass
+            name: "osac-integration-tenant-fast"
+          register: _jit_fast_sc
+
+        - name: Assert osac-integration-tenant-fast StorageClass was created
+          ansible.builtin.assert:
+            that:
+              - _jit_fast_sc.resources | length == 1
+            fail_msg: >-
+              Expected unmapped fast tier to be JIT-provisioned as osac-integration-tenant-fast,
+              got: {{ _jit_fast_sc.resources }}
+
+        - name: Read root and additional disk DataVolumes after mixed mapped/unmapped JIT run
+          kubernetes.core.k8s_info:
+            api_version: cdi.kubevirt.io/v1beta1
+            kind: DataVolume
+            namespace: "test-subnet"
+          register: _mixed_jit_dvs
+
+        - name: Assert DataVolumes use custom-gold-sc and JIT-created osac-integration-tenant-fast
+          ansible.builtin.assert:
+            that:
+              - >-
+                (_mixed_jit_dvs.resources
+                 | selectattr('metadata.name', 'equalto', 'test-vm-csp-tiers-root-disk')
+                 | map(attribute='spec.pvc.storageClassName')
+                 | list) == ['custom-gold-sc']
+              - >-
+                (_mixed_jit_dvs.resources
+                 | selectattr('metadata.name', 'equalto', 'test-vm-csp-tiers-disk-1')
+                 | map(attribute='spec.pvc.storageClassName')
+                 | list) == ['osac-integration-tenant-fast']
+            fail_msg: >-
+              Expected root disk='custom-gold-sc' and disk-1='osac-integration-tenant-fast',
+              got: {{ _mixed_jit_dvs.resources }}
+
+      always:
+        - name: Remove JIT-created StorageClasses from mixed mapped/unmapped test
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: StorageClass
+            name: "{{ _jit_sc_name }}"
+          loop:
+            - "osac-integration-tenant-gold"
+            - "osac-integration-tenant-fast"
+          loop_control:
+            loop_var: _jit_sc_name
+          failed_when: false
+        - name: Remove test VirtualMachine
+          kubernetes.core.k8s:
+            state: absent
+            api_version: kubevirt.io/v1
+            kind: VirtualMachine
+            name: "test-vm-csp-tiers"
+            namespace: "test-subnet"
+          failed_when: false
+
+        - name: Remove test DataVolumes
+          kubernetes.core.k8s:
+            state: absent
+            api_version: cdi.kubevirt.io/v1beta1
+            kind: DataVolume
+            name: "{{ _dv_name }}"
+            namespace: "test-subnet"
+          loop:
+            - "test-vm-csp-tiers-root-disk"
+            - "test-vm-csp-tiers-disk-1"
+          loop_control:
+            loop_var: _dv_name
+          failed_when: false
+
+        - name: Clear finalizers on test-vm-csp-tiers ComputeInstance
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ComputeInstance
+              metadata:
+                name: "test-vm-csp-tiers"
+                namespace: "osac-system"
+                finalizers: []
+          failed_when: false
+
+        - name: Remove test-vm-csp-tiers ComputeInstance
+          kubernetes.core.k8s:
+            state: absent
+            api_version: osac.openshift.io/v1alpha1
+            kind: ComputeInstance
+            name: "test-vm-csp-tiers"
+            namespace: "osac-system"
+          failed_when: false

@@ -288,8 +288,10 @@ class StorageMappingTests(unittest.TestCase):
 
     def test_osac_managed_jit_classes_extend_the_shared_mapping(self) -> None:
         managed_class = f"osac-{self.namespace}-balanced"
-        self.owned_classes.append(managed_class)
+        unwanted_fast_jit_class = f"osac-{self.namespace}-fast"
+        self.owned_classes.extend([managed_class, unwanted_fast_jit_class])
         definitions = [
+            {"name": "fast", "provider": "lvms", "protocol": "block"},
             {"name": "balanced", "provider": "lvms", "protocol": "block"},
             {
                 "name": "not-requested",
@@ -304,6 +306,9 @@ class StorageMappingTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("osac.service.storage_provider :", result.stdout)
         self.assertIn("osac.templates.lvms_storage :", result.stdout)
+        with self.assertRaises(ApiException) as fast_lookup:
+            self.storage.read_storage_class(unwanted_fast_jit_class)
+        self.assertEqual(fast_lookup.exception.status, 404)
         managed = self.storage.read_storage_class(managed_class)
         self.assertEqual(managed.provisioner, "topolvm.io")
         self.assertEqual(
@@ -328,7 +333,7 @@ class StorageMappingTests(unittest.TestCase):
             definitions,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("osac.service.storage_provider :", result.stdout)
+        self.assertNotIn("osac.service.storage_provider :", result.stdout)
         self.assertEqual(
             self._assert_disk_specs(
                 [self.classes["fast"], managed_class, self.classes["archive"]]

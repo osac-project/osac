@@ -23,16 +23,20 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
+	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
+	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/internal/controller"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 
@@ -71,14 +75,20 @@ func (m *mockProvider) Start(ctx context.Context, mgr multicluster.Aware) error 
 	return m.startFunc(ctx, mgr)
 }
 
-// mockManager implements mcmanager.Manager.Start for testing.
+// mockManager implements mcmanager.Manager.Start and GetProvider for testing.
 type mockManager struct {
 	mcmanager.Manager
+	provider  multicluster.Provider
 	startFunc func(ctx context.Context) error
 }
 
 func (m *mockManager) Start(ctx context.Context) error {
 	return m.startFunc(ctx)
+}
+
+// GetProvider returns the configured multicluster.Provider for testing.
+func (m *mockManager) GetProvider() multicluster.Provider {
+	return m.provider
 }
 
 var _ = Describe("discovery ignition TLS", func() {
@@ -631,5 +641,162 @@ var _ = Describe("controllerFlags.validate", func() {
 	It("accepts no controllers enabled", func() {
 		f := &controllerFlags{}
 		Expect(f.validate()).To(Succeed())
+	})
+})
+
+var _ = Describe("targetClusterFromManager", func() {
+	It("returns LocalCluster when manager provider is nil", func() {
+		mgr := &mockManager{provider: nil}
+		Expect(targetClusterFromManager(mgr)).To(Equal(mcmanager.LocalCluster))
+	})
+
+	It("returns remote cluster name when manager provider is non-nil", func() {
+		mgr := &mockManager{provider: &mockProvider{}}
+		Expect(targetClusterFromManager(mgr)).To(Equal(multicluster.ClusterName(remoteClusterName)))
+	})
+})
+
+var _ = Describe("newClusterFromKubeconfig", func() {
+	var remoteScheme *runtime.Scheme
+
+	BeforeEach(func() {
+		localScheme := runtime.NewScheme()
+		remoteScheme = runtime.NewScheme()
+		addSchemesForRemoteControllers(localScheme, remoteScheme, true, true, true, true)
+	})
+
+	It("rejects empty or whitespace-only kubeconfig paths without falling back to in-cluster config", func() {
+		cl, err := newClusterFromKubeconfig("", remoteScheme)
+		Expect(err).To(MatchError(ContainSubstring("remote cluster kubeconfig path is empty")))
+		Expect(cl).To(BeNil())
+
+		cl, err = newClusterFromKubeconfig("   ", remoteScheme)
+		Expect(err).To(MatchError(ContainSubstring("remote cluster kubeconfig path is empty")))
+		Expect(cl).To(BeNil())
+	})
+
+	It("returns an error when the kubeconfig file does not exist", func() {
+		missingPath := filepath.Join(GinkgoT().TempDir(), "does-not-exist-kubeconfig")
+		cl, err := newClusterFromKubeconfig(missingPath, remoteScheme)
+		Expect(err).To(MatchError(ContainSubstring("build config from kubeconfig")))
+		Expect(cl).To(BeNil())
+	})
+
+	It("returns an error when the kubeconfig content is invalid", func() {
+		dir := GinkgoT().TempDir()
+
+		malformedPath := filepath.Join(dir, "malformed-kubeconfig")
+		Expect(os.WriteFile(malformedPath, []byte("not: [valid: yaml"), 0o600)).To(Succeed())
+		cl, err := newClusterFromKubeconfig(malformedPath, remoteScheme)
+		Expect(err).To(HaveOccurred())
+		Expect(cl).To(BeNil())
+
+		emptyConfigPath := filepath.Join(dir, "empty-config-kubeconfig")
+		Expect(os.WriteFile(emptyConfigPath, []byte("apiVersion: v1\nkind: Config\n"), 0o600)).To(Succeed())
+		cl, err = newClusterFromKubeconfig(emptyConfigPath, remoteScheme)
+		Expect(err).To(HaveOccurred())
+		Expect(cl).To(BeNil())
+	})
+
+	It("creates a cluster from a valid kubeconfig file with remoteScheme", func() {
+		testKubeconfigFixture := []byte(`apiVersion: v1
+kind: Config
+clusters:
+- name: remote
+  cluster:
+    server: https://127.0.0.1:6443
+contexts:
+- name: remote
+  context:
+    cluster: remote
+    user: remote
+current-context: remote
+users:
+- name: remote
+  user: {}
+`)
+		testKubeconfigPath := filepath.Join(GinkgoT().TempDir(), "valid-kubeconfig")
+		Expect(os.WriteFile(testKubeconfigPath, testKubeconfigFixture, 0o600)).To(Succeed())
+
+		cl, err := newClusterFromKubeconfig(testKubeconfigPath, remoteScheme)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cl).NotTo(BeNil())
+		Expect(cl.GetScheme()).To(Equal(remoteScheme))
+
+		trailingSpacePath := filepath.Join(GinkgoT().TempDir(), "valid-kubeconfig ")
+		Expect(os.WriteFile(trailingSpacePath, testKubeconfigFixture, 0o600)).To(Succeed())
+
+		clWithTrailingSpace, err := newClusterFromKubeconfig(trailingSpacePath, remoteScheme)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(clWithTrailingSpace).NotTo(BeNil())
+		Expect(clWithTrailingSpace.GetScheme()).To(Equal(remoteScheme))
+	})
+})
+
+var _ = Describe("controllerFlags.validateRemoteCluster", func() {
+	It("rejects Cluster controller when remoteClusterKubeconfig is set", func() {
+		f := &controllerFlags{Cluster: true, ComputeInstance: true}
+		Expect(f.validateRemoteCluster("/etc/osac/remote-cluster-kubeconfig")).To(
+			MatchError(ContainSubstring("remote cluster kubeconfig option is not supported along with cluster controller")),
+		)
+	})
+
+	It("rejects BareMetalInstance controller when remoteClusterKubeconfig is set", func() {
+		f := &controllerFlags{BareMetalInstance: true, Tenant: true}
+		Expect(f.validateRemoteCluster("/etc/osac/remote-cluster-kubeconfig")).To(
+			MatchError(ContainSubstring(
+				"remote cluster kubeconfig option is not supported along with bare metal instance controller",
+			)),
+		)
+	})
+
+	It("rejects default enableAllIfNoneSet flags when remoteClusterKubeconfig is set", func() {
+		f := &controllerFlags{}
+		f.enableAllIfNoneSet()
+		Expect(f.validateRemoteCluster("/etc/osac/remote-cluster-kubeconfig")).To(HaveOccurred())
+	})
+
+	It("rejects whitespace-only remoteClusterKubeconfig instead of falling back to local mode", func() {
+		compatible := &controllerFlags{
+			Tenant:  true,
+			Storage: true,
+		}
+		Expect(compatible.validateRemoteCluster("   ")).To(
+			MatchError(ContainSubstring("remote cluster kubeconfig path is empty")),
+		)
+	})
+
+	It("accepts compatible controllers when remoteClusterKubeconfig is set and all combinations when empty", func() {
+		compatible := &controllerFlags{
+			Tenant:          true,
+			Storage:         true,
+			ComputeInstance: true,
+			Networking:      true,
+			Volume:          true,
+		}
+		Expect(compatible.validateRemoteCluster("/etc/osac/remote-cluster-kubeconfig")).To(Succeed())
+
+		all := &controllerFlags{}
+		all.enableAllIfNoneSet()
+		Expect(all.validateRemoteCluster("")).To(Succeed())
+	})
+})
+
+var _ = Describe("addSchemesForRemoteControllers", func() {
+	It("registers StorageClass on remoteScheme and HostedControlPlane/BareMetalInstance on localScheme", func() {
+		localScheme := runtime.NewScheme()
+		remoteScheme := runtime.NewScheme()
+		addSchemesForRemoteControllers(localScheme, remoteScheme, false, false, true, true)
+
+		Expect(remoteScheme.Recognizes(storagev1.SchemeGroupVersion.WithKind("StorageClass"))).To(BeTrue())
+		Expect(localScheme.Recognizes(hypershiftv1beta1.GroupVersion.WithKind("HostedControlPlane"))).To(BeTrue())
+		Expect(localScheme.Recognizes(bmfov1alpha1.GroupVersion.WithKind("BareMetalInstance"))).To(BeTrue())
+	})
+
+	It("registers HostedControlPlane on localScheme in local mode when storage is enabled without cluster", func() {
+		localScheme := runtime.NewScheme()
+		addSchemesForLocalControllers(localScheme, false, false, false, true, false, false)
+
+		Expect(localScheme.Recognizes(hypershiftv1beta1.GroupVersion.WithKind("HostedControlPlane"))).To(BeTrue())
 	})
 })

@@ -1,0 +1,18 @@
+---
+name: lso
+title: Local Storage Operator
+description: >
+  Installs the Local Storage Operator.
+template_type: addon_operator
+min_ocp_version: ""
+max_ocp_version: ""
+exclusions: []
+dependencies: []
+package_name: local-storage-operator
+channel: stable
+catalog_source: redhat-operators
+catalog_source_namespace: openshift-marketplace
+subscription_namespace: openshift-local-storage
+operator_group_name: local-storage
+operator_group_target_namespaces:
+  - openshift-local-storage

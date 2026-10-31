@@ -1,0 +1,15 @@
+---
+name: servicemesh
+title: OpenShift Service Mesh Operator
+description: >
+  Installs the OpenShift Service Mesh Operator.
+template_type: addon_operator
+min_ocp_version: ""
+max_ocp_version: ""
+exclusions: []
+dependencies: []
+package_name: servicemeshoperator
+channel: stable
+catalog_source: redhat-operators
+catalog_source_namespace: openshift-marketplace
+subscription_namespace: openshift-operators

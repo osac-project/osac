@@ -82,6 +82,8 @@ commands below use `osac/v`; nightly source tags also use this prefix.
 
 An example nightly chart tag is
 [`osac/v0.0.58-nightly.20261027.8402b1c.141.1`](https://github.com/osac-project/osac/tree/osac/v0.0.58-nightly.20261027.8402b1c.141.1).
+It was built on 27 October 2026, before the install preflight, so it runs the
+old shell validation hook; see the note below.
 Check the [OSAC Nightly Build workflow](https://github.com/osac-project/osac/actions/workflows/nightly-build.yaml)
 for newer builds and use the newest successful run. The chart includes a
 `values.schema.json` file and a `values-example.yaml` file.
@@ -93,6 +95,18 @@ once. The following example uses the published stable
 ```console
 export OSAC_RELEASE_VERSION="0.0.62"
 ```
+
+> **Note**
+>
+> The install preflight described in
+> [Section 11.1](#111-the-install-preflight-stops-the-installation) is in
+> charts built after 30 October 2026: releases after
+> `osac-release/v0.0.63` and nightly builds from after that date. Earlier
+> charts, including the 0.0.62 release and the 27 October nightly in the
+> examples here, run a shell validation hook instead and do not behave as
+> described there. To evaluate the preflight, choose a nightly from the
+> workflow above that was built after 30 October 2026; its chart contains
+> `templates/preflight/_engine.tpl`.
 
 Use only the chart version, without either tag prefix. For evaluation, set
 `OSAC_RELEASE_VERSION` to an exact nightly version from the workflow above;
@@ -1557,6 +1571,18 @@ Create the namespace before you install ([Section 4.1](#41-preparing-the-cluster
 the preflight runs before Helm creates a namespace, so with only
 `--create-namespace` it stops at `install-namespace-active`.
 
+**After upgrading from a release without the preflight.** The earlier
+validation Job, `osac-pre-install-validate`, no longer exists. Helm deletes it
+after a successful run, but a failed one stays. If an earlier attempt left it
+behind, delete it, and the `osac-validate` ServiceAccount and the
+`osac-validate-<namespace>` ClusterRole and ClusterRoleBinding that it used:
+
+```console
+oc delete job osac-pre-install-validate -n <namespace> --ignore-not-found
+oc delete serviceaccount osac-validate -n <namespace> --ignore-not-found
+oc delete clusterrolebinding,clusterrole osac-validate-<namespace> --ignore-not-found
+```
+
 **Checks.** A check that does not apply to your configuration is recorded as
 `skipped` with the reason.
 
@@ -1564,11 +1590,12 @@ the preflight runs before Helm creates a namespace, so with only
 |---|---|---|
 | `install-namespace-active` | The release namespace exists and is not terminating. | Always |
 | `ocp-version` | The OpenShift version is 4.22 or later (warning only). | OpenShift |
-| `nodes-schedulable` | At least one node is Ready, not cordoned, and not tainted against ordinary pods. | Always; a warning on upgrade |
+| `nodes-schedulable` | At least one node is Ready, not cordoned, and has no `NoSchedule` or `NoExecute` taint. The chart sets no tolerations, so a tainted node cannot run its pods. | Always; a warning on upgrade |
 | `default-storageclass` | A default storage class exists. | Always; required on a new installation with the AAP instance or CaaS, otherwise a warning |
 | `cert-manager-crds` | The `certificates.cert-manager.io` CRD exists. | Always |
 | `cert-issuer-ready` | The issuer in `service.certs.issuerRef` exists and is `Ready`. | Always; a warning on upgrade |
 | `ca-bundle-present` | The `service.certs.caBundle.configMap` ConfigMap exists in the namespace. | Always |
+| `operator-ingress-ca` | The OpenShift-managed ConfigMap `default-ingress-cert` in `openshift-config-managed` exists and has the key `ca-bundle.crt`. The operator reads it at startup and exits without it. | OpenShift, with `operator.enabled` and `operator.ignition.trustIngressCA=true` |
 | `db-secrets` | Secrets named in `service.database.connection` that the chart does not create exist, have their keys, and carry a valid PostgreSQL URL. | Always |
 | `db-init-host-endpoints` | When `dbInit.host` is an in-cluster Service, it exists and has a ready endpoint. A Service that is only starting is a warning, because the `db-init` hook retries for up to 5 minutes. | In-cluster host |
 | `kafka-access` | The `Kafka` resource is `Ready`, or the Secrets in `service.kafka.connection` exist when `kafka.enabled=false`. | Always; a warning on upgrade |

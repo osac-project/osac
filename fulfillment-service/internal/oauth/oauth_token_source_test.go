@@ -271,6 +271,73 @@ var _ = Describe("Token source", func() {
 		Expect(token.Access).To(Equal("my_access_token"))
 	})
 
+	It("Retries endpoint discovery after a transient failure", func() {
+		oauthDiscoveryRequests := 0
+		openidDiscoveryRequests := 0
+		var tokenRequests []string
+
+		server.RouteToHandler(
+			http.MethodGet,
+			"/retry/.well-known/oauth-authorization-server",
+			http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				oauthDiscoveryRequests++
+				if oauthDiscoveryRequests == 1 {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, err := fmt.Fprintf(
+					w,
+					`{"issuer":%q,"token_endpoint":%q}`,
+					server.URL()+"/retry",
+					server.URL()+"/token",
+				)
+				Expect(err).To(Succeed())
+			}),
+		)
+		server.RouteToHandler(
+			http.MethodGet,
+			"/retry/.well-known/openid-configuration",
+			http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				openidDiscoveryRequests++
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}),
+		)
+		server.RouteToHandler(
+			http.MethodPost,
+			"/token",
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				tokenRequests = append(tokenRequests, r.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, err := fmt.Fprint(w, `{"access_token":"my_access_token","token_type":"Bearer","expires_in":3600}`)
+				Expect(err).To(Succeed())
+			}),
+		)
+
+		source, err := NewTokenSource().
+			SetLogger(logger).
+			SetIssuer(server.URL() + "/retry").
+			SetStore(store).
+			SetFlow(CredentialsFlow).
+			SetClientId("my_client").
+			SetClientSecret("my_secret").
+			SetCaPool(caPool).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = source.Token(ctx)
+		Expect(err).To(HaveOccurred())
+
+		token, err := source.Token(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(token.Access).To(Equal("my_access_token"))
+		Expect(oauthDiscoveryRequests).To(Equal(2))
+		Expect(openidDiscoveryRequests).To(Equal(1))
+		Expect(tokenRequests).To(Equal([]string{"/token"}))
+	})
+
 	It("Refreshes the access token it is expired", func() {
 		// Prepare the server so that it responds to the token refresh request with a valid token:
 		server.AppendHandlers(

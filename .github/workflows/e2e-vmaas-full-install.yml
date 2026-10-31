@@ -36,6 +36,11 @@ on:
         required: false
         type: string
         default: ""
+      ci-observe:
+        description: Run the tests under ci-observe telemetry capture (osac-test-infra); the capture lands in the CI Grafana after the run
+        required: false
+        type: boolean
+        default: false
   # 5x/day. Offset 7 minutes past the hour, not on the hour -- GitHub
   # Actions' shared cron scheduler queues everyone's on-the-hour
   # schedules together and can delay/drop them under load.
@@ -59,6 +64,11 @@ on:
         description: "Branch/ref of osac-test-infra"
         required: false
         default: "main"
+      ci-observe:
+        description: "Run the tests under ci-observe telemetry capture (osac-test-infra); the capture lands in the CI Grafana after the run"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   e2e-vmaas-full-install:
@@ -115,6 +125,10 @@ jobs:
       # Checkout osac-test-infra for tests/Containerfile (not the caller repo)
       test-infra-repository: osac-project/osac-test-infra
       test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
+      # Off unless the flag was asked for: by hand (workflow_dispatch input) or by
+      # the pull request's ci-observe label (e2e-pr-vmaas.yml reads it). The capture
+      # itself never changes the test outcome; see osac-test-infra's ci-observe-capture.
+      ci-observe: ${{ inputs.ci-observe || false }}
       test-repository: ${{ inputs.repo || github.repository }}
       test-ref: ${{ inputs.sha || github.sha }}
       notify-on-failure: ${{ github.event_name == 'schedule' }}

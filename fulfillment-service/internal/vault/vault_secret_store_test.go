@@ -17,10 +17,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 
+	vaultapi "github.com/hashicorp/vault/api"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
@@ -378,5 +381,23 @@ var _ = Describe("VaultSecretStore", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(capturedTenant).To(Equal("my-tenant"))
 		})
+	})
+})
+
+var _ = Describe("IsSecretNotFound", func() {
+	It("recognizes wrapped Vault missing-secret errors", func() {
+		err := fmt.Errorf("fetch failed: %w", vaultapi.ErrSecretNotFound)
+		Expect(IsSecretNotFound(err)).To(BeTrue())
+	})
+
+	It("recognizes Vault and gRPC not-found responses", func() {
+		Expect(IsSecretNotFound(fmt.Errorf("fetch failed: %w", &vaultapi.ResponseError{
+			StatusCode: http.StatusNotFound,
+		}))).To(BeTrue())
+		Expect(IsSecretNotFound(grpcstatus.Error(grpccodes.NotFound, "secret missing"))).To(BeTrue())
+	})
+
+	It("does not classify unrelated errors as a missing secret", func() {
+		Expect(IsSecretNotFound(errors.New("vault unavailable"))).To(BeFalse())
 	})
 })

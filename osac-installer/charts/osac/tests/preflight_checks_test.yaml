@@ -33,6 +33,10 @@ x-fixtures:
   node_ok: &node_ok {kind: Node, apiVersion: v1, metadata: {name: n1}, status: {conditions: [{type: Ready, status: "True"}]}}
   node_notready: &node_notready {kind: Node, apiVersion: v1, metadata: {name: n1}, status: {conditions: [{type: Ready, status: "False"}]}}
   node_cordoned: &node_cordoned {kind: Node, apiVersion: v1, metadata: {name: n1}, spec: {unschedulable: true}, status: {conditions: [{type: Ready, status: "True"}]}}
+  node_custom_taint: &node_custom_taint {kind: Node, apiVersion: v1, metadata: {name: n1}, spec: {taints: [{key: dedicated, value: gpu, effect: NoSchedule}]}, status: {conditions: [{type: Ready, status: "True"}]}}
+  node_noexecute_taint: &node_noexecute_taint {kind: Node, apiVersion: v1, metadata: {name: n1}, spec: {taints: [{key: dedicated, value: gpu, effect: NoExecute}]}, status: {conditions: [{type: Ready, status: "True"}]}}
+  node_prefer_taint: &node_prefer_taint {kind: Node, apiVersion: v1, metadata: {name: n1}, spec: {taints: [{key: dedicated, value: gpu, effect: PreferNoSchedule}]}, status: {conditions: [{type: Ready, status: "True"}]}}
+  node_second: &node_second {kind: Node, apiVersion: v1, metadata: {name: n2}, status: {conditions: [{type: Ready, status: "True"}]}}
   node_tainted: &node_tainted {kind: Node, apiVersion: v1, metadata: {name: n1}, spec: {taints: [{key: node-role.kubernetes.io/control-plane, effect: NoSchedule}]}, status: {conditions: [{type: Ready, status: "True"}]}}
   sc_default: &sc_default {kind: StorageClass, apiVersion: storage.k8s.io/v1, metadata: {name: fast, annotations: {storageclass.kubernetes.io/is-default-class: "true"}}}
   sc_plain: &sc_plain {kind: StorageClass, apiVersion: storage.k8s.io/v1, metadata: {name: slow}}
@@ -49,6 +53,8 @@ x-fixtures:
   cv_old: &cv_old {kind: ClusterVersion, apiVersion: config.openshift.io/v1, metadata: {name: version}, status: {desired: {version: 4.21.3}}}
   issuer_ok: &issuer_ok {kind: ClusterIssuer, apiVersion: cert-manager.io/v1, metadata: {name: default-ca}, status: {conditions: [{type: Ready, status: "True"}]}}
   issuer_notready: &issuer_notready {kind: ClusterIssuer, apiVersion: cert-manager.io/v1, metadata: {name: default-ca}, status: {conditions: [{type: Ready, status: "False", reason: ErrGetKeyPair}]}}
+  cm_ingress_ca: &cm_ingress_ca {kind: ConfigMap, apiVersion: v1, metadata: {name: default-ingress-cert, namespace: openshift-config-managed}, data: {ca-bundle.crt: stub}}
+  cm_ingress_ca_nokey: &cm_ingress_ca_nokey {kind: ConfigMap, apiVersion: v1, metadata: {name: default-ingress-cert, namespace: openshift-config-managed}, data: {other: stub}}
   cm_cabundle: &cm_cabundle {kind: ConfigMap, apiVersion: v1, metadata: {name: ca-bundle, namespace: osac}}
   kafka_ok: &kafka_ok {kind: Kafka, apiVersion: kafka.strimzi.io/v1, metadata: {name: osac-kafka, namespace: osac-kafka}, status: {conditions: [{type: Ready, status: "True"}]}}
   kafka_notready: &kafka_notready {kind: Kafka, apiVersion: kafka.strimzi.io/v1, metadata: {name: osac-kafka, namespace: osac-kafka}, status: {conditions: [{type: Ready, status: "False"}]}}
@@ -102,7 +108,7 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'install-namespace-active: Namespace osac is Terminating'
-  - it: "nodes-schedulable: NotReady, cordoned and control-plane-tainted nodes do not count"
+  - it: "nodes-schedulable: a control-plane-tainted node does not count"
     kubernetesProvider:
       scheme: *scheme
       objects: [*ns_kube, *ns_osac, *node_tainted, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
@@ -116,6 +122,68 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'nodes-schedulable: no node can run new pods \(1 node\(s\): 0 not Ready, 0 cordoned, 1 tainted\)'
+  - it: "nodes-schedulable: a custom NoSchedule taint keeps the chart's pods off, because it sets no tolerations"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_custom_taint, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodes-schedulable: no node can run new pods \(1 node\(s\): 0 not Ready, 0 cordoned, 1 tainted\)'
+      - failedTemplate:
+          errorPattern: 'remove its NoSchedule or NoExecute taints'
+  - it: "nodes-schedulable: a custom NoExecute taint also keeps the chart's pods off"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_noexecute_taint, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodes-schedulable: no node can run new pods \(1 node\(s\): 0 not Ready, 0 cordoned, 1 tainted\)'
+  - it: "nodes-schedulable: a PreferNoSchedule taint does not keep pods off"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_prefer_taint, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"nodes-schedulable","message":"1 of 1 node\(s\) can run new pods"'
+  - it: "nodes-schedulable: one free node is enough next to a tainted one"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_custom_taint, *node_second, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"nodes-schedulable","message":"1 of 2 node\(s\) can run new pods"'
   - it: "nodes-schedulable: a NotReady cluster fails"
     kubernetesProvider:
       scheme: *scheme
@@ -726,6 +794,111 @@ tests:
       - matchRegex:
           path: 'data["render.json"]'
           pattern: '"id":"metal3-watch-all-namespaces","message":"none of bmf\.metal3\.enabled, bmf\.netbox\.enabled is set"'
+  - it: "operator-ingress-ca: the ingress CA bundle the operator trusts is present"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license, *cm_ingress_ca]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      operator.ignition.trustIngressCA: true
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"operator-ingress-ca","message":"1 ConfigMap\(s\) found"'
+  - it: "operator-ingress-ca: a missing ConfigMap fails and names its namespace"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      operator.ignition.trustIngressCA: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'operator-ingress-ca: ConfigMap openshift-config-managed/default-ingress-cert not found'
+      - failedTemplate:
+          errorPattern: 'set operator.ignition.trustIngressCA=false'
+  - it: "operator-ingress-ca: a ConfigMap without ca-bundle.crt fails"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license, *cm_ingress_ca_nokey]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      operator.ignition.trustIngressCA: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'operator-ingress-ca: ConfigMap openshift-config-managed/default-ingress-cert is missing key\(s\) ca-bundle.crt'
+  - it: "operator-ingress-ca: skipped while the operator does not trust the ingress CA"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      operator.ignition.trustIngressCA: false
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"operator-ingress-ca","message":"operator.ignition.trustIngressCA is not set"'
+  - it: "operator-ingress-ca: skipped when the operator is not deployed, even with the trust setting on"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      operator.enabled: false
+      operator.networkManagers.enabled: true
+      operator.ignition.trustIngressCA: true
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"operator-ingress-ca","message":"operator.enabled is not set"'
+  - it: "operator-ingress-ca: skipped on a cluster that is not OpenShift"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+    set:
+      operator.ignition.trustIngressCA: true
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"operator-ingress-ca","message":"not OpenShift"'
   - it: "ocp-version: 4.22.0 is accepted; there is no upper bound"
     kubernetesProvider:
       scheme: *scheme
@@ -744,7 +917,7 @@ tests:
           pattern: '"id":"ocp-version","message":"OpenShift 4\.22\.0 is 4\.22\.0 or later'
       - matchRegex:
           path: 'data["render.json"]'
-          pattern: '"summary":\{"blocking":0,"fail":0,"pass":15,"skipped":3,"unknown":0,"warn":0\}'
+          pattern: '"summary":\{"blocking":0,"fail":0,"pass":15,"skipped":4,"unknown":0,"warn":0\}'
   - it: "ocp-version: 4.22.14 is accepted; there is no upper bound"
     kubernetesProvider:
       scheme: *scheme
@@ -763,7 +936,7 @@ tests:
           pattern: '"id":"ocp-version","message":"OpenShift 4\.22\.14 is 4\.22\.0 or later'
       - matchRegex:
           path: 'data["render.json"]'
-          pattern: '"summary":\{"blocking":0,"fail":0,"pass":15,"skipped":3,"unknown":0,"warn":0\}'
+          pattern: '"summary":\{"blocking":0,"fail":0,"pass":15,"skipped":4,"unknown":0,"warn":0\}'
   - it: "ocp-version: 4.23.1 is accepted; there is no upper bound"
     kubernetesProvider:
       scheme: *scheme
@@ -782,7 +955,7 @@ tests:
           pattern: '"id":"ocp-version","message":"OpenShift 4\.23\.1 is 4\.22\.0 or later'
       - matchRegex:
           path: 'data["render.json"]'
-          pattern: '"summary":\{"blocking":0,"fail":0,"pass":15,"skipped":3,"unknown":0,"warn":0\}'
+          pattern: '"summary":\{"blocking":0,"fail":0,"pass":15,"skipped":4,"unknown":0,"warn":0\}'
   - it: "ocp-version: 4.21.9 is below the 4.22 minimum; there is no upper bound"
     kubernetesProvider:
       scheme: *scheme
@@ -801,4 +974,4 @@ tests:
           pattern: '"id":"ocp-version","message":"OpenShift 4\.21\.9 is not 4\.22\.0 or later'
       - matchRegex:
           path: 'data["render.json"]'
-          pattern: '"summary":\{"blocking":0,"fail":0,"pass":14,"skipped":3,"unknown":0,"warn":1\}'
+          pattern: '"summary":\{"blocking":0,"fail":0,"pass":14,"skipped":4,"unknown":0,"warn":1\}'

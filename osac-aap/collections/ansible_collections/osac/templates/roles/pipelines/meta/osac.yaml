@@ -1,0 +1,15 @@
+---
+name: pipelines
+title: OpenShift Pipelines Operator
+description: >
+  Installs the OpenShift Pipelines Operator.
+template_type: addon_operator
+min_ocp_version: ""
+max_ocp_version: ""
+exclusions: []
+dependencies: []
+package_name: openshift-pipelines-operator-rh
+channel: latest
+catalog_source: redhat-operators
+catalog_source_namespace: openshift-marketplace
+subscription_namespace: openshift-operators

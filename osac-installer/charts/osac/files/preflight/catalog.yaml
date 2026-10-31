@@ -18,6 +18,7 @@
 #                  the listed services is enabled.
 #   when           Values path that must be set/true, else the check is skipped.
 #   whenAny        Values paths; the check is skipped unless at least one is set/true.
+#   whenAll        Values paths; the check is skipped unless every one is set/true.
 #   unless         Values path that, when set/true, skips the check.
 #   platforms      [openshift] limits the check to OpenShift clusters.
 #   dependsOn      Check ids. If one of them did not pass, this check is
@@ -55,7 +56,7 @@
   category: hardware
   requiredFor: [core]
   title: "At least one node can run new pods"
-  remediation: "Uncordon a node (oc adm uncordon <node>), add a worker, or resolve NotReady and pressure conditions. Pods stay Pending until then."
+  remediation: "Uncordon a node (oc adm uncordon <node>), add a worker, remove its NoSchedule or NoExecute taints (the chart sets no tolerations), or resolve NotReady and pressure conditions. Pods stay Pending until then."
   docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#21-cluster-and-access"
 
 - id: default-storageclass
@@ -109,6 +110,22 @@
       - nameFrom: service.certs.caBundle.configMap
   remediation: "Create the ca-bundle ConfigMap in the release namespace (trust-manager distributes it) or point service.certs.caBundle.configMap at yours."
   docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#43-installing-osac"
+
+- id: operator-ingress-ca
+  kind: configmap-keys
+  severity: required
+  category: cluster
+  requiredFor: [core]
+  whenAll: [operator.enabled, operator.ignition.trustIngressCA]
+  platforms: [openshift]
+  title: "The OpenShift ingress CA bundle that the operator trusts exists"
+  params:
+    configmaps:
+      - name: default-ingress-cert
+        namespace: openshift-config-managed
+        keys: [ca-bundle.crt]
+  remediation: "The operator reads this OpenShift-managed ConfigMap when it starts and exits without it. Use an OpenShift cluster that publishes it, or set operator.ignition.trustIngressCA=false."
+  docsURL: "https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md#111-the-install-preflight-stops-the-installation"
 
 - id: db-secrets
   kind: secret-keys

@@ -1,0 +1,8 @@
+---
+- name: Load AddOnOperator metadata
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/meta/osac.yaml"
+    name: addon_operator_metadata
+- name: Install and verify add-on operator
+  ansible.builtin.include_role:
+    name: osac.service.install_addon_operator

@@ -1636,8 +1636,13 @@ the cluster. Every workflow also needs the networking values and steps of
 
 #### CUDN EVPN with Netris
 
-Your platform administrators must prepare the EVPN host networking before
-installation. Replace the service-specific block in step 1 with the following
+Your platform administrators must prepare the EVPN host networking, including
+the EVPN `FRRConfiguration`, and configure the external EVPN/BGP/VTEP fabric
+before installation. They must also make the `cudn_evpn` implementation
+available in the AAP execution environment. See
+[EVPN host networking (VMaaS)](helm-deployment-guide.md#evpn-host-networking-vmaas).
+
+Replace the service-specific block in step 1 with the following
 `my-values.yaml` values. Keep the shared settings from
 [Section 4.2](#42-configuring-the-helm-values).
 Set the Netris URL, user, site, and tenant to your deployment's values:
@@ -2228,7 +2233,7 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
 
 ### 8.1 Accessing the OSAC consoles
 
-The OSAC web console, Fulfillment API, and AAP routes are in the install
+The OSAC web console and Fulfillment API routes are in the install
 namespace. Host names are auto-assigned as
 `<route>-<namespace>.<cluster_domain>` unless you set `ui.externalHostname`
 or `service.externalHostname`. Obtain the Keycloak console URL from your
@@ -2243,14 +2248,19 @@ oc get route -n <namespace>
   in through Keycloak SSO against the `osac` realm, using a realm user or
   a federated identity provider configured by your Keycloak administrator.
 - **Fulfillment API.** Authenticate with an OIDC token or with `osac login`, as
-  described in step 11 of [Section 7](#7-verifying-the-installation).
-- **AAP.** Log in as `admin`. To retrieve the password, run the following
-  command:
+  described in step 10 of [Section 7](#7-verifying-the-installation).
+- **AAP managed by the chart** (`aap.aap.instance.enabled: true`). Its route
+  is in the install namespace. Log in as `admin`. For the default instance
+  name, retrieve the password with the following command:
 
   ```console
   oc extract secret/osac-aap-admin-password -n <namespace> --to -
   ```
 
+  If you change `aap.aap.instance.name`, replace `osac-aap` in the Secret name
+  with your instance name.
+- **Externally managed AAP** (`aap.aap.instance.enabled: false`). Obtain the
+  AAP URL and credentials from your AAP administrator.
 - **Keycloak admin console.** Use the URL and administrator credentials
   supplied by your identity provider administrator.
 

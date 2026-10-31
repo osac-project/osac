@@ -366,8 +366,6 @@ installing a chart pinned by content digest (`oci://...@sha256:...`).
 
 ```bash
 helm dependency update ./charts/osac
-# --force-conflicts resolves an AAP field ownership conflict (Helm 4 only).
-# Helm 3 users: omit this option; Helm 3 does not support it.
 helm upgrade --install osac ./charts/osac \
     -n "$NS" --create-namespace \
     -f my-values.yaml \
@@ -375,9 +373,11 @@ helm upgrade --install osac ./charts/osac \
     --set service.externalHostname="fulfillment-api-$NS.$DOMAIN" \
     --set service.internalHostname="fulfillment-internal-api-$NS.$DOMAIN" \
     --set-string ui.auth.oidcIssuerURL="https://keycloak-keycloak.$DOMAIN/realms/osac" \
-    --force-conflicts \
     --wait --timeout 40m
 ```
+
+With Helm 4, add `--force-conflicts` if an AAP field ownership conflict occurs.
+Helm 3 does not support this option.
 
 `my-infra-values.yaml` configures `osac-deps` and `osac-infra`; see
 [Phase-1 Parameters](#phase-1-parameters) below. For Phase 2,

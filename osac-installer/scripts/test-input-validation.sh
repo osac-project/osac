@@ -272,10 +272,13 @@ render_success valid-defaults
 render_infra_success infra-valid-defaults
 
 # Retry counts and POSIX IDs accept zero (no retries, root) but never
-# negative values.
+# negative values. Minimum-constraint wording differs across Helm
+# versions: 3.18 prints "Must be greater than or equal to 0" while 3.22
+# (what CI installs) prints "minimum: got -1, want 0"; patterns accept
+# both, in the dotted-path (Helm 3) and JSON-pointer (newer) spellings.
 render_failure_matching \
   backoff-limit-negative \
-  '(aap\.bootstrap\.backoffLimit|/aap/bootstrap/backoffLimit).*(must|should) be greater than or equal to 0' \
+  '(aap\.bootstrap\.backoffLimit|/aap/bootstrap/backoffLimit).*(greater than or equal to 0|minimum: got -1, want 0)' \
   --set aap.bootstrap.backoffLimit=-1
 
 render_success \
@@ -285,7 +288,7 @@ render_success \
 for field in runAsUser runAsGroup fsGroup; do
   render_infra_failure_matching \
     "vault-${field}-negative" \
-    "(bundledVault\\.podSecurityContext\\.${field}|/bundledVault/podSecurityContext/${field}).*(must|should) be greater than or equal to 0" \
+    "(bundledVault\\.podSecurityContext\\.${field}|/bundledVault/podSecurityContext/${field}).*(greater than or equal to 0|minimum: got -1, want 0)" \
     --set "bundledVault.podSecurityContext.${field}=-1"
 done
 

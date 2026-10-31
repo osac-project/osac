@@ -3,31 +3,10 @@
 from __future__ import annotations
 
 import os
-import textwrap
 
 import pytest
 
 from tests.e2e.core.runner import env, run_unchecked
-
-# ---------------------------------------------------------------------------
-# Shared K8s manifest templates used across storage test files.
-# ---------------------------------------------------------------------------
-
-NAMESPACE_MANIFEST = textwrap.dedent("""\
-    apiVersion: v1
-    kind: Namespace
-    metadata:
-      name: {name}
-""")
-
-TENANT_MANIFEST = textwrap.dedent("""\
-    apiVersion: osac.openshift.io/v1alpha1
-    kind: Tenant
-    metadata:
-      name: {name}
-      namespace: {namespace}
-    spec: {{}}
-""")
 
 
 def _storage_controller_configured(namespace: str) -> bool:

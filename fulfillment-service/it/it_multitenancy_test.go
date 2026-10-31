@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -151,6 +152,14 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 						err = nil
 					}
 					Expect(err).ToNot(HaveOccurred())
+					Eventually(func(g Gomega) {
+						response, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenant}.Build())
+						g.Expect(err).ToNot(HaveOccurred())
+						condition := findTenantCondition(response.GetObject().GetStatus().GetConditions(),
+							privatev1.TenantConditionType_TENANT_CONDITION_TYPE_VAULT_READY)
+						g.Expect(condition).ToNot(BeNil())
+						g.Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+					}, time.Minute, time.Second).Should(Succeed())
 				}
 
 				// Create cluster template for testing
@@ -180,14 +189,16 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 					Expect(err).ToNot(HaveOccurred())
 
 					clustersClient := publicv1.NewClustersClient(conn)
+					pullSecret := clusterPullSecretReferenceFixture(ctx, conn, tenant)
 					createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 						Object: publicv1.Cluster_builder{
 							Metadata: publicv1.Metadata_builder{
 								Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
-								Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-								NodeSets: testClusterNodeSets(clusterBMIT, 3),
+								Template:         publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+								PullSecretSecret: pullSecret,
+								NodeSets:         testClusterNodeSets(clusterBMIT, 3),
 							}.Build(),
 						}.Build(),
 					}.Build())
@@ -456,14 +467,16 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 					Expect(err).ToNot(HaveOccurred())
 
 					clustersClient := publicv1.NewClustersClient(conn)
+					pullSecret := clusterPullSecretReferenceFixture(ctx, conn, "")
 					createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 						Object: publicv1.Cluster_builder{
 							Metadata: publicv1.Metadata_builder{
 								Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
-								Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-								NodeSets: testClusterNodeSets(clusterBMIT, 3),
+								Template:         publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+								PullSecretSecret: pullSecret,
+								NodeSets:         testClusterNodeSets(clusterBMIT, 3),
 							}.Build(),
 						}.Build(),
 					}.Build())

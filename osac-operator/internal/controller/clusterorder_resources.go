@@ -12,6 +12,7 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/pullsecret"
 )
 
 func (r *ClusterOrderReconciler) newNamespace(ctx context.Context, instance *v1alpha1.ClusterOrder) (*appResource, error) {
@@ -47,6 +48,9 @@ func (r *ClusterOrderReconciler) newNamespace(ctx context.Context, instance *v1a
 	}
 
 	mutateFn := func() error {
+		if err := pullsecret.BindNamespace(instance, namespace); err != nil {
+			return err
+		}
 		ensureCommonLabels(instance, namespace)
 		instance.SetClusterReferenceNamespace(namespaceName)
 		return nil

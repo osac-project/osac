@@ -35,7 +35,7 @@
     hosted_cluster_namespace: "{{ cluster_working_namespace }}"
     hosted_cluster_settings:
       ocp_release_image: "{{ ocp_release_image }}"
-      pull_secret: "{{ template_parameters.pull_secret }}"
+      pull_secret_name: "pullsecret-cluster-{{ cluster_order.metadata.name }}"
       ssh_public_key: "{{ template_parameters.ssh_public_key }}"
     hosted_cluster_node_count: >-
       {{ cluster_order.spec.nodeRequests | map(attribute="numberOfNodes") | sum }}

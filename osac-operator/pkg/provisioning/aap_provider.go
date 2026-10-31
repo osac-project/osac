@@ -122,7 +122,7 @@ func (p *AAPProvider) launchProvisionJob(ctx context.Context, resource client.Ob
 	if err != nil {
 		return "", err
 	}
-	return p.launchTemplate(ctx, templateName, resource, extraVars)
+	return p.launchTemplate(ctx, templateName, resource, extraVars, true)
 }
 
 // GetProvisionStatus checks provisioning job status via AAP API.
@@ -323,11 +323,11 @@ func (p *AAPProvider) launchDeprovisionJob(ctx context.Context, resource client.
 	if err != nil {
 		return "", err
 	}
-	return p.launchTemplate(ctx, templateName, resource, nil)
+	return p.launchTemplate(ctx, templateName, resource, nil, false)
 }
 
 // launchTemplate launches the named template (job or workflow) and returns the job ID.
-func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, resource client.Object, inheritedExtraVars map[string]any) (string, error) {
+func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, resource client.Object, inheritedExtraVars map[string]any, requirePullSecret bool) (string, error) {
 	template, err := p.client.GetTemplate(ctx, templateName)
 	if err != nil {
 		return "", fmt.Errorf("failed to get template: %w", err)
@@ -347,6 +347,9 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 		return "", fmt.Errorf("failed to extract extra vars: %w", err)
 	}
 	extraVars = mergeExtraVars(extraVars, inheritedExtraVars)
+	if err := protectClusterOrderLaunch(resource, extraVars, requirePullSecret); err != nil {
+		return "", err
+	}
 	sensitive := adminKubeconfigInExtraVars(extraVars)
 
 	var jobID int

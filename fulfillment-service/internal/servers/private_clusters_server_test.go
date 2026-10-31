@@ -37,6 +37,34 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+// seedClusterPullSecretDefaults supplies an authorized synthetic API reference.
+func seedClusterPullSecretDefaults(ctx context.Context, tenant string) *privatev1.ClusterTemplateSpecDefaults {
+	return seedClusterPullSecretDefaultsForProject(ctx, tenant, "")
+}
+
+// seedClusterPullSecretDefaultsForProject keeps local references in the requested scope.
+func seedClusterPullSecretDefaultsForProject(ctx context.Context, tenant, project string) *privatev1.ClusterTemplateSpecDefaults {
+	GinkgoHelper()
+	secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancy).
+		Build()
+	Expect(err).NotTo(HaveOccurred())
+	fixtureID := "fixture-pull-secret-" + uuid.New()
+	_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
+		Id: fixtureID,
+		Metadata: privatev1.Metadata_builder{
+			Name: fixtureID, Tenant: tenant, Project: project,
+		}.Build(),
+		Type: privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
+		Data: map[string][]byte{".dockerconfigjson": []byte(`{"auths":{"fixture.invalid":{}}}`)},
+	}.Build()).Do(ctx)
+	Expect(err).NotTo(HaveOccurred())
+	return privatev1.ClusterTemplateSpecDefaults_builder{
+		PullSecretSecret: privatev1.SecretLocalReference_builder{Id: fixtureID}.Build(),
+	}.Build()
+}
+
 func seedClusterVersion(ctx context.Context, cv *privatev1.ClusterVersion) {
 	GinkgoHelper()
 	cv = proto.Clone(cv).(*privatev1.ClusterVersion)
@@ -451,7 +479,8 @@ var _ = Describe("Private clusters server", func() {
 			_, err = templatesDao.Create().
 				SetObject(
 					privatev1.ClusterTemplate_builder{
-						Id: "my-template-id",
+						Id:           "my-template-id",
+						SpecDefaults: seedClusterPullSecretDefaults(ctx, testTenant),
 						Metadata: privatev1.Metadata_builder{
 							Name:   "my-template-name",
 							Tenant: testTenant,
@@ -467,7 +496,8 @@ var _ = Describe("Private clusters server", func() {
 			_, err = templatesDao.Create().
 				SetObject(
 					privatev1.ClusterTemplate_builder{
-						Id: "no-bmit-template-id",
+						Id:           "no-bmit-template-id",
+						SpecDefaults: seedClusterPullSecretDefaults(ctx, testTenant),
 						Metadata: privatev1.Metadata_builder{
 							Name:   "no-bmit-template-name",
 							Tenant: testTenant,
@@ -599,9 +629,10 @@ var _ = Describe("Private clusters server", func() {
 				_, err = templatesDao.Create().
 					SetObject(
 						privatev1.ClusterTemplate_builder{
-							Id:          fmt.Sprintf("my-template-id-%d", i),
-							Title:       fmt.Sprintf("My template %d", i),
-							Description: fmt.Sprintf("My template %d", i),
+							Id:           fmt.Sprintf("my-template-id-%d", i),
+							SpecDefaults: seedClusterPullSecretDefaults(ctx, testTenant),
+							Title:        fmt.Sprintf("My template %d", i),
+							Description:  fmt.Sprintf("My template %d", i),
 							Metadata: privatev1.Metadata_builder{
 								Name:   fmt.Sprintf("my-template-name-%d", i),
 								Tenant: testTenant,
@@ -630,7 +661,8 @@ var _ = Describe("Private clusters server", func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				_, err = tenantServer.templatesDao.Create().SetObject(privatev1.ClusterTemplate_builder{
-					Metadata: privatev1.Metadata_builder{Name: "shared-template", Tenant: auth.SharedTenant}.Build(),
+					Metadata:     privatev1.Metadata_builder{Name: "shared-template", Tenant: auth.SharedTenant}.Build(),
+					SpecDefaults: seedClusterPullSecretDefaults(ctx, auth.SharedTenant),
 				}.Build()).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 				seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
@@ -1365,7 +1397,8 @@ var _ = Describe("Private clusters server", func() {
 						Project: "workloads",
 					}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
-						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						PullSecretSecret: seedClusterPullSecretDefaultsForProject(ctx, testTenant, "workloads").GetPullSecretSecret(),
+						Template:         privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 						AddOnOperators: []*privatev1.AddOnOperatorReference{
 							privatev1.AddOnOperatorReference_builder{Name: operator.GetMetadata().GetName()}.Build(),
 						},
@@ -2299,6 +2332,7 @@ var _ = Describe("Private clusters server", func() {
 					Spec: privatev1.ClusterSpec_builder{
 						Template:          object.GetSpec().GetTemplate(),
 						NetworkAttachment: object.GetSpec().GetNetworkAttachment(),
+						PullSecretSecret:  object.GetSpec().GetPullSecretSecret(),
 					}.Build(),
 					Status: privatev1.ClusterStatus_builder{
 						Hub: "your_hub",
@@ -3674,7 +3708,8 @@ var _ = Describe("Private clusters server", func() {
 							Title:       "Template with defaults",
 							Description: "Template with spec defaults",
 							SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
-								SshPublicKey: proto.String(testSSHPublicKey),
+								SshPublicKey:     proto.String(testSSHPublicKey),
+								PullSecretSecret: seedClusterPullSecretDefaults(ctx, testTenant).GetPullSecretSecret(),
 							}.Build(),
 						}.Build(),
 					).
@@ -3759,7 +3794,8 @@ var _ = Describe("Private clusters server", func() {
 							Title:       "Version-pinned template",
 							Description: "Template that pins version via spec_defaults",
 							SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
-								Version: &privatev1.ClusterVersionReference{Name: "4-18-0"},
+								Version:          &privatev1.ClusterVersionReference{Name: "4-18-0"},
+								PullSecretSecret: seedClusterPullSecretDefaults(ctx, testTenant).GetPullSecretSecret(),
 							}.Build(),
 						}.Build(),
 					).
@@ -3836,7 +3872,8 @@ var _ = Describe("Private clusters server", func() {
 							Title:       "Template for FD override test",
 							Description: "Template whose spec_defaults are overridden by fields",
 							SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
-								Version: &privatev1.ClusterVersionReference{Name: "4-17-0"},
+								Version:          &privatev1.ClusterVersionReference{Name: "4-17-0"},
+								PullSecretSecret: seedClusterPullSecretDefaults(ctx, testTenant).GetPullSecretSecret(),
 							}.Build(),
 						}.Build(),
 					).
@@ -3890,7 +3927,8 @@ var _ = Describe("Private clusters server", func() {
 				_, err = templatesDao.Create().
 					SetObject(
 						privatev1.ClusterTemplate_builder{
-							Id: "template-no-version",
+							Id:           "template-no-version",
+							SpecDefaults: seedClusterPullSecretDefaults(ctx, testTenant),
 							Metadata: privatev1.Metadata_builder{
 								Name:   "template-no-version-name",
 								Tenant: testTenant,
@@ -4961,7 +4999,8 @@ var _ = Describe("Private clusters server", func() {
 					Metadata: privatev1.Metadata_builder{Name: "template-pinned-no-disk-image", Tenant: testTenant}.Build(),
 					Title:    "Template with incompatible version",
 					SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
-						Version: &privatev1.ClusterVersionReference{Name: "4-19-0-template-no-disk-image"},
+						Version:          &privatev1.ClusterVersionReference{Name: "4-19-0-template-no-disk-image"},
+						PullSecretSecret: seedClusterPullSecretDefaults(ctx, testTenant).GetPullSecretSecret(),
 					}.Build(),
 				}.Build()).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())

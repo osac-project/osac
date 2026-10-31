@@ -106,9 +106,10 @@ var _ = Describe("Cluster reconciler", func() {
 		templateId = fmt.Sprintf("my_template_%s", uuid.New())
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
-				Id:          templateId,
-				Title:       "My template %s",
-				Description: "My template.",
+				Id:           templateId,
+				Title:        "My template %s",
+				Description:  "My template.",
+				SpecDefaults: clusterPullSecretDefaultsFixture(ctx),
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("test-tmpl-%s", uuid.New()[24:32]),
 				}.Build(),

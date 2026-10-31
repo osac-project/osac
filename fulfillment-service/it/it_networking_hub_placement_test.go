@@ -261,9 +261,10 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		clusterTemplateID := fmt.Sprintf("test-hub-a-template-%s", uuid.New())
 		_, err = clusterTemplatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
-				Id:       clusterTemplateID,
-				Title:    "Hub placement test template",
-				Metadata: privatev1.Metadata_builder{Name: clusterTemplateID}.Build(),
+				SpecDefaults: clusterPullSecretDefaultsFixture(ctx),
+				Id:           clusterTemplateID,
+				Title:        "Hub placement test template",
+				Metadata:     privatev1.Metadata_builder{Name: clusterTemplateID}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

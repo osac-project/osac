@@ -13,6 +13,7 @@ DELETE_TASKS = (
 
 
 def test_worker_teardown_precedes_hosted_cluster_removal() -> None:
+    """Keep teardown ordered while controller-owned pull Secrets remain untouched."""
     tasks = yaml.safe_load(DELETE_TASKS.read_text())
     by_name = {task["name"]: (index, task) for index, task in enumerate(tasks)}
     names = (
@@ -37,11 +38,11 @@ def test_worker_teardown_precedes_hosted_cluster_removal() -> None:
     # Guest credentials and cluster registration must survive until Machine
     # drain/unbinding is complete.
     for name in (
-        "Delete Secret resource containing pull-secret",
         "Delete Secret resource containing ssh-key",
         "Delete ManagedCluster resource",
     ):
         assert by_name[name][0] > by_name[names[2]][0]
+    assert "Delete Secret resource containing pull-secret" not in by_name
 
 
 @pytest.mark.parametrize(

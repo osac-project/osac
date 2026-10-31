@@ -23,6 +23,7 @@ HELM_BIN=${HELM_BIN:-helm}
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
+# Print an error to stderr and abort the suite with a non-zero status.
 fail() {
   echo "ERROR: $*" >&2
   exit 1
@@ -39,6 +40,7 @@ cp -a "${INSTALLER_DIR}" "${SANDBOX}"
 mkdir -p "${STUB_BIN}"
 : >"${LOG}"
 
+# Write an executable stub binary named $1 whose body is the heredoc on stdin.
 write_stub() {
   local name=$1
   {
@@ -145,6 +147,8 @@ assert_no_devstack_deps multicluster install-multicluster \
 # Continuation lines are joined so the render command and its values flags
 # match on one line, and only the plan region before the first recursive
 # make is checked -- that is the gate, not the sub-make's own renders.
+# Join make -n recipe continuation lines (trailing backslash) so a command
+# and its flag lines can be matched as one logical line.
 join_continuations() {
   awk '/\\$/ { sub(/\\$/, ""); acc = acc $0 " "; next }
        { print acc $0; acc = "" }'
@@ -209,6 +213,7 @@ COMMON_ARGS=(template osac "${OSAC_CHART_DIR}"
 INFRA_ARGS=(template osac-infra "${INFRA_CHART_DIR}"
   --values "${INSTALLER_DIR}/values/dev/kind-infra.yaml")
 
+# Render the osac chart with the given extra helm args and expect success.
 render_success() {
   local name=$1
   shift
@@ -216,6 +221,7 @@ render_success() {
   "${HELM_BIN}" "${COMMON_ARGS[@]}" "$@" >/dev/null
 }
 
+# Render the osac-infra chart with the given extra helm args; expect success.
 render_infra_success() {
   local name=$1
   shift
@@ -223,6 +229,9 @@ render_infra_success() {
   "${HELM_BIN}" "${INFRA_ARGS[@]}" "$@" >/dev/null
 }
 
+# Render the osac chart expecting failure, requiring stderr to match the
+# pattern (the offending field and violated constraint) so an unrelated
+# rendering failure cannot satisfy a negative test.
 render_failure_matching() {
   local name=$1 pattern=$2
   shift 2
@@ -239,6 +248,8 @@ render_failure_matching() {
   fi
 }
 
+# Render the osac-infra chart expecting failure with stderr matching the
+# pattern; the infra counterpart of render_failure_matching.
 render_infra_failure_matching() {
   local name=$1 pattern=$2
   shift 2

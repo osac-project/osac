@@ -32,6 +32,7 @@ effects, and follow the instructions for every affected component.
 | Stretched BM/ComputeInstance connectivity | Backend-agnostic regression E2E for address uniqueness and bidirectional ARP/ICMP on one OSAC Subnet; selected by the generic `stretched_networking` suite and the Netris infrastructure job `/test stretched-netris` | `uv run pytest -n 0 -m requires_stretched_networking tests/e2e/networking/stretched` | The Netris runner uses the `full-ci` profile, BMaaS SSH access, `OSAC_BMI_NETWORK_INTERFACE`, a VM template, and the OCP CUDN EVPN VTEP/underlay. The test itself checks OSAC networking behavior and creates/cleans its VirtualNetwork, Subnet, SecurityGroup, BMI, and ComputeInstance. |
 | CaaS deletion helpers and focused teardown ordering | [DEV] Unit regressions for exact NotFound, parent-before-dependent ordering, polling budgets, safe diagnostics, and no mutation | From the repository root: `uv run pytest -n 0 tests/unit/test_caas_teardown_order.py tests/unit/test_cluster_deletion_polling.py tests/unit/test_caas_deletion_diagnostics.py tests/unit/test_caas_worker_bmi_visibility.py tests/unit/test_caas_two_node_sets.py tests/unit/test_caas_selector_contracts.py` | Kubernetes, fulfillment responses, and time are mocked; selector regressions cover NodeSet identity with shared BMITs and shared-only BMIT reference expectations. Does not prove deployed reconciliation. |
 | Focused bare-metal CaaS natural teardown | [QE] E2E for catalog-item-authored cluster creation, worker BMI removal, natural ClusterOrder removal, independent InfraEnv GC, fulfillment removal, and deleted metering | From the repository root: `uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py::test_cluster_create --junitxml=/tmp/test-output/caas-bm-teardown-junit.xml` | Requires compatible source-pinned OSAC/operator/installer/AAP images and project source, hub access/auth, cluster template/release/disk images, pull-secret/SSH-key inputs, available virtual BMHs, and healthy Kafka/metering. No teardown completion is mocked. |
+| CaaS sequential control-plane and named-pool upgrade | [QE] E2E for tenant API updates, ClusterOrder/AAP application, HyperShift progress and completion, and unchanged sibling NodePool | From the repository root: `uv run pytest -n 0 tests/e2e/caas/regression/test_cluster_node_sets.py::test_cluster_create_with_two_node_sets` | Requires the compatible source-pinned CaaS profile, two worker sets, and a compatible target release image. No upgrade completion is mocked. |
 
 The `test_cluster_create` and `test_cluster_create_with_two_node_sets` scenarios
 share natural teardown assertions without the legacy helper's forced cleanup.
@@ -42,6 +43,10 @@ creates its cluster directly with two node sets and verifies ready worker aggreg
 installed Agents, and per-NodeSet NodePool isolation before deleting; it uses the same
 source-pinned environment prerequisites as the focused lifecycle. Run it with
 `uv run pytest -n 0 tests/e2e/caas/regression/test_cluster_node_sets.py::test_cluster_create_with_two_node_sets`.
+That regression upgrades a ready HostedCluster's control plane and one named
+NodePool while leaving the sibling unchanged. Run `test_cluster_create`
+for installation and teardown without an upgrade. Set
+`OSAC_TEST_UPGRADE_RELEASE_VERSION` and `OSAC_TEST_UPGRADE_RELEASE_IMAGE` for a compatible target (defaults 4.22.1 and its multi-arch image).
 CaaS sanity contains the single-nodepool lifecycle and the fast deletion
 feedback test; the lifecycle verifies deployed version resolution through the
 ClusterOrder and HostedCluster release image. Two-node-set isolation belongs in

@@ -870,6 +870,7 @@ Touched-area requirements: [component guide](../tests/e2e/AGENTS.md#touched-area
 | E2E (stretched BMI/ComputeInstance connectivity) | Backend-agnostic test: `uv run pytest -n 0 -m requires_stretched_networking tests/e2e/networking/stretched`; test-infra standalone selector: `SUITE=stretched_networking` | Creates a BMI and ComputeInstance on one OSAC Subnet and verifies unique addresses plus bidirectional ARP/ICMP | The Netris `/test stretched-netris` workflow provisions `full-ci`, BMaaS SSH access, `OSAC_BMI_NETWORK_INTERFACE`, the VM template, and CUDN EVPN VTEP/underlay. `SUITE=full` also includes this test. It is not part of standard VMaaS or BMaaS runs. |
 | Unit ([DEV], CaaS teardown) | From the repository root: `uv run pytest -n 0 tests/unit/test_caas_teardown_order.py tests/unit/test_cluster_deletion_polling.py tests/unit/test_caas_deletion_diagnostics.py tests/unit/test_caas_worker_bmi_visibility.py tests/unit/test_caas_two_node_sets.py tests/unit/test_caas_selector_contracts.py` | Read-only wait logic, exact-resource NotFound, ordered worker/parent/dependent waits, shared single/two-node-set budgets, stage-specific safe failures, snapshot throttling and sanitization, worker ownership checks, NodeSet selectors with shared BMITs, and shared-only BMIT reference expectations | API/client responses and time are mocked. No deployed controllers, fulfillment, AAP, provider, or metering is exercised. |
 | E2E ([QE], focused bare-metal CaaS lifecycle) | From the repository root: `uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py::test_cluster_create --junitxml=/tmp/test-output/caas-bm-teardown-junit.xml` | CLI/API/database, Kubernetes, OSAC operators, AAP, HyperShift/CAPI/CAP-Agent, Assisted Service, provider-backed virtual BMHs, and Kafka/metering; catalog-item-authored creation (published ClusterCatalogItem locking version, node sets, and SSH key), guest readiness, scale events, natural worker/parent teardown, independent InfraEnv GC, fulfillment removal, and deleted events | Requires the compatible deployed CaaS profile; no mocked completion or workaround-enabled deletion wait. Virtual BMHs do not prove physical-hardware coverage. Guest LVMS device readiness, PVC/CSI mount, and application I/O are not established by this lifecycle test. |
+| E2E ([QE], sequential CaaS upgrade) | From the repository root: `uv run pytest -n 0 tests/e2e/caas/regression/test_cluster_node_sets.py::test_cluster_create_with_two_node_sets` | The two-node regression continues after installation through tenant API control-plane and named-NodePool updates, ClusterOrder/AAP application, HyperShift progress and completion, and sibling isolation | Requires the compatible deployed CaaS profile, two worker sets, and a compatible upgrade image. The test does not mock upgrade completion. |
 
 Resize lifecycle tests expect `RestartRequired`. Multi-node live hot-plug
 coverage is tracked under
@@ -915,6 +916,11 @@ scenario. Run that [QE] E2E with
 `uv run pytest -n 0 tests/e2e/caas/regression/test_cluster_node_sets.py::test_cluster_create_with_two_node_sets`;
 it requires the same source-pinned environment described below and enough
 available BMHs for both worker sets.
+After the existing install checks, the regression waits for a healthy
+HostedCluster and both NodePools, upgrades the control plane and one named pool
+through ClusterOrder/AAP and HyperShift, and checks the sibling is unchanged.
+Run `test_cluster_create` above for installation and teardown without an upgrade.
+Set `OSAC_TEST_UPGRADE_RELEASE_VERSION` and `OSAC_TEST_UPGRADE_RELEASE_IMAGE` for a compatible target (defaults 4.22.1 and its multi-arch image).
 
 The deletion request triggers the test-owned worker BMI wait (480 attempts at
 five-second intervals). Worker ownership is verified through the fulfillment

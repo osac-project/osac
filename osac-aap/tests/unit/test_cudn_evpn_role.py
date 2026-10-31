@@ -31,6 +31,24 @@ def _evpn_filter_module():
 evpn_fabric_ipam = _evpn_filter_module().evpn_fabric_ipam
 
 
+@pytest.mark.parametrize("skipped,existing_namespace,uuid,allowed", [
+    (True, True, "", False),
+    (True, True, "vn", True),
+    (True, False, "", True),
+    (False, True, "", True),
+])
+def test_selector_migration_never_enables_or_detaches_ambiguous_skipped_namespace(
+    skipped, existing_namespace, uuid, allowed,
+):
+    tasks = _flatten_tasks(_raw_create_tasks())
+    guard = next(task for task in tasks if task.get("name") == "Preserve ambiguous historical explicit opt-out namespaces")
+    expression = Environment().compile_expression(guard["ansible.builtin.assert"]["that"][0])
+    namespace = {"metadata": {"labels": {"osac.openshift.io/virtualnetwork-uuid": uuid}}}
+    item = {"resources": [namespace] if existing_namespace else [], "item": {"metadata": {
+        "annotations": {"osac.openshift.io/skip-k8s-manager": "true" if skipped else "false"}}}}
+    assert expression(item=item, vnet_uuid="vn") is allowed
+
+
 def _role_metadata_path() -> Path:
     return (
         Path(__file__).resolve().parents[2]
@@ -367,9 +385,13 @@ def test_role_creates_tenant_namespace_and_waits_for_cudn_ready() -> None:
     persist_owner_index = task_names.index("Persist CUDN owner on the shared Lease before Kubernetes writes")
     persist_owner = tasks[persist_owner_index]["kubernetes.core.k8s"]
     assert persist_owner["state"] == "patched"
-    assert persist_owner["definition"]["metadata"]["annotations"] == {
-        "osac.openshift.io/cudn-owner-subnet": "{{ _cudn_owner_subnet_name }}"
-    }
+    expression = persist_owner["definition"]["metadata"].removeprefix("{{").removesuffix("}}").strip()
+    metadata = Environment().compile_expression(expression)(vnet_lock_name="shared", vnet_lock_namespace="management",
+        _cudn_owner_lease={"resources": [{"metadata": {"resourceVersion": "7", "annotations": {}}}]},
+        _evpn_decision={"owner": "owner", "supported": True})
+    assert metadata["resourceVersion"] == "7"
+    assert metadata["annotations"] == {"osac.openshift.io/cudn-owner-subnet": "owner",
+        "osac.openshift.io/cudn-owner-cleaned": None}
     assert persist_owner_index < task_names.index("Create tenant workload namespace")
 
     ready_task = tasks[task_names.index("Wait for current CUDN generation to be Ready")]
@@ -439,58 +461,10 @@ def test_native_evpn_conditions_require_acceptance_creation_and_allocation(chang
     assert bool(evaluate(cudn_status={"resources": [resource]})) == expected
 
 
-@pytest.mark.parametrize(
-    ("conditions", "expected"),
-    [
-        ([{"type": "Ready", "status": "True", "observedGeneration": 4}], True),
-        ([{"type": "Ready", "status": "True", "observedGeneration": 3}], False),
-        ([{"type": "Ready", "status": "False", "observedGeneration": 4},
-          {"type": "TransportAccepted", "status": "True"},
-          {"type": "NetworkCreated", "status": "True"},
-          {"type": "NetworkAllocationSucceeded", "status": "True"}], False),
-        ([{"type": "TransportAccepted", "status": "True"},
-          {"type": "NetworkCreated", "status": "True"},
-          {"type": "NetworkAllocationSucceeded", "status": "True"}], False),
-        ([{"type": "TransportAccepted", "status": "True"},
-          {"type": "NetworkCreated", "status": "False"},
-          {"type": "NetworkAllocationSucceeded", "status": "True"}], False),
-        ([{"type": "TransportAccepted", "status": "True"},
-          {"type": "NetworkCreated", "status": "True", "observedGeneration": 3},
-          {"type": "NetworkAllocationSucceeded", "status": "True"}], False),
-        ([{"type": "TransportAccepted", "status": "True", "observedGeneration": 4},
-          {"type": "NetworkCreated", "status": "True", "observedGeneration": 4},
-          {"type": "NetworkAllocationSucceeded", "status": "True", "observedGeneration": 4}], True),
-        ([{"type": "TransportAccepted", "status": "True", "observedGeneration": 4},
-          {"type": "NetworkCreated", "status": "True"},
-          {"type": "NetworkAllocationSucceeded", "status": "True", "observedGeneration": 4}], False),
-    ],
-)
-def test_owner_handoff_wait_accepts_native_cudn_conditions(conditions: list[dict], expected: bool) -> None:
-    task = next(t for t in _delete_tasks() if t.get("name") == "Wait for successor CUDN generation to be Ready before deleting its old owner")
-    evaluate = Environment().compile_expression(task["until"])
-    resource = {"metadata": {"generation": 4}, "status": {"conditions": conditions}}
-    result = evaluate(_cudn_successor_status={"resources": [resource]})
-    assert bool(result) is expected
 
 
-def test_owner_handoff_vrf_status_is_optional_for_native_cudn() -> None:
-    tasks = _delete_tasks()
-    validate = next(t for t in tasks if t.get("name") == "Validate successor CUDN VRF status")
-    assert validate["when"][-1] == "_cudn_successor_status.resources[0].status.vrfName is defined"
-    assert validate["ansible.builtin.assert"]["that"] == [
-        "_cudn_successor_status.resources[0].status.vrfName is string",
-        "_cudn_successor_status.resources[0].status.vrfName | string | trim | length > 0",
-    ]
 
 
-def test_owner_handoff_waits_for_successor_before_transferring_lease() -> None:
-    tasks = _delete_tasks()
-    names = [task.get("name") for task in tasks]
-    wait_index = names.index("Wait for successor CUDN generation to be Ready before deleting its old owner")
-    validate_index = names.index("Validate successor CUDN VRF status")
-    transfer_index = names.index("Transfer persisted owner after successor CUDN is Ready")
-    namespace_delete_index = names.index("Delete Subnet namespace")
-    assert wait_index < validate_index < transfer_index < namespace_delete_index
 
 
 @pytest.mark.parametrize("vrf_name", [None, "tenant-vrf"])
@@ -535,7 +509,7 @@ def test_shared_cudn_is_parent_owned_and_reconciled_only_by_current_owner() -> N
     owner_block = next(
         task for task in tasks if task.get("name") == "Provision CUDN resources only for its persisted Subnet owner"
     )
-    assert owner_block["when"][0] == "_cudn_owner_subnet_name == subnet_name"
+    assert owner_block["when"][0] == "_evpn_decision.supported"
     owner_block_names = [task.get("name") for task in _flatten_tasks(owner_block["block"])]
     assert "Create tenant workload namespace" in owner_block_names
 
@@ -605,65 +579,8 @@ def test_delete_identifies_compute_instance_siblings_after_extracting_refs(
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_delete_owner_handoff_derives_gateway_ipam_template_data() -> None:
-    tasks = _delete_tasks()
-    task_names = [task.get("name") for task in tasks]
-    variables_index = task_names.index("Set CUDN template variables from the successor")
-    apply_index = task_names.index("Apply the CUDN for the successor before deleting its current owner")
-    template_variables = tasks[variables_index]["ansible.builtin.set_fact"]
-
-    assert variables_index < apply_index
-    assert template_variables["_evpn_fabric_ipam"] == (
-        "{{ _cudn_next_owner_reserved_range | osac.templates.evpn_fabric_ipam }}"
-    )
 
 
-def test_delete_owner_handoff_reserves_first_half_of_successor_subnet(tmp_path: Path) -> None:
-    tasks = _delete_tasks()
-    range_task = next(task for task in tasks if task.get("name") == "Calculate the successor EVPN reserved range")
-    playbook = tmp_path / "successor_fabric_range.yaml"
-    playbook.write_text(
-        yaml.safe_dump(
-            [
-                {
-                    "hosts": "localhost",
-                    "connection": "local",
-                    "gather_facts": False,
-                    "vars": {
-                        "_cudn_owner_subnet_name": "deleting-subnet",
-                        "_deleting_subnet_name": "deleting-subnet",
-                        "_cudn_evpn_next_owner": {
-                            "metadata": {"name": "successor-subnet"},
-                            "spec": {"ipv4Cidr": "192.0.2.0/24"},
-                        },
-                    },
-                    "tasks": [
-                        range_task,
-                        {
-                            "name": "Assert successor split",
-                            "ansible.builtin.assert": {
-                                "that": [
-                                    "_cudn_next_owner_reserved_prefix | int == 25",
-                                    "_cudn_next_owner_reserved_range == '192.0.2.0/25'",
-                                ]
-                            },
-                        },
-                    ],
-                }
-            ],
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-    result = subprocess.run(
-        ["ansible-playbook", "--inventory", "localhost,", str(playbook)],
-        cwd=Path(__file__).resolve().parents[2],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_existing_sibling_namespaces_are_backfilled_before_cudn_selector_migration() -> None:
@@ -817,136 +734,8 @@ def test_existing_cudn_must_match_the_full_virtualnetwork_identity() -> None:
     )
 
 
-def test_oldest_active_non_skipped_subnet_owns_cudn_and_ties_break_by_name() -> None:
-    tasks = _create_tasks()
-    lookup_index = next(
-        i for i, task in enumerate(tasks) if task.get("name") == "List Subnets in the parent VirtualNetwork"
-    )
-    active_task = next(
-        task for task in tasks if task.get("name") == "Find active Subnets for the parent VirtualNetwork"
-    )
-    candidate_task = next(
-        task
-        for task in tasks
-        if task.get("name") == "Add active Subnets that allow Kubernetes provisioning as CUDN owner candidates"
-    )
-    owner_task = next(
-        task for task in tasks if task.get("name") == "Select oldest eligible Subnet as initial CUDN owner"
-    )
-    owner_template = owner_task["ansible.builtin.set_fact"]["_cudn_owner_subnet"]
-    owner_expression = Environment().compile_expression(owner_template.removeprefix("{{").removesuffix("}}").strip())
-    active_expression = Environment().compile_expression(
-        active_task["ansible.builtin.set_fact"]["_cudn_owner_active_subnets"]
-        .removeprefix("{{")
-        .removesuffix("}}")
-        .strip()
-    )
-    subnets = [
-        {
-            "metadata": {
-                "name": "older-but-skipped",
-                "creationTimestamp": "2024-01-01T00:00:00Z",
-                "annotations": {"osac.openshift.io/skip-k8s-manager": "true"},
-            },
-            "spec": {"virtualNetwork": "vnet-uuid-7"},
-        },
-        {
-            "metadata": {"name": "tie-z", "creationTimestamp": "2026-01-01T00:00:00Z"},
-            "spec": {"virtualNetwork": "vnet-uuid-7"},
-        },
-        {
-            "metadata": {
-                "name": "older-but-deleting",
-                "creationTimestamp": "2025-01-01T00:00:00Z",
-                "deletionTimestamp": "2026-01-02T00:00:00Z",
-            },
-            "spec": {"virtualNetwork": "vnet-uuid-7"},
-        },
-        {
-            "metadata": {"name": "tie-a", "creationTimestamp": "2026-01-01T00:00:00Z"},
-            "spec": {"virtualNetwork": "vnet-uuid-7"},
-        },
-        {
-            "metadata": {"name": "other-vnet", "creationTimestamp": "2024-01-01T00:00:00Z"},
-            "spec": {"virtualNetwork": "other-uuid"},
-        },
-    ]
-
-    active_subnets = active_expression(_vnet_subnet_lookup={"resources": subnets}, vnet_uuid="vnet-uuid-7")
-    allow_k8s = Environment().compile_expression(candidate_task["when"])
-    assert candidate_task["loop"] == "{{ _cudn_owner_active_subnets }}"
-    assert allow_k8s(item=subnets[0]) is False
-    candidates = [item for item in active_subnets if allow_k8s(item=item)]
-    owner = owner_expression(_cudn_owner_candidates=candidates)
-    assert owner["metadata"]["name"] == "tie-a"
-    assert lookup_index < tasks.index(active_task) < tasks.index(candidate_task) < tasks.index(owner_task)
-
-    owner_block = next(
-        task for task in tasks if task.get("name") == "Provision CUDN resources only for its persisted Subnet owner"
-    )
-    assert owner_block["when"] == [
-        "_cudn_owner_subnet_name == subnet_name",
-        "(subnet.metadata.annotations | default({})).get('osac.openshift.io/skip-k8s-manager', '') != 'true'",
-    ]
 
 
-def test_persisted_lease_owner_precedes_cudn_annotation_and_initial_oldest_subnet() -> None:
-    tasks = _create_tasks()
-    owner_parts = next(task for task in tasks if task.get("name") == "Keep the persisted CUDN owner stable")
-    effective_owner = next(task for task in tasks if task.get("name") == "Set effective persisted CUDN owner")
-    lease_owner = Environment().compile_expression(
-        owner_parts["ansible.builtin.set_fact"]["_cudn_owner_from_lease"].removeprefix("{{").removesuffix("}}").strip()
-    )
-    cudn_owner = Environment().compile_expression(
-        owner_parts["ansible.builtin.set_fact"]["_cudn_owner_from_cudn"].removeprefix("{{").removesuffix("}}").strip()
-    )
-    choose_owner = Environment().compile_expression(
-        effective_owner["ansible.builtin.set_fact"]["_cudn_owner_subnet_name"]
-        .removeprefix("{{")
-        .removesuffix("}}")
-        .strip()
-    )
-
-    assert (
-        lease_owner(
-            _cudn_owner_lease={
-                "resources": [{"metadata": {"annotations": {"osac.openshift.io/cudn-owner-subnet": "first"}}}]
-            }
-        )
-        == "first"
-    )
-    assert (
-        cudn_owner(
-            _existing_cudn={
-                "resources": [{"metadata": {"annotations": {"osac.openshift.io/cudn-owner-subnet": "legacy"}}}]
-            }
-        )
-        == "legacy"
-    )
-    assert (
-        choose_owner(
-            _cudn_owner_from_lease="first",
-            _cudn_owner_from_cudn="legacy",
-            _cudn_owner_subnet={"metadata": {"name": "new-oldest"}},
-        )
-        == "first"
-    )
-    assert (
-        choose_owner(
-            _cudn_owner_from_lease="",
-            _cudn_owner_from_cudn="legacy",
-            _cudn_owner_subnet={"metadata": {"name": "new-oldest"}},
-        )
-        == "legacy"
-    )
-    assert (
-        choose_owner(
-            _cudn_owner_from_lease="",
-            _cudn_owner_from_cudn="",
-            _cudn_owner_subnet={"metadata": {"name": "first-owner"}},
-        )
-        == "first-owner"
-    )
 
 
 def test_parent_virtual_network_uuid_resolves_name_for_shared_cudn_identity() -> None:

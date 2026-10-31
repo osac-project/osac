@@ -125,6 +125,12 @@ func RenderSubnet(w io.Writer, s *publicv1.Subnet) {
 	fmt.Fprintf(writer, "IPv6 CIDR:\t%s\n", ipv6Cidr)
 	fmt.Fprintf(writer, "State:\t%s\n", state)
 	fmt.Fprintf(writer, "Message:\t%s\n", message)
+	vmSupported := "unknown"
+	if s.GetStatus().HasComputeInstanceSupported() {
+		vmSupported = fmt.Sprint(s.GetStatus().GetComputeInstanceSupported())
+	}
+	fmt.Fprintf(writer, "VM supported:\t%s\n", vmSupported)
+	fmt.Fprintf(writer, "VM support reason:\t%s\n", s.GetStatus().GetComputeInstanceUnsupportedReason())
 	writer.Flush()
 }
 

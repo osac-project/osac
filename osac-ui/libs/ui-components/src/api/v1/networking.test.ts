@@ -1,7 +1,14 @@
+import { fromBinary, fromJson, toBinary, toJson } from '@bufbuild/protobuf';
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 
-import { ExternalIPState, SecurityGroupState, SubnetState, VirtualNetworkState } from '@osac/types';
+import {
+  ExternalIPState,
+  SecurityGroupState,
+  SubnetState,
+  Subnets,
+  VirtualNetworkState,
+} from '@osac/types';
 
 import {
   VIRTUAL_NETWORK_READY_LIST_FILTER,
@@ -18,6 +25,35 @@ import {
 import { escapeCelStringLiteral } from '../cel';
 
 describe('networking list filters', () => {
+  it.each([undefined, false, true])(
+    'preserves optional eligibility through the stable service descriptor: %s',
+    (supported) => {
+      const schema = Subnets.method.list.output;
+      const response = fromJson(schema, {
+        items: [
+          {
+            id: 'subnet',
+            status: {
+              state: SubnetState.READY,
+              ...(supported === undefined ? {} : { computeInstanceSupported: supported }),
+              computeInstanceUnsupportedReason: 'backend explanation',
+            },
+          },
+        ],
+      });
+      for (const roundtrip of [
+        fromJson(schema, toJson(schema, response)),
+        fromBinary(schema, toBinary(schema, response)),
+      ]) {
+        expect(roundtrip.items[0].status?.computeInstanceSupported).toBe(supported);
+        expect(roundtrip.items[0].status?.computeInstanceUnsupportedReason).toBe(
+          'backend explanation',
+        );
+        expect(roundtrip.items[0].status?.state).toBe(SubnetState.READY);
+      }
+    },
+  );
+
   it('filters virtual networks to ready state using enum integer', () => {
     expect(VIRTUAL_NETWORK_READY_LIST_FILTER).toBe(
       `this.status.state == ${VirtualNetworkState.READY}`,
@@ -51,6 +87,12 @@ describe('networking list filters', () => {
   it('combines virtual network scope and ready state for subnets', () => {
     expect(virtualNetworkFilterForSubnetList('vn-1')).toBe(
       `this.spec.virtual_network.id == "vn-1" && this.status.state == ${SubnetState.READY}`,
+    );
+  });
+
+  it('requires backend VM capability only for VM choices', () => {
+    expect(virtualNetworkFilterForSubnetList('vn-1', true)).toBe(
+      `this.spec.virtual_network.id == "vn-1" && this.status.state == ${SubnetState.READY} && this.status.compute_instance_supported == true`,
     );
   });
 

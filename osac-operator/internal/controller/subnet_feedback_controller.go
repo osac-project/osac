@@ -69,7 +69,7 @@ func NewSubnetFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.ClientConn
 		Save: func(ctx context.Context, remote *privatev1.Subnet) error {
 			_, err := subnetsClient.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
 				Object:     remote,
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{feedbackStatusStatePath, feedbackStatusMessagePath}},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{feedbackStatusStatePath, feedbackStatusMessagePath, "status.compute_instance_supported", "status.compute_instance_unsupported_reason"}},
 			}.Build())
 			return err
 		},
@@ -104,6 +104,8 @@ func (r *SubnetFeedbackReconciler) Reconcile(ctx context.Context, request ctrl.R
 }
 
 func syncSubnetUpdate(ctx context.Context, obj *v1alpha1.Subnet, remote *privatev1.Subnet) error {
+	remote.GetStatus().ComputeInstanceSupported = obj.Status.ComputeInstanceSupported
+	remote.GetStatus().SetComputeInstanceUnsupportedReason(obj.Status.ComputeInstanceUnsupportedReason)
 	syncSubnetPhase(ctx, obj, remote)
 	syncSubnetBackendNetworkID(obj, remote)
 	return nil

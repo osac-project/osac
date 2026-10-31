@@ -12,6 +12,7 @@ export const VmNetworkingStep = () => {
       <StackItem>
         <OsacForm>
           <NetworkFields
+            requireVmSupport
             networkAttachmentName="spec.networking.networkAttachment"
             externalIpAttachmentName="spec.networking.autoExternalIpAttachment"
             autoExternalIpHelperText={t(

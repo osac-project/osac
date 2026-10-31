@@ -16,20 +16,14 @@ package servers
 import (
 	"context"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"time"
 
 	"github.com/google/uuid"
-	gatewayruntime "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
-	"k8s.io/client-go/rest"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -207,192 +201,28 @@ var _ = Describe("Private subnets server", func() {
 		})
 	})
 
-	Describe("cudn_evpn sequential creation guard", func() {
-		var server *PrivateSubnetsServer
-
-		BeforeEach(func() {
-			var err error
-			server, err = NewPrivateSubnetsServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				Build()
+	Describe("EVPN fabric-only siblings", func() {
+		It("creates three Subnets without a hub VM lookup and ignores caller eligibility annotations", func() {
+			server, err := NewPrivateSubnetsServer().SetLogger(logger).
+				SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
 			Expect(err).NotTo(HaveOccurred())
-		})
-
-		createExistingSubnet := func(vn *privatev1.VirtualNetwork, name, cidr string) *privatev1.Subnet {
-			response, err := subnetDao.Create().SetObject(privatev1.Subnet_builder{
-				Metadata: privatev1.Metadata_builder{Tenant: testTenant, Name: name}.Build(),
-				Spec: privatev1.SubnetSpec_builder{
-					Ipv4Cidr:       new(cidr),
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
-				}.Build(),
-			}.Build()).Do(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			return response.GetObject()
-		}
-
-		newSubnet := func(vn *privatev1.VirtualNetwork, name, cidr string, annotations map[string]string) *privatev1.Subnet {
-			return privatev1.Subnet_builder{
-				Metadata: privatev1.Metadata_builder{Tenant: testTenant, Name: name, Annotations: annotations}.Build(),
-				Spec: privatev1.SubnetSpec_builder{
-					Ipv4Cidr:       new(cidr),
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
-				}.Build(),
-			}.Build()
-		}
-
-		It("selects the oldest Subnet by creation time and uses name for ties", func() {
-			older := privatev1.Subnet_builder{Metadata: privatev1.Metadata_builder{
-				Name:              "z-created-first",
-				CreationTimestamp: timestamppb.New(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)),
-			}.Build()}.Build()
-			newer := privatev1.Subnet_builder{Metadata: privatev1.Metadata_builder{
-				Name:              "a-created-later",
-				CreationTimestamp: timestamppb.New(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)),
-			}.Build()}.Build()
-			tieLaterName := privatev1.Subnet_builder{Metadata: privatev1.Metadata_builder{
-				Name:              "z-same-time",
-				CreationTimestamp: timestamppb.New(time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)),
-			}.Build()}.Build()
-			tieEarlierName := privatev1.Subnet_builder{Metadata: privatev1.Metadata_builder{
-				Name:              "a-same-time",
-				CreationTimestamp: timestamppb.New(time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)),
-			}.Build()}.Build()
-
-			Expect(oldestSubnet([]*privatev1.Subnet{newer, older})).To(Equal(older))
-			Expect(oldestSubnet([]*privatev1.Subnet{tieLaterName, tieEarlierName})).To(Equal(tieEarlierName))
-		})
-
-		It("does not inspect VMs or reject non-EVPN NetworkClasses", func() {
-			vn := createVirtualNetwork(ctx, "10.80.0.0/16", "")
-			createExistingSubnet(vn, "existing-subnet", "10.80.1.0/24")
-			server.listVirtualMachines = func(context.Context, string, string) (int, error) {
-				return 0, fmt.Errorf("must not be called")
-			}
-
-			Expect(server.validateEvpnSubnetCreation(ctx, newSubnet(vn, "next-subnet", "10.80.2.0/24", nil))).To(Succeed())
-		})
-
-		It("allows a first EVPN Subnet without listing a VM namespace", func() {
-			vn := createVirtualNetworkWithManager(ctx, "10.81.0.0/16", "", "cudn_evpn")
-			server.listVirtualMachines = func(context.Context, string, string) (int, error) {
-				Fail("VM namespace should not be queried when no Subnet exists")
-				return 0, nil
-			}
-
-			Expect(server.validateEvpnSubnetCreation(ctx, newSubnet(vn, "first-subnet", "10.81.1.0/24", nil))).To(Succeed())
-		})
-
-		It("allows a second EVPN Subnet when the oldest Subnet namespace has no VMs", func() {
-			vn := createVirtualNetworkWithManager(ctx, "10.82.0.0/16", "", "cudn_evpn")
-			first := createExistingSubnet(vn, "first-subnet", "10.82.1.0/24")
-			queriedHub, queriedSubnetID := "", ""
-			server.listVirtualMachines = func(_ context.Context, hubID, subnetID string) (int, error) {
-				queriedHub, queriedSubnetID = hubID, subnetID
-				return 0, nil
-			}
-
-			Expect(server.validateEvpnSubnetCreation(ctx, newSubnet(vn, "second-subnet", "10.82.2.0/24", nil))).To(Succeed())
-			Expect(queriedHub).To(Equal("test-hub"))
-			Expect(queriedSubnetID).To(Equal(first.GetId()))
-		})
-
-		It("rejects API creation with FailedPrecondition when the oldest Subnet contains a VM, even with skip annotation", func() {
 			vn := createVirtualNetworkWithManager(ctx, "10.83.0.0/16", "", "cudn_evpn")
-			first := createExistingSubnet(vn, "z-first-created", "10.83.1.0/24")
-			createExistingSubnet(vn, "zz-created-later", "10.83.2.0/24")
-			queriedSubnetID := ""
-			server.listVirtualMachines = func(_ context.Context, _, subnetID string) (int, error) {
-				queriedSubnetID = subnetID
-				return 1, nil
+			for index := 1; index <= 3; index++ {
+				response, err := server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
+					Object: privatev1.Subnet_builder{
+						Metadata: privatev1.Metadata_builder{Tenant: testTenant,
+							Name: fmt.Sprintf("subnet-%d", index), Annotations: map[string]string{
+								"osac.openshift.io/compute-instance-supported": "true",
+							}}.Build(),
+						Spec: privatev1.SubnetSpec_builder{
+							Ipv4Cidr:       new(fmt.Sprintf("10.83.%d.0/24", index)),
+							VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(response.GetObject().GetMetadata().GetAnnotations()).NotTo(HaveKey("osac.openshift.io/compute-instance-supported"))
 			}
-
-			_, err := server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
-				Object: newSubnet(vn, "third-subnet", "10.83.3.0/24", map[string]string{
-					"osac.openshift.io/skip-k8s-manager": "true",
-				}),
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-			Expect(queriedSubnetID).To(Equal(first.GetId()))
-			Expect(gatewayruntime.HTTPStatusFromCode(grpcstatus.Code(err))).To(Equal(http.StatusBadRequest))
-			Expect(err.Error()).To(ContainSubstring("z-first-created"))
-			Expect(err.Error()).To(ContainSubstring("cudn_evpn"))
-			persistedSubnets, err := server.List(ctx, &privatev1.SubnetsListRequest{})
-			Expect(err).NotTo(HaveOccurred())
-			foundRejectedSubnet := false
-			for _, persistedSubnet := range persistedSubnets.GetItems() {
-				if persistedSubnet.GetMetadata().GetName() == "third-subnet" {
-					foundRejectedSubnet = true
-					break
-				}
-			}
-			Expect(foundRejectedSubnet).To(BeFalse())
-		})
-
-		It("fails closed when the hub VM lookup fails", func() {
-			vn := createVirtualNetworkWithManager(ctx, "10.84.0.0/16", "", "cudn_evpn")
-			createExistingSubnet(vn, "first-subnet", "10.84.1.0/24")
-			server.listVirtualMachines = func(context.Context, string, string) (int, error) {
-				return 0, fmt.Errorf("hub unavailable")
-			}
-
-			_, err := server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
-				Object: newSubnet(vn, "second-subnet", "10.84.2.0/24", nil),
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Internal))
-
-			persistedSubnets, err := server.List(ctx, &privatev1.SubnetsListRequest{})
-			Expect(err).NotTo(HaveOccurred())
-			for _, persistedSubnet := range persistedSubnets.GetItems() {
-				Expect(persistedSubnet.GetMetadata().GetName()).NotTo(Equal("second-subnet"))
-			}
-		})
-
-		It("uses the generated hub Subnet CR name for the VM namespace", func() {
-			var subnetLabelSelector, vmListPath string
-			hubServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-				writer.Header().Set("Content-Type", "application/json")
-				switch request.URL.Path {
-				case "/apis/osac.openshift.io/v1alpha1/namespaces/networking/subnets":
-					subnetLabelSelector = request.URL.Query().Get("labelSelector")
-					_, _ = writer.Write([]byte(`{"apiVersion":"osac.openshift.io/v1alpha1","kind":"SubnetList","metadata":{"resourceVersion":"1"},"items":[{"apiVersion":"osac.openshift.io/v1alpha1","kind":"Subnet","metadata":{"name":"subnet-generated-name"}}]}`))
-				case "/apis/kubevirt.io/v1/namespaces/subnet-generated-name/virtualmachines":
-					vmListPath = request.URL.Path
-					_, _ = writer.Write([]byte(`{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachineList","metadata":{"resourceVersion":"1"},"items":[{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","metadata":{"name":"vm-one"}}]}`))
-				default:
-					http.NotFound(writer, request)
-				}
-			}))
-			defer hubServer.Close()
-
-			server.hubClientProvider = &stubHubClientProvider{
-				config:    &rest.Config{Host: hubServer.URL},
-				namespace: "networking",
-			}
-			server.listVirtualMachines = server.listHubVirtualMachines
-
-			vmCount, err := server.listHubVirtualMachines(ctx, "test-hub", "subnet-uuid")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(vmCount).To(Equal(1))
-			Expect(subnetLabelSelector).To(Equal("osac.openshift.io/subnet-uuid=subnet-uuid"))
-			Expect(vmListPath).To(Equal("/apis/kubevirt.io/v1/namespaces/subnet-generated-name/virtualmachines"))
-		})
-
-		It("fails closed when the hub has no Subnet CR for the existing Subnet ID", func() {
-			hubServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-				writer.Header().Set("Content-Type", "application/json")
-				_, _ = writer.Write([]byte(`{"apiVersion":"osac.openshift.io/v1alpha1","kind":"SubnetList","metadata":{"resourceVersion":"1"},"items":[]}`))
-			}))
-			defer hubServer.Close()
-
-			server.hubClientProvider = &stubHubClientProvider{
-				config:    &rest.Config{Host: hubServer.URL},
-				namespace: "networking",
-			}
-
-			_, err := server.listHubVirtualMachines(ctx, "test-hub", "missing-subnet-id")
-			Expect(err).To(MatchError(ContainSubstring("found 0")))
 		})
 	})
 
@@ -1550,7 +1380,7 @@ var _ = Describe("Private subnets server", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("rejects deletion when a compute instance uses the subnet", func() {
+			DescribeTable("rejects deletion for every unarchived compute state", func(state privatev1.ComputeInstanceState) {
 				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
 
 				createResponse, err := server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
@@ -1570,6 +1400,7 @@ var _ = Describe("Private subnets server", func() {
 
 				_, err = computeInstancesDao.Create().
 					SetObject(privatev1.ComputeInstance_builder{
+						Status: privatev1.ComputeInstanceStatus_builder{State: state}.Build(),
 						Metadata: privatev1.Metadata_builder{
 							Tenant: testTenant,
 						}.Build(),
@@ -1592,7 +1423,14 @@ var _ = Describe("Private subnets server", func() {
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
 				Expect(status.Message()).To(ContainSubstring("compute instance"))
-			})
+			},
+				Entry("pending", privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING),
+				Entry("running", privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING),
+				Entry("stopped", privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED),
+				Entry("paused", privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED),
+				Entry("failed retained", privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED),
+				Entry("deleting", privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING),
+			)
 
 			It("rejects deletion while a referencing compute instance is still being deleted", func() {
 				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")

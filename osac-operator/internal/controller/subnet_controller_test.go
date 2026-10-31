@@ -853,9 +853,6 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(provisioning.FindLatestJobByTypeAndTarget(final.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleFabric))).NotTo(BeNil())
 			Expect(provisioning.FindLatestJobByTypeAndTarget(final.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleK8s))).NotTo(BeNil())
 
-			// A later Subnet is fabric-only during provisioning, but it still records
-			// the shared CUDN cleanup manager so whichever Subnet is deleted last can
-			// remove the VirtualNetwork-wide resource.
 			laterSubnet := &osacv1alpha1.Subnet{
 				ObjectMeta: metav1.ObjectMeta{Name: "dual-subnet-later", Namespace: "default"},
 				Spec:       osacv1alpha1.SubnetSpec{VirtualNetwork: "dual-vnet-uuid", IPv4CIDR: "10.4.2.0/24"},
@@ -870,7 +867,7 @@ var _ = Describe("SubnetReconciler", func() {
 			laterAnnotations := &osacv1alpha1.Subnet{}
 			Expect(k8sClient.Get(ctx, laterKey, laterAnnotations)).To(Succeed())
 			Expect(laterAnnotations.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
-			Expect(laterAnnotations.Annotations).NotTo(HaveKey(osacK8sImplementationStrategyAnnotation))
+			Expect(laterAnnotations.Annotations[osacK8sImplementationStrategyAnnotation]).To(Equal("cudn_evpn"))
 			Expect(laterAnnotations.Annotations[osacK8sCleanupStrategyAnnotation]).To(Equal("cudn_evpn"))
 			_, err = reconciler.Reconcile(ctx, laterRequest)
 			Expect(err).NotTo(HaveOccurred())
@@ -896,7 +893,7 @@ var _ = Describe("SubnetReconciler", func() {
 
 			skippedAnnotations := &osacv1alpha1.Subnet{}
 			Expect(k8sClient.Get(ctx, skippedKey, skippedAnnotations)).To(Succeed())
-			Expect(skippedAnnotations.Annotations).NotTo(HaveKey(osacK8sImplementationStrategyAnnotation))
+			Expect(skippedAnnotations.Annotations[osacK8sImplementationStrategyAnnotation]).To(Equal("cudn_evpn"))
 			Expect(skippedAnnotations.Annotations[osacK8sCleanupStrategyAnnotation]).To(Equal("cudn_evpn"))
 			_, err = reconciler.Reconcile(ctx, skippedRequest)
 			Expect(err).NotTo(HaveOccurred())

@@ -35,3 +35,6 @@ columns:
 - header: STATE
   value: this.status.state
   type: osac.public.v1.SubnetState
+
+- header: VM-SUPPORTED
+  value: "has(this.status.compute_instance_supported)? string(this.status.compute_instance_supported): 'unknown'"

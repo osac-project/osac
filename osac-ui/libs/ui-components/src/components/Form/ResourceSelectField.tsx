@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo } from 'react';
 import { Alert, Content, FormGroup } from '@patternfly/react-core';
 import { TypeaheadSelect } from '@patternfly/react-templates';
 import { useField } from 'formik';
@@ -41,6 +41,8 @@ export interface ResourceSelectFieldProps {
   onSelectResource?: (value: ResourceSelectValue) => void;
   /** Client-side filter applied after the list response (e.g. GPU-class). */
   filterItems?: (item: ResourceListItem) => boolean;
+  /** Validates the selected value against the currently listed resources. */
+  validateSelection?: (value: ResourceSelectValue, items: ResourceListItem[]) => string | undefined;
   /** Label for options and the closed toggle. Defaults to metadata.name. */
   formatOptionLabel?: (item: ResourceListItem) => string;
 }
@@ -69,11 +71,10 @@ export const ResourceSelectField = ({
   emptyDescription,
   onSelectResource,
   filterItems,
+  validateSelection,
   formatOptionLabel = defaultOptionLabel,
 }: ResourceSelectFieldProps) => {
-  const [field, meta, helpers] = useField<ResourceSelectValue>(name);
   const showValidationErrors = useShowFieldValidationErrors();
-  const error = getVisibleFieldError(meta, showValidationErrors);
   const { data, isLoading, error: loadError } = useListResource(service, request);
   const items = useMemo(() => {
     const listed = ((data as { items?: ResourceListItem[] } | undefined)?.items ?? []).filter(
@@ -81,6 +82,12 @@ export const ResourceSelectField = ({
     );
     return filterItems ? listed.filter(filterItems) : listed;
   }, [data, filterItems]);
+  const validate = useCallback(
+    (value: ResourceSelectValue) => validateSelection?.(value, items),
+    [items, validateSelection],
+  );
+  const [field, meta, helpers] = useField<ResourceSelectValue>({ name, validate });
+  const error = getVisibleFieldError(meta, showValidationErrors);
 
   const listFailed = Boolean(loadError);
   const listEmpty = !isLoading && !listFailed && items.length === 0;

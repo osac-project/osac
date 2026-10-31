@@ -94,6 +94,10 @@ spec:
               backendNetworkId:
                 description: BackendNetworkID stores provider-specific network identifier
                 type: string
+              computeInstanceSupported:
+                type: boolean
+              computeInstanceUnsupportedReason:
+                type: string
               conditions:
                 description: Conditions holds an array of metav1.Condition that describe
                   the state of the Subnet

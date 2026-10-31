@@ -8,6 +8,8 @@ const typesDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
 const sourceDirectory = join(typesDirectory, 'src');
 const bufConfigTemplatePath = join(typesDirectory, 'buf.gen.yaml.template');
 const bufApiVersionPath = join(typesDirectory, '.buf-api-version');
+const localProtos = process.argv.slice(2).includes('--local');
+const protoDirectory = join(typesDirectory, '../../../proto');
 const apiVersionPattern = /^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/;
 
 const readApiVersion = () => {
@@ -33,7 +35,10 @@ const renderBufConfig = () => {
     throw new Error(`Expected two ${placeholder} placeholders in ${bufConfigTemplatePath}`);
   }
 
-  return template.replaceAll(placeholder, readApiVersion());
+  const rendered = template.replaceAll(placeholder, readApiVersion());
+  return localProtos
+    ? rendered.replace('remote: buf.build/bufbuild/es:v2.12.0', 'local: protoc-gen-es')
+    : rendered;
 };
 
 const removeGeneratedBindings = (directory) => {
@@ -65,6 +70,18 @@ try {
   }
 
   process.exitCode = result.status ?? 1;
+  if (result.status === 0 && localProtos) {
+    const localTemplate = readFileSync(join(typesDirectory, 'buf.local.gen.yaml'), 'utf8');
+    writeFileSync(bufConfigPath, localTemplate.replace('out: src', `out: ${sourceDirectory}`));
+    const localResult = spawnSync('buf', ['generate', '--template', bufConfigPath], {
+      cwd: protoDirectory,
+      stdio: 'inherit',
+    });
+    if (localResult.error) {
+      throw localResult.error;
+    }
+    process.exitCode = localResult.status ?? 1;
+  }
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;

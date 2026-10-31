@@ -24,11 +24,13 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/utils/ptr"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -3152,6 +3154,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			subnet.Status.Phase = osacv1alpha1.SubnetPhaseReady
+			subnet.Status.ComputeInstanceSupported = ptr.To(true)
+			Expect(k8sClient.Status().Update(ctx, subnet)).To(Succeed())
 			defer func() {
 				_ = k8sClient.Delete(ctx, subnet)
 			}()
@@ -3227,6 +3232,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			subnet.Status.Phase = osacv1alpha1.SubnetPhaseReady
+			subnet.Status.ComputeInstanceSupported = ptr.To(true)
+			Expect(k8sClient.Status().Update(ctx, subnet)).To(Succeed())
 			defer func() {
 				_ = k8sClient.Delete(ctx, subnet)
 			}()
@@ -3324,6 +3332,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			subnet.Status.Phase = osacv1alpha1.SubnetPhaseReady
+			subnet.Status.ComputeInstanceSupported = ptr.To(true)
+			Expect(k8sClient.Status().Update(ctx, subnet)).To(Succeed())
 			defer func() {
 				_ = k8sClient.Delete(ctx, subnet)
 			}()
@@ -3385,6 +3396,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			subnet.Status.Phase = osacv1alpha1.SubnetPhaseReady
+			subnet.Status.ComputeInstanceSupported = ptr.To(true)
+			Expect(k8sClient.Status().Update(ctx, subnet)).To(Succeed())
 			defer func() {
 				_ = k8sClient.Delete(ctx, subnet)
 			}()
@@ -3745,6 +3759,9 @@ var _ = Describe("ComputeInstance Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			subnet.Status.Phase = osacv1alpha1.SubnetPhaseReady
+			subnet.Status.ComputeInstanceSupported = ptr.To(true)
+			Expect(k8sClient.Status().Update(ctx, subnet)).To(Succeed())
 			defer func() {
 				_ = k8sClient.Delete(ctx, subnet)
 			}()
@@ -3869,5 +3886,252 @@ var _ = Describe("configRunningSince", func() {
 		since := configRunningSince(instance)
 
 		Expect(since.Time).To(BeTemporally("~", time.Now(), 2*time.Second))
+	})
+})
+
+var _ = Describe("ComputeInstance subnet placement gating", func() {
+	const namespaceName = "default"
+
+	ctx := context.Background()
+
+	deleteCI := func(name string) {
+		ci := &osacv1alpha1.ComputeInstance{}
+		nn := types.NamespacedName{Name: name, Namespace: namespaceName}
+		if err := k8sClient.Get(ctx, nn, ci); err == nil {
+			ci.Finalizers = nil
+			_ = k8sClient.Update(ctx, ci)
+			_ = k8sClient.Delete(ctx, ci)
+		}
+	}
+
+	createFixture := func(
+		name string,
+		requestRestart bool,
+		provisioningJobs []osacv1alpha1.JobStatus,
+		provider provisioning.ProvisioningProvider,
+	) (types.NamespacedName, *ComputeInstanceReconciler, string) {
+		tenantName := "tenant-" + name
+		subnetName := "subnet-" + name
+		targetNamespace := "cached-" + name
+		virtualNetwork := "vnet-" + name
+		createReadyTenant(ctx, namespaceName, tenantName)
+		DeferCleanup(func() { deleteTenantInNamespace(ctx, namespaceName, tenantName) })
+
+		subnet := &osacv1alpha1.Subnet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      subnetName,
+				Namespace: namespaceName,
+				Annotations: map[string]string{
+					osacK8sImplementationStrategyAnnotation: cudnEVPNManagerName,
+					subnetComputeSupportedAnnotation:        "true",
+				},
+			},
+			Spec: osacv1alpha1.SubnetSpec{
+				VirtualNetwork: virtualNetwork,
+				IPv4CIDR:       "10.0.0.0/24",
+			},
+		}
+		Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+		subnet.Status.Phase = osacv1alpha1.SubnetPhaseReady
+		subnet.Status.ComputeInstanceSupported = ptr.To(false)
+		subnet.Status.ComputeInstanceUnsupportedReason = "Subnet is not the EVPN owner"
+		Expect(k8sClient.Status().Update(ctx, subnet)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, subnet) })
+
+		lease := &coordinationv1.Lease{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      sharedCUDNLeaseName(virtualNetwork),
+				Namespace: namespaceName,
+				Annotations: map[string]string{
+					cudnOwnerAnnotation: "another-subnet",
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, lease)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, lease) })
+
+		workloadNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNamespace}}
+		Expect(k8sClient.Create(ctx, workloadNamespace)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, workloadNamespace) })
+
+		nn := types.NamespacedName{Name: name, Namespace: namespaceName}
+		spec := newTestComputeInstanceSpec("test_template")
+		spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetName}}
+		if requestRestart {
+			spec.RestartRequestedAt = ptr.To(metav1.Now())
+		}
+		ci := &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: namespaceName,
+				Annotations: map[string]string{
+					osacTenantKey:                       tenantName,
+					osacSubnetTargetNamespaceAnnotation: targetNamespace,
+				},
+			},
+			Spec: spec,
+		}
+		Expect(k8sClient.Create(ctx, ci)).To(Succeed())
+		DeferCleanup(func() { deleteCI(name) })
+		if len(provisioningJobs) > 0 {
+			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+			ci.Status.ProvisioningJobs = provisioningJobs
+			Expect(k8sClient.Status().Update(ctx, ci)).To(Succeed())
+		}
+
+		reconciler := NewComputeInstanceReconciler(
+			testMcManager,
+			"",
+			namespaceName,
+			"",
+			provider,
+			100*time.Millisecond,
+			0,
+			mcmanager.LocalCluster,
+		)
+		Eventually(func(g Gomega) {
+			cachedCI := &osacv1alpha1.ComputeInstance{}
+			g.Expect(reconciler.Client.Get(ctx, nn, cachedCI)).To(Succeed())
+			g.Expect(cachedCI.Status.ProvisioningJobs).To(HaveLen(len(provisioningJobs)))
+			cachedTenant := &osacv1alpha1.Tenant{}
+			tenantKey := types.NamespacedName{Name: tenantName, Namespace: namespaceName}
+			g.Expect(reconciler.Client.Get(ctx, tenantKey, cachedTenant)).To(Succeed())
+			g.Expect(cachedTenant.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+		}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+		return nn, reconciler, targetNamespace
+	}
+
+	assertPlacementUnsupported := func(ci *osacv1alpha1.ComputeInstance) {
+		placement := ci.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionNetworkPlacement)
+		Expect(placement).NotTo(BeNil())
+		Expect(placement.Status).To(Equal(metav1.ConditionFalse))
+		Expect(placement.Reason).To(Equal(networkAttachmentFailedReason))
+	}
+
+	It("keeps first-time unsupported placement terminal across reconciles", func() {
+		triggerCount := 0
+		provider := &mockProvisioningProvider{
+			triggerProvisionFunc: func(context.Context, client.Object) (*provisioning.ProvisionResult, error) {
+				triggerCount++
+				return &provisioning.ProvisionResult{JobID: "unexpected-job", InitialState: osacv1alpha1.JobStatePending}, nil
+			},
+		}
+		nn, reconciler, _ := createFixture("test-subnet-placement-first-time", true, nil, provider)
+
+		for attempt := 0; attempt < 3; attempt++ {
+			result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+
+			ci := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+			Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseFailed))
+			assertPlacementUnsupported(ci)
+			provisionedReason := conditionReason(ci, osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(provisionedReason).To(Equal(networkAttachmentFailedReason))
+			Expect(conditionReason(ci, osacv1alpha1.ComputeInstanceConditionReady)).To(Equal(networkAttachmentFailedReason))
+			Expect(ci.Status.ProvisioningJobs).To(BeEmpty())
+			if attempt < 2 {
+				Eventually(func(g Gomega) {
+					cachedCI := &osacv1alpha1.ComputeInstance{}
+					g.Expect(reconciler.Client.Get(ctx, nn, cachedCI)).To(Succeed())
+					g.Expect(cachedCI.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseFailed))
+				}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+			}
+		}
+		Expect(triggerCount).To(BeZero())
+	})
+
+	It("keeps reconciling an existing VM when subnet eligibility changes", func() {
+		nn, reconciler, targetNamespace := createFixture("test-subnet-placement-existing-vm", false, nil, nil)
+		subnetName := "subnet-" + nn.Name
+		virtualNetwork := "vnet-" + nn.Name
+		subnet := &osacv1alpha1.Subnet{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: subnetName, Namespace: namespaceName}, subnet)).To(Succeed())
+		subnet.Status.ComputeInstanceSupported = ptr.To(true)
+		subnet.Status.ComputeInstanceUnsupportedReason = ""
+		Expect(k8sClient.Status().Update(ctx, subnet)).To(Succeed())
+		lease := &coordinationv1.Lease{}
+		leaseKey := types.NamespacedName{Name: sharedCUDNLeaseName(virtualNetwork), Namespace: namespaceName}
+		Expect(k8sClient.Get(ctx, leaseKey, lease)).To(Succeed())
+		lease.Annotations[cudnOwnerAnnotation] = subnetName
+		Expect(k8sClient.Update(ctx, lease)).To(Succeed())
+
+		targetClient, err := getTargetClient(ctx, reconciler.mgr, reconciler.targetCluster)
+		Expect(err).NotTo(HaveOccurred())
+
+		vm := &kubevirtv1.VirtualMachine{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "vm-" + nn.Name,
+				Namespace: targetNamespace,
+				Labels:    map[string]string{osacComputeInstanceNameLabel: nn.Name},
+			},
+			Status: kubevirtv1.VirtualMachineStatus{PrintableStatus: kubevirtv1.VirtualMachineStatusRunning},
+		}
+		Expect(targetClient.Create(ctx, vm)).To(Succeed())
+		DeferCleanup(func() { _ = targetClient.Delete(ctx, vm) })
+		Eventually(func() error {
+			vmKey := types.NamespacedName{Name: vm.Name, Namespace: targetNamespace}
+			return targetClient.Get(ctx, vmKey, &kubevirtv1.VirtualMachine{})
+		}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+		result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeZero())
+		ci := &osacv1alpha1.ComputeInstance{}
+		Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+		Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseRunning))
+		placement := ci.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionNetworkPlacement)
+		Expect(placement).NotTo(BeNil())
+		Expect(placement.Status).To(Equal(metav1.ConditionTrue))
+
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: subnetName, Namespace: namespaceName}, subnet)).To(Succeed())
+		subnet.Status.ComputeInstanceSupported = ptr.To(false)
+		subnet.Status.ComputeInstanceUnsupportedReason = "Subnet is not the EVPN owner"
+		Expect(k8sClient.Status().Update(ctx, subnet)).To(Succeed())
+		Expect(k8sClient.Get(ctx, leaseKey, lease)).To(Succeed())
+		lease.Annotations[cudnOwnerAnnotation] = "another-subnet"
+		Expect(k8sClient.Update(ctx, lease)).To(Succeed())
+
+		result, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeZero())
+
+		Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+		Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseRunning))
+		Expect(ci.Status.VirtualMachineReference).NotTo(BeNil())
+		Expect(ci.Status.VirtualMachineReference.KubeVirtVirtualMachineName).To(Equal(vm.Name))
+		assertPlacementUnsupported(ci)
+		provisionedReason := conditionReason(ci, osacv1alpha1.ComputeInstanceConditionProvisioned)
+		Expect(provisionedReason).To(Equal(osacv1alpha1.ReasonInfrastructureReady))
+	})
+
+	It("continues reconciling prior provisioning history without a VM", func() {
+		previousJob := osacv1alpha1.JobStatus{
+			JobID:     "previous-provision",
+			Type:      osacv1alpha1.JobTypeProvision,
+			Timestamp: metav1.Now(),
+			State:     osacv1alpha1.JobStateSucceeded,
+		}
+		nn, reconciler, _ := createFixture(
+			"test-subnet-placement-job-history",
+			false,
+			[]osacv1alpha1.JobStatus{previousJob},
+			nil,
+		)
+
+		result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeZero())
+
+		ci := &osacv1alpha1.ComputeInstance{}
+		Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+		Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+		Expect(ci.Status.ProvisioningJobs).To(HaveLen(1))
+		Expect(ci.Status.ProvisioningJobs[0].JobID).To(Equal(previousJob.JobID))
+		assertPlacementUnsupported(ci)
+		provisionedReason := conditionReason(ci, osacv1alpha1.ComputeInstanceConditionProvisioned)
+		Expect(provisionedReason).To(Equal(osacv1alpha1.ReasonWaitingForVM))
 	})
 })

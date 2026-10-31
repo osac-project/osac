@@ -127,6 +127,13 @@ message SubnetStatus {
   //
   // For READY state, this is typically empty or contains confirmation like "Subnet ready for compute instances".
   optional string message = 2;
+
+  // Whether this subnet supports compute instances. Absent until eligibility is determined.
+  // This capability is independent of lifecycle readiness and cannot be set by callers.
+  optional bool compute_instance_supported = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Explanation when compute instances are not supported on this subnet.
+  string compute_instance_unsupported_reason = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Lifecycle states for Subnet resources.

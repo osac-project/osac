@@ -40,6 +40,26 @@ class StorageMappingTests(unittest.TestCase):
         self.owned_classes = []
         self.core.create_namespace({"metadata": {"name": self.namespace}})
         self.addCleanup(self._cleanup)
+        self.custom.create_namespaced_custom_object(
+            "osac.openshift.io",
+            "v1alpha1",
+            self.namespace,
+            "subnets",
+            {
+                "apiVersion": "osac.openshift.io/v1alpha1",
+                "kind": "Subnet",
+                "metadata": {
+                    "name": self.namespace,
+                    "namespace": self.namespace,
+                    "annotations": {"osac.openshift.io/tenant": self.namespace},
+                },
+                "spec": {
+                    "virtualNetwork": "fixture-network",
+                    "ipv4Cidr": "192.0.2.0/24",
+                },
+            },
+        )
+        self._set_subnet_status(True, "Ready")
         self.snapshots = {}
         for tier, name in self.classes.items():
             self.storage.create_storage_class(
@@ -70,7 +90,7 @@ class StorageMappingTests(unittest.TestCase):
             },
             "spec": {
                 "templateID": "osac.templates.ocp_virt_vm",
-                "networkAttachments": [{"subnetRef": "fixture-subnet"}],
+                "networkAttachments": [{"subnetRef": self.namespace}],
                 "vcpus": 1,
                 "memoryGiB": 2,
                 "bootDisk": {"sizeGiB": 40, "storageTier": "fast"},
@@ -129,6 +149,47 @@ class StorageMappingTests(unittest.TestCase):
             {"name": self.classes[tier], "tier": tier}
             for tier in ("archive", "fast", "balanced")
         ]
+
+    def _set_subnet_status(self, supported: bool | None, phase: str) -> None:
+        self.custom.patch_namespaced_custom_object_status(
+            "osac.openshift.io",
+            "v1alpha1",
+            self.namespace,
+            "subnets",
+            self.namespace,
+            {"status": {"computeInstanceSupported": supported, "phase": phase}},
+        )
+        persisted = self.custom.get_namespaced_custom_object(
+            "osac.openshift.io", "v1alpha1", self.namespace, "subnets", self.namespace
+        )
+        self.assertEqual(persisted["status"].get("computeInstanceSupported"), supported)
+        self.assertEqual(persisted["status"]["phase"], phase)
+
+    def test_unavailable_subnet_prevents_storage_and_workload_creation(self) -> None:
+        for supported, phase in ((False, "Ready"), (None, "Ready"), (True, "Progressing")):
+            with self.subTest(supported=supported, phase=phase):
+                self._set_subnet_status(supported, phase)
+                self._assert_placement_rejected()
+        self.custom.delete_namespaced_custom_object(
+            "osac.openshift.io", "v1alpha1", self.namespace, "subnets", self.namespace
+        )
+        self._assert_placement_rejected()
+
+    def _assert_placement_rejected(self) -> None:
+        result = self._run_playbook(self._mapping())
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("is not supported and ready for VM placement", result.stdout)
+        self.assertNotIn("Resolve StorageClass for boot disk tier", result.stdout)
+        self.assertNotIn("osac.service.storage_provider :", result.stdout)
+        self.assertNotIn("Step - Create secrets", result.stdout)
+        self.assertNotIn("Step - Pre-create hook", result.stdout)
+        self.assertNotIn("Step - Post-create hook", result.stdout)
+        self._assert_no_disks()
+        instances = self.custom.list_namespaced_custom_object(
+            "kubevirt.io", "v1", self.namespace, "virtualmachineinstances"
+        )
+        self.assertEqual(instances["items"], [])
+        self.assertEqual(self.core.list_namespaced_secret(self.namespace).items, [])
 
     def _run_playbook(
         self,

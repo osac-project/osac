@@ -60,6 +60,7 @@ import {
   ServiceTier,
   Subnet,
   SubnetsGetRequest,
+  SubnetsListRequest,
   User,
   VirtualNetwork,
   Volume,
@@ -238,6 +239,16 @@ const matchesReadyStateFilter = (
     return true;
   }
   return state === VirtualNetworkState.READY;
+};
+
+const matchesComputeSupportFilter = (
+  filter: string | undefined,
+  computeInstanceSupported: boolean | undefined,
+): boolean => {
+  if (!filter?.includes('this.status.compute_instance_supported == true')) {
+    return true;
+  }
+  return computeInstanceSupported === true;
 };
 
 const matchesStringEqualityFilter = (
@@ -475,6 +486,7 @@ export type MockTransportOverrides = {
   onDiskImageCreate?: (req: DiskImagesCreateRequest) => DiskImagesCreateResponse;
   onDiskImageUpdate?: (req: DiskImagesUpdateRequest) => DiskImagesUpdateResponse;
   onDiskImageDelete?: (req: DiskImagesDeleteRequest) => DiskImagesDeleteResponse;
+  onSubnetList?: (req: SubnetsListRequest) => void;
   onSubnetGet?: (req: SubnetsGetRequest) => { object?: Subnet };
   onNatGatewayList?: (req: NATGatewaysListRequest) => void;
   onNatGatewayCreate?: (
@@ -639,13 +651,17 @@ export const createMockConnectTransport = (
       });
 
       router.service(Subnets, {
-        list: (req) => ({
-          items: subnets.filter(
-            (item) =>
-              matchesReadyStateFilter(req.filter, item.status?.state) &&
-              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
-          ),
-        }),
+        list: (req) => {
+          overrides.onSubnetList?.(req);
+          return {
+            items: subnets.filter(
+              (item) =>
+                matchesReadyStateFilter(req.filter, item.status?.state) &&
+                matchesComputeSupportFilter(req.filter, item.status?.computeInstanceSupported) &&
+                matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
+            ),
+          };
+        },
         get: (req) => {
           if (overrides.onSubnetGet) {
             return overrides.onSubnetGet(req);

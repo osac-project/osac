@@ -86,6 +86,9 @@ const (
 
 // SubnetStatus defines the observed state of Subnet
 type SubnetStatus struct {
+	ComputeInstanceSupported         *bool  `json:"computeInstanceSupported,omitempty"`
+	ComputeInstanceUnsupportedReason string `json:"computeInstanceUnsupportedReason,omitempty"`
+
 	// Phase provides a single-value overview of the state of the Subnet
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string

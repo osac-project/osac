@@ -156,6 +156,7 @@ const CatalogGeneralStep = ({
             service={templateService}
             isRequired
             isDisabled={isEdit}
+            autoSelectSingleOption
             placeholder={t('Select a provisioning template')}
             loadErrorTitle={t('Failed to fetch provisioning templates')}
             labelHelp={

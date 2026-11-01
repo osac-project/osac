@@ -66,7 +66,8 @@ var _ = Describe("deployed MCP server", func() {
 		defer func() { Expect(session.Close()).To(Succeed()) }()
 		tools, err := session.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(tools.Tools).To(HaveLen(5))
+		Expect(tools.Tools).To(HaveLen(len(expectedMCPServerToolNames)))
+		Expect(mcpToolNames(tools.Tools)).To(ConsistOf(expectedMCPServerToolNames))
 		before, err := callMCPTool[mcpserver.ListResourcesOutput](ctx, session, "list_resources", mcpserver.ListResourcesInput{
 			ResourceType: mcpserver.ResourceTypeComputeInstance,
 		})
@@ -77,12 +78,19 @@ var _ = Describe("deployed MCP server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(connection.Endpoint).To(Equal(resourceURL))
 		Expect(connection.Caller.Subject).ToNot(BeEmpty())
-		Expect(connection.Tools).To(HaveLen(5))
+		Expect(connection.Tools).To(ConsistOf(expectedMCPServerToolNames))
 		after, err := callMCPTool[mcpserver.ListResourcesOutput](ctx, session, "list_resources", mcpserver.ListResourcesInput{
 			ResourceType: mcpserver.ResourceTypeComputeInstance,
 		})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(after.Items).To(Equal(before.Items))
+		resourceIDs := func(items []mcpserver.ResourceSummary) []string {
+			ids := make([]string, 0, len(items))
+			for _, item := range items {
+				ids = append(ids, item.ID)
+			}
+			return ids
+		}
+		Expect(resourceIDs(after.Items)).To(ConsistOf(resourceIDs(before.Items)))
 
 		// The regular Fulfillment API token has a different audience and must not
 		// be accepted by the MCP listener.
@@ -218,10 +226,27 @@ var _ = Describe("deployed MCP server", func() {
 		defer cancel()
 
 		resourceURL := endpoint + "/"
-		token, err := tool.SimulateMCPLogin(ctx, resourceURL, userUsername, usersPassword)
+		username := "mcp-denied-exchange-" + uuid.New()[24:32]
+		code, body, err := tool.KeycloakAdminRequest(ctx, http.MethodPost, "/users", map[string]any{
+			"username": username, "email": username + "@test.local", "emailVerified": true,
+			"enabled": true, "firstName": username, "lastName": "MCPContract", "requiredActions": []string{},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(code).To(Equal(http.StatusCreated), string(body))
+		userID, err := tool.keycloakEnsureUserReady(ctx, username)
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			code, body, err := tool.KeycloakAdminRequest(context.Background(), http.MethodDelete,
+				fmt.Sprintf("/users/%s", userID), nil)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(code == http.StatusNoContent || code == http.StatusNotFound, string(body)).To(BeTrue())
+		})
+		Expect(tool.ensureUserInOrg(ctx, username, usersGroup)).To(Succeed())
+
+		initialToken, err := tool.SimulateMCPLogin(ctx, resourceURL, username, usersPassword)
 		Expect(err).ToNot(HaveOccurred())
 		_, err = callDeployedMCPTool[mcpserver.CheckConnectionOutput](
-			ctx, endpoint, token, "check_connection", mcpserver.CheckConnectionInput{},
+			ctx, endpoint, initialToken, "check_connection", mcpserver.CheckConnectionInput{},
 		)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -234,11 +259,26 @@ var _ = Describe("deployed MCP server", func() {
 		attributes["standard.token.exchange.enabled"] = "false"
 		Expect(updateKeycloakClient(ctx, clientID, denied)).To(Succeed())
 		DeferCleanup(func() {
-			Expect(updateKeycloakClient(context.Background(), clientID, original)).To(Succeed())
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cleanupCancel()
+			Expect(updateKeycloakClient(cleanupCtx, clientID, original)).To(Succeed())
+			Eventually(func(g Gomega) {
+				restoredToken, tokenErr := tool.SimulateMCPLogin(
+					cleanupCtx, resourceURL, username, usersPassword,
+				)
+				g.Expect(tokenErr).ToNot(HaveOccurred())
+				_, callErr := callDeployedMCPTool[mcpserver.CheckConnectionOutput](
+					cleanupCtx, endpoint, restoredToken, "check_connection",
+					mcpserver.CheckConnectionInput{},
+				)
+				g.Expect(callErr).ToNot(HaveOccurred())
+			}, time.Minute, time.Second).Should(Succeed())
 		})
 
+		deniedToken, err := tool.SimulateMCPLogin(ctx, resourceURL, username, usersPassword)
+		Expect(err).ToNot(HaveOccurred())
 		_, err = callDeployedMCPTool[mcpserver.CheckConnectionOutput](
-			ctx, endpoint, token, "check_connection", mcpserver.CheckConnectionInput{},
+			ctx, endpoint, deniedToken, "check_connection", mcpserver.CheckConnectionInput{},
 		)
 		expectMCPToolError(err, "authentication", "Unauthenticated", false)
 	})

@@ -23,20 +23,17 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/ghttp"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/start/mcpserver"
-	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -82,34 +79,39 @@ var _ = Describe("MCP server", func() {
 		virtualNetworksClient          privatev1.VirtualNetworksClient
 		securityGroupsClient           privatev1.SecurityGroupsClient
 
-		catalogItemID          string
-		computeInstanceID      string
-		otherComputeInstanceID string
-		templateID             string
-		diskImageID            string
-		instanceTypeID         string
-		storageBackendID       string
-		storageTierID          string
-		subnetID               string
-		virtualNetworkID       string
-		networkClassID         string
-		securityGroupID        string
-		mcpGrpcConn            *grpc.ClientConn
-		mcpHTTPServer          *httptest.Server
-		mcpClient              *http.Client
+		catalogItemID            string
+		computeInstanceID        string
+		otherComputeInstanceID   string
+		templateID               string
+		diskImageID              string
+		instanceTypeID           string
+		compatibleInstanceTypeID string
+		deprecatedInstanceTypeID string
+		obsoleteInstanceTypeID   string
+		storageBackendID         string
+		storageTierID            string
+		subnetID                 string
+		virtualNetworkID         string
+		networkClassID           string
+		securityGroupID          string
+		projectID                string
+		projectName              string
+		mcpHTTPServer            *httptest.Server
+		mcpClient                *http.Client
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
 		catalogItemID, computeInstanceID, otherComputeInstanceID = "", "", ""
 		templateID, diskImageID, instanceTypeID = "", "", ""
+		compatibleInstanceTypeID, deprecatedInstanceTypeID, obsoleteInstanceTypeID = "", "", ""
 		storageBackendID, storageTierID, subnetID = "", "", ""
 		virtualNetworkID, networkClassID, securityGroupID = "", "", ""
-		mcpGrpcConn, mcpHTTPServer, mcpClient = nil, nil, nil
+		projectID, projectName = "", ""
+		mcpHTTPServer, mcpClient = nil, nil
 		adminConn := tool.InternalView().AdminConn()
 		catalogItemsClient = privatev1.NewComputeInstanceCatalogItemsClient(adminConn)
 		computeInstanceTemplatesClient = privatev1.NewComputeInstanceTemplatesClient(adminConn)
-		computeInstancesClient = publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
 		diskImagesClient = privatev1.NewDiskImagesClient(adminConn)
 		instanceTypesClient = privatev1.NewInstanceTypesClient(adminConn)
 		networkClassesClient = privatev1.NewNetworkClassesClient(adminConn)
@@ -118,6 +120,23 @@ var _ = Describe("MCP server", func() {
 		subnetsClient = privatev1.NewSubnetsClient(adminConn)
 		virtualNetworksClient = privatev1.NewVirtualNetworksClient(adminConn)
 		securityGroupsClient = privatev1.NewSecurityGroupsClient(adminConn)
+
+		revokeTenantAdmin := grantMCPDiscoveryTenantAdmin(ctx, userUsername)
+		projectConn, err := tool.MakeUserConnection(ctx, userUsername, usersPassword)
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() { _ = projectConn.Close() })
+		project, _ := createMCPProjectFixture(
+			ctx,
+			publicv1.NewProjectsClient(projectConn),
+			userUsername,
+			usersGroup,
+			"compute",
+			"MCP compute instance",
+			"Project for MCP compute integration",
+		)
+		revokeTenantAdmin(ctx)
+		projectID = project.GetId()
+		projectName = project.GetMetadata().GetName()
 
 		storageBackendResponse, err := storageBackendsClient.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{
 			Object: privatev1.StorageBackend_builder{
@@ -159,18 +178,57 @@ var _ = Describe("MCP server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		instanceTypeResponse, err := instanceTypesClient.Create(ctx, privatev1.InstanceTypesCreateRequest_builder{
-			Object: privatev1.InstanceType_builder{
-				Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("mcp-instance-type-%s", uuid.New()[24:32])}.Build(),
-				Spec:     privatev1.InstanceTypeSpec_builder{Vcpus: 2, MemoryGib: 4}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		instanceTypeID = instanceTypeResponse.GetObject().GetId()
-		DeferCleanup(func() {
-			_, err := instanceTypesClient.Delete(ctx, privatev1.InstanceTypesDeleteRequest_builder{Id: instanceTypeID}.Build())
+		createInstanceType := func(
+			state privatev1.InstanceTypeState, deprecation *privatev1.InstanceTypeDeprecation,
+		) string {
+			instanceTypeResponse, err := instanceTypesClient.Create(ctx, privatev1.InstanceTypesCreateRequest_builder{
+				Object: privatev1.InstanceType_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("mcp-instance-type-%s", uuid.New()[24:32])}.Build(),
+					Spec: privatev1.InstanceTypeSpec_builder{
+						Vcpus: 2, MemoryGib: 4,
+					}.Build(),
+				}.Build(),
+			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-		})
+			instanceTypeID := instanceTypeResponse.GetObject().GetId()
+			if state != privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE {
+				paths := []string{"spec.state"}
+				spec := privatev1.InstanceTypeSpec_builder{State: state}
+				if deprecation != nil {
+					paths = append(paths, "spec.deprecation")
+					spec.Deprecation = deprecation
+				}
+				_, err = instanceTypesClient.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
+					Object: privatev1.InstanceType_builder{
+						Id:   instanceTypeID,
+						Spec: spec.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: paths},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			}
+			DeferCleanup(func() {
+				_, err := instanceTypesClient.Delete(ctx, privatev1.InstanceTypesDeleteRequest_builder{
+					Id: instanceTypeID,
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			})
+			return instanceTypeID
+		}
+		instanceTypeID = createInstanceType(privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE, nil)
+		compatibleInstanceTypeID = createInstanceType(privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE, nil)
+		deprecatedInstanceTypeID = createInstanceType(
+			privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_DEPRECATED,
+			privatev1.InstanceTypeDeprecation_builder{
+				ObsolescenceTimestamp: timestamppb.New(time.Now().Add(time.Hour)),
+				Replacement: privatev1.InstanceTypeLocalReference_builder{
+					Id: compatibleInstanceTypeID,
+				}.Build(),
+			}.Build(),
+		)
+		obsoleteInstanceTypeID = createInstanceType(
+			privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_OBSOLETE, nil,
+		)
 
 		diskImageResponse, err := diskImagesClient.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
 			Object: privatev1.DiskImage_builder{
@@ -231,20 +289,14 @@ var _ = Describe("MCP server", func() {
 		})
 		waitForNetworkClassReady(ctx, networkClassesClient, networkClassID)
 
-		err = updateNetworkClassStatusWithRetry(ctx, networkClassesClient, networkClassID, privatev1.NetworkClassStatus_builder{
-			State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
-			Hub:   hubId,
-		}.Build(), &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.hub"}})
-		Expect(err).ToNot(HaveOccurred())
-		waitForNetworkClassReady(ctx, networkClassesClient, networkClassID)
-
 		virtualNetworkID = fmt.Sprintf("mcp-virtual-network-%s", uuid.New())
 		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 			Object: privatev1.VirtualNetwork_builder{
 				Id: virtualNetworkID,
 				Metadata: privatev1.Metadata_builder{
-					Name:   fmt.Sprintf("mcp-virtual-network-%s", uuid.New()[24:32]),
-					Tenant: usersGroup,
+					Name:    fmt.Sprintf("mcp-virtual-network-%s", uuid.New()[24:32]),
+					Tenant:  usersGroup,
+					Project: projectName,
 				}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					Ipv4Cidr: proto.String("10.200.0.0/16"),
@@ -264,8 +316,9 @@ var _ = Describe("MCP server", func() {
 			Object: privatev1.Subnet_builder{
 				Id: subnetID,
 				Metadata: privatev1.Metadata_builder{
-					Name:   fmt.Sprintf("mcp-subnet-%s", uuid.New()[24:32]),
-					Tenant: usersGroup,
+					Name:    fmt.Sprintf("mcp-subnet-%s", uuid.New()[24:32]),
+					Tenant:  usersGroup,
+					Project: projectName,
 				}.Build(),
 				Spec: privatev1.SubnetSpec_builder{
 					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
@@ -284,8 +337,9 @@ var _ = Describe("MCP server", func() {
 		securityGroupResponse, err := securityGroupsClient.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
 			Object: privatev1.SecurityGroup_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name:   fmt.Sprintf("mcp-security-group-%s", uuid.New()[24:32]),
-					Tenant: usersGroup,
+					Name:    fmt.Sprintf("mcp-security-group-%s", uuid.New()[24:32]),
+					Tenant:  usersGroup,
+					Project: projectName,
 				}.Build(),
 				Spec: privatev1.SecurityGroupSpec_builder{
 					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
@@ -322,6 +376,9 @@ var _ = Describe("MCP server", func() {
 							Editable: privatev1.EditableStorageTierReferenceField_builder{}.Build(),
 						}.Build(),
 					}.Build(),
+					RunStrategy: privatev1.ComputeInstanceRunStrategyFieldPolicy_builder{
+						Editable: privatev1.EditableComputeInstanceRunStrategyField_builder{}.Build(),
+					}.Build(),
 					NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{
 						Editable: privatev1.EditableComputeNetworkAttachmentList_builder{}.Build(),
 					}.Build(),
@@ -334,44 +391,16 @@ var _ = Describe("MCP server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		jwksCache, err := auth.NewJwksCache().
-			SetLogger(logger).
-			SetCaPool(tool.CaPool()).
-			AddIssuers(keycloakIssuer(ctx)).
-			Build()
+		mcpTokenSource, err := tool.makeKeycloakTokenSource(ctx, userUsername, usersPassword)
 		Expect(err).ToNot(HaveOccurred())
-		// The password-flow fixture returns Keycloak's account audience. Audience
-		// enforcement is covered by the NewHandler unit tests and the deployed
-		// wrong-audience integration test.
-		jwtValidator, err := auth.NewJwtValidator().
-			SetLogger(logger).
-			SetJwksCache(jwksCache).
-			SetExpirationLeeway(5 * time.Second).
-			Build()
+		mcpConn, err := tool.makeGrpcConn(externalServiceAddr, mcpTokenSource)
 		Expect(err).ToNot(HaveOccurred())
-
-		mcpGrpcConn, err = network.NewGrpcClient().
-			SetLogger(logger).
-			SetCaPool(tool.CaPool()).
-			SetAddress(externalServiceAddr).
-			SetUserAgent("fulfillment-mcp-server-it").
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() { Expect(mcpGrpcConn.Close()).To(Succeed()) })
-		// This test exercises MCP tool behavior against the deployed public API. The
-		// OAuth exchange protocol is covered separately by the exchange contract tests.
-		handler, err := mcpserver.NewHandler(
-			mcpserver.NewServerDeps(mcpGrpcConn), jwtValidator, "", "",
-			mcpserver.TokenExchangerFunc(func(_ context.Context, subjectToken string, _ *jwt.Token) (string, error) {
-				return subjectToken, nil
-			}),
-		)
-		Expect(err).ToNot(HaveOccurred())
-		mcpHTTPServer = httptest.NewServer(handler)
-		DeferCleanup(mcpHTTPServer.Close)
+		DeferCleanup(func() { _ = mcpConn.Close() })
+		computeInstancesClient = publicv1.NewComputeInstancesClient(mcpConn)
+		mcpHTTPServer = startInProcessMCPServer(ctx, "fulfillment-mcp-server-it")
 		mcpClient = &http.Client{
 			Transport: ghttp.RoundTripperFunc(func(request *http.Request) (*http.Response, error) {
-				token, err := tool.UserTokenSource().Token(request.Context())
+				token, err := mcpTokenSource.Token(request.Context())
 				if err != nil {
 					return nil, err
 				}
@@ -389,17 +418,8 @@ var _ = Describe("MCP server", func() {
 		defer func() { Expect(session.Close()).To(Succeed()) }()
 		listedTools, err := session.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(listedTools.Tools).To(HaveLen(5))
-		toolNames := make([]string, len(listedTools.Tools))
-		for index, tool := range listedTools.Tools {
-			toolNames[index] = tool.Name
-		}
-		Expect([]string{
-			listedTools.Tools[0].Name, listedTools.Tools[1].Name,
-			listedTools.Tools[2].Name, listedTools.Tools[3].Name, listedTools.Tools[4].Name,
-		}).To(ConsistOf(
-			"check_connection", "list_resources", "get_resource", "create_compute_instance", "delete_compute_instance",
-		))
+		Expect(listedTools.Tools).To(HaveLen(len(expectedMCPServerToolNames)))
+		Expect(mcpToolNames(listedTools.Tools)).To(ConsistOf(expectedMCPServerToolNames))
 
 		instancesBefore, err := computeInstancesClient.List(ctx, publicv1.ComputeInstancesListRequest_builder{
 			Limit: proto.Int32(1),
@@ -414,13 +434,16 @@ var _ = Describe("MCP server", func() {
 		Expect(connection.Caller.Subject).ToNot(BeEmpty())
 		Expect(connection.Caller.Tenants).To(ContainElement(usersGroup))
 		Expect(connection.ResourceFamilies).To(HaveLen(11))
-		Expect(connection.Tools).To(ConsistOf(toolNames))
+		Expect(connection.Tools).To(ConsistOf(expectedMCPServerToolNames))
 		Expect(connection.Permissions).To(ConsistOf(
 			mcpserver.CheckConnectionPermission{
 				Tenant: usersGroup, Service: "osac.public.v1.ComputeInstances", Method: "List", Allowed: true,
 			},
 			mcpserver.CheckConnectionPermission{
 				Tenant: usersGroup, Service: "osac.public.v1.ComputeInstances", Method: "Create", Allowed: true,
+			},
+			mcpserver.CheckConnectionPermission{
+				Tenant: usersGroup, Service: "osac.public.v1.ComputeInstances", Method: "Update", Allowed: true,
 			},
 		))
 		encodedConnection, err := json.Marshal(connection)
@@ -447,21 +470,31 @@ var _ = Describe("MCP server", func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resource.Resource).To(HaveKeyWithValue("id", id))
+			Expect(resource.Resource).To(HaveKey("name"))
+			Expect(resource.Resource).To(HaveKey("version"))
+			Expect(resource.Resource).ToNot(HaveKey("title"))
+			Expect(resource.Resource).ToNot(HaveKey("description"))
+			Expect(resource.Resource).ToNot(HaveKey("annotations"))
+			Expect(resource.Resource).ToNot(HaveKey("status"))
+			Expect(resource.Resource).ToNot(HaveKey("conditions"))
+			Expect(resource.Resource).ToNot(HaveKey("specDefaults"))
+			Expect(resource.Resource).ToNot(HaveKey("spec"))
+			Expect(resource.Resource).ToNot(HaveKey("fields"))
+			Expect(resource.Resource).ToNot(HaveKey("userData"))
 			return resource.Resource
 		}
 
 		catalogItem := assertDiscoverable(mcpserver.ResourceTypeComputeInstanceCatalogItem, catalogItemID)
-		Expect(catalogItem).To(HaveKeyWithValue("title", "MCP compute instance"))
-		template := assertDiscoverable(mcpserver.ResourceTypeComputeInstanceTemplate, templateID)
-		specDefaults, ok := template["specDefaults"].(map[string]any)
-		Expect(ok).To(BeTrue())
-		bootDisk, ok := specDefaults["bootDisk"].(map[string]any)
-		Expect(ok).To(BeTrue())
-		storageTier, ok := bootDisk["storageTier"].(map[string]any)
-		Expect(ok).To(BeTrue())
-		Expect(storageTier).To(HaveKeyWithValue("id", storageTierID))
+		assertDiscoverable(mcpserver.ResourceTypeComputeInstanceTemplate, templateID)
 		instanceType := assertDiscoverable(mcpserver.ResourceTypeInstanceType, instanceTypeID)
 		assertDiscoverable(mcpserver.ResourceTypeDiskImage, diskImageID)
+		projectList, err := callMCPTool[mcpserver.ListResourcesOutput](ctx, session, "list_resources", mcpserver.ListResourcesInput{
+			ResourceType: mcpserver.ResourceTypeProject,
+			Filter:       fmt.Sprintf("this.id == %q", projectID),
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(projectList.Items).To(HaveLen(1))
+		Expect(projectList.Items[0].ID).To(Equal(projectID))
 		storageTierResource := assertDiscoverable(mcpserver.ResourceTypeStorageTier, storageTierID)
 		assertDiscoverable(mcpserver.ResourceTypeVirtualNetwork, virtualNetworkID)
 		subnet := assertDiscoverable(mcpserver.ResourceTypeSubnet, subnetID)
@@ -471,6 +504,7 @@ var _ = Describe("MCP server", func() {
 		Expect(ok).To(BeTrue())
 		instanceTypeResourceID, ok := instanceType["id"].(string)
 		Expect(ok).To(BeTrue())
+		projectResourceID := projectList.Items[0].ID
 		storageTierResourceID, ok := storageTierResource["id"].(string)
 		Expect(ok).To(BeTrue())
 		subnetResourceID, ok := subnet["id"].(string)
@@ -483,6 +517,8 @@ var _ = Describe("MCP server", func() {
 			ctx, session, "create_compute_instance", mcpserver.CreateComputeInstanceInput{
 				Name:           fmt.Sprintf("mcp-compute-instance-%s", uuid.New()[24:32]),
 				CatalogItem:    catalogItemResourceID,
+				DiskImageID:    diskImageID,
+				ProjectID:      projectResourceID,
 				InstanceTypeID: instanceTypeResourceID,
 				BootDisk: &mcpserver.ComputeInstanceBootDiskInput{
 					SizeGiB:       &bootDiskSize,
@@ -503,7 +539,8 @@ var _ = Describe("MCP server", func() {
 			if computeInstanceID == "" {
 				return
 			}
-			_, err := computeInstancesClient.Delete(ctx, publicv1.ComputeInstancesDeleteRequest_builder{Id: computeInstanceID}.Build())
+			adminInstances := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
+			_, err := adminInstances.Delete(ctx, privatev1.ComputeInstancesDeleteRequest_builder{Id: computeInstanceID}.Build())
 			if status.Code(err) != codes.NotFound {
 				Expect(err).ToNot(HaveOccurred())
 			}
@@ -516,6 +553,124 @@ var _ = Describe("MCP server", func() {
 		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(createdList.Items).To(ConsistOf(HaveField("ID", computeInstanceID)))
+
+		Eventually(func(g Gomega) {
+			response, getErr := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: computeInstanceID,
+			}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			g.Expect(response.GetObject().GetStatus().GetState()).To(Equal(
+				publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+			))
+		}, time.Minute, 100*time.Millisecond).Should(Succeed())
+		currentResponse, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+			Id: computeInstanceID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		currentVersion := currentResponse.GetObject().GetMetadata().GetVersion()
+		staleVersion := currentVersion + 1
+
+		_, err = callMCPTool[mcpserver.UpdateComputeInstanceOutput](
+			ctx, session, "update_compute_instance", mcpserver.UpdateComputeInstanceInput{
+				ID: computeInstanceID, Version: staleVersion, RunStrategy: "HALTED",
+			},
+		)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`"category":"conflict"`))
+		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"Aborted"`))
+
+		var updated mcpserver.UpdateComputeInstanceOutput
+		Eventually(func(g Gomega) {
+			retryResponse, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: computeInstanceID,
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			retryVersion := retryResponse.GetObject().GetMetadata().GetVersion()
+
+			output, updateErr := callMCPTool[mcpserver.UpdateComputeInstanceOutput](
+				ctx, session, "update_compute_instance", mcpserver.UpdateComputeInstanceInput{
+					ID: computeInstanceID, Version: retryVersion, RunStrategy: "HALTED",
+				},
+			)
+			if updateErr != nil {
+				g.Expect(updateErr.Error()).To(ContainSubstring("The resource version is stale"))
+				g.Expect(updateErr).ToNot(HaveOccurred())
+				return
+			}
+			updated = output
+			g.Expect(updated.ID).To(Equal(computeInstanceID))
+			g.Expect(updated.Version).To(BeNumerically(">", retryVersion))
+		}, time.Minute, 100*time.Millisecond).Should(Succeed())
+
+		updateInstanceTypeWithRetry := func(instanceTypeID string) mcpserver.UpdateComputeInstanceOutput {
+			var output mcpserver.UpdateComputeInstanceOutput
+			Eventually(func(g Gomega) {
+				response, getErr := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+					Id: computeInstanceID,
+				}.Build())
+				g.Expect(getErr).ToNot(HaveOccurred())
+				version := response.GetObject().GetMetadata().GetVersion()
+
+				update, updateErr := callMCPTool[mcpserver.UpdateComputeInstanceOutput](
+					ctx, session, "update_compute_instance", mcpserver.UpdateComputeInstanceInput{
+						ID: computeInstanceID, Version: version, InstanceTypeID: instanceTypeID,
+					},
+				)
+				if updateErr != nil {
+					g.Expect(updateErr.Error()).To(ContainSubstring("The resource version is stale"))
+					g.Expect(updateErr).ToNot(HaveOccurred())
+					return
+				}
+				output = update
+				g.Expect(output.Version).To(BeNumerically(">", version))
+			}, time.Minute, 100*time.Millisecond).Should(Succeed())
+			return output
+		}
+
+		compatibleUpdate := updateInstanceTypeWithRetry(compatibleInstanceTypeID)
+		Expect(compatibleUpdate.ID).To(Equal(computeInstanceID))
+		Expect(compatibleUpdate.Warnings).To(BeEmpty())
+		compatibleResponse, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+			Id: computeInstanceID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(compatibleResponse.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal(compatibleInstanceTypeID))
+		Expect(compatibleResponse.GetObject().GetMetadata().GetVersion()).To(BeNumerically(">=", compatibleUpdate.Version))
+
+		deprecatedUpdate := updateInstanceTypeWithRetry(deprecatedInstanceTypeID)
+		Expect(deprecatedUpdate.Warnings).To(HaveLen(1))
+		Expect(deprecatedUpdate.Warnings[0]).To(And(
+			ContainSubstring("is deprecated"),
+			ContainSubstring("will become obsolete"),
+			ContainSubstring("Consider using"),
+		))
+		encodedWarnings, err := json.Marshal(deprecatedUpdate)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(encodedWarnings).To(ContainSubstring(`"warnings":`))
+		Expect(encodedWarnings).To(ContainSubstring("is deprecated"))
+
+		Eventually(func(g Gomega) {
+			response, getErr := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: computeInstanceID,
+			}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			version := response.GetObject().GetMetadata().GetVersion()
+
+			_, updateErr := callMCPTool[mcpserver.UpdateComputeInstanceOutput](
+				ctx, session, "update_compute_instance", mcpserver.UpdateComputeInstanceInput{
+					ID: computeInstanceID, Version: version, InstanceTypeID: obsoleteInstanceTypeID,
+				},
+			)
+			g.Expect(updateErr).To(HaveOccurred())
+			g.Expect(updateErr.Error()).To(ContainSubstring(`"category":"conflict"`))
+			g.Expect(updateErr.Error()).To(ContainSubstring(`"grpc_code":"FailedPrecondition"`))
+			g.Expect(updateErr.Error()).To(ContainSubstring("same GPU configuration"))
+		}, time.Minute, 100*time.Millisecond).Should(Succeed())
+		rejectedResponse, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+			Id: computeInstanceID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(rejectedResponse.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal(deprecatedInstanceTypeID))
 
 		otherNetwork := createCatalogItemNetworkInClassFixture(ctx, "development", "", networkClassID)
 		otherTokenSource, err := tool.makeKeycloakTokenSource(ctx, "ben", usersPassword)
@@ -548,7 +703,8 @@ var _ = Describe("MCP server", func() {
 		Expect(otherCreated.ID).ToNot(BeEmpty())
 		otherComputeInstanceID = otherCreated.ID
 		DeferCleanup(func() {
-			_, err := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn()).Delete(
+			adminInstances := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
+			_, err := adminInstances.Delete(
 				ctx, privatev1.ComputeInstancesDeleteRequest_builder{Id: otherComputeInstanceID}.Build(),
 			)
 			if status.Code(err) != codes.NotFound {
@@ -575,6 +731,16 @@ var _ = Describe("MCP server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(stillPresent.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
 
+		missingPrerequisiteName := fmt.Sprintf("mcp-missing-project-compute-%s", uuid.New()[24:32])
+		_, err = callMCPTool[mcpserver.CreateComputeInstanceOutput](
+			ctx, session, "create_compute_instance", mcpserver.CreateComputeInstanceInput{
+				Name: missingPrerequisiteName, CatalogItem: catalogItemID, ProjectID: uuid.New(),
+			},
+		)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`"category":"not_found"`))
+		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"NotFound"`))
+
 		invalidName := fmt.Sprintf("mcp-invalid-compute-%s", uuid.New()[24:32])
 		_, err = callMCPTool[mcpserver.CreateComputeInstanceOutput](
 			ctx, session, "create_compute_instance", mcpserver.CreateComputeInstanceInput{
@@ -595,14 +761,14 @@ var _ = Describe("MCP server", func() {
 			},
 		)
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring(`"category":"invalid_request"`))
-		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"InvalidArgument"`))
+		Expect(err.Error()).To(ContainSubstring(`"category":"not_found"`))
+		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"NotFound"`))
 		deniedEnvelope := regexp.MustCompile(`"category":"([^"]+)".*"grpc_code":"([^"]+)"`).FindStringSubmatch(err.Error())
 		Expect(deniedEnvelope).To(HaveLen(3))
-		Expect(deniedEnvelope[1]).To(Equal("invalid_request"))
-		Expect(deniedEnvelope[2]).To(Equal("InvalidArgument"))
+		Expect(deniedEnvelope[1]).To(Equal("not_found"))
+		Expect(deniedEnvelope[2]).To(Equal("NotFound"))
 		adminInstances := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
-		for _, name := range []string{invalidName, deniedName} {
+		for _, name := range []string{missingPrerequisiteName, invalidName, deniedName} {
 			invalidList, e := adminInstances.List(ctx, privatev1.ComputeInstancesListRequest_builder{
 				Filter: proto.String(fmt.Sprintf("this.metadata.name == %q", name)),
 			}.Build())
@@ -613,14 +779,14 @@ var _ = Describe("MCP server", func() {
 		dispatchName := fmt.Sprintf("mcp-dispatch-compute-%s", uuid.New()[24:32])
 		_, err = callMCPTool[mcpserver.CreateComputeInstanceOutput](
 			ctx, session, "create_compute_instance", map[string]any{
-				"service":      "osac.public.v1.ComputeInstances",
-				"method":       "Delete",
-				"payload":      map[string]any{"id": computeInstanceID},
-				"name":         dispatchName,
-				"catalog_item": catalogItemID,
+				"service": "osac.public.v1.ComputeInstances",
+				"method":  "Delete",
+				"payload": map[string]any{"id": computeInstanceID},
+				"name":    dispatchName,
 			},
 		)
 		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("unexpected additional properties"))
 		dispatchList, err := adminInstances.List(ctx, privatev1.ComputeInstancesListRequest_builder{
 			Filter: proto.String(fmt.Sprintf("this.metadata.name == %q", dispatchName)),
 		}.Build())
@@ -653,7 +819,12 @@ var _ = Describe("MCP server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(createdInstance.GetObject().GetMetadata().GetCreator()).To(Equal(usersResponse.GetItems()[0].GetId()))
 		Expect(createdInstance.GetObject().GetMetadata().GetTenant()).To(Equal(usersGroup))
-		Expect(createdInstance.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal(instanceTypeID))
+		Expect(createdInstance.GetObject().GetMetadata().GetProject()).To(Equal(projectName))
+		Expect(createdInstance.GetObject().GetSpec().GetDiskImage().GetId()).To(Equal(diskImageID))
+		Expect(createdInstance.GetObject().GetSpec().GetRunStrategy()).To(Equal(
+			publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED,
+		))
+		Expect(createdInstance.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal(deprecatedInstanceTypeID))
 		Expect(createdInstance.GetObject().GetSpec().GetBootDisk().GetSizeGib()).To(Equal(bootDiskSize))
 		Expect(createdInstance.GetObject().GetSpec().GetBootDisk().GetStorageTier().GetId()).To(Equal(storageTierID))
 		Expect(createdInstance.GetObject().GetSpec().GetNetworkAttachments()).To(HaveLen(1))

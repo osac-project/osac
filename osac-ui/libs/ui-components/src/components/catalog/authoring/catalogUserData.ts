@@ -9,8 +9,6 @@ export interface CatalogUserDataValue {
 
 export interface CatalogUserDataFormValues {
   userData: ProvisioningFieldValue<string>;
-  userDataSource: ProvisioningFieldValue<'inline' | 'secret'>;
-  userDataSecret: ProvisioningFieldValue<string>;
 }
 
 interface CatalogUserDataSourceInit {
@@ -69,14 +67,13 @@ export const catalogUserDataValuesFromPolicy = (
   policy: CatalogFieldPolicyLike,
 ): CatalogUserDataFormValues => {
   const field = catalogUserDataFieldFromPolicy(policy);
-  const { source, value } = field.value;
 
+  // Secret-backed policies may be created through the CLI, but the authoring wizards only support
+  // text user data. Ignore the secret when loading edit values and expose an empty text field.
   return {
-    userDataSource: provisioningFieldValue(source, field.locked),
-    userData: provisioningFieldValue(source === 'inline' ? value : '', field.locked),
-    userDataSecret: provisioningFieldValue(
-      source === 'secret' ? value : '',
-      source === 'secret' && field.locked,
+    userData: provisioningFieldValue(
+      field.value.source === 'inline' ? field.value.value : '',
+      field.locked,
     ),
   };
 };
@@ -94,13 +91,8 @@ export const catalogUserDataDisplayValue = (policy: CatalogFieldPolicyLike): str
 export const catalogUserDataPolicyFromValues = (
   values: CatalogUserDataFormValues,
 ): CatalogUserDataPolicyInit | undefined => {
-  const source = values.userDataSource.value === 'secret' ? 'secret' : 'inline';
-  const value =
-    source === 'secret' ? values.userDataSecret.value.trim() : values.userData.value.trim();
-  const userDataSource: CatalogUserDataSourceInit =
-    source === 'secret'
-      ? { source: { case: 'secret', value: { name: value } } }
-      : { source: { case: 'inline', value } };
+  const value = values.userData.value.trim();
+  const userDataSource: CatalogUserDataSourceInit = { source: { case: 'inline', value } };
 
   if (values.userData.locked) {
     return { behavior: { case: 'locked', value: userDataSource } };

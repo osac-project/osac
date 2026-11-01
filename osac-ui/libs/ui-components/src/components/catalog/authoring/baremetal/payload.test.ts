@@ -73,23 +73,6 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
     });
   });
 
-  it('serializes an editable Secret user-data source', () => {
-    const values = emptyBareMetalCatalogItemValues();
-    values.userDataSource = { value: 'secret', locked: false };
-    values.userDataSecret = { value: 'user-data-secret', locked: false };
-
-    const payload = buildBareMetalCatalogItemCreatePayload(values);
-
-    expect(payload.fields?.userDataSource).toEqual({
-      behavior: {
-        case: 'editable',
-        value: {
-          defaultValue: { source: { case: 'secret', value: { name: 'user-data-secret' } } },
-        },
-      },
-    });
-  });
-
   it('encodes global and tenant-scoped metadata consistently with the general step', () => {
     const globalValues = emptyBareMetalCatalogItemValues();
     globalValues.scope = 'global';
@@ -137,11 +120,9 @@ describe('bare metal catalog item initial values and updates', () => {
     expect(values.instanceType).toEqual({ value: 'acme-1tb', locked: true });
     expect(values.diskImage).toEqual({ value: { id: 'image-1', name: 'rhel-9' }, locked: false });
     expect(values.userData).toEqual({ value: '', locked: false });
-    expect(values.userDataSource).toEqual({ value: 'inline', locked: false });
-    expect(values.userDataSecret).toEqual({ value: '', locked: false });
   });
 
-  it('deserializes a Secret user-data source', () => {
+  it('ignores a Secret user-data source when loading edit values', () => {
     const values = getBareMetalCatalogItemInitialValues({
       fields: {
         userDataSource: {
@@ -154,8 +135,6 @@ describe('bare metal catalog item initial values and updates', () => {
     } as BareMetalInstanceCatalogItem);
 
     expect(values.userData).toEqual({ value: '', locked: false });
-    expect(values.userDataSource).toEqual({ value: 'secret', locked: false });
-    expect(values.userDataSecret).toEqual({ value: 'cloud-init', locked: false });
   });
 
   it('omits immutable general fields and the template from updates', () => {

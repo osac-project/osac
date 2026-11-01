@@ -30,18 +30,16 @@ describe('buildComputeCatalogStepSchema', () => {
     ).resolves.toBeDefined();
   });
 
-  it.each([
-    ['inline', 'userData.value'],
-    ['secret', 'userDataSecret.value'],
-  ])('requires %s user data when locked', async (source, path) => {
+  it('requires text user data when locked', async () => {
     const schema = buildComputeCatalogStepSchema('access-init', t, 'tenant-admin');
 
     await expect(
       schema?.validate({
         userData: { locked: true, value: '' },
-        userDataSource: { value: source },
-        userDataSecret: { value: '' },
       }),
-    ).rejects.toMatchObject({ path, message: 'User data is required when locked' });
+    ).rejects.toMatchObject({
+      path: 'userData.value',
+      message: 'User data is required when locked',
+    });
   });
 });

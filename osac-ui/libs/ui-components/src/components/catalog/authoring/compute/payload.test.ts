@@ -104,24 +104,7 @@ describe('buildComputeCatalogItemCreatePayload', () => {
     });
   });
 
-  it('serializes an editable Secret user-data source', () => {
-    const values = emptyComputeCatalogItemValues();
-    values.userDataSource = { value: 'secret', locked: false };
-    values.userDataSecret = { value: 'user-data-secret', locked: false };
-
-    const payload = buildComputeCatalogItemCreatePayload(values);
-
-    expect(payload.fields?.userDataSource).toEqual({
-      behavior: {
-        case: 'editable',
-        value: {
-          defaultValue: { source: { case: 'secret', value: { name: 'user-data-secret' } } },
-        },
-      },
-    });
-  });
-
-  it('deserializes inline and Secret user-data sources', () => {
+  it('deserializes inline user data and ignores Secret user-data sources', () => {
     const values = getComputeCatalogItemInitialValues({
       fields: {
         userDataSource: {
@@ -134,8 +117,6 @@ describe('buildComputeCatalogItemCreatePayload', () => {
     } as ComputeInstanceCatalogItem);
 
     expect(values.userData).toEqual({ value: 'cloud-init', locked: true });
-    expect(values.userDataSource).toEqual({ value: 'inline', locked: true });
-    expect(values.userDataSecret).toEqual({ value: '', locked: false });
 
     const secretValues = getComputeCatalogItemInitialValues({
       fields: {
@@ -149,8 +130,6 @@ describe('buildComputeCatalogItemCreatePayload', () => {
     } as ComputeInstanceCatalogItem);
 
     expect(secretValues.userData).toEqual({ value: '', locked: false });
-    expect(secretValues.userDataSource).toEqual({ value: 'secret', locked: false });
-    expect(secretValues.userDataSecret).toEqual({ value: 'cloud-init', locked: false });
 
     const lockedSecretValues = getComputeCatalogItemInitialValues({
       fields: {
@@ -164,7 +143,6 @@ describe('buildComputeCatalogItemCreatePayload', () => {
     } as ComputeInstanceCatalogItem);
 
     expect(lockedSecretValues.userData).toEqual({ value: '', locked: true });
-    expect(lockedSecretValues.userDataSecret).toEqual({ value: 'cloud-init', locked: true });
   });
 
   it('writes a locked additional-disks list and omits an empty editable one', () => {

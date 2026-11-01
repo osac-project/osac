@@ -133,15 +133,10 @@ const additionalDisksLabel = (
 const userDataKey = (values: ComputeCatalogItemValues) =>
   JSON.stringify({
     locked: values.userData.locked,
-    source: values.userDataSource.value,
-    inline: values.userData.value,
-    secret: values.userDataSecret.value,
+    value: values.userData.value,
   });
 
 const userDataLabel = (t: TFunction, values: ComputeCatalogItemValues): string => {
-  if (values.userDataSource.value === 'secret') {
-    return values.userDataSecret.value.trim() ? values.userDataSecret.value : t('Not set');
-  }
   return values.userData.value.trim() ? t('Configured') : t('Not set');
 };
 

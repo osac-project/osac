@@ -1,0 +1,93 @@
+version: 1
+# Crystal's OSAC Core Quality Plan capability areas. Each area spans several
+# Go packages; test plans are added separately as they are reviewed.
+# Area membership drafted from the OSAC Core Quality Plan; pending confirmation by the Core team.
+group: core
+features:
+  - key: iam
+    name: Identity & Access Management
+    testplans:
+      - enhancement-proposals/enhancements/OSAC-2476-self-subject-access-review/testplan.md
+    unit_packages:
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/apiclient, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/auth, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/auth/jwe, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/logout, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/whoami, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/controllers/identityprovider, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/controllers/rolebinding, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/controllers/user, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/oauth, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/password, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/login, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/idp, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/controllers/role, rationale: from OSAC Core Quality Plan}
+    behaviors:
+      - {id: flow-cloud-provider-admin-authorization, title: "Cloud Provider Admin Authorization", tier: e2e}
+      - {id: flow-identity-provider-setup, title: "Identity Provider Setup", tier: e2e}
+      - {id: flow-tenant-user-registration, title: "Tenant User Registration", tier: e2e}
+      - {id: flow-role-assignment, title: "Role Assignment", tier: e2e}
+      - {id: flow-access-restriction-through-projects, title: "Access restriction through Projects", tier: e2e}
+      - {id: flow-project-membership-grants-access, title: "Project Membership Grants Access", tier: e2e}
+      - {id: flow-self-subject-access-review-approval, title: "Self-Subject Access Review Approval", tier: e2e}
+      - {id: flow-self-subject-access-review-denial, title: "Self-Subject Access Review Denial", tier: e2e}
+    mappings:
+      - {behavior: flow-self-subject-access-review-approval, test: tests/e2e/vmaas/test_self_subject_access_review.py, tier: e2e}
+      - {behavior: flow-self-subject-access-review-denial, test: tests/e2e/vmaas/test_self_subject_access_review.py, tier: e2e}
+  - key: tenancy
+    name: Tenancy
+    testplans: []
+    unit_packages:
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/project, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/controllers/onboarding, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/controllers/project, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/controllers/projectmembership, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/controllers/tenant, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/tenant, rationale: from OSAC Core Quality Plan}
+    behaviors:
+      - {id: flow-tenant-creation, title: "Tenant Creation", tier: e2e}
+      - {id: flow-tenant-update, title: "Tenant Update", tier: e2e}
+      - {id: flow-tenant-deletion, title: "Tenant Deletion", tier: e2e}
+      - {id: flow-tenant-adoption, title: "Tenant Adoption", tier: e2e}
+      - {id: flow-unmanaged-tenants-remain-unmanaged, title: "Unmanaged Tenants Remain Unmanaged", tier: e2e}
+      - {id: flow-project-creation, title: "Project Creation", tier: e2e}
+      - {id: flow-nested-project-creation, title: "Nested Project Creation", tier: e2e}
+      - {id: flow-project-deletion, title: "Project Deletion", tier: e2e}
+    mappings:
+      - {behavior: flow-tenant-creation, test: tests/e2e/regression/test_tenant_onboarding.py, tier: e2e}
+  - key: secrets
+    name: Secrets & Encryption
+    testplans:
+      - enhancement-proposals/enhancements/OSAC-5343-cross-cluster-authentication-and-tls-trust-for-tenant-cluster-workloads/testplan.md
+    unit_packages:
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/trust, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/vault, rationale: from OSAC Core Quality Plan}
+    behaviors:
+      - {id: flow-secret-creation, title: "Secret Creation", tier: e2e}
+      - {id: flow-secret-referenced, title: "Secret Referenced", tier: e2e}
+      - {id: flow-secret-deleted, title: "Secret Deleted", tier: e2e}
+  - key: api-quality
+    name: API Quality & Standards
+    testplans: []
+    unit_packages:
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/database/dao, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/references, rationale: from OSAC Core Quality Plan}
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/reflection, rationale: from OSAC Core Quality Plan}
+    behaviors:
+      - {id: flow-reference-resolution-global, title: "Reference Resolution (Global)", tier: e2e}
+      - {id: flow-negative-reference-resolution-global, title: "Negative Reference Resolution (Global)", tier: e2e}
+      - {id: flow-reference-resolution-local, title: "Reference Resolution (Local)", tier: e2e}
+      - {id: flow-name-uniqueness-in-tenant-project, title: "Name Uniqueness (in Tenant & Project)", tier: e2e}
+      - {id: flow-name-uniqueness-only-applies-to-same-tenant, title: "Name Uniqueness Only Applies to Same Tenant", tier: e2e}
+      - {id: flow-name-immutability, title: "Name Immutability", tier: e2e}
+    mappings:
+      - {behavior: flow-name-uniqueness-in-tenant-project, test: tests/e2e/vmaas/regression/test_name_uniqueness.py, tier: e2e}
+      - {behavior: flow-name-uniqueness-only-applies-to-same-tenant, test: tests/e2e/vmaas/regression/test_name_uniqueness.py, tier: e2e}
+      - {behavior: flow-name-immutability, test: tests/e2e/vmaas/regression/test_name_immutability.py, tier: e2e}
+  - key: events
+    name: Events
+    testplans: []
+    unit_packages:
+      - {package: github.com/osac-project/osac/fulfillment-service/internal/kafka, rationale: from OSAC Core Quality Plan}
+    behaviors:
+      - {id: flow-controller-restart-event-continuation, title: "Controller Restart Event Continuation", tier: e2e}

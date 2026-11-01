@@ -1,4 +1,10 @@
 {{- if .Values.evpn.enabled }}
+{{- $cidrParts := splitList "/" .Values.evpn.vtepCIDR }}
+{{- $blockSize := int64 1 }}
+{{- range until (int (sub 32 (atoi (index $cidrParts 1)))) }}
+  {{- $blockSize = mul $blockSize 2 }}
+{{- end }}
+{{- $vtepNetwork := div (include "osac-infra.ipv4Number" (index $cidrParts 0) | int64) $blockSize }}
 {{- $seenNames := dict }}
 {{- $seenVTEPs := dict }}
 {{- range $node := .Values.evpn.nodes }}
@@ -10,6 +16,9 @@
     {{- fail (printf "evpn.nodes: duplicate vtepIP %s" $node.vtepIP) }}
   {{- end }}
   {{- $_ := set $seenVTEPs $node.vtepIP true }}
+  {{- if ne (div (include "osac-infra.ipv4Number" $node.vtepIP | int64) $blockSize) $vtepNetwork }}
+    {{- fail (printf "evpn.nodes: node %s vtepIP %s must be inside evpn.vtepCIDR %s" $node.name $node.vtepIP $.Values.evpn.vtepCIDR) }}
+  {{- end }}
   {{- $seenPeers := dict }}
   {{- range $uplink := $node.uplinks }}
     {{- if hasKey $seenPeers $uplink.peerAddress }}
@@ -135,7 +144,7 @@ data:
                   allowed:
                     mode: filtered
                     prefixes:
-    {{- range $prefix := $.Values.evpn.bgp.acceptPrefixes }}
+    {{- range $prefix := $.Values.evpn.bgp.accectVtepPrefixes }}
                       - prefix: {{ $prefix | quote }}
                         ge: 32
                         le: 32

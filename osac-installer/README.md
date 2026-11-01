@@ -396,7 +396,7 @@ evpn:
   vtepCIDR: 10.200.255.0/24
   bgp:
     asn: 4209999999
-    acceptPrefixes:
+    accectVtepPrefixes:
       - 10.200.0.0/16
     waitForEstablished: true
     timeoutSeconds: 900
@@ -409,6 +409,13 @@ evpn:
           peerAddress: 169.254.133.3
           peerASN: 4200300002
 ```
+
+Every node's `vtepIP` must be inside `evpn.vtepCIDR`; Helm rejects a mismatch
+before applying resources and reports the node, address, and CIDR. For example,
+`10.200.255.1` belongs to `10.200.255.0/24`. The node's dummy interface still
+uses a `/32` address. Remote fabric VTEP ranges use
+`evpn.bgp.accectVtepPrefixes` (renamed from `acceptPrefixes`); update existing
+values files to use the new key.
 
 The Netris fabric side stays external: the fabric admin configures the links,
 VTEP range, and switch-side node ASN. VMs use the cluster DNS that

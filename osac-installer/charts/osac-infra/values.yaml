@@ -123,13 +123,14 @@ evpn:
   # host, global IP forwarding). This restarts OVN-Kubernetes once.
   configureClusterNetwork: true
   # [REQUIRED when enabled] Range holding every node's VTEP IP.
+  # Helm rejects any node whose vtepIP is outside this CIDR.
   vtepCIDR: ""
   bgp:
     # [REQUIRED when enabled] Node ASN; a node can override it.
     asn: 0
     # [REQUIRED when enabled] Fabric loopback ranges (remote VTEPs). Only /32
     # routes inside these ranges are accepted from the fabric.
-    acceptPrefixes: []
+    accectVtepPrefixes: []
     # Fail the install when sessions are not Established within the timeout.
     waitForEstablished: true
     timeoutSeconds: 900

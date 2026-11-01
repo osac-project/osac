@@ -42,7 +42,9 @@ def render(release: str, chart: pathlib.Path, *args: str) -> list[dict[str, Any]
     ]
 
 
-def expect_render_failure(chart: pathlib.Path, values_file: pathlib.Path) -> None:
+def expect_render_failure(
+    chart: pathlib.Path, values_file: pathlib.Path, expected_error: str | None = None
+) -> None:
     result = subprocess.run(
         [
             os.environ.get("HELM_BIN", "helm"),
@@ -59,6 +61,8 @@ def expect_render_failure(chart: pathlib.Path, values_file: pathlib.Path) -> Non
         check=False,
     )
     assert result.returncode != 0, "invalid EVPN values unexpectedly rendered"
+    if expected_error is not None:
+        assert expected_error in result.stderr, result.stderr
 
 
 def named(
@@ -143,7 +147,7 @@ def base_values(nodes: list[dict[str, Any]]) -> dict[str, Any]:
             "vtepCIDR": "10.200.255.0/24",
             "bgp": {
                 "asn": 4209999999,
-                "acceptPrefixes": ["10.200.0.0/16"],
+                "accectVtepPrefixes": ["10.200.0.0/16"],
                 "waitForEstablished": True,
                 "timeoutSeconds": 900,
             },
@@ -437,6 +441,75 @@ def test_nmstate_install_disabled() -> None:
     named(infra, "Job", "osac-infra-configure-evpn")
 
 
+def test_vtep_cidr_membership() -> None:
+    cases = [
+        ("10.200.255.0/24", "10.200.255.1", True),
+        ("10.200.255.0/24", "10.200.254.1", False),
+        ("10.200.240.0/20", "10.200.255.254", True),
+        ("10.200.240.0/20", "10.200.239.255", False),
+        ("0.0.0.0/0", "255.255.255.255", True),
+        ("128.0.0.0/1", "255.255.255.255", True),
+        ("128.0.0.0/1", "127.255.255.255", False),
+        ("10.200.255.0/31", "10.200.255.1", True),
+        ("10.200.255.0/31", "10.200.255.2", False),
+        ("10.200.255.1/32", "10.200.255.1", True),
+        ("10.200.255.1/32", "10.200.255.2", False),
+        ("255.255.255.255/32", "255.255.255.255", True),
+        ("255.255.255.255/32", "255.255.255.254", False),
+    ]
+    with tempfile.TemporaryDirectory(prefix="evpn-cidr-") as temp:
+        directory = pathlib.Path(temp)
+        for index, (cidr, ip, valid) in enumerate(cases):
+            values = base_values([node("worker-0", ip, [uplink("ens6", "169.254.133.1")])])
+            values["evpn"]["vtepCIDR"] = cidr
+            values_file = write_values(directory, f"cidr-{index}.yaml", values)
+            if valid:
+                data = config_data(render("osac-infra", INFRA_CHART, "--values", str(values_file)))
+                assert parse_documents(data["vtep.yaml"])[0]["spec"]["cidrs"] == [cidr]
+            else:
+                expect_render_failure(
+                    INFRA_CHART,
+                    values_file,
+                    f"node worker-0 vtepIP {ip} must be inside evpn.vtepCIDR {cidr}",
+                )
+
+        values = base_values([
+            node("worker-0", "10.200.255.1", [uplink("ens6", "169.254.133.1")]),
+            node("worker-1", "10.200.254.2", [uplink("ens7", "169.254.134.1")]),
+        ])
+        values_file = write_values(directory, "second-node.yaml", values)
+        expect_render_failure(
+            INFRA_CHART,
+            values_file,
+            "node worker-1 vtepIP 10.200.254.2 must be inside evpn.vtepCIDR 10.200.255.0/24",
+        )
+        values["evpn"]["enabled"] = False
+        disabled_file = write_values(directory, "disabled.yaml", values)
+        absent(
+            render("osac-infra", INFRA_CHART, "--values", str(disabled_file)),
+            "ConfigMap",
+            "osac-infra-evpn-config",
+        )
+
+
+def test_renamed_vtep_prefix_key() -> None:
+    values = base_values([node("worker-0", "10.200.255.1", [uplink("ens6", "169.254.133.1")])])
+    values["evpn"]["bgp"]["accectVtepPrefixes"] = ["10.201.0.0/16", "10.202.0.0/16"]
+    with tempfile.TemporaryDirectory(prefix="evpn-prefixes-") as temp:
+        directory = pathlib.Path(temp)
+        values_file = write_values(directory, "prefixes.yaml", values)
+        data = config_data(render("osac-infra", INFRA_CHART, "--values", str(values_file)))
+        frr = named(parse_documents(data["frr.yaml"]), "FRRConfiguration", "osac-evpn-worker-0")
+        prefixes = frr["spec"]["bgp"]["routers"][0]["neighbors"][0]["toReceive"]["allowed"]["prefixes"]
+        assert prefixes == [
+            {"prefix": "10.201.0.0/16", "ge": 32, "le": 32},
+            {"prefix": "10.202.0.0/16", "ge": 32, "le": 32},
+        ]
+        values["evpn"]["bgp"]["acceptPrefixes"] = values["evpn"]["bgp"].pop("accectVtepPrefixes")
+        old_file = write_values(directory, "old-key.yaml", values)
+        expect_render_failure(INFRA_CHART, old_file, "acceptPrefixes")
+
+
 def test_invalid_values() -> None:
     valid_node = node("worker-0", "10.200.255.1", [uplink("ens6", "169.254.133.1")])
     invalid: list[dict[str, Any]] = []
@@ -502,6 +575,8 @@ def main() -> None:
     test_uplink_without_address()
     test_nmstate_install_disabled()
     test_invalid_values()
+    test_vtep_cidr_membership()
+    test_renamed_vtep_prefix_key()
     print("EVPN host networking Helm render contract passed.")
 
 

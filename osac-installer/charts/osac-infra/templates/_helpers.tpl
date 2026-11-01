@@ -48,3 +48,12 @@ fsGroup: {{ . }}
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{/* Convert a schema-validated IPv4 address to an integer for CIDR comparisons. */}}
+{{- define "osac-infra.ipv4Number" -}}
+{{- $number := int64 0 -}}
+{{- range $octet := splitList "." . -}}
+  {{- $number = add (mul $number 256) (atoi $octet) -}}
+{{- end -}}
+{{- $number -}}
+{{- end -}}

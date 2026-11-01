@@ -45,12 +45,20 @@ export const OSACWizardFooter = ({
   const { setShowErrors } = useFieldValidation();
   const [validationAlert, setValidationAlert] = useState(false);
   const actionInFlight = useRef(false);
+  const actionGeneration = useRef(0);
   const [isActionPending, setIsActionPending] = useState(false);
   const isBusy = isSubmitting || isActionPending;
 
   const stepIndex = activeStep?.index ?? 1;
   const isFirst = stepIndex <= 1;
   const isLast = stepIndex >= steps.length;
+
+  useEffect(
+    () => () => {
+      actionGeneration.current += 1;
+    },
+    [activeStep.id],
+  );
 
   useEffect(() => {
     setValidationAlert(false);
@@ -70,9 +78,13 @@ export const OSACWizardFooter = ({
       return;
     }
     actionInFlight.current = true;
+    const generation = actionGeneration.current;
     setIsActionPending(true);
     try {
       const errors = await validateForm();
+      if (generation !== actionGeneration.current) {
+        return;
+      }
       if (isLast ? Object.keys(errors).length > 0 : stepHasErrors(String(activeStep.id), errors)) {
         setValidationAlert(true);
         setShowErrors(true);

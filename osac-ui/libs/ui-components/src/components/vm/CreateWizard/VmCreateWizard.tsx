@@ -35,6 +35,7 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   const provision = useProvisionComputeInstance();
   const formRef = useRef<FormikProps<ComputeInstanceWizardValues>>(null);
   const submissionInFlight = useRef(false);
+  const navigationGeneration = useRef(0);
   const validateVmSubnet = useVmSubnetValidator();
   const validateNetwork = useCallback(
     async (
@@ -109,9 +110,10 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
         return;
       }
       submissionInFlight.current = true;
+      const generation = navigationGeneration.current;
       try {
         const networkErrors = await validateNetwork(values);
-        if (formRef.current?.values !== values) {
+        if (formRef.current?.values !== values || generation !== navigationGeneration.current) {
           return;
         }
         if (Object.keys(networkErrors).length > 0) {
@@ -163,6 +165,7 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
           <Wizard
             isVisitRequired
             onStepChange={(_, step) => {
+              navigationGeneration.current += 1;
               setActiveStep(String(step.id) as VmWizardStepId);
               setValidationAlert(false);
             }}

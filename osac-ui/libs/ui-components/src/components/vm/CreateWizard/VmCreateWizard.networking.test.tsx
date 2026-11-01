@@ -508,6 +508,110 @@ describe('VmCreateWizard', () => {
     },
   );
 
+  it.each([false, true].flatMap((locked) => [1, 3].map((boundary) => ({ locked, boundary }))))(
+    'abandons Create after header navigation at Get $boundary, locked=$locked',
+    async ({ locked, boundary }) => {
+      const view = renderNetworkWizard(locked, true);
+      await view.openNetworking();
+      await view.user.click(screen.getByRole('button', { name: 'Next' }));
+      await view.user.click(screen.getByRole('button', { name: 'Next' }));
+      let finish: () => void = () => undefined;
+      const pending = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      let submitGets = 0;
+      let reachedBoundary = false;
+      view.deferGet(async () => {
+        submitGets += 1;
+        if (submitGets === boundary) {
+          reachedBoundary = true;
+          await pending;
+        }
+      });
+      try {
+        await view.user.click(await screen.findByRole('button', { name: 'Create' }));
+        await waitFor(() => expect(reachedBoundary).toBe(true));
+        expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+        await view.user.click(screen.getByRole('button', { name: 'Networking' }));
+        await screen.findByLabelText('Subnet');
+        expect(view.onCreate).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => {
+          finish();
+          await pending;
+        });
+      }
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+      expect(view.onCreate).not.toHaveBeenCalled();
+      expect(mockNavigate).not.toHaveBeenCalled();
+      await view.user.click(screen.getByRole('button', { name: 'Next' }));
+      await view.user.click(screen.getByRole('button', { name: 'Next' }));
+      await view.user.click(await screen.findByRole('button', { name: 'Create' }));
+      await waitFor(() => expect(view.onCreate).toHaveBeenCalledTimes(1));
+    },
+  );
+
+  it.each([1, 3])('abandons Create on unmount at Get %s', async (boundary) => {
+    const view = renderNetworkWizard(false, true);
+    await view.openNetworking();
+    await view.user.click(screen.getByRole('button', { name: 'Next' }));
+    await view.user.click(screen.getByRole('button', { name: 'Next' }));
+    let finish: () => void = () => undefined;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let submitGets = 0;
+    let reachedBoundary = false;
+    view.deferGet(async () => {
+      submitGets += 1;
+      if (submitGets === boundary) {
+        reachedBoundary = true;
+        await pending;
+      }
+    });
+    try {
+      await view.user.click(await screen.findByRole('button', { name: 'Create' }));
+      await waitFor(() => expect(reachedBoundary).toBe(true));
+      view.unmount();
+    } finally {
+      await act(async () => {
+        finish();
+        await pending;
+      });
+    }
+    expect(view.onCreate).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('abandons pending Next when the visited header changes the active step', async () => {
+    const view = renderNetworkWizard(false, true);
+    await view.openNetworking();
+    let finish: () => void = () => undefined;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const previous = view.getCalls();
+    view.deferGet(() => pending);
+    try {
+      await view.user.click(screen.getByRole('button', { name: 'Next' }));
+      await waitFor(() => expect(view.getCalls()).toBeGreaterThan(previous));
+      await view.user.click(screen.getByRole('button', { name: 'Storage' }));
+      expect(screen.getByRole('button', { name: 'Storage' })).toHaveAttribute(
+        'aria-current',
+        'step',
+      );
+    } finally {
+      await act(async () => {
+        finish();
+        await pending;
+      });
+    }
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: 'Storage' })).toHaveAttribute('aria-current', 'step');
+    expect(view.onCreate).not.toHaveBeenCalled();
+  });
+
   it('releases both guards after Create failure and retries exactly once', async () => {
     const view = renderNetworkWizard(false, true);
     await view.openNetworking();

@@ -17,7 +17,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: ["{{ include "osac-aap.instanceName" . }}-admin-password"]
+    resourceNames: ["{{ include "osac-aap.adminPasswordSecretName" . }}"]
     verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -88,11 +88,17 @@ spec:
         - secretRef:
             name: {{ .Values.configAsCode.secret }}
         env:
+        {{- if not .Values.aap.instance.enabled }}
+        # Points config-as-code (Ansible's aap_hostname) at the external AAP;
+        # the controller collection appends /api/controller/v2 itself.
+        - name: AAP_HOSTNAME
+          value: {{ include "osac-aap.controllerUrl" . | quote }}
+        {{- end }}
         - name: AAP_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: {{ include "osac-aap.instanceName" . }}-admin-password
-              key: password
+              name: {{ include "osac-aap.adminPasswordSecretName" . }}
+              key: {{ include "osac-aap.adminPasswordSecretKey" . }}
         - name: NAMESPACE
           valueFrom:
             fieldRef:

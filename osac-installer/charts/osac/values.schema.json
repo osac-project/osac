@@ -1195,6 +1195,23 @@
               "default": 3,
               "minimum": 1
             },
+            "adminPasswordSecret": {
+              "type": "object",
+              "description": "Admin credentials of an external AAP (aap.aap.instance.enabled=false)",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Secret holding the external AAP admin password",
+                  "minLength": 1
+                },
+                "key": {
+                  "type": "string",
+                  "description": "Key of the admin password in that Secret",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            },
             "gateway": {
               "type": "object",
               "properties": {

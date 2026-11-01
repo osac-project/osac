@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from tests.e2e.core import runner
-from tests.e2e.core.runner import _is_transient_grpc_error, run
+from tests.e2e.core.runner import CommandFailed, CommandTimedOut, _is_transient_grpc_error, run
 
 # ---------------------------------------------------------------------------
 # _is_transient_grpc_error classification
@@ -156,3 +156,51 @@ class TestRunTransientRetry:
 
         assert "secret-token" not in caplog.text
         assert "Transient gRPC" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Conflict-sensitive: run() must preserve upstream exception wrapping
+# ---------------------------------------------------------------------------
+
+
+class TestRunExceptionWrapping:
+    """Verify that run() wraps errors as CommandFailed/CommandTimedOut.
+
+    These tests guard the rebase integration between the transient-retry
+    loop and the upstream exception-sanitisation layer.
+    """
+
+    def test_permanent_error_raises_command_failed(self) -> None:
+        """Non-transient CalledProcessError becomes CommandFailed."""
+        with patch("subprocess.run", side_effect=_subprocess_permanent()), pytest.raises(CommandFailed) as exc_info:
+            run("grpcurl", "test")
+        assert exc_info.value.returncode == 1
+        # stderr is preserved for diagnostics
+        assert "NotFound" in (exc_info.value.stderr or "")
+
+    def test_exhausted_transient_raises_command_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Transient error after all retries still becomes CommandFailed."""
+        monkeypatch.setattr(runner, "_TRANSIENT_GRPC_RETRY_DELAY_S", 0.0)
+        with patch("subprocess.run", side_effect=_subprocess_transient()), pytest.raises(CommandFailed) as exc_info:
+            run("grpcurl", "test")
+        assert "Unavailable" in (exc_info.value.stderr or "")
+
+    def test_command_failed_sanitizes_command(self) -> None:
+        """CommandFailed.cmd must not contain raw secret arguments."""
+        with patch("subprocess.run", side_effect=_subprocess_permanent()), pytest.raises(CommandFailed) as exc_info:
+            run("grpcurl", "-H", "Authorization: Bearer secret-token", "addr")
+        assert "secret-token" not in str(exc_info.value)
+        assert "secret-token" not in " ".join(map(str, exc_info.value.cmd))
+
+    def test_timeout_raises_command_timed_out(self) -> None:
+        """TimeoutExpired becomes CommandTimedOut, never retried."""
+        call_count = 0
+
+        def mock_run(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            nonlocal call_count
+            call_count += 1
+            raise subprocess.TimeoutExpired("grpcurl", 300)
+
+        with patch("subprocess.run", side_effect=mock_run), pytest.raises(CommandTimedOut):
+            run("grpcurl", "test")
+        assert call_count == 1  # not retried

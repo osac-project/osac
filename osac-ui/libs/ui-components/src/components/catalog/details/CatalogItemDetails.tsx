@@ -13,6 +13,7 @@ import {
 } from '@patternfly/react-core';
 
 import { CatalogItemDetailContent } from './CatalogItemDetailContent';
+import VMCatalogItemDetailContent from './VMCatalogItemDetailContent';
 import { useSession } from '../../../hooks/use-session';
 import { useTranslation } from '../../../hooks/useTranslation';
 import DeleteResourceButton from '../../Resource/DeleteResourceButton';
@@ -28,7 +29,6 @@ import {
 
 interface CatalogItemDetailsProps {
   item: CatalogItem;
-  children?: ReactNode;
   showStatus?: boolean;
   titleAddon?: ReactNode;
   titlePrefix?: ReactNode;
@@ -36,7 +36,6 @@ interface CatalogItemDetailsProps {
 
 const CatalogItemDetails = ({
   item,
-  children,
   showStatus = true,
   titleAddon,
   titlePrefix,
@@ -45,6 +44,7 @@ const CatalogItemDetails = ({
   const navigate = useNavigate();
   const { role, tenantId } = useSession();
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const isVm = item.$typeName === 'osac.public.v1.ComputeInstanceCatalogItem';
   const { isPending, setPublished } = useSetCatalogItemPublished(item);
   const canManage = canManageCatalogItem(role, tenantId, item);
   const canLaunch = (role === 'tenant-admin' || role === 'tenant-user') && item.published;
@@ -138,7 +138,11 @@ const CatalogItemDetails = ({
         </Stack>
       </PageSection>
       <PageSection hasBodyWrapper={false}>
-        {children ?? <CatalogItemDetailContent item={item} />}
+        {isVm ? (
+          <VMCatalogItemDetailContent item={item} />
+        ) : (
+          <CatalogItemDetailContent item={item} />
+        )}
       </PageSection>
     </>
   );

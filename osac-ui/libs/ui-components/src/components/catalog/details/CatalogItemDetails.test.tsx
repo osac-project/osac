@@ -11,7 +11,6 @@ import {
 } from '@osac/types';
 
 import CatalogItemDetails from './CatalogItemDetails';
-import VMCatalogItemDetailContent from './VMCatalogItemDetailContent';
 import { useGetResource } from '../../../api/use-resource';
 import { CatalogItemIcon } from '../../../icons';
 import type { UserRole } from '../../../shellTypes';
@@ -56,9 +55,7 @@ const renderDetails = (
             item={item}
             showStatus={false}
             titlePrefix={<CatalogItemIcon kind="vm" isActive />}
-          >
-            <VMCatalogItemDetailContent item={item} />
-          </CatalogItemDetails>
+          />
         }
       />
       <Route path="/catalog/vm/catalog-vm/edit" element={<div>Edit catalog item page</div>} />
@@ -71,11 +68,7 @@ const QueriedCatalogItemDetails = () => {
   const { data: response } = useGetResource(ComputeInstanceCatalogItems, { id: 'catalog-vm' });
   const item = response?.object;
 
-  return item ? (
-    <CatalogItemDetails item={item}>
-      <div>{item.published ? 'Live' : 'Unpublished'}</div>
-    </CatalogItemDetails>
-  ) : null;
+  return item ? <CatalogItemDetails item={item} /> : null;
 };
 
 describe('CatalogItemDetails', () => {
@@ -88,6 +81,7 @@ describe('CatalogItemDetails', () => {
     renderDetails(makeItem(false));
 
     expect(screen.getAllByText('Unpublished').length).toBeGreaterThan(0);
+    expect(screen.getByRole('heading', { name: 'Storage' })).toBeInTheDocument();
     expect(screen.getByText('Created')).toBeInTheDocument();
     expect(screen.getByText('Visibility')).toBeInTheDocument();
     expect(screen.getByText('tenant-1')).toBeInTheDocument();

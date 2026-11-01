@@ -62,6 +62,7 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
     "helm.sh/hook-output-log-policy": hook-failed
 spec:
+  activeDeadlineSeconds: 300
   template:
     metadata:
       labels:

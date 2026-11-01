@@ -152,8 +152,9 @@ AgentlessNet CaaS steps.
 ### Netris CA ConfigMap lifecycle
 
 `NETRIS_CA_CONFIGMAP` names a ConfigMap that the platform administrator creates
-and owns. The installer never creates, rotates, or deletes it, and never
-receives the PEM contents:
+and owns. The installer never creates, rotates, or deletes it. The Helm client
+and the chart values never carry the PEM contents; the validation hooks read
+the ConfigMap in-cluster:
 
 ```yaml
 apiVersion: v1
@@ -233,8 +234,12 @@ still exist and remain immutable.
 
 Deleting an old version is safe only after a new job has succeeded against the
 replacement and rollback is no longer required. Delete it as a platform
-administrator. Until then, keep it in place: the admission policy blocks the
-delete for every identity outside `adminGroups`.
+administrator. The admission policy protects only the active ConfigMap name, so
+once the Helm switch points at a new name the previous copy has no admission
+protection: any identity with ConfigMap delete permission, including `osac-sa`
+through its `cluster-admin` binding, can remove it. Keep the rollback copy in
+place until the rollback window closes; otherwise a rollback needs the
+administrator to recreate the ConfigMap from the PEM.
 
 ## Checks during a rollout
 

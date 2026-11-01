@@ -130,6 +130,13 @@ class RenderContractTests(unittest.TestCase):
         self.assertEqual(env_of(identity)["CHECK_IDENTITY"], "true")
 
         for job in (pre_install, identity):
+            self.assertEqual(
+                job["metadata"]["annotations"]["helm.sh/hook-output-log-policy"],
+                "hook-failed",
+            )
+            self.assertEqual(job["spec"]["activeDeadlineSeconds"], 300)
+
+        for job in (pre_install, identity):
             pod_spec = job["spec"]["template"]["spec"]
             pod_security = pod_spec["securityContext"]
             container = pod_spec["containers"][0]

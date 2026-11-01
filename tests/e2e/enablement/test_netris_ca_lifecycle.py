@@ -37,7 +37,7 @@ from tests.e2e.core.runner import env, poll_until, run, run_unchecked
 pytestmark = [
     pytest.mark.regression,
     pytest.mark.skipif(
-        not os.environ.get("OSAC_NETRIS_CA_E2E"),
+        os.environ.get("OSAC_NETRIS_CA_E2E") != "true",
         reason="Enable the deployed Netris CA lifecycle test with OSAC_NETRIS_CA_E2E=true",
     ),
 ]
@@ -246,6 +246,33 @@ def _wait_for_bundle_in_job_pod(k8s: K8sClient, pod_name: str, expected_bundle: 
     assert actual_hash == expected_hash, f"{pod_name} mounted the wrong Netris CA bundle"
 
 
+def _virtual_network_id_by_name(grpc: GRPCClient, name: str) -> str:
+    """Find the probe VirtualNetwork by its unique name after a failed create.
+
+    A create call can time out after the server persisted the object and still
+    return no ID; the name is the only handle left for cleanup.
+    """
+    for vnet_id in grpc.list_virtual_network_ids():
+        try:
+            vnet = grpc.get_virtual_network(vn_id=vnet_id)
+        except subprocess.CalledProcessError:
+            continue
+        if vnet.get("object", {}).get("metadata", {}).get("name") == name:
+            return vnet_id
+    return ""
+
+
+def _cleanup_virtual_network(grpc: GRPCClient, k8s: K8sClient, name: str, vnet_id: str) -> None:
+    if not vnet_id:
+        vnet_id = _virtual_network_id_by_name(grpc, name)
+    if not vnet_id:
+        return
+    cr_name = k8s.get_virtual_network_name(uuid=vnet_id, checked=False)
+    grpc.delete_virtual_network(vn_id=vnet_id)
+    if cr_name:
+        wait_for_virtual_network_deletion(k8s=k8s, name=cr_name)
+
+
 def _exercise_netris(
     grpc: GRPCClient,
     k8s: K8sClient,
@@ -255,9 +282,9 @@ def _exercise_netris(
 ) -> None:
     name = unique_name("netris-ca-probe")
     cidr = f"10.{random.randint(100, 250)}.{random.randint(0, 255)}.0/24"
-    vnet_id = grpc.create_virtual_network(name=name, ipv4_cidr=cidr)
-    cr_name = name
+    vnet_id = ""
     try:
+        vnet_id = grpc.create_virtual_network(name=name, ipv4_cidr=cidr)
         cr_name = wait_for_virtual_network_cr(k8s=k8s, uuid=vnet_id)
         job_id = _wait_for_virtual_network_job_id(k8s, cr_name)
         pod = _wait_for_job_pod(k8s, configmap, job_id)
@@ -265,8 +292,7 @@ def _exercise_netris(
         _wait_for_bundle_in_job_pod(k8s, pod["metadata"]["name"], expected_bundle)
         wait_for_virtual_network_ready(k8s=k8s, name=cr_name)
     finally:
-        grpc.delete_virtual_network(vn_id=vnet_id)
-        wait_for_virtual_network_deletion(k8s=k8s, name=cr_name)
+        _cleanup_virtual_network(grpc, k8s, name, vnet_id)
 
 
 def test_netris_ca_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, namespace: str) -> None:
@@ -320,8 +346,8 @@ def test_netris_ca_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, namesp
         _apply(k8s_hub_client, probe_role)
 
         allowed = unique_name("netris-ca-probe-allowed")
-        _apply(k8s_hub_client, _configmap_manifest(allowed, namespace, new_pem))
         try:
+            _apply(k8s_hub_client, _configmap_manifest(allowed, namespace, new_pem))
             output, returncode = run_unchecked(
                 *_probe_base(k8s_hub_client, probe_sa),
                 "label",
@@ -366,10 +392,19 @@ def test_netris_ca_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, namesp
                 namespace,
             )
         finally:
-            run(*k8s_hub_client._base(), "delete", "configmap", allowed, "-n", namespace)
+            run(
+                *k8s_hub_client._base(),
+                "delete",
+                "configmap",
+                allowed,
+                "-n",
+                namespace,
+                "--ignore-not-found",
+            )
 
-        _apply(k8s_hub_client, _configmap_manifest(next_name, namespace, new_pem))
+        # Register the name first: an apply that times out can still persist the object.
         created_next = True
+        _apply(k8s_hub_client, _configmap_manifest(next_name, namespace, new_pem))
         next_bundle = _configmap_bundle(k8s_hub_client, next_name)
         rotated = True
         _upgrade_ca(namespace, next_name)

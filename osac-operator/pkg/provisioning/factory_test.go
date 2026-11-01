@@ -5,6 +5,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -100,6 +101,7 @@ var _ = Describe("NewProvider", func() {
 
 			order := &v1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{Name: "test-order", Namespace: "default"},
+				Spec:       v1alpha1.ClusterOrderSpec{PullSecretRef: &corev1.LocalObjectReference{Name: "fixture-source"}, PullSecretRevision: "fixture-revision"},
 			}
 			order.SetGroupVersionKind(v1alpha1.GroupVersion.WithKind("ClusterOrder"))
 

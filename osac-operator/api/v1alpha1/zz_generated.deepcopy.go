@@ -21,8 +21,8 @@ limitations under the License.
 package v1alpha1
 
 import (
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -196,6 +196,11 @@ func (in *ClusterOrderSpec) DeepCopyInto(out *ClusterOrderSpec) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.PullSecretRef != nil {
+		in, out := &in.PullSecretRef, &out.PullSecretRef
+		*out = new(v1.LocalObjectReference)
+		**out = **in
+	}
 	if in.Network != nil {
 		in, out := &in.Network, &out.Network
 		*out = new(ClusterNetworkSpec)
@@ -232,7 +237,7 @@ func (in *ClusterOrderStatus) DeepCopyInto(out *ClusterOrderStatus) {
 	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make([]v1.Condition, len(*in))
+		*out = make([]metav1.Condition, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
@@ -417,7 +422,7 @@ func (in *ComputeInstanceSpec) DeepCopyInto(out *ComputeInstanceSpec) {
 	}
 	if in.UserDataSecretRef != nil {
 		in, out := &in.UserDataSecretRef, &out.UserDataSecretRef
-		*out = new(corev1.LocalObjectReference)
+		*out = new(v1.LocalObjectReference)
 		**out = **in
 	}
 	if in.NetworkAttachments != nil {
@@ -452,7 +457,7 @@ func (in *ComputeInstanceStatus) DeepCopyInto(out *ComputeInstanceStatus) {
 	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make([]v1.Condition, len(*in))
+		*out = make([]metav1.Condition, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
@@ -682,7 +687,7 @@ func (in *ExternalIPAttachmentStatus) DeepCopyInto(out *ExternalIPAttachmentStat
 	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make([]v1.Condition, len(*in))
+		*out = make([]metav1.Condition, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
@@ -826,7 +831,7 @@ func (in *ExternalIPPoolStatus) DeepCopyInto(out *ExternalIPPoolStatus) {
 	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make([]v1.Condition, len(*in))
+		*out = make([]metav1.Condition, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
@@ -870,7 +875,7 @@ func (in *ExternalIPStatus) DeepCopyInto(out *ExternalIPStatus) {
 	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make([]v1.Condition, len(*in))
+		*out = make([]metav1.Condition, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
@@ -1013,7 +1018,7 @@ func (in *FabricDomainStatus) DeepCopyInto(out *FabricDomainStatus) {
 	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make([]v1.Condition, len(*in))
+		*out = make([]metav1.Condition, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
@@ -1179,7 +1184,7 @@ func (in *NATGatewayStatus) DeepCopyInto(out *NATGatewayStatus) {
 	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make([]v1.Condition, len(*in))
+		*out = make([]metav1.Condition, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
@@ -1360,7 +1365,7 @@ func (in *SecurityGroupStatus) DeepCopyInto(out *SecurityGroupStatus) {
 	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make([]v1.Condition, len(*in))
+		*out = make([]metav1.Condition, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
@@ -1503,7 +1508,7 @@ func (in *SubnetStatus) DeepCopyInto(out *SubnetStatus) {
 	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make([]v1.Condition, len(*in))
+		*out = make([]metav1.Condition, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
@@ -1619,7 +1624,7 @@ func (in *TenantStatus) DeepCopyInto(out *TenantStatus) {
 	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make([]v1.Condition, len(*in))
+		*out = make([]metav1.Condition, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
@@ -1787,7 +1792,7 @@ func (in *VirtualNetworkStatus) DeepCopyInto(out *VirtualNetworkStatus) {
 	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make([]v1.Condition, len(*in))
+		*out = make([]metav1.Condition, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
@@ -1888,7 +1893,7 @@ func (in *VolumeStatus) DeepCopyInto(out *VolumeStatus) {
 	*out = *in
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make([]v1.Condition, len(*in))
+		*out = make([]metav1.Condition, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}

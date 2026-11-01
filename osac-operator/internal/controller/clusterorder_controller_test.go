@@ -37,6 +37,7 @@ import (
 
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
+	"github.com/osac-project/osac/osac-operator/pkg/pullsecret"
 )
 
 func readyClusterOrderNodePool(instanceType string, replicas int32) hypershiftv1beta1.NodePool {
@@ -96,6 +97,14 @@ var _ = Describe("ClusterOrder Controller", func() {
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+				fixturePullSecret := `{"auths":{"fixture.invalid":{}}}`
+				Expect(pullsecret.Ensure(ctx, k8sClient, resource, &fixturePullSecret)).To(Succeed())
+				Expect(k8sClient.Update(ctx, resource)).To(Succeed())
+				DeferCleanup(func() {
+					Expect(k8sClient.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+						Name: resource.Spec.PullSecretRef.Name, Namespace: resource.Namespace,
+					}})).To(Succeed())
+				})
 			}
 		})
 
@@ -864,6 +873,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:        name,
 					Namespace:   "default",
+					UID:         types.UID("fixture-" + name),
 					Annotations: map[string]string{osacManagementStateAnnotation: ManagementStateManual},
 					Finalizers:  []string{osacFinalizer},
 				},
@@ -897,6 +907,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:        name,
 					Namespace:   "default",
+					UID:         types.UID("fixture-" + name),
 					Annotations: map[string]string{osacManagementStateAnnotation: ManagementStateManual},
 					Finalizers:  []string{osacFinalizer},
 				},

@@ -1139,7 +1139,7 @@ var _ = Describe("IPv4-only controller endpoint gRPC contract", Label("ipv4-netw
 
 		By("creating a real cluster and accepting canonical IPv4 controller updates")
 		bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
-		template := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
+		template := createCatalogItemClusterTemplateFixture(ctx, clusterPullSecretSharedDefaultsFixture(ctx), nil)
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		cluster, err := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
 			Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(),

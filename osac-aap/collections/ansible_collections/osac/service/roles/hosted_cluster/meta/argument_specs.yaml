@@ -40,7 +40,7 @@ argument_specs:
           ocp_release_image:
             type: str
             required: true
-          pull_secret:
+          pull_secret_name:
             type: str
             required: true
           ssh_public_key:

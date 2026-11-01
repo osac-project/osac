@@ -6,8 +6,12 @@
     - name: Provide credentials without node requests
       ansible.builtin.set_fact:
         cluster_order:
+          metadata:
+            name: fixture-cluster
           spec:
-            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa AAAA"}'
+            pullSecretRef:
+              name: fixture-source
+            templateParameters: '{"ssh_public_key": "ssh-rsa AAAA"}'
 
     - name: Resolve cluster settings without node requests
       ansible.builtin.include_role:
@@ -25,8 +29,12 @@
     - name: Provide order with selected hardware
       ansible.builtin.set_fact:
         cluster_order:
+          metadata:
+            name: fixture-cluster
           spec:
-            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa AAAA"}'
+            pullSecretRef:
+              name: fixture-source
+            templateParameters: '{"ssh_public_key": "ssh-rsa AAAA"}'
             nodeRequests:
               - nodeSet: workers
                 numberOfNodes: 2

@@ -993,8 +993,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		templateId = fmt.Sprintf("test-tmpl-%s", uuid.New())
 		_, err = clusterTemplatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
-				Id:    templateId,
-				Title: "Test Template",
+				SpecDefaults: clusterPullSecretDefaultsFixture(ctx),
+				Id:           templateId,
+				Title:        "Test Template",
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("test-tmpl-%s", uuid.New()[24:32]),
 				}.Build(),

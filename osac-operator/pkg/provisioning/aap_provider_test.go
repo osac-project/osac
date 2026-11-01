@@ -9,6 +9,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -363,6 +364,7 @@ var _ = Describe("AAPProvider", func() {
 
 			order := &v1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{Name: "test-order", Namespace: "default"},
+				Spec:       v1alpha1.ClusterOrderSpec{PullSecretRef: &corev1.LocalObjectReference{Name: "fixture-source"}, PullSecretRevision: "fixture-revision"},
 			}
 			result, err := provider.TriggerProvision(ctx, order)
 			Expect(err).NotTo(HaveOccurred())
@@ -1041,7 +1043,8 @@ var _ = Describe("AAPProvider", func() {
 					Namespace: "default",
 				},
 				Spec: v1alpha1.ClusterOrderSpec{
-					TemplateID: "cluster-template",
+					TemplateID:    "cluster-template",
+					PullSecretRef: &corev1.LocalObjectReference{Name: "fixture-source"}, PullSecretRevision: "fixture-revision",
 				},
 			}
 			result, err := provider.TriggerProvision(ctx, clusterOrder)
@@ -1052,6 +1055,7 @@ var _ = Describe("AAPProvider", func() {
 
 		It("should trigger deprovision for ClusterOrder", func() {
 			clusterOrder := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{PullSecretRef: &corev1.LocalObjectReference{Name: "fixture-source"}, PullSecretRevision: "fixture-revision"},
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-cluster-order",
 					Namespace: "default",

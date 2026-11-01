@@ -15,7 +15,6 @@
     cluster_working_namespace: test-work
     ocp_release_image: example.test/release:latest
     template_parameters:
-      pull_secret: test-secret
       ssh_public_key: ssh-rsa
     delete_step_hosted_cluster_override:
       name: osac.test_overrides.cluster_hooks

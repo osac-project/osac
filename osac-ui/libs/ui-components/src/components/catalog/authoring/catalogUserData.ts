@@ -1,8 +1,11 @@
 import type { UserDataSource } from '@osac/types';
 
-import { type CatalogFieldPolicyLike, catalogValueFromPolicy } from './catalogItemPolicy';
-import type { ProvisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
-import { provisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
+import type { CatalogFieldPolicyLike } from './catalogItemPolicy';
+import {
+  type ProvisioningFieldValue,
+  getFieldFromCatalogItemPolicy,
+  provisioningFieldValue,
+} from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
 export interface CatalogUserDataValue {
   source: 'inline' | 'secret';
@@ -28,32 +31,20 @@ const emptyCatalogUserDataValue: CatalogUserDataValue = {
   value: '',
 };
 
-const stringValue = (value: unknown): string => (typeof value === 'string' ? value : '');
-
-const readCatalogUserDataValue = (value: unknown): CatalogUserDataValue => {
-  if (!value || typeof value !== 'object') {
+const readCatalogUserDataValue = (value: UserDataSource | undefined): CatalogUserDataValue => {
+  const source = value?.source;
+  if (!source || source.case === undefined) {
     return emptyCatalogUserDataValue;
   }
 
-  const source = (value as { source?: unknown }).source;
-  if (!source || typeof source !== 'object') {
-    return emptyCatalogUserDataValue;
+  if (source.case === 'inline') {
+    return { source: 'inline', value: source.value ?? '' };
   }
 
-  const sourceCase = (source as { case?: unknown }).case;
-  if (sourceCase === 'inline') {
-    return { source: 'inline', value: stringValue((source as { value?: unknown }).value) };
-  }
-
-  if (sourceCase === 'secret') {
-    const reference = (source as { value?: unknown }).value;
-    if (!reference || typeof reference !== 'object') {
-      return { source: 'secret', value: '' };
-    }
-    const secret = reference as { id?: unknown; name?: unknown };
+  if (source.case === 'secret') {
     return {
       source: 'secret',
-      value: stringValue(secret.name) || stringValue(secret.id),
+      value: source.value?.name || source.value?.id || '',
     };
   }
 
@@ -62,8 +53,10 @@ const readCatalogUserDataValue = (value: unknown): CatalogUserDataValue => {
 
 const catalogUserDataFieldFromPolicy = (
   policy: CatalogFieldPolicyLike<UserDataSource>,
-): ProvisioningFieldValue<CatalogUserDataValue> =>
-  catalogValueFromPolicy(policy, readCatalogUserDataValue, emptyCatalogUserDataValue);
+): ProvisioningFieldValue<CatalogUserDataValue> => {
+  const field = getFieldFromCatalogItemPolicy<UserDataSource | undefined>(policy, undefined);
+  return provisioningFieldValue(readCatalogUserDataValue(field.value), field.locked);
+};
 
 export const catalogUserDataValuesFromPolicy = (
   policy: CatalogFieldPolicyLike<UserDataSource>,

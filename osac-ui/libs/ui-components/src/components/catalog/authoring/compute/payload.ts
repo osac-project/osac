@@ -16,16 +16,15 @@ type CatalogItemFieldsInit = NonNullable<
 type BootDiskFieldsInit = NonNullable<CatalogItemFieldsInit['bootDisk']>;
 type FieldPolicyInit<K extends keyof CatalogItemFieldsInit> = NonNullable<CatalogItemFieldsInit[K]>;
 
-const isEmptyString = (value: unknown) => typeof value !== 'string' || !value.trim();
-const isEmptyResource = (value: unknown) => !(value as ResourceSelectValue | undefined)?.id?.trim();
-const isEmptyDiskList = (value: unknown) =>
-  !(value as ComputeInstanceDiskValues[] | undefined)?.length;
+const isEmptyString = (value: string) => !value.trim();
+const isEmptyResource = (value: ResourceSelectValue) => !value.id.trim();
+const isEmptyDiskList = (value: ComputeInstanceDiskValues[]) => !value.length;
 
-const toResourceRef = (value: unknown) => ({ id: (value as ResourceSelectValue).id.trim() });
-const toTrimmedString = (value: unknown) => (value as string).trim();
+const toResourceRef = (value: ResourceSelectValue) => ({ id: value.id.trim() });
+const toTrimmedString = (value: string) => value.trim();
 
-const toDiskListRef = (value: unknown) => ({
-  items: (value as ComputeInstanceDiskValues[])
+const toDiskListRef = (value: ComputeInstanceDiskValues[]) => ({
+  items: value
     .filter((disk) => disk.sizeGib.trim())
     .map((disk) => ({
       sizeGib: Number(disk.sizeGib.trim()),

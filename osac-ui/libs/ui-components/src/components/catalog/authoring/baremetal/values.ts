@@ -1,11 +1,18 @@
-import { type BareMetalInstanceCatalogItem, GuestOSFamily } from '@osac/types';
+import {
+  type BareMetalInstanceCatalogItem,
+  type BareMetalInstanceTypeReference,
+  type DiskImageReference,
+  GuestOSFamily,
+} from '@osac/types';
 
 import {
   type ResourceSelectValue,
   emptyResourceSelectValue,
+  resourceSelectValueFromReference,
 } from '../../../Form/resourceSelectValue';
 import {
   type ProvisioningFieldValue,
+  getFieldFromCatalogItemPolicy,
   provisioningFieldValue,
 } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
 import {
@@ -13,7 +20,6 @@ import {
   catalogGeneralValues,
   catalogGeneralValuesFromItem,
 } from '../CatalogGeneralStep';
-import { catalogValueFromPolicy } from '../catalogItemPolicy';
 import { catalogUserDataValuesFromPolicy } from '../catalogUserData';
 
 export interface BareMetalCatalogItemValues extends CatalogGeneralValues {
@@ -23,17 +29,8 @@ export interface BareMetalCatalogItemValues extends CatalogGeneralValues {
   userData: ProvisioningFieldValue<string>;
 }
 
-const readInstanceTypeValue = (value: unknown): string => {
-  const reference = value as { id?: string; name?: string } | undefined;
-  return reference?.name || reference?.id || '';
-};
-
-const readResourceReference = (value: unknown): ResourceSelectValue => {
-  const reference = value as { id?: string; name?: string } | undefined;
-  return reference?.id || reference?.name
-    ? { id: reference.id ?? '', name: reference.name ?? '' }
-    : emptyResourceSelectValue();
-};
+const readInstanceTypeValue = (value: BareMetalInstanceTypeReference | undefined): string =>
+  value?.name || value?.id || '';
 
 export const emptyBareMetalCatalogItemValues = (): BareMetalCatalogItemValues => ({
   ...catalogGeneralValues(),
@@ -51,15 +48,25 @@ export const getBareMetalCatalogItemInitialValues = (
   }
 
   const fields = item.fields;
+  const instanceType = getFieldFromCatalogItemPolicy<BareMetalInstanceTypeReference | undefined>(
+    fields?.instanceType,
+    undefined,
+  );
+  const diskImage = getFieldFromCatalogItemPolicy<DiskImageReference | undefined>(
+    fields?.diskImage,
+    undefined,
+  );
 
   return {
     ...catalogGeneralValuesFromItem(item),
     guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
-    instanceType: catalogValueFromPolicy(fields?.instanceType, readInstanceTypeValue, ''),
-    diskImage: catalogValueFromPolicy(
-      fields?.diskImage,
-      readResourceReference,
-      emptyResourceSelectValue(),
+    instanceType: provisioningFieldValue(
+      readInstanceTypeValue(instanceType.value),
+      instanceType.locked,
+    ),
+    diskImage: provisioningFieldValue(
+      resourceSelectValueFromReference(diskImage.value),
+      diskImage.locked,
     ),
     ...catalogUserDataValuesFromPolicy(fields?.userDataSource),
   };

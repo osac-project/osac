@@ -1,11 +1,20 @@
-import { type ComputeInstanceCatalogItem, GuestOSFamily } from '@osac/types';
+import {
+  type ComputeInstanceCatalogItem,
+  type ComputeInstanceDiskList,
+  type DiskImageReference,
+  GuestOSFamily,
+  type InstanceTypeReference,
+  type StorageTierReference,
+} from '@osac/types';
 
 import {
   type ResourceSelectValue,
   emptyResourceSelectValue,
+  resourceSelectValueFromReference,
 } from '../../../Form/resourceSelectValue';
 import {
   type ProvisioningFieldValue,
+  getFieldFromCatalogItemPolicy,
   provisioningFieldValue,
 } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
 import type { ComputeInstanceDiskValues } from '../../../vm/CreateWizard/fields';
@@ -14,7 +23,6 @@ import {
   catalogGeneralValues,
   catalogGeneralValuesFromItem,
 } from '../CatalogGeneralStep';
-import { catalogValueFromPolicy } from '../catalogItemPolicy';
 import { catalogUserDataValuesFromPolicy } from '../catalogUserData';
 
 export interface ComputeCatalogItemValues extends CatalogGeneralValues {
@@ -27,31 +35,16 @@ export interface ComputeCatalogItemValues extends CatalogGeneralValues {
   additionalDisks: ProvisioningFieldValue<ComputeInstanceDiskValues[]>;
 }
 
-const readResourceReference = (value: unknown): ResourceSelectValue => {
-  const ref = value as { id?: string; name?: string } | undefined;
-  return ref?.id || ref?.name
-    ? { id: ref.id ?? '', name: ref.name ?? '' }
-    : emptyResourceSelectValue();
-};
+const readStringValue = (value: string | number | undefined): string =>
+  value === undefined ? '' : String(value);
 
-const readStringValue = (value: unknown): string => {
-  if (typeof value === 'string') {
-    return value;
-  }
-  return typeof value === 'number' ? String(value) : '';
-};
-
-const readDiskListValue = (value: unknown): ComputeInstanceDiskValues[] => {
-  const items = (
-    value as { items?: { sizeGib?: number; storageTier?: { id?: string; name?: string } }[] }
-  )?.items;
-  return (items ?? []).map((disk) => ({
+const readDiskListValue = (
+  value: ComputeInstanceDiskList | undefined,
+): ComputeInstanceDiskValues[] =>
+  (value?.items ?? []).map((disk) => ({
     sizeGib: disk.sizeGib === undefined ? '' : String(disk.sizeGib),
-    storageTier: disk.storageTier
-      ? readResourceReference(disk.storageTier)
-      : emptyResourceSelectValue(),
+    storageTier: resourceSelectValueFromReference(disk.storageTier),
   }));
-};
 
 export const emptyComputeCatalogItemValues = (): ComputeCatalogItemValues => ({
   ...catalogGeneralValues(),
@@ -72,27 +65,50 @@ export const getComputeCatalogItemInitialValues = (
   }
 
   const fields = item.fields;
+  const diskImage = getFieldFromCatalogItemPolicy<DiskImageReference | undefined>(
+    fields?.diskImage,
+    undefined,
+  );
+  const instanceType = getFieldFromCatalogItemPolicy<InstanceTypeReference | undefined>(
+    fields?.instanceType,
+    undefined,
+  );
+  const bootDiskSizeGib = getFieldFromCatalogItemPolicy<number | undefined>(
+    fields?.bootDisk?.sizeGib,
+    undefined,
+  );
+  const bootDiskStorageTier = getFieldFromCatalogItemPolicy<StorageTierReference | undefined>(
+    fields?.bootDisk?.storageTier,
+    undefined,
+  );
+  const additionalDisks = getFieldFromCatalogItemPolicy<ComputeInstanceDiskList | undefined>(
+    fields?.additionalDisks,
+    undefined,
+  );
 
   return {
     ...catalogGeneralValuesFromItem(item),
     guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
-    diskImage: catalogValueFromPolicy(
-      fields?.diskImage,
-      readResourceReference,
-      emptyResourceSelectValue(),
+    diskImage: provisioningFieldValue(
+      resourceSelectValueFromReference(diskImage.value),
+      diskImage.locked,
     ),
-    instanceType: catalogValueFromPolicy(
-      fields?.instanceType,
-      readResourceReference,
-      emptyResourceSelectValue(),
+    instanceType: provisioningFieldValue(
+      resourceSelectValueFromReference(instanceType.value),
+      instanceType.locked,
     ),
     ...catalogUserDataValuesFromPolicy(fields?.userDataSource),
-    bootDiskSizeGib: catalogValueFromPolicy(fields?.bootDisk?.sizeGib, readStringValue, ''),
-    bootDiskStorageTier: catalogValueFromPolicy(
-      fields?.bootDisk?.storageTier,
-      readResourceReference,
-      emptyResourceSelectValue(),
+    bootDiskSizeGib: provisioningFieldValue(
+      readStringValue(bootDiskSizeGib.value),
+      bootDiskSizeGib.locked,
     ),
-    additionalDisks: catalogValueFromPolicy(fields?.additionalDisks, readDiskListValue, []),
+    bootDiskStorageTier: provisioningFieldValue(
+      resourceSelectValueFromReference(bootDiskStorageTier.value),
+      bootDiskStorageTier.locked,
+    ),
+    additionalDisks: provisioningFieldValue(
+      readDiskListValue(additionalDisks.value),
+      additionalDisks.locked,
+    ),
   };
 };

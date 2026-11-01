@@ -1,4 +1,4 @@
-{{- if and (eq .Values.global.networking.fabricManager "netris") .Values.global.networking.netris.caBundle.configMap }}
+{{- if and (eq (toString .Values.global.networking.fabricManager) "netris") (include "osac.netrisCaConfigMapName" .) }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -19,9 +19,9 @@ spec:
         kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
   variables:
   - name: activeName
-    expression: {{ .Values.global.networking.netris.caBundle.configMap | toJson | quote }}
+    expression: {{ include "osac.netrisCaConfigMapName" . | toJson | quote }}
   - name: adminGroups
-    expression: {{ .Values.global.networking.netris.caBundle.adminGroups | toJson | quote }}
+    expression: {{ .Values.global.networking.caBundle.adminGroups | toJson | quote }}
   - name: target
     expression: "request.operation == 'DELETE' ? oldObject : object"
   validations:

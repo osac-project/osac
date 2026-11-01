@@ -1,4 +1,4 @@
-{{- if and .Values.validation.enabled (eq .Values.global.networking.fabricManager "netris") .Values.global.networking.netris.caBundle.configMap }}
+{{- if and .Values.validation.enabled (eq (toString .Values.global.networking.fabricManager) "netris") (include "osac.netrisCaConfigMapName" .) }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -33,7 +33,7 @@ spec:
         - name: HOME
           value: /tmp
         - name: CA_CONFIGMAP_NAME
-          value: {{ .Values.global.networking.netris.caBundle.configMap | quote }}
+          value: {{ include "osac.netrisCaConfigMapName" . | quote }}
         - name: AAP_NAMESPACE
           value: {{ .Release.Namespace | quote }}
         - name: CA_EXECUTION_IDENTITY

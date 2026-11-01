@@ -106,7 +106,7 @@
     },
     "cliImage": {
       "type": "string",
-      "description": "Default OpenShift CLI image used by hook jobs. When Netris CA validation is enabled it must provide kubectl, sh and openssl."
+      "description": "Default OpenShift CLI image used by hook jobs. When Netris CA validation is enabled it must provide kubectl, sh, grep, mktemp, rm and openssl."
     },
     "dbInit": {
       "type": "object",
@@ -2445,85 +2445,6 @@
     }
   },
   "$defs": {
-    "networkingNetris": {
-      "type": "object",
-      "description": "Netris fabric manager configuration.",
-      "properties": {
-        "controllerUrl": {
-          "type": "string",
-          "description": "Netris controller API URL (HTTPS only).",
-          "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
-        },
-        "validateCerts": {
-          "type": "boolean",
-          "default": true,
-          "description": "Verify Netris HTTPS certificates. Disable only for trusted non-production endpoints with self-signed certificates."
-        },
-        "caBundle": {
-          "type": "object",
-          "description": "Optional customer-created ConfigMap containing the Netris CA chain under the fixed bundle.pem key.",
-          "properties": {
-            "configMap": {
-              "type": "string",
-              "description": "Name of the customer-created ConfigMap in the AAP namespace. It must contain bundle.pem and is mounted read-only into Netris execution pods.",
-              "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
-              "maxLength": 253
-            },
-            "adminGroups": {
-              "type": "array",
-              "description": "Groups allowed to create, update, or delete the active Netris CA ConfigMap. Defaults to the break-glass group system:masters and the OpenShift cluster administrator group system:cluster-admins.",
-              "minItems": 1,
-              "default": [
-                "system:masters",
-                "system:cluster-admins"
-              ],
-              "items": {
-                "type": "string",
-                "minLength": 1
-              },
-              "uniqueItems": true
-            }
-          },
-          "additionalProperties": false
-        },
-        "credentials": {
-          "type": "object",
-          "properties": {
-            "username": {
-              "type": "string"
-            },
-            "password": {
-              "type": "string"
-            },
-            "externalSecret": {
-              "type": "boolean",
-              "const": true,
-              "description": "Use the externally managed netris-credentials Secret (NETRIS_PASSWORD key) in the AAP namespace instead of an inline password."
-            }
-          },
-          "additionalProperties": false
-        },
-        "siteId": {
-          "type": "string"
-        },
-        "tenantId": {
-          "type": "string"
-        },
-        "tenantName": {
-          "type": "string"
-        },
-        "mgmtVpcId": {
-          "type": "string"
-        },
-        "mgmtVpcName": {
-          "type": "string"
-        },
-        "resourceClassMap": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
     "positiveDuration": {
       "type": "string",
       "description": "Positive Go time.Duration (e.g. 500ms, 15m, 1h30m). Zero and negative timeouts are invalid.",
@@ -2538,7 +2459,27 @@
         "fabricManager"
       ],
       "properties": {
-        "netris": {"$ref": "#/$defs/networkingNetris"},
+        "caBundle": {
+          "type": "object",
+          "description": "Protection settings for the customer-managed Netris CA ConfigMap named by aap.instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP. The chart never creates, rotates, or deletes that object.",
+          "properties": {
+            "adminGroups": {
+              "type": "array",
+              "description": "Groups allowed to create, update, or delete the active Netris CA ConfigMap. Defaults to the break-glass group system:masters and the OpenShift cluster administrator group system:cluster-admins. Identity-provider groups bound directly to cluster-admin are in neither and must be listed here.",
+              "minItems": 1,
+              "default": [
+                "system:masters",
+                "system:cluster-admins"
+              ],
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        },
         "provisioningEnabled": {
           "type": "boolean",
           "description": "Run networking jobs through the network managers. Set at installation; the fulfillment service refuses to start when it changes later. With false, networking resources become READY without provider work.",

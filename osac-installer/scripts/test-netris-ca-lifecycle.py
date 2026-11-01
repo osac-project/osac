@@ -42,24 +42,15 @@ FIXTURE_NETRIS_ARGS = [
     "--set",
     "global.networking.fabricManager=netris",
     "--set",
-    "global.networking.k8sManager=",
-    "--set-string",
-    "global.networking.netris.controllerUrl=https://netris.example.test",
-    "--set-string",
-    "global.networking.netris.credentials.username=osac-lifecycle-fixture",
-    "--set",
-    "global.networking.netris.credentials.externalSecret=true",
-    "--set-string",
-    "global.networking.netris.siteId=1",
-    "--set-string",
-    "global.networking.netris.tenantId=1",
-    "--set-string",
-    "global.networking.netris.tenantName=test",
+    "global.networking.k8sManager=cudn_evpn",
 ]
 
+# aap.instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP is the single
+# source of truth for the CA ConfigMap: AAP config-as-code mounts bundle.pem
+# from it, and the chart validates and protects the same name.
 CA_ARGS = [
     "--set-string",
-    "global.networking.netris.caBundle.configMap=customer-netris-ca",
+    "aap.instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP=customer-netris-ca",
 ]
 
 
@@ -110,13 +101,13 @@ class RenderContractTests(unittest.TestCase):
             render(*FIXTURE_NETRIS_ARGS, *CA_ARGS, "--set", "validation.enabled=false")
         )
         names = {doc.get("metadata", {}).get("name", "") for doc in docs}
-        self.assertFalse([name for name in names if "netris-ca-validate" in name])
+        self.assertFalse([name for name in names if "netris-ca-preflight" in name])
         self.assertFalse([name for name in names if "identity-validate" in name])
 
     def test_validation_hooks_and_validator_rbac(self) -> None:
         docs = documents(render(*FIXTURE_NETRIS_ARGS, *CA_ARGS))
 
-        pre_install = find(docs, "Job", "osac-pre-install-validate")
+        pre_install = find(docs, "Job", "osac-netris-ca-preflight")
         pre_command = command_of(pre_install)
         pre_env = env_of(pre_install)
         self.assertEqual(pre_env["CA_CONFIGMAP_NAME"], "customer-netris-ca")
@@ -166,17 +157,7 @@ class RenderContractTests(unittest.TestCase):
                 },
             )
 
-        hook_role = find(docs, "ClusterRole", "osac-validate-default")
-        self.assertFalse(
-            [
-                rule
-                for rule in hook_role["rules"]
-                if "configmaps" in rule.get("resources", [])
-                or "subjectaccessreviews" in rule.get("resources", [])
-            ]
-        )
-
-        pre_install_role = find(docs, "Role", "osac-validate-netris-ca")
+        pre_install_role = find(docs, "Role", "osac-netris-ca-preflight")
         self.assertEqual(
             pre_install_role["rules"],
             [
@@ -188,10 +169,10 @@ class RenderContractTests(unittest.TestCase):
                 }
             ],
         )
-        pre_install_binding = find(docs, "RoleBinding", "osac-validate-netris-ca")
+        pre_install_binding = find(docs, "RoleBinding", "osac-netris-ca-preflight")
         self.assertEqual(
             pre_install_binding["subjects"],
-            [{"kind": "ServiceAccount", "name": "osac-validate", "namespace": "default"}],
+            [{"kind": "ServiceAccount", "name": "osac-netris-ca-preflight", "namespace": "default"}],
         )
 
         find(docs, "ServiceAccount", "osac-netris-ca-validate")
@@ -223,7 +204,7 @@ class RenderContractTests(unittest.TestCase):
             env_of(identity)["CA_EXECUTION_IDENTITY"],
             "system:serviceaccount:default:custom-sa",
         )
-        pre_install = find(docs, "Job", "osac-pre-install-validate")
+        pre_install = find(docs, "Job", "osac-netris-ca-preflight")
         self.assertEqual(
             env_of(pre_install)["CA_EXECUTION_IDENTITY"],
             "system:serviceaccount:default:custom-sa",
@@ -286,7 +267,7 @@ class RenderContractTests(unittest.TestCase):
                 *FIXTURE_NETRIS_ARGS,
                 *CA_ARGS,
                 "--set",
-                "global.networking.netris.caBundle.adminGroups[0]=platform-admins",
+                "global.networking.caBundle.adminGroups[0]=platform-admins",
             )
         )
         policy = find(
@@ -301,7 +282,7 @@ class RenderContractTests(unittest.TestCase):
                 *FIXTURE_NETRIS_ARGS,
                 *CA_ARGS,
                 "--set-json",
-                "global.networking.netris.caBundle.adminGroups=[]",
+                "global.networking.caBundle.adminGroups=[]",
             )
 
 

@@ -43,7 +43,7 @@ pytestmark = [
 ]
 
 POLICY_MESSAGE = "Only authorized platform administrators may modify or delete the active Netris CA ConfigMap."
-CA_VALUE = "global.networking.netris.caBundle.configMap"
+CA_VALUE = "aap.instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP"
 NETRIS_CA_PATH = "/etc/netris/ca/bundle.pem"
 
 
@@ -60,7 +60,11 @@ def _current_ca_configmap(namespace: str) -> str:
     release = _helm_release()
     values = json.loads(run("helm", "get", "values", release, "-n", namespace, "-o", "json"))
     configured = (
-        values.get("global", {}).get("networking", {}).get("netris", {}).get("caBundle", {}).get("configMap", "")
+        values.get("aap", {})
+        .get("instanceGroups", {})
+        .get("networkFulfillment", {})
+        .get("config", {})
+        .get("NETRIS_CA_CONFIGMAP", "")
     )
     active = configured or os.environ.get("OSAC_NETRIS_CA_ACTIVE_CONFIGMAP", "")
     assert active, f"{CA_VALUE} is empty and OSAC_NETRIS_CA_ACTIVE_CONFIGMAP is not set"

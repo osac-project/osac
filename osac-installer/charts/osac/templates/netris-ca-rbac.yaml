@@ -1,4 +1,4 @@
-{{- if and (eq .Values.global.networking.fabricManager "netris") .Values.global.networking.netris.caBundle.configMap }}
+{{- if and (eq (toString .Values.global.networking.fabricManager) "netris") (include "osac.netrisCaConfigMapName" .) }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -9,7 +9,7 @@ metadata:
 rules:
 - apiGroups: [""]
   resources: ["configmaps"]
-  resourceNames: [{{ .Values.global.networking.netris.caBundle.configMap | quote }}]
+  resourceNames: [{{ include "osac.netrisCaConfigMapName" . | quote }}]
   verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

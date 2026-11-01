@@ -55,31 +55,17 @@ global:
     fabricManager: ""
     # OSAC Kubernetes Manager; required with VMaaS. "" or cudn_evpn.
     k8sManager: ""
-    netris:
-      controllerUrl: ""
-      # Validate the Netris controller certificate. Keep enabled for production;
-      # set false only in a separately managed test profile.
-      validateCerts: true
-      # Optional customer-created ConfigMap in the AAP namespace. It must
-      # contain the PEM bundle under the fixed key bundle.pem.
-      caBundle:
-        configMap: ""
-        # Groups allowed to create, update or delete the active CA ConfigMap.
-        # OpenShift cluster administrators are in system:cluster-admins;
-        # system:masters is the break-glass group of the system:admin
-        # certificate. Identity-provider groups bound directly to cluster-admin
-        # are in neither group and must be listed here explicitly.
-        adminGroups:
-          - "system:masters"
-          - "system:cluster-admins"
-      credentials:
-        username: ""
-      siteId: ""
-      tenantId: ""
-      tenantName: ""
-      mgmtVpcId: ""
-      mgmtVpcName: ""
-      resourceClassMap: ""
+    # Groups allowed to create, update, or delete the customer-managed Netris
+    # CA ConfigMap named by
+    # aap.instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP.
+    # system:masters is the break-glass group of the system:admin certificate;
+    # system:cluster-admins holds the built-in cluster-admin subjects. An
+    # identity-provider group bound directly to cluster-admin is in neither,
+    # so add each such group here explicitly.
+    caBundle:
+      adminGroups:
+        - "system:masters"
+        - "system:cluster-admins"
     networkClass:
       defaults:
         virtualNetworkIPv4CIDR: 10.200.0.0/16
@@ -99,8 +85,8 @@ global:
       #   lbVip: 0.25
 
 # Used by the validation and CA identity hook Jobs. With Netris CA validation
-# enabled the image must provide kubectl, sh and openssl (the hooks fail with
-# NETRIS_CA_OPENSSL_MISSING instead of skipping the bundle check).
+# enabled the image must provide kubectl, sh, grep, mktemp, rm and openssl (the
+# hooks fail with ERROR: NETRIS_CA_* instead of skipping the checks).
 cliImage: quay.io/openshift/origin-cli:4.20.0
 
 # Shared PostgreSQL host for the db-init hook.

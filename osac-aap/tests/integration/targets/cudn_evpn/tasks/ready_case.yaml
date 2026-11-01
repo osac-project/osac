@@ -1,0 +1,30 @@
+---
+# create_subnet of the owner while one OVN-Kubernetes condition stays False.
+# Input: ce_ready {label, type, reason}.
+- name: "Report the condition as False - {{ ce_ready.label }}"
+  ansible.builtin.include_tasks: hub.yaml
+  vars:
+    _others: "{{ ['TransportAccepted', 'NetworkCreated', 'NetworkAllocationSucceeded'] | difference([ce_ready.type]) }}"
+    ce_hub_steps:
+      - state: patched
+        def:
+          apiVersion: k8s.ovn.org/v1
+          kind: ClusterUserDefinedNetwork
+          metadata: {name: "{{ ce_hub_h }}"}
+          status:
+            conditions:
+              - {type: "{{ _others[0] }}", status: "True", reason: Ok}
+              - {type: "{{ _others[1] }}", status: "True", reason: Ok}
+              - {type: "{{ ce_ready.type }}", status: "False", reason: "{{ ce_ready.reason }}"}
+
+- name: "Fail create_subnet as retryable after the wait - {{ ce_ready.label }}"
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: "{{ ce_ready.label }}"
+    sft_expect: retryable
+    sft_short_waits: true
+    sft_message_search: "not ready after 2 seconds \\({{ ce_ready.type }}={{ ce_ready.reason }}\\); OSAC retries the task"
+    ce_task: create_subnet
+    ce_vn_id: "{{ ce_id.vn_h }}"
+    ce_subnet_id: "{{ ce_id.s_h }}"
+    sft_job: "{{ ce_subnet_job }}"

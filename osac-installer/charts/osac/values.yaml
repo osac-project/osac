@@ -45,11 +45,13 @@ global:
   # has no default. The installer's NetworkClass step creates the NetworkClass
   # from these values; none of them can change after installation.
   networking:
-    # Run networking jobs through the network managers. false: networking
-    # resources become READY without provider work (reason ProvisioningDisabled).
+    # Run networking jobs through the network managers. false: VirtualNetworks,
+    # Subnets, SecurityGroups, ExternalIPPools and FabricDomains become READY
+    # without provider work (reason ProvisioningDisabled); ExternalIPs,
+    # ExternalIPAttachments and NATGateways are not offered.
     provisioningEnabled: true
     # Canonical IPv4 CIDRs of the provider's infrastructure (management,
-    # provisioning, node networks, and the DNS resolvers given to workloads).
+    # provisioning and node networks).
     excludedIpv4Cidrs: []
     # [REQUIRED] Registration name of the provider's Fabric Manager.
     fabricManager: ""

@@ -2,10 +2,9 @@
 deleting it keeps its whole billed life.
 
 The test sends no traffic, so it needs provider networking and the metering
-adapter but not the external return path: it lives outside the external_ip and
-references directories and is not gated by OSAC_NETRIS_VM_EXTERNAL_PATH_ENABLED.
-It uses an ExternalIPPool from OSAC_EXTERNAL_IP_POOL_CIDR, as the main suite
-does, and runs after test_vmaas_networking.py (see conftest.py).
+adapter but not the external return path. It uses an ExternalIPPool from
+OSAC_EXTERNAL_IP_POOL_CIDR, as the main suite does, and runs after
+test_vmaas_networking.py (see conftest.py).
 
 The allocation meter bills an ExternalIP while it is ALLOCATED and through
 DELETING until it is physically deleted (osac-metering ``0001-meters.yaml``),
@@ -18,13 +17,10 @@ from __future__ import annotations
 
 import contextlib
 import itertools
-from collections.abc import Iterator
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
-
-import pytest
 
 from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
@@ -44,57 +40,12 @@ from tests.e2e.core.metering import (
 )
 from tests.e2e.core.runner import poll_until
 from tests.e2e.core.wait_kinds import WaitResourceKind
-from tests.e2e.networking.teardown import wait_owned_gone
-from tests.e2e.networking.vmaas import stack
 
 # ExternalIPs are offered only with provider networking enabled
 # (global.networking.provisioningEnabled: true); otherwise the Fulfillment
 # Service rejects the ExternalIP create with FailedPrecondition.
 
 HEARTBEAT_TIMEOUT: int = 300
-
-
-@pytest.fixture
-def billing_metering(request: pytest.FixtureRequest) -> MeteringCollector:
-    """The metering collector, or a skip when this profile has no echo adapter.
-
-    The test carries no ``metering`` marker on purpose: that marker makes the whole session fail at
-    collection when no adapter is reachable (tests/e2e/conftest.py), which would take every other test of
-    the run down for a profile that only lacks this one dependency.
-    """
-    try:
-        request.getfixturevalue("metering_adapter_url")
-    except (RuntimeError, OSError) as exc:
-        pytest.skip(f"no metering echo adapter: set METERING_ADAPTER_URL or enable metering.echoAdapter ({exc})")
-    return request.getfixturevalue("metering")
-
-
-@pytest.fixture(scope="module")
-def billing_pool(
-    private_grpc: GRPCClient, k8s_hub_client: K8sClient, external_ip_pool_cidr: str, net_test_run_id: str
-) -> Iterator[dict[str, Any]]:
-    """The routed ExternalIPPool of the main suite: adopted when it exists, otherwise created and removed here."""
-    pool: dict[str, Any] = {}
-    try:
-        stack.resolve_external_ip_pool(
-            private_grpc=private_grpc,
-            k8s_hub_client=k8s_hub_client,
-            name=f"netris-billing-pool-{net_test_run_id}",
-            cidr=external_ip_pool_cidr,
-            record=pool,
-        )
-        yield pool
-    finally:
-        if pool.get("owned"):
-            pool_id = pool["id"]
-            wait_owned_gone(
-                description=f"ExternalIPPool {pool_id} gone",
-                api_gone=lambda: pool_id not in private_grpc.list_external_ip_pool_ids(),
-                cr_gone=lambda: k8s_hub_client.get_external_ip_pool_name(uuid=pool_id, checked=False) == "",
-                delete=lambda: private_grpc.delete_external_ip_pool(pool_id=pool_id),
-                resource_kind=WaitResourceKind.EXTERNAL_IP_POOL,
-                resource_id=pool_id,
-            )
 
 
 def test_external_ip_bills_allocation_through_deletion(

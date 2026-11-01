@@ -277,13 +277,36 @@
     sft_expect: success
     nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
 
-- name: EIP recovery - create the pool
+- name: EIP recovery - the common subnet committed, but its response was lost
   ansible.builtin.include_tasks: run_task.yaml
   vars:
     nf_task: create_external_ip_pool
-    sft_label: eiprec-pool-create
+    sft_label: eiprec-pool-lost-response
+    sft_expect: retryable
+    nf_job: "{{ nf_pool_job }}"
+
+- name: EIP recovery - the rerun adopts the common subnet
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_external_ip_pool
+    sft_label: eiprec-pool-rerun
     sft_expect: success
     nf_job: "{{ nf_pool_job }}"
+
+- name: EIP recovery - one allocation and one common subnet, no new write
+  ansible.builtin.assert:
+    that:
+      - nf_state.allocations | selectattr('name', 'equalto', 'osac-pool-' ~ nf_ids.pool) | list | length == 1
+      - nf_state.ipam_subnets | length == 1
+      - nf_state.ipam_subnets[0].purpose == 'common'
+      - nf_writes == []
+    quiet: true
+
+- name: EIP recovery - lose the reservation response next
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "POST /api/v2/ipam/subnet", mode: commit_then_drop}}
 
 - name: EIP recovery - the reservation committed, its response was lost, and the module finds it again
   ansible.builtin.include_tasks: run_task.yaml
@@ -298,7 +321,7 @@
   ansible.builtin.assert:
     that:
       - nf_state.faults == []
-      - nf_state.ipam_subnets | length == 1
+      - nf_state.ipam_subnets | length == 2
     quiet: true
 
 - name: EIP recovery - a rerun returns the same address without a second reservation
@@ -313,7 +336,7 @@
 - name: EIP recovery - one reservation, no new write
   ansible.builtin.assert:
     that:
-      - nf_state.ipam_subnets | length == 1
+      - nf_state.ipam_subnets | length == 2
       - nf_writes == []
     quiet: true
 
@@ -453,9 +476,9 @@
     nf_job: "{{ nf_eip_job }}"
     nf_result: {}
 
-- name: EIP recovery - the reservation is gone and the rerun wrote nothing
+- name: EIP recovery - only the common subnet of the pool is left and the rerun wrote nothing
   ansible.builtin.assert:
     that:
-      - nf_state.ipam_subnets == []
+      - nf_state.ipam_subnets | map(attribute='purpose') | list == ['common']
       - nf_writes == []
     quiet: true

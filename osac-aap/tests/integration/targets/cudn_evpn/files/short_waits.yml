@@ -1,0 +1,18 @@
+---
+# playbook_osac_network_task.yml unchanged, with the role's waits cut from
+# minutes to seconds. The generic playbook refuses every extra var and
+# roles/cudn_evpn/vars/main.yml holds the waits, so they are set here as facts,
+# which win over role vars. Only the cases that wait for a timeout use it.
+- name: Shorten the cudn_evpn waits
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Set two attempts, one second apart
+      ansible.builtin.set_fact:
+        cudn_evpn_ready_retries: 2
+        cudn_evpn_ready_delay: 1
+        cudn_evpn_gone_retries: 2
+        cudn_evpn_gone_delay: 1
+
+- name: Run the generic playbook
+  ansible.builtin.import_playbook: ../../../../../playbook_osac_network_task.yml

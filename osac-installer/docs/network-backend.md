@@ -79,6 +79,14 @@ aap:
   group; with a provider Fabric Manager, the provider's image built on
   `aap.bootstrap.image`.
 
+## Shared provider networking provisioning setting
+
+`global.networking.provisioningEnabled` is the shared installation setting for
+provider networking. It defaults to `true`. Choose the value before
+installation and keep it unchanged during upgrades. When migrating from older
+component-specific settings, remove those settings and configure
+`global.networking.provisioningEnabled` once for the whole installation.
+
 ## Manager registration
 
 The installer chart renders the registration ConfigMaps of the OSAC-shipped

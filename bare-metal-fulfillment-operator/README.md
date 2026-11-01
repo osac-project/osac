@@ -293,3 +293,13 @@ Unless required by applicable law or agreed to in writing, software distributed
 under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
 CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
+
+### Provider-networking startup configuration
+
+BMF reads `OSAC_ENABLE_NETWORKING_PROVISIONING` once at startup, independently
+of AAP credential availability, and logs the loaded value. The default is now
+`true` (previously `false`); empty or invalid input also defaults to `true`,
+with a diagnostic for invalid input. Helm installations use the shared boolean
+`global.networking.provisioningEnabled`. The removed `env.enableNetworkingProvisioning`
+key is rejected. See the [shared configuration and upgrade guide](../osac-installer/docs/network-backend.md#shared-provider-networking-provisioning-setting)
+for coordinated rollout and migration from mixed settings.

@@ -12,10 +12,12 @@ permissions: {}
 
 jobs:
   plan:
-    uses: osac-project/osac-ci/.github/workflows/e2e-queue-plan.yml@5bfcd1ff220362171967451de7aaabb9e027d855  # v1.3.6
+    uses: osac-project/osac-ci/.github/workflows/e2e-queue-plan.yml@fd8b518a7d1a2e10921645983c7747bef0447bde  # v1.3.8
     permissions:
       contents: read
       actions: write
+      pull-requests: read  # the pull request of the entry, for a fast track
+      checks: read  # and its E2E check
 
   vmaas:
     needs: plan
@@ -57,7 +59,7 @@ jobs:
   result:
     needs: plan
     if: always()
-    uses: osac-project/osac-ci/.github/workflows/e2e-queue-result.yml@5bfcd1ff220362171967451de7aaabb9e027d855  # v1.3.6
+    uses: osac-project/osac-ci/.github/workflows/e2e-queue-result.yml@fd8b518a7d1a2e10921645983c7747bef0447bde  # v1.3.8
     permissions:
       actions: write
       contents: read
@@ -66,5 +68,6 @@ jobs:
       branch: ${{ github.event.merge_group.base_ref }}
       plan-result: ${{ needs.plan.result }}
       suites: ${{ needs.plan.outputs.suites }}
+      fast-track: ${{ needs.plan.outputs.fast-track }}
     secrets:
       OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}

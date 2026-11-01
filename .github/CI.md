@@ -87,6 +87,21 @@ itself checks OSAC networking behavior and is not backend-specific. The broad
 Netris `full` suite excludes `tests/e2e/networking/vmaas` and
 `tests/e2e/networking/bmaas` and includes this test.
 
+## Skipping the tests of one pull request (fast track)
+
+For a change that cannot wait, a member of the team named in `fast_track.team` of `.github/e2e-policy.yml` can skip every test
+of one pull request: Actions, **Fast track**, **Run workflow**, with the number of the pull request and a reason. Until the
+policy has that key nobody may, and the workflow refuses. The refusals, what it does and what it does not are in osac-ci's
+`docs/CALLERS.md` ("Fast track"); in short:
+
+- The `E2E` check of the head commit passes, titled `Fast track: skipped by <login>: <reason>`; the suites that run are
+  cancelled; this workflow (`ci.yml`) is stopped and run again, and its `plan` job finds the fast track and runs no leg, so
+  `CI` passes. `pre-commit` and `dependency-review` still run, and so does the Jira check.
+- The merge queue entry of the pull request is not tested either (`e2e-queue.yml`, and the `plan` job of `ci.yml`).
+- It is for the commit it was run for: a new commit has no fast track. It does not approve the pull request, and a change to
+  `.github/` or `CODEOWNERS` is never fast-tracked.
+- The run belongs to the default branch, so it adds no row to a pull request; the title of the `E2E` check is the trace.
+
 ## Approvals after a rebase, and pull requests from forks
 
 - A clean rebase, or "Update branch", keeps the approval and moves it to the new head. A rebase that needs conflict

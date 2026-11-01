@@ -6,6 +6,7 @@ import type { ComputeInstanceCatalogItem } from '@osac/types';
 
 import { type ComputeInstanceWizardValues } from './fields';
 import type { ResourceSelectValue } from '../../Form/resourceSelectValue';
+import { getUserDataSourcePayload } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
 export { createEmptyComputeInstanceValues } from './fields';
 
@@ -81,19 +82,9 @@ export const buildComputeInstanceCreatePayload = (
     }
   }
 
-  if (values.spec.userDataSource.value === 'secret') {
-    const userDataSecretName = values.spec.userDataSecret.value.trim();
-    if (!values.spec.userDataSecret.locked && userDataSecretName) {
-      // OSAC-7033: serialize the selected source through the current API oneof.
-      spec.userDataSource = {
-        source: { case: 'secret', value: { name: userDataSecretName } },
-      };
-    }
-  } else {
-    const userData = values.spec.userData.value.trim();
-    if (!values.spec.userData.locked && userData) {
-      spec.userDataSource = { source: { case: 'inline', value: userData } };
-    }
+  const userDataSource = getUserDataSourcePayload(values.spec.userData);
+  if (userDataSource) {
+    spec.userDataSource = userDataSource;
   }
 
   const bootDisk: { sizeGib?: number; storageTier?: { id?: string; name?: string } } = {};

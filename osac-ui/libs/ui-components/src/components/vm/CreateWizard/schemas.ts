@@ -45,11 +45,16 @@ const buildComputeInstanceFieldDefinitions = (t: TFunction) => {
         name: yup.string(),
       }),
     ),
-    specUserData: lockedField(yup.string()).when('userDataSource', {
-      is: (source: { value?: string }) => source?.value !== 'secret',
-      then: () => lockedField(userDataSchema(t)),
-      otherwise: () => lockedField(yup.string()),
-    }),
+    specUserData: lockedField(
+      yup.object({
+        source: yup.string().oneOf(['inline', 'secret']).required(),
+        inline: yup.string().when('source', {
+          is: 'inline',
+          then: () => userDataSchema(t),
+        }),
+        secret: yup.string(),
+      }),
+    ),
     specBootDisk: yup.object({
       sizeGib: lockedField(
         yup
@@ -157,9 +162,7 @@ export const buildComputeInstanceStepSchema = (
       return yup.object({
         spec: yup.object({
           sshKey: lockedField(yup.string()),
-          userDataSource: lockedField(yup.string()),
           userData: fields.specUserData,
-          userDataSecret: lockedField(yup.string()),
         }),
       });
     default:

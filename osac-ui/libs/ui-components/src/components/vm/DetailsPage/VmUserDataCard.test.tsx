@@ -1,4 +1,3 @@
-/*
 import { screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
@@ -11,20 +10,21 @@ const catalogVm = {
   id: 'vm-1',
   spec: {
     catalogItem: { id: 'catalog-rhel-9' },
-    //userData: '#cloud-config\nusers: []',
+    userDataSource: { source: { case: 'inline', value: '#cloud-config\nusers: []' } },
   },
 } as ComputeInstance;
 
-
 const renderCard = (vm: ComputeInstance = catalogVm) =>
   renderWithProviders(<VmUserDataCard vm={vm} />);
-
 
 describe('VmUserDataCard', () => {
   it('renders nothing when user data is empty', () => {
     const { container } = renderCard({
       id: 'vm-1',
-      spec: { catalogItem: { id: 'catalog-rhel-9' }, userData: '   ' },
+      spec: {
+        catalogItem: { id: 'catalog-rhel-9' },
+        userDataSource: { source: { case: 'inline', value: '   ' } },
+      },
     } as ComputeInstance);
     expect(container).toBeEmptyDOMElement();
   });
@@ -47,4 +47,3 @@ describe('VmUserDataCard', () => {
     );
   });
 });
-*/

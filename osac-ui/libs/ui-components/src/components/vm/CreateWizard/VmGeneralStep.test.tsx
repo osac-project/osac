@@ -25,7 +25,7 @@ const SecretValuesReadout = () => {
   return (
     <>
       <output aria-label="ssh-key">{values.spec.sshKey.value}</output>
-      <output aria-label="user-data-secret">{values.spec.userDataSecret.value}</output>
+      <output aria-label="user-data-secret">{values.spec.userData.value.secret}</output>
     </>
   );
 };
@@ -38,7 +38,11 @@ describe('VmGeneralStep', () => {
       spec: {
         ...createEmptyComputeInstanceValues().spec,
         sshKey: provisioningFieldValue('ssh-secret-a'),
-        userDataSecret: provisioningFieldValue('userdata-secret-a'),
+        userData: provisioningFieldValue({
+          source: 'inline',
+          inline: '',
+          secret: 'userdata-secret-a',
+        }),
       },
     };
 

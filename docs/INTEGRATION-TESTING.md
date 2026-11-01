@@ -936,6 +936,26 @@ local temporary directories. Companion-repository checks skip when the path
 is not set. These checks and pytest collection prove selection only, not
 [QE] deployed CaaS success; the live prerequisites below still apply.
 
+### E2E component build-context boundary
+
+The full-install callers hand osac-test-infra's reusable workflow a
+`components` list, and it builds each entry as
+`podman build -f <containerfile> <context>`. A COPY source outside the declared
+`context` is therefore unreadable, and the failure only appears mid-run as
+`copier: stat: "<path>": no such file or directory`. The metering echo adapter,
+like metering-service, copies `go.work` and every workspace sibling's `go.mod`
+from the repository root, so its context is `.` and not `osac-metering`.
+
+[DEV] Unit/Contract checks live in
+`tests/unit/test_e2e_component_build_contexts.py`. From the repository root,
+run `uv run pytest -n 0 tests/unit/test_e2e_component_build_contexts.py`. They
+read every component declaration in
+`.github/workflows/e2e-*-full-install.yml` and in
+`.github/actions/resolve-e2e-components/action.yaml`, then resolve each
+referenced Containerfile's COPY sources against its declared context on disk.
+They prove path reachability only: no image is built, so `.containerignore`
+allowlists, registry access, and build success are not established.
+
 ### Focused CaaS natural-teardown boundary
 
 CaaS sanity retains the single-nodepool lifecycle and fast deletion feedback

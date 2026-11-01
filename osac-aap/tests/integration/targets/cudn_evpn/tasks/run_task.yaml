@@ -10,6 +10,8 @@
 #   sft_job          osac_job_vars without manager (added here)
 #   sft_env          optional settings overriding sft_settings
 #   sft_ready_cudn   optional CUDN name: once it exists, report it ready
+#   sft_short_waits  optional: run files/short_waits.yml, the generic playbook
+#                    with the role's waits cut to seconds
 # Output: sft_last (parse_job.yaml).
 - name: "Write the launch extra vars - {{ sft_label }}"
   ansible.builtin.copy:
@@ -23,7 +25,7 @@
       - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
       - -i
       - inventory/localhost.yml   # the AAP inventory: localhost with a local connection
-      - playbook_osac_network_task.yml
+      - "{{ 'tests/integration/targets/cudn_evpn/files/short_waits.yml' if sft_short_waits | default(false) else 'playbook_osac_network_task.yml' }}"
       - -e
       - "@{{ sft.root }}/{{ sft_label | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
     chdir: "{{ sft.repo }}"
@@ -34,7 +36,7 @@
   changed_when: false
 
 - name: "Play OVN-Kubernetes for the hub network - {{ sft_label }}"
-  when: sft_ready_cudn is defined
+  when: sft_ready_cudn | default('') | length > 0
   block:
     - name: "Wait for the hub network to be created - {{ sft_label }}"
       kubernetes.core.k8s_info:

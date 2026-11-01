@@ -255,7 +255,7 @@ class GRPCClient:
         # other error still fails fast. Note the two error shapes are matched
         # differently: a completed RPC prints grpcurl's `Code: <Name>` block
         # (AlreadyExists), while a transport failure prints the Go status string
-        # `code = Unavailable desc = ...` -- see tests/e2e/vmaas/external_ip/conftest.py.
+        # `code = Unavailable desc = ...` -- see tests/e2e/vmaas/regression/external_ip/conftest.py.
         for attempt in range(retries):
             try:
                 self.call(service=f"{PRIVATE_API}.Tenants/Create", data={"object": {"metadata": {"name": name}}})

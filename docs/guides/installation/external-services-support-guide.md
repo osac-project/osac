@@ -714,8 +714,11 @@ chmod 600 realm-resolved.json    # it contains client secrets
 # CA is the Keycloak server CA provisioned in A.4 — verify, don't -k.
 KC="https://<kc-host>:8443"
 CA=/root/kc-ca.pem
-TOKEN=$(curl -s --cacert "$CA" -d "client_id=admin-cli" -d "username=admin" \
-  -d "password=<kc-admin-password>" -d "grant_type=password" \
+TOKEN=$(curl -s --cacert "$CA" \
+  --data-urlencode "client_id=admin-cli" \
+  --data-urlencode "username=admin" \
+  --data-urlencode "password=<kc-admin-password>" \
+  --data-urlencode "grant_type=password" \
   "${KC}/realms/master/protocol/openid-connect/token" \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 curl -s --cacert "$CA" -X POST -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" \
@@ -1961,6 +1964,11 @@ generated files hold keys and passwords), data in `/var/lib/osac/kafka`.
 KROOT=/root/osac-kafka-external
 DATA=/var/lib/osac/kafka
 mkdir -p "$KROOT/tls" "$DATA/data" && chmod 700 "$KROOT"
+# the image runs as uid/gid 1000 (appuser) — everything the container
+# reads or writes must be owned by 1000:1000 (see the note under 5);
+# $KROOT itself stays root-only 700, since only the individual files
+# below are bind-mounted into the container
+chown 1000:1000 "$DATA/data"
 
 if [ ! -f "$KROOT/credentials.env" ]; then
   umask 077
@@ -2005,6 +2013,7 @@ oc -n osac get secret osac-external-kafka-tls -o jsonpath='{.data.tls\.crt}' | b
 oc -n osac get secret osac-external-kafka-tls -o jsonpath='{.data.tls\.key}' | base64 -d > "$KROOT/tls/tls.key"
 oc -n osac get secret osac-external-kafka-tls -o jsonpath='{.data.ca\.crt}'  | base64 -d > "$KROOT/tls/ca.crt" || true
 chmod 600 "$KROOT"/tls/*
+chown 1000:1000 "$KROOT"/tls/*   # readable by the container's appuser
 ```
 
 **3. `server.properties` — always generate, never hand-edit** (the PEM
@@ -2072,11 +2081,14 @@ EOF
   emit_pem ssl.keystore.key "$KROOT/tls/tls.key"
 } > "$KROOT/server.properties"
 chmod 600 "$KROOT/server.properties"
+chown 1000:1000 "$KROOT/server.properties"   # the container's appuser
 ```
 
 Each `emit_pem` line is one property whose value is the whole
 certificate/key with `\n`-escaped newlines — that is why the file must be
-generated, not hand-edited.
+generated, not hand-edited. The chown is part of the script on purpose:
+regenerating the file would otherwise leave it owned by root again and
+the broker (running as appuser, step 6) could not read it.
 
 **4. CLI client properties (for every `--command-config`):**
 
@@ -2092,6 +2104,7 @@ make_client_props() { # $1=file $2=user $3=password
     echo
   } > "$1"
   chmod 600 "$1"
+  chown 1000:1000 "$1"   # the CLI containers run as the image's appuser
 }
 make_client_props "$KROOT/client-admin.properties" admin "$KAFKA_ADMIN_PASSWORD"
 make_client_props "$KROOT/client-fulfillment.properties" fulfillment-service "$KAFKA_FULFILLMENT_PASSWORD"
@@ -2116,7 +2129,10 @@ krun() { # krun <tool> [args...]
 ```bash
 CLUSTER_ID=$(podman run --rm --entrypoint /bin/bash "$IMAGE" \
   -c '/opt/kafka/bin/kafka-storage.sh random-uuid')
-podman run --rm --security-opt label=disable --user 0:0 \
+# runs as the image's default user (appuser, uid 1000): the mounted
+# server.properties and data dir are chowned 1000:1000 above, so no
+# --user 0:0 is needed
+podman run --rm --security-opt label=disable \
   -v "$KROOT/server.properties:/etc/kafka/server.properties:ro" \
   -v "$DATA/data:/var/lib/kafka/data" \
   --entrypoint /bin/bash "$IMAGE" \
@@ -2144,7 +2160,7 @@ TimeoutStartSec=300
 ExecStartPre=/bin/sh -c 'rm -f %t/%n.ctr-id'
 ExecStart=/usr/bin/podman run --cidfile=%t/%n.ctr-id --cgroups=no-conmon \
   --rm --sdnotify=conmon --replace -d --name osac-kafka \
-  -p <host-ip>:9092:9092 --security-opt label=disable --user 0:0 \
+  -p <host-ip>:9092:9092 --security-opt label=disable \
   -v /root/osac-kafka-external/server.properties:/etc/kafka/server.properties:ro \
   -v /root/osac-kafka-external/tls:/etc/kafka/tls:ro \
   -v /var/lib/osac/kafka/data:/var/lib/kafka/data \
@@ -2159,6 +2175,16 @@ WantedBy=multi-user.target
 ```bash
 systemctl daemon-reload && systemctl enable --now container-osac-kafka.service
 ```
+
+Everything above runs as the image's default user (appuser, uid/gid
+1000) — no `--user 0:0` anywhere: the CLI helper (`krun`), the storage
+format in step 5, the broker startup in this unit, and a `systemctl
+restart` after the broker is running were validated together under that
+user. The trade-off for dropping the root override is the `chown
+1000:1000` on each mounted file in steps 1–4 (repeated on regeneration,
+hence inside `gen-server-properties.sh` and `make_client_props`);
+permissions stay restrictive — 600 on every credential file, 700 on
+`$KROOT`, and the mounts that only need reading stay `:ro`.
 
 **7. Wait for readiness, then create the service users** (name comes from
 `--entity-name`, **no** `name=` inside brackets — the mirror image of the

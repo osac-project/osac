@@ -172,6 +172,7 @@ def test_names_follow_d7() -> None:
     assert names["pool_ipam"] == ""
     pool = nc.netris_contract_names(nc.netris_contract_input({"resource": snap("ExternalIPPool", POOL)}, []))
     assert pool["pool_ipam"] == f"osac-pool-{POOL}"
+    assert pool["pool_common_ipam"] == f"osac-pool-{POOL}-common"
     eip = nc.netris_contract_names(nc.netris_contract_input({"resource": snap("ExternalIP", EIP)}, []))
     assert eip["natgw_snat"] == f"osac-natgw-{EIP}"
     assert eip["eipa_dnat"] == f"osac-eipa-{EIP}"
@@ -402,3 +403,104 @@ def test_class_map_accepts_text_or_mapping() -> None:
     for value in ('{"gpu": {}}', {"gpu": {}}):
         assert nc.netris_contract_settings_error({**SETTINGS, "resource_class_map": value}, ["resource_class_map"]) == ""
     assert nc.netris_contract_settings_error({**SETTINGS, "resource_class_map": {}}, ["resource_class_map"])
+
+
+# ---------------------------------------------------------------------------
+# Rules no other direct case reaches
+# ---------------------------------------------------------------------------
+
+
+def test_a_non_string_cidr_is_not_a_network() -> None:
+    assert nc.netris_vn_cidr_error(5).startswith("VirtualNetwork spec.ipv4Cidr '5'")
+
+
+def test_a_class_map_of_blank_text_is_refused() -> None:
+    message = nc.netris_contract_settings_error({"resource_class_map": "   "}, ["resource_class_map"])
+    assert "NETRIS_RESOURCE_CLASS_MAP must be a non-empty JSON object" in message
+
+
+def test_an_attachment_destination_needs_an_api_id() -> None:
+    bad = {"resource": {"kind": "ExternalIPAttachment", "id": VN},
+           "destination": {"routing_domain": {"type": "tenant_virtual_network", "virtual_network_id": "x"}}}
+    assert nc.netris_contract_input(bad)["error"].endswith(
+        "destination.routing_domain.virtual_network_id must be a lowercase UUID API ID")
+
+
+def test_a_gateway_above_the_physical_blocks_leaves_no_dhcp_range() -> None:
+    job = {"resource": {"spec": {"ipv4Cidr": "10.20.1.0/24"}},
+           "ipam": {"gateway_ipv4": "10.20.1.200", "physical_ipv4_cidrs": ["10.20.1.8/29"]}}
+    assert nc.netris_vnet_plan(job, "gateway_ipv4") == {"error": "", "gateway": "10.20.1.200/24", "dhcp_start": "", "dhcp_end": ""}
+
+
+def dhcp_job(cidr="10.20.1.0/24", blocks=("10.20.1.8/29",)) -> dict:
+    return {"subnet": {"spec": {"ipv4Cidr": cidr}}, "ipam": {"physical_ipv4_cidrs": list(blocks)}}
+
+
+GATEWAY = {"gateways": [{"prefix": "10.20.1.1/24"}]}
+
+
+@pytest.mark.parametrize(
+    ("detail", "job_vars", "message"),
+    [
+        (GATEWAY, dhcp_job(cidr="nope"), "Subnet spec.ipv4Cidr must be a canonical IPv4 CIDR"),
+        (GATEWAY, dhcp_job(blocks=("192.0.2.0/29",)), "is not an IPv4 block inside the Subnet CIDR"),
+        (GATEWAY, dhcp_job(blocks=()), nc.NO_DHCP_RANGE),
+        ({"gateways": []}, dhcp_job(), "the V-Net has no gateway to serve DHCP from"),
+        ({"gateways": [{"prefix": "192.0.2.1/24"}]}, dhcp_job(), "is not an IPv4 address inside the Subnet CIDR"),
+        ({"gateways": [{"prefix": "10.20.1.200/24"}]}, dhcp_job(), nc.NO_DHCP_RANGE),
+    ],
+)
+def test_a_vnet_that_cannot_serve_dhcp_is_an_error(detail, job_vars, message) -> None:
+    out = nc.netris_vnet_dhcp_update(detail, job_vars)
+    assert message in out["error"]
+    assert out["matches"] is False and out["body"] == {}
+
+
+def test_dhcp_lease_ignores_host_rows_that_are_not_records() -> None:
+    hosts = ["junk", {"address": "10.20.1.10/24", "mac": [{"address": "AA:BB:CC:DD:EE:01"}]}]
+    assert nc.netris_dhcp_lease(hosts, "aa:bb:cc:dd:ee:01") == {"error": "", "ip_address": "10.20.1.10"}
+
+
+@pytest.mark.parametrize(
+    ("job_vars", "message"),
+    [
+        (None, "must be a non-empty list"),
+        ({"resource": {"spec": {"servers": []}}}, "must be a non-empty list"),
+        ({"resource": {"spec": {"servers": ["a", " "]}}}, "must contain only non-empty host names"),
+        ({"resource": {"spec": {"servers": ["a ", "b"]}}}, "must contain only non-empty host names"),
+        ({"resource": {"spec": {"servers": ["a", 3]}}}, "must contain only non-empty host names"),
+        ({"resource": {"spec": {"servers": ["a", "a"]}}}, "must not repeat a host name"),
+    ],
+)
+def test_fabric_domain_servers_are_checked(job_vars, message) -> None:
+    assert message in nc.netris_fabric_domain_servers_error(job_vars)
+
+
+def test_fabric_domain_servers_accept_unique_names() -> None:
+    assert nc.netris_fabric_domain_servers_error({"resource": {"spec": {"servers": ["a", "b"]}}}) == ""
+
+
+@pytest.mark.parametrize(
+    "job_vars",
+    [
+        None,
+        {"resource": "x"},
+        {"resource": {"spec": {}}},
+        {"resource": {"spec": {"cidrs": []}}},
+        {"resource": {"spec": {"cidrs": ["203.0.113.0/30", "203.0.113.4/30"]}}},
+        {"resource": {"spec": {"cidrs": ["203.0.113.1/30"]}}},
+    ],
+)
+def test_a_pool_needs_exactly_one_canonical_cidr(job_vars) -> None:
+    assert nc.netris_pool_plan(job_vars) == {
+        "error": "Netris invalid task input: resource.spec.cidrs must hold exactly one canonical IPv4 CIDR", "cidr": ""}
+
+
+def test_a_pool_with_one_cidr_plans_it() -> None:
+    assert nc.netris_pool_plan({"resource": {"spec": {"cidrs": ["203.0.113.0/30"]}}}) == {"error": "", "cidr": "203.0.113.0/30"}
+
+
+def test_the_filter_plugin_publishes_every_helper() -> None:
+    filters = nc.FilterModule().filters()
+    assert filters["netris_pool_plan"] is nc.netris_pool_plan
+    assert len(filters) == 18

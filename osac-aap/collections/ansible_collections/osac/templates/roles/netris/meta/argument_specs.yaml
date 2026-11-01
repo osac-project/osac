@@ -72,7 +72,7 @@ argument_specs:
           by tasks/_input.yaml and the netris_attachment_plan filter.
 
   delete_network_attachment:
-    short_description: Move the fabric ports of a physical attachment back, no-op for overlay
+    short_description: Move the interface port of a physical attachment back, no-op for overlay
     options:
       osac_job_vars:
         type: dict
@@ -134,7 +134,7 @@ argument_specs:
           its content is checked by tasks/_input.yaml.
 
   create_external_ip_pool:
-    short_description: Create the IPAM allocation of an ExternalIPPool
+    short_description: Create the IPAM allocation and common subnet of an ExternalIPPool
     options:
       osac_job_vars:
         type: dict
@@ -144,7 +144,7 @@ argument_specs:
           its content is checked by tasks/_input.yaml.
 
   delete_external_ip_pool:
-    short_description: Delete the IPAM allocation of an ExternalIPPool
+    short_description: Delete the common subnet and IPAM allocation of an ExternalIPPool
     options:
       osac_job_vars:
         type: dict

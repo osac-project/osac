@@ -164,12 +164,46 @@ def writes_of(netris) -> list[tuple[str, str]]:
 # --- ExternalIPPool --------------------------------------------------------
 
 
+FOREIGN_COMMON = {
+    "id": 901,
+    "name": f"osac-pool-{POOL}-common",
+    "prefix": POOL_CIDR,
+    "purpose": "common",
+    "tenant": {"id": 99},
+    "sites": [{"id": 1}],
+}
+
+
+def pool_common(netris) -> list[dict]:
+    return [s for s in netris.state["ipam_subnets"] if s["name"] == f"osac-pool-{POOL}-common"]
+
+
 def test_create_pool_makes_the_allocation_and_publishes_nothing(tmp_path, netris) -> None:
     assert ok(*run(tmp_path, netris, pool_job("create_external_ip_pool"))) == {}
     assert len(netris.state["allocations"]) == 1
     alloc = netris.state["allocations"][0]
     assert alloc["name"] == f"osac-pool-{POOL}" and alloc["prefix"] == POOL_CIDR
     assert alloc["tenant"] == {"id": TENANT_ID} and "vpc" not in alloc
+
+
+def test_create_pool_wraps_the_cidr_in_a_common_subnet(tmp_path, netris) -> None:
+    """Netris blackholes the return traffic of a /32 nat address without this subnet."""
+    ok(*run(tmp_path, netris, pool_job("create_external_ip_pool")))
+    [common] = pool_common(netris)
+    assert common["prefix"] == POOL_CIDR and common["purpose"] == "common"
+    assert common["tenant"] == {"id": TENANT_ID} and common["sites"] == [{"id": 1}] and "vpc" not in common
+
+
+def test_create_pool_rerun_adds_a_missing_common_subnet(tmp_path, netris) -> None:
+    ok(*run(tmp_path, netris, pool_job("create_external_ip_pool")))
+    netris.state["ipam_subnets"].clear()
+    ok(*run(tmp_path, netris, pool_job("create_external_ip_pool")))
+    assert len(netris.state["allocations"]) == 1 and len(pool_common(netris)) == 1
+
+
+def test_common_subnet_takes_no_address_from_the_pool(tmp_path, netris) -> None:
+    ok(*run(tmp_path, netris, pool_job("create_external_ip_pool")))
+    assert ok(*run(tmp_path, netris, eip_job("create_external_ip"))) == {"external_ip": {"address": ADDRESS}}
 
 
 def test_create_pool_rerun_makes_no_write(tmp_path, netris) -> None:
@@ -207,11 +241,42 @@ def test_create_pool_provider_failure_is_retryable(tmp_path, netris) -> None:
     err(*run(tmp_path, netris, pool_job("create_external_ip_pool")), retryable=True)
 
 
-def test_delete_pool_removes_the_allocation(tmp_path, netris) -> None:
+def test_create_pool_common_subnet_rejected_by_netris_is_final(tmp_path, netris) -> None:
+    netris.state["responses"]["POST /api/v2/ipam/subnet"] = (400, {"message": "overlaps"})
+    err(*run(tmp_path, netris, pool_job("create_external_ip_pool")), retryable=False)
+
+
+def test_create_pool_common_subnet_provider_failure_is_retryable(tmp_path, netris) -> None:
+    netris.state["responses"]["POST /api/v2/ipam/subnet"] = (500, {"message": "boom"})
+    err(*run(tmp_path, netris, pool_job("create_external_ip_pool")), retryable=True)
+
+
+def test_create_pool_foreign_tenant_common_subnet_is_final_and_untouched(tmp_path, netris) -> None:
+    netris.state["ipam_subnets"].append(FOREIGN_COMMON)
+    err(*run(tmp_path, netris, pool_job("create_external_ip_pool")), retryable=False)
+    assert netris.state["ipam_subnets"] == [FOREIGN_COMMON]
+
+
+def test_delete_pool_removes_the_common_subnet_before_the_allocation(tmp_path, netris) -> None:
     ok(*run(tmp_path, netris, pool_job("create_external_ip_pool")))
     netris.calls.clear()
     assert ok(*run(tmp_path, netris, pool_job("delete_external_ip_pool", with_spec=False))) == {}
+    assert netris.state["allocations"] == [] and netris.state["ipam_subnets"] == []
+    deletes = [path for method, path in writes_of(netris) if method == "DELETE"]
+    assert [path.rsplit("/", 1)[0] for path in deletes] == ["/api/v2/ipam/subnet", "/api/v2/ipam/allocation"]
+
+
+def test_delete_pool_without_a_common_subnet_removes_the_allocation(tmp_path, netris) -> None:
+    ok(*run(tmp_path, netris, pool_job("create_external_ip_pool")))
+    netris.state["ipam_subnets"].clear()
+    ok(*run(tmp_path, netris, pool_job("delete_external_ip_pool")))
     assert netris.state["allocations"] == []
+
+
+def test_delete_pool_never_deletes_a_foreign_tenant_common_subnet(tmp_path, netris) -> None:
+    netris.state["ipam_subnets"].append(FOREIGN_COMMON)
+    err(*run(tmp_path, netris, pool_job("delete_external_ip_pool")), retryable=False)
+    assert writes_of(netris) == [] and netris.state["ipam_subnets"] == [FOREIGN_COMMON]
 
 
 def test_delete_absent_pool_succeeds(tmp_path, netris) -> None:

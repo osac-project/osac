@@ -1,8 +1,9 @@
 ---
-# Delete the IPAM allocation osac-pool-<pool id>. An allocation that is already
-# gone is a success; one of another tenant is a final error and is not deleted.
-# Netris refuses while ExternalIP reservations remain; OSAC deletes those first
-# and retries a failed delete.
+# Delete the common subnet osac-pool-<pool id>-common, then the IPAM allocation
+# osac-pool-<pool id>. An object that is already gone is a success; one of
+# another tenant is a final error and is not deleted. Netris refuses while
+# ExternalIP reservations remain; OSAC deletes those first and retries a failed
+# delete.
 - name: Delete the ExternalIPPool from Netris
   block:
     - name: Check the settings
@@ -15,6 +16,19 @@
 
     - name: Build the object names
       ansible.builtin.include_tasks: _names.yaml
+
+    # No ipam_tenant_id: that filter would hide a subnet of another tenant, and
+    # ipam_expected_fields has to see it to refuse it.
+    - name: Delete the common subnet of the pool
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+        tasks_from: delete_subnet
+      vars:
+        ipam_name: "{{ netris_names.pool_common_ipam }}"
+        ipam_expected_fields:
+          purpose: common
+          "tenant.id": "{{ netris_tenant_id | int }}"
+          "sites.ids": ["{{ netris_site_id | int }}"]
 
     - name: Delete the IPAM allocation of the pool
       ansible.builtin.include_role:

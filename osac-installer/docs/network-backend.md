@@ -32,8 +32,10 @@ aap:
       secret: {}   # Secret network-fulfillment-ig, written verbatim
 ```
 
-- `provisioningEnabled`: with `false`, OSAC runs no networking jobs and
-  networking resources become READY without provider work. The fulfillment
+- `provisioningEnabled`: with `false`, OSAC runs no networking jobs.
+  VirtualNetworks, Subnets, SecurityGroups, ExternalIPPools and FabricDomains
+  become READY without provider work; ExternalIPs, ExternalIPAttachments and
+  NATGateways are not offered. The fulfillment
   service stores the value at its first start and refuses to start when a
   later rollout changes it.
 - `excludedIpv4Cidrs`: canonical IPv4 CIDRs the provider's infrastructure uses
@@ -179,7 +181,7 @@ With the fulfillment service enabled, the chart creates the
 ValidatingAdmissionPolicy `<namespace>-osac-managed-resources` and its binding.
 They reject, from identities other than the OSAC controllers (the `hub-access`
 service account the fulfillment controllers use, the OSAC operator and BMF
-service accounts, and the Kubernetes garbage collector and namespace
+service accounts, the AAP job pods' `osac-sa`, and the Kubernetes garbage collector and namespace
 controller), with "OSAC manages this resource; change it through the
 fulfillment API":
 

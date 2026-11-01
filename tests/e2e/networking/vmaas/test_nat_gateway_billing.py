@@ -1,8 +1,12 @@
-"""NAT gateway metering: a ready gateway bills allocation seconds.
+"""NAT gateway billing: a ready gateway bills allocation seconds.
 
 The NAT gateway is the only billed resource whose dimensions are two
 references (its virtual network and its external IP), and references render
 by name in heartbeats, so this journey pins reference-based attribution.
+
+The test sends no traffic and needs no helper Pod: it needs provider networking
+and the metering adapter, uses the routed ExternalIPPool of the main suite, and
+runs after test_vmaas_networking.py (see conftest.py).
 """
 
 from __future__ import annotations
@@ -13,8 +17,6 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
-
-import pytest
 
 from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
@@ -34,31 +36,32 @@ from tests.e2e.core.metering import (
 )
 from tests.e2e.core.runner import poll_until
 from tests.e2e.core.wait_kinds import WaitResourceKind
+from tests.e2e.references.conftest import ref_test_run_id, ref_virtual_network  # noqa: F401
 
 # ExternalIPs and NATGateways are offered only with provider networking
 # enabled (global.networking.provisioningEnabled: true); otherwise the
 # Fulfillment Service rejects the ExternalIP create with FailedPrecondition.
-pytestmark = pytest.mark.metering
 
 HEARTBEAT_TIMEOUT: int = 300
 
 
 def test_nat_gateway_bills_allocation(
+    billing_metering: MeteringCollector,
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
-    ref_virtual_network: dict[str, str],
-    ref_eip_pool: dict[str, str],
-    metering: MeteringCollector,
+    ref_virtual_network: dict[str, str],  # noqa: F811
+    billing_pool: dict[str, Any],
 ) -> None:
     """A READY gateway bills per interval with its references as dimensions;
     deletion bills the final partial interval up to the recorded deletion, then
     ends billing."""
+    metering = billing_metering
     tag = uuid4().hex[:8]
     eip_name = f"ref-nat-metering-eip-{tag}"
 
     eip_response: dict[str, Any] = grpc.call(
         service=f"{PUBLIC_API}.ExternalIPs/Create",
-        data={"object": {"metadata": {"name": eip_name}, "spec": {"pool": {"name": ref_eip_pool["name"]}}}},
+        data={"object": {"metadata": {"name": eip_name}, "spec": {"pool": {"id": billing_pool["id"]}}}},
     )
     eip_id: str = eip_response["object"]["id"]
     eip_cr_name = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=eip_id)

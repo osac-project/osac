@@ -5,7 +5,6 @@ import { TFunction } from 'i18next';
 
 import { CatalogItem } from '@osac/ui-components/components/catalog/catalogItemDisplay';
 import CatalogItemLaunchButton from '@osac/ui-components/components/catalog/CatalogItemLaunchButton';
-import CatalogItemSource from '@osac/ui-components/components/catalog/CatalogItemSource';
 import CatalogItemTenant from '@osac/ui-components/components/catalog/CatalogItemTenant';
 import FieldSeparator from '@osac/ui-components/components/Primitives/FieldSeparator';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
@@ -54,16 +53,6 @@ const CatalogItemCardFooter: FC<CatalogItemCardFooterProps> = ({
             </>
           ) : null}
           <FlexItem>{t('Admin-managed')}</FlexItem>
-        </Flex>
-      );
-    }
-
-    if (role === 'tenant-admin') {
-      return (
-        <Flex flexWrap={{ default: 'nowrap' }} spaceItems={{ default: 'spaceItemsXs' }}>
-          <FlexItem>
-            <CatalogItemSource catalogItem={catalogItem} />
-          </FlexItem>
         </Flex>
       );
     }

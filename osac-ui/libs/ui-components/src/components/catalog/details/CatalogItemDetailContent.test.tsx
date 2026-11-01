@@ -15,6 +15,7 @@ import {
   InstanceTypeSchema,
   InstanceTypeState,
 } from '@osac/types';
+import { BareMetalInstanceTypeSchema } from '@osac/types/private';
 
 import { CatalogItemDetailContent } from './CatalogItemDetailContent';
 import VmCatalogItemDetailContent from './ComputeCatalogItemDetailContent';
@@ -40,6 +41,11 @@ const catalogApiFixtures = {
       id: 'di-rhel-10',
       metadata: { name: 'RHEL 10' },
       spec: { guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX },
+    }),
+  ],
+  privateBaremetalInstanceTypes: [
+    create(BareMetalInstanceTypeSchema, {
+      metadata: { name: 'bm.large' },
     }),
   ],
 };
@@ -185,7 +191,7 @@ describe('CatalogItemDetailContent', () => {
     expect(screen.getByText('Live')).toBeInTheDocument();
 
     expect(screen.getByText('Instance type')).toBeInTheDocument();
-    expect(screen.getByText('standard-4-8')).toBeInTheDocument();
+    expect(await screen.findByText('standard-4-8')).toBeInTheDocument();
     expect(screen.getByText('RHEL 10')).toBeInTheDocument();
     expect(await screen.findByText('Linux')).toBeInTheDocument();
     expect(screen.getByText('Disk image')).toBeInTheDocument();
@@ -263,7 +269,7 @@ describe('CatalogItemDetailContent', () => {
 
     expect(screen.queryByText('Details', { exact: true })).not.toBeInTheDocument();
     expect(screen.getByText('Instance type')).toBeInTheDocument();
-    expect(screen.getByText('bm.large')).toBeInTheDocument();
+    expect(await screen.findByText('bm.large')).toBeInTheDocument();
     expect(screen.getByText('RHEL 10')).toBeInTheDocument();
     const userDataToggle = screen.getByRole('button', { name: 'Expand user data' });
     expect(screen.getByText('echo ready')).not.toBeVisible();

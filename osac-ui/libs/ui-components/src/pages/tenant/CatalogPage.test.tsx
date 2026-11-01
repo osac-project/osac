@@ -975,7 +975,7 @@ describe('CatalogPage', () => {
     });
   });
 
-  it('shows the source before the added date for tenant admins', async () => {
+  it('shows visibility before the added date for tenant admins', async () => {
     localStorage.setItem(catalogItemsViewPrefKey, 'list');
 
     const catalogItem = {
@@ -1000,11 +1000,10 @@ describe('CatalogPage', () => {
       within(table)
         .getAllByRole('columnheader')
         .map((header) => header.textContent),
-    ).toEqual(['Name', 'Status', 'Instance type', 'Disk image', 'Source', 'Added', '']);
-    expect(within(table).getByRole('columnheader', { name: 'Source' })).toBeInTheDocument();
+    ).toEqual(['Name', 'Status', 'Instance type', 'Disk image', 'Visibility', 'Added', '']);
+    expect(within(table).getByRole('columnheader', { name: 'Visibility' })).toBeInTheDocument();
     expect(within(table).getByRole('columnheader', { name: 'Added' })).toBeInTheDocument();
-    expect(within(table).getByText('From provider')).toBeInTheDocument();
-    expect(within(table).queryByText('creator-user-id')).not.toBeInTheDocument();
+    expect(within(table).getByText('Global public')).toBeInTheDocument();
   });
 
   describe('Create catalog item action', () => {

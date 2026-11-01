@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import CatalogItemDetails from './CatalogItemDetails.tsx';
 import { useCatalogItemByKind } from './useCatalogItemByKind';
 import { useTranslation } from '../../../hooks/useTranslation.ts';
+import { CatalogItemIcon } from '../../../icons';
 import ResourceDetailsPage from '../../Resource/ResourceDetailsPage.tsx';
 import { ResourceDetailsPageError } from '../../Resource/ResourceDetailsPageError.tsx';
 import { isCatalogItemKind } from '../catalogItemDisplay.ts';
@@ -10,7 +11,8 @@ import { isCatalogItemKind } from '../catalogItemDisplay.ts';
 export const CatalogItemDetailPage = () => {
   const { t } = useTranslation();
   const { kind: kindParam, id = '' } = useParams() as { kind?: string; id?: string };
-  const kind = isCatalogItemKind(kindParam) && kindParam !== 'vm' ? kindParam : undefined;
+  const kind = isCatalogItemKind(kindParam) ? kindParam : undefined;
+  const isVm = kind === 'vm';
   const { data: item, isLoading, isError, error, refetch } = useCatalogItemByKind(kind, id);
 
   if (!kind || !id) {
@@ -33,9 +35,15 @@ export const CatalogItemDetailPage = () => {
       parentLabel={t('Catalog')}
       refetch={() => void refetch()}
       resourceLabel={t('catalog item')}
-      cardCount={2}
+      cardCount={isVm ? 4 : 2}
     >
-      {item && <CatalogItemDetails item={item} />}
+      {item ? (
+        <CatalogItemDetails
+          item={item}
+          showStatus={!isVm}
+          titlePrefix={isVm ? <CatalogItemIcon kind="vm" isActive /> : undefined}
+        />
+      ) : null}
     </ResourceDetailsPage>
   );
 };

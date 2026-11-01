@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { ComputeInstanceCatalogItemSchema } from '@osac/types';
 
-import { VmCatalogItemDetailPage } from './VmCatalogItemDetailPage';
+import { CatalogItemDetailPage } from './CatalogItemDetailPage';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
 vi.mock('../../../hooks/use-session', async (importOriginal) => {
@@ -16,7 +16,7 @@ vi.mock('../../../hooks/use-session', async (importOriginal) => {
   };
 });
 
-describe('VmCatalogItemDetailPage', () => {
+describe('CatalogItemDetailPage', () => {
   it('loads a VM catalog item and renders its four detail sections', async () => {
     const item = create(ComputeInstanceCatalogItemSchema, {
       id: 'catalog-vm',
@@ -26,7 +26,7 @@ describe('VmCatalogItemDetailPage', () => {
 
     renderWithProviders(
       <Routes>
-        <Route path="/catalog/vm/:id" element={<VmCatalogItemDetailPage />} />
+        <Route path="/catalog/:kind/:id" element={<CatalogItemDetailPage />} />
       </Routes>,
       {
         routerEntries: ['/catalog/vm/catalog-vm'],

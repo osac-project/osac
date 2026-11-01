@@ -18,6 +18,7 @@ import {
 import type { Volume } from '@osac/types';
 import { VolumeState } from '@osac/types';
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
+import { formatSizeGib } from '@osac/ui-components/components/Volume/utils';
 
 import { VOLUMES_LIST_PATH } from './values';
 import { VolumeAccessModeLabel } from './VolumeAccessModeLabel';
@@ -31,9 +32,6 @@ import { ResourceDetailHeader } from '../Resource/ResourceDetailHeader';
 interface VolumeDetailsProps {
   volume: Volume;
 }
-
-const formatSizeGib = (sizeGib: bigint | undefined): string =>
-  sizeGib === undefined ? '—' : `${sizeGib} GiB`;
 
 const VolumeDetails = ({ volume }: VolumeDetailsProps) => {
   const { t } = useTranslation();

@@ -1,0 +1,3 @@
+{{- if hasKey .Values.controllers "networkingProvisioning" -}}
+{{- fail "controllers.networkingProvisioning was removed; use global.networking.provisioningEnabled (boolean). Choose one state for all networking consumers." -}}
+{{- end -}}

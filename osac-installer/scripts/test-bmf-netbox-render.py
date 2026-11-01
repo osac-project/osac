@@ -267,6 +267,28 @@ def check_bmf_netbox(docs: list[dict[str, Any]]) -> None:
     assert sum(mount.get("readOnly") is True for mount in manager.get("volumeMounts", [])) >= 3
 
 
+def check_bmf_ca_bundle_is_opt_in() -> None:
+    docs = bmf_render()
+    deployment = resource(docs, "Deployment", "bmf-operator-controller-manager")
+    manager = container(deployment, "manager")
+    env = environment(manager)
+    pod_spec = deployment["spec"]["template"]["spec"]
+    assert "OSAC_INSTALLATION_API_CA_FILE" not in env
+    assert not any(volume.get("name") == "secret-api-ca" for volume in pod_spec["volumes"])
+    assert not any(mount.get("name") == "secret-api-ca" for mount in manager.get("volumeMounts", []))
+
+    configured_docs = bmf_render("--set-string", "secretAPI.caBundle.configMap=ca-bundle")
+    configured_deployment = resource(configured_docs, "Deployment", "bmf-operator-controller-manager")
+    configured_manager = container(configured_deployment, "manager")
+    configured_env = environment(configured_manager)
+    configured_pod_spec = configured_deployment["spec"]["template"]["spec"]
+    assert configured_env["OSAC_INSTALLATION_API_CA_FILE"]["value"] == "/etc/osac/secret-api/ca/bundle.pem"
+    volume = next(volume for volume in configured_pod_spec["volumes"] if volume.get("name") == "secret-api-ca")
+    assert volume["configMap"]["name"] == "ca-bundle"
+    mount = next(mount for mount in configured_manager["volumeMounts"] if mount.get("name") == "secret-api-ca")
+    assert mount["mountPath"] == "/etc/osac/secret-api/ca/"
+
+
 def check_bmf_custom_token_key(netbox_values: pathlib.Path) -> None:
     docs = bmf_render("--values", str(netbox_values), "--set-string", "netbox.tokenSecretKey=true")
     token_secret = resource(docs, "Secret", "custom-netbox-token")
@@ -549,8 +571,15 @@ def check_osac_wiring(temp_dir: pathlib.Path) -> tuple[list[dict[str, Any]], pat
     env = environment(manager)
     assert "OSAC_SECRET_API_ISSUER_URL" in env
     assert env["OSAC_SECRET_API_ISSUER_URL"]["value"] == "https://keycloak.example.test/realms/osac"
+    assert env["OSAC_SECRET_API_CA_FILE"]["value"] == "/etc/osac/secret-api/ca/bundle.pem"
     assert "fulfillment-controller-credentials" in str(deployment)
     assert "OSAC_SECRET_API_TOKEN_FILE" not in env
+    secret_api_ca = next(
+        volume
+        for volume in deployment["spec"]["template"]["spec"]["volumes"]
+        if volume.get("name") == "secret-api-ca"
+    )
+    assert secret_api_ca["configMap"]["name"] == "ca-bundle"
 
     management = embedded_config(docs, "osac-management-config", "management.yaml")
     assert management["type"] == "metal3"
@@ -643,6 +672,7 @@ def main() -> None:
 
         bmf_docs = bmf_render("--values", str(netbox_values))
         check_bmf_netbox(bmf_docs)
+        check_bmf_ca_bundle_is_opt_in()
         check_bmf_custom_token_key(netbox_values)
         check_bmf_without_ca(netbox_values)
         check_bmf_metal3()

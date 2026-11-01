@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActionList,
   ActionListGroup,
@@ -44,6 +44,9 @@ export const OSACWizardFooter = ({
   const { submitForm, validateForm, isSubmitting } = useFormikContext();
   const { setShowErrors } = useFieldValidation();
   const [validationAlert, setValidationAlert] = useState(false);
+  const actionInFlight = useRef(false);
+  const [isActionPending, setIsActionPending] = useState(false);
+  const isBusy = isSubmitting || isActionPending;
 
   const stepIndex = activeStep?.index ?? 1;
   const isFirst = stepIndex <= 1;
@@ -56,36 +59,39 @@ export const OSACWizardFooter = ({
   }, [activeStep.id, onErrorReset, setShowErrors]);
 
   const handleBack = useCallback(() => {
-    if (isFirst || isSubmitting) {
+    if (isFirst || isBusy || actionInFlight.current) {
       return;
     }
     goToStepByIndex(stepIndex - 1);
-  }, [goToStepByIndex, isFirst, isSubmitting, stepIndex]);
+  }, [goToStepByIndex, isFirst, isBusy, stepIndex]);
 
   const handleNextOrCreate = useCallback(async () => {
-    if (isSubmitting) {
+    if (isSubmitting || actionInFlight.current) {
       return;
     }
-    if (isLast) {
+    actionInFlight.current = true;
+    setIsActionPending(true);
+    try {
       const errors = await validateForm();
-      if (Object.keys(errors).length > 0) {
+      if (isLast ? Object.keys(errors).length > 0 : stepHasErrors(String(activeStep.id), errors)) {
         setValidationAlert(true);
         setShowErrors(true);
         return;
       }
-      await submitForm();
-      return;
-    }
-    const errors = await validateForm();
-
-    if (stepHasErrors(String(activeStep.id), errors)) {
+      setValidationAlert(false);
+      setShowErrors(false);
+      if (isLast) {
+        await submitForm();
+      } else {
+        goToStepByIndex(stepIndex + 1);
+      }
+    } catch {
       setValidationAlert(true);
       setShowErrors(true);
-      return;
+    } finally {
+      actionInFlight.current = false;
+      setIsActionPending(false);
     }
-    setValidationAlert(false);
-    setShowErrors(false);
-    goToStepByIndex(stepIndex + 1);
   }, [
     activeStep.id,
     isSubmitting,
@@ -133,8 +139,8 @@ export const OSACWizardFooter = ({
                 <Button
                   variant="secondary"
                   onClick={handleBack}
-                  isDisabled={isFirst || isSubmitting}
-                  isAriaDisabled={isFirst || isSubmitting}
+                  isDisabled={isFirst || isBusy}
+                  isAriaDisabled={isFirst || isBusy}
                 >
                   {t('Back')}
                 </Button>
@@ -144,14 +150,14 @@ export const OSACWizardFooter = ({
                   type="button"
                   variant="primary"
                   onClick={() => void handleNextOrCreate()}
-                  isDisabled={isSubmitting || isNextDisabled}
-                  isLoading={isSubmitting}
+                  isDisabled={isBusy || isNextDisabled}
+                  isLoading={isBusy}
                 >
                   {isLast ? submitButtonLabel : t('Next')}
                 </Button>
               </ActionListItem>
               <ActionListItem>
-                <Button variant="link" onClick={onCancel} isDisabled={isSubmitting}>
+                <Button variant="link" onClick={onCancel} isDisabled={isBusy}>
                   {t('Cancel')}
                 </Button>
               </ActionListItem>

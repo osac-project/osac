@@ -8,8 +8,11 @@ import {
   FormGroup,
   Gallery,
   GalleryItem,
+  Icon,
   Label,
 } from '@patternfly/react-core';
+import BuildingIcon from '@patternfly/react-icons/dist/esm/icons/building-icon';
+import GlobeAmericasIcon from '@patternfly/react-icons/dist/esm/icons/globe-americas-icon';
 import { useFormikContext } from 'formik';
 
 import type { CatalogGeneralValues, CatalogItemScope } from './CatalogGeneralStep';
@@ -19,6 +22,7 @@ interface ScopeOption {
   value: CatalogItemScope;
   title: string;
   description: string;
+  icon: typeof BuildingIcon;
 }
 
 interface CatalogScopeFieldProps {
@@ -34,11 +38,13 @@ const CatalogScopeField = ({ isDisabled = false }: CatalogScopeFieldProps) => {
       value: 'global',
       title: t('Global'),
       description: t('Available to all tenants on the platform'),
+      icon: GlobeAmericasIcon,
     },
     {
       value: 'tenant',
       title: t('Tenant scoped'),
       description: t('Assigned to one tenant'),
+      icon: BuildingIcon,
     },
   ];
 
@@ -79,19 +85,28 @@ const CatalogScopeField = ({ isDisabled = false }: CatalogScopeFieldProps) => {
                     isHidden: true,
                   }}
                 >
-                  <CardTitle id={`${cardId}-title`}>
-                    <Flex
-                      justifyContent={{ default: 'justifyContentSpaceBetween' }}
-                      alignItems={{ default: 'alignItemsCenter' }}
-                    >
-                      <FlexItem>{option.title}</FlexItem>
-                      {isSelected && (
-                        <FlexItem>
-                          <Label color="grey">{t('Selected')}</Label>
-                        </FlexItem>
-                      )}
-                    </Flex>
-                  </CardTitle>
+                  <Flex direction={{ default: 'column' }} gap={{ default: 'gapSm' }}>
+                    <FlexItem>
+                      <Icon size="lg">
+                        <option.icon aria-hidden />
+                      </Icon>
+                    </FlexItem>
+                    <FlexItem>
+                      <CardTitle id={`${cardId}-title`}>
+                        <Flex
+                          justifyContent={{ default: 'justifyContentSpaceBetween' }}
+                          alignItems={{ default: 'alignItemsCenter' }}
+                        >
+                          <FlexItem>{option.title}</FlexItem>
+                          {isSelected && (
+                            <FlexItem>
+                              <Label color="grey">{t('Selected')}</Label>
+                            </FlexItem>
+                          )}
+                        </Flex>
+                      </CardTitle>
+                    </FlexItem>
+                  </Flex>
                 </CardHeader>
                 <CardBody>{option.description}</CardBody>
               </Card>

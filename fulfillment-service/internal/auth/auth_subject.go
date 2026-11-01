@@ -28,6 +28,10 @@ type Subject struct {
 	// Tenants is the set of tenants that the subject belongs to. It may be the universal set if the subject has
 	// access to all tenants.
 	Tenants collections.Set[string]
+
+	// ManagedServiceAccount marks an authenticated, Fulfillment-managed client.
+	// It is request-local and intentionally omitted from the serialized subject.
+	ManagedServiceAccount bool
 }
 
 // subjectJson is the JSON representation of a subject used internally for serialization and deserialization.

@@ -31,6 +31,25 @@ def test_poll_without_opentelemetry_still_raises_on_timeout(monkeypatch: pytest.
         runner.poll_until(fn=lambda: "pending", until=lambda _: False, retries=1, delay=0, description="no otel")
 
 
+def test_poll_without_opentelemetry_with_resource_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resource identity is a span attribute only: without telemetry the poll is unchanged."""
+    monkeypatch.setattr(runner, "_otel_trace", None)
+    values = iter(["pending", "ready"])
+
+    assert (
+        runner.poll_until(
+            fn=lambda: next(values),
+            until=lambda value: value == "ready",
+            retries=3,
+            delay=0,
+            description="no otel",
+            resource_kind="Subnet",
+            resource_id="subnet-7",
+        )
+        == "ready"
+    )
+
+
 def test_poll_without_a_tracer_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """OpenTelemetry present but no provider configured: no crash, poll works."""
     otel_trace = pytest.importorskip("opentelemetry.trace")
@@ -102,6 +121,42 @@ def test_wait_span_named_after_description_with_outcome(exporter: object, monkey
     assert span.attributes["poll.retries"] == 3
     assert span.attributes["poll.attempts"] == 2
     assert span.attributes["poll.condition_met"] is True
+
+
+def test_wait_span_carries_resource_identity_when_passed(exporter: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+    values = iter(["pending", "ready"])
+
+    runner.poll_until(
+        fn=lambda: next(values),
+        until=lambda value: value == "ready",
+        retries=3,
+        delay=5,
+        description="BareMetalInstance bmi-42 to become Ready",
+        resource_kind="BareMetalInstance",
+        resource_id="bmi-42",
+    )
+
+    span = wait_spans(exporter, "BareMetalInstance bmi-42 to become Ready")[0]
+    assert span.attributes["osac.wait.resource_kind"] == "BareMetalInstance"
+    assert span.attributes["osac.wait.resource_id"] == "bmi-42"
+
+
+def test_wait_span_omits_resource_identity_when_not_passed(exporter: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+    values = iter(["pending", "ready"])
+
+    runner.poll_until(
+        fn=lambda: next(values),
+        until=lambda value: value == "ready",
+        retries=3,
+        delay=5,
+        description="workload cluster health",
+    )
+
+    span = wait_spans(exporter, "workload cluster health")[0]
+    assert "osac.wait.resource_kind" not in span.attributes
+    assert "osac.wait.resource_id" not in span.attributes
 
 
 def test_wait_span_timeout_sets_error_status_and_raises(exporter: object, monkeypatch: pytest.MonkeyPatch) -> None:

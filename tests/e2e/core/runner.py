@@ -145,13 +145,15 @@ def poll_until(
     delay: int = 5,
     description: str,
     retry_on_error: bool = False,
+    resource_kind: str | None = None,
+    resource_id: str | None = None,
 ) -> T:
     value: T | None = None
     last_error: subprocess.CalledProcessError | None = None
     start = time.monotonic()
     last_logged = start
     label = sanitize_text(description)
-    with _wait_span(label, delay=delay, retries=retries) as span:
+    with _wait_span(label, delay=delay, retries=retries, resource_kind=resource_kind, resource_id=resource_id) as span:
         # Descriptions name resources and conditions, so they are logged after sanitizing.
         # Polled values, errors and tracebacks stay out of logs; only the StuckState message
         # carries a summary of the last scalar value, never a container.
@@ -213,12 +215,19 @@ _NO_OP_WAIT_SPAN = _NoOpWaitSpan()
 
 
 @contextmanager
-def _wait_span(description: str, *, delay: int, retries: int) -> Iterator[Span | _NoOpWaitSpan]:
+def _wait_span(
+    description: str, *, delay: int, retries: int, resource_kind: str | None = None, resource_id: str | None = None
+) -> Iterator[Span | _NoOpWaitSpan]:
     """Track one poll_until wait as a span named after its description.
 
     The span nests under whatever span is current when poll_until runs (the
     test's call span in the ci-observe trace), so each wait shows with its
     own duration in the trace waterfall.
+
+    ``resource_kind`` and ``resource_id`` name the single resource the wait
+    targets (e.g. "BareMetalInstance" / its name), so a wait can be linked
+    to that resource in Grafana; waits without one resource identity omit
+    both attributes.
 
     Exception recording is disabled: an escaping CalledProcessError carries
     the command and its output, which may contain secrets -- poll_until's
@@ -233,6 +242,10 @@ def _wait_span(description: str, *, delay: int, retries: int) -> Iterator[Span |
     ) as span:
         span.set_attribute("poll.delay", delay)
         span.set_attribute("poll.retries", retries)
+        if resource_kind is not None:
+            span.set_attribute("osac.wait.resource_kind", resource_kind)
+        if resource_id is not None:
+            span.set_attribute("osac.wait.resource_id", resource_id)
         try:
             yield span
         except TimeoutError:

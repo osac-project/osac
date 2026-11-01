@@ -153,6 +153,8 @@ def wait_for_cr(*, k8s: K8sClient, uuid: str) -> str:
         retries=30,
         delay=2,
         description=f"CR for {uuid} to appear",
+        resource_kind="ComputeInstance",
+        resource_id=uuid,
     )
 
 
@@ -163,6 +165,8 @@ def wait_for_provision(*, k8s: K8sClient, name: str) -> None:
         retries=120,
         delay=5,
         description=f"{name} Provisioned condition",
+        resource_kind="ComputeInstance",
+        resource_id=name,
     )
 
 
@@ -173,6 +177,8 @@ def wait_for_running(*, k8s: K8sClient, name: str) -> None:
         retries=90,
         delay=10,
         description=f"{name} Running",
+        resource_kind="ComputeInstance",
+        resource_id=name,
     )
 
 
@@ -185,6 +191,8 @@ def wait_for_vmi_ip(*, k8s: K8sClient, vmi_namespace: str, compute_instance_name
         retries=60,
         delay=5,
         description=f"VMI IP for {compute_instance_name} to be set",
+        resource_kind="VirtualMachineInstance",
+        resource_id=compute_instance_name,
     )
 
 
@@ -195,6 +203,8 @@ def wait_for_restart(*, k8s: K8sClient, name: str, initial: str, restart_ts: str
         retries=30,
         delay=10,
         description=f"{name} lastRestartedAt update",
+        resource_kind="ComputeInstance",
+        resource_id=name,
     )
 
 
@@ -208,6 +218,8 @@ def wait_for_new_vmi(*, k8s: K8sClient, vmi_namespace: str, compute_instance_nam
         delay=5,
         description=f"{compute_instance_name} VMI recreation",
         retry_on_error=True,
+        resource_kind="VirtualMachineInstance",
+        resource_id=compute_instance_name,
     )
 
 
@@ -218,6 +230,8 @@ def wait_for_deletion(*, k8s: K8sClient, name: str) -> None:
         retries=120,
         delay=5,
         description=f"{name} deletion",
+        resource_kind="ComputeInstance",
+        resource_id=name,
     )
 
 
@@ -228,6 +242,8 @@ def wait_for_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:
         retries=30,
         delay=2,
         description=f"{uuid} removed from gRPC list",
+        resource_kind="ComputeInstance",
+        resource_id=uuid,
     )
 
 
@@ -248,6 +264,8 @@ def wait_for_virtual_network_cr(*, k8s: K8sClient, uuid: str) -> str:
         retries=30,
         delay=2,
         description=f"VirtualNetwork CR for {uuid} to appear",
+        resource_kind="VirtualNetwork",
+        resource_id=uuid,
     )
 
 
@@ -258,6 +276,8 @@ def wait_for_virtual_network_ready(*, k8s: K8sClient, name: str) -> None:
         retries=60,
         delay=5,
         description=f"{name} VirtualNetwork Ready",
+        resource_kind="VirtualNetwork",
+        resource_id=name,
     )
 
 
@@ -268,6 +288,8 @@ def wait_for_virtual_network_deletion(*, k8s: K8sClient, name: str) -> None:
         retries=120,
         delay=5,
         description=f"{name} VirtualNetwork deletion",
+        resource_kind="VirtualNetwork",
+        resource_id=name,
     )
 
 
@@ -278,6 +300,8 @@ def wait_for_subnet_cr(*, k8s: K8sClient, uuid: str) -> str:
         retries=30,
         delay=2,
         description=f"Subnet CR for {uuid} to appear",
+        resource_kind="Subnet",
+        resource_id=uuid,
     )
 
 
@@ -288,6 +312,8 @@ def wait_for_subnet_ready(*, k8s: K8sClient, name: str) -> None:
         retries=60,
         delay=5,
         description=f"{name} Subnet Ready",
+        resource_kind="Subnet",
+        resource_id=name,
     )
 
 
@@ -311,6 +337,8 @@ def wait_for_grpc_virtual_network_ready(*, grpc: GRPCClient, vn_id: str) -> None
         retries=60,
         delay=2,
         description=f"VirtualNetwork {vn_id} gRPC READY",
+        resource_kind="VirtualNetwork",
+        resource_id=vn_id,
     )
 
 
@@ -336,6 +364,8 @@ def wait_for_grpc_subnet_ready(*, grpc: GRPCClient, subnet_id: str) -> None:
         retries=60,
         delay=2,
         description=f"Subnet {subnet_id} gRPC READY",
+        resource_kind="Subnet",
+        resource_id=subnet_id,
     )
 
 
@@ -361,6 +391,8 @@ def wait_for_grpc_security_group_ready(*, grpc: GRPCClient, sg_id: str) -> None:
         retries=60,
         delay=2,
         description=f"SecurityGroup {sg_id} gRPC READY",
+        resource_kind="SecurityGroup",
+        resource_id=sg_id,
     )
 
 
@@ -371,6 +403,8 @@ def wait_for_subnet_deletion(*, k8s: K8sClient, name: str) -> None:
         retries=120,
         delay=5,
         description=f"{name} Subnet deletion",
+        resource_kind="Subnet",
+        resource_id=name,
     )
 
 
@@ -381,6 +415,8 @@ def wait_for_external_ip_pool_cr(*, k8s: K8sClient, uuid: str) -> str:
         retries=30,
         delay=1,
         description=f"ExternalIPPool CR for {uuid} to appear",
+        resource_kind="ExternalIPPool",
+        resource_id=uuid,
     )
 
 
@@ -391,6 +427,8 @@ def wait_for_external_ip_pool_ready(*, k8s: K8sClient, name: str) -> None:
         retries=60,
         delay=5,
         description=f"{name} ExternalIPPool Ready",
+        resource_kind="ExternalIPPool",
+        resource_id=name,
     )
 
 
@@ -416,6 +454,8 @@ def wait_for_external_ip_pool_grpc_ready(*, private_grpc: GRPCClient, pool_id: s
         retries=30,
         delay=2,
         description=f"ExternalIPPool {pool_id} gRPC READY",
+        resource_kind="ExternalIPPool",
+        resource_id=pool_id,
     )
 
 
@@ -426,6 +466,8 @@ def wait_for_external_ip_pool_deletion(*, k8s: K8sClient, name: str) -> None:
         retries=120,
         delay=5,
         description=f"{name} ExternalIPPool deletion",
+        resource_kind="ExternalIPPool",
+        resource_id=name,
     )
 
 
@@ -436,6 +478,8 @@ def wait_for_external_ip_cr(*, k8s: K8sClient, uuid: str) -> str:
         retries=30,
         delay=1,
         description=f"ExternalIP CR for {uuid} to appear",
+        resource_kind="ExternalIP",
+        resource_id=uuid,
     )
 
 
@@ -446,6 +490,8 @@ def wait_for_external_ip_allocated(*, k8s: K8sClient, name: str) -> None:
         retries=60,
         delay=5,
         description=f"{name} ExternalIP Allocated",
+        resource_kind="ExternalIP",
+        resource_id=name,
     )
 
 
@@ -457,6 +503,8 @@ def wait_for_external_ip_deletion(*, k8s: K8sClient, name: str) -> None:
         retries=120,
         delay=5,
         description=f"{name} ExternalIP deletion",
+        resource_kind="ExternalIP",
+        resource_id=name,
     )
 
 
@@ -467,6 +515,8 @@ def wait_for_external_ip_attachment_cr(*, k8s: K8sClient, uuid: str) -> str:
         retries=30,
         delay=1,
         description=f"ExternalIPAttachment CR for {uuid} to appear",
+        resource_kind="ExternalIPAttachment",
+        resource_id=uuid,
     )
 
 
@@ -477,6 +527,8 @@ def wait_for_external_ip_attachment_ready(*, k8s: K8sClient, name: str) -> None:
         retries=60,
         delay=5,
         description=f"{name} ExternalIPAttachment Ready",
+        resource_kind="ExternalIPAttachment",
+        resource_id=name,
     )
 
 
@@ -487,6 +539,8 @@ def wait_for_external_ip_attachment_deletion(*, k8s: K8sClient, name: str) -> No
         retries=120,
         delay=5,
         description=f"{name} ExternalIPAttachment deletion",
+        resource_kind="ExternalIPAttachment",
+        resource_id=name,
     )
 
 
@@ -500,6 +554,8 @@ def wait_for_nat_gateway_ready(*, k8s: K8sClient, name: str) -> None:
         retries=30,
         delay=5,
         description=f"NATGateway {name} to become Ready",
+        resource_kind="NATGateway",
+        resource_id=name,
     )
 
 
@@ -510,6 +566,8 @@ def wait_for_nat_gateway_deletion(*, k8s: K8sClient, name: str) -> None:
         retries=120,
         delay=5,
         description=f"{name} NATGateway deletion",
+        resource_kind="NATGateway",
+        resource_id=name,
     )
 
 
@@ -521,6 +579,8 @@ def wait_for_cluster_order_cr(*, k8s: K8sClient, uuid: str) -> str:
         delay=2,
         description=f"ClusterOrder CR for {uuid} to appear",
         retry_on_error=True,
+        resource_kind="ClusterOrder",
+        resource_id=uuid,
     )
 
 
@@ -532,6 +592,8 @@ def wait_for_cluster_progressing(*, k8s: K8sClient, name: str) -> None:
         delay=2,
         description=f"{name} ClusterOrder Progressing phase",
         retry_on_error=True,
+        resource_kind="ClusterOrder",
+        resource_id=name,
     )
 
 
@@ -554,6 +616,8 @@ def wait_for_cluster_order_event_reasons(
         delay=15,
         description=f"{name} ClusterOrder provisioning events",
         retry_on_error=True,
+        resource_kind="ClusterOrder",
+        resource_id=name,
     )
 
 
@@ -608,6 +672,8 @@ def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
         delay=15,
         description=f"{name} ClusterOrder Ready",
         retry_on_error=True,
+        resource_kind="ClusterOrder",
+        resource_id=name,
     )
 
 
@@ -637,6 +703,8 @@ def wait_for_hosted_cluster_kubeconfig(
         delay=5,
         description=f"{hosted_cluster_name} workload kubeconfig",
         retry_on_error=True,
+        resource_kind="HostedControlPlane",
+        resource_id=hosted_cluster_name,
     )
 
 
@@ -749,6 +817,8 @@ def wait_for_cluster_deletion_without_cleanup(
         delay=10,
         description="ClusterOrder natural deletion",
         retry_on_error=True,
+        resource_kind="ClusterOrder",
+        resource_id=name,
     )
 
 
@@ -782,6 +852,8 @@ def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:
         delay=10,
         description=f"{name} ClusterOrder deletion",
         retry_on_error=True,
+        resource_kind="ClusterOrder",
+        resource_id=name,
     )
 
 
@@ -881,6 +953,8 @@ def wait_for_cluster_deleting(*, k8s: K8sClient, name: str) -> None:
         delay=5,
         description=f"{name} ClusterOrder Deleting phase",
         retry_on_error=True,
+        resource_kind="ClusterOrder",
+        resource_id=name,
     )
 
 
@@ -906,6 +980,8 @@ def wait_for_cluster_grpc_deleting_or_archived(*, grpc: GRPCClient, uuid: str) -
         retries=30,
         delay=2,
         description=f"{uuid} gRPC DELETING or already archived",
+        resource_kind="Cluster",
+        resource_id=uuid,
     )
 
 
@@ -920,6 +996,8 @@ def wait_for_cluster_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:
         delay=5,
         description=f"{uuid} removed from gRPC cluster list",
         retry_on_error=True,
+        resource_kind="Cluster",
+        resource_id=uuid,
     )
 
 
@@ -930,6 +1008,8 @@ def wait_for_security_group_cr(*, k8s: K8sClient, uuid: str) -> str:
         retries=30,
         delay=2,
         description=f"SecurityGroup CR for {uuid} to appear",
+        resource_kind="SecurityGroup",
+        resource_id=uuid,
     )
 
 
@@ -940,6 +1020,8 @@ def wait_for_security_group_ready(*, k8s: K8sClient, name: str) -> None:
         retries=60,
         delay=5,
         description=f"{name} SecurityGroup Ready",
+        resource_kind="SecurityGroup",
+        resource_id=name,
     )
 
 
@@ -964,6 +1046,8 @@ def wait_for_security_group_update(*, grpc: GRPCClient, sg_id: str) -> None:
         retries=60,
         delay=5,
         description=f"SecurityGroup {sg_id} rule update applied",
+        resource_kind="SecurityGroup",
+        resource_id=sg_id,
     )
 
 
@@ -974,6 +1058,8 @@ def wait_for_security_group_deletion(*, k8s: K8sClient, name: str) -> None:
         retries=120,
         delay=5,
         description=f"{name} SecurityGroup deletion",
+        resource_kind="SecurityGroup",
+        resource_id=name,
     )
 
 
@@ -988,6 +1074,8 @@ def wait_for_tenant_cr(*, k8s: K8sClient, name: str) -> None:
         delay=2,
         description=f"Tenant CR {name} to appear",
         retry_on_error=True,
+        resource_kind="Tenant",
+        resource_id=name,
     )
 
 
@@ -1009,6 +1097,8 @@ def wait_for_tenant_condition(*, k8s: K8sClient, name: str, condition_type: str,
         delay=5,
         description=f"Tenant {name} {condition_type}={expected_status}",
         retry_on_error=True,
+        resource_kind="Tenant",
+        resource_id=name,
     )
 
 
@@ -1020,6 +1110,8 @@ def wait_for_tenant_deletion(*, k8s: K8sClient, name: str) -> None:
         delay=5,
         description=f"Tenant {name} deletion",
         retry_on_error=True,
+        resource_kind="Tenant",
+        resource_id=name,
     )
 
 
@@ -1045,6 +1137,8 @@ def wait_for_cluster_order_condition(
         delay=10,
         description=f"ClusterOrder {name} {condition_type}={expected_status}",
         retry_on_error=True,
+        resource_kind="ClusterOrder",
+        resource_id=name,
     )
 
 
@@ -1063,6 +1157,8 @@ def wait_for_tenant_cluster_storage_entry(*, k8s: K8sClient, tenant_name: str, c
         delay=10,
         description=f"Tenant {tenant_name} clusterStorage entry for {cluster_name}",
         retry_on_error=True,
+        resource_kind="Tenant",
+        resource_id=tenant_name,
     )
 
 
@@ -1076,6 +1172,8 @@ def wait_for_tenant_cluster_storage_entry_removed(*, k8s: K8sClient, tenant_name
         delay=10,
         description=f"Tenant {tenant_name} clusterStorage entry for {cluster_name} removed",
         retry_on_error=True,
+        resource_kind="Tenant",
+        resource_id=tenant_name,
     )
 
 
@@ -1122,6 +1220,8 @@ def wait_for_bmi_cr(*, k8s: K8sClient, uuid: str) -> str:
         retries=30,
         delay=2,
         description=f"BareMetalInstance CR for {uuid} to appear",
+        resource_kind="BareMetalInstance",
+        resource_id=uuid,
     )
 
 
@@ -1137,6 +1237,8 @@ def wait_for_bmi_running(*, grpc: GRPCClient, bmi_id: str, retries: int = _BMI_R
         retries=retries,
         delay=_BMI_RUNNING_DELAY,
         description=f"{bmi_id} RUNNING",
+        resource_kind="BareMetalInstance",
+        resource_id=bmi_id,
     )
 
 
@@ -1179,6 +1281,8 @@ def assert_bmi_lifecycle_on_running(
             retries=60,
             delay=5,
             description=f"{bmh_name} powered off",
+            resource_kind="BareMetalHost",
+            resource_id=bmh_name,
         )
         grpc.update_baremetal_instance_run_strategy(
             bmi_id=bmi_id, run_strategy="BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS"
@@ -1189,6 +1293,8 @@ def assert_bmi_lifecycle_on_running(
             retries=60,
             delay=5,
             description=f"{bmh_name} powered on",
+            resource_kind="BareMetalHost",
+            resource_id=bmh_name,
         )
 
     return bmi_cr_name, bmh_name
@@ -1224,6 +1330,8 @@ def wait_for_bmi_running_after_recovery(*, grpc: GRPCClient, bmi_id: str) -> Non
         retries=_BMI_RUNNING_RETRIES,
         delay=_BMI_RUNNING_DELAY,
         description=f"{bmi_id} RUNNING after inventory recovery",
+        resource_kind="BareMetalInstance",
+        resource_id=bmi_id,
     )
 
 
@@ -1242,6 +1350,8 @@ def wait_for_bmi_deletion(*, k8s: K8sClient, name: str) -> None:
         retries=270,
         delay=10,
         description=f"{name} BareMetalInstance deletion",
+        resource_kind="BareMetalInstance",
+        resource_id=name,
     )
 
 
@@ -1252,6 +1362,8 @@ def wait_for_bmi_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:
         retries=60,
         delay=5,
         description=f"{uuid} removed from gRPC BareMetalInstance list",
+        resource_kind="BareMetalInstance",
+        resource_id=uuid,
     )
 
 
@@ -1262,7 +1374,13 @@ def wait_for_bmh_provisioned(*, k8s: K8sClient, name: str, bmh_namespace: str) -
         return state
 
     poll_until(
-        fn=_check, until=lambda v: v == "provisioned", retries=120, delay=10, description=f"{name} BMH provisioned"
+        fn=_check,
+        until=lambda v: v == "provisioned",
+        retries=120,
+        delay=10,
+        description=f"{name} BMH provisioned",
+        resource_kind="BareMetalHost",
+        resource_id=name,
     )
 
 
@@ -1278,4 +1396,6 @@ def wait_for_bmh_available(*, k8s: K8sClient, name: str, bmh_namespace: str) -> 
         retries=120,
         delay=10,
         description=f"{name} BMH available",
+        resource_kind="BareMetalHost",
+        resource_id=name,
     )

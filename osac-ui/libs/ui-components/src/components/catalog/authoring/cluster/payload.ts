@@ -4,9 +4,8 @@ import { type ClusterCatalogItem, ClusterCatalogItemSchema } from '@osac/types';
 
 import type { ClusterCatalogItemValues } from './values';
 import type { ClusterNodeSetRow } from '../../../Cluster/CreateWizard/fields';
-import type { ProvisioningFieldValue } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
 import { catalogGeneralItemPayload } from '../CatalogGeneralStep';
-import { policyFromCatalogValue } from '../catalogItemPolicy';
+import { catalogFieldPolicyFromValue } from '../catalogItemPolicy';
 
 type CatalogItemFieldsInit = NonNullable<
   MessageInitShape<typeof ClusterCatalogItemSchema>['fields']
@@ -42,24 +41,12 @@ const toNodeSetMap = (value: unknown) => {
   return { items };
 };
 
-const buildFieldPolicy = <T>(
-  field: ProvisioningFieldValue<unknown>,
-  isEmpty: (value: unknown) => boolean,
-  toValue: (value: unknown) => unknown,
-): T | undefined =>
-  policyFromCatalogValue<T>(
-    field,
-    isEmpty,
-    (value) => ({ behavior: { case: 'locked', value: toValue(value) } }) as T,
-    (value) => ({ behavior: { case: 'editable', value: { defaultValue: toValue(value) } } }) as T,
-  );
-
 const buildClusterCatalogItemFieldsPayload = (
   values: ClusterCatalogItemValues,
 ): CatalogItemFieldsInit => {
   const fields: CatalogItemFieldsInit = {};
 
-  const version = buildFieldPolicy<FieldPolicyInit<'version'>>(
+  const version = catalogFieldPolicyFromValue<FieldPolicyInit<'version'>>(
     values.version,
     isEmptyString,
     toVersionReference,
@@ -68,7 +55,7 @@ const buildClusterCatalogItemFieldsPayload = (
     fields.version = version;
   }
 
-  const nodeSets = buildFieldPolicy<FieldPolicyInit<'nodeSets'>>(
+  const nodeSets = catalogFieldPolicyFromValue<FieldPolicyInit<'nodeSets'>>(
     values.nodeSets,
     isEmptyNodeSetList,
     toNodeSetMap,
@@ -77,12 +64,12 @@ const buildClusterCatalogItemFieldsPayload = (
     fields.nodeSets = nodeSets;
   }
 
-  const podCidr = buildFieldPolicy<NonNullable<NetworkFieldsInit['podCidr']>>(
+  const podCidr = catalogFieldPolicyFromValue<NonNullable<NetworkFieldsInit['podCidr']>>(
     values.podCidr,
     isEmptyString,
     toTrimmedString,
   );
-  const serviceCidr = buildFieldPolicy<NonNullable<NetworkFieldsInit['serviceCidr']>>(
+  const serviceCidr = catalogFieldPolicyFromValue<NonNullable<NetworkFieldsInit['serviceCidr']>>(
     values.serviceCidr,
     isEmptyString,
     toTrimmedString,

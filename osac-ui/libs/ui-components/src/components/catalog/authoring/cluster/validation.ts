@@ -2,22 +2,12 @@ import type { FormikErrors } from 'formik';
 import type { TFunction } from 'i18next';
 import * as yup from 'yup';
 
-import type { UserRole } from '../../../../shellTypes';
 import { buildCidrSchema, cidrsOverlap, isValidCidr } from '../../../../validation/cidr-validation';
 import { resourceNameSchema } from '../../../../validation/resource-name';
-import type { CatalogItemScope } from '../CatalogGeneralStep';
+import { catalogGeneralStepSchema, catalogLockedStringField } from '../catalogValidation';
 import type { ClusterCatalogItemValues } from './values';
 
 export type ClusterCatalogWizardStepId = 'general' | 'configuration' | 'networking' | 'review';
-
-const catalogLockedStringField = (valueSchema: yup.StringSchema, requiredMessage: string) =>
-  yup.object({
-    locked: yup.boolean(),
-    value: valueSchema.when('locked', {
-      is: true,
-      then: (schema) => schema.required(requiredMessage),
-    }),
-  });
 
 const nodeSetRowSchema = (t: TFunction) =>
   yup.object({
@@ -52,39 +42,11 @@ const cidrField = (t: TFunction, label: string) =>
 export const buildClusterCatalogStepSchema = (
   stepId: ClusterCatalogWizardStepId,
   t: TFunction,
-  role: UserRole,
+  role: Parameters<typeof catalogGeneralStepSchema>[1],
 ): yup.AnyObjectSchema | undefined => {
-  const isAdmin = role === 'admin';
-
   switch (stepId) {
     case 'general':
-      return yup.object({
-        scope: yup.string(),
-        metadata: yup
-          .object({
-            name: resourceNameSchema(t),
-            project: yup.string(),
-            tenant: yup.object({ id: yup.string(), name: yup.string() }),
-          })
-          .test('tenant-required', t('Tenant is required'), function tenantRequired(value) {
-            if (!isAdmin) {
-              return true;
-            }
-            const scope = (this.parent as { scope?: CatalogItemScope } | undefined)?.scope;
-            if (scope !== 'tenant' || value?.tenant?.id?.trim()) {
-              return true;
-            }
-            return this.createError({
-              path: `${this.path}.tenant`,
-              message: t('Tenant is required'),
-            });
-          }),
-        template: yup
-          .object({ id: yup.string(), name: yup.string() })
-          .test('template-required', t('Provisioning template is required'), (value) =>
-            Boolean(value?.id?.trim()),
-          ),
-      });
+      return catalogGeneralStepSchema(t, role);
     case 'configuration':
       return yup.object({
         version: catalogLockedStringField(

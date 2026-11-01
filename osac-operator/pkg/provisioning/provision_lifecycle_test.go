@@ -18,6 +18,7 @@ package provisioning
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -435,6 +436,32 @@ var _ = ginkgo.Describe("ComputeDesiredConfigVersion", func() {
 		v2, err := ComputeDesiredConfigVersion(map[string]string{"key": "b"})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(v1).NotTo(Equal(v2))
+	})
+
+	ginkgo.It("preserves the config hash of a ClusterOrder "+
+		"with an empty node image", func() {
+		spec := v1alpha1.ClusterOrderSpec{
+			NodeRequests: []v1alpha1.NodeRequest{{
+				NodeSet:       "workers",
+				NumberOfNodes: 3,
+			}},
+		}
+		encoded, err := json.Marshal(spec)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(encoded)).To(Equal(
+			`{"nodeRequests":[` +
+				`{"nodeSet":"workers","numberOfNodes":3}]}`,
+		))
+
+		hash, err := ComputeDesiredConfigVersion(spec)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(hash).To(Equal("398d688e45d7741c"))
+
+		spec.NodeRequests[0].ReleaseImage =
+			"registry.example/ocp:4.21.0"
+		withImage, err := ComputeDesiredConfigVersion(spec)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(withImage).NotTo(Equal(hash))
 	})
 })
 

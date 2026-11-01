@@ -62,6 +62,7 @@ vet: ## Run go vet against code.
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /test/integration) -coverprofile cover.out
+	go test -C api ./...
 
 # Run integration tests against a pre-existing Kind cluster deployed via
 # the root Makefile's `make dev-env` + `make integration-test-bmf`.

@@ -296,9 +296,13 @@ preflight:
   # - default-storageclass: a vanilla vcluster ships no default
   #   StorageClass, and the AAP that would need one runs on the outer
   #   cluster, not here.
+  # - kubevirt-crds: OpenShift Virtualization runs in the outer cluster;
+  #   VMaaS remote mode reaches it through the remote kubeconfig, so the
+  #   CRDs are never visible in the vcluster API.
   skipChecks:
   - db-init-host-endpoints
   - default-storageclass
+  - kubevirt-crds
 
 # --- LVMS StorageBackend registration ---
 lvms:

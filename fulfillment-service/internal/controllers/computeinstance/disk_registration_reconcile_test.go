@@ -610,6 +610,9 @@ func (c *registrationComputeInstancesClient) Update(
 		c.object.SetStatus(&privatev1.ComputeInstanceStatus{})
 	}
 	paths := request.GetUpdateMask().GetPaths()
+	if slices.Contains(paths, "status") {
+		c.object.SetStatus(proto.Clone(request.GetObject().GetStatus()).(*privatev1.ComputeInstanceStatus))
+	}
 	if slices.Contains(paths, "status.volume_registration") {
 		c.object.GetStatus().SetVolumeRegistration(cloneDiskRegistrations(request.GetObject().GetStatus().GetVolumeRegistration()))
 	}

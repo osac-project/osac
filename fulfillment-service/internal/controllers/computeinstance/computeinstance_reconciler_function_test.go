@@ -810,6 +810,10 @@ var _ = Describe("disk registration handoff from the reconciler", func() {
 			Namespace: hubNamespace,
 			Client:    hubClient,
 		}, nil).AnyTimes()
+		hubsClient := controllers.NewMockHubsClient(ctrl)
+		hubsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			&privatev1.HubsListResponse{Items: []*privatev1.Hub{{Id: hubID}}}, nil,
+		).AnyTimes()
 		instanceTypesClient := NewMockInstanceTypesClient(ctrl)
 		instanceTypesClient.EXPECT().Get(gomock.Any(), gomock.Any()).Return(
 			privatev1.InstanceTypesGetResponse_builder{
@@ -822,6 +826,7 @@ var _ = Describe("disk registration handoff from the reconciler", func() {
 		return &function{
 			logger:                 logger,
 			hubCache:               hubCache,
+			hubsClient:             hubsClient,
 			computeInstancesClient: computeClient,
 			volumesClient:          volumesClient,
 			instanceTypesClient:    instanceTypesClient,
@@ -923,10 +928,13 @@ var _ = Describe("disk registration handoff from the reconciler", func() {
 		Expect(provisioned(registrationTask.computeInstance).GetReason()).To(Equal("VolumeRegistrationPending"))
 	})
 
-	It("persists every disk ID before creating the first managed ComputeInstance", func() {
+	DescribeTable("persists every disk ID before creating the first managed ComputeInstance", func(initialStatus bool) {
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
 		instance := newInstance()
+		if !initialStatus {
+			instance.SetStatus(nil)
+		}
 		volumesClient := &registrationVolumesClient{}
 		var computeClient *registrationComputeInstancesClient
 		created := 0
@@ -975,11 +983,15 @@ var _ = Describe("disk registration handoff from the reconciler", func() {
 				continue
 			}
 			outerUpdates++
+			Expect(request.GetUpdateMask().GetPaths()).NotTo(ContainElement("status"))
 			Expect(request.GetUpdateMask().GetPaths()).NotTo(ContainElement("status.volumes"))
 			Expect(request.GetUpdateMask().GetPaths()).NotTo(ContainElement("status.volume_registration"))
 		}
 		Expect(outerUpdates).To(BeNumerically(">", 0))
-	})
+	},
+		Entry("with an existing status", true),
+		Entry("with no initial status", false),
+	)
 
 	It("blocks the managed CR during uncertainty and reuses the recovered ID", func() {
 		ctrl := gomock.NewController(GinkgoT())

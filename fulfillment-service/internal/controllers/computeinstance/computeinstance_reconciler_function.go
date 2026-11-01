@@ -235,6 +235,13 @@ func (r *function) run(ctx context.Context, computeInstance *privatev1.ComputeIn
 	}
 	// Calculate which fields the reconciler actually modified and use a field mask
 	// to update only those fields. This prevents overwriting concurrent user changes.
+	// Disk registration persists status through separate API calls. If this pass
+	// started without status, compare against an empty status so the mask names
+	// only our changed fields instead of replacing all of status with this stale
+	// copy and erasing the newly persisted Volume IDs.
+	if !oldComputeInstance.HasStatus() && computeInstance.HasStatus() {
+		oldComputeInstance.SetStatus(&privatev1.ComputeInstanceStatus{})
+	}
 	updateMask := r.maskCalculator.Calculate(oldComputeInstance, computeInstance)
 
 	// Only send an update if there are actual changes

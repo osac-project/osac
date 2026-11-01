@@ -721,12 +721,36 @@ make install-osac  PLATFORM=... PROFILE=... NS=...  # OSAC application only
 make kind-load-images PLATFORM=kind PROFILE=dev-full NS=... # Load existing images
 make uninstall     PLATFORM=... PROFILE=... NS=...  # Full uninstall
 make test          PLATFORM=... PROFILE=... NS=... SUITE=...  # Integration tests
+make validate-inputs PLATFORM=... PROFILE=... NS=... # Offline input validation (no cluster changes)
 make helm-lint                                       # Lint all charts
 make helm-template       # Dry-run render all templates
 make mce-render-test                                  # Verify disabled MCE defaults and CaaS enablement
+make input-validation-test                             # Test the upfront input-validation gate
 make helm-validate                                   # Lint + template (full validation)
 make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm dependency build)
 ```
+
+#### Input validation
+
+Every installation target (`install`, `install-infra`, `install-osac`,
+`install-devstack`, `install-multicluster`) first runs `validate-inputs`:
+an offline `helm template` of every applicable chart with the exact values
+the installation would use — the same profile values files, `EXTRA_HELM_ARGS`
+overrides, and (on OpenShift) the same read-only cluster lookups for the
+cluster domain and version. (With `DRY_RUN=1`, `install` renders offline via
+`install-dry-run` and skips the gate — the dry run is itself an offline
+render.) Invalid values — wrong types, negative numbers where only
+zero-or-positive is allowed, unknown keys — fail the install before any
+namespace, secret, or release is created, and before any readiness wait.
+The failure names the offending field and the violated constraint; fix the
+reported value and retry.
+
+The gate validates static inputs only. It does not check that the cluster is
+ready for the installation: prerequisites that must already exist (issuers,
+storage classes, CRDs) are verified by the render-time install preflight
+during `helm upgrade`, and resources the installer itself creates are allowed
+to become ready afterwards. `make validate-inputs` runs the same validation
+standalone without installing.
 
 ### Monitor Progress
 

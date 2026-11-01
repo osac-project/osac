@@ -63,7 +63,7 @@ TOPOLVM_BACKING_SIZE ?= 20G
 # -- Fail-fast parameter validation ------------------------------------
 # Guards fire at parse time, gated by MAKECMDGOALS so `make help` works.
 
-ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-load-images test
+ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack validate-inputs kind-load-images test
 
 ifneq ($(filter $(ALL_TARGETS),$(MAKECMDGOALS)),)
 ifndef PLATFORM
@@ -114,6 +114,14 @@ $(error install-multicluster requires PROFILE=vmaas-ci)
 endif
 ifndef REMOTE_KUBECONFIG
 $(error REMOTE_KUBECONFIG is required (workload cluster kubeconfig))
+endif
+endif
+ifneq ($(filter install-devstack,$(MAKECMDGOALS)),)
+ifneq ($(PLATFORM),kind)
+$(error install-devstack requires PLATFORM=kind)
+endif
+ifneq ($(PROFILE),dev-full)
+$(error install-devstack requires PROFILE=dev-full)
 endif
 endif
 ifneq ($(filter install-osac,$(MAKECMDGOALS)),)
@@ -223,6 +231,16 @@ INSTANCE_VALUES_EXTRA := -f values/bmaas-netbox-ci/instance.yaml
 else ifdef PROFILE
 INFRA_VALUES    := values/$(PROFILE)/infra.yaml
 INSTANCE_VALUES := values/$(PROFILE)/instance.yaml
+endif
+
+# install-multicluster's recipe passes the multicluster infra overlay to its
+# recursive install-infra; the gate must see the same effective values, or an
+# invalid overlay would only surface after prepare-remote-cluster has already
+# changed the remote workload cluster. `override` keeps the append even when
+# INFRA_VALUES_EXTRA is set on the command line, matching the install's
+# unconditional overlay.
+ifneq ($(filter install-multicluster,$(MAKECMDGOALS)),)
+override INFRA_VALUES_EXTRA += -f values/vmaas-ci/multicluster-infra.yaml
 endif
 
 # Kind cluster create/delete routing. dev-full needs a rootful runtime (KubeVirt
@@ -359,7 +377,7 @@ kind-load-images: ## Load previously built dev-full images into Kind (PLATFORM=k
 ##@ Entity: Infra
 
 .PHONY: install-infra
-install-infra: helm-infra-deps ## Install infrastructure (PLATFORM= PROFILE= NS= required)
+install-infra: validate-inputs helm-infra-deps ## Install infrastructure (PLATFORM= PROFILE= NS= required)
 ifeq ($(PLATFORM),kind)
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_CMD) check
@@ -511,8 +529,85 @@ else
 	@[ -z "$(OSAC_CHART_OCI_VERSION)" ] || { echo "ERROR: OSAC_CHART_OCI_VERSION is set without OSAC_CHART_OCI_REF -- this would silently install the local checkout's chart, ignoring the version" >&2; exit 1; }
 endif
 
+.PHONY: validate-inputs
+# An OCI-ref install renders the pulled chart, so the local osac chart's
+# dependencies are not built for it (mirrors the install-osac guard below).
+ifneq ($(OSAC_CHART_OCI_REF),)
+validate-inputs: helm-infra-deps validate-osac-chart-oci-ref
+else
+validate-inputs: helm-osac-deps helm-infra-deps validate-osac-chart-oci-ref ## Render every applicable chart offline, rejecting invalid inputs before any cluster change
+endif
+# dev-full is the only profile whose gate renders the devstack chart. Its
+# dependencies are a prerequisite, not a recipe step, so make shares (and
+# deduplicates) the build with install-devstack's own even under make -j.
+ifeq ($(PLATFORM),kind)
+ifeq ($(PROFILE),dev-full)
+validate-inputs: helm-devstack-deps
+endif
+endif
+ifeq ($(PLATFORM),kind)
+	@helm template osac-infra $(INFRA_CHART) \
+		--namespace osac-infra \
+		-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
+		--set osacNamespace=$(NS) \
+		$(INFRA_HELM_ARGS) >/dev/null \
+	|| { echo "ERROR: invalid installer inputs for osac-infra; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
+	@helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
+		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
+		--namespace $(NS) \
+		--set-string global.osacDeploymentId=$(NS)/osac \
+		$(INSTANCE_HELM_ARGS) \
+		$(EXTRA_HELM_ARGS) >/dev/null \
+	|| { echo "ERROR: invalid installer inputs for the osac chart; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
+ifeq ($(PROFILE),dev-full)
+	@helm template osac-devstack $(CHARTS)/osac-devstack \
+		--namespace $(NS) \
+		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
+		--set osacNamespace=$(NS) \
+		--set kindClusterName=$(KIND_CLUSTER_NAME) \
+		--set ui.enabled=true \
+		$(DEVSTACK_HELM_ARGS) >/dev/null \
+	|| { echo "ERROR: invalid installer inputs for osac-devstack; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
+endif
+else
+	$(eval OCP_VERSION := $(shell oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2))
+	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))
+	@[ -n "$(OCP_VERSION)" ] || { echo "ERROR: could not determine the OpenShift version for input validation. Is oc logged in?" >&2; exit 1; }
+	@[ -n "$(DOMAIN)" ] || { echo "ERROR: could not determine cluster domain for input validation. Is oc logged in?" >&2; exit 1; }
+	@helm template osac-deps $(DEPS_CHART) \
+		--namespace osac-deps \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
+		--set lvms.channel=stable-$(OCP_VERSION) \
+		$(INFRA_HELM_ARGS) >/dev/null \
+	|| { echo "ERROR: invalid installer inputs for osac-deps; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
+	@helm template osac-infra $(INFRA_CHART) \
+		--namespace osac-infra \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
+		--set osacNamespace=$(NS) \
+		--set lvms.channel=stable-$(OCP_VERSION) \
+		--set keycloak.hostname=https://keycloak-keycloak.$(DOMAIN) \
+		--set keycloak.route.hostname=keycloak-keycloak.$(DOMAIN) \
+		--set keycloak.uiUrl=https://$(UI_HOSTNAME) \
+		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
+		$(INFRA_HELM_ARGS) >/dev/null \
+	|| { echo "ERROR: invalid installer inputs for osac-infra; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
+	@helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
+		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
+		--namespace $(NS) \
+		--set-string global.osacDeploymentId=$(NS)/osac \
+		--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) \
+		--set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) \
+		--set global.clusterDomain=$(DOMAIN) \
+		--set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac \
+		--set ui.externalHostname=$(UI_HOSTNAME) \
+		$(INSTANCE_HELM_ARGS) \
+		$(EXTRA_HELM_ARGS) >/dev/null \
+	|| { echo "ERROR: invalid installer inputs for the osac chart; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
+endif
+	@echo "Installer input validation passed."
+
 .PHONY: install-osac
-install-osac: validate-osac-chart-oci-ref ## Install OSAC instance (PLATFORM= PROFILE= NS= required)
+install-osac: validate-inputs validate-osac-chart-oci-ref ## Install OSAC instance (PLATFORM= PROFILE= NS= required)
 ifndef OSAC_CHART_OCI_REF
 	rm -rf $(OSAC_CHART)/charts
 	helm --repository-config $(LOCAL_HELM_REPOSITORY_CONFIG) dependency build $(OSAC_CHART)
@@ -568,7 +663,7 @@ uninstall-osac: ## Uninstall OSAC instance (PLATFORM= PROFILE= NS= required)
 ##@ Entity: Dev Stack (kind PROFILE=dev-full only)
 
 .PHONY: install-devstack
-install-devstack: helm-devstack-deps ## Install dev-full extras: KubeVirt/CDI/Multus + AWX + UI Gateway route + seeded catalog
+install-devstack: validate-inputs helm-devstack-deps ## Install dev-full extras: KubeVirt/CDI/Multus + AWX + UI Gateway route + seeded catalog
 ifneq ($(PLATFORM)/$(PROFILE),kind/dev-full)
 	@echo "ERROR: install-devstack requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1
 endif
@@ -625,11 +720,11 @@ ifeq ($(PLATFORM),kind)
 else
 	helm template osac-deps $(DEPS_CHART) \
 		--namespace osac-deps \
-		--values $(INFRA_VALUES) \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set lvms.channel=stable-$(DRY_RUN_OCP_VERSION)
 	helm template osac-infra $(INFRA_CHART) \
 		--namespace osac-infra \
-		--values $(INFRA_VALUES) \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set osacNamespace=$(NS) \
 		--set lvms.channel=stable-$(DRY_RUN_OCP_VERSION) \
 		--set keycloak.hostname=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
@@ -653,7 +748,7 @@ ifeq ($(PROFILE),dev-full)
 endif
 
 .PHONY: install-multicluster
-install-multicluster: ## Prepare a VMaaS workload cluster, then install OSAC on management in remote mode
+install-multicluster: validate-inputs ## Prepare a VMaaS workload cluster, then install OSAC on management in remote mode
 	@test -r "$(KUBECONFIG)" || { echo "ERROR: KUBECONFIG is not readable: $(KUBECONFIG)" >&2; exit 1; }
 	@test -r "$(REMOTE_KUBECONFIG)" || { echo "ERROR: REMOTE_KUBECONFIG is not readable: $(REMOTE_KUBECONFIG)" >&2; exit 1; }
 	@test -f "$(AAP_LICENSE_FILE)" || { echo "ERROR: AAP_LICENSE_FILE not found at $(AAP_LICENSE_FILE)" >&2; exit 1; }
@@ -676,7 +771,7 @@ install-multicluster: ## Prepare a VMaaS workload cluster, then install OSAC on 
 		EVPN_VALUES="$(INFRA_VALUES)"
 	$(MAKE) install-infra PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
 		KUBECONFIG="$(KUBECONFIG)" \
-		INFRA_VALUES_EXTRA="-f values/vmaas-ci/multicluster-infra.yaml"
+		INFRA_VALUES_EXTRA="$(INFRA_VALUES_EXTRA)"
 	$(MAKE) install-osac PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
 		KUBECONFIG="$(KUBECONFIG)" \
 		REMOTE_KUBECONFIG="$(REMOTE_KUBECONFIG)" \
@@ -941,7 +1036,7 @@ chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/
 	uv run --project .. python scripts/test-chart-name-independence-render.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test mce-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test input-validation-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test mce-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \
@@ -964,3 +1059,7 @@ helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-ne
 .PHONY: helm-networking-test
 helm-networking-test: helm-deps helm-infra-deps ## Test networking fabricManager/k8sManager validation and derivation
 	./scripts/test-networking-values.sh
+
+.PHONY: input-validation-test
+input-validation-test: helm-deps helm-infra-deps ## Test the upfront input-validation gate wiring and schema rejections
+	./scripts/test-input-validation.sh

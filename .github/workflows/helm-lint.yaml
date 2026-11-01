@@ -172,6 +172,10 @@ jobs:
       working-directory: osac-installer
       run: ./scripts/test-networking-values.sh
 
+    - name: Test input validation gate
+      working-directory: osac-installer
+      run: ./scripts/test-input-validation.sh
+
     - name: Test MCE rendering
       working-directory: osac-installer
       run: uv run --project .. make mce-render-test

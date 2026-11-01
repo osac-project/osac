@@ -37,7 +37,8 @@
               "description": "Namespace containing fulfillment trust resources in tenant clusters",
               "default": "osac-csi"
             }
-          }
+          },
+          "additionalProperties": false
         },
         "services": {
           "type": "object",
@@ -1288,7 +1289,8 @@
             "backoffLimit": {
               "type": "integer",
               "description": "Number of retries for bootstrap job",
-              "default": 15
+              "default": 15,
+              "minimum": 0
             },
             "readinessConsecutiveSuccesses": {
               "type": "integer",

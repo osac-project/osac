@@ -484,7 +484,7 @@ func (c *BCMClient) ensureBMHExists(ctx context.Context, device *bcmclient.Devic
 
 	// Secret name is derived from the BMH so the two stay coupled.
 	secretName := bmhName + bmcSecretSuffix
-	if err := c.bmhManager.EnsureBMCSecret(ctx, secretName, username, password); err != nil {
+	if err := c.bmhManager.EnsureBMCSecret(ctx, secretName, username, password, bareMetalInstanceID); err != nil {
 		return fmt.Errorf("failed to create BMC credentials Secret for host %q: %w", device.Hostname, err)
 	}
 
@@ -663,37 +663,51 @@ func (c *BCMClient) buildHost(device *bcmclient.Device) *Host {
 	}
 }
 
-// UnassignHost clears the OSAC assignment from a BCM device and deletes the
-// on-demand BMH CR. Ordering is BCM update before BMH deletion for crash
-// recovery safety — both steps are individually idempotent.
+// UnassignHost deletes generated resources before clearing the BCM claim.
 func (c *BCMClient) UnassignHost(ctx context.Context, inventoryHostID, bareMetalInstanceID string, labels []string) error {
 	_, hostname, err := ParseHostID(inventoryHostID)
 	if err != nil {
 		return fmt.Errorf("UnassignHost: %w", err)
 	}
-
-	log := ctrllog.FromContext(ctx)
-	log.Info("Unassigning BCM host", "hostname", hostname)
-
-	ownedByAnother, err := c.clearBCMAssignment(ctx, hostname, bareMetalInstanceID, labels)
+	ctrllog.FromContext(ctx).Info("Unassigning BCM host", "hostname", hostname, "bmiUID", bareMetalInstanceID)
+	ownedByAnother, err := c.bcmHostOwnedByAnother(ctx, hostname, bareMetalInstanceID)
 	if err != nil {
 		return fmt.Errorf("UnassignHost: %w", err)
 	}
 	if ownedByAnother {
 		return nil
 	}
-
-	if err := c.bmhManager.DeleteBMH(ctx, hostname); err != nil {
+	if err := c.deleteBCMResources(ctx, hostname, bareMetalInstanceID); err != nil {
 		return fmt.Errorf("UnassignHost: %w", err)
 	}
-
-	// Delete the operator-created BMC Secret if we own it. Label-guarded inside
-	// DeleteBMCSecret, so admin-provided Secrets are never touched.
-	if err := c.bmhManager.DeleteBMCSecret(ctx, hostname+bmcSecretSuffix); err != nil {
+	_, err = c.clearBCMAssignment(ctx, hostname, bareMetalInstanceID, labels)
+	if err != nil {
 		return fmt.Errorf("UnassignHost: %w", err)
 	}
-
 	return nil
+}
+
+func (c *BCMClient) bcmHostOwnedByAnother(ctx context.Context, hostname, ownerUID string) (bool, error) {
+	device, err := c.client.GetDevice(ctx, hostname)
+	if err != nil || device == nil {
+		return false, err
+	}
+	owner, assigned := device.ExtraValues[bcmclient.ExtraValueInstanceID]
+	return assigned && owner != ownerUID, nil
+}
+
+func (c *BCMClient) deleteBCMResources(ctx context.Context, hostname, ownerUID string) error {
+	if err := c.bmhManager.DeleteBMH(ctx, hostname, ownerUID); err != nil {
+		return err
+	}
+	exists, err := c.bmhManager.BMHExists(ctx, hostname)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("BareMetalHost %s deletion pending", hostname)
+	}
+	return c.bmhManager.DeleteBMCSecret(ctx, hostname+bmcSecretSuffix, ownerUID)
 }
 
 func (c *BCMClient) clearBCMAssignment(ctx context.Context, hostname, bareMetalInstanceID string, labels []string) (bool, error) {

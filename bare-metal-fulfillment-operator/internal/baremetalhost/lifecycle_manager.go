@@ -24,11 +24,11 @@ import "context"
 //go:generate mockgen -destination=bmh_lifecycle_manager_mock.go -package=baremetalhost . BMHLifecycleManager
 type BMHLifecycleManager interface {
 	CreateBMH(ctx context.Context, params CreateParams) error
-	DeleteBMH(ctx context.Context, name string) error
+	DeleteBMH(ctx context.Context, name, ownerUID string) error
 	BMHExists(ctx context.Context, name string) (bool, error)
 	IsBMHReady(ctx context.Context, name string) (bool, error)
-	EnsureBMCSecret(ctx context.Context, name, username, password string) error
-	DeleteBMCSecret(ctx context.Context, name string) error
+	EnsureBMCSecret(ctx context.Context, name, username, password, ownerUID string) error
+	DeleteBMCSecret(ctx context.Context, name, ownerUID string) error
 	GetHardwareNICs(ctx context.Context, name string) ([]string, error)
 	Namespace() string
 }

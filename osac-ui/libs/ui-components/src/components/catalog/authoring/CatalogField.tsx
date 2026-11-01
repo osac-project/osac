@@ -25,6 +25,7 @@ const CatalogField = ({ name, children }: CatalogFieldProps) => {
   const labelInfo = (
     <Switch
       id={`${name}-editable`}
+      className="pf-v6-u-font-weight-normal"
       label={isEditable ? t('Editable') : t('Locked')}
       isChecked={isEditable}
       hasCheckIcon

@@ -36,6 +36,7 @@ describe('CatalogField', () => {
     const toggle = screen.getByRole('switch');
     expect(toggle).toBeChecked();
     expect(toggle).toHaveAccessibleName('Editable');
+    expect(toggle.closest('label')).toHaveClass('pf-v6-u-font-weight-normal');
     expect(screen.queryByText('*')).not.toBeInTheDocument();
   });
 

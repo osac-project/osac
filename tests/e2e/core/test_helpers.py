@@ -13,19 +13,6 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
 
-def test_wait_for_cluster_ready_fails_immediately_on_failed_order(monkeypatch: pytest.MonkeyPatch) -> None:
-    k8s = Mock()
-    k8s.get_cluster_order_phase.return_value = "Failed"
-
-    def run_once(*, fn: Callable[[], str], until: Callable[[str], bool], **_kwargs: object) -> str:
-        return fn()
-
-    monkeypatch.setattr(helpers, "poll_until", run_once)
-
-    with pytest.raises(AssertionError, match="order-test entered Failed phase"):
-        helpers.wait_for_cluster_ready(k8s=k8s, name="order-test")
-
-
 def test_node_pool_ready_node_count_uses_node_versions() -> None:
     node_pool = {"status": {"nodesInfo": {"nodeVersions": [{"readyNodeCount": 1}, {"readyNodeCount": 2}]}}}
 

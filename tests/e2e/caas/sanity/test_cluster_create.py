@@ -776,9 +776,74 @@ def _assert_two_node_set_requests(
     return expected_replicas
 
 
+_TRANSIENT_KUBECTL_PATTERNS: tuple[str, ...] = (
+    "was refused",
+    "connection refused",
+    "i/o timeout",
+    "connection timed out",
+    "connection reset by peer",
+    "tls handshake timeout",
+    "client.timeout exceeded",
+    "context deadline exceeded",
+    "server is currently unable to handle the request",
+)
+"""Lowercase substrings that identify transient kubectl / API-server
+connectivity failures safe to retry.  Everything else -- invalid
+namespace, Forbidden, Unauthorized, unknown resource, etc. -- is
+treated as permanent and propagated immediately so the test fails
+fast with the original diagnostic."""
+
+
+def _is_transient_kubectl_error(exc: subprocess.CalledProcessError) -> bool:
+    """Return True only for known transient kubectl connectivity failures."""
+    combined = ((exc.stderr or "") + " " + (exc.stdout or "")).lower()
+    return any(p in combined for p in _TRANSIENT_KUBECTL_PATTERNS)
+
+
+_PERMANENT_ERROR_CATEGORIES: dict[str, str] = {
+    "not found": "not-found",
+    "forbidden": "forbidden",
+    "unauthorized": "unauthorized",
+    "doesn't have a resource type": "unknown-resource",
+}
+"""Safe category labels for permanent kubectl errors.
+
+Raw stderr/stdout may contain internal hostnames, namespace names,
+or other operational data that must not appear in exception messages
+(see runner.py's suppression policy).  This mapping classifies the
+error for diagnostics without leaking raw command output."""
+
+
+def _permanent_error_category(exc: subprocess.CalledProcessError) -> str:
+    """Classify a permanent kubectl error without leaking raw output."""
+    combined = ((exc.stderr or "") + " " + (exc.stdout or "")).lower()
+    for pattern, category in _PERMANENT_ERROR_CATEGORIES.items():
+        if pattern in combined:
+            return category
+    return "unclassified"
+
+
 def _assert_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers: int) -> None:
+    """Poll worker aggregates, retrying only transient API errors.
+
+    Permanent kubectl failures (invalid namespace, authorization,
+    unknown resource) propagate immediately instead of being hidden
+    behind a ~20-minute poll_until timeout.  The raised RuntimeError
+    carries the return code and a safe error category but never raw
+    command output (runner.py suppression policy).
+    """
+
     def _get_worker_counts() -> tuple[int, int, int]:
-        status = k8s.get_json(resource="clusterorder", name=co_name).get("status", {})
+        try:
+            status = k8s.get_json(resource="clusterorder", name=co_name).get("status", {})
+        except subprocess.CalledProcessError as exc:
+            if _is_transient_kubectl_error(exc):
+                raise  # poll_until catches and retries
+            # Suppress the chained CalledProcessError: its command
+            # and output may contain secrets (runner.py convention).
+            raise RuntimeError(
+                f"permanent kubectl failure (rc={exc.returncode}, category={_permanent_error_category(exc)})"
+            ) from None
         return tuple(int(status.get(key, -1)) for key in ("desiredWorkers", "currentWorkers", "readyWorkers"))
 
     poll_until(
@@ -786,7 +851,7 @@ def _assert_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers:
         until=lambda value: value == (expected_workers, expected_workers, expected_workers),
         retries=120,
         delay=10,
-        description=f"{co_name} worker aggregates before NodePool isolation check",
+        description=(f"{co_name} worker aggregates before NodePool isolation check"),
         retry_on_error=True,
         resource_kind=WaitResourceKind.CLUSTER_ORDER,
         resource_id=co_name,

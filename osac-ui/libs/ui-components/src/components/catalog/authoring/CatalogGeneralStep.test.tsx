@@ -74,6 +74,12 @@ describe('CatalogGeneralStep', () => {
     expect(screen.queryByRole('textbox', { name: 'Description' })).not.toBeInTheDocument();
   });
 
+  it('renders the General heading', () => {
+    renderStep(false);
+
+    expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
+  });
+
   it('shows provisioning template help information', async () => {
     const { user } = renderStep(false);
 

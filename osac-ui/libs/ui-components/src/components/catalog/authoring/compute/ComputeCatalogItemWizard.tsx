@@ -137,13 +137,12 @@ const ComputeCatalogItemWizard = ({ item }: ComputeCatalogItemWizardProps) => {
                 setCurrentStep(step.id as ComputeCatalogWizardStepId);
               }}
             >
-              <WizardStep id="details" name={t('Details')}>
+              <WizardStep id="details" name={t('General')}>
                 {currentStep === 'details' && (
                   <CatalogGeneralStep
                     isEdit={!!item}
                     templateService={ComputeInstanceTemplates}
                     templateFieldId="compute-catalog-item-template"
-                    heading={t('Details')}
                   />
                 )}
               </WizardStep>

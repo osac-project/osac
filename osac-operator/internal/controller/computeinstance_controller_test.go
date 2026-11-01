@@ -35,6 +35,7 @@ import (
 	clocktesting "k8s.io/utils/clock/testing"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
@@ -46,6 +47,57 @@ import (
 )
 
 const testTemplateParams = `{"key": "value"}`
+
+// boundarySnapshot holds the server state captured at the moment the
+// reconciler's Update call removes the base finalizer from a deleting
+// ComputeInstance.
+type boundarySnapshot struct {
+	phase      osacv1alpha1.ComputeInstancePhaseType
+	deprovJob  *osacv1alpha1.NetworkJobStatus
+	finalizers []string
+}
+
+// finalizerBoundaryClient wraps a client.Client.  On the first Update
+// that submits a deleting ComputeInstance WITHOUT the base finalizer,
+// it reads the API-server state via the direct (uncached) k8sClient
+// and records it in Snap BEFORE forwarding the Update.
+type finalizerBoundaryClient struct {
+	client.Client
+	Key  types.NamespacedName
+	Snap *boundarySnapshot
+}
+
+func (w *finalizerBoundaryClient) Update(
+	ctx context.Context, obj client.Object,
+	opts ...client.UpdateOption,
+) error {
+	if w.Snap == nil {
+		if ci, ok := obj.(*osacv1alpha1.ComputeInstance); ok &&
+			client.ObjectKeyFromObject(ci) == w.Key &&
+			!ci.DeletionTimestamp.IsZero() &&
+			!controllerutil.ContainsFinalizer(
+				ci, osacComputeInstanceFinalizer) {
+			server := &osacv1alpha1.ComputeInstance{}
+			ExpectWithOffset(1,
+				k8sClient.Get(ctx, w.Key, server)).To(Succeed())
+			entry := networktask.FindJob(
+				server.Status.Jobs,
+				computeInstanceDeprovisionTask,
+				osacv1alpha1.NetworkJobManagerNone)
+			snap := boundarySnapshot{
+				phase: server.Status.Phase,
+				finalizers: append([]string(nil),
+					server.Finalizers...),
+			}
+			if entry != nil {
+				cp := *entry
+				snap.deprovJob = &cp
+			}
+			w.Snap = &snap
+		}
+	}
+	return w.Client.Update(ctx, obj, opts...)
+}
 
 // createReadyTenant creates a Tenant with the given name in the namespace and sets status to Ready.
 // If the tenant already exists, it is updated to Ready.
@@ -273,6 +325,177 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
 
 			deleteTenantInNamespace(ctx, namespaceName, tenantName)
+		})
+	})
+
+	// OSAC-5667 regression: Engine.write (engine.go:420) persists the
+	// terminal deprovision Succeeded via Status().Update before
+	// handleDelete's r.Update removes the base finalizer.  This test
+	// intercepts that metadata Update to read the server state at the
+	// exact boundary and assert that the Succeeded job, Deleting phase,
+	// and both finalizers are present on the server BEFORE the finalizer
+	// removal reaches the API server.
+	Context("OSAC-5667: deletion status persistence", func() {
+		const namespaceName = "default"
+		const tenantName = "test-tenant-osac-5667"
+		ctx := context.Background()
+
+		ciReconcilerWithBoundary := func(
+			key types.NamespacedName,
+		) (*ComputeInstanceReconciler, *wlFakeAAP, *finalizerBoundaryClient) {
+			rec, fake := newTestCIReconcilerWithAAP(
+				false, namespaceName, namespaceName,
+				namespaceName, 100*time.Millisecond)
+			bw := &finalizerBoundaryClient{
+				Client: rec.Client, Key: key,
+			}
+			rec.Client = bw
+			return rec, fake, bw
+		}
+
+		// cleanupCI removes finalizers and deletes the CR.
+		cleanupCI := func(key types.NamespacedName) {
+			ci := &osacv1alpha1.ComputeInstance{}
+			if err := k8sClient.Get(ctx, key, ci); err != nil {
+				Expect(errors.IsNotFound(err)).To(BeTrue())
+				return
+			}
+			ci.Finalizers = nil
+			Expect(k8sClient.Update(ctx, ci)).To(Succeed())
+			if ci.DeletionTimestamp.IsZero() {
+				Expect(client.IgnoreNotFound(
+					k8sClient.Delete(ctx, ci))).To(Succeed())
+			}
+		}
+
+		// provisionAndDelete drives the CR through provision
+		// completion and initiates deletion so the deprovision
+		// path is exercised.
+		provisionAndDelete := func(
+			rec *ComputeInstanceReconciler,
+			aapFake *wlFakeAAP,
+			key types.NamespacedName,
+		) mcreconcile.Request {
+			req := mcreconcile.Request{
+				Request: reconcile.Request{NamespacedName: key},
+			}
+			// Provision.
+			_, err := rec.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			aapFake.finish(computeInstanceProvisionTask, "successful", "")
+			Eventually(func(g Gomega) {
+				_, err := rec.Reconcile(ctx, req)
+				g.Expect(err).NotTo(HaveOccurred())
+				ci := &osacv1alpha1.ComputeInstance{}
+				g.Expect(k8sClient.Get(ctx, key, ci)).To(Succeed())
+				e := networktask.FindJob(ci.Status.Jobs,
+					computeInstanceProvisionTask,
+					osacv1alpha1.NetworkJobManagerNone)
+				g.Expect(e).NotTo(BeNil())
+				g.Expect(e.State).To(Equal(
+					osacv1alpha1.NetworkJobStateSucceeded))
+			}, 10*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			// Set VM ref so removeVM triggers deprovision.
+			Eventually(func(g Gomega) {
+				ci := &osacv1alpha1.ComputeInstance{}
+				g.Expect(k8sClient.Get(ctx, key, ci)).To(Succeed())
+				ci.Status.VirtualMachineReference =
+					&osacv1alpha1.VirtualMachineReferenceType{
+						KubeVirtVirtualMachineName: "vm",
+						Namespace:                  namespaceName,
+					}
+				g.Expect(k8sClient.Status().Update(ctx, ci)).
+					To(Succeed())
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			// Delete.
+			ci := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, key, ci)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, ci)).To(Succeed())
+			Eventually(func(g Gomega) {
+				ci := &osacv1alpha1.ComputeInstance{}
+				g.Expect(k8sClient.Get(ctx, key, ci)).To(Succeed())
+				g.Expect(ci.DeletionTimestamp.IsZero()).To(BeFalse())
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			// Launch deprovision job.
+			_, err = rec.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			return req
+		}
+
+		It("persists deprovision Succeeded before removing "+
+			"the base finalizer", func() {
+			createReadyTenant(ctx, namespaceName, tenantName)
+			DeferCleanup(deleteTenantInNamespace, ctx, namespaceName, tenantName)
+
+			key := types.NamespacedName{
+				Name: "test-ci-osac-5667", Namespace: namespaceName,
+			}
+			rec, aapFake, bw := ciReconcilerWithBoundary(key)
+			ci := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      key.Name,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+					},
+					Finalizers: []string{
+						osacComputeInstanceFinalizer,
+						osacComputeInstanceFeedbackFinalizer,
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, ci)).To(Succeed())
+			DeferCleanup(cleanupCI, key)
+
+			req := provisionAndDelete(rec, aapFake, key)
+			aapFake.finish(
+				computeInstanceDeprovisionTask, "successful", "")
+
+			// Reconcile until the base finalizer is removed.
+			Eventually(func(g Gomega) {
+				_, err := rec.Reconcile(ctx, req)
+				g.Expect(err).NotTo(HaveOccurred())
+				got := &osacv1alpha1.ComputeInstance{}
+				g.Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+				g.Expect(got.Finalizers).NotTo(ContainElement(
+					osacComputeInstanceFinalizer))
+			}, 10*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			// The boundary wrapper captured the server state
+			// immediately before the Update that removed the
+			// base finalizer.  Assert the exact contract.
+			Expect(bw.Snap).NotTo(BeNil(),
+				"boundary must have been observed")
+			Expect(bw.Snap.phase).To(Equal(
+				osacv1alpha1.ComputeInstancePhaseDeleting))
+			Expect(bw.Snap.deprovJob).NotTo(BeNil())
+			Expect(bw.Snap.deprovJob.State).To(Equal(
+				osacv1alpha1.NetworkJobStateSucceeded))
+			Expect(bw.Snap.finalizers).To(ContainElement(
+				osacComputeInstanceFinalizer))
+			Expect(bw.Snap.finalizers).To(ContainElement(
+				osacComputeInstanceFeedbackFinalizer))
+
+			// Post-removal: Succeeded and Deleting survive,
+			// feedback finalizer present, base absent.
+			got := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+			Expect(got.Status.Phase).To(Equal(
+				osacv1alpha1.ComputeInstancePhaseDeleting))
+			e := networktask.FindJob(got.Status.Jobs,
+				computeInstanceDeprovisionTask,
+				osacv1alpha1.NetworkJobManagerNone)
+			Expect(e).NotTo(BeNil())
+			Expect(e.State).To(Equal(
+				osacv1alpha1.NetworkJobStateSucceeded))
+			Expect(got.Finalizers).To(ContainElement(
+				osacComputeInstanceFeedbackFinalizer))
+			Expect(got.Finalizers).NotTo(ContainElement(
+				osacComputeInstanceFinalizer))
 		})
 	})
 

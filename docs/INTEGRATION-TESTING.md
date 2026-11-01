@@ -354,13 +354,6 @@ installer command in the tier table remains the component-integration check.
 
 Touched-area requirements: [component guide](../osac-installer/AGENTS.md#integration-testing).
 
-The `make -C osac-installer evpn-render-test` Helm contract validates EVPN
-rendering and rejects node VTEP addresses outside `evpn.vtepCIDR`, including
-non-octet prefixes and `/0`, `/31`, and `/32` boundaries. It checks the
-`evpn.bgp.accectVtepPrefixes` receive filters and rejection of the old
-`acceptPrefixes` key. It does not configure host interfaces or establish BGP
-sessions on a cluster.
-
 The `make mce-render-test` Helm contract renders the prerequisite charts from
 local sources. It asserts disabled defaults, explicit standalone MCE
 enablement, configuration, Assisted image overrides, compatibility RBAC,

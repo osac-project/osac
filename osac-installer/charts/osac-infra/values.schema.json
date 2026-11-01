@@ -217,7 +217,7 @@
               "description": "Default node ASN; individual nodes can override it.",
               "default": 0
             },
-            "accectVtepPrefixes": {
+            "acceptPrefixes": {
               "type": "array",
               "description": "Fabric loopback ranges; only /32 routes inside them are accepted.",
               "items": {
@@ -238,7 +238,7 @@
               "default": 900
             }
           },
-          "required": ["asn", "accectVtepPrefixes", "waitForEstablished", "timeoutSeconds"]
+          "required": ["asn", "acceptPrefixes", "waitForEstablished", "timeoutSeconds"]
         },
         "nodes": {
           "type": "array",
@@ -323,7 +323,7 @@
               "bgp": {
                 "properties": {
                   "asn": {"minimum": 1},
-                  "accectVtepPrefixes": {"minItems": 1}
+                  "acceptPrefixes": {"minItems": 1}
                 }
               },
               "nodes": {"minItems": 1}

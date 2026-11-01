@@ -463,9 +463,8 @@ interface, optional uplink address, fabric peer address, and peer ASN. The
 fabric admin also assigns the VTEP range, each node VTEP address, and the node
 ASN, and configures the matching VTEP range and node ASN on the fabric. If a
 node has a different ASN, set its `nodes[].asn`; otherwise the installer uses
-`bgp.asn`. Every node's `vtepIP` must be inside `evpn.vtepCIDR`; Helm rejects
-out-of-range addresses before applying resources. `bgp.accectVtepPrefixes` comes
-from the fabric admin and lists remote fabric loopback ranges; the installer accepts only /32 routes within them.
+`bgp.asn`. `bgp.acceptPrefixes` comes from the fabric admin and lists remote
+fabric loopback ranges; the installer accepts only /32 routes within them.
 
 | Value | Meaning and source |
 |---|---|
@@ -475,7 +474,7 @@ from the fabric admin and lists remote fabric loopback ranges; the installer acc
 | `evpn.configureClusterNetwork` | Applies the cluster network operator settings. It triggers one OVN-Kubernetes restart. |
 | `evpn.vtepCIDR` | Required VTEP address range, assigned with the fabric admin. |
 | `evpn.bgp.asn` | Required default node ASN, assigned with the fabric admin. |
-| `evpn.bgp.accectVtepPrefixes` | Required fabric loopback IPv4 ranges supplied by the fabric admin. Only /32 routes are accepted. |
+| `evpn.bgp.acceptPrefixes` | Required fabric loopback IPv4 ranges supplied by the fabric admin. Only /32 routes are accepted. |
 | `evpn.bgp.waitForEstablished` | Fails installation if a configured BGP session does not become Established. |
 | `evpn.bgp.timeoutSeconds` | Maximum wait per BGP session. |
 | `evpn.nodes[].name` | Kubernetes node name from the cluster admin. Add one entry for every VMaaS node. |

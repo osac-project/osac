@@ -487,7 +487,7 @@ export type MockTransportOverrides = {
   onDiskImageUpdate?: (req: DiskImagesUpdateRequest) => DiskImagesUpdateResponse;
   onDiskImageDelete?: (req: DiskImagesDeleteRequest) => DiskImagesDeleteResponse;
   onSubnetList?: (req: SubnetsListRequest) => void;
-  onSubnetGet?: (req: SubnetsGetRequest) => { object?: Subnet };
+  onSubnetGet?: (req: SubnetsGetRequest) => { object?: Subnet } | Promise<{ object?: Subnet }>;
   onNatGatewayList?: (req: NATGatewaysListRequest) => void;
   onNatGatewayCreate?: (
     req: NATGatewaysCreateRequest,

@@ -3,6 +3,7 @@ import { useField } from 'formik';
 import { Subnets } from '@osac/types';
 
 import type { ProvisioningFieldControlProps } from './provisioningFieldValue';
+import { useVmSubnetValidator } from './useVmSubnetValidator';
 import { virtualNetworkFilterForSubnetList } from '../../../api/v1/networking';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { ResourceSelectField } from '../../Form/ResourceSelectField';
@@ -22,6 +23,7 @@ const SubnetField = ({
   const { t } = useTranslation();
   const [virtualNetwork] = useField<ResourceSelectValue>(virtualNetworkName);
   const virtualNetworkId = virtualNetwork.value?.id ?? '';
+  const validateVmSubnet = useVmSubnetValidator();
 
   return (
     <ResourceSelectField
@@ -41,11 +43,11 @@ const SubnetField = ({
       }
       isDisabled={isDisabled || !virtualNetworkId}
       validateSelection={
-        requireVmSupport && isDisabled
-          ? (value, items) =>
-              value.id && !items.some((item) => item.id === value.id)
+        requireVmSupport
+          ? (value, _items, state) =>
+              value?.id && (state.isFetching || state.hasError)
                 ? t('A subnet must be READY and support compute instances.')
-                : undefined
+                : validateVmSubnet(value, virtualNetworkId)
           : undefined
       }
       autoSelectSingleOption

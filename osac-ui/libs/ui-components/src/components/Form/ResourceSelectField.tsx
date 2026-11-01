@@ -1,7 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo } from 'react';
 import { Alert, Content, FormGroup } from '@patternfly/react-core';
 import { TypeaheadSelect } from '@patternfly/react-templates';
-import { useField } from 'formik';
+import { useField, useFormikContext } from 'formik';
 
 import type { ListParams } from '@osac/ui-components/api/types';
 import { useListResource } from '@osac/ui-components/api/use-resource';
@@ -42,7 +42,11 @@ export interface ResourceSelectFieldProps {
   /** Client-side filter applied after the list response (e.g. GPU-class). */
   filterItems?: (item: ResourceListItem) => boolean;
   /** Validates the selected value against the currently listed resources. */
-  validateSelection?: (value: ResourceSelectValue, items: ResourceListItem[]) => string | undefined;
+  validateSelection?: (
+    value: ResourceSelectValue,
+    items: ResourceListItem[],
+    state: { isFetching: boolean; hasError: boolean },
+  ) => string | undefined | Promise<string | undefined>;
   /** Label for options and the closed toggle. Defaults to metadata.name. */
   formatOptionLabel?: (item: ResourceListItem) => string;
 }
@@ -75,7 +79,13 @@ export const ResourceSelectField = ({
   formatOptionLabel = defaultOptionLabel,
 }: ResourceSelectFieldProps) => {
   const showValidationErrors = useShowFieldValidationErrors();
-  const { data, isLoading, error: loadError } = useListResource(service, request);
+  const {
+    data,
+    isLoading,
+    isFetching,
+    dataUpdatedAt,
+    error: loadError,
+  } = useListResource(service, request);
   const items = useMemo(() => {
     const listed = ((data as { items?: ResourceListItem[] } | undefined)?.items ?? []).filter(
       (item) => item.id,
@@ -83,10 +93,26 @@ export const ResourceSelectField = ({
     return filterItems ? listed.filter(filterItems) : listed;
   }, [data, filterItems]);
   const validate = useCallback(
-    (value: ResourceSelectValue) => validateSelection?.(value, items),
-    [items, validateSelection],
+    (value: ResourceSelectValue) =>
+      validateSelection?.(value, items, { isFetching, hasError: Boolean(loadError) }),
+    [items, validateSelection, isFetching, loadError],
   );
   const [field, meta, helpers] = useField<ResourceSelectValue>({ name, validate });
+  const { validateField } = useFormikContext();
+  const hasSelectionValidator = Boolean(validateSelection);
+  useEffect(() => {
+    if (hasSelectionValidator) {
+      void validateField(name);
+    }
+  }, [
+    dataUpdatedAt,
+    isFetching,
+    loadError,
+    field.value,
+    name,
+    validateField,
+    hasSelectionValidator,
+  ]);
   const error = getVisibleFieldError(meta, showValidationErrors);
 
   const listFailed = Boolean(loadError);

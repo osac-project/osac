@@ -1,11 +1,15 @@
+import React, { type ReactNode, createElement } from 'react';
 import { create, fromBinary, fromJson, toBinary, toJson } from '@bufbuild/protobuf';
-import { createClient } from '@connectrpc/connect';
-import { QueryClient } from '@tanstack/react-query';
+import { createClient, createRouterTransport } from '@connectrpc/connect';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import {
   ExternalIPState,
+  Protocol,
   SecurityGroupState,
+  SecurityGroups,
   SubnetSchema,
   SubnetState,
   Subnets,
@@ -21,9 +25,11 @@ import {
   securityGroupFilterForVirtualNetwork,
   securityGroupFilterForVirtualNetworkList,
   unallocatedExternalIpFilter,
+  useUpdateSecurityGroup,
   virtualNetworkFilterForSubnetList,
   virtualNetworkScopeFilter,
 } from './networking';
+import { ApiProvider } from '../api-context';
 import { createMockConnectTransport } from '../../test-utils/createMockConnectTransport';
 import { escapeCelStringLiteral } from '../cel';
 
@@ -211,5 +217,45 @@ describe('networking query invalidation', () => {
 
     expect(qc.getQueryState(['v1/security_groups'])?.isInvalidated).toBe(true);
     expect(qc.getQueryState(['v1/security_groups', ['sg-1']])?.isInvalidated).toBe(true);
+  });
+});
+
+describe('useUpdateSecurityGroup', () => {
+  it('sends rule updates through the public API', async () => {
+    let captured: { object?: unknown } | undefined;
+    const transport = createRouterTransport((router) => {
+      router.service(SecurityGroups, {
+        update: (request) => {
+          captured = request;
+          return { object: request.object };
+        },
+      });
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(
+        ApiProvider,
+        { transport } as React.ComponentProps<typeof ApiProvider>,
+        createElement(QueryClientProvider, { client: queryClient }, children),
+      );
+    const { result } = renderHook(() => useUpdateSecurityGroup(), { wrapper });
+    const object = {
+      id: 'sg-1',
+      metadata: { name: 'sg-web' },
+      spec: {
+        virtualNetwork: { id: 'vn-1' },
+        ingress: [{ protocol: Protocol.TCP, portFrom: 443, portTo: 443 }],
+        egress: [],
+      },
+    };
+
+    await act(async () => {
+      await result.current.mutateAsync({ object });
+    });
+
+    expect(captured?.object).toMatchObject(object);
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
   });
 });

@@ -37,6 +37,7 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.storage.conftest import NAMESPACE_MANIFEST, TENANT_MANIFEST
 
 logger = logging.getLogger(__name__)
@@ -148,6 +149,8 @@ def _verify_provisioning(*, k8s: K8sClient, tenant_name: str, co_name: str) -> N
         retries=30,
         delay=5,
         description=f"cluster-storage finalizer on {co_name}",
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
     )
 
     # --- ClusterStorageReady=True on ClusterOrder ---

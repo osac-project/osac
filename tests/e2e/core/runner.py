@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
 from tests.e2e.core.sanitize import sanitize_args, sanitize_text
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 T = TypeVar("T")
 
@@ -145,13 +146,32 @@ def poll_until(
     delay: int = 5,
     description: str,
     retry_on_error: bool = False,
+    resource_kind: WaitResourceKind,
+    resource_id: str,
 ) -> T:
+    """Poll fn() until its value passes until(), raising StuckState on timeout.
+
+    resource_kind and resource_id are mandatory: the kind and the name or
+    UUID of the single resource the wait observes (e.g. "Subnet" and its
+    name). A wait that cannot name what it waits on is a bug to fix, not a
+    case to silence. The kind must be a WaitResourceKind member and the id
+    a non-empty string; anything else fails fast.
+    """
+    # isinstance, not membership: on Python 3.11 (the E2E container's
+    # version) `str in StrEnum` raises TypeError instead of returning a
+    # bool, and equal strings are banned at call sites by the AST guard
+    # anyway -- so only members are accepted.
+    if not isinstance(resource_kind, WaitResourceKind):
+        valid = ", ".join(kind.value for kind in WaitResourceKind)
+        raise ValueError(f"poll_until got unknown resource_kind {resource_kind!r}; valid kinds: {valid}")
+    if not isinstance(resource_id, str) or not resource_id.strip():
+        raise ValueError(f"poll_until requires a non-empty resource_id, got {resource_id!r}")
     value: T | None = None
     last_error: subprocess.CalledProcessError | None = None
     start = time.monotonic()
     last_logged = start
     label = sanitize_text(description)
-    with _wait_span(label, delay=delay, retries=retries) as span:
+    with _wait_span(label, delay=delay, retries=retries, resource_kind=resource_kind, resource_id=resource_id) as span:
         # Descriptions name resources and conditions, so they are logged after sanitizing.
         # Polled values, errors and tracebacks stay out of logs; only the StuckState message
         # carries a summary of the last scalar value, never a container.
@@ -213,12 +233,18 @@ _NO_OP_WAIT_SPAN = _NoOpWaitSpan()
 
 
 @contextmanager
-def _wait_span(description: str, *, delay: int, retries: int) -> Iterator[Span | _NoOpWaitSpan]:
+def _wait_span(
+    description: str, *, delay: int, retries: int, resource_kind: WaitResourceKind, resource_id: str
+) -> Iterator[Span | _NoOpWaitSpan]:
     """Track one poll_until wait as a span named after its description.
 
     The span nests under whatever span is current when poll_until runs (the
     test's call span in the ci-observe trace), so each wait shows with its
     own duration in the trace waterfall.
+
+    ``resource_kind`` and ``resource_id`` name the single resource the wait
+    observes (e.g. "BareMetalInstance" / its name), so a wait can be linked
+    to that resource in Grafana.
 
     Exception recording is disabled: an escaping CalledProcessError carries
     the command and its output, which may contain secrets -- poll_until's
@@ -233,6 +259,8 @@ def _wait_span(description: str, *, delay: int, retries: int) -> Iterator[Span |
     ) as span:
         span.set_attribute("poll.delay", delay)
         span.set_attribute("poll.retries", retries)
+        span.set_attribute("osac.wait.resource_kind", str(resource_kind))
+        span.set_attribute("osac.wait.resource_id", resource_id)
         try:
             yield span
         except TimeoutError:

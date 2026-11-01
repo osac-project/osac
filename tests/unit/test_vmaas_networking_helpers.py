@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking import teardown
 from tests.e2e.networking.cidrs import TENANT_SECOND_OCTETS, run_offset, subnet_cidr, tenant_vn_cidr
 from tests.e2e.networking.vmaas import conftest as vmaas_conftest
@@ -182,7 +183,14 @@ def test_poll_or_fail_turns_a_timeout_into_a_diagnosed_failure(monkeypatch: pyte
 
     with pytest.raises(pytest.fail.Exception, match=r"thing timed out\. look at the lab"):
         stack.poll_or_fail(
-            hint="look at the lab", fn=lambda: False, until=bool, retries=2, delay=0, description="thing"
+            hint="look at the lab",
+            fn=lambda: False,
+            until=bool,
+            retries=2,
+            delay=0,
+            description="thing",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id="ci-1",
         )
 
 
@@ -254,7 +262,14 @@ def test_wait_owned_gone_names_a_rejected_delete_on_timeout(monkeypatch: pytest.
 
     with pytest.raises(TimeoutError) as exc_info:
         teardown.wait_owned_gone(
-            description="vm gone", api_gone=lambda: False, cr_gone=lambda: True, delete=delete, retries=2, delay=0
+            description="vm gone",
+            api_gone=lambda: False,
+            cr_gone=lambda: True,
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id="ci-1",
+            delete=delete,
+            retries=2,
+            delay=0,
         )
 
     assert "FailedPrecondition: manual attachment" in str(exc_info.value)

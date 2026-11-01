@@ -13,6 +13,7 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking.vmaas.external_ip.helpers import create_ip, delete_ip
 from tests.e2e.vmaas.regression.external_ip.helpers import pool_status
 
@@ -86,6 +87,8 @@ class TestPoolAllocation:
             retries=60,
             delay=2,
             description="Pool available restored to 1 after IP release",
+            resource_kind=WaitResourceKind.EXTERNAL_IP_POOL,
+            resource_id=pool_id,
         )
 
         created_ips.append(create_ip(grpc, k8s_hub_client, pool_id))
@@ -123,6 +126,8 @@ class TestPoolAllocation:
             retries=60,
             delay=2,
             description="Pool allocated drops to 0",
+            resource_kind=WaitResourceKind.EXTERNAL_IP_POOL,
+            resource_id=pool_id,
         )
 
         private_grpc.delete_external_ip_pool(pool_id=pool_id)

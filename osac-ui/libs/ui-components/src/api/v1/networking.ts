@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { MessageInitShape } from '@bufbuild/protobuf';
+import { type MessageInitShape } from '@bufbuild/protobuf';
 import { useMutation } from '@tanstack/react-query';
 
 import {
@@ -351,10 +351,11 @@ export const useCreateSecurityGroup = () => {
 };
 
 export const useUpdateSecurityGroup = () => {
+  const client = useApiFetch(SecurityGroups);
   const qc = useApiQueryClient();
   return useMutation({
     mutationFn: ({ object }: { object: MessageInitShape<typeof SecurityGroupSchema> }) => {
-      return Promise.resolve(object);
+      return client.update({ object });
     },
     onSuccess: () => invalidateSecurityGroupsQueries(qc),
   });

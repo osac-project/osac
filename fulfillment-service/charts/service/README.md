@@ -46,6 +46,8 @@ The following table lists the configurable parameters of the chart and their def
 | `eventPublisher.topicRetention` | How long a tenant's event topic keeps records: `-1s` indefinitely, or a duration like `168h` | `-1s`                                         |
 | `database.connection`      | List of sources for database connection parameters (see below)                    | `[]` (must be configured)                                      |
 | `kafka.connection`         | List of sources for Kafka connection parameters (see below)                       | `[]` (must be configured when the event publisher is enabled)  |
+| `ingressProxy.concurrency` | Number of worker threads for the fulfillment ingress proxy                       | `4`                                                            |
+
 
 Connection details are provided via `kafka.connection`, a list of ConfigMap and Secret sources that
 provide the connection parameters. When `eventPublisher.enabled` is true, the sources must provide

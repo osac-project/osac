@@ -40,8 +40,9 @@ spec:
     matchLabels:
       app: fulfillment-controller
   replicas: 1
+  # Keep this singleton from overlapping during upgrades; reconciliation has external side effects.
   strategy:
-    type: {{ if .Values.debug }}Recreate{{ else }}RollingUpdate{{ end }}
+    type: Recreate
   template:
     metadata:
       labels:

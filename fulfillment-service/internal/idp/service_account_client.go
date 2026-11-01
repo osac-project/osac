@@ -18,6 +18,8 @@ package idp
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -165,6 +167,75 @@ func (c *Client) FindServiceAccountClient(ctx context.Context, clientID, tenantI
 		return "", false, errors.New("invalid Keycloak client UUID in lookup response")
 	}
 	return found.ID, true, nil
+}
+
+// GenerateServiceAccountClientSecret generates the secret that the caller durably stages before
+// applying it to the Keycloak client.
+func GenerateServiceAccountClientSecret() (string, error) {
+	secretBytes := make([]byte, 32)
+	if _, err := rand.Read(secretBytes); err != nil {
+		return "", errors.New("failed to generate service-account client secret")
+	}
+	return base64.RawURLEncoding.EncodeToString(secretBytes), nil
+}
+
+// RotateServiceAccountClientSecret sets the supplied secret through the client's registration
+// token, so rotation does not require realm-wide manage-clients. The caller persists the secret
+// before this update and persists any returned registration token before publishing the secret.
+func (c *Client) RotateServiceAccountClientSecret(ctx context.Context, clientID, clientUUID,
+	registrationAccessToken, clientSecret string) (newRegistrationAccessToken string, err error) {
+	if !validServiceAccountClientID(clientID) || registrationAccessToken == "" || clientSecret == "" {
+		return "", errors.New("invalid service-account client rotation credentials")
+	}
+	if _, err := uuid.Parse(clientUUID); err != nil {
+		return "", errors.New("invalid service-account client UUID")
+	}
+	client, err := c.clientWithRegistrationToken(registrationAccessToken)
+	if err != nil {
+		return "", errors.New("failed to configure service-account client rotation")
+	}
+	path := "/realms/" + url.PathEscape(c.realmName) + "/clients-registrations/default/" + url.PathEscape(clientID)
+	response, err := client.DoRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return "", serviceAccountClientError("get client for secret rotation", err)
+	}
+	var representation map[string]json.RawMessage
+	decodeErr := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&representation)
+	closeErr := response.Body.Close()
+	if decodeErr != nil || closeErr != nil {
+		return "", errors.New("invalid service-account client configuration for secret rotation")
+	}
+	var returnedID, returnedClientID string
+	if json.Unmarshal(representation["id"], &returnedID) != nil || returnedID != clientUUID ||
+		json.Unmarshal(representation["clientId"], &returnedClientID) != nil || returnedClientID != clientID {
+		return "", errors.New("service-account registration token resolved to a different client")
+	}
+
+	encodedSecret, err := json.Marshal(clientSecret)
+	if err != nil {
+		return "", errors.New("failed to encode service-account client secret")
+	}
+	representation["secret"] = encodedSecret
+	delete(representation, "registrationAccessToken")
+
+	response, err = client.DoRequest(ctx, http.MethodPut, path, representation)
+	if err != nil {
+		return "", serviceAccountClientError("rotate client secret", err)
+	}
+	defer response.Body.Close()
+	var updated struct {
+		ID                      string `json:"id"`
+		ClientID                string `json:"clientId"`
+		RegistrationAccessToken string `json:"registrationAccessToken"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&updated); err != nil ||
+		updated.ID != clientUUID || updated.ClientID != clientID {
+		return "", errors.New("invalid service-account client rotation response")
+	}
+	if updated.RegistrationAccessToken == "" {
+		updated.RegistrationAccessToken = registrationAccessToken
+	}
+	return updated.RegistrationAccessToken, nil
 }
 
 func (c *Client) DeleteServiceAccountClient(ctx context.Context, clientID, clientUUID, registrationAccessToken string) error {

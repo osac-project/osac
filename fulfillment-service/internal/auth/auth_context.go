@@ -72,6 +72,28 @@ func IsControllerServiceAccount(ctx context.Context) bool {
 		strings.HasSuffix(subject.User, ":service-account-osac-controller"))
 }
 
+// IsTenantAdmin reports whether the authenticated JWT grants the tenant-admin realm role.
+func IsTenantAdmin(ctx context.Context) bool {
+	token := TokenFromContext(ctx)
+	if token == nil {
+		return false
+	}
+	authContext, err := ExtractAuthContext(token)
+	if err != nil || authContext.RealmAccess == nil {
+		return false
+	}
+	roles, ok := authContext.RealmAccess["roles"].([]any)
+	if !ok {
+		return false
+	}
+	for _, role := range roles {
+		if role == "tenant-admin" {
+			return true
+		}
+	}
+	return false
+}
+
 // ContextWithToken creates a new context containing the given validated JWT token.
 func ContextWithToken(parent context.Context, token *jwt.Token) context.Context {
 	return context.WithValue(parent, tokenContextKey, token)

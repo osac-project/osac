@@ -47,6 +47,10 @@ func ExtractAuthContext(token *jwt.Token) (*AuthContext, error) {
 		if username == "" {
 			username, _ = claims["username"].(string)
 		}
+		tenant, _ := claims["osac_tenant"].(string)
+		if username == "" && tenant != "" {
+			username, _ = claims["client_id"].(string)
+		}
 		authContext.Username = username
 		authContext.Groups = claimAsAnySlice(claims, "groups")
 
@@ -57,6 +61,9 @@ func ExtractAuthContext(token *jwt.Token) (*AuthContext, error) {
 			} else if orgObj, ok := orgValue.(map[string]any); ok {
 				authContext.Organization = orgObj
 			}
+		}
+		if authContext.Organization == nil && tenant != "" {
+			authContext.Organization = []any{tenant}
 		}
 
 		authContext.Organizations = claimAsAnySlice(claims, "organizations")

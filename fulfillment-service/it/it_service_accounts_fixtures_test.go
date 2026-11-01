@@ -121,21 +121,44 @@ func keycloakServiceAccountClientIDs(ctx context.Context, tenant string) []strin
 
 func serviceAccountClaims(ctx context.Context, clientID, secret string) jwt.MapClaims {
 	GinkgoHelper()
-	issuer := serviceAccountKeycloakIssuer(ctx)
-	store, err := auth.NewMemoryTokenStore().SetLogger(logger).Build()
-	Expect(err).ToNot(HaveOccurred())
-	source, err := oauth.NewTokenSource().SetLogger(logger).SetStore(store).SetCaPool(tool.CaPool()).SetIssuer(issuer).
-		SetFlow(oauth.CredentialsFlow).SetClientId(clientID).SetClientSecret(secret).Build()
+	source, err := serviceAccountTokenSource(ctx, clientID, secret)
 	Expect(err).ToNot(HaveOccurred())
 	token, err := source.Token(ctx)
 	Expect(err).ToNot(HaveOccurred())
+	issuer := serviceAccountKeycloakIssuer(ctx)
 	keys, err := auth.NewJwksCache().SetLogger(logger).SetCaPool(tool.CaPool()).AddIssuer(issuer).SetRoot(GinkgoT().TempDir()).Build()
 	Expect(err).ToNot(HaveOccurred())
-	validator, err := auth.NewJwtValidator().SetLogger(logger).SetJwksCache(keys).AddAudience("osac-api").Build()
+	validator, err := auth.NewJwtValidator().SetLogger(logger).SetJwksCache(keys).
+		SetExpirationLeeway(5 * time.Second).AddAudience("osac-api").Build()
 	Expect(err).ToNot(HaveOccurred())
 	verified, err := validator.Validate(ctx, token.Access)
 	Expect(err).ToNot(HaveOccurred())
 	return verified.Claims.(jwt.MapClaims)
+}
+
+func serviceAccountTokenSource(ctx context.Context, clientID, secret string) (auth.TokenSource, error) {
+	GinkgoHelper()
+	issuer := serviceAccountKeycloakIssuer(ctx)
+	store, err := auth.NewMemoryTokenStore().SetLogger(logger).Build()
+	if err != nil {
+		return nil, err
+	}
+	source, err := oauth.NewTokenSource().SetLogger(logger).SetStore(store).SetCaPool(tool.CaPool()).SetIssuer(issuer).
+		SetFlow(oauth.CredentialsFlow).SetClientId(clientID).SetClientSecret(secret).Build()
+	if err != nil {
+		return nil, err
+	}
+	return source, nil
+}
+
+func serviceAccountTokenError(ctx context.Context, clientID, secret string) error {
+	GinkgoHelper()
+	source, err := serviceAccountTokenSource(ctx, clientID, secret)
+	if err != nil {
+		return err
+	}
+	_, err = source.Token(ctx)
+	return err
 }
 
 // Read only SQL against the Kind fixture, using the database container's local peer authentication.

@@ -857,6 +857,19 @@ Touched-area requirements: [component guide](../osac-metering/AGENTS.md#integrat
 
 Touched-area requirements: [component guide](../tests/e2e/AGENTS.md#touched-area-map).
 
+Storage scenarios create tenants with the private Tenants API and request deletion
+through that API so Fulfillment owns cleanup of the tenant, namespace, and defaults.
+After observing Tenant CR removal, cleanup sends one private `Tenants/Signal`
+before waiting for API removal. This follows the API integration cleanup pattern;
+autonomous tenant-deletion feedback is not covered. An observed onboarding-finalizer
+notification gap remains unresolved, with no follow-up owner/ticket identified.
+`uv run pytest -n 0 tests/unit/test_storage_tenant_lifecycle.py` checks the scenario
+orchestration with mocked external clients, including provisioning failures. This
+does not prove deployed storage behavior. Run `uv run pytest -n 0 tests/e2e/storage/`
+from the repository root for the real Fulfillment/operator/AAP/storage boundary;
+the CaaS case additionally requires cluster provisioning inputs and capacity.
+See [OSAC-6286](https://redhat.atlassian.net/browse/OSAC-6286).
+
 | Tier | Location / command | Exercises for real | Faked or omitted |
 |---|---|---|---|
 | Unit ([DEV], VMaaS deletion-test finalizer retries) | From the repository root: `uv run pytest -n 0 tests/unit/test_vmaas_deletion_finalizer.py` | Test-helper retry policy: reread versions and finalizers after Aborted, preserve concurrent finalizers, stop after bounded attempts, skip no-op updates, and propagate other errors | gRPC responses and time are mocked; no production behavior changes or deployed deletion coverage. |

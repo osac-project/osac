@@ -21,9 +21,9 @@ const makeCatalogItem = (tenant: string) =>
 
 describe('CatalogItemCardFooter', () => {
   it.each([
-    ['shared', 'From provider'],
-    ['tenant-a', 'Added by you'],
-  ])('shows %s catalog ownership as "%s" for tenant admins', (tenant, label) => {
+    ['shared', 'Global public'],
+    ['tenant-a', 'tenant-a'],
+  ])('shows %s catalog visibility as "%s" for tenant admins', (tenant, label) => {
     renderWithProviders(
       <CatalogItemCardFooter
         catalogItem={makeCatalogItem(tenant)}

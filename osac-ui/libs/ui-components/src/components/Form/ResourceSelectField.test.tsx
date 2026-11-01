@@ -1,7 +1,7 @@
 import { Code, ConnectError } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
 import { Formik, type FormikErrors } from 'formik';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as yup from 'yup';
 
 import { type Tenant, TenantState, Tenants } from '@osac/types/private';
@@ -29,6 +29,7 @@ const renderSelect = ({
   initialValue = emptyResourceSelectValue(),
   tenants = [makeTenant('only-1', 'Only tenant')],
   transportOverrides,
+  createOption,
 }: {
   autoSelectSingleOption?: boolean;
   filterItems?: (item: { id: string; metadata?: { name?: string } }) => boolean;
@@ -36,6 +37,7 @@ const renderSelect = ({
   initialValue?: ResourceSelectValue;
   tenants?: Tenant[];
   transportOverrides?: MockTransportOverrides;
+  createOption?: { label: string; onSelect: () => void };
 } = {}) => {
   let latestErrors: FormikErrors<{ tenant: ResourceSelectValue }> = {};
 
@@ -60,6 +62,7 @@ const renderSelect = ({
             autoSelectSingleOption={autoSelectSingleOption}
             filterItems={filterItems}
             formatOptionLabel={formatOptionLabel}
+            createOption={createOption}
             placeholder="Select a tenant"
             loadErrorTitle="Failed to fetch tenants"
             emptyTitle="No registered tenants"
@@ -183,6 +186,22 @@ describe('ResourceSelectField', () => {
       screen.getByText('Register a tenant before creating and assigning an external IP pool.'),
     ).toBeInTheDocument();
     expect(document.getElementById('tenant')).toHaveClass('pf-m-disabled');
+  });
+
+  it('offers resource creation when the list is empty', async () => {
+    const onCreate = vi.fn();
+    const { user } = renderSelect({
+      tenants: [],
+      createOption: { label: 'Create tenant', onSelect: onCreate },
+    });
+
+    await waitFor(() => expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled());
+    await user.click(screen.getByLabelText(/^Tenant/));
+    await user.click(screen.getByRole('option', { name: 'Create tenant' }));
+
+    expect(onCreate).toHaveBeenCalledOnce();
+    expect(screen.getByLabelText('formik-value')).toHaveTextContent('{"id":"","name":""}');
+    expect(screen.getByRole('combobox')).toHaveValue('');
   });
 
   it('shows a load error above a disabled select when listing fails', async () => {

@@ -195,7 +195,7 @@ describe('buildClusterCreatePayload', () => {
     expect(payload.spec).not.toHaveProperty('networkAttachment');
   });
 
-  it('includes networkAttachment with subnet and security groups when pickers have values', () => {
+  it('includes the custom subnet while leaving security group selection to the server', () => {
     const values = {
       ...createEmptyClusterValues(),
       catalogItemReference: { name: clusterCatalogItem.title, id: clusterCatalogItem.id },
@@ -218,7 +218,6 @@ describe('buildClusterCreatePayload', () => {
     const payload = buildClusterCreatePayload(values, clusterCatalogItem);
     expect(payload.spec?.networkAttachment).toEqual({
       subnet: { id: 'my-subnet' },
-      securityGroups: [{ id: 'sg-1' }, { id: 'sg-2' }],
     });
   });
 

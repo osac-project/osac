@@ -23,7 +23,7 @@ import {
 } from '@osac/types';
 
 import { useApiFetch } from '../api-context';
-import { cel } from '../cel';
+import { type CelFilter, cel } from '../cel';
 import { type ListParams, apiQueryKey } from '../types';
 import { type ApiQueryClient, useApiQuery, useApiQueryClient } from '../use-api-query';
 import { useListResource } from '../use-resource';
@@ -94,6 +94,28 @@ export const securityGroupFilterForVirtualNetworkList = (virtualNetworkId: strin
 export const VIRTUAL_NETWORK_READY_LIST_FILTER = cel<VirtualNetwork>((filter) =>
   filter.field('status.state').equals(VirtualNetworkState.READY),
 );
+
+const DEFAULT_NETWORK_LABEL_FILTER = 'this.metadata.labels["osac.openshift.io/default"] == "true"';
+
+export const defaultSubnetListFilter = (project: string) =>
+  cel<Subnet>((filter) =>
+    filter.and(
+      DEFAULT_NETWORK_LABEL_FILTER as CelFilter<Subnet>,
+      filter.field('metadata.project').equals(project),
+      filter.field('status.state').equals(SubnetState.READY),
+      'has(this.spec.ipv4_cidr)' as CelFilter<Subnet>,
+    ),
+  );
+
+export const defaultSecurityGroupListFilter = (project: string, virtualNetworkId: string) =>
+  cel<SecurityGroup>((filter) =>
+    filter.and(
+      DEFAULT_NETWORK_LABEL_FILTER as CelFilter<SecurityGroup>,
+      filter.field('metadata.project').equals(project),
+      filter.field('spec.virtualNetwork.id').equals(virtualNetworkId),
+      filter.field('status.state').equals(SecurityGroupState.READY),
+    ),
+  );
 
 export const unallocatedExternalIpFilter = (project?: string) =>
   cel<ExternalIP>((filter) =>

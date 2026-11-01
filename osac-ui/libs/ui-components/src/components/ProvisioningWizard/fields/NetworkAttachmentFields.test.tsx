@@ -25,6 +25,7 @@ import { renderWithProviders } from '../../../test-utils/TestProviders';
 import { emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 
 interface TestFormValues {
+  metadata: { project: string };
   spec: {
     networkAttachment: ProvisioningFieldValue<NetworkAttachmentFormFields>;
     autoExternalIpAttachment: ProvisioningFieldValue<boolean>;
@@ -32,6 +33,7 @@ interface TestFormValues {
 }
 
 const emptyTestValues = (useDefaultNetwork = true): TestFormValues => ({
+  metadata: { project: '' },
   spec: {
     networkAttachment: provisioningFieldValue({
       useDefaultNetwork,
@@ -55,50 +57,48 @@ const renderFields = (initialValues?: TestFormValues, isDisabled = false) =>
   );
 
 describe('NetworkAttachmentFields', () => {
-  it('renders "use default network" and "auto external IP" checkboxes', () => {
+  it('renders the shared network cards and external IP switch', () => {
     renderFields();
 
-    expect(
-      screen.getByRole('checkbox', { name: 'Use tenant default network' }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('checkbox', { name: 'Auto External IP Attachment' }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: 'Network' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Tenant default/ })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /Custom network/ })).not.toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Auto-attach external IP' })).not.toBeChecked();
   });
 
-  it('hides VN, Subnet, and Security Groups pickers when default network is checked', () => {
+  it('hides VN, Subnet, and Security Groups pickers when tenant default is selected', () => {
     renderFields();
 
-    expect(screen.getByRole('checkbox', { name: 'Use tenant default network' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /Tenant default/ })).toBeChecked();
     expect(screen.queryByText('Virtual network')).not.toBeInTheDocument();
     expect(screen.queryByText('Subnet')).not.toBeInTheDocument();
     expect(screen.queryByText('Security groups')).not.toBeInTheDocument();
   });
 
-  it('shows VN, Subnet, and Security Groups pickers when default network is unchecked', async () => {
+  it('shows VN, Subnet, and Security Groups pickers when custom network is selected', async () => {
     const user = userEvent.setup();
     renderFields();
 
-    await user.click(screen.getByRole('checkbox', { name: 'Use tenant default network' }));
+    await user.click(screen.getByRole('radio', { name: /Custom network/ }));
 
     expect(screen.getByText('Virtual network')).toBeInTheDocument();
     expect(screen.getByText('Subnet')).toBeInTheDocument();
     expect(screen.getByText('Security groups')).toBeInTheDocument();
   });
 
-  it('hides pickers when toggling default network back on', async () => {
+  it('hides pickers when switching back to tenant default', async () => {
     const user = userEvent.setup();
     renderFields();
 
-    await user.click(screen.getByRole('checkbox', { name: 'Use tenant default network' }));
+    await user.click(screen.getByRole('radio', { name: /Custom network/ }));
     expect(screen.getByText('Virtual network')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('checkbox', { name: 'Use tenant default network' }));
+    await user.click(screen.getByRole('radio', { name: /Tenant default/ }));
     expect(screen.queryByText('Virtual network')).not.toBeInTheDocument();
   });
 
-  it('renders auto external IP helper text when provided', () => {
-    renderWithProviders(
+  it('renders the workload-specific external IP helper when enabled', async () => {
+    const { user } = renderWithProviders(
       <Formik initialValues={emptyTestValues()} onSubmit={() => undefined}>
         <NetworkFields
           networkAttachmentName="spec.networkAttachment"
@@ -108,6 +108,7 @@ describe('NetworkAttachmentFields', () => {
       </Formik>,
     );
 
+    await user.click(screen.getByRole('switch', { name: 'Auto-attach external IP' }));
     expect(screen.getByText('Provision external IPs automatically.')).toBeInTheDocument();
   });
 
@@ -118,16 +119,17 @@ describe('NetworkAttachmentFields', () => {
     expect(screen.queryByText('Subnet is required')).not.toBeInTheDocument();
   });
 
-  it('disables the default-network checkbox and pickers together', () => {
+  it('disables the network cards and pickers together', () => {
     renderFields(emptyTestValues(false), true);
 
-    expect(screen.getByRole('checkbox', { name: 'Use tenant default network' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: /Tenant default/ })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: /Custom network/ })).toBeDisabled();
     expectResourceSelectDisabled(/^Virtual network/);
     expectResourceSelectDisabled(/^Subnet/);
     expect(screen.getByLabelText(/^Security groups/).closest('.pf-v6-c-menu-toggle')).toHaveClass(
       'pf-m-disabled',
     );
-    expect(screen.getByRole('checkbox', { name: 'Auto External IP Attachment' })).toBeDisabled();
+    expect(screen.getByRole('switch', { name: 'Auto-attach external IP' })).toBeDisabled();
   });
 
   it('disables auto external IP from its own catalog policy', () => {
@@ -139,8 +141,8 @@ describe('NetworkAttachmentFields', () => {
       },
     });
 
-    expect(screen.getByRole('checkbox', { name: 'Use tenant default network' })).not.toBeDisabled();
-    expect(screen.getByRole('checkbox', { name: 'Auto External IP Attachment' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: /Tenant default/ })).not.toBeDisabled();
+    expect(screen.getByRole('switch', { name: 'Auto-attach external IP' })).toBeDisabled();
   });
 
   it('resolves the parent virtual network from a catalog subnet so attachments display', async () => {
@@ -203,7 +205,9 @@ describe('NetworkAttachmentFields', () => {
     await waitFor(() =>
       expect(getResourceSelectCombobox(/^Virtual network/)).toHaveValue('vn-prod'),
     );
-    await waitFor(() => expect(getResourceSelectCombobox(/^Subnet/)).toHaveValue('subnet-a'));
+    await waitFor(() =>
+      expect(getResourceSelectCombobox(/^Subnet/)).toHaveValue('subnet-a · 10.0.1.0/24'),
+    );
   });
 
   it('shows a load error with retry when catalog subnet lookup fails', async () => {

@@ -1,6 +1,9 @@
+import { FormSection, Switch } from '@patternfly/react-core';
+import { useField } from 'formik';
+
 import type { ProvisioningFieldControlProps } from './provisioningFieldValue';
 import { useTranslation } from '../../../hooks/useTranslation';
-import { CheckboxField } from '../../Form/CheckboxField';
+import { FormFieldHelper } from '../../Form/FormFieldHelper';
 
 interface AutoExternalIpFieldProps extends ProvisioningFieldControlProps {
   helperText?: string;
@@ -12,15 +15,30 @@ const AutoExternalIpField = ({
   isDisabled = false,
 }: AutoExternalIpFieldProps) => {
   const { t } = useTranslation();
+  const [field, , helpers] = useField<boolean>(name);
 
   return (
-    <CheckboxField
-      name={name}
-      label={t('Auto External IP Attachment')}
-      fieldId={name}
-      helperText={helperText}
-      isDisabled={isDisabled}
-    />
+    <FormSection title={t('External IP')} titleElement="h2">
+      <Switch
+        id={name}
+        label={t('Auto-attach external IP')}
+        isChecked={field.value}
+        isDisabled={isDisabled}
+        aria-describedby={`${name}-helper-description`}
+        onChange={(_event, checked) => void helpers.setValue(checked)}
+      />
+      <FormFieldHelper
+        fieldId={name}
+        description={
+          field.value
+            ? (helperText ??
+              t(
+                'Attaches an external IP so the instance is reachable outside the private network.',
+              ))
+            : t('No external IP at launch. You can attach one later from the instance.')
+        }
+      />
+    </FormSection>
   );
 };
 

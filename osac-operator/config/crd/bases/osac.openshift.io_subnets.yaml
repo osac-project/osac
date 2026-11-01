@@ -23,8 +23,8 @@ spec:
     - jsonPath: .spec.ipv4Cidr
       name: IPv4CIDR
       type: string
-    - jsonPath: .status.phase
-      name: Phase
+    - jsonPath: .status.conditions[?(@.type=="Ready")].reason
+      name: Ready
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -54,6 +54,40 @@ spec:
           spec:
             description: spec defines the desired state of Subnet
             properties:
+              addressPlan:
+                description: |-
+                  AddressPlan is the NetworkClass address plan at the Subnet's create, in
+                  sixteenths. OSAC computes status.ipam from it once.
+                properties:
+                  fabric:
+                    description: Fabric is the share of the Fabric Manager's range,
+                      in sixteenths.
+                    format: int32
+                    maximum: 16
+                    minimum: 0
+                    type: integer
+                  lbVip:
+                    description: LBVIP is the share of LoadBalancer VIP reservations,
+                      in sixteenths.
+                    format: int32
+                    maximum: 16
+                    minimum: 0
+                    type: integer
+                  overlay:
+                    description: Overlay is the share of VM addresses from the Kubernetes
+                      Manager, in sixteenths.
+                    format: int32
+                    maximum: 16
+                    minimum: 0
+                    type: integer
+                required:
+                - fabric
+                - lbVip
+                - overlay
+                type: object
+                x-kubernetes-validations:
+                - message: addressPlan shares must sum to 16 sixteenths
+                  rule: self.overlay + self.fabric + self.lbVip == 16
               ipv4Cidr:
                 description: IPv4CIDR is the required canonical IPv4 CIDR block for
                   this subnet.
@@ -65,23 +99,14 @@ spec:
                   rule: string(cidr(self).masked()) == self && !self.contains(':')
                 - message: ipv4Cidr is immutable
                   rule: self == oldSelf
-              ipv6Cidr:
-                description: |-
-                  IPv6CIDR is retained for wire compatibility, but IPv6 and dual-stack
-                  networking are not supported. Non-empty values are rejected.
-                type: string
-                x-kubernetes-validations:
-                - message: IPv6 and dual-stack networking are not supported
-                  rule: self == ''
-                - message: ipv6Cidr is immutable
-                  rule: self == oldSelf
               virtualNetwork:
-                description: VirtualNetwork is the ID of the parent VirtualNetwork
+                description: VirtualNetwork is the API ID of the parent VirtualNetwork
                 type: string
                 x-kubernetes-validations:
                 - message: virtualNetwork is immutable
                   rule: self == oldSelf
             required:
+            - addressPlan
             - ipv4Cidr
             - virtualNetwork
             type: object
@@ -91,16 +116,15 @@ spec:
           status:
             description: status defines the observed state of Subnet
             properties:
-              backendNetworkId:
-                description: BackendNetworkID stores provider-specific network identifier
-                type: string
               computeInstanceSupported:
+                description: |-
+                  Compute eligibility is independent of lifecycle readiness. An absent value
+                  means the Kubernetes manager has not reported eligibility.
                 type: boolean
               computeInstanceUnsupportedReason:
                 type: string
               conditions:
-                description: Conditions holds an array of metav1.Condition that describe
-                  the state of the Subnet
+                description: Conditions holds the Ready condition of the Subnet.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -156,81 +180,153 @@ spec:
                   - type
                   type: object
                 type: array
-              desiredConfigVersion:
-                description: DesiredConfigVersion is a hash of the spec, used to detect
-                  spec changes and control retry behavior.
-                type: string
-              phase:
-                description: Phase provides a single-value overview of the state of
-                  the Subnet
-                enum:
-                - Progressing
-                - Failed
-                - Ready
-                - Deleting
-                type: string
-              provisioningJobs:
-                description: ProvisioningJobs holds an array of JobStatus tracking
-                  provisioning and deprovisioning operations
-                items:
-                  description: JobStatus represents the status of a provisioning or
-                    deprovisioning job
-                  properties:
-                    blockDeletionOnFailure:
-                      description: |-
-                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
-                        AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
-                      type: boolean
-                    configVersion:
-                      description: |-
-                        ConfigVersion is the DesiredConfigVersion at the time this job was triggered.
-                        Used to determine retry behavior on failure: if ConfigVersion differs from
-                        the current DesiredConfigVersion, a new job is triggered immediately.
-                        If they match, the controller retries with exponential backoff.
+              ipam:
+                description: IPAM is the address layout computed once at create (contract
+                  §4.8).
+                properties:
+                  gatewayIpv4:
+                    description: GatewayIPv4 is the Subnet's network address plus
+                      one.
+                    type: string
+                  lbVipIpv4Cidrs:
+                    description: LBVIPIPv4CIDRs is the LoadBalancer VIP range.
+                    items:
                       type: string
+                    type: array
+                  overlayIpv4Cidrs:
+                    description: OverlayIPv4CIDRs is the overlay range.
+                    items:
+                      type: string
+                    type: array
+                  physicalIpv4Cidrs:
+                    description: PhysicalIPv4CIDRs is the Fabric Manager's range.
+                    items:
+                      type: string
+                    type: array
+                required:
+                - gatewayIpv4
+                type: object
+              jobs:
+                description: Jobs tracks the latest job per task and manager (contract
+                  §4.7).
+                items:
+                  description: |-
+                    NetworkJobStatus tracks the latest AAP job of one task on one manager
+                    (contract §4.7 Job tracking). OSAC never removes an entry.
+                  properties:
+                    attempt:
+                      description: Attempt counts the task's launches on this manager.
+                      format: int32
+                      minimum: 0
+                      type: integer
                     jobID:
-                      description: JobID is the AAP job identifier from the provisioning
-                        provider API response.
+                      description: JobID is the AAP job ID; empty until AAP returned
+                        it.
+                      type: string
+                    manager:
+                      description: Manager is the manager type the task runs on.
+                      enum:
+                      - fabric
+                      - kubernetes
+                      - none
                       type: string
                     message:
-                      description: Message provides human-readable status or error
-                        information
+                      description: |-
+                        Message is the job's osac_error message, the AAP failure text, or why
+                        OSAC rejected the result; while retrying it also names the next retry time.
                       type: string
                     state:
-                      description: State is the current state of the job
+                      description: State is the state of the latest job.
                       enum:
-                      - Pending
-                      - Waiting
                       - Running
+                      - Retrying
                       - Succeeded
                       - Failed
-                      - Canceled
-                      - Unknown
+                      - Cancelled
                       type: string
-                    target:
-                      description: |-
-                        Target identifies which manager this job was dispatched to, for resources
-                        that provision through multiple managers concurrently (e.g. a Subnet
-                        dispatching to both a fabric manager and a k8s manager). Empty for
-                        resources with a single provisioning target.
-                      type: string
-                    timestamp:
-                      description: Timestamp when this job was created/triggered
-                      format: date-time
-                      type: string
-                    type:
-                      description: Type indicates the operation type
-                      enum:
-                      - provision
-                      - deprovision
+                    task:
+                      description: Task is the task name, for example create_subnet.
+                      minLength: 1
                       type: string
                   required:
-                  - jobID
+                  - attempt
+                  - manager
                   - state
-                  - timestamp
-                  - type
+                  - task
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - task
+                - manager
+                x-kubernetes-list-type: map
+              networkManagers:
+                description: NetworkManagers records the managers copied from the
+                  parent at create.
+                properties:
+                  fabric:
+                    description: Fabric is the Fabric Manager.
+                    properties:
+                      ansibleRole:
+                        description: AnsibleRole is the fully qualified Ansible role
+                          of the manager.
+                        minLength: 1
+                        type: string
+                      name:
+                        description: Name is the registration name of the manager.
+                        minLength: 1
+                        type: string
+                    required:
+                    - ansibleRole
+                    - name
+                    type: object
+                  kubernetes:
+                    description: Kubernetes is the OSAC Kubernetes Manager; absent
+                      when none is selected.
+                    properties:
+                      ansibleRole:
+                        description: AnsibleRole is the fully qualified Ansible role
+                          of the manager.
+                        minLength: 1
+                        type: string
+                      name:
+                        description: Name is the registration name of the manager.
+                        minLength: 1
+                        type: string
+                    required:
+                    - ansibleRole
+                    - name
+                    type: object
+                type: object
+              networkSegment:
+                description: NetworkSegment is the accepted segment of the Fabric
+                  create_subnet (contract §4.9).
+                properties:
+                  l2Vni:
+                    description: L2VNI is the Subnet's L2 VNI.
+                    format: int32
+                    maximum: 16777215
+                    minimum: 1
+                    type: integer
+                  type:
+                    description: Type is the network type of the segment.
+                    enum:
+                    - evpn
+                    type: string
+                required:
+                - l2Vni
+                - type
+                type: object
+              networkType:
+                description: NetworkType records the network type copied from the
+                  parent at create; empty without a Kubernetes Manager.
+                enum:
+                - evpn
+                type: string
+              taskInput:
+                description: TaskInput is the task input stored before the first job
+                  (contract §4.5).
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
             type: object
         required:
         - spec

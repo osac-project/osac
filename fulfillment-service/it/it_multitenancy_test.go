@@ -151,10 +151,12 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 						err = nil
 					}
 					Expect(err).ToNot(HaveOccurred())
+					// Cluster creates use the tenant's default networking.
+					ensureTenantDefaultNetworkingFixture(ctx, tenant, "")
 				}
 
 				// Create cluster template for testing
-				templateId := fmt.Sprintf("sa-isolation-template-%s", uuid.New())
+				templateId := newTemplateID("sa_isolation_template")
 				templatesClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 				_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 					Object: privatev1.ClusterTemplate_builder{
@@ -194,10 +196,9 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 					Expect(err).ToNot(HaveOccurred())
 					clusterObject := createResponse.GetObject()
 
-					DeferCleanup(func(ctx context.Context) {
-						err := deleteCluster(ctx, clusterObject.GetId())
-						Expect(err).ToNot(HaveOccurred())
-					})
+					// Wait for the archive, so the default networking cleanup
+					// doesn't race a cluster that still references it.
+					deferClusterDeletion(clusterObject.GetId(), tool.InternalView().AdminConn())
 
 					// Populate map to track which clusters belong to which tenants
 					tenantClusterMapping[tenant] = append(tenantClusterMapping[tenant], clusterObject.GetId())
@@ -391,6 +392,8 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 						err = nil
 					}
 					Expect(err).ToNot(HaveOccurred())
+					// Cluster creates use the tenant's default networking.
+					ensureTenantDefaultNetworkingFixture(ctx, tenant, "")
 				}
 
 				// Create a bare metal instance type for testing
@@ -430,7 +433,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 				})
 
 				// Create cluster template for testing
-				templateId := fmt.Sprintf("oidc-isolation-template-%s", uuid.New())
+				templateId := newTemplateID("oidc_isolation_template")
 				templatesClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 				_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 					Object: privatev1.ClusterTemplate_builder{
@@ -470,10 +473,9 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 					Expect(err).ToNot(HaveOccurred())
 					clusterObject := createResponse.GetObject()
 
-					DeferCleanup(func(ctx context.Context) {
-						err := deleteCluster(ctx, clusterObject.GetId())
-						Expect(err).ToNot(HaveOccurred())
-					})
+					// Wait for the archive, so the default networking cleanup
+					// doesn't race a cluster that still references it.
+					deferClusterDeletion(clusterObject.GetId(), tool.InternalView().AdminConn())
 
 					// Each object now has a single tenant; record the actual assigned tenant:
 					tenant := clusterObject.GetMetadata().GetTenant()
@@ -544,14 +546,6 @@ func listClusters(ctx context.Context, conn *grpc.ClientConn) *publicv1.Clusters
 	Expect(err).ToNot(HaveOccurred(), "error listing clusters")
 
 	return response
-}
-
-func deleteCluster(ctx context.Context, clusterId string) error {
-	clusterClient := privatev1.NewClustersClient(tool.InternalView().AdminConn())
-	_, err := clusterClient.Delete(ctx, privatev1.ClustersDeleteRequest_builder{
-		Id: clusterId,
-	}.Build())
-	return err
 }
 
 // calculateResponseSize calculates the response size based on a tenant-resource mapping and a user's tenant membership

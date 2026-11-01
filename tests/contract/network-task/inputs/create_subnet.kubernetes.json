@@ -1,0 +1,56 @@
+{
+  "ipam": {
+    "gateway_ipv4": "10.0.1.1",
+    "lb_vip_ipv4_cidrs": [
+      "10.0.1.192/26"
+    ],
+    "overlay_ipv4_cidrs": [
+      "10.0.1.0/25"
+    ],
+    "physical_ipv4_cidrs": [
+      "10.0.1.128/26"
+    ]
+  },
+  "manager": {
+    "ansible_role": "osac.templates.cudn_evpn",
+    "name": "cudn_evpn",
+    "type": "kubernetes"
+  },
+  "network_segment": {
+    "l2_vni": 10101,
+    "type": "evpn"
+  },
+  "resource": {
+    "apiVersion": "osac.openshift.io/v1alpha1",
+    "id": "8a2b4c6d-1e3f-4a5b-9c7d-2e4f6a8b0c12",
+    "kind": "Subnet",
+    "metadata": {
+      "generation": 1,
+      "name": "subnet-8a2b4c6d",
+      "namespace": "osac-networking",
+      "uid": "00000000-0000-4000-8000-000000000002"
+    },
+    "spec": {
+      "ipv4Cidr": "10.0.1.0/24"
+    }
+  },
+  "task": "create_subnet",
+  "tenant": "tenant-a",
+  "virtual_network": {
+    "apiVersion": "osac.openshift.io/v1alpha1",
+    "id": "3f1c9a2e-7b4d-4e8a-9c6f-0d2e4b6a8c10",
+    "kind": "VirtualNetwork",
+    "metadata": {
+      "generation": 1,
+      "name": "vn-3f1c9a2e",
+      "namespace": "osac-networking",
+      "uid": "00000000-0000-4000-8000-000000000001"
+    },
+    "spec": {
+      "ipv4Cidr": "10.0.0.0/16"
+    },
+    "status": {
+      "l3Vni": 10001
+    }
+  }
+}

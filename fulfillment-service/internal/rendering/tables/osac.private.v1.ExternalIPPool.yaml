@@ -29,9 +29,6 @@ columns:
   value: this.spec.ip_family
   type: osac.private.v1.IPFamily
 
-- header: STRATEGY
-  value: this.spec.implementation_strategy
-
 - header: STATE
   value: this.status.state
   type: osac.private.v1.ExternalIPPoolState

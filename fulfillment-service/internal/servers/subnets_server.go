@@ -216,7 +216,6 @@ func (s *SubnetsServer) Create(ctx context.Context,
 		return
 	}
 
-	privateSubnet.SetStatus(nil)
 	// Delegate to the private server:
 	privateRequest := &privatev1.SubnetsCreateRequest{}
 	privateRequest.SetObject(privateSubnet)

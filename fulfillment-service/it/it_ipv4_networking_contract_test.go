@@ -16,7 +16,6 @@ package it
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -143,47 +142,11 @@ func newIPv4NetworkingContractFixture(ctx context.Context) *ipv4NetworkingContra
 						return err
 					}))
 		}
-		if fixture.networkClassID != "" {
-			cleanupErrors = appendFixtureCleanupError(cleanupErrors, "NetworkClass", fixture.networkClassID,
-				cleanupNetworkFixtureResource(cleanupCtx,
-					func(ctx context.Context) error {
-						_, err := fixture.networkClasses.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: fixture.networkClassID}.Build())
-						return err
-					},
-					func(ctx context.Context) (*privatev1.Metadata, error) {
-						response, err := fixture.networkClasses.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: fixture.networkClassID}.Build())
-						if err != nil {
-							return nil, err
-						}
-						return response.GetObject().GetMetadata(), nil
-					},
-					func(ctx context.Context) error {
-						response, err := fixture.networkClasses.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: fixture.networkClassID}.Build())
-						if err != nil {
-							return err
-						}
-						object := response.GetObject()
-						object.GetMetadata().SetFinalizers(nil)
-						_, err = fixture.networkClasses.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
-							Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
-						}.Build())
-						return err
-					}))
-		}
+		// The NetworkClass is the installer's deployment singleton: the fixture never deletes it.
 		Expect(cleanupErrors).To(BeEmpty())
 	})
 
-	networkClassName := fmt.Sprintf("ipv4-contract-nc-%s", uuid.New()[24:])
-	networkClassResponse, err := fixture.networkClasses.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-		Object: privatev1.NetworkClass_builder{
-			Metadata: privatev1.Metadata_builder{
-				Name:   networkClassName,
-				Tenant: usersGroup,
-			}.Build(),
-			Title:         "IPv4 networking contract test class",
-			FabricManager: new("netris"),
-		}.Build(),
-	}.Build())
+	networkClassResponse, err := sharedNetworkClass(ctx, fixture.networkClasses)
 	Expect(err).ToNot(HaveOccurred())
 	fixture.networkClassID = networkClassResponse.GetObject().GetId()
 	err = updateNetworkClassStatusWithRetry(ctx, fixture.networkClasses, fixture.networkClassID, privatev1.NetworkClassStatus_builder{
@@ -202,9 +165,7 @@ func newIPv4NetworkingContractFixture(ctx context.Context) *ipv4NetworkingContra
 				Tenant: usersGroup,
 			}.Build(),
 			Spec: privatev1.VirtualNetworkSpec_builder{
-				NetworkClass: privatev1.NetworkClassReference_builder{Id: fixture.networkClassID}.Build(),
-				Region:       "us-east-1",
-				Ipv4Cidr:     new("10.240.0.0/16"),
+				Ipv4Cidr: new("10.240.0.0/16"),
 			}.Build(),
 		}.Build(),
 	}.Build())
@@ -287,9 +248,14 @@ func (f *ipv4NetworkingContractFixture) createSubnet(ctx context.Context) *priva
 	getResponse, err := f.subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: f.subnetID}.Build())
 	Expect(err).ToNot(HaveOccurred())
 	subnet := getResponse.GetObject()
-	subnet.SetStatus(privatev1.SubnetStatus_builder{
-		State: privatev1.SubnetState_SUBNET_STATE_READY,
-	}.Build())
+	expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
+		response, getErr := f.subnets.Get(getCtx, privatev1.SubnetsGetRequest_builder{Id: f.subnetID}.Build())
+		if getErr != nil {
+			return "", getErr
+		}
+		return response.GetObject().GetStatus().GetHub(), nil
+	})
+	subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_READY)
 	_, err = f.subnets.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
 		Object:     subnet,
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
@@ -358,15 +324,13 @@ var _ = Describe("IPv4-only VirtualNetwork gRPC contract", func() {
 	})
 
 	It("supports canonical IPv4 CRUD and preserves the CIDR during a metadata-only update", func() {
-		fixture := newIPv4NetworkingContractFixture(ctx)
+		_ = newIPv4NetworkingContractFixture(ctx)
 		name := fmt.Sprintf("ipv4-vn-crud-%s", uuid.New()[24:])
 		response, err := client.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 			Object: privatev1.VirtualNetwork_builder{
 				Metadata: privatev1.Metadata_builder{Name: name, Tenant: usersGroup}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: fixture.networkClassID}.Build(),
-					Region:       "us-east-1",
-					Ipv4Cidr:     new("10.241.0.0/16"),
+					Ipv4Cidr: new("10.241.0.0/16"),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -394,115 +358,14 @@ var _ = Describe("IPv4-only VirtualNetwork gRPC contract", func() {
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
 		}.Build())
-		Expect(err).ToNot(HaveOccurred())
+		// Networking resources are update-less: names and labels can\'t change.
+		expectIPv4ContractError(err, "immutable")
 		getResponse, err = client.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(getResponse.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("contract", "ipv4-vn"))
 		Expect(getResponse.GetObject().GetSpec().GetIpv4Cidr()).To(Equal("10.241.0.0/16"))
 
 		_, err = client.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: id}.Build())
 		Expect(err).ToNot(HaveOccurred())
-	})
-
-	It("rejects creation until the referenced NetworkClass is READY", func() {
-		adminConn := tool.InternalView().AdminConn()
-		networkClasses := privatev1.NewNetworkClassesClient(adminConn)
-		name := fmt.Sprintf("networking-ready-gate-nc-%s", uuid.New()[24:])
-		networkClass, err := networkClasses.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-			Object: privatev1.NetworkClass_builder{
-				Metadata:      privatev1.Metadata_builder{Name: name, Tenant: usersGroup}.Build(),
-				Title:         "NetworkClass readiness gate test",
-				FabricManager: new("unregistered-it-network-manager"),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		networkClassID := networkClass.GetObject().GetId()
-		var virtualNetworkID string
-		DeferCleanup(func(cleanupCtx context.Context) {
-			if virtualNetworkID != "" {
-				cleanupErr := cleanupNetworkFixtureResource(cleanupCtx,
-					func(ctx context.Context) error {
-						_, err := client.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: virtualNetworkID}.Build())
-						return err
-					},
-					func(ctx context.Context) (*privatev1.Metadata, error) {
-						response, err := client.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: virtualNetworkID}.Build())
-						if err != nil {
-							return nil, err
-						}
-						return response.GetObject().GetMetadata(), nil
-					},
-					func(ctx context.Context) error {
-						response, err := client.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: virtualNetworkID}.Build())
-						if err != nil {
-							return err
-						}
-						object := response.GetObject()
-						object.GetMetadata().SetFinalizers(nil)
-						_, err = client.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
-							Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
-						}.Build())
-						return err
-					})
-				Expect(cleanupErr).ToNot(HaveOccurred())
-			}
-			cleanupErr := cleanupNetworkFixtureResource(cleanupCtx,
-				func(ctx context.Context) error {
-					_, err := networkClasses.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: networkClassID}.Build())
-					return err
-				},
-				func(ctx context.Context) (*privatev1.Metadata, error) {
-					response, err := networkClasses.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassID}.Build())
-					if err != nil {
-						return nil, err
-					}
-					return response.GetObject().GetMetadata(), nil
-				},
-				func(ctx context.Context) error {
-					response, err := networkClasses.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassID}.Build())
-					if err != nil {
-						return err
-					}
-					object := response.GetObject()
-					object.GetMetadata().SetFinalizers(nil)
-					_, err = networkClasses.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
-						Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
-					}.Build())
-					return err
-				})
-			Expect(cleanupErr).ToNot(HaveOccurred())
-		})
-
-		// Fulfillment may resolve the Hub and mark state READY without the operator
-		// manager-discovery controller. Force the state used by this API contract so
-		// the fixture deterministically exercises the non-ready reference guard.
-		err = updateNetworkClassStatusWithRetry(ctx, networkClasses, networkClassID,
-			privatev1.NetworkClassStatus_builder{
-				State:        privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING,
-				ManagerState: privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING,
-			}.Build(),
-			&fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.manager_state"}})
-		Expect(err).ToNot(HaveOccurred())
-		pendingNetworkClass, err := networkClasses.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassID}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		Expect(pendingNetworkClass.GetObject().GetStatus().GetState()).NotTo(Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
-
-		virtualNetworkName := fmt.Sprintf("networking-ready-gate-vn-%s", uuid.New()[24:])
-		createdVirtualNetwork, err := client.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-			Object: privatev1.VirtualNetwork_builder{
-				Metadata: privatev1.Metadata_builder{Name: virtualNetworkName, Tenant: usersGroup}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassID}.Build(),
-					Region:       "us-east-1",
-					Ipv4Cidr:     new("10.245.0.0/16"),
-				}.Build(),
-			}.Build(),
-		}.Build())
-		if err == nil {
-			virtualNetworkID = createdVirtualNetwork.GetObject().GetId()
-		}
-		expectFailedPrecondition(err, "NetworkClass", "READY")
-		expectNoVirtualNetworkNamed(ctx, client, virtualNetworkName)
 	})
 
 	It("requires a READY VirtualNetwork for Subnet creation and protects referenced parents from deletion", func() {
@@ -567,24 +430,20 @@ var _ = Describe("IPv4-only VirtualNetwork gRPC contract", func() {
 			expectIPv4ContractError(err, expected...)
 			expectNoVirtualNetworkNamed(ctx, client, name)
 		},
-		Entry("missing IPv4 CIDR", privatev1.VirtualNetworkSpec_builder{Region: "us-east-1"}.Build(), "spec.ipv4_cidr"),
-		Entry("empty IPv4 CIDR", privatev1.VirtualNetworkSpec_builder{Region: "us-east-1", Ipv4Cidr: new("")}.Build(), "spec.ipv4_cidr"),
-		Entry("malformed IPv4 CIDR", privatev1.VirtualNetworkSpec_builder{Region: "us-east-1", Ipv4Cidr: new("not-a-cidr")}.Build(), "ipv4_cidr"),
-		Entry("non-canonical IPv4 CIDR", privatev1.VirtualNetworkSpec_builder{Region: "us-east-1", Ipv4Cidr: new("10.242.0.1/16")}.Build(), "canonical"),
-		Entry("IPv6-only CIDR", privatev1.VirtualNetworkSpec_builder{Region: "us-east-1", Ipv6Cidr: new("2001:db8::/32")}.Build(), "IPv6 and dual-stack"),
-		Entry("dual-stack CIDRs", privatev1.VirtualNetworkSpec_builder{Region: "us-east-1", Ipv4Cidr: new("10.242.0.0/16"), Ipv6Cidr: new("2001:db8::/32")}.Build(), "IPv6 and dual-stack"),
+		Entry("missing IPv4 CIDR", privatev1.VirtualNetworkSpec_builder{}.Build(), "spec.ipv4_cidr"),
+		Entry("empty IPv4 CIDR", privatev1.VirtualNetworkSpec_builder{Ipv4Cidr: new("")}.Build(), "spec.ipv4_cidr"),
+		Entry("malformed IPv4 CIDR", privatev1.VirtualNetworkSpec_builder{Ipv4Cidr: new("not-a-cidr")}.Build(), "ipv4_cidr"),
+		Entry("non-canonical IPv4 CIDR", privatev1.VirtualNetworkSpec_builder{Ipv4Cidr: new("10.242.0.1/16")}.Build(), "canonical"),
 	)
 
-	It("rejects non-canonical, IPv6, dual-stack, and clearing updates through field masks", func() {
-		fixture := newIPv4NetworkingContractFixture(ctx)
+	It("rejects invalid and immutable CIDR changes through field masks", func() {
+		_ = newIPv4NetworkingContractFixture(ctx)
 		name := fmt.Sprintf("ipv4-vn-update-%s", uuid.New()[24:])
 		response, err := client.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 			Object: privatev1.VirtualNetwork_builder{
 				Metadata: privatev1.Metadata_builder{Name: name, Tenant: usersGroup}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: fixture.networkClassID}.Build(),
-					Region:       "us-east-1",
-					Ipv4Cidr:     new("10.243.0.0/16"),
+					Ipv4Cidr: new("10.243.0.0/16"),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -601,33 +460,21 @@ var _ = Describe("IPv4-only VirtualNetwork gRPC contract", func() {
 			want  string
 		}{
 			{name: "non-canonical IPv4", field: "spec.ipv4_cidr", value: new("10.243.0.1/16"), want: "canonical"},
-			{name: "IPv6", field: "spec.ipv6_cidr", value: new("2001:db8::/32"), want: "IPv6 and dual-stack"},
-			{name: "cleared IPv4", field: "spec.ipv4_cidr", value: new(""), want: "immutable"},
+			{name: "changed IPv4", field: "spec.ipv4_cidr", value: new("10.244.0.0/16"), want: "immutable"},
 		}
 		for _, testCase := range cases {
 			By("rejecting " + testCase.name)
 			object := privatev1.VirtualNetwork_builder{Id: id}.Build()
-			if strings.HasPrefix(testCase.field, "spec.ipv4") {
-				object.SetSpec(privatev1.VirtualNetworkSpec_builder{Ipv4Cidr: testCase.value}.Build())
-			} else {
-				object.SetSpec(privatev1.VirtualNetworkSpec_builder{Ipv6Cidr: testCase.value}.Build())
-			}
+			object.SetSpec(privatev1.VirtualNetworkSpec_builder{Ipv4Cidr: testCase.value}.Build())
 			_, err = client.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
 				Object:     object,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{testCase.field}},
 			}.Build())
 			expectIPv4ContractError(err, testCase.want)
+			stored, getErr := client.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+			Expect(getErr).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetSpec().GetIpv4Cidr()).To(Equal("10.243.0.0/16"))
 		}
-
-		By("rejecting an IPv4 and IPv6 dual-stack update")
-		_, err = client.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
-			Object: privatev1.VirtualNetwork_builder{
-				Id:   id,
-				Spec: privatev1.VirtualNetworkSpec_builder{Ipv6Cidr: new("2001:db8::/32")}.Build(),
-			}.Build(),
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.ipv6_cidr"}},
-		}.Build())
-		expectIPv4ContractError(err, "IPv6 and dual-stack")
 	})
 })
 
@@ -663,10 +510,10 @@ var _ = Describe("IPv4-only Subnet gRPC contract", func() {
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
 		}.Build())
-		Expect(err).ToNot(HaveOccurred())
+		// Networking resources are update-less: names and labels can\'t change.
+		expectIPv4ContractError(err, "immutable")
 		getResponse, err = client.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: id}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(getResponse.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("contract", "ipv4-subnet"))
 		Expect(getResponse.GetObject().GetSpec().GetIpv4Cidr()).To(Equal("10.240.1.0/24"))
 
 		_, err = client.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: id}.Build())
@@ -691,8 +538,6 @@ var _ = Describe("IPv4-only Subnet gRPC contract", func() {
 		Entry("empty IPv4 CIDR", privatev1.SubnetSpec_builder{Ipv4Cidr: new("")}.Build(), "spec.ipv4_cidr"),
 		Entry("malformed IPv4 CIDR", privatev1.SubnetSpec_builder{Ipv4Cidr: new("not-a-cidr")}.Build(), "ipv4_cidr"),
 		Entry("non-canonical IPv4 CIDR", privatev1.SubnetSpec_builder{Ipv4Cidr: new("10.244.0.1/24")}.Build(), "canonical"),
-		Entry("IPv6-only CIDR", privatev1.SubnetSpec_builder{Ipv6Cidr: new("2001:db8::/64")}.Build(), "IPv6 and dual-stack"),
-		Entry("dual-stack CIDRs", privatev1.SubnetSpec_builder{Ipv4Cidr: new("10.244.0.0/24"), Ipv6Cidr: new("2001:db8::/64")}.Build(), "IPv6 and dual-stack"),
 	)
 
 	It("rejects invalid field-masked updates and never changes the stored CIDR", func() {
@@ -707,22 +552,20 @@ var _ = Describe("IPv4-only Subnet gRPC contract", func() {
 			want  string
 		}{
 			{name: "non-canonical IPv4", field: "spec.ipv4_cidr", value: new("10.240.1.1/24"), want: "canonical"},
-			{name: "IPv6", field: "spec.ipv6_cidr", value: new("2001:db8::/64"), want: "IPv6 and dual-stack"},
-			{name: "cleared IPv4", field: "spec.ipv4_cidr", value: new(""), want: "immutable"},
+			{name: "changed IPv4", field: "spec.ipv4_cidr", value: new("10.240.2.0/24"), want: "immutable"},
 		}
 		for _, testCase := range cases {
 			By("rejecting " + testCase.name)
 			object := privatev1.Subnet_builder{Id: id}.Build()
-			if strings.HasPrefix(testCase.field, "spec.ipv4") {
-				object.SetSpec(privatev1.SubnetSpec_builder{Ipv4Cidr: testCase.value}.Build())
-			} else {
-				object.SetSpec(privatev1.SubnetSpec_builder{Ipv6Cidr: testCase.value}.Build())
-			}
+			object.SetSpec(privatev1.SubnetSpec_builder{Ipv4Cidr: testCase.value}.Build())
 			_, err := client.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
 				Object:     object,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{testCase.field}},
 			}.Build())
 			expectIPv4ContractError(err, testCase.want)
+			stored, getErr := client.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: id}.Build())
+			Expect(getErr).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetSpec().GetIpv4Cidr()).To(Equal("10.240.1.0/24"))
 		}
 	})
 })
@@ -775,10 +618,10 @@ var _ = Describe("IPv4-only SecurityGroup gRPC contract", func() {
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
 		}.Build())
-		Expect(err).ToNot(HaveOccurred())
+		// Networking resources are update-less: names and labels can\'t change.
+		expectIPv4ContractError(err, "immutable")
 		getResponse, err = client.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: fixture.securityGroupID}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(getResponse.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("contract", "ipv4-security-group"))
 		Expect(getResponse.GetObject().GetSpec().GetIngress()[0].GetIpv4Cidr()).To(Equal("0.0.0.0/0"))
 
 		Expect(cleanupSecurityGroupFixture(ctx, fixture.securityGroups, fixture.securityGroupID)).To(Succeed())
@@ -813,6 +656,18 @@ var _ = Describe("IPv4-only SecurityGroup gRPC contract", func() {
 			})).To(Succeed())
 			g.Expect(securityGroups.Items).To(HaveLen(1))
 		}, time.Minute, time.Second).Should(Succeed())
+
+		By("marking the initial SecurityGroup READY for a rule update")
+		initial, err := fixture.securityGroups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{
+			Id: fixture.securityGroupID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		initial.GetObject().GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY)
+		_, err = fixture.securityGroups.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+			Object:     initial.GetObject(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
 
 		updatedIngress := publicv1.SecurityRule_builder{
 			Protocol: publicv1.Protocol_PROTOCOL_UDP,
@@ -932,15 +787,11 @@ var _ = Describe("IPv4-only SecurityGroup gRPC contract", func() {
 		Entry("empty ingress IPv4", true, privatev1.SecurityRule_builder{Protocol: privatev1.Protocol_PROTOCOL_ALL, Ipv4Cidr: new("")}.Build(), "ipv4_cidr"),
 		Entry("malformed ingress IPv4", true, privatev1.SecurityRule_builder{Protocol: privatev1.Protocol_PROTOCOL_ALL, Ipv4Cidr: new("not-a-cidr")}.Build(), "ipv4_cidr"),
 		Entry("host-bit ingress IPv4", true, privatev1.SecurityRule_builder{Protocol: privatev1.Protocol_PROTOCOL_ALL, Ipv4Cidr: new("10.245.0.1/24")}.Build(), "canonical"),
-		Entry("IPv6-only ingress", true, privatev1.SecurityRule_builder{Protocol: privatev1.Protocol_PROTOCOL_ALL, Ipv6Cidr: new("2001:db8::/64")}.Build(), "IPv6 and dual-stack"),
-		Entry("dual-stack ingress", true, privatev1.SecurityRule_builder{Protocol: privatev1.Protocol_PROTOCOL_ALL, Ipv4Cidr: new("10.245.0.0/24"), Ipv6Cidr: new("2001:db8::/64")}.Build(), "IPv6 and dual-stack"),
 		Entry("missing egress IPv4", false, privatev1.SecurityRule_builder{Protocol: privatev1.Protocol_PROTOCOL_ALL}.Build(), "ipv4_cidr"),
 		Entry("host-bit egress IPv4", false, privatev1.SecurityRule_builder{Protocol: privatev1.Protocol_PROTOCOL_ALL, Ipv4Cidr: new("10.246.0.1/24")}.Build(), "canonical"),
-		Entry("IPv6-only egress", false, privatev1.SecurityRule_builder{Protocol: privatev1.Protocol_PROTOCOL_ALL, Ipv6Cidr: new("2001:db8::/64")}.Build(), "IPv6 and dual-stack"),
-		Entry("dual-stack egress", false, privatev1.SecurityRule_builder{Protocol: privatev1.Protocol_PROTOCOL_ALL, Ipv4Cidr: new("10.246.0.0/24"), Ipv6Cidr: new("2001:db8::/64")}.Build(), "IPv6 and dual-stack"),
 	)
 
-	It("rejects a field-masked ingress change without changing the stored rule", func() {
+	It("rejects a private field-masked ingress change without changing the stored rule", func() {
 		fixture := newIPv4NetworkingContractFixture(ctx)
 		rule := privatev1.SecurityRule_builder{Protocol: privatev1.Protocol_PROTOCOL_ALL, Ipv4Cidr: new("0.0.0.0/0")}.Build()
 		response, err := client.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
@@ -966,7 +817,7 @@ var _ = Describe("IPv4-only SecurityGroup gRPC contract", func() {
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.ingress"}},
 		}.Build())
-		expectIPv4ContractError(err, "spec' is immutable")
+		expectIPv4ContractError(err, "spec is immutable")
 		stored, err := client.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: fixture.securityGroupID}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(stored.GetObject().GetSpec().GetIngress()[0].GetIpv4Cidr()).To(Equal("0.0.0.0/0"))
@@ -1022,10 +873,10 @@ var _ = Describe("IPv4-only ExternalIPPool gRPC contract", func() {
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
 		}.Build())
-		Expect(err).ToNot(HaveOccurred())
+		// Networking resources are update-less: names and labels can\'t change.
+		expectIPv4ContractError(err, "immutable")
 		getResponse, err = client.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: id}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(getResponse.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("contract", "ipv4-pool"))
 		Expect(getResponse.GetObject().GetSpec().GetCidrs()).To(Equal([]string{cidr}))
 	})
 
@@ -1050,7 +901,7 @@ var _ = Describe("IPv4-only ExternalIPPool gRPC contract", func() {
 		Entry("IPv6 CIDR with IPv4 family", privatev1.ExternalIPPoolSpec_builder{Cidrs: []string{"2001:db8::/64"}, IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4}.Build(), "IPv4 CIDR"),
 	)
 
-	It("rejects IPv6, unspecified-family, non-canonical, and multiple-CIDR updates", func() {
+	It("rejects invalid and immutable field-masked updates", func() {
 		cidr := "10.250.0.0/28"
 		response, err := client.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 			Object: privatev1.ExternalIPPool_builder{
@@ -1070,10 +921,11 @@ var _ = Describe("IPv4-only ExternalIPPool gRPC contract", func() {
 			mask string
 			want string
 		}{
-			{name: "IPv6 family", obj: privatev1.ExternalIPPool_builder{Id: id, Spec: privatev1.ExternalIPPoolSpec_builder{IpFamily: privatev1.IPFamily_IP_FAMILY_IPV6}.Build()}.Build(), mask: "spec.ip_family", want: "IP_FAMILY_IPV4"},
-			{name: "unspecified family", obj: privatev1.ExternalIPPool_builder{Id: id, Spec: privatev1.ExternalIPPoolSpec_builder{IpFamily: privatev1.IPFamily_IP_FAMILY_UNSPECIFIED}.Build()}.Build(), mask: "spec.ip_family", want: "validation failed"},
+			{name: "IPv6 family", obj: privatev1.ExternalIPPool_builder{Id: id, Spec: privatev1.ExternalIPPoolSpec_builder{IpFamily: privatev1.IPFamily_IP_FAMILY_IPV6}.Build()}.Build(), mask: "spec.ip_family", want: "spec.ip_family"},
+			{name: "unspecified family", obj: privatev1.ExternalIPPool_builder{Id: id, Spec: privatev1.ExternalIPPoolSpec_builder{IpFamily: privatev1.IPFamily_IP_FAMILY_UNSPECIFIED}.Build()}.Build(), mask: "spec.ip_family", want: "spec.ip_family"},
 			{name: "non-canonical CIDR", obj: privatev1.ExternalIPPool_builder{Id: id, Spec: privatev1.ExternalIPPoolSpec_builder{Cidrs: []string{"10.250.0.1/28"}}.Build()}.Build(), mask: "spec.cidrs", want: "canonical"},
 			{name: "multiple CIDRs", obj: privatev1.ExternalIPPool_builder{Id: id, Spec: privatev1.ExternalIPPoolSpec_builder{Cidrs: []string{"10.250.0.0/28", "10.250.1.0/28"}}.Build()}.Build(), mask: "spec.cidrs", want: "spec.cidrs"},
+			{name: "changed canonical CIDR", obj: privatev1.ExternalIPPool_builder{Id: id, Spec: privatev1.ExternalIPPoolSpec_builder{Cidrs: []string{"10.250.1.0/28"}}.Build()}.Build(), mask: "spec.cidrs", want: "immutable"},
 		}
 		for _, testCase := range cases {
 			By("rejecting " + testCase.name)
@@ -1082,6 +934,10 @@ var _ = Describe("IPv4-only ExternalIPPool gRPC contract", func() {
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{testCase.mask}},
 			}.Build())
 			expectIPv4ContractError(err, testCase.want)
+			stored, getErr := client.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: id}.Build())
+			Expect(getErr).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetSpec().GetCidrs()).To(Equal([]string{cidr}))
+			Expect(stored.GetObject().GetSpec().GetIpFamily()).To(Equal(privatev1.IPFamily_IP_FAMILY_IPV4))
 		}
 	})
 })

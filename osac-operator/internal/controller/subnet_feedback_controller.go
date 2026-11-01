@@ -22,7 +22,6 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	ctrl "sigs.k8s.io/controller-runtime"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -71,6 +70,11 @@ func NewSubnetFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.ClientConn
 				Object:     remote,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{feedbackStatusStatePath, feedbackStatusMessagePath, "status.compute_instance_supported", "status.compute_instance_unsupported_reason"}},
 			}.Build())
+			if err != nil {
+				return err
+			}
+			// Signal on change, so the fulfillment service acts on the new state.
+			_, err = subnetsClient.Signal(ctx, privatev1.SubnetsSignalRequest_builder{Id: remote.GetId()}.Build())
 			return err
 		},
 		Signal: func(ctx context.Context, id string) error {
@@ -103,41 +107,25 @@ func (r *SubnetFeedbackReconciler) Reconcile(ctx context.Context, request ctrl.R
 	return r.bridge.Reconcile(ctx, request)
 }
 
-func syncSubnetUpdate(ctx context.Context, obj *v1alpha1.Subnet, remote *privatev1.Subnet) error {
-	remote.GetStatus().ComputeInstanceSupported = obj.Status.ComputeInstanceSupported
-	remote.GetStatus().SetComputeInstanceUnsupportedReason(obj.Status.ComputeInstanceUnsupportedReason)
-	syncSubnetPhase(ctx, obj, remote)
-	syncSubnetBackendNetworkID(obj, remote)
-	return nil
-}
-
-func syncSubnetDelete(_ context.Context, obj *v1alpha1.Subnet, remote *privatev1.Subnet) error {
-	if obj.Status.Phase == v1alpha1.SubnetPhaseFailed {
-		remote.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_DELETE_FAILED)
-		return nil
-	}
-	remote.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_DELETING)
-	return nil
-}
-
-func syncSubnetPhase(ctx context.Context, obj *v1alpha1.Subnet, remote *privatev1.Subnet) {
-	switch obj.Status.Phase {
-	case v1alpha1.SubnetPhaseProgressing:
-		remote.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_PENDING)
-	case v1alpha1.SubnetPhaseFailed:
-		remote.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_FAILED)
-	case v1alpha1.SubnetPhaseReady:
-		remote.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_READY)
-	case v1alpha1.SubnetPhaseDeleting:
-		remote.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_DELETING)
+func syncSubnetUpdate(_ context.Context, obj *v1alpha1.Subnet, remote *privatev1.Subnet) error {
+	status := remote.GetStatus()
+	status.ComputeInstanceSupported = obj.Status.ComputeInstanceSupported
+	status.SetComputeInstanceUnsupportedReason(obj.Status.ComputeInstanceUnsupportedReason)
+	state, message := networkFeedback(obj, obj.Status.Conditions)
+	switch state {
+	case networkFeedbackReady:
+		status.SetState(privatev1.SubnetState_SUBNET_STATE_READY)
+	case networkFeedbackFailed:
+		status.SetState(privatev1.SubnetState_SUBNET_STATE_FAILED)
+	case networkFeedbackDeleting:
+		status.SetState(privatev1.SubnetState_SUBNET_STATE_DELETING)
 	default:
-		log := ctrllog.FromContext(ctx)
-		log.Info("Unknown phase, will ignore it", "phase", obj.Status.Phase)
+		status.SetState(privatev1.SubnetState_SUBNET_STATE_PENDING)
 	}
+	feedbackMessage(message, status.SetMessage, status.ClearMessage)
+	return nil
 }
 
-func syncSubnetBackendNetworkID(obj *v1alpha1.Subnet, remote *privatev1.Subnet) {
-	if obj.Status.BackendNetworkID != "" {
-		remote.GetStatus().SetMessage(sanitizeFeedbackText(obj.Status.BackendNetworkID))
-	}
+func syncSubnetDelete(ctx context.Context, obj *v1alpha1.Subnet, remote *privatev1.Subnet) error {
+	return syncSubnetUpdate(ctx, obj, remote)
 }

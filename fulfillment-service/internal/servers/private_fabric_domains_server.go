@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -27,20 +28,24 @@ import (
 )
 
 type PrivateFabricDomainsServerBuilder struct {
-	logger            *slog.Logger
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	metricsRegisterer prometheus.Registerer
-	filterDesc        protoreflect.MessageDescriptor
+	logger             *slog.Logger
+	attributionLogic   auth.AttributionLogic
+	tenancyLogic       auth.TenancyLogic
+	metricsRegisterer  prometheus.Registerer
+	networkingSettings *NetworkingSettings
+	filterDesc         protoreflect.MessageDescriptor
 }
 
 var _ privatev1.FabricDomainsServer = (*PrivateFabricDomainsServer)(nil)
 
 type PrivateFabricDomainsServer struct {
 	privatev1.UnimplementedFabricDomainsServer
-	generic           *GenericServer[*privatev1.FabricDomain]
-	virtualNetworkDao *dao.GenericDAO[*privatev1.VirtualNetwork]
-	networkClassDao   *dao.GenericDAO[*privatev1.NetworkClass]
+	generic  *GenericServer[*privatev1.FabricDomain]
+	settings NetworkingSettings
+	guards   *networkingGuards
+
+	// virtualNetworks resolves the parent reference with the caller's visibility.
+	virtualNetworks *dao.GenericDAO[*privatev1.VirtualNetwork]
 }
 
 func NewPrivateFabricDomainsServer() *PrivateFabricDomainsServerBuilder {
@@ -74,6 +79,13 @@ func (b *PrivateFabricDomainsServerBuilder) SetFilterDesc(value protoreflect.Mes
 	return b
 }
 
+// SetNetworkingSettings sets the networking installation settings. This is optional; the default is
+// DefaultNetworkingSettings.
+func (b *PrivateFabricDomainsServerBuilder) SetNetworkingSettings(value NetworkingSettings) *PrivateFabricDomainsServerBuilder {
+	b.networkingSettings = &value
+	return b
+}
+
 func (b *PrivateFabricDomainsServerBuilder) Build() (result *PrivateFabricDomainsServer, err error) {
 	if b.logger == nil {
 		return nil, errors.New("logger is mandatory")
@@ -93,28 +105,23 @@ func (b *PrivateFabricDomainsServerBuilder) Build() (result *PrivateFabricDomain
 	if err != nil {
 		return nil, err
 	}
-
-	virtualNetworkDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
+	guards, err := newNetworkingGuards(b.logger)
 	if err != nil {
 		return nil, err
 	}
-	networkClassDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+	virtualNetworks, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
 		Build()
 	if err != nil {
 		return nil, err
 	}
 
 	return &PrivateFabricDomainsServer{
-		generic:           generic,
-		virtualNetworkDao: virtualNetworkDao,
-		networkClassDao:   networkClassDao,
+		generic:         generic,
+		settings:        resolveNetworkingSettings(b.networkingSettings),
+		guards:          guards,
+		virtualNetworks: virtualNetworks,
 	}, nil
 }
 
@@ -131,9 +138,15 @@ func (s *PrivateFabricDomainsServer) Get(ctx context.Context, request *privatev1
 }
 
 func (s *PrivateFabricDomainsServer) Create(ctx context.Context, request *privatev1.FabricDomainsCreateRequest) (*privatev1.FabricDomainsCreateResponse, error) {
+	if err := rejectOutputStatusOnCreate(request.GetObject().HasStatus()); err != nil {
+		return nil, err
+	}
 	var response *privatev1.FabricDomainsCreateResponse
 	err := s.generic.CreateWithCandidatePreparation(ctx, request, &response,
 		func(ctx context.Context, _ *privatev1.FabricDomain, object *privatev1.FabricDomain) error {
+			if err := lockTenantForCreate(ctx, object.GetMetadata().GetTenant()); err != nil {
+				return err
+			}
 			// Tenant assignment precedes relationship validation, including for administrators.
 			if err := s.validateFabricDomain(ctx, object); err != nil {
 				return err
@@ -148,6 +161,15 @@ func (s *PrivateFabricDomainsServer) Create(ctx context.Context, request *privat
 	return response, err
 }
 
+// fabricDomainControllerStatusFields are the status fields the controllers write.
+var fabricDomainControllerStatusFields = map[string]bool{
+	"status.backend_id": true,
+	"status.members":    true,
+	"status.hub":        true,
+	"status.conditions": true,
+}
+
+// Update writes status only; the spec is immutable, and the servers can't change in this release.
 func (s *PrivateFabricDomainsServer) Update(ctx context.Context, request *privatev1.FabricDomainsUpdateRequest) (*privatev1.FabricDomainsUpdateResponse, error) {
 	if request.GetObject().GetId() == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "object identifier is mandatory")
@@ -157,51 +179,34 @@ func (s *PrivateFabricDomainsServer) Update(ctx context.Context, request *privat
 		if !auth.IsControllerServiceAccount(ctx) && !auth.IsServiceAccount(ctx, "osac-operator") {
 			return nil, grpcstatus.Error(grpccodes.InvalidArgument, "status output fields can only be updated by an authorized controller")
 		}
-		controllerStatusFields := map[string]struct{}{
-			"status.backend_id": {},
-			"status.vpc_id":     {},
-			"status.members":    {},
-			"status.hub":        {},
-			"status.conditions": {},
-		}
 		for _, path := range mask.GetPaths() {
-			if path == "status" || strings.HasPrefix(path, "status.") {
-				if _, allowed := controllerStatusFields[path]; allowed {
-					continue
-				}
+			if (path == "status" || strings.HasPrefix(path, "status.")) && !fabricDomainControllerStatusFields[path] {
 				return nil, grpcstatus.Error(grpccodes.InvalidArgument, "status field is not writable by the fulfillment controller")
 			}
 		}
 	}
-	getRequest := &privatev1.FabricDomainsGetRequest{}
-	getRequest.SetId(request.GetObject().GetId())
-	var getResponse *privatev1.FabricDomainsGetResponse
-	if err := s.generic.Get(ctx, getRequest, &getResponse); err != nil {
-		return nil, err
-	}
-	old := getResponse.GetObject()
-	updated := request.GetObject()
-	fullUpdate := request.GetUpdateMask() == nil || len(request.GetUpdateMask().GetPaths()) == 0
-	if (fullUpdate || updateIncludesField(request.GetUpdateMask(), "spec.type")) && updated.GetSpec().GetType() != old.GetSpec().GetType() {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "type is immutable")
-	}
-	if (fullUpdate || updateIncludesField(request.GetUpdateMask(), "spec.virtual_network")) && updated.GetSpec().GetVirtualNetwork() != old.GetSpec().GetVirtualNetwork() {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "virtual_network is immutable")
-	}
-	if (fullUpdate || updateIncludesField(request.GetUpdateMask(), "spec.servers")) && len(updated.GetSpec().GetServers()) == 0 {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "servers list must not be empty")
-	}
-	if fullUpdate {
-		updated.SetStatus(old.GetStatus())
-	}
 	var response *privatev1.FabricDomainsUpdateResponse
-	err := s.generic.Update(ctx, request, &response)
+	err := s.generic.UpdateWithCandidatePreparation(ctx, request, &response,
+		func(_ context.Context, current, candidate *privatev1.FabricDomain) error {
+			if !slices.Equal(current.GetSpec().GetServers(), candidate.GetSpec().GetServers()) {
+				return grpcstatus.Error(grpccodes.InvalidArgument,
+					"FabricDomain servers cannot change in this release; delete and recreate the FabricDomain")
+			}
+			return validateNetworkingStatusOnlyUpdate("FabricDomain", current, candidate)
+		})
 	return response, err
 }
 
 func (s *PrivateFabricDomainsServer) Delete(ctx context.Context, request *privatev1.FabricDomainsDeleteRequest) (*privatev1.FabricDomainsDeleteResponse, error) {
+	domain, err := lockLifecycleResource(ctx, s.generic.dao, request.GetId(), "FabricDomain")
+	if err != nil {
+		return nil, err
+	}
+	if deleteAlreadyAccepted(domain.GetMetadata()) {
+		return &privatev1.FabricDomainsDeleteResponse{}, nil
+	}
 	var response *privatev1.FabricDomainsDeleteResponse
-	err := s.generic.Delete(ctx, request, &response)
+	err = s.generic.Delete(ctx, request, &response)
 	return response, err
 }
 
@@ -231,47 +236,28 @@ func (s *PrivateFabricDomainsServer) validateFabricDomain(ctx context.Context, o
 	default:
 		return grpcstatus.Error(grpccodes.InvalidArgument, "unknown or unspecified FabricDomain type")
 	}
+	if !s.settings.BareMetalEnabled {
+		return grpcstatus.Error(grpccodes.FailedPrecondition,
+			"FabricDomains need BMaaS, which is not enabled in this deployment")
+	}
+	// Hold the VirtualNetwork row lock, as VirtualNetworks.Delete does, until this request transaction finishes.
+	vn, err := lockParentVirtualNetwork(ctx, s.guards, s.virtualNetworks, spec.GetVirtualNetwork(), object.GetMetadata())
+	if err != nil {
+		return err
+	}
+	spec.SetVirtualNetwork(vn.GetId())
 
-	// Hold the same VN row lock as VirtualNetworks.Delete until this request transaction
-	// finishes. This closes the window before the reconciler materializes a domain CR.
-	vnResponse, err := s.virtualNetworkDao.Get().SetId(spec.GetVirtualNetwork()).SetLock(true).Do(ctx)
+	nc, err := findSingletonNetworkClass(ctx, s.guards.networkClasses)
 	if err != nil {
-		return translateLifecycleError(err)
+		return grpcstatus.Error(grpccodes.Internal, "failed to find the NetworkClass")
 	}
-	vn := vnResponse.GetObject()
-	if vn.GetMetadata().GetTenant() != object.GetMetadata().GetTenant() {
-		return grpcstatus.Error(grpccodes.InvalidArgument, "VirtualNetwork must belong to the same tenant as the FabricDomain")
+	if nc == nil {
+		return grpcstatus.Error(grpccodes.FailedPrecondition, "no NetworkClass is configured")
 	}
-	if vn.GetMetadata().HasDeletionTimestamp() {
-		return grpcstatus.Error(grpccodes.FailedPrecondition, "VirtualNetwork is being deleted")
+	if !nc.GetSpec().GetEastWestCapabilities().GetSupportsEastWestEthernet() {
+		return grpcstatus.Error(grpccodes.InvalidArgument,
+			"the NetworkClass does not set east_west_capabilities.supports_east_west_ethernet")
 	}
-	if vn.GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"VirtualNetwork '%s' must be READY (current state: %s)",
-			spec.GetVirtualNetwork(), vn.GetStatus().GetState().String())
-	}
-	networkClassID := vn.GetSpec().GetNetworkClass().GetId()
-	if networkClassID == "" {
-		return grpcstatus.Error(grpccodes.FailedPrecondition, "VirtualNetwork has no NetworkClass")
-	}
-	ncResponse, err := s.networkClassDao.Get().SetId(networkClassID).SetLock(true).Do(ctx)
-	if err != nil {
-		return translateLifecycleError(err)
-	}
-	nc := ncResponse.GetObject()
-	if nc.GetMetadata().HasDeletionTimestamp() {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"NetworkClass '%s' is being deleted", networkClassID)
-	}
-	if nc.GetStatus().GetState() != privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"NetworkClass '%s' must be READY (current state: %s)", networkClassID, nc.GetStatus().GetState().String())
-	}
-	if !nc.GetCapabilities().GetSupportsEastWestEthernet() {
-		return grpcstatus.Error(grpccodes.InvalidArgument, "type does not match NetworkClass capability")
-	}
-	if nc.GetFabricManager() != "netris" {
-		return grpcstatus.Error(grpccodes.FailedPrecondition, "ethernet_ew requires the netris fabric manager")
-	}
+
 	return nil
 }

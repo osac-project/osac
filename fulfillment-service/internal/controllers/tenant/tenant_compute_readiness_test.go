@@ -341,7 +341,14 @@ var _ = Describe("Tenant compute infrastructure readiness", func() {
 				networkClasses := NewMockNetworkClassesClient(ctrl)
 				reconciler.networkClassesClient = networkClasses
 				networkClasses.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-					privatev1.NetworkClassesListResponse_builder{}.Build(), nil)
+					privatev1.NetworkClassesListResponse_builder{Items: []*privatev1.NetworkClass{
+						privatev1.NetworkClass_builder{
+							Id: "nc-1",
+							Status: privatev1.NetworkClassStatus_builder{
+								State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+							}.Build(),
+						}.Build(),
+					}}.Build(), nil).AnyTimes()
 				vn := NewMockVirtualNetworksClient(ctrl)
 				reconciler.virtualNetworksClient = vn
 				vn.EXPECT().List(gomock.Any(), gomock.Any()).Return(nil, failure)

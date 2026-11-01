@@ -19,9 +19,7 @@ these documents locally; verify its revision before relying on it. They remain
 available through GitHub in a fresh OSAC clone.
 
 These decisions describe the accepted target contract. They do not assert that
-every constraint is enforced by the current code. The unified design explicitly
-records legacy IPv6/dual-stack fields and allocation paths still present in the
-implementation. Check [proto sources](../../proto/private/),
+every constraint is enforced by the current code. Check [proto sources](../../proto/private/),
 [operator APIs](../../osac-operator/api/), and the affected component's guidance
 when assessing current behavior. Report implementation/design gaps explicitly.
 
@@ -82,6 +80,39 @@ superseded or extended design explicitly.
     when no active resource references the target, subject to the accepted
     auto-created resource cleanup rules.
 
+## EVPN handoff implementation status
+
+The EVPN handoff amends contract design §4.8–§4.10; this implementation
+follows it, and carries `l3Vni` in the stored parent snapshot (pending the
+matching EP amendment):
+
+- Fabric `create_virtual_network` with `network_type: evpn` returns
+  `{l3_vni: <int>, backend_id?}`. OSAC records it in
+  `VirtualNetwork.status.l3Vni` and puts it in the stored `virtual_network`
+  snapshot of every Subnet and NetworkAttachment task as `status.l3Vni`.
+- Fabric `create_subnet` returns `network_segment: {type: evpn, l2_vni}`,
+  recorded in `Subnet.status.networkSegment {type, l2Vni}` and passed to
+  Kubernetes tasks as the launch key `network_segment`.
+- OSAC rejects a VNI a live resource holds ("VNI already in use") and retries
+  while only a deleting resource holds it.
+- OVN-Kubernetes serves the VM gateway (`defaultGatewayIPs: [gateway_ipv4]`,
+  symmetric IRB into the IP-VRF), not the Fabric. `cudn_evpn` sets
+  `infrastructureSubnets: [gateway/32, network+2/32]`, route targets
+  `0:<l2_vni>` / `0:<l3_vni>` and MTU 1500.
+- A VM on a `cudn_evpn` network can ping the node that hosts it, and nothing on
+  the node serves it. OVN-Kubernetes treats every EVPN network as advertised and
+  SNATs traffic toward the cluster node IPs to the network's management-port
+  masquerade IP, so it enters the host through the management port, inside the
+  network's VRF. Measured on the single-node lab: the node answers ICMP echo;
+  TCP to listening 22 gets a RST from the node kernel (6443 and 10250 are
+  refused the same way), which fits `net.ipv4.tcp_l3mdev_accept=0`: sockets in
+  the default VRF do not match traffic that arrives on a VRF device; anything
+  beyond the node stops at the VRF's `unreachable` default. So isolation of node
+  services rests on that kernel default staying 0, not on an OSAC rule. UDP
+  matches: with `net.ipv4.udp_l3mdev_accept=0`, dnsmasq listening on 53 did not
+  answer and the node sent port-unreachable. Not measured: another node's
+  address. No E2E checks any of this; add a check when needed.
+
 ## Resource-specific attachment contracts
 
 | Resource | Attachment field and type | Accepted cardinality and primary behavior |
@@ -115,66 +146,84 @@ by the unified design. Manually created external resources and tenant-shared
 default networking persist when a workload is deleted. Follow the full design's
 reverse-reference guards when deleting shared resources or replacing NetworkClass.
 
-## AgentlessNet ExternalIP implementation status
+## Implementation notes
 
-The OSAC-6307 AgentlessNet v1 implementation supplies the resolved ExternalIP
-pool context to AAP. AAP reserves the UID-owned address and returns it in the
-successful `external_ip.allocate` job artifact at `osac_result.data.address`.
-The operator validates the current job result and pool, then publishes the
-address in `ExternalIP.status.address`; AAP does not query the ExternalIPPool
-or write the allocated-address annotation for this v1 flow. For both allocation
-and release, it validates the result against the resource and pool snapshots in
-the same AAP job's submitted `extra_vars`. Release continues to use the v1
-identity envelope with empty `data`.
+The code implements the network manager integration contract
+([OSAC-1433 contract](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-network-manager-integration-contract-networking/design.md))
+as follows:
 
-This implementation updates the allocation handoff in the accepted unified
-networking design, which now documents the same-job artifact and pool snapshot
-contract. Deployed AgentlessNet ExternalIP E2E validation is tracked with
-OSAC-6308. Netris ExternalIP adoption follows the same contract: the OSAC-6376
-Netris v1 implementation dispatches by the
-`osac.openshift.io/externalip-contract-version` annotation. v1 resources run the
-`osac.templates.netris_external_ip` module, which reserves a UID-owned canonical
-IPv4 /32 nat reservation by Kubernetes UID and returns the exact `osac_result`
-v1 artifact at `data.address`; release removes that reservation and reports
-success only after confirmed absence. Netris v1 jobs do not query Kubernetes or
-mutate ExternalIP annotations or status; the operator owns status, finalizers,
-and capacity. Unversioned Netris resources retain the legacy name-owned
-annotation handoff until its removal (OSAC-6384), and the operator chart
-defaults the netris manager registration to the v1 contract while the manager
-itself stays disabled until an operator enables it.
-
-## AgentlessNet ExternalIPAttachment implementation status
-
-The OSAC-6308 AgentlessNet v1 attachment flow is independently versioned by
-`externalIPAttachmentContractVersion`; it does not inherit the ExternalIP
-contract version. The ExternalIPAttachment controller resolves the ready
-ExternalIP, BareMetalInstance, primary Subnet, and VirtualNetwork, then sends
-their resource identities, tenant ownership, addresses, and readiness in the
-same AAP job input as the attachment CR. AAP does not query Kubernetes or write
-CR status. It reserves attachment state in the existing AgentlessNet SQLite
-schema-v1 database, installs inbound whole-address DNAT and scoped forwarding,
-and announces the ExternalIP `/32` through local FRR. The controller validates
-the returned artifact against the submitted input and current resource snapshot
-before marking the attachment Ready; detach uses saved provider state and keeps
-finalizers until its artifact is accepted.
-
-This first delivery supports BMaaS BareMetalInstance targets. It does not add
-SecurityGroup policy, IPv6, or an upstream-router/BGP-peer configuration API.
-The OSAC-1433 design's AAP input and attachment result contract specifies the
-controller-supplied dependency snapshot and same-job-result validation.
-AgentlessNet implements it under OSAC-6308. Netris must adopt the attachment
-v1 contract before advertising it; that work is tracked by OSAC-6638. The
-OSAC-6308 deployed E2E coverage uses a test-only static route and does not
-validate upstream BGP advertisement.
+- **Generic network task:** every manager task (`create_subnet`,
+  `apply_network_attachment`, `query_dhcp_lease`, `create_external_ip`, ...)
+  runs as the AAP job template `<prefix>-<task with dashes>` (for example
+  `osac-create-subnet`). All of them run
+  [`playbook_osac_network_task.yml`](../../osac-aap/playbook_osac_network_task.yml),
+  which calls the manager's `ansible_role` with `osac_job_vars` (`task`,
+  `manager`, the resource snapshot) and returns `osac_result`/`osac_error`.
+  The operator side is [`internal/networktask`](../../osac-operator/internal/networktask/doc.go).
+  There is no dispatcher and no per-manager or per-kind playbook.
+- **Manager registrations:** each manager registers through an immutable
+  ConfigMap in the operator namespace labelled
+  `osac.openshift.io/network-fabric-manager` or
+  `osac.openshift.io/network-k8s-manager` (`name`, `ansible_role`, optional
+  `network_types` and `capabilities`, which apply to both manager types). The
+  operator discovers registrations and derives NetworkClass capabilities from
+  them. Manager-specific registration content and provider behavior remain with
+  the owning teams.
+- **Capability types:** the operator fixes them. `eastWestEthernet` (Fabric
+  Manager only) means the manager implements the FabricDomain tasks.
+  `security_group_icmp` (any manager) means its `create_security_group` accepts
+  `icmp` rules. The operator records `status.securityGroupIcmp` on the
+  NetworkClass, true only when every resolved manager declares it, and
+  fulfillment copies it to `status.security_group_icmp`. SecurityGroup create
+  and rule update reject `PROTOCOL_ICMP` with InvalidArgument when the value is
+  false, or unset with provider networking enabled. `cudn_evpn` does not declare
+  it because NetworkPolicy cannot match ICMP; `all` includes ICMP. Netris
+  declares it although its SecurityGroup tasks are no-ops. The value is derived,
+  so it has no Helm value. A class whose default rules use `icmp` without the
+  capability fails resolution.
+- **DNS:** OSAC has no per-resource DNS. VMs get the cluster DNS that
+  OVN-Kubernetes DHCP gives on the primary UDN. Bare metal on Netris gets an
+  installation-level resolver (default `8.8.8.8`) from the Netris default DHCP
+  option set, a provider install step, not OSAC code; bare metal without
+  internet needs no DNS reachability. The settings `CUDN_EVPN_DNS_RESOLVERS`,
+  `NETRIS_DNS_RESOLVERS`, `NETRIS_DNS_SNAT_CIDR` and the Netris per-VN DNS SNAT
+  are removed.
+- **NetworkClass and NetworkAttachment CRDs:** the fulfillment reconciler
+  creates the single NetworkClass CR, which resolves its managers from the
+  registrations. BMaaS (BMF) and VMaaS create a NetworkAttachment per
+  workload attachment; the operator networking controller runs its tasks.
+- **Status:** networking CRs have no `status.phase`. They report the `Ready`
+  condition (reasons `Progressing`, `Succeeded`, `Failed`, `Updating`,
+  `ProvisioningDisabled`), one `status.jobs` entry per task run (manager,
+  attempt, state, AAP job ID, message) and `status.taskInput`, the input
+  captured once at the first job and reused by retries and cleanup. Feedback
+  controllers map `Ready` to the private state; there is no `DELETE_FAILED`
+  (cleanup tasks retry until they succeed).
+- **Provider networking disabled:** with
+  `global.networking.provisioningEnabled: false` no networking job runs;
+  the operator does not read manager registration ConfigMaps. It marks the
+  NetworkClass Ready with reason `ProvisioningDisabled` and leaves
+  `status.networkManagers`, `status.networkType` and `status.securityGroupIcmp`
+  empty, and ICMP rules are stored. The configured
+  manager names remain part of the NetworkClass spec but are not resolved;
+  VirtualNetwork, Subnet, SecurityGroup, ExternalIPPool and FabricDomain
+  become Ready with reason `ProvisioningDisabled`; workloads create no
+  NetworkAttachment, and ExternalIP, ExternalIPAttachment and NATGateway are
+  not offered. The fulfillment service refuses to start when the stored value
+  changes.
+- **CaaS workers:** worker BareMetalInstances live in tenant `system` and
+  record their Cluster in status. The agent registration timeout (30 minutes)
+  starts at the latest of the attempt start, the BMI network-ready time and
+  the management publication, so network setup time does not count against it.
 
 ## AgentlessNet NATGateway implementation status
 
-OSAC-6202 adds the independent `natGatewayContractVersion: v1` manager
-registration and controller/AAP contract. The NATGateway controller resolves
-the current ready VirtualNetwork and allocated ExternalIP, submits their
-identity, tenant and address/CIDR snapshot, then accepts only a matching
-same-job `nat_gateway.ensure` or `nat_gateway.delete` result. Unversioned
-managers keep their existing lifecycle. Netris adoption is tracked by OSAC-6694.
+The NATGateway controller runs `create_nat_gateway` and `delete_nat_gateway`
+through the generic network task for every manager. It stores the identity,
+tenant and address/CIDR snapshot of the ready VirtualNetwork and allocated
+ExternalIP as `nat_gateway_context`, and accepts a result only while they still
+match. `osac.templates.agentless_net` reads that input without querying
+Kubernetes. There is no per-manager `natGatewayContractVersion`.
 
 AgentlessNet stores NATGateway ownership in schema-v1 SQLite. AAP translates the
 immutable VirtualNetwork IPv4 CIDR with a constant namespace rule pair: a saved
@@ -184,7 +233,26 @@ forwarding and a host SNAT-bypass rule are installed before announcing the
 ExternalIP `/32` through local FRR. Delete withdraws the route before removing
 SNAT, the transit exemption, forwarding, bypass and matching reply-destination
 conntrack entries; ExternalIP and VirtualNetwork cleanup remain blocked until
-saved NATGateway state is removed. The current per-Subnet source behavior is
-superseded by OSAC-6202's VN-wide SNAT plan; the accepted design amendment must
-be published through the enhancement-proposals design workflow. Deployed BGP
-convergence and packet delivery remain QE coverage under OSAC-5533.
+saved NATGateway state is removed. The accepted design amendment for VN-wide
+SNAT must be published through the enhancement-proposals design workflow.
+Deployed BGP convergence and packet delivery remain QE coverage under OSAC-5533.
+
+The other AgentlessNet tasks (VirtualNetwork, Subnet, ExternalIPPool, ExternalIP,
+ExternalIPAttachment) still read the per-kind playbook inputs, and AgentlessNet
+has no valid manager registration. NATGateway therefore cannot run on a deployed
+AgentlessNet until the role adopts the contract.
+
+## Subnet compute eligibility
+
+The Kubernetes `create_subnet` result additionally accepts optional
+`compute_instance_supported` (boolean) and
+`compute_instance_unsupported_reason` (string). The operator persists these
+with the successful task and reports them through Subnet status to the API
+and VM wizard. `cudn_evpn` reports true for the CUDN owner and false with a
+reason for a fabric-only sibling; both Subnets remain Ready. A manager returning
+no output defaults to supported. A Subnet without a Kubernetes manager is
+unsupported. With provider networking disabled, VMs use the cluster default
+pod network and the Subnet is supported. The `apply_network_attachment` task still validates current
+ownership before VM provisioning, including after the owner is removed.
+This is a local extension to the manager result contract; the matching
+accepted-design amendment remains to be published.

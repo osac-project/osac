@@ -39,7 +39,6 @@ var _ = Describe("Describe Virtual Network", func() {
 				}.Build(),
 				Spec: publicv1.VirtualNetworkSpec_builder{
 					Ipv4Cidr: new("10.0.0.0/16"),
-					Ipv6Cidr: new("2001:db8::/48"),
 				}.Build(),
 				Status: publicv1.VirtualNetworkStatus_builder{
 					State:   publicv1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
@@ -51,7 +50,6 @@ var _ = Describe("Describe Virtual Network", func() {
 			Expect(output).To(ContainSubstring("vnet-001"))
 			Expect(output).To(ContainSubstring("example-vn"))
 			Expect(output).To(ContainSubstring("10.0.0.0/16"))
-			Expect(output).To(ContainSubstring("2001:db8::/48"))
 			Expect(output).To(ContainSubstring("READY"))
 			Expect(output).To(ContainSubstring("Network ready"))
 		})
@@ -70,28 +68,13 @@ var _ = Describe("Describe Virtual Network", func() {
 
 		It("should show '-' for IPv4 CIDR when not set", func() {
 			vn := publicv1.VirtualNetwork_builder{
-				Id: "vnet-003",
-				Spec: publicv1.VirtualNetworkSpec_builder{
-					Ipv6Cidr: new("2001:db8::/48"),
-				}.Build(),
+				Id:   "vnet-003",
+				Spec: publicv1.VirtualNetworkSpec_builder{}.Build(),
 			}.Build()
 
 			output := formatVirtualNetwork(vn)
 			Expect(output).To(MatchRegexp(`IPv4 CIDR:\s+-`))
-			Expect(output).To(ContainSubstring("2001:db8::/48"))
-		})
-
-		It("should show '-' for IPv6 CIDR when not set", func() {
-			vn := publicv1.VirtualNetwork_builder{
-				Id: "vnet-004",
-				Spec: publicv1.VirtualNetworkSpec_builder{
-					Ipv4Cidr: new("10.0.0.0/16"),
-				}.Build(),
-			}.Build()
-
-			output := formatVirtualNetwork(vn)
-			Expect(output).To(ContainSubstring("10.0.0.0/16"))
-			Expect(output).To(MatchRegexp(`IPv6 CIDR:\s+-`))
+			Expect(output).NotTo(ContainSubstring("IPv6"))
 		})
 
 		It("should strip VIRTUAL_NETWORK_STATE_ prefix from state", func() {

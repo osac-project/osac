@@ -59,23 +59,33 @@ regression, with the CaaS references).
 
 ## Optional: VMaaS Netris
 
-The VMaaS Netris suite uses the `cudn-evpn-netris-test` profile and the
-VMaaS setup in osac-test-infra PR [#622](https://github.com/osac-project/osac-test-infra/pull/622).
-It is manual-only: start it with `/test vmaas-netris` or its checkbox in the
-pull request comment, or use the Actions page entry “E2E VMaaS Netris Full
-Install”. Its ExternalIP ingress and NAT egress cases skip until the lab's
-Netris route and return policy is configured and
- `OSAC_NETRIS_VM_EXTERNAL_PATH_ENABLED=true` is set.
+The VMaaS Netris suite uses the `vmaas-ci` profile with `values/vmaas-ci/netris.yaml`
+(which sets the operator's AAP status poll interval to 5s) and the Netris backend of
+osac-test-infra. It is manual-only: start it with `/test vmaas-netris` or its checkbox in
+the pull request comment. The job runs `test_vmaas_networking.py` with `-x`, so it stops at
+the first failed test: `test_00`..`test_13`, and
+the single teardown test `test_14`. Its NAT and ExternalIP tests always run and fail with a
+diagnosis when the lab has no external path, and the routed ExternalIPPool is checked by a
+fixture. Removed from the suite: the ICMP SecurityGroup rule rejection, node service
+isolation and the second-tenant automatic ExternalIP test, which are removed E2E requirements, not
+moved coverage.
+
+The `external_ip/` and `references/` directories and `test_external_ip_billing.py` stay in
+the repository but are not part of this job. Run them by hand against a Netris lab with
+`OSAC_NETRIS_VM_EXTERNAL_PATH_ENABLED=true` for the two directories (they are skipped at
+collection without it) and `METERING_ADAPTER_URL` for the billing file. While they are out of
+the job the ExternalIP delete billing path has no CI signal.
 
 ## Optional: Stretched VMaaS/BMaaS Netris
 
 The stretched networking suite checks shared-subnet connectivity between a
 ComputeInstance and a BareMetalInstance. Start it with `/test stretched-netris`
 or its checkbox in the pull request's E2E comment. It has a separate
-`E2E / Stretched Networking Netris Full Install` line and uses the `full-ci`
-profile. The workflow provisions the Netris/EVPN infrastructure; the test
+`E2E / Stretched Netris Full Install` line and uses the `full-ci`
+profile with `values/full-ci/netris.yaml`. The workflow provisions the Netris/EVPN infrastructure; the test
 itself checks OSAC networking behavior and is not backend-specific. The broad
-Netris `full` suite also includes this test.
+Netris `full` suite excludes `tests/e2e/networking/vmaas` and
+`tests/e2e/networking/bmaas` and includes this test.
 
 ## Approvals after a rebase, and pull requests from forks
 

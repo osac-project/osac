@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -41,16 +40,17 @@ var _ = Describe("Private fabric domains server", func() {
 		}.Build()
 	})
 
-	seedNetwork := func(manager string, ethernet bool, config *privatev1.EthernetEastWestConfig) {
-		ncDAO, err := dao.NewGenericDAO[*privatev1.NetworkClass]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
-		Expect(err).ToNot(HaveOccurred())
-		_, err = ncDAO.Create().SetObject(privatev1.NetworkClass_builder{
+	seedNetwork := func(ethernet bool) {
+		_, err := fixtureDAO[*privatev1.NetworkClass]().Create().SetObject(privatev1.NetworkClass_builder{
 			Id:            "test-class",
 			Metadata:      privatev1.Metadata_builder{Name: "test-class", Tenant: auth.SharedTenant}.Build(),
-			FabricManager: &manager,
-			Capabilities:  privatev1.NetworkClassCapabilities_builder{SupportsEastWestEthernet: ethernet}.Build(),
+			Title:         "OSAC NetworkClass",
+			FabricManager: "netris",
 			Spec: privatev1.NetworkClassSpec_builder{
-				EastWestConfig: privatev1.EastWestConfig_builder{EthernetEw: config}.Build(),
+				EastWestCapabilities: privatev1.NetworkClassEastWestCapabilities_builder{
+					SupportsEastWestEthernet: ethernet,
+				}.Build(),
+				AddressPlan: fixtureAddressPlan(),
 			}.Build(),
 			Status: privatev1.NetworkClassStatus_builder{
 				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
@@ -58,15 +58,10 @@ var _ = Describe("Private fabric domains server", func() {
 			}.Build(),
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		vnDAO, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
-		Expect(err).ToNot(HaveOccurred())
-		_, err = vnDAO.Create().SetObject(privatev1.VirtualNetwork_builder{
+		_, err = fixtureDAO[*privatev1.VirtualNetwork]().Create().SetObject(privatev1.VirtualNetwork_builder{
 			Id:       "test-network",
 			Metadata: privatev1.Metadata_builder{Name: "test-network", Tenant: testTenant, Finalizers: []string{"test/cleanup"}}.Build(),
-			Spec: privatev1.VirtualNetworkSpec_builder{
-				NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
-				Region:       "region-a", Ipv4Cidr: new("10.0.0.0/16"),
-			}.Build(),
+			Spec:     privatev1.VirtualNetworkSpec_builder{Ipv4Cidr: new("10.0.0.0/16")}.Build(),
 			Status: privatev1.VirtualNetworkStatus_builder{
 				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
 				Hub:   "hub-a",
@@ -75,31 +70,35 @@ var _ = Describe("Private fabric domains server", func() {
 		Expect(err).ToNot(HaveOccurred())
 	}
 
-	DescribeTable("creates Ethernet domains without a NetworkClass template", func(config *privatev1.EthernetEastWestConfig) {
-		seedNetwork("netris", true, config)
+	It("creates an Ethernet domain", func() {
+		seedNetwork(true)
 		response, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response.GetObject().GetSpec().GetServers()).To(Equal([]string{"server-a"}))
 		Expect(response.GetObject().GetStatus().GetConditions()).To(HaveLen(1))
 		Expect(response.GetObject().GetStatus().GetConditions()[0].GetType()).To(Equal(privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_PROGRESSING))
-	},
-		Entry("absent Ethernet config", (*privatev1.EthernetEastWestConfig)(nil)),
-		Entry("empty future policy config", &privatev1.EthernetEastWestConfig{}),
-	)
-
-	It("requires the NetworkClass Ethernet capability", func() {
-		seedNetwork("netris", false, nil)
-		_, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-		Expect(err).To(MatchError(ContainSubstring("capability")))
 	})
 
-	DescribeTable("requires the Netris fabric manager", func(manager string) {
-		seedNetwork(manager, true, nil)
+	It("requires the NetworkClass Ethernet capability", func() {
+		seedNetwork(false)
 		_, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err).To(MatchError(ContainSubstring("supports_east_west_ethernet")))
+	})
+
+	It("requires BMaaS", func() {
+		seedNetwork(true)
+		disabled, err := NewPrivateFabricDomainsServer().
+			SetLogger(logger).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			SetNetworkingSettings(NetworkingSettings{ProvisioningEnabled: true}).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		_, err = disabled.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-		Expect(err).To(MatchError(ContainSubstring("netris")))
-	}, Entry("unset", ""), Entry("unsupported", "neutron"))
+		Expect(err).To(MatchError(ContainSubstring("BMaaS")))
+	})
 
 	DescribeTable("rejects unsupported fabric types", func(kind privatev1.FabricDomainType) {
 		object.GetSpec().SetType(kind)
@@ -130,24 +129,23 @@ var _ = Describe("Private fabric domains server", func() {
 		Expect(err).To(MatchError(ContainSubstring("virtual_network")))
 	})
 
-	It("updates membership without requiring a template on NetworkClass", func() {
-		seedNetwork("netris", true, nil)
+	It("rejects a servers change", func() {
+		seedNetwork(true)
 		created, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		updated, err := server.Update(ctx, privatev1.FabricDomainsUpdateRequest_builder{
+		_, err = server.Update(ctx, privatev1.FabricDomainsUpdateRequest_builder{
 			Object: privatev1.FabricDomain_builder{
 				Id:   created.GetObject().GetId(),
 				Spec: privatev1.FabricDomainSpec_builder{Servers: []string{"server-a", "server-b"}}.Build(),
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.servers"}},
 		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		Expect(updated.GetObject().GetSpec().GetServers()).To(Equal([]string{"server-a", "server-b"}))
-		Expect(updated.GetObject().GetSpec().GetVirtualNetwork()).To(Equal("test-network"))
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err).To(MatchError(ContainSubstring("FabricDomain servers cannot change in this release")))
 	})
 
 	DescribeTable("retains immutable and nonempty update validation", func(path string) {
-		seedNetwork("netris", true, nil)
+		seedNetwork(true)
 		created, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		_, err = server.Update(ctx, privatev1.FabricDomainsUpdateRequest_builder{
@@ -163,7 +161,7 @@ var _ = Describe("Private fabric domains server", func() {
 	)
 
 	It("allows the fulfillment controller to update FabricDomain-owned status", func() {
-		seedNetwork("netris", true, nil)
+		seedNetwork(true)
 		created, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
 		Expect(err).NotTo(HaveOccurred())
 
@@ -183,7 +181,6 @@ var _ = Describe("Private fabric domains server", func() {
 				Id: created.GetObject().GetId(),
 				Status: privatev1.FabricDomainStatus_builder{
 					BackendId: "cluster-42",
-					VpcId:     "vpc-7",
 					Members: []*privatev1.FabricDomainMemberStatus{privatev1.FabricDomainMemberStatus_builder{
 						Server: "server-a",
 						State:  privatev1.FabricDomainMemberState_FABRIC_DOMAIN_MEMBER_STATE_ACTIVE,
@@ -195,12 +192,11 @@ var _ = Describe("Private fabric domains server", func() {
 				}.Build(),
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
-				"status.backend_id", "status.vpc_id", "status.members", "status.conditions",
+				"status.backend_id", "status.members", "status.conditions",
 			}},
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(updated.GetObject().GetStatus().GetBackendId()).To(Equal("cluster-42"))
-		Expect(updated.GetObject().GetStatus().GetVpcId()).To(Equal("vpc-7"))
 		Expect(updated.GetObject().GetStatus().GetMembers()).To(HaveLen(1))
 		Expect(updated.GetObject().GetStatus().GetConditions()).To(HaveLen(1))
 
@@ -236,14 +232,14 @@ var _ = Describe("Private fabric domains server", func() {
 			var err error
 			vnServer, err = NewPrivateVirtualNetworksServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
 			Expect(err).ToNot(HaveOccurred())
-			seedNetwork("netris", true, nil)
+			seedNetwork(true)
 		})
 
 		It("rejects a cross-tenant VN even with administrator visibility", func() {
 			object.GetMetadata().SetTenant("another-tenant")
 			_, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(err).To(MatchError(ContainSubstring("same tenant")))
+			Expect(err).To(MatchError(ContainSubstring("does not exist")))
 		})
 
 		It("rejects an already deleting VN", func() {
@@ -284,7 +280,7 @@ var _ = Describe("Private fabric domains server", func() {
 		It("does not block an unrelated VN", func() {
 			_, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			_, err = server.virtualNetworkDao.Create().SetObject(privatev1.VirtualNetwork_builder{
+			_, err = fixtureDAO[*privatev1.VirtualNetwork]().Create().SetObject(privatev1.VirtualNetwork_builder{
 				Id: "unrelated", Metadata: privatev1.Metadata_builder{Name: "unrelated", Tenant: testTenant}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())

@@ -1,0 +1,15 @@
+---
+# Read osac_job_vars.network_type: absent or evpn. Anything else fails as final.
+# Sets netris_network_type to "evpn" or "".
+- name: Check the network type
+  vars:
+    _netris_network_type_error: "{{ osac_job_vars | osac.templates.netris_network_type_error }}"
+    netris_fail:
+      message: "{{ _netris_network_type_error }}"
+      retryable: false
+  when: _netris_network_type_error | length > 0
+  ansible.builtin.include_tasks: _fail.yaml
+
+- name: Record the network type
+  ansible.builtin.set_fact:
+    netris_network_type: "{{ osac_job_vars.network_type | default('', true) }}"

@@ -52,14 +52,19 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
 from tests.e2e.networking.bmaas import bmi_ssh, guest_ssh
+from tests.e2e.networking.teardown import (
+    FABRIC_RETRIES,
+    teardown_nat,
+    teardown_nat_eip,
+    teardown_sg,
+    teardown_subnets,
+    teardown_vnet,
+    wait_owned_gone,
+)
 
-pytestmark = [pytest.mark.regression, pytest.mark.requires_netris, pytest.mark.requires_netris_bmaas]
+pytestmark = pytest.mark.regression
 
 _NETRIS_BMI_RUNNING_RETRIES = 240
-# Poll often; proceed as soon as API + CR are gone. Caps match existing helpers (~5m / ~10m).
-_POLL_DELAY = 2
-_CHILD_RETRIES = 150
-_FABRIC_RETRIES = 300
 _SSH_ICMP_INGRESS = [
     {"protocol": "PROTOCOL_TCP", "port_from": 22, "port_to": 22, "ipv4_cidr": "0.0.0.0/0"},
     {"protocol": "PROTOCOL_ICMP", "ipv4_cidr": "0.0.0.0/0"},
@@ -147,109 +152,7 @@ def _create_bmi(
         return grpc.create_baremetal_instance(**kwargs)
 
 
-def _nat_gateway_ids(grpc: GRPCClient) -> list[str]:
-    return [str(item.get("id") or "") for item in grpc.call(service="osac.public.v1.NATGateways/List").get("items", [])]
-
-
-def _wait_owned_gone(
-    *,
-    description: str,
-    api_gone,
-    cr_gone,
-    delete=None,
-    retries: int = _CHILD_RETRIES,
-    delay: int = _POLL_DELAY,
-) -> None:
-    """Poll until API and K8s CR are gone. Re-issue delete while they linger."""
-
-    def _tick() -> bool:
-        if delete is not None:
-            try:
-                delete()
-            except Exception:  # noqa: BLE001 — already gone / still deprovisioning
-                pass
-        return bool(api_gone()) and bool(cr_gone())
-
-    poll_until(
-        fn=_tick,
-        until=lambda gone: gone is True,
-        retries=retries,
-        delay=delay,
-        description=description,
-    )
-
-
-def _teardown_nat(grpc: GRPCClient, k8s: K8sClient, net: dict[str, Any]) -> None:
-    nat_id = net.get("nat_id")
-    if not nat_id:
-        return
-    vnet_name = net.get("vnet_name") or nat_id
-    _wait_owned_gone(
-        description=f"{vnet_name} NATGateway gone",
-        api_gone=lambda nid=nat_id: nid not in _nat_gateway_ids(grpc),
-        cr_gone=lambda nid=nat_id: k8s.get_nat_gateway_name(uuid=nid, checked=False) == "",
-        delete=lambda nid=nat_id: grpc.delete_nat_gateway(nat_gateway_id=nid),
-        retries=_FABRIC_RETRIES,
-    )
-
-
-def _teardown_nat_eip(grpc: GRPCClient, k8s: K8sClient, net: dict[str, Any]) -> None:
-    eip_id = net.get("nat_eip_id")
-    if not eip_id:
-        return
-    vnet_name = net.get("vnet_name") or eip_id
-    _wait_owned_gone(
-        description=f"{vnet_name} NAT EIP gone",
-        api_gone=lambda eid=eip_id: eid not in grpc.list_external_ip_ids(),
-        cr_gone=lambda eid=eip_id: k8s.get_external_ip_name(uuid=eid, checked=False) == "",
-        delete=lambda eid=eip_id: grpc.delete_external_ip(external_ip_id=eid),
-    )
-
-
-def _teardown_sg(grpc: GRPCClient, k8s: K8sClient, net: dict[str, Any]) -> None:
-    sg_id = net.get("sg_id")
-    if not sg_id:
-        return
-    vnet_name = net.get("vnet_name") or sg_id
-    _wait_owned_gone(
-        description=f"{vnet_name} SecurityGroup gone",
-        api_gone=lambda sid=sg_id: sid not in grpc.list_security_group_ids(),
-        cr_gone=lambda sid=sg_id: k8s.get_security_group_name(uuid=sid, checked=False) == "",
-        delete=lambda sid=sg_id: grpc.delete_security_group(sg_id=sid),
-    )
-
-
-def _teardown_subnets(grpc: GRPCClient, k8s: K8sClient, net: dict[str, Any]) -> None:
-    vnet_name = net.get("vnet_name") or "subnet"
-    for sub_id in (net.get("sub_a_id"), net.get("sub_b_id")):
-        if not sub_id:
-            continue
-        _wait_owned_gone(
-            description=f"{vnet_name} subnet {sub_id} gone",
-            api_gone=lambda sid=sub_id: sid not in grpc.list_subnet_ids(),
-            cr_gone=lambda sid=sub_id: k8s.get_subnet_name(uuid=sid, checked=False) == "",
-            delete=lambda sid=sub_id: grpc.delete_subnet(subnet_id=sid),
-            retries=_FABRIC_RETRIES,
-        )
-
-
-def _teardown_vnet(grpc: GRPCClient, k8s: K8sClient, net: dict[str, Any]) -> None:
-    vnet_id = net.get("vnet_id")
-    if not vnet_id:
-        return
-    vnet_name = net.get("vnet_name") or vnet_id
-    _wait_owned_gone(
-        description=f"{vnet_name} VirtualNetwork gone",
-        api_gone=lambda vid=vnet_id: vid not in grpc.list_virtual_network_ids(),
-        cr_gone=lambda vid=vnet_id: k8s.get_virtual_network_name(uuid=vid, checked=False) == "",
-        delete=lambda vid=vnet_id: grpc.delete_virtual_network(vn_id=vid),
-        retries=_FABRIC_RETRIES,
-    )
-
-
-def _teardown_owned_resources(
-    state: dict[str, Any], grpc: GRPCClient, k8s: K8sClient, bmh_namespace: str
-) -> None:
+def _teardown_owned_resources(state: dict[str, Any], grpc: GRPCClient, k8s: K8sClient, bmh_namespace: str) -> None:
     """Delete only IDs recorded in ``state``. Safe on a partial run."""
     if state.get("_teardown_done"):
         return
@@ -264,7 +167,7 @@ def _teardown_owned_resources(
     if "ingress_attach_id" in state:
         aid = state["ingress_attach_id"]
         _phase(
-            lambda: _wait_owned_gone(
+            lambda: wait_owned_gone(
                 description=f"ingress attachment {aid} gone",
                 api_gone=lambda: aid not in grpc.list_external_ip_attachment_ids(),
                 cr_gone=lambda: k8s.get_external_ip_attachment_name(uuid=aid, checked=False) == "",
@@ -274,7 +177,7 @@ def _teardown_owned_resources(
     if "ingress_eip_id" in state:
         eip_id = state["ingress_eip_id"]
         _phase(
-            lambda: _wait_owned_gone(
+            lambda: wait_owned_gone(
                 description=f"ingress EIP {eip_id} gone",
                 api_gone=lambda: eip_id not in grpc.list_external_ip_ids(),
                 cr_gone=lambda: k8s.get_external_ip_name(uuid=eip_id, checked=False) == "",
@@ -288,7 +191,7 @@ def _teardown_owned_resources(
         auto_eip_id = bmi.get("auto_eip_id")
         if auto_attach_id:
             _phase(
-                lambda aid=auto_attach_id, k=key: _wait_owned_gone(
+                lambda aid=auto_attach_id, k=key: wait_owned_gone(
                     description=f"{k} auto-EIP attachment gone",
                     api_gone=lambda: aid not in grpc.list_external_ip_attachment_ids(),
                     cr_gone=lambda: k8s.get_external_ip_attachment_name(uuid=aid, checked=False) == "",
@@ -297,7 +200,7 @@ def _teardown_owned_resources(
             )
         if auto_eip_id:
             _phase(
-                lambda eid=auto_eip_id, k=key: _wait_owned_gone(
+                lambda eid=auto_eip_id, k=key: wait_owned_gone(
                     description=f"{k} auto-EIP gone",
                     api_gone=lambda: eid not in grpc.list_external_ip_ids(),
                     cr_gone=lambda: k8s.get_external_ip_name(uuid=eid, checked=False) == "",
@@ -324,15 +227,15 @@ def _teardown_owned_resources(
 
     stacks = [net for net in (state.get("t1_net"), state.get("t2_net")) if net]
     for net in stacks:
-        _phase(lambda n=net: _teardown_nat(grpc, k8s, n))
+        _phase(lambda n=net: teardown_nat(grpc, k8s, n))
     for net in stacks:
-        _phase(lambda n=net: _teardown_nat_eip(grpc, k8s, n))
+        _phase(lambda n=net: teardown_nat_eip(grpc, k8s, n))
     for net in stacks:
-        _phase(lambda n=net: _teardown_sg(grpc, k8s, n))
+        _phase(lambda n=net: teardown_sg(grpc, k8s, n))
     for net in stacks:
-        _phase(lambda n=net: _teardown_subnets(grpc, k8s, n))
+        _phase(lambda n=net: teardown_subnets(grpc, k8s, n))
     for net in stacks:
-        _phase(lambda n=net: _teardown_vnet(grpc, k8s, n))
+        _phase(lambda n=net: teardown_vnet(grpc, k8s, n))
 
     if state.get("pool_owned") and state.get("pool_id"):
         pool_id = state["pool_id"]
@@ -342,11 +245,11 @@ def _teardown_owned_resources(
                 grpc.delete_external_ip_pool(pool_id=pool_id)
             except Exception:  # noqa: BLE001 — already gone
                 pass
-            _wait_owned_gone(
+            wait_owned_gone(
                 description=f"ExternalIPPool {pool_id} gone",
                 api_gone=lambda: pool_id not in grpc.list_external_ip_pool_ids(),
                 cr_gone=lambda: k8s.get_external_ip_pool_name(uuid=pool_id, checked=False) == "",
-                retries=_FABRIC_RETRIES,
+                retries=FABRIC_RETRIES,
             )
 
         _phase(_wait_pool)
@@ -363,7 +266,9 @@ class TestCrossTenantBmaasNetworking:
     def _owned_resource_finalizer(
         cls, private_grpc: GRPCClient, k8s_hub_client: K8sClient, bmh_namespace: str
     ) -> Iterator[None]:
+        guest_ssh.register_guest_snapshot("guests-bmaas-cross-tenant", lambda: list(cls.state.get("bmis") or []))
         yield
+        guest_ssh.unregister_guest_snapshot("guests-bmaas-cross-tenant")
         _teardown_owned_resources(cls.state, private_grpc, k8s_hub_client, bmh_namespace)
 
     def test_00_resolve_tenants(self, private_grpc: GRPCClient) -> None:
@@ -375,11 +280,7 @@ class TestCrossTenantBmaasNetworking:
         self.__class__.state.update(t1=t1, t2=t2)
 
     def test_01_resolve_external_ip_pool(
-        self,
-        private_grpc: GRPCClient,
-        k8s_hub_client: K8sClient,
-        net_test_run_id: str,
-        external_ip_pool_cidr: str,
+        self, private_grpc: GRPCClient, k8s_hub_client: K8sClient, net_test_run_id: str, external_ip_pool_cidr: str
     ) -> None:
         def _cidrs(item: dict[str, Any]) -> list[str]:
             spec = item.get("spec") or {}
@@ -391,7 +292,9 @@ class TestCrossTenantBmaasNetworking:
         def _adopt(item: dict[str, Any], *, owned: bool) -> None:
             pool_id = str(item.get("id") or "")
             assert pool_id
-            print(f"Reusing ExternalIPPool {pool_id} name={(item.get('metadata') or {}).get('name')} state={_state(item)}")
+            print(
+                f"Reusing ExternalIPPool {pool_id} name={(item.get('metadata') or {}).get('name')} state={_state(item)}"
+            )
             self.__class__.state.update(pool_id=pool_id, pool_owned=owned)
             if _state(item) in ("EXTERNAL_IP_POOL_STATE_READY", "Ready"):
                 return
@@ -402,17 +305,10 @@ class TestCrossTenantBmaasNetworking:
 
         listed = private_grpc.call(service="osac.private.v1.ExternalIPPools/List").get("items") or []
         ready = next(
-            (
-                item
-                for item in listed
-                if item.get("id") and _state(item) in ("EXTERNAL_IP_POOL_STATE_READY", "Ready")
-            ),
+            (item for item in listed if item.get("id") and _state(item) in ("EXTERNAL_IP_POOL_STATE_READY", "Ready")),
             None,
         )
-        matching = next(
-            (item for item in listed if item.get("id") and external_ip_pool_cidr in _cidrs(item)),
-            None,
-        )
+        matching = next((item for item in listed if item.get("id") and external_ip_pool_cidr in _cidrs(item)), None)
         if ready is not None:
             _adopt(ready, owned=False)
             return
@@ -422,18 +318,13 @@ class TestCrossTenantBmaasNetworking:
 
         pool_name = f"xt-pool-{net_test_run_id}"
         try:
-            pool_id = private_grpc.create_external_ip_pool(
-                name=pool_name, cidrs=[external_ip_pool_cidr], implementation_strategy="netris"
-            )
+            pool_id = private_grpc.create_external_ip_pool(name=pool_name, cidrs=[external_ip_pool_cidr])
         except subprocess.CalledProcessError as exc:
             output = (exc.output or "") + (getattr(exc, "stderr", None) or "")
             if "AlreadyExists" not in output and "already exists" not in output.lower():
                 raise RuntimeError(f"ExternalIPPools/Create failed: {output}") from exc
             listed = private_grpc.call(service="osac.private.v1.ExternalIPPools/List").get("items") or []
-            matching = next(
-                (item for item in listed if item.get("id") and external_ip_pool_cidr in _cidrs(item)),
-                None,
-            )
+            matching = next((item for item in listed if item.get("id") and external_ip_pool_cidr in _cidrs(item)), None)
             if matching is None:
                 matching = next((item for item in listed if item.get("id")), None)
             if matching is None:
@@ -450,7 +341,7 @@ class TestCrossTenantBmaasNetworking:
         self, private_grpc: GRPCClient, k8s_hub_client: K8sClient, net_test_run_id: str
     ) -> None:
         _require(self.state, "t1", "t2", "pool_id")
-        for key, cidr_base in (("t2", "10.101"), ("t1", "10.102")):
+        for key, cidr_base in (("t2", "172.21"), ("t1", "172.22")):
             tenant = self.state[key]
             vnet_name = f"{key}-net-{net_test_run_id}"
             net: dict[str, Any] = {"tenant": tenant, "vnet_name": vnet_name, "cidr_base": cidr_base}
@@ -534,7 +425,16 @@ class TestCrossTenantBmaasNetworking:
         t2 = self.state["t2_net"]
         t1 = self.state["t1_net"]
         specs = [
-            ("t2_a", "t2a", t2["tenant"], catalog_item_name, t2["sub_a_id"], t2["sg_id"], False, t2["cidr_base"] + ".1."),
+            (
+                "t2_a",
+                "t2a",
+                t2["tenant"],
+                catalog_item_name,
+                t2["sub_a_id"],
+                t2["sg_id"],
+                False,
+                t2["cidr_base"] + ".1.",
+            ),
             (
                 "t2_b",
                 "t2b",
@@ -619,22 +519,18 @@ class TestCrossTenantBmaasNetworking:
                 return None
 
             attachment = poll_until(
-                fn=find,
-                until=lambda a: a is not None,
-                retries=60,
-                delay=5,
-                description=f"auto-EIP {key}",
+                fn=find, until=lambda a: a is not None, retries=60, delay=5, description=f"auto-EIP {key}"
             )
-            eip_id = (attachment.get("spec", {}).get("externalIp") or attachment.get("spec", {}).get("external_ip") or {}).get(
-                "id", ""
-            )
+            eip_id = (
+                attachment.get("spec", {}).get("externalIp") or attachment.get("spec", {}).get("external_ip") or {}
+            ).get("id", "")
             assert eip_id
             bmi["auto_attach_id"] = attachment["id"]
             bmi["auto_eip_id"] = eip_id
 
     @staticmethod
     def _subnet_gateway(tenant_ip: str) -> str:
-        """Netris V-Net gateway is .1 on the BMI's /24 (e.g. 10.101.1.2 → 10.101.1.1)."""
+        """Netris V-Net gateway is .1 on the BMI's /24 (e.g. 172.21.1.2 → 172.21.1.1)."""
         return tenant_ip.rsplit(".", 1)[0] + ".1"
 
     def test_05_cross_tenant_isolation(self) -> None:
@@ -668,12 +564,10 @@ class TestCrossTenantBmaasNetworking:
         )
 
         assert not guest_ssh.ping(t2_a["ssh_host"], t1_a["ip"]), (
-            f"ping tenant2 ({t2_a['ip']}) → tenant1 ({t1_a['ip']}) succeeded — "
-            f"cross-tenant traffic must be blocked"
+            f"ping tenant2 ({t2_a['ip']}) → tenant1 ({t1_a['ip']}) succeeded — cross-tenant traffic must be blocked"
         )
         assert not guest_ssh.ping(t1_a["ssh_host"], t2_a["ip"]), (
-            f"ping tenant1 ({t1_a['ip']}) → tenant2 ({t2_a['ip']}) succeeded — "
-            f"cross-tenant traffic must be blocked"
+            f"ping tenant1 ({t1_a['ip']}) → tenant2 ({t2_a['ip']}) succeeded — cross-tenant traffic must be blocked"
         )
 
     def test_06_nat_egress_and_ingress_dnat(
@@ -706,19 +600,14 @@ class TestCrossTenantBmaasNetworking:
             private_grpc.get_external_ip(external_ip_id=eip_id).get("object", {}).get("status", {}).get("address", "")
         )
         assert ext_addr
+
         def _try_ssh() -> str:
             try:
                 return guest_ssh.ssh_via_external_ip(ext_addr)
             except subprocess.CalledProcessError:
                 return ""
 
-        poll_until(
-            fn=_try_ssh,
-            until=lambda h: bool(h),
-            retries=12,
-            delay=20,
-            description=f"SSH via {ext_addr}",
-        )
+        poll_until(fn=_try_ssh, until=lambda h: bool(h), retries=12, delay=20, description=f"SSH via {ext_addr}")
         self.__class__.state.update(
             ingress_eip_id=eip_id, ingress_eip_cr=eip_cr, ingress_attach_id=attach_id, ingress_attach_cr=attach_cr
         )

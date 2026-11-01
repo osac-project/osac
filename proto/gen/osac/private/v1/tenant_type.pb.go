@@ -45,12 +45,10 @@ type TenantConditionType int32
 const (
 	// Unspecified condition type.
 	TenantConditionType_TENANT_CONDITION_TYPE_UNSPECIFIED TenantConditionType = 0
-	// Indicates whether all default networking resources (VirtualNetwork, Subnets, SecurityGroup, NATGateway)
-	// have reached READY state.
+	// Indicates whether the tenant's default VirtualNetwork, Subnet and SecurityGroup are READY, and, when provider
+	// networking is enabled, also its default NATGateway.
 	//
-	// Status meanings:
-	// - True: All default networking resources are ready, or no default networking is configured
-	// - False: One or more default networking resources are pending or failed
+	// Reasons: AllResourcesReady, ReservedTenant, ProvisioningDisabled, ResourcesPending, ResourceFailed, Deleting.
 	TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY TenantConditionType = 1
 	// Indicates whether the tenant's vault namespace has been successfully provisioned.
 	//

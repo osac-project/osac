@@ -55,6 +55,22 @@ rules:
   verbs:
   - get
 - apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - cdi.kubevirt.io
+  resources:
+  - datavolumes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - events.k8s.io
   resources:
   - events
@@ -111,18 +127,6 @@ rules:
   - list
   - watch
 - apiGroups:
-  - k8s.ovn.org
-  resources:
-  - userdefinednetworks
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - kubevirt.io
   resources:
   - virtualmachineinstances
@@ -142,6 +146,7 @@ rules:
   - externalippools
   - externalips
   - natgateways
+  - networkattachments
   - securitygroups
   - subnets
   - tenants
@@ -175,6 +180,7 @@ rules:
   - externalippools/finalizers
   - externalips/finalizers
   - natgateways/finalizers
+  - networkattachments/finalizers
   - securitygroups/finalizers
   - subnets/finalizers
   - tenants/finalizers
@@ -198,6 +204,7 @@ rules:
   - externalippools/status
   - externalips/status
   - natgateways/status
+  - networkattachments/status
   - securitygroups/status
   - subnets/status
   - tenants/status
@@ -222,7 +229,23 @@ rules:
   verbs:
   - get
   - list
+  - patch
+  - update
   - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - networkclasses/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - networkclasses/status
+  verbs:
+  - get
+  - patch
+  - update
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:

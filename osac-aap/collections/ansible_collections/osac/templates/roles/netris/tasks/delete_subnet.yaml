@@ -1,277 +1,119 @@
 ---
-# Subnet deletion - removes its V-Net, child prefix, then parent IPAM subnet.
+# Delete the Netris objects of a Subnet: the V-Net (frees the L2 VNI), then the
+# IPAM subnet. An object that is already gone is a success. The VPC is looked
+# up only to scope the ownership checks; without the VirtualNetwork snapshot
+# or the VPC, the unique object names and the tenant identify the objects.
+- name: Delete the Subnet from Netris
+  block:
+    - name: Check the settings
+      ansible.builtin.include_tasks: _settings.yaml
+      vars:
+        netris_require: [controller, credentials, site, tenant]
 
-- name: Extract Subnet identity
-  ansible.builtin.set_fact:
-    subnet_name: "{{ subnet.metadata.name }}"
-    subnet_ipv4_cidr: "{{ subnet.spec.ipv4Cidr | default('') }}"
-    subnet_virtual_network_id: "{{ subnet.spec.virtualNetwork | default('') }}"
-    is_cudn_evpn: >-
-      {{ (subnet.metadata.annotations | default({})).get('osac.openshift.io/k8s-cleanup-strategy', '') == 'cudn_evpn' }}
+    - name: Check the task input
+      ansible.builtin.include_tasks: _input.yaml
 
-- name: Refuse delete of default Subnet
-  ansible.builtin.include_tasks: _refuse_if_default.yaml
-  vars:
-    _default_refuse_resource: "{{ subnet }}"
-    _default_refuse_kind: Subnet
-    _default_refuse_name: "{{ subnet_name }}"
-    _default_refuse_allow_override: false
+    - name: Build the object names
+      ansible.builtin.include_tasks: _names.yaml
 
-- name: Display deletion information
-  ansible.builtin.debug:
-    msg: "Deleting Netris V-Net + IPAM subnet for Subnet '{{ subnet_name }}'"
+    - name: Look up the VPC of the VirtualNetwork
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: read
+      vars:
+        vpc_name: "{{ netris_names.vpc }}"
+        vpc_tenant_id: "{{ netris_tenant_id | int }}"
+      when: netris_names.vpc | length > 0
 
-- name: Look up parent VirtualNetwork by UUID
-  kubernetes.core.k8s_info:
-    api_version: osac.openshift.io/v1alpha1
-    kind: VirtualNetwork
-    namespace: "{{ subnet.metadata.namespace }}"
-    label_selectors:
-      - "osac.openshift.io/virtualnetwork-uuid={{ subnet_virtual_network_id }}"
-  register: _subnet_parent_vn_lookup
-  when: subnet_virtual_network_id | length > 0
+    - name: Set the ownership fields of the objects
+      ansible.builtin.set_fact:
+        _netris_vpc_id: "{{ netris_vpc.id if (netris_vpc | default(none)) is mapping else '' }}"
 
-- name: Require exactly one parent VirtualNetwork CR for CUDN EVPN cleanup
-  ansible.builtin.assert:
-    that:
-      - _subnet_parent_vn_lookup.resources | length == 1
-    fail_msg: >-
-      Expected exactly one VirtualNetwork with UUID '{{ subnet_virtual_network_id }}' in
-      namespace '{{ subnet.metadata.namespace }}'; refusing to delete unscoped Netris resources.
-  when: is_cudn_evpn
+    - name: List the V-Nets with the name of the Subnet
+      ansible.builtin.include_role:
+        name: netris.controller.vnet
+        tasks_from: read
+      vars:
+        vnet_name: "{{ netris_names.vnet }}"
 
-- name: Set parent VirtualNetwork name
-  ansible.builtin.set_fact:
-    _subnet_parent_vn_name: "{{ _subnet_parent_vn_lookup.resources[0].metadata.name }}"
-    subnet_virtual_network_name: "{{ _subnet_parent_vn_lookup.resources[0].metadata.name }}"
-    subnet_virtual_network_vpc_id: "{{ _subnet_parent_vn_lookup.resources[0].status.backendNetworkId | default('') }}"
-  when: is_cudn_evpn
+    # A V-Net with our name in another tenant or VPC is never touched: it
+    # counts as absent, and the IPAM subnet of the Subnet is still deleted. A
+    # list entry without its tenant (or VPC, when known) is read by ID; if the
+    # owner is still unknown the V-Net is not deleted either, and the task
+    # fails unless the IPAM subnet was proven ours and deleted.
+    - name: Sort the V-Nets with the name of the Subnet by known owner
+      vars:
+        _same: "{{ netris_vnets | selectattr('name', 'equalto', netris_names.vnet) | list }}"
+        _known: >-
+          {{ _same | selectattr('tenant.id', 'defined') | list
+             if _netris_vpc_id | string | length == 0
+             else _same | selectattr('tenant.id', 'defined') | selectattr('vpc.id', 'defined') | list }}
+      ansible.builtin.set_fact:
+        _netris_vnets_known: "{{ _known }}"
+        _netris_vnets_unknown: "{{ _same | difference(_known) }}"
 
-- name: Set parent VirtualNetwork name when it still exists
-  ansible.builtin.set_fact:
-    _subnet_parent_vn_name: "{{ _subnet_parent_vn_lookup.resources[0].metadata.name }}"
-  when:
-    - not is_cudn_evpn
-    - _subnet_parent_vn_lookup is defined
-    - _subnet_parent_vn_lookup.resources | default([]) | length > 0
+    - name: Read the V-Nets whose list entry omits the owner
+      ansible.builtin.include_tasks: _read_vnet_detail.yaml
+      vars:
+        _netris_vnet_read_id: "{{ item.id }}"
+        _netris_vnet_gone_ok: true
+      loop: "{{ _netris_vnets_unknown }}"
+      loop_control:
+        label: "{{ item.id }}"
 
-- name: Validate the parent VPC ID from VirtualNetwork status
-  ansible.builtin.assert:
-    that:
-      - subnet_virtual_network_vpc_id | string | trim is match('^[1-9][0-9]*$')
-    fail_msg: >-
-      VirtualNetwork '{{ _subnet_parent_vn_name }}' has no positive Netris VPC ID in
-      status.backendNetworkId; refusing to delete Subnet resources by name alone.
-  when: is_cudn_evpn
+    - name: Classify the V-Nets by owner
+      vars:
+        _found: "{{ _netris_vnet_details | default([]) }}"
+        _all: "{{ _netris_vnets_known + _found }}"
+        _decided: >-
+          {{ _all | selectattr('tenant.id', 'defined') | list
+             if _netris_vpc_id | string | length == 0
+             else _all | selectattr('tenant.id', 'defined') | selectattr('vpc.id', 'defined') | list }}
+        _mine_tenant: "{{ _decided | selectattr('tenant.id', 'equalto', netris_tenant_id | int) | list }}"
+        _mine: >-
+          {{ _mine_tenant
+             if _netris_vpc_id | string | length == 0
+             else _mine_tenant | selectattr('vpc.id', 'equalto', _netris_vpc_id | int) | list }}
+      ansible.builtin.set_fact:
+        _netris_vnet_is_ours: "{{ _mine | length > 0 }}"
+        _netris_vnet_unproven: "{{ (_all | difference(_decided)) | length > 0 }}"
 
-- name: Set parent VPC for CUDN EVPN cleanup
-  ansible.builtin.set_fact:
-    _parent_vpc:
-      id: "{{ subnet_virtual_network_vpc_id | int }}"
-  when: is_cudn_evpn
+    - name: Delete the V-Net
+      when: _netris_vnet_is_ours
+      ansible.builtin.include_role:
+        name: netris.controller.vnet
+        tasks_from: delete
+      vars:
+        vnet_name: "{{ netris_names.vnet }}"
+        vnet_tenant_id: "{{ netris_tenant_id | int }}"
+        vnet_expected_fields: >-
+          {{ {'tenant.id': netris_tenant_id | int, 'sites.ids': [netris_site_id | int]}
+             | combine({'vpc.id': _netris_vpc_id} if _netris_vpc_id | string | length > 0 else {}) }}
 
-- name: Read parent Netris VPC for ownership checks
-  ansible.builtin.include_role:
-    name: netris.controller.vpc
-    tasks_from: read
-  vars:
-    vpc_name: "{{ _subnet_parent_vn_name }}"
-  when:
-    - not is_cudn_evpn
-    - _subnet_parent_vn_name is defined
+    - name: Delete the IPAM subnet
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+        tasks_from: delete_subnet
+      vars:
+        ipam_name: "{{ netris_names.subnet_ipam }}"
+        ipam_tenant_id: "{{ netris_tenant_id | int }}"
+        ipam_expected_fields: >-
+          {{ {'purpose': 'common', 'tenant.id': netris_tenant_id | int, 'sites.ids': [netris_site_id | int]}
+             | combine({'vpc.id': _netris_vpc_id} if _netris_vpc_id | string | length > 0 else {}) }}
 
-- name: Set parent Netris VPC ID for ownership checks
-  ansible.builtin.set_fact:
-    _subnet_parent_vpc_id: "{{ netris_vpc.id | default('') }}"
-  when:
-    - not is_cudn_evpn
-    - netris_vpc is defined
-    - netris_vpc is not none
-
-- name: Set parent VPC ID for CUDN EVPN ownership checks
-  ansible.builtin.set_fact:
-    _subnet_parent_vpc_id: "{{ _parent_vpc.id }}"
-  when: is_cudn_evpn
-
-- name: Build Subnet V-Net ownership fields
-  ansible.builtin.set_fact:
-    _subnet_vnet_expected_fields:
-      "tenant.id": "{{ netris_tenant_id }}"
-      "sites.ids": ["{{ netris_site_id }}"]
-
-- name: Add parent VPC to Subnet V-Net ownership fields
-  ansible.builtin.set_fact:
-    _subnet_vnet_expected_fields: >-
-      {{ _subnet_vnet_expected_fields | combine({'vpc.id': _subnet_parent_vpc_id}) }}
-  when: _subnet_parent_vpc_id is defined and _subnet_parent_vpc_id | string | length > 0
-
-- name: Build IPAM subnet ownership fields
-  ansible.builtin.set_fact:
-    _subnet_ipam_expected_fields:
-      prefix: "{{ subnet_ipv4_cidr }}"
-      purpose: common
-      "tenant.id": "{{ netris_tenant_id }}"
-      "sites.ids": ["{{ netris_site_id }}"]
-
-- name: Add parent VPC to IPAM subnet ownership fields
-  ansible.builtin.set_fact:
-    _subnet_ipam_expected_fields: >-
-      {{ _subnet_ipam_expected_fields | combine({'vpc.id': _subnet_parent_vpc_id}) }}
-  when: _subnet_parent_vpc_id is defined and _subnet_parent_vpc_id | string | length > 0
-
-- name: Find the exact IPAM parent for this Subnet
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: find_subnet_by_identity
-  vars:
-    ipam_name: "{{ subnet_name }}"
-    ipam_cidr: "{{ subnet_ipv4_cidr }}"
-    ipam_vpc_id: "{{ _parent_vpc.id }}"
-    ipam_tenant_id: "{{ netris_tenant_id }}"
-  when: is_cudn_evpn
-
-- name: Preserve the exact parent IPAM identity
-  ansible.builtin.set_fact:
-    _subnet_ipam_parent: "{{ ipam_subnet_by_identity }}"
-  when: is_cudn_evpn
-
-- name: Look for a reserved child when its parent IPAM subnet is missing
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: find_subnet_by_identity
-  vars:
-    ipam_name: "{{ subnet_name }}-fabric"
-    ipam_vpc_id: "{{ _parent_vpc.id }}"
-    ipam_tenant_id: "{{ netris_tenant_id }}"
-  when:
-    - is_cudn_evpn
-    - _subnet_ipam_parent is not mapping
-
-- name: Fail if a reserved child remains without its parent identity
-  ansible.builtin.assert:
-    that:
-      - ipam_subnet_by_identity is not mapping
-    fail_msg: >-
-      The parent IPAM subnet '{{ subnet_name }}' is missing while a reserved child
-      IPAM subnet '{{ subnet_name }}-fabric' remains in VPC '{{ _parent_vpc.id }}'
-      and tenant '{{ netris_tenant_id }}'. Refusing cleanup without a verifiable parent.
-  when:
-    - is_cudn_evpn
-    - _subnet_ipam_parent is not mapping
-
-# Remove only this Subnet's SG ACL rows. Shared groups and sibling rules remain.
-- name: Verify the parent VPC before Subnet ACL cleanup
-  ansible.builtin.include_role:
-    name: netris.controller.vpc
-    tasks_from: read
-  vars:
-    vpc_name: "{{ _subnet_parent_vn_name }}"
-    vpc_lookup_id: "{{ _subnet_parent_vpc_id }}"
-    vpc_tenant_id: "{{ netris_tenant_id }}"
-  when: subnet_virtual_network_id | length > 0
-
-- name: Require the expected parent VPC before Subnet ACL cleanup
-  ansible.builtin.assert:
-    that:
-      - netris_vpc is mapping
-      - netris_vpc.id | int == _subnet_parent_vpc_id | int
-    fail_msg: Cannot verify parent VPC ownership; refusing Subnet ACL cleanup.
-  when: subnet_virtual_network_id | length > 0
-
-- name: Look up SecurityGroups for Subnet ACL cleanup
-  kubernetes.core.k8s_info:
-    api_version: osac.openshift.io/v1alpha1
-    kind: SecurityGroup
-    namespace: "{{ subnet.metadata.namespace }}"
-  register: _subnet_security_groups
-  # An SG create that took its Subnet snapshot before deletion must finish first.
-  # Jobs starting afterwards exclude the terminating Subnet from their snapshot.
-  until: >-
-    (_subnet_security_groups.resources
-     | selectattr('spec.virtualNetwork', 'defined')
-     | selectattr('spec.virtualNetwork', 'equalto', subnet_virtual_network_id)
-     | map(attribute='status.provisioningJobs', default=[]) | flatten
-     | selectattr('state', 'in', ['Running', 'Pending']) | list | length) == 0
-  retries: 12
-  delay: 5
-  when: subnet_virtual_network_id | length > 0
-
-- name: Delete SecurityGroup ACL rules for this Subnet
-  ansible.builtin.include_role:
-    name: netris.controller.acl
-    tasks_from: delete_for_subnet
-  vars:
-    acl_vpc_id: "{{ _subnet_parent_vpc_id | default('') }}"
-    acl_subnet_cidr: "{{ subnet_ipv4_cidr }}"
-    acl_security_group_names: >-
-      {{ _subnet_security_groups.resources
-         | selectattr('spec.virtualNetwork', 'defined')
-         | selectattr('spec.virtualNetwork', 'equalto', subnet_virtual_network_id)
-         | map(attribute='metadata.name') | list }}
-  when: subnet_virtual_network_id | length > 0
-
-- name: Delete V-Net from Netris controller
-  ansible.builtin.include_role:
-    name: netris.controller.vnet
-    tasks_from: delete
-  vars:
-    vnet_name: "{{ subnet_name }}"
-    vnet_vpc_id: "{{ _parent_vpc.id }}"
-    vnet_tenant_id: "{{ netris_tenant_id }}"
-    vnet_expected_fields: "{{ _subnet_vnet_expected_fields }}"
-  when: is_cudn_evpn
-
-- name: Delete V-Net for a non-EVPN Subnet
-  ansible.builtin.include_role:
-    name: netris.controller.vnet
-    tasks_from: delete
-  vars:
-    vnet_name: "{{ subnet_name }}"
-    vnet_expected_fields: "{{ _subnet_vnet_expected_fields }}"
-  when: not is_cudn_evpn
-
-- name: Delete the reserved EVPN fabric IPAM subnet
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: delete_subnet
-  vars:
-    ipam_name: "{{ subnet_name }}-fabric"
-    ipam_vpc_id: "{{ _parent_vpc.id }}"
-    ipam_tenant_id: "{{ netris_tenant_id }}"
-    ipam_parent_id: "{{ _subnet_ipam_parent.id }}"
-  when:
-    - is_cudn_evpn
-    - _subnet_ipam_parent is mapping
-
-- name: Delete IPAM subnet from Netris controller
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: delete_subnet
-  vars:
-    ipam_name: "{{ subnet_name }}"
-    ipam_cidr: "{{ subnet_ipv4_cidr }}"
-    ipam_vpc_id: "{{ _parent_vpc.id }}"
-    ipam_tenant_id: "{{ netris_tenant_id }}"
-    ipam_expected_fields: "{{ _subnet_ipam_expected_fields }}"
-  when: is_cudn_evpn
-
-- name: Delete IPAM subnet for a non-EVPN Subnet
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: delete_subnet
-  vars:
-    ipam_name: "{{ subnet_name }}"
-    ipam_expected_fields: "{{ _subnet_ipam_expected_fields }}"
-  when: not is_cudn_evpn
-
-- name: Delete fabric output ConfigMap
-  kubernetes.core.k8s:
-    state: absent
-    api_version: v1
-    kind: ConfigMap
-    name: "subnet-{{ subnet_name }}-fabric-output"
-    namespace: "{{ subnet.metadata.namespace }}"
-
-- name: Display deletion result
-  ansible.builtin.debug:
-    msg: "V-Net + IPAM subnet '{{ subnet_name }}' deletion completed"
+    - name: Stop when a V-Net with the name is unproven and nothing else is ours
+      vars:
+        netris_fail:
+          message: >-
+            Netris V-Net {{ netris_names.vnet }} exists but its owner is not reported, and the
+            IPAM subnet of the Subnet was not found; nothing can be proven ours.
+            The V-Net was not deleted. OSAC does not retry.
+          retryable: false
+      when:
+        - _netris_vnet_unproven
+        - not _netris_vnet_is_ours
+        - _existing_ipam_subnet is not mapping
+      ansible.builtin.include_tasks: _fail.yaml
+  rescue:
+    - name: Report the error
+      ansible.builtin.include_tasks: _rescue.yaml

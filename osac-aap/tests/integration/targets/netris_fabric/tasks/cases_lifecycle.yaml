@@ -1,0 +1,51 @@
+---
+# Case 1: every task of the Fabric set runs once through the generic playbook
+# with valid input. Each publishes its contract result; SecurityGroup create and
+# delete, the overlay attachment and the ingress release are documented
+# no-ops that publish nothing; reserve_cluster_ingress_ip is a final error.
+- name: Read the generic playbook
+  ansible.builtin.set_fact:
+    _nf_play: "{{ (lookup('ansible.builtin.file', nf.repo ~ '/playbook_osac_network_task.yml') | from_yaml)[0] }}"
+
+- name: Check the lifecycle covers the playbook's 21 Fabric tasks
+  ansible.builtin.assert:
+    that:
+      - _nf_play.vars.osac_network_fabric_tasks | length == 21
+      - _nf_play.vars.osac_network_fabric_tasks | sort == nf_fabric_tasks | sort
+      - nf_lifecycle | map(attribute='task') | unique | sort == nf_fabric_tasks | sort
+    quiet: true
+
+- name: Start from an empty fake Netris with a host, servers and a lease
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps: "{{ nf_reset + nf_seed_host + nf_seed_servers + nf_lease }}"
+
+- name: Run every Fabric task
+  ansible.builtin.include_tasks: run_task.yaml
+  loop: "{{ nf_lifecycle }}"
+  loop_control:
+    loop_var: _nf_step
+    label: "{{ _nf_step.name }}"
+  vars:
+    nf_task: "{{ _nf_step.task }}"
+    nf_iface: "{{ _nf_step.iface | default(nf_physical) }}"
+    sft_label: "lifecycle-{{ _nf_step.name }}"
+    sft_expect: "{{ _nf_step.expect | default('success') }}"
+    sft_message_search: "{{ _nf_step.search | default('') }}"
+    nf_result: "{{ _nf_step.result | default(none) }}"
+    nf_no_requests: "{{ _nf_step.noreq | default(false) }}"
+    nf_job: "{{ lookup('ansible.builtin.vars', _nf_step.job) | combine(nf_evpn if _nf_step.evpn | default(false) else {}) }}"
+
+- name: Check the fake Netris keeps only the host fixture and frees the VNIs
+  ansible.builtin.assert:
+    that:
+      - nf_state.vpcs == []
+      - nf_state.allocations == []
+      - nf_state.ipam_subnets == []
+      - nf_state.nats == []
+      - nf_state.clusters == []
+      - nf_state.vnets | map(attribute='name') | list == ['provisioning']
+      - nf_state.vni.vpc.free == [10001]
+      - nf_state.vni.vnet.free == [5000001]
+    fail_msg: "objects are left after the lifecycle: {{ nf_state }}"
+    quiet: true

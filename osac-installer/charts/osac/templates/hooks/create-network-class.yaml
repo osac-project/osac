@@ -1,35 +1,20 @@
-{{- $networking := include "osac.networking.effective" . | fromYaml -}}
-{{- $networkClass := $networking.networkClass -}}
-{{- $expert := .Values.global.expertOverrides | default dict -}}
-{{- $netExpertNetworkClass := $expert.networkClass | default false -}}
-{{- if $netExpertNetworkClass -}}
-{{- $networkClass = .Values.networkClass | default dict -}}
-{{- end }}
-{{- if $networkClass.enabled }}
-{{- $fabricManager := $networkClass.fabricManager | default "" -}}
-{{- $k8sManager := $networkClass.k8sManager | default "" -}}
-{{- $title := $networkClass.title -}}
-{{- $egressRules := list -}}
-{{- range $networkClass.defaults.egressRules }}
-{{- $rule := dict "protocol" .protocol -}}
-{{- if .ipv4Cidr }}{{ $_ := set $rule "ipv4_cidr" .ipv4Cidr }}{{ end -}}
-{{- if .portFrom }}{{ $_ := set $rule "port_from" .portFrom }}{{ end -}}
-{{- if .portTo }}{{ $_ := set $rule "port_to" .portTo }}{{ end -}}
-{{- $egressRules = append $egressRules $rule -}}
-{{- end }}
-{{- $identity := $fabricManager | default $k8sManager -}}
-{{- $body := dict
-      "title" (required "networkClass.title is required when networkClass.enabled is true" $title)
-      "spec" (dict "defaults" (dict
-        "virtual_network_ipv4_cidr" $networkClass.defaults.virtualNetworkIPv4CIDR
-        "subnet_ipv4_cidr" $networkClass.defaults.subnetIPv4CIDR
-        "enable_nat_gateway" $networkClass.defaults.enableNatGateway
-        "egress_rules" $egressRules
-      ))
-    -}}
-{{- if $networkClass.description }}{{ $_ := set $body "description" $networkClass.description }}{{ end -}}
-{{- if $k8sManager }}{{ $_ := set $body "k8s_manager" $k8sManager }}{{ end -}}
-{{- if $fabricManager }}{{ $_ := set $body "fabric_manager" $fabricManager }}{{ end -}}
+{{- if .Values.service.enabled }}
+{{/* The installer's NetworkClass step (files/network-class-step.py). */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: network-class-step
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "24"
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  network-class-step.py: |
+{{ .Files.Get "files/network-class-step.py" | indent 4 }}
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -72,74 +57,26 @@ spec:
           - |
             {{- include "osac.fulfillmentAccessTokenFunction" . | nindent 12 }}
             AUTH_TOKEN=$(get_fulfillment_access_token)
-            API="https://fulfillment-internal-api:8001/api/private/v1/network_classes"
-            RESPONSE=/tmp/nc-response.json
-
-            # metadata.name is auto-derived deterministically server-side from
-            # fabric_manager/k8s_manager when not set explicitly (see
-            # PrivateNetworkClassesServer.Create), so POSTing the same body again
-            # on every install/upgrade hits a name collision on the second run.
-            # Check for an existing NetworkClass for this identity first instead
-            # of relying on the create call's error code, and PATCH it if found so
-            # values.yaml changes are applied on upgrade instead of silently ignored.
-            EXISTING=$(curl -sS {{ include "osac.fulfillmentCurlTLS" . }} --connect-timeout 5 --max-time 30 \
-              -H "Authorization: Bearer ${AUTH_TOKEN}" \
-              "${API}")
-            EXISTING_ID=$(echo "${EXISTING}" | python3 -c "
-            import json, os, sys
-            identity = os.environ['NC_IDENTITY']
-            items = json.load(sys.stdin).get('items', [])
-            match = next((i for i in items if i.get('fabric_manager') == identity or i.get('k8s_manager') == identity), None)
-            print(match['id'] if match else '')
-            ")
-
-            if [[ -n "${EXISTING_ID}" ]]; then
-              echo "NetworkClass for '${NC_IDENTITY}' already exists (id: ${EXISTING_ID}), updating..."
-              METHOD=PATCH
-              URL="${API}/${EXISTING_ID}"
-            else
-              METHOD=POST
-              URL="${API}"
-            fi
-
-            CODE=$(curl -sS {{ include "osac.fulfillmentCurlTLS" . }} \
-              --connect-timeout 5 --max-time 30 \
-              -o "${RESPONSE}" -w '%{http_code}' \
-              -X "${METHOD}" "${URL}" \
-              -H "Authorization: Bearer ${AUTH_TOKEN}" \
-              -H "Content-Type: application/json" \
-              --data-binary "${NETWORK_CLASS_BODY}")
-
-            case "${CODE}" in
-              2??)
-                if [[ "${METHOD}" == "PATCH" ]]; then
-                  echo "NetworkClass updated."
-                else
-                  echo "NetworkClass created."
-                fi
-                ;;
-              409)
-                echo "NetworkClass already exists, skipping."
-                ;;
-              *)
-                echo "ERROR: Failed to ${METHOD} NetworkClass (HTTP ${CODE})" >&2
-                cat "${RESPONSE}" >&2
-                exit 1
-                ;;
-            esac
+            export AUTH_TOKEN
+            exec python3 /scripts/network-class-step.py
         env:
         - name: HOME
           value: /tmp
-        - name: NETWORK_CLASS_BODY
-          value: {{ $body | toJson | quote }}
-        - name: NC_IDENTITY
-          value: {{ required "networkClass.fabricManager or networkClass.k8sManager is required when networkClass.enabled is true" $identity | quote }}
+        - name: NETWORK_CLASS_STEP_INPUT
+          value: {{ include "osac.networking.stepInput" . | quote }}
+        - name: FULFILLMENT_URL
+          value: https://fulfillment-internal-api:8001
+        - name: FULFILLMENT_CA_FILE
+          value: /etc/ca-bundle/bundle.pem
         {{- include "osac.fulfillmentAuthEnv" . | nindent 8 }}
         volumeMounts:
         - name: tmp
           mountPath: /tmp
         - name: ca-bundle
           mountPath: /etc/ca-bundle
+          readOnly: true
+        - name: scripts
+          mountPath: /scripts
           readOnly: true
         {{- include "osac.fulfillmentAuthVolumeMount" . | nindent 8 }}
         resources:
@@ -157,6 +94,9 @@ spec:
       volumes:
       - name: tmp
         emptyDir: {}
+      - name: scripts
+        configMap:
+          name: network-class-step
       - name: ca-bundle
         configMap:
           name: {{ .Values.service.certs.caBundle.configMap | required "service.certs.caBundle.configMap is required" }}

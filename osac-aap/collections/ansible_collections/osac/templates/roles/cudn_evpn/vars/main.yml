@@ -1,0 +1,11 @@
+---
+# Fixed by the cudn_evpn manager design. The generic playbook accepts no extra
+# vars, so nothing here can be overridden at launch.
+
+# Wait for the hub network's OVN-Kubernetes conditions after a create.
+cudn_evpn_ready_retries: 30
+cudn_evpn_ready_delay: 10
+
+# Wait for a deleted hub object to be gone (namespace deletion takes longest).
+cudn_evpn_gone_retries: 60
+cudn_evpn_gone_delay: 10

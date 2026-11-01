@@ -96,7 +96,7 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 
 	// createTemplate creates a cluster template with provisioning defaults but no hardware selection.
 	createTemplate := func(ctx context.Context, defaults *privatev1.ClusterTemplateSpecDefaults) string {
-		templateId := fmt.Sprintf("my_template_%s", uuid.New())
+		templateId := newTemplateID("my_template")
 		_, err := templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          templateId,
@@ -149,7 +149,7 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		getOrCreateTenantDefaultNetworkClassFixture(ctx)
+		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		secretsClient = publicv1.NewSecretsClient(tool.ExternalView().UserConn())

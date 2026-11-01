@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -54,7 +55,11 @@ type Client struct {
 	httpClient    *http.Client
 	token         string
 	templateCache sync.Map // map[string]*Template - caches template name → template (with ID, name, type)
+	orgCache      sync.Map // map[string]int - organization name → ID
 }
+
+// queryName is the name filter of AAP list queries and the name field of AAP objects.
+const queryName = "name"
 
 // NewClient creates a new AAP API client.
 // When insecureSkipVerify is true, TLS certificate verification is disabled (InsecureSkipVerify) for AAP API requests.
@@ -79,7 +84,10 @@ type LaunchJobTemplateRequest struct {
 	TemplateName  string
 	ExtraVars     map[string]any
 	CredentialIDs []int
-	Sensitive     bool
+	// Labels are AAP label IDs attached to the job; the template must set
+	// ask_labels_on_launch.
+	Labels    []int
+	Sensitive bool
 }
 
 // LaunchJobTemplateResponse contains the response from launching a job template.
@@ -102,13 +110,16 @@ type LaunchWorkflowTemplateResponse struct {
 
 // Job represents an AAP job with status information.
 type Job struct {
-	ID              int             `json:"id"`
-	Status          string          `json:"status"`
-	Started         time.Time       `json:"started"`
-	Finished        time.Time       `json:"finished"`
-	ExtraVars       string          `json:"extra_vars"` // AAP returns this as a JSON-encoded string
-	ResultTraceback string          `json:"result_traceback"`
-	Artifacts       json.RawMessage `json:"artifacts,omitempty"`
+	ID              int       `json:"id"`
+	Status          string    `json:"status"`
+	Started         time.Time `json:"started"`
+	Finished        time.Time `json:"finished"`
+	ExtraVars       string    `json:"extra_vars"` // AAP returns this as a JSON-encoded string
+	ResultTraceback string    `json:"result_traceback"`
+	// JobExplanation is AAP's explanation of how the job ended, for example
+	// the timeout explanation.
+	JobExplanation string          `json:"job_explanation"`
+	Artifacts      json.RawMessage `json:"artifacts,omitempty"`
 }
 
 type jobsPage struct {
@@ -149,6 +160,9 @@ func (c *Client) LaunchJobTemplate(ctx context.Context, req LaunchJobTemplateReq
 	}
 	if len(req.CredentialIDs) > 0 {
 		payload["credentials"] = req.CredentialIDs
+	}
+	if len(req.Labels) > 0 {
+		payload["labels"] = req.Labels
 	}
 
 	// Credential-bearing launches may receive an AAP error response that echoes
@@ -214,35 +228,109 @@ func (c *Client) GetJob(ctx context.Context, jobID string) (*Job, error) {
 	return &job, nil
 }
 
-func (c *Client) ListJobs(ctx context.Context, templateID int) ([]Job, error) {
-	if templateID <= 0 {
-		return nil, fmt.Errorf("job template ID must be positive")
-	}
+// ListJobsByLabel returns the jobs that carry the AAP label with the given
+// name, lowest job ID first. The list entries carry no artifacts; read a job
+// with GetJob for its result.
+func (c *Client) ListJobsByLabel(ctx context.Context, labelName string) ([]Job, error) {
 	const pageSize = 200
-	const maxPages = 100
+	const maxPages = 10
 	jobs := make([]Job, 0)
 	for page := 1; page <= maxPages; page++ {
 		query := url.Values{
-			"job_template": {fmt.Sprintf("%d", templateID)},
-			"order_by":     {"-id"},
+			"labels__name": {labelName},
+			"order_by":     {"id"},
 			"page":         {fmt.Sprintf("%d", page)},
 			"page_size":    {fmt.Sprintf("%d", pageSize)},
 		}
 		endpoint := fmt.Sprintf("%s/%s/jobs/?%s", c.baseURL, APIVersion, query.Encode())
 		resp, err := c.doRequestWithRedaction(ctx, http.MethodGet, endpoint, nil, true)
 		if err != nil {
-			return nil, fmt.Errorf("failed to list jobs for template %d: %w", templateID, err)
+			return nil, fmt.Errorf("failed to list jobs with label %s: %w", labelName, err)
 		}
 		var result jobsPage
 		if err := json.Unmarshal(resp, &result); err != nil {
-			return nil, fmt.Errorf("failed to parse job list for template %d: %w", templateID, err)
+			return nil, fmt.Errorf("failed to parse job list for label %s: %w", labelName, err)
 		}
 		jobs = append(jobs, result.Results...)
 		if result.Next == nil || *result.Next == "" {
 			return jobs, nil
 		}
 	}
-	return nil, fmt.Errorf("job list for template %d exceeded %d pages", templateID, maxPages)
+	return nil, fmt.Errorf("job list for label %s exceeded %d pages", labelName, maxPages)
+}
+
+type namedObject struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+type namedPage struct {
+	Count   int           `json:"count"`
+	Results []namedObject `json:"results"`
+}
+
+// OrganizationID returns the ID of the AAP organization. organization is the
+// organization name or its numeric ID.
+func (c *Client) OrganizationID(ctx context.Context, organization string) (int, error) {
+	if organization == "" {
+		return 0, errors.New("AAP organization is not configured")
+	}
+	if id, err := strconv.Atoi(organization); err == nil && id > 0 {
+		return id, nil
+	}
+	if cached, ok := c.orgCache.Load(organization); ok {
+		return cached.(int), nil
+	}
+	endpoint := fmt.Sprintf("%s/%s/organizations/?%s", c.baseURL, APIVersion, url.Values{queryName: {organization}}.Encode())
+	resp, err := c.doRequest(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to look up AAP organization %s: %w", organization, err)
+	}
+	var page namedPage
+	if err := json.Unmarshal(resp, &page); err != nil {
+		return 0, fmt.Errorf("failed to parse AAP organization lookup: %w", err)
+	}
+	if len(page.Results) == 0 {
+		return 0, fmt.Errorf("AAP organization %s not found", organization)
+	}
+	c.orgCache.Store(organization, page.Results[0].ID)
+	return page.Results[0].ID, nil
+}
+
+// EnsureLabel returns the ID of the AAP label with the given name in the
+// organization, creating the label when it is missing. organization is the
+// organization name or its numeric ID. Labels are not cached: each label
+// names one attempt of one task and is used once.
+func (c *Client) EnsureLabel(ctx context.Context, organization, name string) (int, error) {
+	orgID, err := c.OrganizationID(ctx, organization)
+	if err != nil {
+		return 0, err
+	}
+	query := url.Values{queryName: {name}, "organization": {strconv.Itoa(orgID)}}
+	endpoint := fmt.Sprintf("%s/%s/labels/?%s", c.baseURL, APIVersion, query.Encode())
+	resp, err := c.doRequest(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to look up AAP label %s: %w", name, err)
+	}
+	var page namedPage
+	if err := json.Unmarshal(resp, &page); err != nil {
+		return 0, fmt.Errorf("failed to parse AAP label lookup: %w", err)
+	}
+	for _, label := range page.Results {
+		if label.Name == name {
+			return label.ID, nil
+		}
+	}
+	endpoint = fmt.Sprintf("%s/%s/labels/", c.baseURL, APIVersion)
+	resp, err = c.doRequest(ctx, http.MethodPost, endpoint, map[string]any{queryName: name, "organization": orgID})
+	if err != nil {
+		return 0, fmt.Errorf("failed to create AAP label %s: %w", name, err)
+	}
+	var created namedObject
+	if err := json.Unmarshal(resp, &created); err != nil {
+		return 0, fmt.Errorf("failed to parse AAP label create response: %w", err)
+	}
+	return created.ID, nil
 }
 
 // CanCancelJobResponse contains the response from checking if a job can be canceled.

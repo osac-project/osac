@@ -1,71 +1,48 @@
 ---
-# VirtualNetwork deletion - removes IPAM allocation first, then VPC
+# Delete the Netris objects of a VirtualNetwork: the IPAM allocation, then the
+# VPC, which frees the L3 VNI. An object that is already gone is a success.
+# OSAC owns the delete ordering, so there is no default-network refusal here.
+- name: Delete the VirtualNetwork from Netris
+  block:
+    - name: Check the settings
+      ansible.builtin.include_tasks: _settings.yaml
+      vars:
+        netris_require: [controller, credentials, tenant]
 
-- name: Extract VirtualNetwork name
-  ansible.builtin.set_fact:
-    vn_name: "{{ virtual_network.metadata.name }}"
-    vn_ipv4_cidr: "{{ virtual_network.spec.ipv4Cidr | default('') }}"
+    - name: Check the task input
+      ansible.builtin.include_tasks: _input.yaml
 
-- name: Refuse delete of default VirtualNetwork
-  ansible.builtin.include_tasks: _refuse_if_default.yaml
-  vars:
-    _default_refuse_resource: "{{ virtual_network }}"
-    _default_refuse_kind: VirtualNetwork
-    _default_refuse_name: "{{ vn_name }}"
-    _default_refuse_allow_override: false
+    - name: Build the object names
+      ansible.builtin.include_tasks: _names.yaml
 
-- name: Display VirtualNetwork deletion info
-  ansible.builtin.debug:
-    msg: "Deleting Netris VPC + IPAM allocation for VirtualNetwork '{{ vn_name }}'"
+    - name: Look up the VPC
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: read
+      vars:
+        vpc_name: "{{ netris_names.vpc }}"
+        vpc_tenant_id: "{{ netris_tenant_id | int }}"
 
-- name: Look up VPC by name
-  ansible.builtin.include_role:
-    name: netris.controller.vpc
-    tasks_from: read
-  vars:
-    vpc_name: "{{ vn_name }}"
+    - name: Delete the IPAM allocation
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+        tasks_from: delete_allocation
+      vars:
+        ipam_name: "{{ netris_names.vn_ipam }}"
+        ipam_vpc_id: "{{ netris_vpc.id }}"
+        ipam_expected_fields:
+          "tenant.id": "{{ netris_tenant_id | int }}"
+          "vpc.id": "{{ netris_vpc.id }}"
+      when: netris_vpc is mapping
 
-- name: Set VPC ID
-  ansible.builtin.set_fact:
-    _vn_vpc_id: "{{ netris_vpc.id | default('') }}"
-
-- name: Build VirtualNetwork allocation ownership fields
-  ansible.builtin.set_fact:
-    _vn_allocation_expected_fields:
-      "tenant.id": "{{ netris_tenant_id }}"
-  when: vn_ipv4_cidr | length > 0
-
-- name: Add VirtualNetwork allocation prefix ownership field
-  ansible.builtin.set_fact:
-    _vn_allocation_expected_fields: >-
-      {{ _vn_allocation_expected_fields | combine({'prefix': vn_ipv4_cidr}) }}
-  when: vn_ipv4_cidr | length > 0
-
-- name: Add VirtualNetwork allocation VPC ownership field
-  ansible.builtin.set_fact:
-    _vn_allocation_expected_fields: >-
-      {{ _vn_allocation_expected_fields | combine({'vpc.id': _vn_vpc_id}) }}
-  when:
-    - vn_ipv4_cidr | length > 0
-    - _vn_vpc_id | string | length > 0
-
-- name: Delete IPAM allocation from Netris controller
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: delete_allocation
-  vars:
-    ipam_name: "{{ vn_name }}"
-    ipam_vpc_id: "{{ _vn_vpc_id }}"
-    ipam_expected_fields: "{{ _vn_allocation_expected_fields | default({'tenant.id': netris_tenant_id}) }}"
-
-- name: Delete VPC from Netris controller
-  ansible.builtin.include_role:
-    name: netris.controller.vpc
-    tasks_from: delete
-  vars:
-    vpc_name: "{{ vn_name }}"
-    vpc_tenant_id: "{{ netris_tenant_id }}"
-
-- name: Display deletion result
-  ansible.builtin.debug:
-    msg: "VPC + IPAM allocation '{{ vn_name }}' deletion completed"
+    - name: Delete the VPC
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: delete
+      vars:
+        vpc_name: "{{ netris_names.vpc }}"
+        vpc_tenant_id: "{{ netris_tenant_id | int }}"
+      when: netris_vpc is mapping
+  rescue:
+    - name: Report the error
+      ansible.builtin.include_tasks: _rescue.yaml

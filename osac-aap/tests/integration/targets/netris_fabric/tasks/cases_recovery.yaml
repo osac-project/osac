@@ -1,0 +1,461 @@
+---
+# Case 10 (part 2): partial creates and lost responses (the request is applied,
+# the client sees a reset) for VPC, allocation and V-Net; delete recovery after a
+# lost response; ExternalIP and NAT lost responses.
+# --- partial create and lost response: VPC, allocation, V-Net -------------------
+- name: Recovery - the VPC create commits but the response is lost
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: reset}
+      - {path: faults, body: {key: "POST /api/v2/vpc", mode: commit_then_drop}}
+
+- name: Recovery - create_virtual_network fails retryably
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: rec-vpc-lost-response
+    sft_expect: retryable
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Recovery - the rerun adopts the VPC and creates no second one
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: rec-vpc-rerun
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+    nf_result: {backend_id: "101", l3_vni: 10001}
+
+- name: Recovery - one VPC, one allocation
+  ansible.builtin.assert:
+    that:
+      - "'POST /api/v2/vpc' not in nf_write_kinds"
+      - nf_state.vpcs | length == 1
+      - nf_state.allocations | length == 1
+    quiet: true
+
+- name: Recovery - the allocation create fails after the VPC exists (partial create)
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: reset}
+      - {path: faults, body: {key: "POST /api/v2/ipam/allocation", status: 500, body: {message: boom}}}
+
+- name: Recovery - create_virtual_network fails retryably
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: rec-allocation-500
+    sft_expect: retryable
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Recovery - the rerun creates the allocation only
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: rec-allocation-rerun
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+    nf_result: {backend_id: "101", l3_vni: 10001}
+
+- name: Recovery - one VPC, one allocation
+  ansible.builtin.assert:
+    that:
+      - "'POST /api/v2/vpc' not in nf_write_kinds"
+      - nf_state.vpcs | length == 1
+      - nf_state.allocations | length == 1
+    quiet: true
+
+- name: Recovery - the allocation create commits but the response is lost
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: reset}
+      - {path: faults, body: {key: "POST /api/v2/ipam/allocation", mode: commit_then_drop}}
+
+- name: Recovery - create_virtual_network fails retryably
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: rec-allocation-lost-response
+    sft_expect: retryable
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Recovery - the rerun adopts the allocation
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: rec-allocation-lost-rerun
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+    nf_result: {backend_id: "101", l3_vni: 10001}
+
+- name: Recovery - no second allocation
+  ansible.builtin.assert:
+    that:
+      - "'POST /api/v2/ipam/allocation' not in nf_write_kinds"
+      - nf_state.vpcs | length == 1
+      - nf_state.allocations | length == 1
+    quiet: true
+
+- name: Recovery - the V-Net create fails after the IPAM subnet exists (partial create)
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "POST /api/v2/vnet", status: 500, body: {message: boom}}}
+
+- name: Recovery - create_subnet fails retryably
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: rec-vnet-500
+    sft_expect: retryable
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Recovery - the rerun creates the V-Net only
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: rec-vnet-rerun
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+    nf_result: {network_segment: {type: evpn, l2_vni: 5000001}}
+
+- name: Recovery - one IPAM subnet, one V-Net
+  ansible.builtin.assert:
+    that:
+      - "'POST /api/v2/ipam/subnet' not in nf_write_kinds"
+      - nf_state.vnets | length == 1
+      - nf_state.ipam_subnets | length == 1
+    quiet: true
+
+- name: Recovery - the V-Net create commits but the response is lost
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: remove, body: {collection: vnets, id: 401}}
+      - {path: faults, body: {key: "POST /api/v2/vnet", mode: commit_then_drop}}
+
+- name: Recovery - create_subnet fails retryably
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: rec-vnet-lost-response
+    sft_expect: retryable
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Recovery - the rerun adopts the V-Net
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: rec-vnet-lost-rerun
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Recovery - no second V-Net
+  ansible.builtin.assert:
+    that:
+      - "'POST /api/v2/vnet' not in nf_write_kinds"
+      - nf_state.vnets | length == 1
+      - sft_last.result.network_segment.l2_vni == nf_state.vnets[0].vxlanID
+    quiet: true
+
+# --- delete recovery after a lost response ---------------------------------------
+- name: Delete recovery - the V-Net delete commits but the response is lost
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "DELETE /api/v2/vnet/*", mode: commit_then_drop}}
+
+- name: Delete recovery - delete_subnet fails retryably
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_subnet
+    sft_label: delrec-vnet-lost-response
+    sft_expect: retryable
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Delete recovery - the V-Net delete was applied, the IPAM subnet is still there
+  ansible.builtin.assert:
+    that:
+      - nf_state.vnets == []
+      - nf_state.ipam_subnets | length == 1
+      - nf_write_kinds == ['DELETE /api/v2/vnet']
+    quiet: true
+
+- name: Delete recovery - the IPAM subnet delete will commit but lose its response
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "DELETE /api/v2/ipam/subnet/*", mode: commit_then_drop}}
+
+- name: Delete recovery - the IPAM subnet delete commits but the response is lost
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_subnet
+    sft_label: delrec-ipam-lost-response
+    sft_expect: retryable
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Delete recovery - the next rerun finds everything gone
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_subnet
+    sft_label: delrec-subnet-rerun
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Delete recovery - nothing is left of the Subnet and the rerun wrote nothing
+  ansible.builtin.assert:
+    that:
+      - nf_state.vnets == []
+      - nf_state.ipam_subnets == []
+      - nf_writes == []
+    quiet: true
+
+- name: Delete recovery - the allocation delete commits but the response is lost
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "DELETE /api/v2/ipam/allocation/*", mode: commit_then_drop}}
+
+- name: Delete recovery - delete_virtual_network fails retryably
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_virtual_network
+    sft_label: delrec-allocation-lost-response
+    sft_expect: retryable
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Delete recovery - the VPC delete commits but the response is lost
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "DELETE /api/v2/vpc/*", mode: commit_then_drop}}
+
+- name: Delete recovery - the rerun deletes the VPC and loses that response
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_virtual_network
+    sft_label: delrec-vpc-lost-response
+    sft_expect: retryable
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Delete recovery - the last rerun succeeds, nothing is left, the VNI is free
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_virtual_network
+    sft_label: delrec-vn-rerun
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Delete recovery - all gone
+  ansible.builtin.assert:
+    that:
+      - nf_state.vpcs == []
+      - nf_state.allocations == []
+      - nf_state.vni.vpc.free == [10001]
+      - nf_writes == []
+    quiet: true
+
+# --- ExternalIP and NAT: lost responses --------------------------------------------
+- name: EIP recovery - a pool, a VirtualNetwork and a lost reservation response
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: reset}
+      - {path: faults, body: {key: "POST /api/v2/ipam/subnet", mode: commit_then_drop}}
+
+- name: EIP recovery - create the VirtualNetwork
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: eiprec-vn-create
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: EIP recovery - create the pool
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_external_ip_pool
+    sft_label: eiprec-pool-create
+    sft_expect: success
+    nf_job: "{{ nf_pool_job }}"
+
+- name: EIP recovery - the reservation committed, its response was lost, and the module finds it again
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_external_ip
+    sft_label: eiprec-eip-lost-response
+    sft_expect: success
+    nf_job: "{{ nf_eip_job }}"
+    nf_result: {external_ip: {address: 203.0.113.1}}
+
+- name: EIP recovery - the response really was lost, and there is one reservation
+  ansible.builtin.assert:
+    that:
+      - nf_state.faults == []
+      - nf_state.ipam_subnets | length == 1
+    quiet: true
+
+- name: EIP recovery - a rerun returns the same address without a second reservation
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_external_ip
+    sft_label: eiprec-eip-rerun
+    sft_expect: success
+    nf_job: "{{ nf_eip_job }}"
+    nf_result: {external_ip: {address: 203.0.113.1}}
+
+- name: EIP recovery - one reservation, no new write
+  ansible.builtin.assert:
+    that:
+      - nf_state.ipam_subnets | length == 1
+      - nf_writes == []
+    quiet: true
+
+- name: EIP recovery - the DNAT create commits but the response is lost
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "POST /api/v2/nat", mode: commit_then_drop}}
+
+- name: EIP recovery - attach_external_ip fails retryably
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: attach_external_ip
+    sft_label: eiprec-attach-lost-response
+    sft_expect: retryable
+    nf_job: "{{ nf_eipa_job }}"
+
+- name: EIP recovery - the rerun adopts the DNAT rule
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: attach_external_ip
+    sft_label: eiprec-attach-rerun
+    sft_expect: success
+    nf_job: "{{ nf_eipa_job }}"
+    nf_result: {}
+
+- name: EIP recovery - one DNAT rule
+  ansible.builtin.assert:
+    that:
+      - nf_state.nats | selectattr('name', 'equalto', 'osac-eipa-' ~ nf_ids.eipa) | list | length == 1
+      - nf_writes == []
+    quiet: true
+
+- name: EIP recovery - the SNAT create commits but the response is lost
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "POST /api/v2/nat", mode: commit_then_drop}}
+
+- name: EIP recovery - create_nat_gateway fails retryably
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_nat_gateway
+    sft_label: eiprec-natgw-lost-response
+    sft_expect: retryable
+    nf_job: "{{ nf_natgw_job }}"
+
+- name: EIP recovery - the rerun adopts the SNAT rule
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_nat_gateway
+    sft_label: eiprec-natgw-rerun
+    sft_expect: success
+    nf_job: "{{ nf_natgw_job }}"
+    nf_result: {}
+
+- name: EIP recovery - one SNAT rule
+  ansible.builtin.assert:
+    that:
+      - nf_state.nats | selectattr('name', 'equalto', 'osac-natgw-' ~ nf_ids.natgw) | list | length == 1
+      - nf_writes == []
+    quiet: true
+
+- name: EIP recovery - the DNAT delete commits but the response is lost
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "DELETE /api/v2/nat/*", mode: commit_then_drop}}
+
+- name: EIP recovery - detach_external_ip fails retryably
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: detach_external_ip
+    sft_label: eiprec-detach-lost-response
+    sft_expect: retryable
+    nf_job: "{{ nf_eipa_job }}"
+
+- name: EIP recovery - the rerun finds the rule gone
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: detach_external_ip
+    sft_label: eiprec-detach-rerun
+    sft_expect: success
+    nf_job: "{{ nf_eipa_job }}"
+    nf_result: {}
+
+- name: EIP recovery - the rule is gone and the rerun wrote nothing
+  ansible.builtin.assert:
+    that:
+      - nf_state.nats | selectattr('name', 'equalto', 'osac-eipa-' ~ nf_ids.eipa) | list == []
+      - nf_writes == []
+    quiet: true
+
+- name: EIP recovery - the SNAT delete commits but the response is lost
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "DELETE /api/v2/nat/*", mode: commit_then_drop}}
+
+- name: EIP recovery - delete_nat_gateway fails retryably
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_nat_gateway
+    sft_label: eiprec-natgw-delete-lost-response
+    sft_expect: retryable
+    nf_job: "{{ nf_natgw_job }}"
+
+- name: EIP recovery - the rerun finds the rule gone
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_nat_gateway
+    sft_label: eiprec-natgw-delete-rerun
+    sft_expect: success
+    nf_job: "{{ nf_natgw_job }}"
+    nf_result: {}
+
+- name: EIP recovery - the reservation release commits but the response is lost
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "DELETE /api/v2/ipam/subnet/*", mode: commit_then_drop}}
+
+- name: EIP recovery - delete_external_ip fails retryably
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_external_ip
+    sft_label: eiprec-eip-delete-lost-response
+    sft_expect: retryable
+    nf_job: "{{ nf_eip_job }}"
+
+- name: EIP recovery - the rerun finds the reservation gone
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_external_ip
+    sft_label: eiprec-eip-delete-rerun
+    sft_expect: success
+    nf_job: "{{ nf_eip_job }}"
+    nf_result: {}
+
+- name: EIP recovery - the reservation is gone and the rerun wrote nothing
+  ansible.builtin.assert:
+    that:
+      - nf_state.ipam_subnets == []
+      - nf_writes == []
+    quiet: true

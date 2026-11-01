@@ -1,4 +1,7 @@
 global:
+  networking:
+    # Set at installation; when false the operator runs no networking job.
+    provisioningEnabled: true
   fulfillmentTrust:
     enabled: false
     tenantNamespace: osac-csi
@@ -24,6 +27,7 @@ aap:
   insecureSkipVerify: "true"
   statusPollInterval: "30s"
   templatePrefix: "osac"
+  organization: "osac"
 
 stall:
   preparingInfrastructureThreshold: "15m"
@@ -64,7 +68,6 @@ controllers:
   # is empty the controller starts with provisioning disabled (Volumes stay in
   # Progressing) and never fails operator startup.
   volume: true
-  networkingProvisioning: true
 
 # vendorControllers maps provider identifiers to their vendor CSI controller
 # gRPC endpoints, rendered into OSAC_VENDOR_CONTROLLERS for the Volume
@@ -136,16 +139,6 @@ networkManagers:
   # the k8s manager need not advertise it. Set the corresponding
   # NetworkClass.spec.disable_capabilities field to true to suppress publication.
   fabricManagers:
-    netris:
-      enabled: false
-      externalIPContractVersion: v1
-      description: >-
-        Netris SDN controller for physical fabric management.
-        Manages VLAN/VxLAN segments, ACLs, public IP allocation, and NAT gateways.
-        Capabilities: ipv4 and Ethernet east-west via Netris Server Clusters.
-      capabilities:
-      - ipv4
-      - eastWestEthernet
     cudn_net:
       enabled: true
       description: >-
@@ -159,7 +152,6 @@ networkManagers:
       enabled: false
       externalIPContractVersion: v1
       externalIPAttachmentContractVersion: v1
-      natGatewayContractVersion: v1
       description: >-
         AgentlessNet VirtualNetwork and Subnet baseline. Implements UID-keyed
         namespaces, /31 transit links, Cumulus trunk VLANs, Subnet gateways,

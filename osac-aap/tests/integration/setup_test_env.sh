@@ -133,11 +133,6 @@ HCEOF
 # spec fields (tests defaults merging) and is read from file by tests via lookup().
 echo "Applying test fixtures..."
 kubectl apply -f "${SCRIPT_DIR}/fixtures/clusterorder-test.yaml"
-kubectl apply -f "${SCRIPT_DIR}/fixtures/subnet-test.yaml"
-# Subnet.status is a subresource, so seed the readiness fields separately from
-# the spec fixture. The VM placement role requires both fields before use.
-kubectl patch subnet test-subnet -n osac-system --subresource=status --type=merge \
-  -p '{"status":{"phase":"Ready","computeInstanceSupported":true}}'
 kubectl apply -f "${SCRIPT_DIR}/fixtures/computeinstance-test.yaml"
 kubectl apply -f "${SCRIPT_DIR}/fixtures/computeinstance-with-gpu-test.yaml"
 

@@ -59,9 +59,8 @@ func readyNetworkingHubReader(id, namespace string, client clnt.Client) *fakeNet
 }
 
 var _ = Describe("buildSpec", func() {
-	It("Copies only the canonical IPv4 field when a legacy IPv6 field is present", func() {
+	It("Copies the IPv4 CIDR", func() {
 		ipv4 := "10.0.1.0/24"
-		ipv6 := "2001:db8::/64"
 		vnetID := "vnet-123"
 
 		task := &task{
@@ -70,7 +69,6 @@ var _ = Describe("buildSpec", func() {
 				Spec: privatev1.SubnetSpec_builder{
 					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnetID}.Build(),
 					Ipv4Cidr:       &ipv4,
-					Ipv6Cidr:       &ipv6,
 				}.Build(),
 			}.Build(),
 		}
@@ -79,7 +77,6 @@ var _ = Describe("buildSpec", func() {
 
 		Expect(spec.VirtualNetwork).To(Equal(vnetID))
 		Expect(spec.IPv4CIDR).To(Equal(ipv4))
-		Expect(spec.IPv6CIDR).To(BeEmpty())
 	})
 
 	It("Includes only IPv4 when IPv6 is not present", func() {
@@ -100,29 +97,8 @@ var _ = Describe("buildSpec", func() {
 
 		Expect(spec.VirtualNetwork).To(Equal(vnetID))
 		Expect(spec.IPv4CIDR).To(Equal(ipv4))
-		Expect(spec.IPv6CIDR).To(BeEmpty())
 	})
 
-	It("Does not project a legacy IPv6-only object", func() {
-		ipv6 := "fd00:1234::/64"
-		vnetID := "vnet-789"
-
-		task := &task{
-			subnet: privatev1.Subnet_builder{
-				Id: "subnet-test-789",
-				Spec: privatev1.SubnetSpec_builder{
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnetID}.Build(),
-					Ipv6Cidr:       &ipv6,
-				}.Build(),
-			}.Build(),
-		}
-
-		spec := task.buildSpec()
-
-		Expect(spec.VirtualNetwork).To(Equal(vnetID))
-		Expect(spec.IPv4CIDR).To(BeEmpty())
-		Expect(spec.IPv6CIDR).To(BeEmpty())
-	})
 })
 
 // newSubnetCR creates a typed Subnet CR for use with the fake client.
@@ -170,8 +146,9 @@ func newTaskForDelete(subnetID, hubID string, hubCache controllers.HubCache) *ta
 	}.Build()
 
 	f := &function{
-		logger:   logger,
-		hubCache: hubCache,
+		networkClassesClient: planNetworkClasses{},
+		logger:               logger,
+		hubCache:             hubCache,
 	}
 
 	return &task{
@@ -338,7 +315,9 @@ var _ = Describe("delete", func() {
 		}.Build()
 
 		f := &function{
-			logger: logger,
+			networkClassesClient: planNetworkClasses{},
+			logger:               logger,
+			networkingHubReader:  &fakeNetworkingHubReader{err: controllers.ErrNoNetworkingHubs},
 		}
 
 		t := &task{
@@ -584,7 +563,7 @@ var _ = Describe("hub persistence", func() {
 		DeferCleanup(ctrl.Finish)
 	})
 
-	It("should select hub and return without creating Subnet CR", func() {
+	It("should persist the hub and create the Subnet CR with the address plan in the same reconcile", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 
@@ -615,10 +594,11 @@ var _ = Describe("hub persistence", func() {
 		}.Build()
 
 		f := &function{
-			logger:              logger,
-			subnetsClient:       subnetsClient,
-			networkingHubReader: resolver,
-			maskCalculator:      nil,
+			networkClassesClient: planNetworkClasses{},
+			logger:               logger,
+			subnetsClient:        subnetsClient,
+			networkingHubReader:  resolver,
+			maskCalculator:       nil,
 		}
 
 		err := f.run(ctx, subnet)
@@ -628,7 +608,8 @@ var _ = Describe("hub persistence", func() {
 		list := &osacv1alpha1.SubnetList{}
 		err = fakeClient.List(ctx, list)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(list.Items).To(BeEmpty())
+		Expect(list.Items).To(HaveLen(1))
+		Expect(list.Items[0].Spec.AddressPlan).To(Equal(osacv1alpha1.SubnetAddressPlan{Overlay: 12, Fabric: 2, LBVIP: 2}))
 	})
 
 	It("should not create CR when no hubs available", func() {
@@ -661,10 +642,11 @@ var _ = Describe("hub persistence", func() {
 		}.Build()
 
 		f := &function{
-			logger:              logger,
-			subnetsClient:       subnetsClient,
-			networkingHubReader: resolver,
-			maskCalculator:      nil,
+			networkClassesClient: planNetworkClasses{},
+			logger:               logger,
+			subnetsClient:        subnetsClient,
+			networkingHubReader:  resolver,
+			maskCalculator:       nil,
 		}
 
 		err := f.run(ctx, subnet)
@@ -711,10 +693,11 @@ var _ = Describe("hub persistence", func() {
 		}.Build()
 
 		f := &function{
-			logger:              logger,
-			subnetsClient:       subnetsClient,
-			networkingHubReader: resolver,
-			maskCalculator:      nil,
+			networkClassesClient: planNetworkClasses{},
+			logger:               logger,
+			subnetsClient:        subnetsClient,
+			networkingHubReader:  resolver,
+			maskCalculator:       nil,
 		}
 
 		err := f.run(ctx, subnet)
@@ -728,7 +711,7 @@ var _ = Describe("hub persistence", func() {
 		Expect(list.Items[0].Namespace).To(Equal(hubNamespace))
 	})
 
-	It("should create CR on second reconcile after hub is persisted", func() {
+	It("should adopt the CR created by an earlier reconcile", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 
@@ -759,22 +742,23 @@ var _ = Describe("hub persistence", func() {
 		}.Build()
 
 		f := &function{
-			logger:              logger,
-			subnetsClient:       subnetsClient,
-			networkingHubReader: resolver,
-			maskCalculator:      nil,
+			networkClassesClient: planNetworkClasses{},
+			logger:               logger,
+			subnetsClient:        subnetsClient,
+			networkingHubReader:  resolver,
+			maskCalculator:       nil,
 		}
 
-		// First reconcile: hub is empty, gets selected and persisted, but no CR created
+		// First reconcile: the hub is selected and persisted, and the CR is created
 		err := f.run(ctx, subnet)
 		Expect(err).ToNot(HaveOccurred())
 
 		list := &osacv1alpha1.SubnetList{}
 		err = fakeClient.List(ctx, list)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(list.Items).To(BeEmpty())
+		Expect(list.Items).To(HaveLen(1))
 
-		// Second reconcile: hub already set, CR should be created
+		// Second reconcile: the existing CR is patched, not duplicated
 		subnet.GetStatus().SetHub(hubID)
 
 		err = f.run(ctx, subnet)
@@ -791,7 +775,7 @@ var _ = Describe("hub persistence", func() {
 var _ = Describe("canonical networking Hub resolution", func() {
 	It("rejects conflicting assignments and never selects a fallback Hub", func() {
 		resolver := readyNetworkingHubReader("hub-a", "hub-a-ns", fake.NewClientBuilder().Build())
-		r := &function{logger: logger, networkingHubReader: resolver}
+		r := &function{logger: logger, networkingHubReader: resolver, networkClassesClient: planNetworkClasses{}}
 		t := &task{
 			r: r,
 			subnet: privatev1.Subnet_builder{
@@ -866,10 +850,11 @@ var _ = Describe("Kubernetes validation error handling", func() {
 		}.Build()
 
 		f := &function{
-			logger:              logger,
-			subnetsClient:       subnetsClient,
-			networkingHubReader: resolver,
-			maskCalculator:      nil,
+			networkClassesClient: planNetworkClasses{},
+			logger:               logger,
+			subnetsClient:        subnetsClient,
+			networkingHubReader:  resolver,
+			maskCalculator:       nil,
 		}
 
 		err := f.run(ctx, subnet)
@@ -881,3 +866,24 @@ var _ = Describe("Kubernetes validation error handling", func() {
 		Expect(subnet.GetStatus().GetMessage()).To(ContainSubstring("CIDR is invalid"))
 	})
 })
+
+// planNetworkClasses returns a NetworkClass with the default address plan.
+type planNetworkClasses struct {
+	privatev1.NetworkClassesClient
+}
+
+func (planNetworkClasses) List(context.Context, *privatev1.NetworkClassesListRequest,
+	...grpc.CallOption) (*privatev1.NetworkClassesListResponse, error) {
+	return privatev1.NetworkClassesListResponse_builder{
+		Items: []*privatev1.NetworkClass{privatev1.NetworkClass_builder{
+			Id: "nc-1",
+			Spec: privatev1.NetworkClassSpec_builder{
+				AddressPlan: privatev1.AddressPlan_builder{
+					Overlay: 0.75,
+					Fabric:  0.125,
+					LbVip:   0.125,
+				}.Build(),
+			}.Build(),
+		}.Build()},
+	}.Build(), nil
+}

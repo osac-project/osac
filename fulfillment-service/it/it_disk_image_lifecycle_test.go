@@ -135,7 +135,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		// Create ComputeInstanceTemplate
-		computeInstanceTemplateId = fmt.Sprintf("test-ci-template-%s", uuid.New())
+		computeInstanceTemplateId = newTemplateID("test_ci_template")
 		_, err = computeInstanceTemplatesClient.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 			Object: privatev1.ComputeInstanceTemplate_builder{
 				Metadata: privatev1.Metadata_builder{
@@ -151,14 +151,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 		// Create NetworkClass — required for VirtualNetwork/Subnet chain so the
 		// ComputeInstance has a valid network attachment (the server rejects
 		// creation when no default subnet exists and no attachments are provided).
-		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-			Object: privatev1.NetworkClass_builder{
-				Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("di-nc-%s", uuid.New())}.Build(),
-				Title:         "Test Network Class",
-				FabricManager: new("netris"),
-				K8SManager:    new(testVMK8SManagerName),
-			}.Build(),
-		}.Build())
+		ncResp, err := sharedNetworkClass(ctx, networkClassesClient)
 		Expect(err).ToNot(HaveOccurred())
 		networkClassId = ncResp.GetObject().GetId()
 		waitForNetworkClassReady(ctx, networkClassesClient, networkClassId)
@@ -173,40 +166,15 @@ var _ = Describe("DiskImage lifecycle", func() {
 				}.Build(),
 				Id: virtualNetworkId,
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
-					Region:       "us-east-1",
-					Ipv4Cidr:     new("10.200.0.0/16"),
+					Ipv4Cidr: new("10.200.0.0/16"),
 				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		// Wait for the VN reconciler to finish initial processing before
-		// overriding state.
-		Eventually(func(g Gomega) {
-			resp, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
-				Id: virtualNetworkId,
-			}.Build())
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(resp.GetObject().GetStatus().GetState()).To(
-				Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
-		}, time.Minute, time.Second).Should(Succeed())
-
-		// Set VirtualNetwork to READY state via private Update API.
-		// In IT environment there is no osac-operator/feedback controller to reconcile state.
-		vnGetResp, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
-			Id: virtualNetworkId,
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		vn := vnGetResp.GetObject()
-		vn.SetStatus(privatev1.VirtualNetworkStatus_builder{
-			State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
-		}.Build())
-		_, err = virtualNetworksClient.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
-			Object:     vn,
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
+		// In IT there is no operator feedback controller, so set READY only after
+		// the controller has assigned the canonical Hub.
+		setComputeInstanceFixtureVirtualNetworkReady(ctx, virtualNetworksClient, virtualNetworkId)
 
 		// Create Subnet
 		subnetId = fmt.Sprintf("test-subnet-%s", uuid.New())
@@ -225,31 +193,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		// Wait for the subnet reconciler to finish initial processing before
-		// overriding state.
-		Eventually(func(g Gomega) {
-			resp, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{
-				Id: subnetId,
-			}.Build())
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(resp.GetObject().GetStatus().GetState()).To(
-				Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
-		}, time.Minute, time.Second).Should(Succeed())
-
-		// Set Subnet to READY state via private Update API.
-		subGetResp, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{
-			Id: subnetId,
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		sub := subGetResp.GetObject()
-		sub.SetStatus(privatev1.SubnetStatus_builder{
-			State: privatev1.SubnetState_SUBNET_STATE_READY,
-		}.Build())
-		_, err = subnetsClient.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
-			Object:     sub,
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
+		setSubnetReady(ctx, subnetsClient, subnetId)
 		securityGroupId = createComputeInstanceFixtureSecurityGroup(ctx, securityGroupsClient,
 			fmt.Sprintf("test-di-sg-%s", uuid.New()), virtualNetworkId)
 	})
@@ -311,10 +255,6 @@ var _ = Describe("DiskImage lifecycle", func() {
 			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
 			defer delCancel()
 			Expect(cleanupNetworkClassFixture(delCtx, networkClassesClient, networkClassId)).To(Succeed())
-			waitForNotFound(func() error {
-				_, err := networkClassesClient.Get(delCtx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassId}.Build())
-				return err
-			})
 			networkClassId = ""
 		}
 		if computeInstanceTemplateId != "" {

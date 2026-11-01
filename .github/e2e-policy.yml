@@ -61,7 +61,7 @@ jobs:
     manual_only: true
   e2e-stretched-netris:
     kind: e2e
-    check: "E2E / Stretched Networking Netris Full Install"
+    check: "E2E / Stretched Netris Full Install"
     suite: stretched-netris
     workflow: e2e-pr-stretched-netris.yml
     manual_only: true

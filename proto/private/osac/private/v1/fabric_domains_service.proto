@@ -68,7 +68,9 @@ service FabricDomains {
   rpc Create(FabricDomainsCreateRequest) returns (FabricDomainsCreateResponse) {
     option (google.api.http) = {post: "/api/private/v1/fabric_domains" body: "object" response_body: "object"};
   }
+  // Status-only update used by the system; FabricDomain servers cannot change in this release.
   rpc Update(FabricDomainsUpdateRequest) returns (FabricDomainsUpdateResponse) {
+    option (cleanapi.method).private = true;
     option (google.api.http) = {patch: "/api/private/v1/fabric_domains/{object.id}" body: "object" response_body: "object"};
   }
   rpc Delete(FabricDomainsDeleteRequest) returns (FabricDomainsDeleteResponse) {

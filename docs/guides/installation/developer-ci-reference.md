@@ -29,7 +29,7 @@ make install PLATFORM=openshift PROFILE=vmaas-ci NS=osac
 | `make test` | Run integration tests (SUITE= required) |
 | `make helm-lint` | Lint all charts |
 
-All targets require `PLATFORM=kind|openshift PROFILE=dev|vmaas-ci|...|cudn-evpn-netris-test NS=<namespace>`.
+All targets require `PLATFORM=kind|openshift PROFILE=dev|vmaas-ci|...|full-ci NS=<namespace>`.
 
 ```bash
 make uninstall PLATFORM=openshift PROFILE=vmaas-ci NS=osac
@@ -37,8 +37,9 @@ make uninstall PLATFORM=openshift PROFILE=vmaas-ci NS=osac
 
 ## CI reference profiles
 
-Each profile under `values/` has an `infra.yaml` and an `instance.yaml`, used
-by CI and local dev, never for a real deployment:
+Each base profile under `values/` has an `infra.yaml` and an `instance.yaml`,
+used by CI and local dev, never for a real deployment. Netris CI layers the
+service-specific `netris.yaml` after the base instance values:
 
 | Profile | Use case |
 |---------|----------|
@@ -47,42 +48,16 @@ by CI and local dev, never for a real deployment:
 | `values/bmaas-ci/` | BMaaS CI (bare metal) |
 | `values/full-ci/` | All services enabled |
 | `values/dev/` | Local dev (Kind) |
-| `values/cudn-evpn-netris-test/` | Explicit CUDN EVPN + Netris VMaaS/BMaaS E2E profile (OpenShift only) |
+| `values/vmaas-ci/netris.yaml` | Netris + CUDN EVPN overlay for VMaaS CI |
+| `values/bmaas-ci/netris.yaml` | Netris overlay for BMaaS CI (no Kubernetes Manager) |
+| `values/full-ci/netris.yaml` | Netris + CUDN EVPN overlay for full and stretched CI |
 
 ## AgentlessNet VirtualNetwork namespace profile
 
-To deploy the AgentlessNet VirtualNetwork namespace and forwarding baseline,
-apply the overlay after the profile values:
-
-```bash
-make install-osac \
-  PLATFORM=openshift \
-  PROFILE=bmaas-ci \
-  NS=<disposable-osac-namespace> \
-  EXTRA_HELM_ARGS="-f values/agentless-net-stub.yaml"
-```
-
-The overlay selects `agentless_net` through `global.networking`, which registers
-the fabric manager and creates a default NetworkClass that selects it. It also
-allows the facade to derive the AAP backend for profiles that preserve their
-existing AAP settings by default. A VirtualNetwork job requires one
-authoritative network node under `all.children.net_nodes.hosts` in serialized
-`AGENTLESS_NET_VN_INVENTORY` YAML/JSON from the existing `network-fulfillment-ig`
-ConfigMap. The networking worker imports it through `envFrom`. Supply SSH
-access through an AAP credential or `AGENTLESS_NET_SSH_PRIVATE_KEY` from the
-`network-fulfillment-ig` Secret. The role creates the namespace, `/31` transit
-link, and forwarding baseline.
-
-Subnet, SecurityGroup, ExternalIPPool, ExternalIP, ExternalIPAttachment, and
-NATGateway operations remain unsupported. The namespace profile does not
-provide physical attachment, DHCP lease discovery, BGP, NAT, or external
-connectivity or tenant `DefaultNetworkingReady`. Manager changes require draining
-and replacing resources. Inventory configuration and the retained `/31`/SQLite
-design differences are documented in the
-[network backend guide](../../../osac-installer/docs/network-backend.md#agentlessnet-virtualnetwork-baseline).
-Existing inline CaaS workflows using `agentless_net.steps` are
-unchanged. AAP must run the project content and execution environment
-containing the AgentlessNet role.
+AgentlessNet is not deployable on this branch: its chart entry renders no
+registration that meets the network manager contract, so a NetworkClass cannot
+select it. Adoption is a follow-up (OSAC-5533 tracks deployed coverage).
+Existing inline CaaS workflows using `agentless_net.steps` are unchanged.
 
 ## The `make` wrapper fails with `[[: not found`
 

@@ -274,6 +274,50 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		Expect(called).To(BeTrue())
 	})
 
+	It("leaves NATGateway Create ExternalIP references for the handler to resolve", func() {
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
+		Expect(err).NotTo(HaveOccurred())
+		v, err := newReferenceValidator(logger, tenancy, prometheus.NewRegistry())
+		Expect(err).NotTo(HaveOccurred())
+
+		for _, testCase := range []struct {
+			name       string
+			fullMethod string
+			request    proto.Message
+		}{
+			{
+				name:       "private API",
+				fullMethod: privatev1.NATGateways_Create_FullMethodName,
+				request: privatev1.NATGatewaysCreateRequest_builder{Object: privatev1.NATGateway_builder{
+					Spec: privatev1.NATGatewaySpec_builder{
+						ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: "missing-external-ip"}.Build(),
+					}.Build(),
+				}.Build()}.Build(),
+			},
+			{
+				name:       "public API",
+				fullMethod: publicv1.NATGateways_Create_FullMethodName,
+				request: publicv1.NATGatewaysCreateRequest_builder{Object: publicv1.NATGateway_builder{
+					Spec: publicv1.NATGatewaySpec_builder{
+						ExternalIp: publicv1.ExternalIPLocalReference_builder{Id: "missing-external-ip"}.Build(),
+					}.Build(),
+				}.Build()}.Build(),
+			},
+		} {
+			By("passing the " + testCase.name + " request to the handler")
+			called := false
+			_, err = v.UnaryServer(context.Background(), testCase.request,
+				&grpc.UnaryServerInfo{FullMethod: testCase.fullMethod},
+				func(_ context.Context, actual any) (any, error) {
+					called = true
+					return "ok", nil
+				})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(called).To(BeTrue(), "ExternalIP lookup must happen after the NATGateway handler's default-NAT guard")
+		}
+	})
+
 	It("does not reject identity provider client_secret_secret as unregistered", func() {
 		request := privatev1.IdentityProvidersCreateRequest_builder{
 			Object: privatev1.IdentityProvider_builder{

@@ -29,10 +29,11 @@ import (
 )
 
 type SecurityGroupsServerBuilder struct {
-	logger            *slog.Logger
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	metricsRegisterer prometheus.Registerer
+	logger             *slog.Logger
+	attributionLogic   auth.AttributionLogic
+	tenancyLogic       auth.TenancyLogic
+	metricsRegisterer  prometheus.Registerer
+	networkingSettings *NetworkingSettings
 }
 
 var _ publicv1.SecurityGroupsServer = (*SecurityGroupsServer)(nil)
@@ -75,6 +76,13 @@ func (b *SecurityGroupsServerBuilder) SetMetricsRegisterer(value prometheus.Regi
 	return b
 }
 
+// SetNetworkingSettings sets the networking installation settings. This is optional; the default is
+// DefaultNetworkingSettings.
+func (b *SecurityGroupsServerBuilder) SetNetworkingSettings(value NetworkingSettings) *SecurityGroupsServerBuilder {
+	b.networkingSettings = &value
+	return b
+}
+
 func (b *SecurityGroupsServerBuilder) Build() (result *SecurityGroupsServer, err error) {
 	// Check parameters:
 	if b.logger == nil {
@@ -109,6 +117,7 @@ func (b *SecurityGroupsServerBuilder) Build() (result *SecurityGroupsServer, err
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc((*publicv1.SecurityGroup)(nil).ProtoReflect().Descriptor()).
+		SetNetworkingSettings(resolveNetworkingSettings(b.networkingSettings)).
 		Build()
 	if err != nil {
 		return

@@ -5,9 +5,6 @@
 # template_id, template_parameters, default_arg_specs, default_vm_labels, default_spec,
 # guest_os_family (from CR spec field, defaults to linux).
 ---
-- name: Validate requested Subnet eligibility before any provisioning resources
-  ansible.builtin.include_tasks: validate_subnet_eligibility.yaml
-
 - name: Include get remote cluster kubeconfig
   ansible.builtin.include_role:
     name: osac.service.common

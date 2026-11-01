@@ -123,30 +123,6 @@ Create or delete a Netris V-Net (virtual network segment within a VPC).
 
 **API:** `POST /api/v2/vnet` (create), `DELETE /api/v2/vnet/{id}` (delete). Uses `tenant` (singular object), `vlan` (integer).
 
-### acl
-
-Create or delete Netris ACL (Access Control List) firewall rules.
-
-**State variable:** `acl_state` (`present` | `absent`)
-
-**Variables:**
-- `acl_name` (required) — Name of the ACL rule
-- `acl_action` (default: `permit`) — `permit` or `deny`
-- `acl_proto` (default: `all`) — Protocol: `all`, `tcp`, `udp`, `icmp`, `ip`, `icmpv6`
-- `acl_vpc_id` (default: `1`) — VPC ID for the rule
-- `acl_src_prefix` — Source prefix in CIDR notation
-- `acl_dst_prefix` — Destination prefix in CIDR notation
-- `acl_src_port_from` / `acl_src_port_to` — Source port range
-- `acl_dst_port_from` / `acl_dst_port_to` — Destination port range
-- `acl_src_port_group` / `acl_dst_port_group` — Port group IDs (0 for none)
-- `acl_established` — Match established connections (0 or 1)
-- `acl_reverse` — Generate reverse rule (`yes` / `no`)
-- `acl_comment` — Comment
-
-**Output:** `acl_id`, `acl_already_existed`
-
-**API:** `POST /api/acl` (create, v1 API), `DELETE /api/acl` with `{"id": [<id>]}` (delete). Field names use snake_case: `proto`, `src_prefix`, `dst_prefix`, `src_port_from`, etc.
-
 ### ipam
 
 Query, create, or delete Netris IPAM allocations and subnets.

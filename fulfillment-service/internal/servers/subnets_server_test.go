@@ -54,15 +54,11 @@ var _ = Describe("Subnets server", func() {
 
 		nc := privatev1.NetworkClass_builder{
 			Id:            "default",
-			FabricManager: new("ovn-kubernetes"),
+			FabricManager: "ovn-kubernetes",
 			Metadata: privatev1.Metadata_builder{
 				Tenant: testTenant,
 			}.Build(),
-			Capabilities: privatev1.NetworkClassCapabilities_builder{
-				SupportsIpv4:      true,
-				SupportsIpv6:      true,
-				SupportsDualStack: true,
-			}.Build(),
+			Spec: privatev1.NetworkClassSpec_builder{AddressPlan: fixtureAddressPlan()}.Build(),
 			Status: privatev1.NetworkClassStatus_builder{
 				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
 			}.Build(),
@@ -86,9 +82,7 @@ var _ = Describe("Subnets server", func() {
 				Tenant: testTenant,
 			}.Build(),
 			Spec: privatev1.VirtualNetworkSpec_builder{
-				Region:       "us-east-1",
-				NetworkClass: privatev1.NetworkClassReference_builder{Id: "default"}.Build(),
-				Ipv4Cidr:     new("10.0.0.0/16"),
+				Ipv4Cidr: new("10.0.0.0/16"),
 			}.Build(),
 			Status: privatev1.VirtualNetworkStatus_builder{
 				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
@@ -158,106 +152,37 @@ var _ = Describe("Subnets server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		setupCudnEvpnPublicServer := func() *SubnetsServer {
-			ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).NotTo(HaveOccurred())
-			networkClassResponse, err := ncDao.Get().SetId("default").Do(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			networkClass := networkClassResponse.GetObject()
-			networkClass.SetK8SManager("cudn_evpn")
-			_, err = ncDao.Update().SetObject(networkClass).Do(ctx)
-			Expect(err).NotTo(HaveOccurred())
-
-			vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).NotTo(HaveOccurred())
-			vnResponse, err := vnDao.Get().SetId(virtualNetworkID).Do(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			virtualNetwork := vnResponse.GetObject()
-			virtualNetwork.GetStatus().SetHub("test-hub")
-			_, err = vnDao.Update().SetObject(virtualNetwork).Do(ctx)
-			Expect(err).NotTo(HaveOccurred())
-
-			publicServer, err := NewSubnetsServer().SetLogger(logger).
-				SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
-			Expect(err).NotTo(HaveOccurred())
-			return publicServer
-		}
-
-		createPublicSubnet := func(publicServer *SubnetsServer, name, cidr string) (*publicv1.Subnet, error) {
-			response, err := publicServer.Create(ctx, publicv1.SubnetsCreateRequest_builder{
-				Object: publicv1.Subnet_builder{
-					Status:   publicv1.SubnetStatus_builder{ComputeInstanceSupported: new(true)}.Build(),
-					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
-					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
-						Ipv4Cidr:       new(cidr),
+		It("roundtrips optional compute eligibility independently of readiness", func() {
+			for i, supported := range []*bool{nil, new(false), new(true)} {
+				created, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
+					Object: publicv1.Subnet_builder{
+						Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("eligibility-%d", i)}.Build(),
+						Spec: publicv1.SubnetSpec_builder{
+							VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
+							Ipv4Cidr:       new(fmt.Sprintf("10.0.%d.0/24", i+1)),
+						}.Build(),
 					}.Build(),
-				}.Build(),
-			}.Build())
-			if err != nil {
-				return nil, err
-			}
-			Expect(response.GetObject().GetStatus().HasComputeInstanceSupported()).To(BeFalse())
-			return response.GetObject(), nil
-		}
-
-		It("allows a VM-free second cudn_evpn Subnet through the public API", func() {
-			publicServer := setupCudnEvpnPublicServer()
-
-			_, err := createPublicSubnet(publicServer, "first-subnet", "10.0.1.0/24")
-			Expect(err).NotTo(HaveOccurred())
-			second, err := createPublicSubnet(publicServer, "second-subnet", "10.0.2.0/24")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(second.GetMetadata().GetName()).To(Equal("second-subnet"))
-		})
-
-		It("allows fabric-only siblings without depending on a hub VM client", func() {
-			publicServer := setupCudnEvpnPublicServer()
-
-			_, err := createPublicSubnet(publicServer, "first-subnet", "10.0.1.0/24")
-			Expect(err).NotTo(HaveOccurred())
-			_, err = createPublicSubnet(publicServer, "second-subnet", "10.0.2.0/24")
-			Expect(err).NotTo(HaveOccurred())
-		})
-
-		It("roundtrips optional eligibility and evaluates the VM wizard predicate", func() {
-			var supportedID string
-			for index, supported := range []*bool{nil, new(false), new(true)} {
-				object, err := createPublicSubnet(server, fmt.Sprintf("eligibility-%d", index), fmt.Sprintf("10.0.%d.0/24", index+1))
+				}.Build())
 				Expect(err).NotTo(HaveOccurred())
 				_, err = server.delegate.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
-					Object: privatev1.Subnet_builder{Id: object.GetId(), Status: privatev1.SubnetStatus_builder{
-						State: privatev1.SubnetState_SUBNET_STATE_READY, ComputeInstanceSupported: supported,
+					Object: privatev1.Subnet_builder{Id: created.GetObject().GetId(), Status: privatev1.SubnetStatus_builder{
+						State:                            privatev1.SubnetState_SUBNET_STATE_READY,
+						ComputeInstanceSupported:         supported,
 						ComputeInstanceUnsupportedReason: "eligibility explanation",
 					}.Build()}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status"}},
 				}.Build())
 				Expect(err).NotTo(HaveOccurred())
-				response, err := server.Get(ctx, publicv1.SubnetsGetRequest_builder{Id: object.GetId()}.Build())
+				got, err := server.Get(ctx, publicv1.SubnetsGetRequest_builder{Id: created.GetObject().GetId()}.Build())
 				Expect(err).NotTo(HaveOccurred())
-				status := response.GetObject().GetStatus()
+				status := got.GetObject().GetStatus()
+				Expect(status.GetState()).To(Equal(publicv1.SubnetState_SUBNET_STATE_READY))
 				Expect(status.HasComputeInstanceSupported()).To(Equal(supported != nil))
 				if supported != nil {
 					Expect(status.GetComputeInstanceSupported()).To(Equal(*supported))
-					if *supported {
-						supportedID = object.GetId()
-					}
 				}
 				Expect(status.GetComputeInstanceUnsupportedReason()).To(Equal("eligibility explanation"))
 			}
-			response, err := server.List(ctx, publicv1.SubnetsListRequest_builder{Filter: new(fmt.Sprintf(
-				"this.spec.virtual_network.id == %q && this.status.state == 2 && this.status.compute_instance_supported == true", virtualNetworkID,
-			))}.Build())
-			Expect(err).NotTo(HaveOccurred())
-			Expect(response.GetItems()).To(HaveLen(1))
-			Expect(response.GetItems()[0].GetId()).To(Equal(supportedID))
-			Expect(response.GetItems()[0].GetStatus().HasComputeInstanceSupported()).To(BeTrue())
 		})
 
 		It("Creates object", func() {

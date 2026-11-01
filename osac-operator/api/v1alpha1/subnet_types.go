@@ -18,12 +18,13 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // SubnetSpec defines the desired state of Subnet
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable after creation"
 type SubnetSpec struct {
-	// VirtualNetwork is the ID of the parent VirtualNetwork
+	// VirtualNetwork is the API ID of the parent VirtualNetwork
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="virtualNetwork is immutable"
@@ -38,78 +39,50 @@ type SubnetSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ipv4Cidr is immutable"
 	IPv4CIDR string `json:"ipv4Cidr,omitempty"`
 
-	// IPv6CIDR is retained for wire compatibility, but IPv6 and dual-stack
-	// networking are not supported. Non-empty values are rejected.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:XValidation:rule="self == ''",message="IPv6 and dual-stack networking are not supported"
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ipv6Cidr is immutable"
-	IPv6CIDR string `json:"ipv6Cidr,omitempty"`
+	// AddressPlan is the NetworkClass address plan at the Subnet's create, in
+	// sixteenths. OSAC computes status.ipam from it once.
+	// +kubebuilder:validation:Required
+	AddressPlan SubnetAddressPlan `json:"addressPlan"`
 }
-
-// SubnetPhaseType is a valid value for .status.phase
-type SubnetPhaseType string
-
-const (
-	// SubnetPhaseProgressing means an update is in progress
-	SubnetPhaseProgressing SubnetPhaseType = "Progressing"
-
-	// SubnetPhaseFailed means the subnet provisioning has failed
-	SubnetPhaseFailed SubnetPhaseType = "Failed"
-
-	// SubnetPhaseReady means the subnet and all associated resources are ready
-	SubnetPhaseReady SubnetPhaseType = "Ready"
-
-	// SubnetPhaseDeleting means there has been a request to delete the Subnet
-	SubnetPhaseDeleting SubnetPhaseType = "Deleting"
-)
-
-// SubnetConditionType is a valid value for .status.conditions.type
-type SubnetConditionType string
-
-const (
-	// SubnetConditionAccepted means the order has been accepted but work has not yet started
-	SubnetConditionAccepted SubnetConditionType = "Accepted"
-
-	// SubnetConditionProgressing means that an update is in progress
-	SubnetConditionProgressing SubnetConditionType = "Progressing"
-
-	// SubnetConditionReady means the subnet is ready
-	SubnetConditionReady SubnetConditionType = "Ready"
-
-	// SubnetConditionNetworkProvisioned means the network has been provisioned
-	SubnetConditionNetworkProvisioned SubnetConditionType = "NetworkProvisioned"
-
-	// SubnetConditionNetworkReady means the network is ready
-	SubnetConditionNetworkReady SubnetConditionType = "NetworkReady"
-)
 
 // SubnetStatus defines the observed state of Subnet
 type SubnetStatus struct {
+	// Compute eligibility is independent of lifecycle readiness. An absent value
+	// means the Kubernetes manager has not reported eligibility.
 	ComputeInstanceSupported         *bool  `json:"computeInstanceSupported,omitempty"`
 	ComputeInstanceUnsupportedReason string `json:"computeInstanceUnsupportedReason,omitempty"`
 
-	// Phase provides a single-value overview of the state of the Subnet
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=Progressing;Failed;Ready;Deleting
-	Phase SubnetPhaseType `json:"phase,omitempty"`
-
-	// DesiredConfigVersion is a hash of the spec, used to detect spec changes and control retry behavior.
-	// +kubebuilder:validation:Optional
-	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
-
-	// ProvisioningJobs holds an array of JobStatus tracking provisioning and deprovisioning operations
-	// +kubebuilder:validation:Optional
-	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
-
-	// Conditions holds an array of metav1.Condition that describe the state of the Subnet
+	// Conditions holds the Ready condition of the Subnet.
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 
-	// BackendNetworkID stores provider-specific network identifier
+	// NetworkManagers records the managers copied from the parent at create.
 	// +kubebuilder:validation:Optional
-	BackendNetworkID string `json:"backendNetworkId,omitempty"`
+	NetworkManagers *NetworkManagers `json:"networkManagers,omitempty"`
+
+	// NetworkType records the network type copied from the parent at create; empty without a Kubernetes Manager.
+	// +kubebuilder:validation:Optional
+	NetworkType NetworkType `json:"networkType,omitempty"`
+
+	// TaskInput is the task input stored before the first job (contract §4.5).
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:pruning:PreserveUnknownFields
+	TaskInput *runtime.RawExtension `json:"taskInput,omitempty"`
+
+	// Jobs tracks the latest job per task and manager (contract §4.7).
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=task
+	// +listMapKey=manager
+	Jobs []NetworkJobStatus `json:"jobs,omitempty"`
+
+	// IPAM is the address layout computed once at create (contract §4.8).
+	// +kubebuilder:validation:Optional
+	IPAM *SubnetIPAM `json:"ipam,omitempty"`
+
+	// NetworkSegment is the accepted segment of the Fabric create_subnet (contract §4.9).
+	// +kubebuilder:validation:Optional
+	NetworkSegment *NetworkSegment `json:"networkSegment,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -117,7 +90,7 @@ type SubnetStatus struct {
 // +kubebuilder:resource:shortName=subnet
 // +kubebuilder:printcolumn:name="VirtualNetwork",type=string,JSONPath=`.spec.virtualNetwork`
 // +kubebuilder:printcolumn:name="IPv4CIDR",type=string,JSONPath=`.spec.ipv4Cidr`
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Subnet is the Schema for the subnets API

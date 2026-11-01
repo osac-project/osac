@@ -1,5 +1,7 @@
 ---
-# Attach _target_port to the Netris V-Net named _op_vnet_name (idempotent).
+# Attach _target_port to the Netris V-Net named _op_vnet_name (idempotent), or
+# to the V-Net with the ID _op_vnet_id when that is set (the caller has proven
+# the V-Net is ours; a name alone could pick a V-Net of another tenant).
 # Fails if the V-Net is not found or _target_port is none.
 # Waits for the V-Net to become active after attaching.
 # Asserts post-condition: port is a member of the target V-Net.
@@ -10,11 +12,17 @@
   when: _target_port is none
 
 - name: Find V-Net by name
+  when: _op_vnet_id | default('', true) | string | length == 0
   ansible.builtin.include_role:
     name: netris.controller.vnet
     tasks_from: read
   vars:
     vnet_name: "{{ _op_vnet_name }}"
+
+- name: Use the V-Net given by ID
+  when: _op_vnet_id | default('', true) | string | length > 0
+  ansible.builtin.set_fact:
+    netris_vnet: "{{ {'id': _op_vnet_id} }}"
 
 - name: Fail if V-Net not found
   ansible.builtin.fail:

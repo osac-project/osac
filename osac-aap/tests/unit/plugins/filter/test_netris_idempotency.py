@@ -196,33 +196,6 @@ class TestNetrisImmutableMismatch:
         )
 
 
-class TestOsacIsDefaultNetworkingResource:
-    def test_default_true(self):
-        resource = {
-            "metadata": {
-                "name": "default-vn",
-                "labels": {"osac.openshift.io/default": "true"},
-            }
-        }
-        assert idempotency.osac_is_default_networking_resource(resource) is True
-
-    def test_default_false(self):
-        resource = {
-            "metadata": {
-                "name": "tenant-vn",
-                "labels": {"osac.openshift.io/default": "false"},
-            }
-        }
-        assert idempotency.osac_is_default_networking_resource(resource) is False
-
-    def test_missing_label(self):
-        resource = {"metadata": {"name": "x", "labels": {}}}
-        assert idempotency.osac_is_default_networking_resource(resource) is False
-
-    def test_none(self):
-        assert idempotency.osac_is_default_networking_resource(None) is False
-
-
 class TestNetrisPortOnVnet:
     def test_present(self):
         detail = {"ports": [{"id": 10}, {"id": 20}]}
@@ -343,7 +316,6 @@ class TestFilterModuleRegistration:
     def test_filters_registered(self):
         filters = idempotency.FilterModule().filters()
         assert "netris_immutable_mismatch" in filters
-        assert "osac_is_default_networking_resource" in filters
         assert "netris_port_on_vnet" in filters
         assert "netris_ports_excluding" in filters
         assert "format_immutable_mismatch_message" in filters

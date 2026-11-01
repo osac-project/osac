@@ -29,9 +29,6 @@ import "osac/public/v1/metadata_type.proto";
 // "External" means external to the VirtualNetwork. The addresses may be internet-routable or
 // data-center-routable depending on the deployment topology (e.g., air-gapped environments).
 //
-// The implementation_strategy field determines how IPs from this pool are advertised on the target
-// cluster (e.g., MetalLB L2 mode). This field is set by the system and is not user-configurable.
-//
 // Capacity tracking fields in the status (total, allocated, available) reflect the current utilization
 // of the pool across all its CIDR ranges.
 message ExternalIPPool {
@@ -61,6 +58,10 @@ message ExternalIPPoolSpec {
     (google.api.field_behavior) = IMMUTABLE,
     (buf.validate.field).enum = {defined_only: true, not_in: [0, 2]}
   ];
+
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 4;
+  reserved "implementation_strategy";
 }
 
 // Represents the current operational state of an ExternalIPPool.

@@ -1,70 +1,5 @@
 # OSAC Ansible Project
 
-## Subnet VM eligibility and EVPN ownership
-
-The fulfillment API's `Subnet.status.compute_instance_supported` is read-only and
-independent of readiness. A READY fabric-only Subnet supports bare metal, not VMs.
-A supported Subnet may serve both; creation provenance does not determine support.
-An absent capability means eligibility has not yet been decided.
-
-For the current `cudn_evpn` manager, exactly one Subnet owns each VirtualNetwork's
-shared network. The first eligible Kubernetes provisioning task claims the existing
-shared `cudn-evpn-<sha1(VirtualNetwork UUID)>` Lease under its CAS mutex. The Lease's
-`osac.openshift.io/cudn-owner-subnet` assignment drives namespace/CUDN creation and
-VM placement. The operator does not independently elect an owner. Backend Subnet
-annotations record the decision; fabric-only decisions survive retries and owner
-removal. No Kubernetes manager means no VM support; the EVPN single-owner limit
-does not constrain other managers.
-
-Each CUDN EVPN workload namespace has a namespace-scoped Role and RoleBinding that let the
-`hub-access` ServiceAccount list KubeVirt VirtualMachines there. This keeps VM inspection scoped to
-the relevant Subnet namespace instead of granting cluster-wide KubeVirt access.
-
-The fulfillment service still accepts valid VM requests. The actual provisioning
-consumer permanently rejects unsupported placement with `NetworkAttachmentFailed`
-before creating VM, SSH Secret, DataVolume, or VMI resources. Unknown eligibility
-and unready networking wait. Neither UI filtering nor a cached namespace is proof
-of support. The requested Subnet is never silently replaced with the owner.
-
-Ownership belongs to the Subnet, not its VMs. Stop, pause, restart, and deleting the
-last VM retain the namespace, CUDN, and assignment. Subnet deletion is blocked by
-every unarchived dependent reference, including pending, failed-retained, and
-deleting workloads. Parent/default resource deletion protections remain in force.
-
-An unused Subnet can be deleted while its VirtualNetwork's SecurityGroups remain.
-The Netris fabric delete path waits for in-flight SecurityGroup jobs, verifies the
-parent VPC, and removes only ACL rows matching that Subnet's CIDR, exact SG names,
-and VPC before deleting its V-Net/IPAM resources. Sibling ACL rows and the shared
-SecurityGroups are retained. New SG provisioning excludes terminating Subnets.
-Provider errors, ambiguous ownership, or surviving ACL rows stop teardown for retry.
-This is subnet teardown cleanup, not general SecurityGroup rule reconciliation.
-
-Once dependencies are gone, owner deletion removes the CUDN, waits for absence,
-then removes its namespace before recording completed cleanup on the same Lease.
-The old owner name remains a fence until its Subnet CR disappears. New candidates
-retry while the owner is deleting, rather than becoming permanently fabric-only.
-Cleanup failures retain the assignment. Existing fabric-only siblings are never
-promoted; a newly created Subnet may claim the cleaned slot.
-Namespace ownership is validated before shared-network deletion. API discovery
-failures are not resource absence: claim and cleanup tasks stop without treating
-an undiscoverable API as an empty inventory. Classification also rejects a stale
-job snapshot when the requested Subnet's Kubernetes UID has changed.
-
-Upgrade preserves a validated Lease/CUDN owner. An unannotated historical CUDN is
-adopted only when its CIDR and historical target identify one unambiguous Subnet.
-Conflicting ownership fails closed without deleting networking.
-`skip-k8s-manager=true` remains an explicit compatibility opt-out, not an eligibility
-calculation. Its absence does not mean support, and removing it does not promote
-a decided fabric-only Subnet. Historical network state is preserved rather than
-using the opt-out to trigger destructive migration.
-An explicitly skipped historical namespace with ambiguous selector identity blocks
-selector migration for explicit repair, rather than enabling or detaching it.
-
-Local regressions execute real Ansible claim/guard tasks against test-only
-Kubernetes-module fixtures with resource-version conflict checking. They cover
-parallel claimants and pre-resource gating without contacting a live provider;
-they do not establish live EVPN traffic, KubeVirt, or Netris end-to-end behavior.
-
 This repository contains the Ansible automation layer for
 [OSAC (Open Sovereign AI Cloud)](https://github.com/osac-project).
 It provides the playbooks, roles, and collections that provision and manage
@@ -90,9 +25,14 @@ User ─► fulfillment-service (API) ─► osac-operator (watches K8s CRs) ─
    SecurityGroup, ComputeInstance, ClusterOrder, etc.) and triggers AAP job
    templates to provision them.
 3. **osac-aap (this repo)** — The Ansible automation that actually creates
-   infrastructure. Each playbook receives the full K8s CR as its payload,
-   reads an `implementation_strategy` annotation, and dynamically includes the
-   matching template role to do the provisioning.
+   infrastructure. Networking jobs run the generic playbook
+   `playbook_osac_network_task.yml`, which includes the task file of the
+   manager role the operator names in `osac_job_vars` (network manager
+   contract); other playbooks receive their CR in `osac_job_vars.resource`.
+   No job template runs the per-resource networking playbooks
+   (`playbook_osac_create_subnet.yml` and the like) any more; they stay only
+   as entry points of the AgentlessNet tests until that manager adopts the
+   contract.
 
 ## What it provisions
 
@@ -104,6 +44,7 @@ pluggable backends:
 | Implementation | Role | Backend |
 |----------------|------|---------|
 | `cudn_net` | ClusterUserDefinedNetwork (CUDN) on OpenShift | OVN-Kubernetes |
+| `cudn_evpn` | OSAC Kubernetes Manager for network type `evpn`: VirtualNetwork namespace, EVPN CUDN and SecurityGroup NetworkPolicies ([README](collections/ansible_collections/osac/templates/roles/cudn_evpn/README.md)) | OVN-Kubernetes EVPN |
 | `netris` | Netris Controller API | Netris |
 | `agentless_net` | UID-keyed VirtualNetwork namespace plus Subnet VLAN, gateway, and per-VirtualNetwork DHCP | AgentlessNet |
 | `openstack` | OpenStack Neutron | Neutron |
@@ -128,7 +69,7 @@ removing forwarding, DNAT, and matching conntrack entries. The operator accepts
 the `osac_result` artifact before marking the attachment Ready or releasing its
 finalizers. BMaaS is the first supported consumer; VMaaS and CaaS target wiring
 remain follow-up work. Provider BGP peers are configured outside these jobs.
-For NATGateway contract v1, AAP reads the controller-supplied ExternalIP and
+For NATGateway tasks, AAP reads the controller-supplied ExternalIP and
 VirtualNetwork snapshot and keeps the ExternalIP reservation until cleanup.
 It translates the complete immutable VirtualNetwork CIDR, excluding the saved
 transit `/31`, with a constant two-rule namespace pair. It installs explicit
@@ -255,7 +196,7 @@ Secret. When the Secret key is used, the role writes it to a mode-0600
 temporary file on the worker and removes it after the operation, including
 failures. Missing or invalid inventory fails before provider mutation.
 Configure nonsecret values through the existing
-[AAP instance-group configuration](../osac-installer/docs/network-backend.md#agentlessnet-virtualnetwork-baseline).
+[AAP instance-group configuration](../osac-installer/docs/network-backend.md#caas-on-netris).
 Tenant VirtualNetwork and Subnet create commands and API inputs remain
 unchanged; VLAN bounds and DHCP-manager selection are internal provider details.
 
@@ -350,13 +291,13 @@ osac-aap/
 
 ### Key design pattern
 
-Every template role declares its capabilities in `meta/osac.yaml`. Network
-roles identify themselves via `fabric_manager`/`k8s_manager` (the dispatcher's
-routing keys); other template types still use `implementation_strategy`:
+Every template role declares its capabilities in `meta/osac.yaml`. For network
+roles the file is informational; a registration ConfigMap (`ansible_role`)
+selects the role:
 
 ```yaml
 template_type: network
-fabric_manager: cudn_net
+fabric_manager: <registration-name>
 capabilities:
   supports_ipv4: true
   supports_ipv6: false
@@ -365,7 +306,7 @@ capabilities:
 
 Network roles declare their dispatcher identity for the operator. The installer
 owns NetworkClass creation; `agentless_net` is selected through the installer
-[overlay instructions](../osac-installer/docs/network-backend.md#agentlessnet-virtualnetwork-baseline)
+[overlay instructions](../osac-installer/docs/network-backend.md)
 and is not published as a ComputeClass. The generic
 resource playbooks then include the selected role without changing the API.
 

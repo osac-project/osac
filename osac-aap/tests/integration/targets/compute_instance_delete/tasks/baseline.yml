@@ -14,6 +14,11 @@
       ansible.builtin.set_fact:
         osac_job_vars:
           resource: "{{ test_compute_instance }}"
+          vm_network:
+            namespace: test-subnet
+            networks: [{name: tenant, pod: {}}]
+            interfaces: [{name: tenant, binding: {name: l2bridge}}]
+            labels: {osac.openshift.io/compute-instance-id: 3c0b9d2e-1111-4a5b-9c7d-2e4f6a8b0c12}
         # Note: delete.yaml doesn't have override hooks yet, so we use noop_template
         # TODO: Refactor ocp_virt_vm delete.yaml to add override points
         template_id_override: "osac.test_overrides.noop_template"
@@ -35,11 +40,36 @@
           - compute_instance_name == "test-vm"
         fail_msg: "Compute instance name not extracted correctly"
 
+    # The workflow above runs the noop template, so ocp_virt_vm's own delete
+    # (which resolves vm_network) has not run. Run it here with a noop resource
+    # step to check what it resolves from the operator-supplied vm_network.
+    - name: Run the ocp_virt_vm delete with the vm_network input
+      ansible.builtin.include_role:
+        name: osac.templates.ocp_virt_vm
+        tasks_from: delete
+      vars:
+        compute_instance: "{{ osac_job_vars.resource }}"
+        delete_step_resources_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+
     - name: Verify subnet target namespace supplied
       ansible.builtin.assert:
         that:
-          - test_compute_instance.metadata.annotations['osac.openshift.io/subnet-target-namespace'] == 'test-subnet'
-        fail_msg: "Subnet target namespace not set correctly"
+          - compute_instance_target_namespace == 'test-subnet'
+        fail_msg: >-
+          compute_instance_target_namespace is '{{ compute_instance_target_namespace | default('<unset>') }}',
+          expected osac_job_vars.vm_network.namespace 'test-subnet'
+
+    - name: Verify the delete keeps the compute-instance-id label of vm_network.labels
+      ansible.builtin.assert:
+        that:
+          - >-
+            vm_network_labels['osac.openshift.io/compute-instance-id'] | default('')
+            == '3c0b9d2e-1111-4a5b-9c7d-2e4f6a8b0c12'
+        fail_msg: >-
+          vm_network_labels is {{ vm_network_labels | default('<unset>') }}; the delete must find the VM's
+          objects by osac.openshift.io/compute-instance-id=3c0b9d2e-1111-4a5b-9c7d-2e4f6a8b0c12
 
     - name: Verify template ID extracted
       ansible.builtin.assert:
@@ -48,49 +78,45 @@
           - template_id == "osac.templates.ocp_virt_vm"
         fail_msg: "Template ID not extracted correctly"
 
-- name: Verify legacy ComputeInstance placement during deletion
+- name: Verify a delete without vm_network fails before touching resources
   hosts: localhost
   gather_facts: false
   vars_files:
     - ../../../common_vars.yml
   tasks:
-    - name: Verify legacy deletion namespace resolution
+    - name: Run the delete without vm_network (the legacy Tenant-name fallback is gone)
       block:
-        - name: Create a legacy Tenant
-          kubernetes.core.k8s:
-            state: present
-            definition:
-              apiVersion: osac.openshift.io/v1alpha1
-              kind: Tenant
-              metadata:
-                name: test-legacy-tenant
-                namespace: osac-system
-
-        - name: Resolve deletion namespace for an unannotated legacy instance
+        - name: Delete with an input that has no vm_network
           ansible.builtin.include_role:
             name: osac.templates.ocp_virt_vm
             tasks_from: delete
           vars:
+            osac_job_vars:
+              resource: "{{ test_compute_instance }}"
             compute_instance_name: test-legacy-vm
             delete_step_resources_override:
               name: osac.workflows.workflow_helpers
               tasks_from: noop.yml
-            compute_instance:
-              metadata:
-                name: test-legacy-vm
-              status:
-                tenantReference:
-                  name: test-legacy-tenant
-                  namespace: osac-system
 
-        - name: Verify legacy tenant-name fallback
+        - name: Record that the delete accepted an input without vm_network
+          ansible.builtin.set_fact:
+            _ci_delete_without_vm_network: accepted
+      rescue:
+        - name: Check the vm_network input check is what failed
           ansible.builtin.assert:
-            that: compute_instance_target_namespace == 'test-legacy-tenant'
-      always:
-        - name: Remove legacy Tenant
-          kubernetes.core.k8s:
-            state: absent
-            api_version: osac.openshift.io/v1alpha1
-            kind: Tenant
-            name: test-legacy-tenant
-            namespace: osac-system
+            that:
+              - ansible_failed_result.msg | default('') is search('no vm_network')
+            fail_msg: >-
+              The delete without vm_network failed in '{{ ansible_failed_task.name }}' with
+              {{ ansible_failed_result.msg | default(ansible_failed_result) }}, expected the vm_network input check
+
+        - name: Record the expected rejection
+          ansible.builtin.set_fact:
+            _ci_delete_without_vm_network: rejected
+
+    - name: Verify the delete rejected the input without vm_network
+      ansible.builtin.assert:
+        that: _ci_delete_without_vm_network == 'rejected'
+        fail_msg: >-
+          ocp_virt_vm delete {{ _ci_delete_without_vm_network }} an osac_job_vars without vm_network;
+          it must fail with "The job input has no vm_network ..."

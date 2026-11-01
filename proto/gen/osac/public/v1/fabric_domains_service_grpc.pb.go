@@ -35,7 +35,6 @@ const (
 	FabricDomains_List_FullMethodName   = "/osac.public.v1.FabricDomains/List"
 	FabricDomains_Get_FullMethodName    = "/osac.public.v1.FabricDomains/Get"
 	FabricDomains_Create_FullMethodName = "/osac.public.v1.FabricDomains/Create"
-	FabricDomains_Update_FullMethodName = "/osac.public.v1.FabricDomains/Update"
 	FabricDomains_Delete_FullMethodName = "/osac.public.v1.FabricDomains/Delete"
 )
 
@@ -46,7 +45,6 @@ type FabricDomainsClient interface {
 	List(ctx context.Context, in *FabricDomainsListRequest, opts ...grpc.CallOption) (*FabricDomainsListResponse, error)
 	Get(ctx context.Context, in *FabricDomainsGetRequest, opts ...grpc.CallOption) (*FabricDomainsGetResponse, error)
 	Create(ctx context.Context, in *FabricDomainsCreateRequest, opts ...grpc.CallOption) (*FabricDomainsCreateResponse, error)
-	Update(ctx context.Context, in *FabricDomainsUpdateRequest, opts ...grpc.CallOption) (*FabricDomainsUpdateResponse, error)
 	Delete(ctx context.Context, in *FabricDomainsDeleteRequest, opts ...grpc.CallOption) (*FabricDomainsDeleteResponse, error)
 }
 
@@ -88,16 +86,6 @@ func (c *fabricDomainsClient) Create(ctx context.Context, in *FabricDomainsCreat
 	return out, nil
 }
 
-func (c *fabricDomainsClient) Update(ctx context.Context, in *FabricDomainsUpdateRequest, opts ...grpc.CallOption) (*FabricDomainsUpdateResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(FabricDomainsUpdateResponse)
-	err := c.cc.Invoke(ctx, FabricDomains_Update_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *fabricDomainsClient) Delete(ctx context.Context, in *FabricDomainsDeleteRequest, opts ...grpc.CallOption) (*FabricDomainsDeleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(FabricDomainsDeleteResponse)
@@ -115,7 +103,6 @@ type FabricDomainsServer interface {
 	List(context.Context, *FabricDomainsListRequest) (*FabricDomainsListResponse, error)
 	Get(context.Context, *FabricDomainsGetRequest) (*FabricDomainsGetResponse, error)
 	Create(context.Context, *FabricDomainsCreateRequest) (*FabricDomainsCreateResponse, error)
-	Update(context.Context, *FabricDomainsUpdateRequest) (*FabricDomainsUpdateResponse, error)
 	Delete(context.Context, *FabricDomainsDeleteRequest) (*FabricDomainsDeleteResponse, error)
 	mustEmbedUnimplementedFabricDomainsServer()
 }
@@ -135,9 +122,6 @@ func (UnimplementedFabricDomainsServer) Get(context.Context, *FabricDomainsGetRe
 }
 func (UnimplementedFabricDomainsServer) Create(context.Context, *FabricDomainsCreateRequest) (*FabricDomainsCreateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
-}
-func (UnimplementedFabricDomainsServer) Update(context.Context, *FabricDomainsUpdateRequest) (*FabricDomainsUpdateResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
 }
 func (UnimplementedFabricDomainsServer) Delete(context.Context, *FabricDomainsDeleteRequest) (*FabricDomainsDeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
@@ -217,24 +201,6 @@ func _FabricDomains_Create_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
-func _FabricDomains_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(FabricDomainsUpdateRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(FabricDomainsServer).Update(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: FabricDomains_Update_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FabricDomainsServer).Update(ctx, req.(*FabricDomainsUpdateRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _FabricDomains_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(FabricDomainsDeleteRequest)
 	if err := dec(in); err != nil {
@@ -271,10 +237,6 @@ var FabricDomains_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Create",
 			Handler:    _FabricDomains_Create_Handler,
-		},
-		{
-			MethodName: "Update",
-			Handler:    _FabricDomains_Update_Handler,
 		},
 		{
 			MethodName: "Delete",

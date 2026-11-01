@@ -254,7 +254,7 @@ class TestRealTemplateMetadata:
         assert metadata.capabilities["supports_east_west_ethernet"] is True
         assert "supports_east_west" not in metadata.capabilities
 
-    @pytest.mark.parametrize("role_name", ["cudn_net", "metallb_l2", "netris", "openstack"])
+    @pytest.mark.parametrize("role_name", ["cudn_evpn", "netris", "openstack"])
     def test_network_metadata_is_ipv4_only(self, role_name):
         metadata = _load_metadata(_roles_dir_path(), role_name)
 
@@ -406,7 +406,7 @@ class TestMetadataTemplateTypes:
         [
             ("ocp_small", TemplateTypeEnum.cluster),
             ("ocp_virt_vm", TemplateTypeEnum.compute_instance),
-            ("cudn_net", TemplateTypeEnum.network),
+            ("cudn_evpn", TemplateTypeEnum.network),
             ("agentless_net", TemplateTypeEnum.network),
             ("bm_host_agent_provisioning", TemplateTypeEnum.bare_metal_instance),
             ("vast_storage", TemplateTypeEnum.storage_provider),

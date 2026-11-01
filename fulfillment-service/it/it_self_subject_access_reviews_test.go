@@ -62,6 +62,7 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 		normalUserReviewClient = publicv1.NewSelfSubjectAccessReviewsClient(normalUserConn)
 
 		tenantName = "engineering"
+		ensureTenantDefaultNetworkingFixture(ctx, tenantName, "")
 
 		// Create a bare metal instance type for the explicit cluster node sets.
 		templateClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
@@ -98,7 +99,7 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 		})
 
 		// Create template
-		templateID = fmt.Sprintf("template-%s", uuid.New())
+		templateID = newTemplateID("template")
 		_, err = templateClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id: templateID,
@@ -193,11 +194,7 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				DeferCleanup(func() {
-					_, _ = systemAdminClustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
-						Id: createResp.GetObject().GetId(),
-					}.Build())
-				})
+				deferClusterDeletion(createResp.GetObject().GetId(), tool.InternalView().AdminConn())
 			})
 
 			It("should return allowed=true for List permission check and succeed on actual List", func() {
@@ -259,14 +256,7 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 					}.Build(),
 				)
 				Expect(err).ToNot(HaveOccurred())
-				DeferCleanup(func() {
-					_, _ = tenantAdminClustersClient.Delete(
-						ctx,
-						publicv1.ClustersDeleteRequest_builder{
-							Id: createResp.GetObject().GetId(),
-						}.Build(),
-					)
-				})
+				deferClusterDeletion(createResp.GetObject().GetId(), tool.InternalView().AdminConn())
 			})
 
 			It("should return allowed=false for Create in non-member tenant and fail on actual Create", func() {

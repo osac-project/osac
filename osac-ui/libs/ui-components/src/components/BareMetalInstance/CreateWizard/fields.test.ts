@@ -25,10 +25,8 @@ describe('getBareMetalInstanceInitialValues', () => {
 
     const values = getBareMetalInstanceInitialValues(catalogItem);
 
-    expect(values.spec.userDataSource).toEqual({ value: 'secret', locked: false });
-    expect(values.spec.userData).toEqual({ value: '', locked: false });
-    expect(values.spec.userDataSecret).toEqual({
-      value: 'catalog-user-data',
+    expect(values.spec.userData).toEqual({
+      value: { source: 'secret', inline: '', secret: 'catalog-user-data' },
       locked: false,
     });
   });
@@ -48,9 +46,10 @@ describe('getBareMetalInstanceInitialValues', () => {
 
     const values = getBareMetalInstanceInitialValues(catalogItem);
 
-    expect(values.spec.userDataSource).toEqual({ value: 'inline', locked: true });
-    expect(values.spec.userData).toEqual({ value: '#cloud-config', locked: true });
-    expect(values.spec.userDataSecret).toEqual({ value: '', locked: true });
+    expect(values.spec.userData).toEqual({
+      value: { source: 'inline', inline: '#cloud-config', secret: '' },
+      locked: true,
+    });
   });
 
   it('loads a locked catalog disk image into the wizard', () => {
@@ -112,12 +111,10 @@ describe('getBareMetalInstanceInitialValues', () => {
 
     const values = getBareMetalInstanceInitialValues(catalogItem);
 
-    expect(values.spec.userDataSource).toEqual({ value: 'inline', locked: false });
     expect(values.spec.userData).toEqual({
-      value: '#cloud-config\nruncmd: []',
+      value: { source: 'inline', inline: '#cloud-config\nruncmd: []', secret: '' },
       locked: false,
     });
-    expect(values.spec.userDataSecret).toEqual({ value: '', locked: false });
   });
 
   it('loads locked catalog network attachments into the wizard', () => {

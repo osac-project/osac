@@ -116,9 +116,11 @@ describe('buildComputeInstanceCreatePayload', () => {
 
   it('sends inline user data when the inline source is selected', () => {
     const values = baseValues();
-    values.spec.userDataSource = provisioningFieldValue('inline');
-    values.spec.userData = provisioningFieldValue('  #cloud-config\nusers: []  ');
-    values.spec.userDataSecret = provisioningFieldValue('stale-secret');
+    values.spec.userData = provisioningFieldValue({
+      source: 'inline',
+      inline: '  #cloud-config\nusers: []  ',
+      secret: 'stale-secret',
+    });
 
     const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
 
@@ -135,9 +137,11 @@ describe('buildComputeInstanceCreatePayload', () => {
 
   it('sends a Secret reference when the Secret source is selected', () => {
     const values = baseValues();
-    values.spec.userDataSource = provisioningFieldValue('secret');
-    values.spec.userData = provisioningFieldValue('stale inline data');
-    values.spec.userDataSecret = provisioningFieldValue('  cloud-init  ');
+    values.spec.userData = provisioningFieldValue({
+      source: 'secret',
+      inline: 'stale inline data',
+      secret: '  cloud-init  ',
+    });
 
     const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
 
@@ -154,9 +158,11 @@ describe('buildComputeInstanceCreatePayload', () => {
 
   it('omits user data when the selected source is empty', () => {
     const values = baseValues();
-    values.spec.userDataSource = provisioningFieldValue('secret');
-    values.spec.userData = provisioningFieldValue('stale inline data');
-    values.spec.userDataSecret = provisioningFieldValue('   ');
+    values.spec.userData = provisioningFieldValue({
+      source: 'secret',
+      inline: 'stale inline data',
+      secret: '   ',
+    });
 
     const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
 
@@ -166,9 +172,10 @@ describe('buildComputeInstanceCreatePayload', () => {
 
   it('omits a locked user data source so the catalog policy can apply it', () => {
     const values = baseValues();
-    values.spec.userDataSource = provisioningFieldValue('secret', true);
-    values.spec.userData = provisioningFieldValue('stale inline data', true);
-    values.spec.userDataSecret = provisioningFieldValue('cloud-init', true);
+    values.spec.userData = provisioningFieldValue(
+      { source: 'secret', inline: 'stale inline data', secret: 'cloud-init' },
+      true,
+    );
 
     const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
 
@@ -180,9 +187,10 @@ describe('getComputeInstanceInitialValues — user data source', () => {
   it('defaults to an editable empty inline source when the policy is absent', () => {
     const values = getComputeInstanceInitialValues(vmCatalogItem);
 
-    expect(values.spec.userDataSource).toEqual({ value: 'inline', locked: false });
-    expect(values.spec.userData).toEqual({ value: '', locked: false });
-    expect(values.spec.userDataSecret).toEqual({ value: '', locked: false });
+    expect(values.spec.userData).toEqual({
+      value: { source: 'inline', inline: '', secret: '' },
+      locked: false,
+    });
   });
 
   it('loads an editable inline default while allowing replacement', () => {
@@ -204,12 +212,10 @@ describe('getComputeInstanceInitialValues — user data source', () => {
 
     const values = getComputeInstanceInitialValues(catalogItem);
 
-    expect(values.spec.userDataSource).toEqual({ value: 'inline', locked: false });
     expect(values.spec.userData).toEqual({
-      value: '#cloud-config\nusers: []',
+      value: { source: 'inline', inline: '#cloud-config\nusers: []', secret: '' },
       locked: false,
     });
-    expect(values.spec.userDataSecret).toEqual({ value: '', locked: false });
   });
 
   it('loads an editable Secret default while allowing replacement', () => {
@@ -231,10 +237,8 @@ describe('getComputeInstanceInitialValues — user data source', () => {
 
     const values = getComputeInstanceInitialValues(catalogItem);
 
-    expect(values.spec.userDataSource).toEqual({ value: 'secret', locked: false });
-    expect(values.spec.userData).toEqual({ value: '', locked: false });
-    expect(values.spec.userDataSecret).toEqual({
-      value: 'catalog-user-data',
+    expect(values.spec.userData).toEqual({
+      value: { source: 'secret', inline: '', secret: 'catalog-user-data' },
       locked: false,
     });
   });
@@ -243,20 +247,19 @@ describe('getComputeInstanceInitialValues — user data source', () => {
     [
       'inline',
       { source: { case: 'inline', value: '#cloud-config' } },
-      { value: 'inline', locked: true },
-      { value: '#cloud-config', locked: true },
-      { value: '', locked: true },
+      { value: { source: 'inline', inline: '#cloud-config', secret: '' }, locked: true },
     ],
     [
       'Secret',
       { source: { case: 'secret', value: { name: 'catalog-user-data' } } },
-      { value: 'secret', locked: true },
-      { value: '', locked: true },
-      { value: 'catalog-user-data', locked: true },
+      {
+        value: { source: 'secret', inline: '', secret: 'catalog-user-data' },
+        locked: true,
+      },
     ],
   ] as const)(
     'loads a locked %s source and prevents overrides',
-    (_label, source, expectedSource, expectedInline, expectedSecret) => {
+    (_label, source, expectedSource) => {
       const catalogItem = create(ComputeInstanceCatalogItemSchema, {
         id: 'catalog-rhel-9',
         fields: {
@@ -268,9 +271,7 @@ describe('getComputeInstanceInitialValues — user data source', () => {
 
       const values = getComputeInstanceInitialValues(catalogItem);
 
-      expect(values.spec.userDataSource).toEqual(expectedSource);
-      expect(values.spec.userData).toEqual(expectedInline);
-      expect(values.spec.userDataSecret).toEqual(expectedSecret);
+      expect(values.spec.userData).toEqual(expectedSource);
     },
   );
 });
@@ -522,12 +523,10 @@ describe('getComputeInstanceInitialValues — user data', () => {
       },
     } as ComputeInstanceCatalogItem);
 
-    expect(values.spec.userDataSource).toEqual({ value: 'inline', locked: false });
     expect(values.spec.userData).toEqual({
-      value: '#cloud-config\nruncmd: []',
+      value: { source: 'inline', inline: '#cloud-config\nruncmd: []', secret: '' },
       locked: false,
     });
-    expect(values.spec.userDataSecret).toEqual({ value: '', locked: false });
   });
 });
 
@@ -637,7 +636,10 @@ describe('buildComputeInstanceCreatePayload — locked catalog fields', () => {
     const values = baseValues();
     values.spec.sshKey = provisioningFieldValue('my-ssh-key', true);
     values.spec.diskImage = provisioningFieldValue({ id: 'disk-image-1', name: 'rhel' }, true);
-    values.spec.userData = provisioningFieldValue('#cloud-config', true);
+    values.spec.userData = provisioningFieldValue(
+      { source: 'inline', inline: '#cloud-config', secret: '' },
+      true,
+    );
     values.spec.bootDisk = {
       sizeGib: provisioningFieldValue('20', true),
       storageTier: provisioningFieldValue({ id: 'id-balanced', name: 'balanced' }, true),

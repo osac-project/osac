@@ -44,9 +44,7 @@ const emptyValues: ComputeInstanceWizardValues = {
     guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
     diskImage: provisioningFieldValue(emptyResourceSelectValue()),
     instanceType: provisioningFieldValue(emptyResourceSelectValue()),
-    userDataSource: provisioningFieldValue('inline'),
-    userData: provisioningFieldValue(''),
-    userDataSecret: provisioningFieldValue(''),
+    userData: provisioningFieldValue({ source: 'inline', inline: '', secret: '' }),
     bootDisk: {
       sizeGib: provisioningFieldValue(''),
       storageTier: provisioningFieldValue(emptyResourceSelectValue()),
@@ -245,11 +243,15 @@ describe('buildComputeInstanceStepSchema', () => {
       metadata: { name: 'web-01', project: '' },
       spec: {
         ...emptyValues.spec,
-        userData: provisioningFieldValue('a'.repeat(65537)),
+        userData: provisioningFieldValue({
+          source: 'inline',
+          inline: 'a'.repeat(65537),
+          secret: '',
+        }),
       },
     });
     expect(errors).toEqual({
-      spec: { userData: { value: 'Cloud-init must not exceed 64 KB.' } },
+      spec: { userData: { value: { inline: 'Cloud-init must not exceed 64 KB.' } } },
     });
 
     await expect(
@@ -259,7 +261,11 @@ describe('buildComputeInstanceStepSchema', () => {
         metadata: { name: 'web-01', project: '' },
         spec: {
           ...emptyValues.spec,
-          userData: provisioningFieldValue('a'.repeat(65536)),
+          userData: provisioningFieldValue({
+            source: 'inline',
+            inline: 'a'.repeat(65536),
+            secret: '',
+          }),
         },
       }),
     ).resolves.toEqual({});
@@ -271,9 +277,11 @@ describe('buildComputeInstanceStepSchema', () => {
         metadata: { name: 'web-01', project: '' },
         spec: {
           ...emptyValues.spec,
-          userDataSource: provisioningFieldValue('secret'),
-          userData: provisioningFieldValue('a'.repeat(65537)),
-          userDataSecret: provisioningFieldValue('user-data-secret'),
+          userData: provisioningFieldValue({
+            source: 'secret',
+            inline: 'a'.repeat(65537),
+            secret: 'user-data-secret',
+          }),
         },
       }),
     ).resolves.toEqual({});

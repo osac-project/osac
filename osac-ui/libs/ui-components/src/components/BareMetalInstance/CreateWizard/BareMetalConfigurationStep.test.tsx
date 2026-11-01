@@ -124,8 +124,11 @@ describe('BareMetalConfigurationStep', () => {
 
   it('lets the user switch between inline user data and a USER_DATA Secret', async () => {
     const values = createEmptyBareMetalInstanceValues();
-    values.spec.userData = provisioningFieldValue('inline data');
-    values.spec.userDataSecret = provisioningFieldValue('stale-secret');
+    values.spec.userData = provisioningFieldValue({
+      source: 'inline',
+      inline: 'inline data',
+      secret: 'stale-secret',
+    });
 
     const { user } = renderWithProviders(
       <Formik initialValues={values} onSubmit={() => undefined}>

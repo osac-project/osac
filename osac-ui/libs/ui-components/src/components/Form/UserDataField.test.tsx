@@ -7,13 +7,11 @@ import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const renderUserDataField = () =>
   renderWithProviders(
-    <Formik initialValues={{ source: 'inline', secret: '', value: '' }} onSubmit={() => undefined}>
-      <UserDataField
-        sourceName="source"
-        secretRefName="secret"
-        inlineName="value"
-        projectName="project-a"
-      />
+    <Formik
+      initialValues={{ userData: { source: 'inline', secret: '', inline: '' } }}
+      onSubmit={() => undefined}
+    >
+      <UserDataField name="userData" projectName="project-a" />
     </Formik>,
     { apiFixtures: { secrets: [] } },
   );

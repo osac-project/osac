@@ -9,7 +9,10 @@ import {
   getEmptyNetworkAttachmentFormFields,
   networkAttachmentFieldsFromPolicy,
 } from '../../ProvisioningWizard/fields/networkAttachments';
-import type { ProvisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
+import type {
+  ProvisioningFieldValue,
+  UserDataSourceFormField,
+} from '../../ProvisioningWizard/fields/provisioningFieldValue';
 import {
   getFieldFromCatalogItemPolicy,
   getUserDataSourceFieldsFromPolicy,
@@ -19,8 +22,6 @@ import {
 export const BM_SSH_KEY_FORM_PATH = 'spec.sshKey';
 
 export const BM_USER_DATA_FORM_PATH = 'spec.userData';
-export const BM_USER_DATA_SOURCE_FORM_PATH = 'spec.userDataSource';
-export const BM_USER_DATA_SECRET_FORM_PATH = 'spec.userDataSecret';
 
 export const BM_INSTANCE_TYPE_FORM_PATH = 'spec.instanceType';
 
@@ -35,9 +36,7 @@ export interface BareMetalInstanceWizardValues {
   spec: {
     sshKey: ProvisioningFieldValue<string>;
     guestOsFamily: GuestOSFamily;
-    userDataSource: ProvisioningFieldValue<'inline' | 'secret'>;
-    userData: ProvisioningFieldValue<string>;
-    userDataSecret: ProvisioningFieldValue<string>;
+    userData: UserDataSourceFormField;
     instanceType: ProvisioningFieldValue<string>;
     diskImage: ProvisioningFieldValue<ResourceSelectValue>;
     networkAttachment: ProvisioningFieldValue<NetworkAttachmentFormFields>;
@@ -64,9 +63,7 @@ export const createEmptyBareMetalInstanceValues = (): BareMetalInstanceWizardVal
   spec: {
     sshKey: provisioningFieldValue(''),
     guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
-    userDataSource: provisioningFieldValue('inline'),
-    userData: provisioningFieldValue(''),
-    userDataSecret: provisioningFieldValue(''),
+    userData: provisioningFieldValue({ source: 'inline', inline: '', secret: '' }),
     instanceType: provisioningFieldValue(''),
     diskImage: provisioningFieldValue(emptyResourceSelectValue()),
     networkAttachment: provisioningFieldValue(getEmptyNetworkAttachmentFormFields()),
@@ -100,7 +97,7 @@ export const getBareMetalInstanceInitialValues = (
     spec: {
       ...values.spec,
       sshKey: getFieldFromCatalogItemPolicy(catalogItem.fields?.sshPublicKey, ''),
-      ...getUserDataSourceFieldsFromPolicy(catalogItem.fields?.userDataSource),
+      userData: getUserDataSourceFieldsFromPolicy(catalogItem.fields?.userDataSource),
       instanceType: (() => {
         const field = getFieldFromCatalogItemPolicy(catalogItem.fields?.instanceType, undefined);
         const reference = field.value as { id?: string; name?: string } | undefined;

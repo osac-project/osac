@@ -6,7 +6,10 @@ import {
   getEmptyNetworkAttachmentFormFields,
   networkAttachmentFieldsFromPolicy,
 } from '../../ProvisioningWizard/fields/networkAttachments';
-import type { ProvisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
+import type {
+  ProvisioningFieldValue,
+  UserDataSourceFormField,
+} from '../../ProvisioningWizard/fields/provisioningFieldValue';
 import {
   getFieldFromCatalogItemPolicy,
   getUserDataSourceFieldsFromPolicy,
@@ -30,8 +33,6 @@ interface ComputeInstanceDiskListPolicyValue {
   }>;
 }
 
-export type UserDataSource = 'inline' | 'secret';
-
 export interface ComputeInstanceWizardValues {
   catalogItemReference: { name: string; id: string };
   metadata: {
@@ -43,9 +44,7 @@ export interface ComputeInstanceWizardValues {
     guestOsFamily: GuestOSFamily;
     diskImage: ProvisioningFieldValue<ResourceSelectValue>;
     instanceType: ProvisioningFieldValue<ResourceSelectValue>;
-    userDataSource: ProvisioningFieldValue<UserDataSource>;
-    userData: ProvisioningFieldValue<string>;
-    userDataSecret: ProvisioningFieldValue<string>;
+    userData: UserDataSourceFormField;
     bootDisk: {
       sizeGib: ProvisioningFieldValue<string>;
       storageTier: ProvisioningFieldValue<ResourceSelectValue>;
@@ -63,9 +62,7 @@ export const createEmptyComputeInstanceValues = (): ComputeInstanceWizardValues 
     guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
     diskImage: provisioningFieldValue(emptyResourceSelectValue()),
     instanceType: provisioningFieldValue(emptyResourceSelectValue()),
-    userDataSource: provisioningFieldValue('inline'),
-    userData: provisioningFieldValue(''),
-    userDataSecret: provisioningFieldValue(''),
+    userData: provisioningFieldValue({ source: 'inline', inline: '', secret: '' }),
     bootDisk: {
       sizeGib: provisioningFieldValue(''),
       storageTier: provisioningFieldValue(emptyResourceSelectValue()),
@@ -80,9 +77,7 @@ export const createEmptyComputeInstanceValues = (): ComputeInstanceWizardValues 
 
 export const VM_SSH_KEY_FORM_PATH = 'spec.sshKey';
 export const VM_DISK_IMAGE_FORM_PATH = 'spec.diskImage';
-export const VM_USER_DATA_SOURCE_FORM_PATH = 'spec.userDataSource';
 export const VM_USER_DATA_FORM_PATH = 'spec.userData';
-export const VM_USER_DATA_SECRET_FORM_PATH = 'spec.userDataSecret';
 
 export const getComputeInstanceNetworkAttachment = (
   catalogItem?: ComputeInstanceCatalogItem,
@@ -109,7 +104,7 @@ export const getComputeInstanceInitialValues = (
     },
     spec: {
       ...values.spec,
-      ...getUserDataSourceFieldsFromPolicy(catalogItem.fields?.userDataSource),
+      userData: getUserDataSourceFieldsFromPolicy(catalogItem.fields?.userDataSource),
       sshKey: (() => {
         const field = getFieldFromCatalogItemPolicy<{ name: string }>(catalogItem.fields?.sshKey, {
           name: '',

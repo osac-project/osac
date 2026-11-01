@@ -116,10 +116,9 @@ export const VmReviewStep = () => {
             <DescriptionListTerm>{t('Cloud-init')}</DescriptionListTerm>
             <DescriptionListDescription>
               {formatReviewScalar(
-                values.spec.userDataSource.value === 'secret'
-                  ? values.spec.userDataSecret.value
-                  : values.spec.userData.value,
-                values.spec.userDataSource.value === 'inline',
+                values.spec.userData.value.source === 'secret'
+                  ? values.spec.userData.value.secret
+                  : values.spec.userData.value.inline,
               )}
             </DescriptionListDescription>
           </DescriptionListGroup>

@@ -5,8 +5,6 @@ import {
   BM_DISK_IMAGE_FORM_PATH,
   BM_INSTANCE_TYPE_FORM_PATH,
   BM_USER_DATA_FORM_PATH,
-  BM_USER_DATA_SECRET_FORM_PATH,
-  BM_USER_DATA_SOURCE_FORM_PATH,
   type BareMetalInstanceWizardValues,
 } from './fields';
 import BareMetalInstanceTypeField from './fields/BareMetalInstanceTypeField';
@@ -39,9 +37,7 @@ const BareMetalConfigurationStep = () => {
           <ProvisioningField name={BM_USER_DATA_FORM_PATH}>
             {({ valueName, isDisabled }) => (
               <UserDataField
-                sourceName={`${BM_USER_DATA_SOURCE_FORM_PATH}.value`}
-                secretRefName={`${BM_USER_DATA_SECRET_FORM_PATH}.value`}
-                inlineName={valueName}
+                name={valueName}
                 projectName={values.metadata.project}
                 isDisabled={isDisabled}
               />

@@ -25,9 +25,7 @@ import SecretSelectionField from './SecretSelectionField';
 import { useTranslation } from '../../hooks/useTranslation';
 
 interface UserDataFieldProps {
-  sourceName: string;
-  secretRefName: string;
-  inlineName: string;
+  name: string;
   projectName: string;
   isDisabled?: boolean;
   isRequired?: boolean;
@@ -41,15 +39,16 @@ interface UserDataSourceOption {
 }
 
 const UserDataField = ({
-  sourceName,
-  secretRefName,
-  inlineName,
+  name,
   projectName,
   isDisabled = false,
   isRequired = false,
   labelInfo,
 }: UserDataFieldProps) => {
   const { t } = useTranslation();
+  const sourceName = `${name}.source`;
+  const secretRefName = `${name}.secret`;
+  const inlineName = `${name}.inline`;
   const [sourceField, sourceMeta, sourceHelpers] = useField<string>(sourceName);
   const showValidationErrors = useShowFieldValidationErrors();
   const currentSource = sourceField.value === 'secret' ? 'secret' : 'inline';

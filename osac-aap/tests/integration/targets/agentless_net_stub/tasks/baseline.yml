@@ -1,23 +1,8 @@
 ---
-- name: Verify AgentlessNet inventory and SecurityGroup no-op lifecycle
+- name: Verify AgentlessNet provider inventory validation
   hosts: localhost
   gather_facts: false
   vars:
-    noop_operations:
-      - create_security_group
-      - delete_security_group
-    noop_playbooks:
-      - playbook_osac_create_security_group.yml
-      - playbook_osac_delete_security_group.yml
-    resource_extra_vars:
-      osac_job_vars:
-        resource:
-          metadata:
-            name: agentless-net-stub-test
-            namespace: default
-            annotations:
-              osac.openshift.io/tenant: tenant-a
-              osac.openshift.io/implementation-strategy: agentless_net
     vn_valid_inventory:
       all:
         children:
@@ -93,35 +78,16 @@
           | combine({'all': {'children': {'switches': {'hosts': {'leaf-1': {
           'ansible_port': 65536}}}}}}, recursive=true) | to_json }}
   tasks:
-    - name: Validate AgentlessNet VirtualNetwork and Subnet lifecycle playbooks
+    - name: Syntax-check the generic network task playbook
       ansible.builtin.command:
         argv:
           - ansible-playbook
           - --syntax-check
           - --inventory
           - localhost,
-          - "{{ playbook_dir }}/../../../../../{{ item }}"
-          - -e
-          - "{{ resource_extra_vars | to_json }}"
+          - "{{ playbook_dir }}/../../../../../playbook_osac_network_task.yml"
         chdir: "{{ playbook_dir }}/../../../../../"
-      register: virtual_network_syntax_result
       changed_when: false
-      loop:
-        - playbook_osac_create_virtual_network.yml
-        - playbook_osac_delete_virtual_network.yml
-        - playbook_osac_create_subnet.yml
-        - playbook_osac_delete_subnet.yml
-      loop_control:
-        label: "{{ item }}"
-
-    - name: Verify VirtualNetwork lifecycle playbooks parse successfully
-      ansible.builtin.assert:
-        that:
-          - item.rc == 0
-        fail_msg: >-
-          {{ item.item }} failed syntax validation:
-          {{ item.stdout + item.stderr }}
-      loop: "{{ virtual_network_syntax_result.results }}"
 
     - name: Load a valid VirtualNetwork inventory in a fresh Ansible process
       ansible.builtin.command:
@@ -243,58 +209,3 @@
           - "'Register the authoritative AgentlessNet network node' not in item.stdout"
       loop: "{{ vn_password_inventory_result.results }}"
       no_log: true
-
-    - name: Invoke every AgentlessNet no-op operation
-      ansible.builtin.include_tasks: ../expect_noop.yaml
-      loop: "{{ noop_operations }}"
-      loop_control:
-        loop_var: operation_name
-
-    - name: Execute every no-op SecurityGroup playbook in check mode
-      ansible.builtin.command:
-        argv:
-          - ansible-playbook
-          - --check
-          - "{{ playbook_dir }}/../../../../../{{ item }}"
-          - -e
-          - "{{ resource_extra_vars | to_json }}"
-        chdir: "{{ playbook_dir }}/../../../../../"
-      register: noop_check_result
-      changed_when: false
-      loop: "{{ noop_playbooks }}"
-      loop_control:
-        label: "{{ item }}"
-
-    - name: Verify no-op SecurityGroup playbooks succeed
-      ansible.builtin.assert:
-        that:
-          - item.rc == 0
-          - "'no-op' in (item.stdout + item.stderr)"
-        fail_msg: >-
-          {{ item.item }} did not succeed as a no-op:
-          rc={{ item.rc }}, output={{ item.stdout + item.stderr }}
-      loop: "{{ noop_check_result.results }}"
-
-    - name: Execute no-op SecurityGroup playbooks in normal mode
-      ansible.builtin.command:
-        argv:
-          - ansible-playbook
-          - "{{ playbook_dir }}/../../../../../{{ item }}"
-          - -e
-          - "{{ resource_extra_vars | to_json }}"
-        chdir: "{{ playbook_dir }}/../../../../../"
-      register: normal_noop_result
-      changed_when: false
-      loop: "{{ noop_playbooks }}"
-      loop_control:
-        label: "{{ item }}"
-
-    - name: Verify normal-mode no-op playbooks succeed with artifacts
-      ansible.builtin.assert:
-        that:
-          - item.rc == 0
-          - "'no-op' in (item.stdout + item.stderr)"
-        fail_msg: >-
-          {{ item.item }} did not succeed as a no-op:
-          rc={{ item.rc }}, output={{ item.stdout + item.stderr }}
-      loop: "{{ normal_noop_result.results }}"

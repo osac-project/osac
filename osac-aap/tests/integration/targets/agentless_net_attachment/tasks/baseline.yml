@@ -115,7 +115,7 @@
           - ansible-playbook
           - -i
           - localhost,
-          - "{{ playbook_dir }}/files/validate_attachment_inventory.yml"
+          - "{{ playbook_dir }}/../files/validate_attachment_inventory.yml"
           - -e
           - ansible_connection=local
       args:

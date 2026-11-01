@@ -1,0 +1,6 @@
+---
+- name: Validate the FabricDomain delete task
+  ansible.builtin.include_tasks: _validate_task_input.yaml
+  vars:
+    agentless_net_expected_kind: FabricDomain
+    agentless_net_expected_tasks: [delete_fabric_domain]

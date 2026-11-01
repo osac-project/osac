@@ -1,0 +1,64 @@
+---
+- name: Write AgentlessNet generic task input - {{ sft_label }}
+  ansible.builtin.copy:
+    dest: "{{ agentless_net_contract_tempdir.path }}/{{ sft_label | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
+    mode: "0600"
+    content: "{{ {'osac_job_vars': agentless_net_contract_job_vars} | to_json }}"
+
+- name: Run AgentlessNet through the generic network task playbook - {{ sft_label }}
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
+      - -i
+      - "{{ agentless_net_contract_tempdir.path }}/inventory.yaml"
+      - "{{ playbook_dir }}/../../../../../playbook_osac_network_task.yml"
+      - -e
+      - "@{{ agentless_net_contract_tempdir.path }}/{{ sft_label | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
+  args:
+    chdir: "{{ playbook_dir }}/../../../../../"
+  environment:
+    AGENTLESS_NET_VN_INVENTORY: "{{ agentless_net_contract_inventory | to_json }}"
+    AGENTLESS_NET_STATE_FILE: "{{ agentless_net_contract_state_file }}"
+    AGENTLESS_NET_SSH_PRIVATE_KEY: ""
+    ANSIBLE_CONFIG: "{{ playbook_dir }}/../../../../../ansible.cfg"
+    ANSIBLE_COLLECTIONS_PATH: "{{ playbook_dir }}/../../../../../collections:{{ playbook_dir }}/../../../../../vendor"
+    ANSIBLE_SSH_EXECUTABLE: "{{ playbook_dir }}/../files/bin/ssh"
+    ANSIBLE_SSH_CONTROL_PATH_DIR: "{{ agentless_net_contract_tempdir.path }}/ssh-control"
+    ANSIBLE_STDOUT_CALLBACK: ansible.posix.json
+    ANSIBLE_SHOW_CUSTOM_STATS: "true"
+    ANSIBLE_LOCALHOST_WARNING: "False"
+    PYTHONPATH: "{{ playbook_dir }}/../files/python"
+    PATH: "{{ playbook_dir }}/../files/bin:{{ lookup('ansible.builtin.env', 'PATH') }}"
+    OSAC_AGENTLESS_NET_CONTRACT_TEST_MODE: "true"
+    OSAC_AGENTLESS_SWITCH_STATE_FILE: "{{ agentless_net_contract_switch_state }}"
+    OSAC_AGENTLESS_SWITCH_FAIL_MARKER: "{{ agentless_net_contract_fail_marker }}"
+    OSAC_AGENTLESS_SWITCH_FAIL_ONCE: "{{ agentless_net_contract_fail_once | default('') }}"
+    OSAC_AGENTLESS_DHCP_LEASE_FILE: "{{ agentless_net_contract_lease_file }}"
+  register: _agentless_net_contract_raw
+  changed_when: false
+  failed_when: false
+
+- name: Parse the generic task result - {{ sft_label }}
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/../../network_task_playbook/tasks/parse_job.yaml"
+  vars:
+    sft_raw: "{{ _agentless_net_contract_raw }}"
+    sft_expect: "{{ agentless_net_contract_expect }}"
+
+- name: Check a successful no-result AgentlessNet task - {{ sft_label }}
+  ansible.builtin.assert:
+    that: sft_last.stats == {}
+    fail_msg: "{{ sft_label }}: expected no typed result, got {{ sft_last.stats }}"
+  when:
+    - agentless_net_contract_expect == 'success'
+    - agentless_net_contract_expected_result is not defined
+
+- name: Check the exact typed AgentlessNet result - {{ sft_label }}
+  ansible.builtin.assert:
+    that:
+      - sft_last.stats.keys() | list == ['osac_result']
+      - sft_last.result == agentless_net_contract_expected_result
+    fail_msg: "{{ sft_label }}: unexpected typed result {{ sft_last.stats }}"
+  when:
+    - agentless_net_contract_expect == 'success'
+    - agentless_net_contract_expected_result is defined

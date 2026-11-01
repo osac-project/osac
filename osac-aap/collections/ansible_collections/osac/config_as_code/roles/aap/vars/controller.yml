@@ -844,7 +844,7 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
               - '--private-data-dir=/runner'
             envFrom:
               - secretRef:
-                  name: config-as-code-ig
+                  name: "{{ aap_config_as_code_secret_name }}"
                   optional: true
             env:
               - name: NAMESPACE
@@ -1035,7 +1035,7 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
         labels:
           ansible_job: ''
       spec:
-        serviceAccountName: osac-sa
+        serviceAccountName: {{ osac_sa_name }}
         affinity:
           podAntiAffinity:
             preferredDuringSchedulingIgnoredDuringExecution:

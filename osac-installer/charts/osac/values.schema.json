@@ -106,7 +106,7 @@
     },
     "cliImage": {
       "type": "string",
-      "description": "Default OpenShift CLI image used by hook jobs"
+      "description": "Default OpenShift CLI image used by hook jobs. When Netris CA validation is enabled it must provide kubectl, sh, grep, mktemp, rm and openssl."
     },
     "dbInit": {
       "type": "object",
@@ -2444,6 +2444,27 @@
         "fabricManager"
       ],
       "properties": {
+        "caBundle": {
+          "type": "object",
+          "description": "Protection settings for the customer-managed Netris CA ConfigMap named by aap.instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP. The chart never creates, rotates, or deletes that object.",
+          "properties": {
+            "adminGroups": {
+              "type": "array",
+              "description": "Groups allowed to create, update, or delete the active Netris CA ConfigMap. Defaults to the break-glass group system:masters and the OpenShift cluster administrator group system:cluster-admins. Identity-provider groups bound directly to cluster-admin are in neither and must be listed here.",
+              "minItems": 1,
+              "default": [
+                "system:masters",
+                "system:cluster-admins"
+              ],
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        },
         "provisioningEnabled": {
           "type": "boolean",
           "description": "Run networking jobs through the network managers. Set at installation; the fulfillment service refuses to start when it changes later. With false, networking resources become READY without provider work.",

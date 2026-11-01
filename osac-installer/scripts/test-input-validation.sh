@@ -50,11 +50,35 @@ write_stub() {
   chmod +x "${STUB_BIN}/${name}"
 }
 
+# Shared stub logger: append "name arg..." to MOCK_LOG with the value
+# after --set/--set-string redacted, so a secret-bearing override passed
+# through EXTRA_HELM_ARGS cannot land in the log. Assertions only match
+# command names and flag spellings, never the redacted values.
+write_stub mock-log <<'STUB'
+#!/usr/bin/env bash
+set -eu
+name=$1
+shift
+redacted=()
+prev=
+for arg in "$@"; do
+  case "${prev}" in
+    --set|--set-string) arg='<redacted>' ;;
+  esac
+  case "${arg}" in
+    --set=*|--set-string=*) arg='--set=<redacted>' ;;
+  esac
+  redacted+=("${arg}")
+  prev=${arg}
+done
+printf '%s %s\n' "${name}" "${redacted[*]}" >>"${MOCK_LOG}"
+STUB
+
 # helm: log every invocation; MOCK_TEMPLATE_FAIL=1 makes offline renders fail
 # the way a schema violation would. `version` feeds the Makefile's Helm
 # major/minor detection.
 write_stub helm <<'STUB'
-printf 'helm %s\n' "$*" >>"${MOCK_LOG}"
+mock-log helm "$@"
 case "$1" in
   version) echo "v3.18.0+gstub" ;;
   template)
@@ -70,7 +94,7 @@ STUB
 # oc: read-only lookups the gate performs before rendering (cluster version
 # and ingress domain). Everything else is logged and succeeds.
 write_stub oc <<'STUB'
-printf 'oc %s\n' "$*" >>"${MOCK_LOG}"
+mock-log oc "$@"
 case "$*" in
   *clusterversion*) echo "4.22.14" ;;
   *ingresses.config/cluster*) echo "apps.example.com" ;;
@@ -79,12 +103,12 @@ exit 0
 STUB
 
 write_stub kubectl <<'STUB'
-printf 'kubectl %s\n' "$*" >>"${MOCK_LOG}"
+mock-log kubectl "$@"
 exit 0
 STUB
 
 write_stub kind <<'STUB'
-printf 'kind %s\n' "$*" >>"${MOCK_LOG}"
+mock-log kind "$@"
 exit 0
 STUB
 

@@ -102,34 +102,20 @@ def run(*args: str, timeout: int = 300) -> str:
     # line, so they are never chained.
     for attempt in range(_TRANSIENT_GRPC_MAX_ATTEMPTS):
         try:
-            result = subprocess.run(
-                args,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=True,
-            )
+            result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=True)
             return result.stdout.strip()
         except subprocess.CalledProcessError as exc:
-            if (
-                attempt < _TRANSIENT_GRPC_MAX_ATTEMPTS - 1
-                and _is_transient_grpc_error(exc)
-            ):
+            if attempt < _TRANSIENT_GRPC_MAX_ATTEMPTS - 1 and _is_transient_grpc_error(exc):
                 logger.warning(
-                    "Transient gRPC upstream error "
-                    "(attempt %d/%d), retrying...",
+                    "Transient gRPC upstream error (attempt %d/%d), retrying...",
                     attempt + 1,
                     _TRANSIENT_GRPC_MAX_ATTEMPTS,
                 )
                 time.sleep(_TRANSIENT_GRPC_RETRY_DELAY_S)
                 continue
-            raise CommandFailed(
-                exc.returncode, args, exc.stdout, exc.stderr
-            ) from None
+            raise CommandFailed(exc.returncode, args, exc.stdout, exc.stderr) from None
         except subprocess.TimeoutExpired as exc:
-            raise CommandTimedOut(
-                args, exc.timeout, exc.stdout, exc.stderr
-            ) from None
+            raise CommandTimedOut(args, exc.timeout, exc.stdout, exc.stderr) from None
     raise AssertionError("unreachable")  # pragma: no cover
 
 

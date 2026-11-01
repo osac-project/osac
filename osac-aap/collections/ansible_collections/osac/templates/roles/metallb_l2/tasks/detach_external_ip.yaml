@@ -117,6 +117,57 @@
       - "ComputeInstance: {{ detach_compute_instance_name | default('not available') }}"
   when: not detach_already_done
 
+# Prefer restoring the UID-named parking Service for v1 ExternalIPs; fall back
+# to the legacy name-based Service when no UID is available.
+- name: Resolve the MetalLB parking Service name for detach restore
+  ansible.builtin.include_tasks: _resolve_parking_service.yaml
+  when: not detach_already_done
+
+# v1 restore must reconstruct the same ownership metadata allocate wrote.
+# A hybrid Service (v1 annotations without owner-kind/owner-id) fails the
+# release inspector and blocks ExternalIP deletion.
+- name: Look up ExternalIP ownership for v1 parking Service restore
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: osac.openshift.io/v1alpha1
+    kind: ExternalIP
+    name: "{{ external_ip_name }}"
+    namespace: "{{ external_ip_attachment.metadata.namespace }}"
+  register: metallb_detach_external_ip_lookup
+  when:
+    - not detach_already_done
+    - metallb_parking_external_ip_uid | default('') | length > 0
+
+- name: Require ExternalIP ownership metadata for v1 parking restore
+  ansible.builtin.assert:
+    that:
+      - metallb_detach_external_ip_lookup.resources | default([]) | length == 1
+      - >-
+        (metallb_detach_external_ip_lookup.resources[0].metadata.labels | default({})).get(
+          'osac.openshift.io/externalip-uuid', '') | length > 0
+      - >-
+        (metallb_detach_external_ip_lookup.resources[0].metadata.annotations | default({})).get(
+          'osac.openshift.io/tenant', '') | length > 0
+    fail_msg: >-
+      Cannot restore v1 MetalLB parking Service for ExternalIP
+      '{{ external_ip_name }}': ownership labels/annotations are missing on the
+      ExternalIP CR.
+  when:
+    - not detach_already_done
+    - metallb_parking_external_ip_uid | default('') | length > 0
+
+- name: Set v1 parking restore ownership from the ExternalIP CR
+  ansible.builtin.set_fact:
+    metallb_parking_external_ip_id: >-
+      {{ metallb_detach_external_ip_lookup.resources[0].metadata.labels['osac.openshift.io/externalip-uuid'] }}
+    metallb_parking_external_ip_tenant: >-
+      {{ metallb_detach_external_ip_lookup.resources[0].metadata.annotations['osac.openshift.io/tenant'] }}
+    metallb_parking_external_ip_generation: >-
+      {{ metallb_detach_external_ip_lookup.resources[0].metadata.generation | int }}
+  when:
+    - not detach_already_done
+    - metallb_parking_external_ip_uid | default('') | length > 0
+
 # Delete the LB Service, clear the annotation, and restore the placeholder atomically.
 # The rescue restores the LB Service if placeholder re-creation fails so the IP
 # is never left unparked without a reservation in metallb-system.
@@ -156,14 +207,46 @@
           apiVersion: v1
           kind: Service
           metadata:
-            name: "osac-eip-{{ external_ip_name }}"
+            name: "{{ metallb_parking_service_name }}"
             namespace: metallb-system
-            labels:
-              osac.openshift.io/externalip: "{{ external_ip_name }}"
-              osac.openshift.io/managed-by: osac-fulfillment
-            annotations:
-              metallb.universe.tf/address-pool: "{{ detach_pool_name }}"
-              metallb.universe.tf/loadBalancerIPs: "{{ detach_ip_address }}"
+            labels: >-
+              {{
+                {
+                  'osac.openshift.io/externalip': external_ip_name,
+                  'osac.openshift.io/managed-by': 'osac-fulfillment'
+                }
+                | combine(
+                    {
+                      'osac.openshift.io/externalip-uuid': metallb_parking_external_ip_id,
+                      'osac.openshift.io/owner-kind': 'externalip',
+                      'osac.openshift.io/owner-id': metallb_parking_external_ip_id
+                    }
+                    if (metallb_parking_external_ip_uid | default('') | length > 0)
+                    else {}
+                  )
+              }}
+            annotations: >-
+              {{
+                {
+                  'metallb.universe.tf/address-pool': detach_pool_name,
+                  'metallb.universe.tf/loadBalancerIPs': detach_ip_address,
+                  'osac.openshift.io/externalippool-name': detach_pool_name
+                }
+                | combine(
+                    {
+                      'osac.openshift.io/externalip-contract-version': 'v1',
+                      'osac.openshift.io/externalip-kubernetes-uid':
+                        metallb_parking_external_ip_uid,
+                      'osac.openshift.io/externalip-generation':
+                        (metallb_parking_external_ip_generation | string),
+                      'osac.openshift.io/tenant': metallb_parking_external_ip_tenant,
+                      'osac.openshift.io/owner-reference':
+                        'ExternalIP/' ~ external_ip_name
+                    }
+                    if (metallb_parking_external_ip_uid | default('') | length > 0)
+                    else {}
+                  )
+              }}
           spec:
             type: LoadBalancer
             selector: {}
@@ -180,7 +263,7 @@
     - name: Display placeholder Service creation result
       ansible.builtin.debug:
         msg:
-          - "Placeholder Service 'osac-eip-{{ external_ip_name }}' re-created in metallb-system"
+          - "Placeholder Service '{{ metallb_parking_service_name }}' re-created in metallb-system"
           - "IP preserved: {{ detach_ip_address }}"
           - "Changed: {{ placeholder_service_result.changed | default(false) }}"
 

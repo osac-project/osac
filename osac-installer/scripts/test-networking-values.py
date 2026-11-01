@@ -699,6 +699,27 @@ class SubchartPlumbingTest(unittest.TestCase):
         self.assertEqual(config_map["data"]["name"], "test_fabric")
         self.assertEqual(config_map["data"]["capabilities"], "ipv4")
 
+    def test_k8s_only_advertises_external_ip_contract_v1(self):
+        # OSAC-6779: MetalLB allocate/release on k8s_only uses the v1 result contract.
+        result = helm(
+            {
+                "operator": {
+                    "networkManagers": {
+                        "k8sManagers": {
+                            "k8s_only": {
+                                "enabled": True,
+                            }
+                        }
+                    }
+                }
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        docs = [doc for doc in yaml.safe_load_all(result.stdout) if doc]
+        config_map = find(docs, "ConfigMap", "osac-network-k8s-manager-k8s-only")
+        self.assertEqual(config_map["data"]["name"], "k8s_only")
+        self.assertEqual(config_map["data"]["externalIPContractVersion"], "v1")
+
     @staticmethod
     def deployment_env(docs, name_part: str) -> dict:
         envs = {}

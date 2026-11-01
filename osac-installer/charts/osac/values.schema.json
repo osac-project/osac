@@ -1425,8 +1425,9 @@
                     },
                     "DNS_CLASS": {
                       "type": "string",
-                      "description": "Fully-qualified Ansible role name of the DNS driver. dns.route53.dns manages Route 53 records; dns.noop.dns skips external DNS for environments that do not manage DNS records.",
+                      "description": "Fully-qualified Ansible role name of the DNS driver. dns.route53.dns manages Route 53 records; dns.noop.dns skips external DNS; dns.kcli.dns manages DNS via kcli.",
                       "enum": [
+                        "dns.kcli.dns",
                         "dns.noop.dns",
                         "dns.route53.dns"
                       ]
@@ -1520,6 +1521,18 @@
                     "NETRIS_USERNAME": {
                       "type": "string",
                       "description": "Netris API username"
+                    },
+                    "KCLI_CLIENT": {
+                      "type": "string",
+                      "description": "kcli client/profile name for DNS management (default: local)"
+                    },
+                    "KCLI_HOST": {
+                      "type": "string",
+                      "description": "Hostname or IP of the kcli hypervisor for DNS management"
+                    },
+                    "KCLI_USER": {
+                      "type": "string",
+                      "description": "SSH user for kcli hypervisor access (default: root)"
                     }
                   },
                   "additionalProperties": false
@@ -1547,6 +1560,10 @@
                     "SERVER_SSH_BASTION_KEY": {
                       "type": "string",
                       "description": "SSH private key for bastion access"
+                    },
+                    "KCLI_SSH_PRIVATE_KEY": {
+                      "type": "string",
+                      "description": "SSH private key for kcli hypervisor access"
                     }
                   },
                   "additionalProperties": false

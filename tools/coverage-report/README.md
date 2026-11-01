@@ -115,23 +115,27 @@ behaviors are listed but not scored: unit coverage comes from the profile.
 Two areas in `features.yaml` read their test plans from the
 `enhancement-proposals` repository: `iam` (OSAC-2476) and `secrets`
 (OSAC-5343). That repository is a gitignored checkout that
-`tools/bootstrap.sh` creates; a fresh clone and CI do not have it.
+`tools/bootstrap.sh` creates; a fresh clone and the nightly report job
+run without it.
 
 A missing plan file is not an error. Its behaviors are simply not loaded,
 so a tier with no other behaviors shows `na` with the evidence
 `no test plan`, and the verdict reason reads for example
-`Integration: no test plan`. In CI and fresh clones this means the plan
-is not available in the checkout, not that coverage is missing. With the
-checkout present, the same area can show `blocked` or gaps that come from
-the plan's real content.
+`Integration: no test plan`. There, `na` means the plan is not available
+in the checkout, not that coverage is missing. Only the plan-backed tiers
+go `na`: an E2E row such as `0.0% (0/8)` is real evidence from the
+inline `behaviors:` and `mappings:` in `features.yaml`, and the missing
+plan does not explain it. With the checkout present, the same area can
+show `blocked` or gaps that come from the plan's real content.
 
 To make the plans readable, run `tools/bootstrap.sh`, which clones
 `enhancement-proposals/` into the repository root. A symlink named
 `enhancement-proposals` at the repository root pointing at an existing
 checkout also works; the reporter trusts it automatically and lists it
 under `External roots` in the report. `--allow-external-root` trusts
-other external roots, but a plan path must still resolve under the
-repository root, so it cannot substitute for the missing checkout itself.
+other external roots, but the plan must still exist at its
+repository-root-relative path: a missing file is detected before the
+flag is consulted, so it cannot stand in for the checkout itself.
 
 ## Verdict
 

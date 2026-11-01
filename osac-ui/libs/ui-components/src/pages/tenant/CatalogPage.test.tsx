@@ -194,7 +194,7 @@ const toCatalogListResponse = <T extends CatalogListFilterableItem>(
   return {
     items,
     size: items.length,
-    total: allItems.length,
+    total: filteredItems.length,
   };
 };
 
@@ -688,6 +688,36 @@ describe('CatalogPage', () => {
       expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
       expect(screen.getByText(unpublishedVmItem.metadata?.name ?? '')).toBeInTheDocument();
     });
+  });
+
+  it('hides unpublished catalog items from tenant users', async () => {
+    localStorage.setItem(catalogItemsViewPrefKey, 'list');
+
+    const unpublishedVmItem: ComputeInstanceCatalogItem = {
+      ...vmCatalogItem,
+      id: 'catalog-rhel-9-draft',
+      metadata: {
+        ...vmCatalogMetaData,
+        name: 'catalog-rhel-9-draft',
+      },
+      title: 'RHEL 9 draft',
+      published: false,
+    };
+
+    renderCatalogPage(
+      createCatalogPageTransport({
+        vmItems: [vmCatalogItem, unpublishedVmItem],
+        clusterItems: [],
+      }),
+      [ServiceTier.VMAAS],
+      ['/catalog?types=vm'],
+      'tenant-user',
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(unpublishedVmItem.metadata?.name ?? '')).not.toBeInTheDocument();
   });
 
   it('shows an error from a failed catalog total query', async () => {

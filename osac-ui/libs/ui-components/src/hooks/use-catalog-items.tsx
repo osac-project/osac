@@ -28,9 +28,16 @@ export const useCatalogItems = (
   typeCounts: Record<ServiceTier, number>;
   unfilteredTotalItems: number;
 } => {
-  const { enabledServices } = useSession();
-  const listFilter = buildCatalogListFilter(filterCriteria);
+  const { enabledServices, role } = useSession();
+  const visibilityCriteria: CatalogListFilterCriteria =
+    role === 'tenant-user' ? { published: 'published' } : {};
+  const listFilter = buildCatalogListFilter({
+    ...filterCriteria,
+    ...visibilityCriteria,
+  });
+  const visibilityFilter = buildCatalogListFilter(visibilityCriteria);
   const listParams = listFilter ? { filter: listFilter } : {};
+  const totalListParams = visibilityFilter ? { limit: 0, filter: visibilityFilter } : { limit: 0 };
 
   const shouldFetchKind = (kind: ServiceTier) =>
     enabledServices.includes(kind) && (fetchAllTypes || typeFilter.includes(kind));
@@ -45,21 +52,15 @@ export const useCatalogItems = (
     enabled: shouldFetchKind(ServiceTier.BMAAS),
   });
 
-  const vmsTotalQuery = useListResource(
-    ComputeInstanceCatalogItems,
-    { limit: 0 },
-    { enabled: enabledServices.includes(ServiceTier.VMAAS) },
-  );
-  const clustersTotalQuery = useListResource(
-    ClusterCatalogItems,
-    { limit: 0 },
-    { enabled: enabledServices.includes(ServiceTier.CAAS) },
-  );
-  const bmsTotalQuery = useListResource(
-    BareMetalInstanceCatalogItems,
-    { limit: 0 },
-    { enabled: enabledServices.includes(ServiceTier.BMAAS) },
-  );
+  const vmsTotalQuery = useListResource(ComputeInstanceCatalogItems, totalListParams, {
+    enabled: enabledServices.includes(ServiceTier.VMAAS),
+  });
+  const clustersTotalQuery = useListResource(ClusterCatalogItems, totalListParams, {
+    enabled: enabledServices.includes(ServiceTier.CAAS),
+  });
+  const bmsTotalQuery = useListResource(BareMetalInstanceCatalogItems, totalListParams, {
+    enabled: enabledServices.includes(ServiceTier.BMAAS),
+  });
 
   const isLoading =
     vmsQuery.isLoading ||

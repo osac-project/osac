@@ -1,4 +1,4 @@
-import { Content, Divider, Stack, StackItem, Title } from '@patternfly/react-core';
+import { Divider, Stack, StackItem, Title } from '@patternfly/react-core';
 
 import { useTranslation } from '../../../../hooks/useTranslation';
 import OsacForm from '../../../Form/OsacForm';
@@ -7,6 +7,7 @@ import { AdditionalDisksArrayField } from '../../../vm/CreateWizard/AdditionalDi
 import BootDiskSizeField from '../../../vm/CreateWizard/fields/BootDiskSizeField';
 import BootStorageTierField from '../../../vm/CreateWizard/fields/BootStorageTierField';
 import CatalogField from '../CatalogField';
+import CatalogFieldPolicyDescription from '../CatalogFieldPolicyDescription';
 
 const ComputeCatalogStorageStep = () => {
   const { t } = useTranslation();
@@ -19,11 +20,11 @@ const ComputeCatalogStorageStep = () => {
         </Title>
       </StackItem>
       <StackItem>
-        <Content component="p">
-          {t(
-            'Optionally set boot disk size, storage tier, and additional disk defaults for this catalog item. Leave fields Not set if tenants should choose when creating a virtual machine.',
+        <CatalogFieldPolicyDescription
+          description={t(
+            'Configure the boot disk size, storage tier, and additional disks for virtual machines created from this catalog item.',
           )}
-        </Content>
+        />
       </StackItem>
       <StackItem>
         <OsacForm>

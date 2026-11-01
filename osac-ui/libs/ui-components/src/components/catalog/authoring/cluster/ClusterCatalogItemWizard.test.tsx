@@ -115,7 +115,7 @@ describe('ClusterCatalogItemWizard', () => {
     await user.click(screen.getByRole('button', { name: 'Next' }));
     expect(
       await screen.findByText(
-        'Optionally set cluster version and node set defaults for this catalog item. Leave fields Not set if tenants should choose when creating a cluster.',
+        'Configure the cluster version and node sets for clusters created from this catalog item. Users can change editable fields, which may have a default value. Lock fields to enforce their configured values.',
       ),
     ).toBeInTheDocument();
     expect(screen.getByLabelText('Version')).toBeInTheDocument();
@@ -124,7 +124,7 @@ describe('ClusterCatalogItemWizard', () => {
     await user.click(screen.getByRole('button', { name: 'Next' }));
     expect(
       await screen.findByText(
-        'Optionally set pod CIDR and service CIDR defaults for this catalog item. Leave fields Not set if tenants should choose when creating a cluster.',
+        'Configure the pod CIDR and service CIDR for clusters created from this catalog item. Users can change editable fields, which may have a default value. Lock fields to enforce their configured values.',
       ),
     ).toBeInTheDocument();
     expect(screen.getByLabelText('Pod CIDR')).toBeInTheDocument();

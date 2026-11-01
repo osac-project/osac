@@ -1,4 +1,4 @@
-import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
+import { Stack, StackItem, Title } from '@patternfly/react-core';
 
 import { useTranslation } from '../../../../hooks/useTranslation';
 import ClusterNodeSetsArrayField from '../../../Cluster/CreateWizard/ClusterNodeSetsArrayField';
@@ -6,6 +6,7 @@ import ClusterVersionField from '../../../Cluster/CreateWizard/fields/ClusterVer
 import OsacForm from '../../../Form/OsacForm';
 import ProvisioningFieldGroup from '../../../ProvisioningWizard/fields/ProvisioningFieldGroup';
 import CatalogField from '../CatalogField';
+import CatalogFieldPolicyDescription from '../CatalogFieldPolicyDescription';
 
 const ClusterCatalogConfigurationStep = () => {
   const { t } = useTranslation();
@@ -18,11 +19,11 @@ const ClusterCatalogConfigurationStep = () => {
         </Title>
       </StackItem>
       <StackItem>
-        <Content component="p">
-          {t(
-            'Optionally set cluster version and node set defaults for this catalog item. Leave fields Not set if tenants should choose when creating a cluster.',
+        <CatalogFieldPolicyDescription
+          description={t(
+            'Configure the cluster version and node sets for clusters created from this catalog item.',
           )}
-        </Content>
+        />
       </StackItem>
       <StackItem>
         <OsacForm>

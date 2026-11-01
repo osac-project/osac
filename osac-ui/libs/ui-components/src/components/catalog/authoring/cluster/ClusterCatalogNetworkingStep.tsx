@@ -1,10 +1,11 @@
-import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
+import { Stack, StackItem, Title } from '@patternfly/react-core';
 
 import { useTranslation } from '../../../../hooks/useTranslation';
 import ClusterPodCidrField from '../../../Cluster/CreateWizard/fields/ClusterPodCidrField';
 import ClusterServiceCidrField from '../../../Cluster/CreateWizard/fields/ClusterServiceCidrField';
 import OsacForm from '../../../Form/OsacForm';
 import CatalogField from '../CatalogField';
+import CatalogFieldPolicyDescription from '../CatalogFieldPolicyDescription';
 
 const ClusterCatalogNetworkingStep = () => {
   const { t } = useTranslation();
@@ -17,11 +18,11 @@ const ClusterCatalogNetworkingStep = () => {
         </Title>
       </StackItem>
       <StackItem>
-        <Content component="p">
-          {t(
-            'Optionally set pod CIDR and service CIDR defaults for this catalog item. Leave fields Not set if tenants should choose when creating a cluster.',
+        <CatalogFieldPolicyDescription
+          description={t(
+            'Configure the pod CIDR and service CIDR for clusters created from this catalog item.',
           )}
-        </Content>
+        />
       </StackItem>
       <StackItem>
         <OsacForm>

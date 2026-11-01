@@ -1,10 +1,11 @@
-import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
+import { Stack, StackItem, Title } from '@patternfly/react-core';
 
 import { useTranslation } from '../../../../hooks/useTranslation';
 import { CATALOG_PROVISION_MULTILINE_TEXTAREA } from '../../../Form/constants';
 import { InputField } from '../../../Form/InputField';
 import OsacForm from '../../../Form/OsacForm';
 import CatalogField from '../CatalogField';
+import CatalogFieldPolicyDescription from '../CatalogFieldPolicyDescription';
 
 const ComputeCatalogAccessStep = () => {
   const { t } = useTranslation();
@@ -17,9 +18,11 @@ const ComputeCatalogAccessStep = () => {
         </Title>
       </StackItem>
       <StackItem>
-        <Content component="p">
-          {t('Add optional user data, or skip this step to continue.')}
-        </Content>
+        <CatalogFieldPolicyDescription
+          description={t(
+            'Configure optional user data for virtual machines created from this catalog item, or skip this step to continue.',
+          )}
+        />
       </StackItem>
       <StackItem>
         <OsacForm>

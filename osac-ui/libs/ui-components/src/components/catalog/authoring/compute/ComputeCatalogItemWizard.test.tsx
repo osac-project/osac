@@ -108,11 +108,11 @@ describe('ComputeCatalogItemWizard', () => {
     vi.mocked(useSession).mockReturnValue(makeSession('tenant-admin'));
   });
 
-  it('shows Details, Compute configuration, Storage, Access & Initial run, and Review steps', () => {
+  it('shows General, Compute configuration, Storage, Access & Initial run, and Review steps', () => {
     renderWizard();
 
     const nav = screen.getByRole('navigation', { name: 'Create compute catalog item steps' });
-    expect(within(nav).getByText('Details')).toBeInTheDocument();
+    expect(within(nav).getByText('General')).toBeInTheDocument();
     expect(within(nav).getByText('Compute configuration')).toBeInTheDocument();
     expect(within(nav).getByText('Storage')).toBeInTheDocument();
     expect(within(nav).getByText('Access & Initial run')).toBeInTheDocument();

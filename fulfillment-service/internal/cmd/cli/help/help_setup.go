@@ -146,7 +146,7 @@ func hidePrivateSubcommands(c *cobra.Command) {
 	}
 	if configDir != "" {
 		if absDir, err := filepath.Abs(configDir); err == nil {
-			data, err := os.ReadFile(filepath.Clean(filepath.Join(absDir, "config.json")))
+			data, err := os.ReadFile(filepath.Clean(filepath.Join(absDir, "config.json"))) // #nosec G703 -- the CLI user's own config file
 			if err == nil {
 				var cfg struct {
 					Private bool `json:"private,omitempty"`

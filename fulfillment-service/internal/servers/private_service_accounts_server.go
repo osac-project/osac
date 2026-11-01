@@ -142,9 +142,6 @@ func (s *PrivateServiceAccountsServer) prepareCreate(_ context.Context, _, accou
 		State: privatev1.ServiceAccountState_SERVICE_ACCOUNT_STATE_PENDING,
 	}.Build())
 	metadata := account.GetMetadata()
-	if metadata.GetDisplayName() != "" || metadata.GetDescription() != "" {
-		return status.Error(codes.InvalidArgument, "display_name and description are not supported for service accounts")
-	}
 	metadata.SetFinalizers([]string{finalizers.Controller})
 	annotations := metadata.GetAnnotations()
 	if annotations == nil {
@@ -177,9 +174,6 @@ func (s *PrivateServiceAccountsServer) update(ctx context.Context, request *priv
 		return nil, status.Error(codes.InvalidArgument, "object identifier is mandatory")
 	}
 	request = proto.Clone(request).(*privatev1.ServiceAccountsUpdateRequest)
-	if metadata := request.GetObject().GetMetadata(); metadata.GetDisplayName() != "" || metadata.GetDescription() != "" {
-		return nil, status.Error(codes.InvalidArgument, "display_name and description are not supported for service accounts")
-	}
 	mask := request.GetUpdateMask()
 	if mask == nil {
 		mask = &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}}

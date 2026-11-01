@@ -37,3 +37,42 @@ export const getFieldFromCatalogItemPolicy = <V>(
 
   return provisioningFieldValue(defaultValue, false);
 };
+
+export interface UserDataSourceFormFields {
+  userDataSource: ProvisioningFieldValue<'inline' | 'secret'>;
+  userData: ProvisioningFieldValue<string>;
+  userDataSecret: ProvisioningFieldValue<string>;
+}
+
+interface CatalogUserDataSource {
+  source?: {
+    case?: string;
+    value?: unknown;
+  };
+}
+
+/** Maps the complete OSAC-7033 user data source policy into wizard form fields. */
+export const getUserDataSourceFieldsFromPolicy = (
+  policy: FieldPolicyLike<unknown>,
+): UserDataSourceFormFields => {
+  const field = getFieldFromCatalogItemPolicy(policy, undefined);
+  const source = (field.value as CatalogUserDataSource | undefined)?.source;
+  const isSecret = source?.case === 'secret';
+  const inlineValue = !isSecret && source?.case === 'inline' ? source.value : undefined;
+  const secretValue =
+    isSecret && typeof source.value === 'object' && source.value !== null
+      ? (source.value as { name?: unknown }).name
+      : undefined;
+
+  return {
+    userDataSource: provisioningFieldValue(isSecret ? 'secret' : 'inline', field.locked),
+    userData: provisioningFieldValue(
+      typeof inlineValue === 'string' ? inlineValue : '',
+      field.locked,
+    ),
+    userDataSecret: provisioningFieldValue(
+      typeof secretValue === 'string' ? secretValue : '',
+      field.locked,
+    ),
+  };
+};

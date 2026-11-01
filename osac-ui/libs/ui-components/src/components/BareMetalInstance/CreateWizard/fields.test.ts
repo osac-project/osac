@@ -6,6 +6,53 @@ import { BareMetalInstanceCatalogItemSchema } from '@osac/types';
 import { getBareMetalInstanceInitialValues } from './fields';
 
 describe('getBareMetalInstanceInitialValues', () => {
+  it('loads an editable user data source default', () => {
+    const catalogItem = create(BareMetalInstanceCatalogItemSchema, {
+      id: 'catalog-bm-1',
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: {
+              defaultValue: {
+                source: { case: 'secret', value: { name: 'catalog-user-data' } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const values = getBareMetalInstanceInitialValues(catalogItem);
+
+    expect(values.spec.userDataSource).toEqual({ value: 'secret', locked: false });
+    expect(values.spec.userData).toEqual({ value: '', locked: false });
+    expect(values.spec.userDataSecret).toEqual({
+      value: 'catalog-user-data',
+      locked: false,
+    });
+  });
+
+  it('loads a locked inline user data source and prevents overrides', () => {
+    const catalogItem = create(BareMetalInstanceCatalogItemSchema, {
+      id: 'catalog-bm-1',
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'locked',
+            value: { source: { case: 'inline', value: '#cloud-config' } },
+          },
+        },
+      },
+    });
+
+    const values = getBareMetalInstanceInitialValues(catalogItem);
+
+    expect(values.spec.userDataSource).toEqual({ value: 'inline', locked: true });
+    expect(values.spec.userData).toEqual({ value: '#cloud-config', locked: true });
+    expect(values.spec.userDataSecret).toEqual({ value: '', locked: true });
+  });
+
   it('loads a locked catalog disk image into the wizard', () => {
     const catalogItem = create(BareMetalInstanceCatalogItemSchema, {
       id: 'catalog-bm-1',

@@ -1,6 +1,5 @@
 import { type ComputeInstanceCatalogItem, GuestOSFamily } from '@osac/types';
 
-import { catalogUserDataValuesFromPolicy } from '../../catalog/authoring/catalogUserData';
 import { type ResourceSelectValue, emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 import {
   type NetworkAttachmentFormFields,
@@ -10,6 +9,7 @@ import {
 import type { ProvisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 import {
   getFieldFromCatalogItemPolicy,
+  getUserDataSourceFieldsFromPolicy,
   provisioningFieldValue,
 } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
@@ -109,7 +109,7 @@ export const getComputeInstanceInitialValues = (
     },
     spec: {
       ...values.spec,
-      ...catalogUserDataValuesFromPolicy(catalogItem.fields?.userDataSource),
+      ...getUserDataSourceFieldsFromPolicy(catalogItem.fields?.userDataSource),
       sshKey: (() => {
         const field = getFieldFromCatalogItemPolicy<{ name: string }>(catalogItem.fields?.sshKey, {
           name: '',
@@ -167,7 +167,7 @@ export const getComputeInstanceInitialValues = (
 };
 
 export const CONFIGURATION_CATALOG_PATHS = [
-  'spec.user_data',
+  'spec.user_data_source',
   'spec.boot_disk.size_gib',
   'spec.boot_disk.storage_tier',
 ] as const;

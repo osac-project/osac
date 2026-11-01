@@ -28,6 +28,8 @@ permissions, before installing the platform chart.
   - [Phase 1b: install shared infrastructure](#phase-1b-install-shared-infrastructure)
   - [Phase 2: install the OSAC platform](#phase-2-install-the-osac-platform)
 - [Phase-1 Parameters](#phase-1-parameters)
+- [EVPN host networking (VMaaS)](#evpn-host-networking-vmaas)
+- [Separate VMaaS workload cluster](#separate-vmaas-workload-cluster)
 - [When Prerequisites Already Exist](#when-prerequisites-already-exist)
   - [How Toggles Affect Operands](#how-toggles-affect-operands)
   - [Skipping Phase 1 Entirely](#skipping-phase-1-entirely)
@@ -52,7 +54,7 @@ permissions, before installing the platform chart.
 |-------------|---------|
 | OpenShift | 4.17+ with cluster-admin access |
 | CLI tools | `oc`, Helm 4 for Kubernetes versions it supports; Helm 3.17.x or 3.18.x for OpenShift 4.17 (Kubernetes 1.30), `git` |
-| Network | Outbound access to github.com, ghcr.io, quay.io, and registry.redhat.io. Building the `osac-infra` dependency also requires Helm workstation access to topolvm.github.io. |
+| Network | Outbound access to github.com, ghcr.io, quay.io, and registry.redhat.io. Building the `osac-infra` dependency also requires Helm workstation access to topolvm.github.io and netbox-community.github.io. |
 | AAP license | Subscription manifest (`license.zip`) from [Red Hat Customer Portal](https://access.redhat.com/) |
 
 ## How It Works
@@ -356,19 +358,11 @@ incompatible with OpenShift 4.17's Kubernetes 1.30; use Helm 3.17.x or 3.18.x
 for OpenShift 4.17. For other cluster versions, choose a Helm 3 minor that
 supports the cluster's Kubernetes version; see the
 [Helm 3 version-skew documentation](https://helm.sh/docs/v3/topics/version_skew/).
-Helm 3.17.0 is the minimum version required for `--take-ownership`. It is
-also the minimum version that can install a chart pinned by content digest
-(`OSAC_CHART_OCI_REF` containing `@sha256:...`, the `install-osac` Makefile
-target's escape hatch for validating a staged OCI chart build by exact
-artifact rather than by semver tag) — on an older Helm, `make install-osac`
-rejects a digest-pinned `OSAC_CHART_OCI_REF` outright with an explicit
-version error instead of failing deep inside Helm's own tag-constraint
-parsing.
+Helm 3.17.0 is the minimum version required for `--take-ownership` and for
+installing a chart pinned by content digest (`oci://...@sha256:...`).
 
 ```bash
 helm dependency update ./charts/osac
-# --force-conflicts resolves an AAP field ownership conflict (Helm 4 only).
-# Helm 3 users: omit this option; Helm 3 does not support it.
 helm upgrade --install osac ./charts/osac \
     -n "$NS" --create-namespace \
     -f my-values.yaml \
@@ -376,9 +370,11 @@ helm upgrade --install osac ./charts/osac \
     --set service.externalHostname="fulfillment-api-$NS.$DOMAIN" \
     --set service.internalHostname="fulfillment-internal-api-$NS.$DOMAIN" \
     --set-string ui.auth.oidcIssuerURL="https://keycloak-keycloak.$DOMAIN/realms/osac" \
-    --force-conflicts \
     --wait --timeout 40m
 ```
+
+With Helm 4, add `--force-conflicts` if an AAP field ownership conflict occurs.
+Helm 3 does not support this option.
 
 `my-infra-values.yaml` configures `osac-deps` and `osac-infra`; see
 [Phase-1 Parameters](#phase-1-parameters) below. For Phase 2,
@@ -393,6 +389,8 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 
 | Parameter | Description | Default |
 |---|---|---|
+| `catalogSource` | OLM `CatalogSource` used by the phase-1 Operator `Subscription` resources. Override it when the cluster uses a mirrored catalog instead of the default Red Hat catalog. | `redhat-operators` |
+| `catalogSourceNamespace` | Namespace of `catalogSource`. | `openshift-marketplace` |
 | `certManager.enabled` | Creates the cert-manager Operator `Subscription` and the CA and trust resources. | `true` |
 | `certManager.channel` | Update channel for `openshift-cert-manager-operator`. | `stable-v1` |
 | `trustManager.enabled` | Deploys the vendored trust-manager. | `true` |
@@ -485,15 +483,20 @@ fabric loopback ranges; the installer accepts only /32 routes within them.
 | `evpn.nodes[].uplinks[].peerAddress` | IPv4 address of the connected fabric BGP peer, supplied by the fabric admin. |
 | `evpn.nodes[].uplinks[].peerASN` | ASN of the connected fabric peer, supplied by the fabric admin. |
 
-For a multicluster VMaaS deployment, `make install-multicluster` uses the
-infra values to configure EVPN on the workload cluster. The management-cluster
-overlay keeps `evpn.enabled` disabled.
+For a separate VMaaS workload cluster, pass these `evpn` values to the phase
+1b install on the workload cluster. Keep `evpn.enabled: false` on the
+management cluster. See
+[Separate VMaaS workload cluster](#separate-vmaas-workload-cluster).
 
-Add a node by adding it to `evpn.nodes` and rerunning `make install`. Remove a
-node by deleting its entry and rerunning `make install`; the installer deletes
-that node's NNCP and FRRConfigurations. Deleting the NNCP does not remove its
-interface addresses from the node, so remove stale addresses separately when
-needed.
+Add a node by adding it to `evpn.nodes` and rerunning the phase 1b
+`helm upgrade --install osac-infra` command. Remove a node by deleting its
+entry and rerunning that command when at least one configured node remains.
+The chart deletes that node's NNCP and `FRRConfiguration` resources. To remove
+the final configured node, set `evpn.enabled: false` and `evpn.nodes: []`,
+then rerun the phase 1b command. That upgrade does not run the EVPN cleanup
+hook, so run the labeled EVPN deletion commands below after the upgrade
+succeeds. Deleting the NNCP does not remove its interface addresses from the
+node, so remove stale addresses separately when needed.
 
 Uninstalling `osac-infra` does not remove the EVPN resources or revert the
 cluster network operator patch. Helm removes the configure-EVPN ServiceAccount
@@ -510,6 +513,70 @@ longer needs them. The VTEP range and uplink ranges must not overlap tenant
 address space. Add these infrastructure ranges to
 `global.networking.excludedIpv4Cidrs` in the `osac` chart when that value is
 available in the installed chart.
+
+For phase 2, use the complete
+[CUDN EVPN with Netris example](customer-install-guide.md#cudn-evpn-with-netris).
+It configures the Netris AAP backend, registers `cudn_evpn` with
+`capabilities: [ipv4]`, and enables the expert NetworkClass path with
+`global.expertOverrides.networkClass: true`. That path also requires
+`networkClass.enabled: true`, a nonempty title, and the Netris and EVPN
+manager names. The subchart has no built-in `cudn_evpn` registration defaults;
+enabling it alone creates an invalid registration with empty capabilities.
+The normal `global.networking.k8sManager` setting accepts only `""` or
+`k8s_only`, so it cannot select `cudn_evpn` directly.
+
+## Separate VMaaS workload cluster
+
+Run the OSAC management services on one OpenShift cluster and the virtual
+machines on another. Both clusters need `cluster-admin` access and different
+API server addresses. Disable CaaS and BMaaS. The operator refuses to start
+with a remote kubeconfig when either the cluster controller or the
+bare-metal-instance controller is enabled.
+
+Create the workload kubeconfig Secret on the management cluster before phase
+2. The Secret contents and the console-proxy label are described in
+[VMaaS dedicated cluster](../../../osac-operator/docs/vmaas-dedicated-cluster/README.md).
+The phase-2 values that mount that Secret are in the
+[customer install guide](customer-install-guide.md#64-installing-vmaas-on-a-separate-workload-cluster).
+
+**Workload cluster.** Point `KUBECONFIG` at the workload cluster. In
+`my-workload-infra-values.yaml`, enable `cnv` and `lvms`. Enable `evpn` when that
+cluster uses CUDN EVPN, as described in
+[EVPN host networking (VMaaS)](#evpn-host-networking-vmaas). Disable the other
+phase-1 toggles. Set `certManager.enabled`, `trustManager.enabled`, and
+`caIssuer.enabled` to `false`; the latter two remain enabled by default even
+when `certManager` is disabled. Also disable `aapOperator`, `keycloak`,
+`mce`, `kafka`, and `bundledVault`. Run
+[Phase 1a](#phase-1a-install-prerequisite-operators) and
+[Phase 1b](#phase-1b-install-shared-infrastructure) against that kubeconfig,
+replacing `-f my-infra-values.yaml` with `-f my-workload-infra-values.yaml`
+in both commands.
+Do not install the `osac` chart on this cluster.
+
+**Management cluster.** Point `KUBECONFIG` at the management cluster. Create
+a separate `my-management-infra-values.yaml` for its prerequisites. Keep the
+certificate stack enabled and OpenShift Virtualization and EVPN disabled:
+
+```yaml
+certManager:
+  enabled: true
+trustManager:
+  enabled: true
+caIssuer:
+  enabled: true
+cnv:
+  enabled: false
+evpn:
+  enabled: false
+```
+
+Run phase 1a and phase 1b, replacing `-f my-infra-values.yaml` with
+`-f my-management-infra-values.yaml` in both commands. Then run phase 2 with
+the remote kubeconfig values from the customer install guide. The Secret must
+exist in the OSAC namespace before `helm upgrade --install osac`. Keep
+`lvms.enabled: true` in the phase-2 `my-values.yaml` to register the workload
+cluster's local StorageBackend and StorageTier in fulfillment. Installing
+LVMS through phase 1 alone does not perform that registration.
 
 ## When Prerequisites Already Exist
 
@@ -600,6 +667,7 @@ Disable these for any real deployment.
 | `bundledPostgres.enabled` | `false` | Deploys bundled PostgreSQL for development and evaluation. It is not intended for production. |
 | `bundledVault.enabled` | `true` | Deploys an in-cluster OpenBao secret store for development and evaluation. Set to `false` for production and follow the [secrets management configuration guide](secrets-management-configuration.md). |
 | `topolvm.enabled` | `false` | Installs the pinned TopoLVM CSI chart for Kind `dev-full`. Keep it disabled when using an existing cluster `StorageClass`. It uses an external `lvmd` service and disposable `vg1`; the profile exposes the non-default `topolvm-provisioner` StorageClass. |
+| `netbox.enabled` | `false` | Deploys the NetBox community chart as a bare-metal inventory backend for the `bmaas_netbox` development and CI flavor. Not for production. On OpenShift it also creates an edge-terminated `Route` named `netbox` in the `osac-infra` namespace. OpenShift assigns the host, and HTTP is redirected to HTTPS. A post-install hook seeds the API token Secret in the OSAC namespace. |
 
 The upgrade does not migrate data from the previous bundled PostgreSQL instance.
 Back up any data you need before upgrading.
@@ -795,13 +863,14 @@ manual install plan; approve its `InstallPlan` in the `osac-kafka` namespace.
 ### `helm dependency build` or an OCI Pull Fails
 
 Run dependency commands from `osac-installer/` and pass the chart directory.
-For the Phase 1b TopoLVM dependency, use
+For the Phase 1b TopoLVM and NetBox dependencies, use
 `helm dependency build ./charts/osac-infra`. Helm downloads the declared
-dependency from `topolvm.github.io` during this step, even when
-`topolvm.enabled: false`; the disabled dependency is not installed. This
-repository access is needed from the machine running Helm, not from the
-cluster at runtime. The Phase 2 `osac` chart uses `file://` subcharts and
-requires a full monorepo checkout; the install procedure updates those with
+dependencies from `topolvm.github.io` and `netbox-community.github.io` during
+this step, even when `topolvm.enabled` and `netbox.enabled` are `false`. The
+disabled dependencies are not installed. This repository access is needed
+from the machine running Helm, not from the cluster at runtime. The Phase 2
+`osac` chart uses `file://` subcharts and requires a full monorepo checkout;
+the install procedure updates those with
 `helm dependency update ./charts/osac`. OCI chart pulls require outbound
 access to `ghcr.io`. A `not found` error on
 `oci://ghcr.io/osac-project/charts/*` usually means an incorrect `--version`.

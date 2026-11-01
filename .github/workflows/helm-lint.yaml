@@ -168,26 +168,22 @@ jobs:
         make helm-infra-deps
         helm dependency build charts/osac/
 
-    - name: Test networking values
+    # One aggregate target instead of a step per test: a new render test only
+    # needs to be added to the Makefile, not to this workflow as well.
+    - name: Run installer validation suite
       working-directory: osac-installer
-      run: uv run --project .. python scripts/test-networking-values.py
+      run: uv run --project .. make helm-validate
 
-    - name: Test the NetworkClass step
+    - name: Check config files for duplicate keys
       working-directory: osac-installer
-      run: python3 scripts/test-network-class-step.py
+      run: make config-duplicate-key-check
 
-    - name: Test MCE rendering
+    - name: Check deleted templates are not still referenced
+      if: github.event_name == 'pull_request'
       working-directory: osac-installer
-      run: uv run --project .. make mce-render-test
-
-    - name: Test BMF NetBox rendering
-      if: steps.should-run.outputs.run
-      working-directory: osac-installer
-      run: uv run --project .. make bmf-netbox-render-test
-
-    - name: Test chart name independence
-      working-directory: osac-installer
-      run: make chart-name-independence-render-test
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: make deleted-template-refs-check
 
     - name: Run chart-testing lint
       working-directory: osac-installer

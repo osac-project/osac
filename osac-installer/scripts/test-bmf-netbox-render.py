@@ -14,6 +14,8 @@ from typing import Any
 
 import yaml
 
+from _render_test_common import assert_no_retired_hook_jobs
+
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 INSTALLER_DIR = SCRIPT_DIR.parent
 REPO_ROOT = INSTALLER_DIR.parent
@@ -544,12 +546,7 @@ def check_osac_wiring(temp_dir: pathlib.Path) -> None:
     # Its Metal3 prerequisites moved into the render-time preflight engine, so
     # assert the Job stays gone AND that the checks still run here. Without
     # this, dropping the hook a second time would silently lose coverage.
-    assert not [
-        doc
-        for doc in docs
-        if doc.get("kind") == "Job"
-        and doc.get("metadata", {}).get("name") == "osac-pre-install-validate"
-    ], "the retired pre-install validation Job is rendered again"
+    assert_no_retired_hook_jobs(docs)
 
     check_ids = {result["id"] for result in preflight_report(docs)["results"]}
     assert {"metal3-bmh-crd", "metal3-watch-all-namespaces"} <= check_ids, sorted(check_ids)

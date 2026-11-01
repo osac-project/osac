@@ -18,6 +18,7 @@ import json
 import pathlib
 import re
 import subprocess
+import sys
 import tarfile
 import tempfile
 
@@ -41,7 +42,8 @@ OSAC_HOOK_JOBS = {
     "osac-aap-create-token",
 }
 # Replaced by the render-time preflight engine; it must not come back.
-RETIRED_HOOK_JOBS = {"osac-pre-install-validate"}
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _render_test_common import RETIRED_HOOK_JOBS  # noqa: E402
 # Both Jobs must end before Helm's own 40m --timeout from the install guide.
 CSI_DEADLINES = {
     "csi-driver-fulfillment-trust-bootstrap": 1800,

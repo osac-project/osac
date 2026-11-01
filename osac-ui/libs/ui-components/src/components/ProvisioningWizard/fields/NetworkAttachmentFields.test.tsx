@@ -205,7 +205,9 @@ describe('NetworkAttachmentFields', () => {
     await waitFor(() =>
       expect(getResourceSelectCombobox(/^Virtual network/)).toHaveValue('vn-prod'),
     );
-    await waitFor(() => expect(getResourceSelectCombobox(/^Subnet/)).toHaveValue('subnet-a · 10.0.1.0/24'));
+    await waitFor(() =>
+      expect(getResourceSelectCombobox(/^Subnet/)).toHaveValue('subnet-a · 10.0.1.0/24'),
+    );
   });
 
   it('shows a load error with retry when catalog subnet lookup fails', async () => {

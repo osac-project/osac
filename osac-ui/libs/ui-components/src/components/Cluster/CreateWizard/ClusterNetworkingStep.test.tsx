@@ -14,6 +14,10 @@ import {
 
 import { ClusterNetworkingStep } from './ClusterNetworkingStep';
 import { createEmptyClusterValues } from './fields';
+import {
+  expectResourceSelectDisabled,
+  getResourceSelectCombobox,
+} from '../../../test-utils/resourceSelect';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 import { provisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
@@ -239,8 +243,8 @@ describe('ClusterNetworkingStep', () => {
     await user.click(screen.getByRole('radio', { name: /Tenant default/ }));
     await user.click(screen.getByRole('radio', { name: /Custom network/ }));
 
-    expect(screen.getByLabelText(/^Virtual network/)).toHaveTextContent('Select virtual network');
-    expect(screen.getByLabelText(/^Subnet/)).toBeDisabled();
+    expect(getResourceSelectCombobox(/^Virtual network/)).toHaveValue('');
+    expectResourceSelectDisabled(/^Subnet/);
   });
 
   it('keeps automatic external IP attachment off until selected', async () => {

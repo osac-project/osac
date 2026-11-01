@@ -100,7 +100,7 @@ Every object is named from an API ID and carries
 |---|---|---|
 | `create_virtual_network` | Create or verify the namespace; create or restore the baseline deny. | none |
 | `delete_virtual_network` | Delete the namespace if it has this VirtualNetwork's owner labels; wait until gone. | none |
-| `create_subnet` | No CUDN: check the VTEP, claim it, wait until ready. Owned by this Subnet: check it matches, restore metadata and selector, wait until ready. Owned by another Subnet: no change. Being deleted: retry. | none |
+| `create_subnet` | No CUDN: check the VTEP, claim it, wait until ready. Owned by this Subnet: check it matches, restore metadata and selector, wait until ready. Owned by another Subnet: no change. Being deleted: retry. | `compute_instance_supported`, `compute_instance_unsupported_reason` |
 | `delete_subnet` | Owner: delete the CUDN, wait until gone. Otherwise nothing. Never deletes the namespace. | none |
 | `create_security_group` | Create the group policy, or replace its rules and keep its members. | none |
 | `delete_security_group` | Delete the group policy; wait until gone. | none |

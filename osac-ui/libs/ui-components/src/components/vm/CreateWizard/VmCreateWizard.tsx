@@ -1,7 +1,7 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageSection, PageSectionTypes, Wizard, WizardStep } from '@patternfly/react-core';
-import { Formik } from 'formik';
+import { Formik, type FormikErrors, type FormikHelpers, type FormikProps, setIn } from 'formik';
 
 import { ComputeInstanceCatalogItem, ComputeInstanceCatalogItems } from '@osac/types';
 import { useGetResource } from '@osac/ui-components/api/use-resource';
@@ -9,6 +9,7 @@ import { useProvisionComputeInstance } from '@osac/ui-components/api/v1/compute-
 import { FieldValidationProvider } from '@osac/ui-components/components/Form/FieldValidationContext';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
 import { CatalogStep } from '@osac/ui-components/components/ProvisioningWizard/CatalogStep';
+import { useVmSubnetValidator } from '@osac/ui-components/components/ProvisioningWizard/fields/useVmSubnetValidator';
 import { OSACWizardFooter } from '@osac/ui-components/components/Wizard/OSACWizardFooter';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
@@ -32,6 +33,29 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const provision = useProvisionComputeInstance();
+  const formRef = useRef<FormikProps<ComputeInstanceWizardValues>>(null);
+  const submissionInFlight = useRef(false);
+  const navigationGeneration = useRef(0);
+  const validateVmSubnet = useVmSubnetValidator();
+  const validateNetwork = useCallback(
+    async (
+      values: ComputeInstanceWizardValues,
+    ): Promise<FormikErrors<ComputeInstanceWizardValues>> => {
+      const network = values.spec.networking.networkAttachment.value;
+      if (network.useDefaultNetwork) {
+        return {};
+      }
+      const error = await validateVmSubnet(network.subnet, network.virtualNetwork.id);
+      return error
+        ? (setIn(
+            {},
+            'spec.networking.networkAttachment.value.subnet',
+            error,
+          ) as FormikErrors<ComputeInstanceWizardValues>)
+        : {};
+    },
+    [validateVmSubnet],
+  );
   const catalogItemQuery = useGetResource(
     ComputeInstanceCatalogItems,
     { id: initialCatalogItemId ?? '' },
@@ -40,6 +64,20 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   const [activeStep, setActiveStep] = useState<VmWizardStepId>('catalog');
   const [validationAlert, setValidationAlert] = useState(false);
   const [selectedCatalogItem, setSelectedCatalogItem] = useState<ComputeInstanceCatalogItem>();
+  const validateStepNetwork = useCallback(
+    (values: ComputeInstanceWizardValues) => {
+      if (
+        !values.spec.networking.networkAttachment.locked &&
+        activeStep !== 'networking' &&
+        activeStep !== 'access' &&
+        activeStep !== 'review'
+      ) {
+        return Promise.resolve({});
+      }
+      return validateNetwork(values);
+    },
+    [activeStep, validateNetwork],
+  );
   const steps = [
     'catalog',
     'general',
@@ -60,11 +98,28 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   };
 
   const handleSubmit = useCallback(
-    async (values: ComputeInstanceWizardValues) => {
-      if (!values.catalogItemReference.id || !values.catalogItemReference.name) {
+    async (
+      values: ComputeInstanceWizardValues,
+      helpers: FormikHelpers<ComputeInstanceWizardValues>,
+    ) => {
+      if (
+        submissionInFlight.current ||
+        !values.catalogItemReference.id ||
+        !values.catalogItemReference.name
+      ) {
         return;
       }
+      submissionInFlight.current = true;
+      const generation = navigationGeneration.current;
       try {
+        const networkErrors = await validateNetwork(values);
+        if (formRef.current?.values !== values || generation !== navigationGeneration.current) {
+          return;
+        }
+        if (Object.keys(networkErrors).length > 0) {
+          helpers.setErrors(networkErrors);
+          return;
+        }
         const created = await provision.mutateAsync(
           buildComputeInstanceCreatePayload(
             values,
@@ -76,9 +131,11 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
         }
       } catch {
         // Surfaced via provision.error in the footer; nothing further to do here.
+      } finally {
+        submissionInFlight.current = false;
       }
     },
-    [catalogItemQuery.data?.object, navigate, provision, selectedCatalogItem],
+    [catalogItemQuery.data?.object, navigate, provision, selectedCatalogItem, validateNetwork],
   );
 
   const initialValues = useMemo(
@@ -94,9 +151,11 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   );
   return (
     <Formik<ComputeInstanceWizardValues>
+      innerRef={formRef}
       initialValues={initialValues}
       enableReinitialize
       validationSchema={schema}
+      validate={validateStepNetwork}
       onSubmit={handleSubmit}
       validateOnChange={false}
     >
@@ -106,6 +165,7 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
           <Wizard
             isVisitRequired
             onStepChange={(_, step) => {
+              navigationGeneration.current += 1;
               setActiveStep(String(step.id) as VmWizardStepId);
               setValidationAlert(false);
             }}

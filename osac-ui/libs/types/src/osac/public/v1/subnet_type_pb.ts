@@ -29,18 +29,17 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/subnet_type.proto.
  */
 export const file_osac_public_v1_subnet_type: GenFile = /*@__PURE__*/
-  fileDesc("CiBvc2FjL3B1YmxpYy92MS9zdWJuZXRfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEingEKBlN1Ym5ldBIKCgJpZBgBIAEoCRIqCghtZXRhZGF0YRgCIAEoCzIYLm9zYWMucHVibGljLnYxLk1ldGFkYXRhEigKBHNwZWMYAyABKAsyGi5vc2FjLnB1YmxpYy52MS5TdWJuZXRTcGVjEjIKBnN0YXR1cxgEIAEoCzIcLm9zYWMucHVibGljLnYxLlN1Ym5ldFN0YXR1c0IE4kEBAyLqAgoKU3VibmV0U3BlYxJMCg92aXJ0dWFsX25ldHdvcmsYASABKAsyLC5vc2FjLnB1YmxpYy52MS5WaXJ0dWFsTmV0d29ya0xvY2FsUmVmZXJlbmNlQgXiQQICBRJ3CglpcHY0X2NpZHIYAiABKAlCX+JBAQW6SFi6AU4KE2Nhbm9uaWNhbF9pcHY0X2NpZHISHW11c3QgYmUgYSBjYW5vbmljYWwgSVB2NCBDSURSGhh0aGlzLmlzSXBQcmVmaXgoNCwgdHJ1ZSnIAQFyAhABSACIAQESeQoJaXB2Nl9jaWRyGAMgASgJQmHiQQEFukhaugFXChdpcHY2X2NpZHJfbm90X3N1cHBvcnRlZBIwSVB2NiBhbmQgZHVhbC1zdGFjayBuZXR3b3JraW5nIGFyZSBub3Qgc3VwcG9ydGVkGgp0aGlzID09ICcnSAGIAQFCDAoKX2lwdjRfY2lkckIMCgpfaXB2Nl9jaWRyIlwKDFN1Ym5ldFN0YXR1cxIqCgVzdGF0ZRgBIAEoDjIbLm9zYWMucHVibGljLnYxLlN1Ym5ldFN0YXRlEhQKB21lc3NhZ2UYAiABKAlIAIgBAUIKCghfbWVzc2FnZSIwChRTdWJuZXRMb2NhbFJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJKrEBCgtTdWJuZXRTdGF0ZRIcChhTVUJORVRfU1RBVEVfVU5TUEVDSUZJRUQQABIYChRTVUJORVRfU1RBVEVfUEVORElORxABEhYKElNVQk5FVF9TVEFURV9SRUFEWRACEhcKE1NVQk5FVF9TVEFURV9GQUlMRUQQAxIZChVTVUJORVRfU1RBVEVfREVMRVRJTkcQBBIeChpTVUJORVRfU1RBVEVfREVMRVRFX0ZBSUxFRBAFYgZwcm90bzM", [file_buf_validate_validate, file_google_api_field_behavior, file_osac_public_v1_metadata_type, file_osac_public_v1_virtual_network_type]);
+  fileDesc("CiBvc2FjL3B1YmxpYy92MS9zdWJuZXRfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEingEKBlN1Ym5ldBIKCgJpZBgBIAEoCRIqCghtZXRhZGF0YRgCIAEoCzIYLm9zYWMucHVibGljLnYxLk1ldGFkYXRhEigKBHNwZWMYAyABKAsyGi5vc2FjLnB1YmxpYy52MS5TdWJuZXRTcGVjEjIKBnN0YXR1cxgEIAEoCzIcLm9zYWMucHVibGljLnYxLlN1Ym5ldFN0YXR1c0IE4kEBAyLyAQoKU3VibmV0U3BlYxJMCg92aXJ0dWFsX25ldHdvcmsYASABKAsyLC5vc2FjLnB1YmxpYy52MS5WaXJ0dWFsTmV0d29ya0xvY2FsUmVmZXJlbmNlQgXiQQICBRJ3CglpcHY0X2NpZHIYAiABKAlCX+JBAQW6SFi6AU4KE2Nhbm9uaWNhbF9pcHY0X2NpZHISHW11c3QgYmUgYSBjYW5vbmljYWwgSVB2NCBDSURSGhh0aGlzLmlzSXBQcmVmaXgoNCwgdHJ1ZSnIAQFyAhABSACIAQFCDAoKX2lwdjRfY2lkckoECAMQBFIJaXB2Nl9jaWRyIt0BCgxTdWJuZXRTdGF0dXMSKgoFc3RhdGUYASABKA4yGy5vc2FjLnB1YmxpYy52MS5TdWJuZXRTdGF0ZRIUCgdtZXNzYWdlGAIgASgJSACIAQESLQoaY29tcHV0ZV9pbnN0YW5jZV9zdXBwb3J0ZWQYBCABKAhCBOJBAQNIAYgBARIxCiNjb21wdXRlX2luc3RhbmNlX3Vuc3VwcG9ydGVkX3JlYXNvbhgFIAEoCUIE4kEBA0IKCghfbWVzc2FnZUIdChtfY29tcHV0ZV9pbnN0YW5jZV9zdXBwb3J0ZWQiMAoUU3VibmV0TG9jYWxSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCSqzAQoLU3VibmV0U3RhdGUSHAoYU1VCTkVUX1NUQVRFX1VOU1BFQ0lGSUVEEAASGAoUU1VCTkVUX1NUQVRFX1BFTkRJTkcQARIWChJTVUJORVRfU1RBVEVfUkVBRFkQAhIXChNTVUJORVRfU1RBVEVfRkFJTEVEEAMSGQoVU1VCTkVUX1NUQVRFX0RFTEVUSU5HEAQiBAgFEAUqGlNVQk5FVF9TVEFURV9ERUxFVEVfRkFJTEVEYgZwcm90bzM", [file_buf_validate_validate, file_google_api_field_behavior, file_osac_public_v1_metadata_type, file_osac_public_v1_virtual_network_type]);
 
 /**
  * Represents a subdivision of a VirtualNetwork for organizing compute instances.
  *
  * Subnets subdivide VirtualNetwork IP address space into smaller, manageable segments. Each Subnet belongs to exactly
- * one parent VirtualNetwork and must be in the same region. Initially, the system supports a 1:1 mapping between
+ * one parent VirtualNetwork. Initially, the system supports a 1:1 mapping between
  * VirtualNetwork and Subnet (one subnet per network), but the schema is designed to support multiple subnets per
  * VirtualNetwork in the future.
  *
- * Subnets currently support canonical IPv4 addressing only. The legacy ipv6_cidr field remains in the wire
- * contract for compatibility, but non-empty IPv6 and dual-stack requests are rejected.
+ * Subnets support canonical IPv4 addressing only.
  *
  * The parent VirtualNetwork relationship should be specified via metadata.annotations using the 'osac.openshift.io/owner-reference'
  * key with the VirtualNetwork ID as the value. This establishes resource hierarchy for garbage collection, ensuring
@@ -104,8 +103,7 @@ export type SubnetSpec = Message<"osac.public.v1.SubnetSpec"> & {
   /**
    * Parent VirtualNetwork reference. Required and immutable after creation.
    *
-   * Must reference an existing VirtualNetwork in READY state. The referenced VirtualNetwork must be
-   * in the same region as this Subnet.
+   * Must reference an existing VirtualNetwork in READY state, in the same tenant and project as this Subnet.
    *
    * The system validates that:
    * - The VirtualNetwork exists
@@ -130,14 +128,6 @@ export type SubnetSpec = Message<"osac.public.v1.SubnetSpec"> & {
    * @generated from field: optional string ipv4_cidr = 2;
    */
   ipv4Cidr?: string | undefined;
-
-  /**
-   * Legacy IPv6 CIDR field. IPv6 and dual-stack networking are not supported; non-empty values are rejected.
-   *
-   *
-   * @generated from field: optional string ipv6_cidr = 3;
-   */
-  ipv6Cidr?: string | undefined;
 };
 
 /**
@@ -181,6 +171,21 @@ export type SubnetStatus = Message<"osac.public.v1.SubnetStatus"> & {
    * @generated from field: optional string message = 2;
    */
   message?: string | undefined;
+
+  /**
+   * Whether this subnet supports compute instances. Absent until eligibility is determined.
+   * This capability is independent of lifecycle readiness and cannot be set by callers.
+   *
+   * @generated from field: optional bool compute_instance_supported = 4;
+   */
+  computeInstanceSupported?: boolean | undefined;
+
+  /**
+   * Explanation when compute instances are not supported on this subnet.
+   *
+   * @generated from field: string compute_instance_unsupported_reason = 5;
+   */
+  computeInstanceUnsupportedReason: string;
 };
 
 /**
@@ -290,18 +295,6 @@ export enum SubnetState {
    * @generated from enum value: SUBNET_STATE_DELETING = 4;
    */
   DELETING = 4,
-
-  /**
-   * The subnet deletion has failed.
-   *
-   * The deprovision operation encountered an error and could not complete.
-   * The status.message field will contain specific error details.
-   * Manual intervention may be required to resolve the underlying issue
-   * before retrying deletion.
-   *
-   * @generated from enum value: SUBNET_STATE_DELETE_FAILED = 5;
-   */
-  DELETE_FAILED = 5,
 }
 
 /**

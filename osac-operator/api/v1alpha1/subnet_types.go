@@ -47,6 +47,11 @@ type SubnetSpec struct {
 
 // SubnetStatus defines the observed state of Subnet
 type SubnetStatus struct {
+	// Compute eligibility is independent of lifecycle readiness. An absent value
+	// means the Kubernetes manager has not reported eligibility.
+	ComputeInstanceSupported         *bool  `json:"computeInstanceSupported,omitempty"`
+	ComputeInstanceUnsupportedReason string `json:"computeInstanceUnsupportedReason,omitempty"`
+
 	// Conditions holds the Ready condition of the Subnet.
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`

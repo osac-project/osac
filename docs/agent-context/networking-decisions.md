@@ -242,3 +242,18 @@ The other AgentlessNet tasks (VirtualNetwork, Subnet, ExternalIPPool, ExternalIP
 ExternalIPAttachment) still read the per-kind playbook inputs, and AgentlessNet
 has no valid manager registration. NATGateway therefore cannot run on a deployed
 AgentlessNet until the role adopts the contract.
+
+## Subnet compute eligibility
+
+The Kubernetes `create_subnet` result additionally accepts optional
+`compute_instance_supported` (boolean) and
+`compute_instance_unsupported_reason` (string). The operator persists these
+with the successful task and reports them through Subnet status to the API
+and VM wizard. `cudn_evpn` reports true for the CUDN owner and false with a
+reason for a fabric-only sibling; both Subnets remain Ready. A manager returning
+no output defaults to supported. A Subnet without a Kubernetes manager is
+unsupported. With provider networking disabled, VMs use the cluster default
+pod network and the Subnet is supported. The `apply_network_attachment` task still validates current
+ownership before VM provisioning, including after the owner is removed.
+This is a local extension to the manager result contract; the matching
+accepted-design amendment remains to be published.

@@ -1000,3 +1000,14 @@ See [Multi-branch test isolation](MULTI-BRANCH-ISOLATION.md) for detailed
 guidance on running integration tests from multiple checkouts simultaneously,
 including Kind cluster naming, namespace parameters, port isolation, database
 and Kafka separation, cleanup procedures, and a quick-reference checklist.
+
+Subnet compute eligibility is covered by `networktask/result_test.go` (typed
+manager result validation), the Subnet cases in
+`osac-operator/internal/controller/networking_resources_test.go` (Envtest with
+fake AAP, including API feedback), and
+`fulfillment-service/internal/servers/subnets_server_test.go` (PostgreSQL-backed
+public API status mapping). The `cudn_evpn` component integration target checks
+that the real manager task reports owner/sibling eligibility through its job
+artifacts against Kind. These checks do not establish live OVN readiness or
+packet continuity; deployed provider coverage remains under
+[OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).

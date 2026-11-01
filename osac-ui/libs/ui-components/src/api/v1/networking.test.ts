@@ -1,5 +1,6 @@
 import React, { type ReactNode, createElement } from 'react';
-import { createRouterTransport } from '@connectrpc/connect';
+import { create, fromBinary, fromJson, toBinary, toJson } from '@bufbuild/protobuf';
+import { createClient, createRouterTransport } from '@connectrpc/connect';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
@@ -9,7 +10,9 @@ import {
   Protocol,
   SecurityGroupState,
   SecurityGroups,
+  SubnetSchema,
   SubnetState,
+  Subnets,
   VirtualNetworkState,
 } from '@osac/types';
 
@@ -26,10 +29,64 @@ import {
   virtualNetworkFilterForSubnetList,
   virtualNetworkScopeFilter,
 } from './networking';
+import { createMockConnectTransport } from '../../test-utils/createMockConnectTransport';
 import { ApiProvider } from '../api-context';
 import { escapeCelStringLiteral } from '../cel';
 
 describe('networking list filters', () => {
+  it.each(['vn', 'vn-"quoted'])(
+    'applies compound VN and VM capability filters in the mock: %s',
+    async (virtualNetwork) => {
+      const subnets = [
+        { id: 'eligible', virtualNetwork, supported: true, state: SubnetState.READY },
+        { id: 'other-vn', virtualNetwork: 'other', supported: true, state: SubnetState.READY },
+        { id: 'false', virtualNetwork, supported: false, state: SubnetState.READY },
+        { id: 'unknown', virtualNetwork, supported: undefined, state: SubnetState.READY },
+        { id: 'not-ready', virtualNetwork, supported: true, state: SubnetState.PENDING },
+      ].map((item) =>
+        create(SubnetSchema, {
+          id: item.id,
+          spec: { virtualNetwork: { id: item.virtualNetwork } },
+          status: { state: item.state, computeInstanceSupported: item.supported },
+        }),
+      );
+      const client = createClient(Subnets, createMockConnectTransport({ subnets }));
+      const result = await client.list({
+        filter: virtualNetworkFilterForSubnetList(virtualNetwork, true),
+      });
+      expect(result.items.map((item) => item.id)).toEqual(['eligible']);
+    },
+  );
+
+  it.each([undefined, false, true])(
+    'preserves optional eligibility through the stable service descriptor: %s',
+    (supported) => {
+      const schema = Subnets.method.list.output;
+      const response = fromJson(schema, {
+        items: [
+          {
+            id: 'subnet',
+            status: {
+              state: SubnetState.READY,
+              ...(supported === undefined ? {} : { computeInstanceSupported: supported }),
+              computeInstanceUnsupportedReason: 'backend explanation',
+            },
+          },
+        ],
+      });
+      for (const roundtrip of [
+        fromJson(schema, toJson(schema, response)),
+        fromBinary(schema, toBinary(schema, response)),
+      ]) {
+        expect(roundtrip.items[0].status?.computeInstanceSupported).toBe(supported);
+        expect(roundtrip.items[0].status?.computeInstanceUnsupportedReason).toBe(
+          'backend explanation',
+        );
+        expect(roundtrip.items[0].status?.state).toBe(SubnetState.READY);
+      }
+    },
+  );
+
   it('filters virtual networks to ready state using enum integer', () => {
     expect(VIRTUAL_NETWORK_READY_LIST_FILTER).toBe(
       `this.status.state == ${VirtualNetworkState.READY}`,
@@ -63,6 +120,12 @@ describe('networking list filters', () => {
   it('combines virtual network scope and ready state for subnets', () => {
     expect(virtualNetworkFilterForSubnetList('vn-1')).toBe(
       `this.spec.virtual_network.id == "vn-1" && this.status.state == ${SubnetState.READY}`,
+    );
+  });
+
+  it('requires backend VM capability only for VM choices', () => {
+    expect(virtualNetworkFilterForSubnetList('vn-1', true)).toBe(
+      `this.spec.virtual_network.id == "vn-1" && this.status.state == ${SubnetState.READY} && this.status.compute_instance_supported == true`,
     );
   });
 

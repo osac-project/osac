@@ -36,3 +36,6 @@ columns:
 - header: HUB
   value: this.status.hub
   type: osac.private.v1.Hub
+
+- header: VM-SUPPORTED
+  value: "has(this.status.compute_instance_supported)? string(this.status.compute_instance_supported): 'unknown'"

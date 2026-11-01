@@ -1,7 +1,7 @@
-import { type ReactNode, useEffect, useMemo } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Alert, Content, FormGroup } from '@patternfly/react-core';
 import { TypeaheadSelect } from '@patternfly/react-templates';
-import { useField } from 'formik';
+import { useField, useFormikContext } from 'formik';
 
 import type { ListParams } from '@osac/ui-components/api/types';
 import { useListResource } from '@osac/ui-components/api/use-resource';
@@ -41,6 +41,12 @@ export interface ResourceSelectFieldProps {
   onSelectResource?: (value: ResourceSelectValue) => void;
   /** Client-side filter applied after the list response (e.g. GPU-class). */
   filterItems?: (item: ResourceListItem) => boolean;
+  /** Validates the selected value against the currently listed resources. */
+  validateSelection?: (
+    value: ResourceSelectValue,
+    items: ResourceListItem[],
+    state: { isFetching: boolean; hasError: boolean },
+  ) => string | undefined | Promise<string | undefined>;
   /** Label for options and the closed toggle. Defaults to metadata.name. */
   formatOptionLabel?: (item: ResourceListItem) => string;
 }
@@ -69,18 +75,56 @@ export const ResourceSelectField = ({
   emptyDescription,
   onSelectResource,
   filterItems,
+  validateSelection,
   formatOptionLabel = defaultOptionLabel,
 }: ResourceSelectFieldProps) => {
-  const [field, meta, helpers] = useField<ResourceSelectValue>(name);
   const showValidationErrors = useShowFieldValidationErrors();
-  const error = getVisibleFieldError(meta, showValidationErrors);
-  const { data, isLoading, error: loadError } = useListResource(service, request);
+  const {
+    data,
+    isLoading,
+    isFetching,
+    dataUpdatedAt,
+    error: loadError,
+  } = useListResource(service, request);
   const items = useMemo(() => {
     const listed = ((data as { items?: ResourceListItem[] } | undefined)?.items ?? []).filter(
       (item) => item.id,
     );
     return filterItems ? listed.filter(filterItems) : listed;
   }, [data, filterItems]);
+  const latestValidation = useRef<Promise<string | undefined>>(Promise.resolve(undefined));
+  const validate = useCallback(
+    async (value: ResourceSelectValue) => {
+      let pendingValidation = Promise.resolve(
+        validateSelection?.(value, items, { isFetching, hasError: Boolean(loadError) }),
+      );
+      latestValidation.current = pendingValidation;
+      let result = await pendingValidation;
+      while (pendingValidation !== latestValidation.current) {
+        pendingValidation = latestValidation.current;
+        result = await pendingValidation;
+      }
+      return result;
+    },
+    [items, validateSelection, isFetching, loadError],
+  );
+  const [field, meta, helpers] = useField<ResourceSelectValue>({ name, validate });
+  const { validateField } = useFormikContext();
+  const hasSelectionValidator = Boolean(validateSelection);
+  useEffect(() => {
+    if (hasSelectionValidator) {
+      void validateField(name);
+    }
+  }, [
+    dataUpdatedAt,
+    isFetching,
+    loadError,
+    field.value,
+    name,
+    validateField,
+    hasSelectionValidator,
+  ]);
+  const error = getVisibleFieldError(meta, showValidationErrors);
 
   const listFailed = Boolean(loadError);
   const listEmpty = !isLoading && !listFailed && items.length === 0;

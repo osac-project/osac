@@ -54,9 +54,14 @@ const CatalogSubnetVirtualNetworkHydrator = ({
 interface NetworkAttachmentFieldsProps {
   name: string;
   isDisabled?: boolean;
+  requireVmSupport?: boolean;
 }
 
-const NetworkAttachmentFields = ({ name, isDisabled = false }: NetworkAttachmentFieldsProps) => {
+const NetworkAttachmentFields = ({
+  name,
+  isDisabled = false,
+  requireVmSupport = false,
+}: NetworkAttachmentFieldsProps) => {
   const [{ value: useDefaultNetwork }] = useField<boolean>(`${name}.useDefaultNetwork`);
 
   return (
@@ -76,6 +81,7 @@ const NetworkAttachmentFields = ({ name, isDisabled = false }: NetworkAttachment
           />
           <SubnetField
             name={`${name}.subnet`}
+            requireVmSupport={requireVmSupport}
             virtualNetworkName={`${name}.virtualNetwork`}
             isDisabled={isDisabled}
           />

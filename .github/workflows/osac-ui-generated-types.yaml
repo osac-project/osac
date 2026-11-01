@@ -37,13 +37,13 @@ jobs:
 
       - name: Regenerate UI types
         working-directory: osac-ui
-        run: pnpm gen-types
+        run: pnpm gen-types --local
 
       - name: Check generated UI types
         run: |
           if ! git diff --exit-code -- osac-ui/libs/types/src \
             || [ -n "$(git ls-files --others --exclude-standard -- osac-ui/libs/types/src)" ]; then
-            echo "::error::Generated UI types are out of date. Run 'pnpm gen-types' in osac-ui and commit the generated files."
+            echo "::error::Generated UI types are out of date. Run 'pnpm gen-types --local' in osac-ui and commit the generated files."
             git status --porcelain -- osac-ui/libs/types/src
             exit 1
           fi

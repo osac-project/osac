@@ -1,11 +1,18 @@
-import { create } from '@bufbuild/protobuf';
+import { clone, create } from '@bufbuild/protobuf';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ComputeInstanceCatalogItemSchema, ComputeInstanceRunStrategy } from '@osac/types';
+import {
+  ComputeInstanceCatalogItemFieldsSchema,
+  ComputeInstanceCatalogItemSchema,
+  ComputeInstanceRunStrategy,
+  SubnetSchema,
+  SubnetState,
+} from '@osac/types';
 
 import VmCreateWizard from './VmCreateWizard';
+import { getResourceSelectCombobox } from '../../../test-utils/resourceSelect';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
 const mockNavigate = vi.fn();
@@ -60,15 +67,14 @@ const renderWizard = (onClosed = vi.fn()) =>
     session: { role: 'tenant-user' },
   });
 
-// The catalog card's selectable radio input does not currently expose an
-// accessible name (see CatalogItemCard's selectableActionAriaLabel), so it is
-// located by the id PatternFly derives from the catalog item id instead.
 const clickCatalogItemCard = async (user: ReturnType<typeof renderWizard>['user']) => {
-  await screen.findByText('catalog-vm-1');
-  const radio = document.getElementById('selectedCatalogItem-catalog-vm-1');
-  if (!radio) {
-    throw new Error('Catalog item radio input not found');
-  }
+  const radio = await waitFor(() => {
+    const option = document.getElementById('selectedCatalogItem-catalog-vm-1');
+    if (!option) {
+      throw new Error('Catalog item radio input not found');
+    }
+    return option;
+  });
   await user.click(radio);
 };
 
@@ -96,6 +102,127 @@ describe('VmCreateWizard', () => {
   beforeEach(() => {
     mockNavigate.mockReset();
   });
+
+  it('does not dispatch an old selection after the form changes during the final GET', async () => {
+    const catalog = clone(ComputeInstanceCatalogItemSchema, vmCatalogItem);
+    const fields = create(ComputeInstanceCatalogItemFieldsSchema, {
+      networkAttachments: {
+        behavior: {
+          case: 'editable',
+          value: {
+            defaultValue: {
+              items: [
+                {
+                  subnet: { id: 'old-subnet', name: 'old-subnet' },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    if (catalog.fields) {
+      catalog.fields.networkAttachments = fields.networkAttachments;
+    }
+    const available = ['old-subnet', 'new-subnet'].map((id) =>
+      create(SubnetSchema, {
+        id,
+        metadata: { name: id },
+        spec: { virtualNetwork: { id: 'vn' } },
+        status: { state: SubnetState.READY, computeInstanceSupported: true },
+      }),
+    );
+    let submitting = false;
+    let submitGets = 0;
+    let reachedFinalGet = false;
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const onCreate = vi.fn(() => ({ object: { id: 'new-vm' } }));
+    const { user } = renderWithProviders(<VmCreateWizard onClosed={vi.fn()} />, {
+      apiFixtures: { catalogItems: [catalog], subnets: available },
+      transportOverrides: {
+        onSubnetGet: async (request) => {
+          const object = create(SubnetSchema, {
+            id: request.id,
+            spec: { virtualNetwork: { id: 'vn' } },
+            status: {
+              state: SubnetState.READY,
+              computeInstanceSupported: request.id === 'old-subnet',
+            },
+          });
+          if (submitting && request.id === 'old-subnet' && ++submitGets === 3) {
+            reachedFinalGet = true;
+            await pending;
+          }
+          return { object };
+        },
+        onComputeInstanceCreate: onCreate as never,
+      },
+    });
+    await selectCatalogItemAndFillName(user, 'changed-subnet-vm');
+    await advanceThroughRemainingSteps(user);
+    submitting = true;
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(reachedFinalGet).toBe(true));
+    expect(onCreate).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Networking' }));
+    const picker = getResourceSelectCombobox('Subnet');
+    await user.click(screen.getByLabelText('Subnet'));
+    await user.click(await screen.findByRole('option', { name: 'new-subnet' }));
+    expect(picker).toHaveValue('new-subnet');
+    finish();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+    expect(onCreate).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    'rechecks selected subnet on Review before Create, locked=%s',
+    async (locked) => {
+      const catalog = clone(ComputeInstanceCatalogItemSchema, vmCatalogItem);
+      const attachment = {
+        items: [
+          {
+            subnet: { id: 'subnet', name: 'subnet' },
+          },
+        ],
+      };
+      const networkFields = create(ComputeInstanceCatalogItemFieldsSchema, {
+        networkAttachments: {
+          behavior: locked
+            ? { case: 'locked', value: attachment }
+            : { case: 'editable', value: { defaultValue: attachment } },
+        },
+      });
+      if (catalog.fields) {
+        catalog.fields.networkAttachments = networkFields.networkAttachments;
+      }
+      let supported = true;
+      const onCreate = vi.fn(() => ({ object: { id: 'new-vm' } }));
+      const { user } = renderWithProviders(<VmCreateWizard onClosed={vi.fn()} />, {
+        apiFixtures: { catalogItems: [catalog] },
+        transportOverrides: {
+          onSubnetGet: () => ({
+            object: create(SubnetSchema, {
+              id: 'subnet',
+              spec: { virtualNetwork: { id: 'vn' } },
+              status: { state: SubnetState.READY, computeInstanceSupported: supported },
+            }),
+          }),
+          onComputeInstanceCreate: onCreate as never,
+        },
+      });
+      await selectCatalogItemAndFillName(user, 'fresh-subnet-vm');
+      await advanceThroughRemainingSteps(user);
+      supported = false;
+      await user.click(screen.getByRole('button', { name: 'Create' }));
+      await screen.findByText('Fix the highlighted errors before continuing.');
+      expect(onCreate).not.toHaveBeenCalled();
+      expect(mockNavigate).not.toHaveBeenCalled();
+    },
+  );
 
   it('submits the catalog-governed payload and navigates to the new VM on success', async () => {
     const onComputeInstanceCreate = vi.fn(
@@ -167,7 +294,9 @@ describe('VmCreateWizard', () => {
   it('blocks Next on the catalog step until a catalog item is selected', async () => {
     const { user } = renderWizard();
 
-    await screen.findByText('catalog-vm-1');
+    await waitFor(() =>
+      expect(document.getElementById('selectedCatalogItem-catalog-vm-1')).not.toBeNull(),
+    );
     await user.click(screen.getByRole('button', { name: 'Next' }));
 
     expect(screen.getByText('Fix the highlighted errors before continuing.')).toBeInTheDocument();

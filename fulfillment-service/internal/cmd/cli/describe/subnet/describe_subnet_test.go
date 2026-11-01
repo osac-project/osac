@@ -30,6 +30,16 @@ func formatSubnet(s *publicv1.Subnet) string {
 
 var _ = Describe("Describe Subnet", func() {
 	Describe("Rendering tests", func() {
+		It("shows capability independently of READY", func() {
+			subnet := publicv1.Subnet_builder{Status: publicv1.SubnetStatus_builder{
+				State: publicv1.SubnetState_SUBNET_STATE_READY, ComputeInstanceSupported: new(false),
+				ComputeInstanceUnsupportedReason: "Fabric-only Subnet",
+			}.Build()}.Build()
+			output := formatSubnet(subnet)
+			Expect(output).To(MatchRegexp(`VM supported:\s+false`))
+			Expect(output).To(ContainSubstring("Fabric-only Subnet"))
+			Expect(output).To(ContainSubstring("READY"))
+		})
 		It("should display all fields when set", func() {
 			msg := "Subnet ready"
 			s := publicv1.Subnet_builder{

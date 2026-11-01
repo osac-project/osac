@@ -3,6 +3,7 @@ import { useField } from 'formik';
 import { Subnets } from '@osac/types';
 
 import type { ProvisioningFieldControlProps } from './provisioningFieldValue';
+import { useVmSubnetValidator } from './useVmSubnetValidator';
 import { virtualNetworkFilterForSubnetList } from '../../../api/v1/networking';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { ResourceSelectField } from '../../Form/ResourceSelectField';
@@ -10,12 +11,19 @@ import type { ResourceSelectValue } from '../../Form/resourceSelectValue';
 
 interface SubnetFieldProps extends ProvisioningFieldControlProps {
   virtualNetworkName: string;
+  requireVmSupport?: boolean;
 }
 
-const SubnetField = ({ name, virtualNetworkName, isDisabled = false }: SubnetFieldProps) => {
+const SubnetField = ({
+  name,
+  virtualNetworkName,
+  isDisabled = false,
+  requireVmSupport = false,
+}: SubnetFieldProps) => {
   const { t } = useTranslation();
   const [virtualNetwork] = useField<ResourceSelectValue>(virtualNetworkName);
   const virtualNetworkId = virtualNetwork.value?.id ?? '';
+  const validateVmSubnet = useVmSubnetValidator();
 
   return (
     <ResourceSelectField
@@ -24,11 +32,30 @@ const SubnetField = ({ name, virtualNetworkName, isDisabled = false }: SubnetFie
       fieldId={name}
       service={Subnets}
       request={
-        virtualNetworkId ? { filter: virtualNetworkFilterForSubnetList(virtualNetworkId) } : {}
+        virtualNetworkId || requireVmSupport
+          ? {
+              filter: virtualNetworkFilterForSubnetList(
+                virtualNetworkId || undefined,
+                requireVmSupport,
+              ),
+            }
+          : {}
       }
       isDisabled={isDisabled || !virtualNetworkId}
+      validateSelection={
+        requireVmSupport
+          ? (value, _items, state) =>
+              value?.id && (state.isFetching || state.hasError)
+                ? t('A subnet must be READY and support compute instances.')
+                : validateVmSubnet(value, virtualNetworkId)
+          : undefined
+      }
       autoSelectSingleOption
       placeholder={t('Select subnet')}
+      emptyTitle={requireVmSupport ? t('No VM-capable subnets available') : undefined}
+      emptyDescription={
+        requireVmSupport ? t('A subnet must be READY and support compute instances.') : undefined
+      }
       loadErrorTitle={t('Could not load subnets')}
     />
   );

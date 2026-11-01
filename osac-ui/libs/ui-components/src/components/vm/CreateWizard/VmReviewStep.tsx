@@ -103,13 +103,13 @@ export const VmReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Disk image')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {values.spec.diskImage.value.name || values.spec.diskImage.value.id || '—'}
+              {values.spec.diskImage.value.name || ''}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Instance type')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {values.spec.instanceType.value.name || values.spec.instanceType.value.id || '—'}
+              {values.spec.instanceType.value.name || ''}
             </DescriptionListDescription>
           </DescriptionListGroup>
 

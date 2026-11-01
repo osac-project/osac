@@ -91,8 +91,7 @@ const ReviewSection = ({ children, title }: ReviewSectionProps) => {
 const resourceValueKey = (value: { id?: string; name?: string }) =>
   `${value.id?.trim() ?? ''}|${value.name?.trim() ?? ''}`;
 
-const resourceValueLabel = (value: { id?: string; name?: string }, notSet: string): string =>
-  value.name?.trim() || value.id?.trim() || notSet;
+const resourceValueLabel = (value: { id?: string; name?: string }): string => value.name || '';
 
 const guestOsFamilyLabel = (t: TFunction, value: GuestOSFamily): string => {
   switch (value) {
@@ -125,7 +124,7 @@ const additionalDisksLabel = (
     ? values
         .map((disk, index) => {
           const size = disk.sizeGib.trim() ? `${disk.sizeGib.trim()} GiB` : t('Not set');
-          const tier = resourceValueLabel(disk.storageTier, t('Not set'));
+          const tier = resourceValueLabel(disk.storageTier);
           return `${t('Disk set {{number}}', { number: index + 1 })}: ${size} · ${tier}`;
         })
         .join('; ')
@@ -164,8 +163,8 @@ const catalogEditChanges = (
     },
     {
       label: t('Disk image'),
-      before: resourceValueLabel(initialValues.diskImage.value, t('Not set')),
-      after: resourceValueLabel(values.diskImage.value, t('Not set')),
+      before: resourceValueLabel(initialValues.diskImage.value),
+      after: resourceValueLabel(values.diskImage.value),
       beforeKey: resourceValueKey(initialValues.diskImage.value),
       afterKey: resourceValueKey(values.diskImage.value),
     },
@@ -178,8 +177,8 @@ const catalogEditChanges = (
     },
     {
       label: t('Instance type'),
-      before: resourceValueLabel(initialValues.instanceType.value, t('Not set')),
-      after: resourceValueLabel(values.instanceType.value, t('Not set')),
+      before: resourceValueLabel(initialValues.instanceType.value),
+      after: resourceValueLabel(values.instanceType.value),
       beforeKey: resourceValueKey(initialValues.instanceType.value),
       afterKey: resourceValueKey(values.instanceType.value),
     },
@@ -206,8 +205,8 @@ const catalogEditChanges = (
     },
     {
       label: t('Boot storage tier'),
-      before: resourceValueLabel(initialValues.bootDiskStorageTier.value, t('Not set')),
-      after: resourceValueLabel(values.bootDiskStorageTier.value, t('Not set')),
+      before: resourceValueLabel(initialValues.bootDiskStorageTier.value),
+      after: resourceValueLabel(values.bootDiskStorageTier.value),
       beforeKey: resourceValueKey(initialValues.bootDiskStorageTier.value),
       afterKey: resourceValueKey(values.bootDiskStorageTier.value),
     },
@@ -260,8 +259,8 @@ const ComputeCatalogReviewStep = ({ item }: ComputeCatalogReviewStepProps) => {
   const isEdit = Boolean(item);
   const editChanges = isEdit ? catalogEditChanges(t, initialValues, values) : [];
   const notSet = t('Not set');
-  const diskImage = resourceValueLabel(values.diskImage.value, notSet);
-  const instanceTypeLabel = resourceValueLabel(values.instanceType.value, notSet);
+  const diskImage = resourceValueLabel(values.diskImage.value);
+  const instanceTypeLabel = resourceValueLabel(values.instanceType.value);
   const userDataReview = userDataLabel(t, values);
 
   if (isEdit) {
@@ -330,14 +329,14 @@ const ComputeCatalogReviewStep = ({ item }: ComputeCatalogReviewStepProps) => {
             value={
               values.scope === 'global'
                 ? t('Global')
-                : formatReviewScalar(values.metadata.tenant.name || values.metadata.tenant.id)
+                : formatReviewScalar(values.metadata.tenant.name || '')
             }
           />
         )}
         <ReviewRow label={t('Name')} value={formatReviewScalar(values.metadata.name)} />
         <ReviewRow
           label={t('Provisioning template')}
-          value={formatReviewScalar(values.template.name || values.template.id)}
+          value={formatReviewScalar(values.template.name || '')}
         />
         <ReviewRow label={t('Status')} value={t('Unpublished')} />
       </ReviewSection>
@@ -372,7 +371,7 @@ const ComputeCatalogReviewStep = ({ item }: ComputeCatalogReviewStepProps) => {
           value={
             <GovernedReviewValue
               field={values.bootDiskStorageTier}
-              value={resourceValueLabel(values.bootDiskStorageTier.value, notSet)}
+              value={resourceValueLabel(values.bootDiskStorageTier.value)}
             />
           }
         />
@@ -388,7 +387,7 @@ const ComputeCatalogReviewStep = ({ item }: ComputeCatalogReviewStepProps) => {
                       <StackItem key={`${disk.sizeGib}-${index}`}>
                         {`${t('Disk set {{number}}', { number: index + 1 })}: ${
                           disk.sizeGib.trim() ? `${disk.sizeGib.trim()} GiB` : notSet
-                        } · ${resourceValueLabel(disk.storageTier, notSet)}`}
+                        } · ${resourceValueLabel(disk.storageTier)}`}
                       </StackItem>
                     ))}
                   </Stack>

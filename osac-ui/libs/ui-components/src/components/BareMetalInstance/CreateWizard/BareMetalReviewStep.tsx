@@ -77,7 +77,7 @@ export const BareMetalReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Disk image')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {values.spec.diskImage.value.name || values.spec.diskImage.value.id || '—'}
+              {values.spec.diskImage.value.name || ''}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

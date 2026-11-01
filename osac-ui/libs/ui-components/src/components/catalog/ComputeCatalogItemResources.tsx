@@ -57,8 +57,7 @@ const ComputeCatalogItemResources = ({
 
   const diskImageOsIcon = diskImageGuestOsIconType(diskImage);
 
-  const instanceTypeLabel =
-    instanceType?.metadata?.name ?? instanceTypeReference?.name ?? instanceTypeReference?.id;
+  const instanceTypeLabel = instanceType?.metadata?.name || '';
   const diskImageLabel = formatComputeCatalogDiskImage(fields, diskImage, diskImageReference);
 
   return (

@@ -92,9 +92,9 @@ export const formatClusterCatalogVersionLabel = (
   reference: ClusterVersionReference | undefined,
 ): string => {
   const raw =
-    version?.spec?.version || version?.metadata?.name || reference?.name || reference?.id || '';
+    version?.spec?.version || version?.metadata?.name || reference?.name || '';
   if (!raw) {
-    return '—';
+    return '';
   }
   if (/^openshift\s/i.test(raw)) {
     return raw;
@@ -135,10 +135,7 @@ export const formatClusterCatalogHostTypeLabel = (
   if (reference?.name) {
     return reference.name;
   }
-  if (reference?.id) {
-    return reference.id;
-  }
-  return '—';
+  return '';
 };
 
 export const formatClusterCatalogVersionRow = (

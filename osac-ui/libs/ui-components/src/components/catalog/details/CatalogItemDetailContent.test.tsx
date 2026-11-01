@@ -53,7 +53,10 @@ const vmItem = create(ComputeInstanceCatalogItemSchema, {
     tenant: 'foo',
   },
   title: 'RHEL 9 catalog',
-  template: create(ComputeInstanceTemplateReferenceSchema, { id: 'template-1' }),
+  template: create(ComputeInstanceTemplateReferenceSchema, {
+    id: 'template-1',
+    name: 'VM template',
+  }),
   published: true,
   fields: {
     instanceType: {
@@ -176,7 +179,8 @@ describe('CatalogItemDetailContent', () => {
     expect(screen.getAllByRole('separator')).toHaveLength(1);
     expect(container.querySelector('.pf-v6-c-card')).toBeNull();
     expect(screen.getByText('Virtual machines')).toBeInTheDocument();
-    expect(screen.getByText('template-1')).toBeInTheDocument();
+    expect(screen.getByText('VM template')).toBeInTheDocument();
+    expect(screen.queryByText('template-1')).not.toBeInTheDocument();
     expect(screen.getByText('foo')).toBeInTheDocument();
     expect(screen.getByText('Live')).toBeInTheDocument();
 

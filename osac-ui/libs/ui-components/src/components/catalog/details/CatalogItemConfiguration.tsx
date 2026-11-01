@@ -79,7 +79,7 @@ const referenceLabel = (reference: unknown): string | undefined => {
     return undefined;
   }
   const value = reference as { id?: string; name?: string };
-  return value.name || value.id || undefined;
+  return value.name || '';
 };
 
 const policyDisplayValue = (value: unknown): string => {
@@ -166,7 +166,7 @@ const computeConfiguration = (
       <>
         <CatalogConfigurationRow
           label={t('Instance type')}
-          value={instanceType?.metadata?.name ?? referenceLabel(instanceTypeReference)}
+          value={instanceType?.metadata?.name || ''}
           policy={fields?.instanceType}
         />
         <CatalogConfigurationRow
@@ -275,7 +275,7 @@ const bareMetalConfiguration = (
       <>
         <CatalogConfigurationRow
           label={t('Instance type')}
-          value={instanceType?.metadata?.name ?? referenceLabel(instanceTypeReference)}
+          value={instanceType?.metadata?.name || ''}
           policy={fields?.instanceType}
         />
         <CatalogConfigurationRow

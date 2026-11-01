@@ -38,20 +38,20 @@ const buildComputeCatalogItemFieldsPayload = (
 ): CatalogItemFieldsInit => {
   const fields: CatalogItemFieldsInit = {};
 
-  const diskImage = catalogFieldPolicyFromValue<FieldPolicyInit<'diskImage'>>(
-    values.diskImage,
-    isEmptyResource,
-    toResourceRef,
-  );
+  const diskImage = catalogFieldPolicyFromValue<
+    ResourceSelectValue,
+    ReturnType<typeof toResourceRef>,
+    FieldPolicyInit<'diskImage'>
+  >(values.diskImage, isEmptyResource, toResourceRef);
   if (diskImage) {
     fields.diskImage = diskImage;
   }
 
-  const instanceType = catalogFieldPolicyFromValue<FieldPolicyInit<'instanceType'>>(
-    values.instanceType,
-    isEmptyResource,
-    toResourceRef,
-  );
+  const instanceType = catalogFieldPolicyFromValue<
+    ResourceSelectValue,
+    ReturnType<typeof toResourceRef>,
+    FieldPolicyInit<'instanceType'>
+  >(values.instanceType, isEmptyResource, toResourceRef);
   if (instanceType) {
     fields.instanceType = instanceType;
   }
@@ -61,12 +61,14 @@ const buildComputeCatalogItemFieldsPayload = (
     fields.userDataSource = userDataSource;
   }
 
-  const bootDiskSizeGib = catalogFieldPolicyFromValue<NonNullable<BootDiskFieldsInit['sizeGib']>>(
-    values.bootDiskSizeGib,
-    isEmptyString,
-    (value) => Number(toTrimmedString(value)),
-  );
+  const bootDiskSizeGib = catalogFieldPolicyFromValue<
+    string,
+    number,
+    NonNullable<BootDiskFieldsInit['sizeGib']>
+  >(values.bootDiskSizeGib, isEmptyString, (value) => Number(toTrimmedString(value)));
   const bootDiskStorageTier = catalogFieldPolicyFromValue<
+    ResourceSelectValue,
+    ReturnType<typeof toResourceRef>,
     NonNullable<BootDiskFieldsInit['storageTier']>
   >(values.bootDiskStorageTier, isEmptyResource, toResourceRef);
   if (bootDiskSizeGib || bootDiskStorageTier) {
@@ -76,11 +78,11 @@ const buildComputeCatalogItemFieldsPayload = (
     };
   }
 
-  const additionalDisks = catalogFieldPolicyFromValue<FieldPolicyInit<'additionalDisks'>>(
-    values.additionalDisks,
-    isEmptyDiskList,
-    toDiskListRef,
-  );
+  const additionalDisks = catalogFieldPolicyFromValue<
+    ComputeInstanceDiskValues[],
+    ReturnType<typeof toDiskListRef>,
+    FieldPolicyInit<'additionalDisks'>
+  >(values.additionalDisks, isEmptyDiskList, toDiskListRef);
   if (additionalDisks) {
     fields.additionalDisks = additionalDisks;
   }

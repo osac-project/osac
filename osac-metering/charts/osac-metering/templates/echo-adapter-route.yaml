@@ -1,4 +1,7 @@
-{{- if .Values.echoAdapter.enabled }}
+{{- /* The echo adapter's ingress. OpenShift Route only: kind and vcluster
+     have no Route API, and their ingress (or the CI run setup) exposes the
+     Service by other means. */}}
+{{- if and .Values.echoAdapter.enabled (eq .Values.variant "openshift") }}
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:

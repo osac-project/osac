@@ -1827,7 +1827,7 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | Parameter | Description |
 |---|---|
 | `service.externalHostname`, `service.internalHostname` | Public and internal API route host names. Set at installation. |
-| `service.variant` | `openshift` or `kind`. Use `openshift`. |
+| `service.variant` | `openshift`, `kind` or `vcluster`. Use `openshift`; `kind` is for local development and `vcluster` for CI virtual clusters, where the run setup creates the routes outside the chart. |
 | `service.images.service`, `service.images.envoy` | Fulfillment Service and Envoy sidecar images. |
 | `service.certs.issuerRef.kind`, `service.certs.issuerRef.name` | cert-manager issuer for the service certificates. |
 | `service.certs.caBundle.configMap` | Name of the existing CA-bundle `ConfigMap` in the OSAC release namespace. OSAC components mount it, so it must contain the PEM bundle under the fixed `bundle.pem` key. This value does not create or rename the ConfigMap; the default name is `ca-bundle`. When using a custom name, set `operator.fulfillment.tls.caBundle.configMap`, `ui.api.fulfillment.certs.caBundle.configMap`, `ui.auth.certs.caBundle.configMap`, and `metering.certs.caBundle.configMap` to the same name. Include the Kafka broker CA and every other CA required by consumers of the bundle, including OSAC service connections and the OIDC/Keycloak endpoint. If BMaaS is enabled, also set `bmf.secretAPI.caBundle.configMap` to that name. Ask your platform administrators to make the bundle available under this name. See step 4 of [Section 7](#7-verifying-the-installation). |
@@ -1884,9 +1884,12 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | `metering.database.connection` | schema | Metering service database connection. The metering service is always deployed: billing is not optional, and the event publisher writes usage events unconditionally. Requires Strimzi-managed Kafka, a database connection, and `global.osacDeploymentId` (see [Table 5.1](#table-51-service-enablement-my-valuesyaml) and [Kafka configuration](kafka-configuration.md#metering)). | Secret-based default |
 | `metering.heartbeat.interval`, `metering.m360Adapter.enabled`, `metering.m360Adapter.m360.apiUrl`, `metering.m360Adapter.m360.apiKeySecret` | subchart | Heartbeat round interval and the Monetize360 billing adapter. | Not applicable |
 | `metering.readers[]` | schema | Grants each named external reader read/describe access to every tenant's `osac.metering.heartbeat.` topics and read access to its same-named Kafka consumer group. Add or revoke readers through Helm values. | `[]` |
+| `metering.variant` | schema | Metering deployment variant: the echo adapter's OpenShift Route renders only with `openshift`. | `openshift` |
+| `metering.kafka.strimziResources` | schema | Creates the metering Strimzi `KafkaUser` and `KafkaTopic` objects. Set `false` with an external Kafka cluster, together with `kafka.enabled: false` (see [Kafka configuration](kafka-configuration.md#metering)). | `true` |
 | `validation.enabled` | schema | Runs the install preflight. When `false`, every check is skipped and recorded as skipped in the report. | `true` |
 | `preflight.mode` | schema | `enforce` stops the installation on a blocking problem. `report` records problems without stopping. `strict` also stops on warnings. See [Section 11.1](#111-the-install-preflight-stops-the-installation). | `enforce` |
 | `preflight.skip.<check_id>` | schema | Skips one preflight check. The value is the reason, which the report records. | `{}` |
+| `preflight.skipChecks` | schema | Check ids to skip without reasons, for automation. Each is reported as skipped with a fixed reason. An id that does not exist stops the install. | `[]` |
 | `hubAccess.enabled` | schema | Creates hub-access resources and registers the local cluster as its own hub. Set to `true` before installation when the Fulfillment Service and hub run on the same cluster; see [Section 8.3](#83-registering-the-hub). | `false` |
 | `dbInit.host` | schema | Host that the `db-init` pre-installation hook connects to, to create the databases. Set it to your external PostgreSQL host for a production deployment. | Development default; override for production |
 | `clusterVersions.enabled`, `clusterVersions.versions[]` | schema | OpenShift Container Platform release images offered to hosted clusters. Each entry has `version`, `image`, and an optional `default`. A default entry also requires `diskImage.name` and `diskImage.sourceRef`, an OCI operating-system disk artifact. | `false` and `[]` |
@@ -3352,8 +3355,12 @@ oc delete clusterrolebinding,clusterrole osac-validate-<namespace> --ignore-not-
 
 **Skipping a check.** Set `preflight.skip.<check_id>` to the reason, for
 example `--set preflight.skip.cert-issuer-ready="created by GitOps after this
-install"`. The report records the reason. A check id that does not exist is
-reported as a warning. `validation.enabled=false` skips every check.
+install"`. The report records the reason. Automation without reasons can list
+ids in `preflight.skipChecks` instead; an unknown id there stops the install,
+while an unknown `preflight.skip` id is only reported as a warning.
+`validation.enabled=false` skips every check, with one exception: a
+`preflight.skipChecks` entry naming a check id that does not exist still stops
+the install, because the skip list itself is broken.
 
 **Access needed.** The preflight reads the cluster with the credentials of
 whoever runs `helm install`: the `kube-system` Namespace (to tell that the

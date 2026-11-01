@@ -20,12 +20,10 @@ import { GuestOSFamily } from '@osac/types';
 import type { ComputeInstanceCatalogItem } from '@osac/types';
 
 import type { ComputeCatalogItemValues } from './values';
-import { useInstanceType } from '../../../../api/v1/instance-types';
 import { useSession } from '../../../../hooks/use-session';
 import { useTranslation } from '../../../../hooks/useTranslation';
 import type { ProvisioningFieldValue } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
 import { formatReviewScalar } from '../../../ProvisioningWizard/reviewFormatters';
-import { formatInstanceTypeReviewLabelFromType } from '../../../vm/utils';
 import CatalogFieldEditabilityLabel from '../../CatalogFieldEditabilityLabel';
 
 interface ComputeCatalogReviewStepProps {
@@ -259,15 +257,11 @@ const ComputeCatalogReviewStep = ({ item }: ComputeCatalogReviewStepProps) => {
   const { t } = useTranslation();
   const { role } = useSession();
   const { initialValues, values } = useFormikContext<ComputeCatalogItemValues>();
-  const { data: instanceType } = useInstanceType(values.instanceType.value.id);
   const isEdit = Boolean(item);
   const editChanges = isEdit ? catalogEditChanges(t, initialValues, values) : [];
   const notSet = t('Not set');
   const diskImage = resourceValueLabel(values.diskImage.value, notSet);
-  const instanceTypeId = values.instanceType.value.id.trim();
-  const instanceTypeLabel = instanceTypeId
-    ? formatInstanceTypeReviewLabelFromType(instanceType, undefined, instanceTypeId)
-    : notSet;
+  const instanceTypeLabel = resourceValueLabel(values.instanceType.value, notSet);
   const userDataReview = userDataLabel(t, values);
 
   if (isEdit) {

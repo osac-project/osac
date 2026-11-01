@@ -43,7 +43,7 @@ const emptyValues: ComputeInstanceWizardValues = {
     sshKey: provisioningFieldValue(''),
     guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
     diskImage: provisioningFieldValue(emptyResourceSelectValue()),
-    instanceType: provisioningFieldValue(''),
+    instanceType: provisioningFieldValue(emptyResourceSelectValue()),
     userDataSource: provisioningFieldValue('inline'),
     userData: provisioningFieldValue(''),
     userDataSecret: provisioningFieldValue(''),
@@ -151,7 +151,7 @@ describe('buildComputeInstanceStepSchema', () => {
       metadata: { name: 'my-vm', project: '' },
       spec: {
         ...emptyValues.spec,
-        instanceType: provisioningFieldValue('standard-4-8'),
+        instanceType: provisioningFieldValue({ id: 'standard-4-8', name: 'standard-4-8' }),
       },
     });
     expect(errors).toEqual({
@@ -184,7 +184,7 @@ describe('buildComputeInstanceStepSchema', () => {
       metadata: { name: 'web-01', project: '' },
       spec: {
         ...emptyValues.spec,
-        instanceType: provisioningFieldValue('standard-4-8'),
+        instanceType: provisioningFieldValue({ id: 'standard-4-8', name: 'standard-4-8' }),
         diskImage: provisioningFieldValue({ id: 'disk-image-rhel', name: 'rhel' }),
         bootDisk: {
           sizeGib: provisioningFieldValue('not-a-number'),
@@ -234,9 +234,7 @@ describe('buildComputeInstanceStepSchema', () => {
       },
     });
     expect(errors).toEqual({
-      spec: {
-        instanceType: { value: 'Instance type is required' },
-      },
+      spec: { instanceType: { value: { id: 'Instance type is required' } } },
     });
   });
 
@@ -431,7 +429,7 @@ describe('buildComputeInstanceStepSchema', () => {
       spec: {
         ...emptyValues.spec,
         diskImage: provisioningFieldValue({ id: 'disk-image-rhel', name: 'rhel' }),
-        instanceType: provisioningFieldValue('standard-4-8'),
+        instanceType: provisioningFieldValue({ id: 'standard-4-8', name: 'standard-4-8' }),
         additionalDisks: provisioningFieldValue([
           { sizeGib: '100', storageTier: emptyResourceSelectValue() },
         ]),

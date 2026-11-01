@@ -43,6 +43,10 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+// clusterOrderWorkerPhaseReady is the worker lifecycle phase that marks a
+// worker as ready; it matches the WorkerStatus.Phase enum value "Ready".
+const clusterOrderWorkerPhaseReady = "Ready"
+
 // FeedbackReconciler sends updates to the fulfillment service.
 type FeedbackReconciler struct {
 	bridge                *feedback.Bridge[*ckv1alpha1.ClusterOrder, *privatev1.Cluster]
@@ -553,23 +557,30 @@ func setClusterStateWithTransitionTime(ctx context.Context, clusterOrder *ckv1al
 	remote.GetStatus().SetState(state)
 }
 
-// setClusterDeletingStateWithTransitionTime forces the DELETING state on the delete path.
-// The ClusterOrder CR may not have recorded Phase=Deleting yet when feedback first syncs a
+// setClusterDeletingStateWithTransitionTime forces a deletion state on the delete path. The
+// ClusterOrder CR may not have recorded Phase=Deleting yet when feedback first syncs a
 // deletion; the CR's PhaseTransitionTime then belongs to the previous phase (for example a
-// READY stamped hours ago), and copying it would date DELETING at that old moment, billing
-// the entire prior state's span as DELETING. When the CR has not recorded Deleting, the
-// transition is dated at the CR's deletionTimestamp when present, else at the feedback
-// observation time, so DELETING is stamped at or after the deletion began (see
-// deletionTransitionTime). When the CR has recorded Deleting, its stamp is copied like the
-// update path. The delete path does not map the CR phase to a state at all: the state is
-// DELETING regardless of the phase the CR still carries, so no intermediate state is
-// stamped in memory within one pass.
+// READY stamped hours ago), and copying it would date the deletion at that old moment,
+// billing the entire prior state's span as deletion. When the CR has not recorded Deleting,
+// the transition is dated at the CR's deletionTimestamp when present, else at the feedback
+// observation time, so the deletion state is stamped at or after the deletion began (see
+// deletionTransitionTime). When the CR has recorded Deleting or DeleteFailed, its stamp is
+// copied like the update path. The delete path does not map the CR phase to a state at all:
+// the state is DELETING regardless of the phase the CR still carries, except DeleteFailed,
+// which reports the failed deprovision explicitly, so no intermediate state is stamped in
+// memory within one pass.
 func setClusterDeletingStateWithTransitionTime(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
 	state := privatev1.ClusterState_CLUSTER_STATE_DELETING
+	phaseRecorded := true
+	if clusterOrder.Status.Phase == ckv1alpha1.ClusterOrderPhaseDeleteFailed {
+		state = privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED
+	} else if clusterOrder.Status.Phase != ckv1alpha1.ClusterOrderPhaseDeleting {
+		phaseRecorded = false
+	}
 	if remote.GetStatus().GetState() != state {
 		log := ctrllog.FromContext(ctx)
 		var stamp *timestamppb.Timestamp
-		if clusterOrder.Status.Phase == ckv1alpha1.ClusterOrderPhaseDeleting {
+		if phaseRecorded {
 			stamp = copyPhaseTransitionTime(log, clusterOrder.Status.PhaseTransitionTime, remote.GetStatus().GetStateTransitionTime())
 		} else {
 			stamp = deletionTransitionTime(log, clusterOrder, remote.GetStatus().GetStateTransitionTime())
@@ -924,6 +935,8 @@ func syncClusterOrderPhase(ctx context.Context, clusterOrder *ckv1alpha1.Cluster
 		state = privatev1.ClusterState_CLUSTER_STATE_READY
 	case ckv1alpha1.ClusterOrderPhaseDeleting:
 		state = privatev1.ClusterState_CLUSTER_STATE_DELETING
+	case ckv1alpha1.ClusterOrderPhaseDeleteFailed:
+		state = privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED
 	default:
 		knownPhase = false
 		log.Info("Unknown phase, will ignore it", "phase", clusterOrder.Status.Phase)
@@ -985,6 +998,7 @@ func syncClusterOrderURLs(ctx context.Context, hubClient clnt.Client, clusterOrd
 
 func syncClusterOrderNodeRequests(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
 	log := ctrllog.FromContext(ctx)
+	readyByNodeSet := readyWorkersByNodeSet(clusterOrder)
 	for i := range len(clusterOrder.Status.NodeRequests) {
 		nodeRequest := &clusterOrder.Status.NodeRequests[i]
 		if nodeRequest.BareMetal == nil || nodeRequest.BareMetal.InstanceType == "" {
@@ -1027,7 +1041,26 @@ func syncClusterOrderNodeRequests(ctx context.Context, clusterOrder *ckv1alpha1.
 			)
 			nodeSet.SetSize(newValue)
 		}
+
+		// The ready count is the observed ready capacity of the node set, unlike
+		// the size above, which is the desired count. Zero is reported when no
+		// worker of the set is ready yet.
+		nodeSet.SetReadySize(readyByNodeSet[nodeSetID])
 	}
+}
+
+// readyWorkersByNodeSet counts, per node set, the workers whose lifecycle phase
+// is Ready. The result is the observed ready capacity of each node set, as
+// opposed to the desired size reported by the node requests.
+func readyWorkersByNodeSet(clusterOrder *ckv1alpha1.ClusterOrder) map[string]int32 {
+	counts := make(map[string]int32)
+	for i := range clusterOrder.Status.Workers {
+		worker := &clusterOrder.Status.Workers[i]
+		if worker.Phase == clusterOrderWorkerPhaseReady {
+			counts[worker.NodeSet]++
+		}
+	}
+	return counts
 }
 
 func fetchHostedCluster(ctx context.Context, hubClient clnt.Client, clusterOrder *ckv1alpha1.ClusterOrder) (*hypershiftv1beta1.HostedCluster, error) {

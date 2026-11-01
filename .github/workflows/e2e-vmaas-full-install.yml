@@ -135,3 +135,8 @@ jobs:
       # Only a run on main (schedule, or a manual run against main): that is where the workload identity trusts this
       # workflow. A run for a pull request or a queue entry passes inputs.sha and never gets it.
       enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' && inputs.sha == '' }}
+    secrets:
+      # The central ci-observe OTLP ingest password, for the live telemetry
+      # push when the ci-observe input is on. The reusable workflow degrades
+      # to running the test without telemetry when it is empty.
+      ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}

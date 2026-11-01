@@ -6,6 +6,7 @@ import type { ComputeInstanceCatalogItem } from '@osac/types';
 import CatalogItemLaunchButton from '@osac/ui-components/components/catalog/CatalogItemLaunchButton';
 import type { CatalogItemResourceLookups } from '@osac/ui-components/components/catalog/catalogItemResourceLookups';
 import CatalogItemResources from '@osac/ui-components/components/catalog/CatalogItemResources';
+import CatalogItemSource from '@osac/ui-components/components/catalog/CatalogItemSource';
 import CatalogItemTenant from '@osac/ui-components/components/catalog/CatalogItemTenant';
 import { Timestamp } from '@osac/ui-components/components/Primitives/Timestamp';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField';
@@ -39,6 +40,7 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
   const instanceTypeLabel = t('Instance type');
   const diskImageLabel = t('Disk image');
   const tenantLabel = t('Visibility');
+  const sourceLabel = t('Source');
   const createdLabel = t('Created');
   const addedLabel = t('Added');
   const actionsLabel = t('Actions');
@@ -65,6 +67,7 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
             </>
           ) : role === 'tenant-admin' ? (
             <>
+              <Th>{sourceLabel}</Th>
               <Th>{addedLabel}</Th>
             </>
           ) : null}
@@ -118,6 +121,9 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
               </>
             ) : role === 'tenant-admin' ? (
               <>
+                <Td dataLabel={sourceLabel}>
+                  <CatalogItemSource catalogItem={item} />
+                </Td>
                 <Td dataLabel={addedLabel}>
                   <Timestamp value={item.metadata?.creationTimestamp} format="Date" />
                 </Td>

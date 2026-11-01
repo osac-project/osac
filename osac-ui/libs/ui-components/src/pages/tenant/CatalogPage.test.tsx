@@ -975,7 +975,7 @@ describe('CatalogPage', () => {
     });
   });
 
-  it('omits the unsupported Source column for tenant admins', async () => {
+  it('shows the source before the added date for tenant admins', async () => {
     localStorage.setItem(catalogItemsViewPrefKey, 'list');
 
     const catalogItem = {
@@ -983,6 +983,7 @@ describe('CatalogPage', () => {
       metadata: create(MetadataSchema, {
         name: vmCatalogItem.metadata?.name,
         creator: 'creator-user-id',
+        tenant: 'shared',
       }),
     };
 
@@ -995,8 +996,14 @@ describe('CatalogPage', () => {
 
     const table = await screen.findByRole('grid', { name: 'Catalog items' });
 
-    expect(within(table).queryByRole('columnheader', { name: 'Source' })).not.toBeInTheDocument();
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((header) => header.textContent),
+    ).toEqual(['Name', 'Status', 'Instance type', 'Disk image', 'Source', 'Added', '']);
+    expect(within(table).getByRole('columnheader', { name: 'Source' })).toBeInTheDocument();
     expect(within(table).getByRole('columnheader', { name: 'Added' })).toBeInTheDocument();
+    expect(within(table).getByText('From provider')).toBeInTheDocument();
     expect(within(table).queryByText('creator-user-id')).not.toBeInTheDocument();
   });
 

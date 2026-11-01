@@ -967,6 +967,14 @@ helm-networking-test: helm-deps ## Test global.networking values, validation, an
 	python3 scripts/test-networking-values.py
 	python3 scripts/test_it_networking_checks.py
 
+.PHONY: config-duplicate-key-check
+config-duplicate-key-check: ## Check chart values, schemas and workflows for duplicate keys
+	python3 scripts/check-duplicate-keys.py
+
+.PHONY: deleted-template-refs-check
+deleted-template-refs-check: ## Check no deleted chart template is still named by a test (BASE_SHA=...)
+	python3 scripts/check-deleted-template-refs.py "$${BASE_SHA:?set BASE_SHA to the merge-base of this change}"
+
 .PHONY: network-class-step-test
 network-class-step-test: ## Test the installer NetworkClass step against a fake fulfillment API
 	python3 scripts/test-network-class-step.py

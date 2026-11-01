@@ -43,7 +43,12 @@ service:
       pullPolicy: IfNotPresent
   auth:
     issuerUrl: https://keycloak.osac.localhost:8443/realms/osac
+
   idp:
     url: https://keycloak.osac.localhost:8443
   vault:
     keycloakIssuerUrl: "https://keycloak.osac.localhost:8443/realms/osac"
+
+bmf:
+  secretAPI:
+    issuerUrl: https://keycloak.osac.localhost:8443/realms/osac

@@ -516,7 +516,7 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
 | Unit | Co-located `*_test.go`; `make test` | Controller helpers, validation, provisioning state logic | External APIs and providers are mocked. |
 | Envtest | Existing Controller Suite in `internal/controller/`; run by `make test` | Kubernetes API server, etcd, loaded CRDs and public in-process reconciliation | Provider/fulfillment responses and external CR progression are test-controlled; this is not a deployed worker. |
 | Component integration | `test/integration/`; deploy the current operator into Kind, then `make integration-tests` | Installed operator, Kubernetes API, CRDs, controller-manager, console proxy, networking, worker service-account authorization and startup without LVMS/TopoLVM | AAP/provider provisioning and external infrastructure are not real; some existing tests remove finalizers to bypass external-provider boundaries. |
-| Component integration (CI) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator` (repository root) | Thin Kind deployment used by the PR workflow | Same external-provider limitations as the local Kind suite. |
+| Component integration (CI) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator` (repository root) | Thin Kind deployment with the Fulfillment client disabled | Same external-provider limitations as the local Kind suite; installation-setting verification needs a separate deployed test. |
 | Contract | `test/contract/`; included by `make test` | Helm chart RBAC templates against the operator permission contract | No deployed operator or external provider. |
 | E2E | `../tests/e2e/` | Cross-component fulfillment journeys | Depends on the deployed environment and configured providers. |
 
@@ -531,8 +531,10 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
   it does not exercise Fulfillment or PostgreSQL feedback.
 - **Fulfillment client TLS:** `cmd/verified_fulfillment_test.go` probes local TLS
   valid/invalid CA and hostname cases, bundle rotation and last-client retention.
-  The production render contract covers mounts/arguments; Kind runs with the
-  trust gate disabled. Neither proves a deployed fulfillment TLS endpoint.
+  `cmd/installation_setting_test.go` checks the pre-manager startup call through
+  the verified TLS connection for both saved networking values. The production
+  render contract covers mounts/arguments; Kind runs with the trust gate
+  disabled. Neither proves a deployed fulfillment TLS endpoint.
 - **Fulfillment OAuth:** `cmd/verified_fulfillment_test.go` uses local TLS OIDC
   and gRPC endpoints to verify client-credentials token acquisition and
   authenticated calls in both connection modes. The installer render contract
@@ -738,7 +740,7 @@ Touched-area requirements: [component guide](../bare-metal-fulfillment-operator/
 | Unit | Co-located `*_test.go`; `make test` | Allocation, lifecycle, client, and provider logic in isolation | Kubernetes and external provider APIs are mocked or intercepted. |
 | Envtest | Controller tests under `internal/controller/*_envtest_test.go`; run by `make test` | Kubernetes API server, etcd, OSAC CRDs, and static Metal3 CRDs | Metal3 controller, Ironic/BMC, hardware, and some provider clients are faked. |
 | Component integration | `test/integration/`; deploy the current operator into a Kind cluster, then run `make integration-tests` | Deployed operator behavior, CRDs, Kubernetes API, pool/instance flows, and status transitions | The suite creates static `BareMetalHost` state and simulates provider transitions; it does not run a real Metal3 operator, Ironic, BMC, or hardware. |
-| Component integration (CI) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf` (from repository root) | The thin Kind deployment used by the PR workflow | Same static Metal3/provider boundary as the local suite. |
+| Component integration (CI) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf` (from repository root) | Thin Kind deployment with the installation API endpoint unset | Same static Metal3/provider boundary as the local suite; installation-setting verification needs a separate deployed test. |
 | Contract | No dedicated contract suite; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) for qualifying provider-contract coverage | No real external provider boundary is exercised by the current suite | Static Metal3 CRDs, patched status, and simulated provider transitions do not exercise a real Metal3/Ironic/BMC contract. |
 | E2E | Cross-component OSAC E2E suites | Fulfillment-to-operator user journeys where the environment provides them | Real hardware and provider availability remain environment-dependent. |
 

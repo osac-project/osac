@@ -101,6 +101,18 @@ spec:
           {{- end }}
           - name: OSAC_ENABLE_NETWORKING_PROVISIONING
             value: {{ .Values.global.networking.provisioningEnabled | quote }}
+          - name: OSAC_INSTALLATION_API_URL
+            value: {{ .Values.secretAPI.url | quote }}
+          - name: OSAC_INSTALLATION_API_ISSUER_URL
+            value: {{ tpl .Values.secretAPI.issuerUrl . | quote }}
+          - name: OSAC_INSTALLATION_API_CLIENT_ID_FILE
+            value: "/etc/osac/secret-api/credentials/client-id"
+          - name: OSAC_INSTALLATION_API_CLIENT_SECRET_FILE
+            value: "/etc/osac/secret-api/credentials/client-secret"
+          {{- if .Values.secretAPI.caBundle.configMap }}
+          - name: OSAC_INSTALLATION_API_CA_FILE
+            value: "/etc/osac/secret-api/ca/bundle.pem"
+          {{- end }}
           {{- if .Values.netbox.enabled }}
           - name: OSAC_SECRET_API_URL
             value: {{ .Values.secretAPI.url | quote }}
@@ -138,6 +150,8 @@ spec:
             mountPath: /etc/osac/secrets/netbox-ca/
             readOnly: true
           {{- end }}
+          {{- end }}
+          {{- if .Values.secretAPI.url }}
           - name: secret-api-client-credentials
             mountPath: /etc/osac/secret-api/credentials/
             readOnly: true
@@ -182,9 +196,12 @@ spec:
               - key: ca.crt
                 path: ca.crt
         {{- end }}
+        {{- end }}
+        {{- if .Values.secretAPI.url }}
         - name: secret-api-client-credentials
           secret:
             secretName: fulfillment-controller-credentials
+            optional: true
             items:
               - key: client-id
                 path: client-id

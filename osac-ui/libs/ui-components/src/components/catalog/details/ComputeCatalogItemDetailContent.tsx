@@ -23,7 +23,12 @@ import { guestOsFamilyLabels } from '../../DiskImage/DiskImageTable';
 import { Timestamp } from '../../Primitives/Timestamp';
 import { findDiskImageForReference } from '../bareMetalCatalogItemResourceDisplay';
 import CatalogFieldEditabilityLabel from '../CatalogFieldEditabilityLabel';
-import { type FieldPolicyLike, catalogFieldPolicyBehavior } from '../catalogFieldPolicyDisplay';
+import {
+  type FieldPolicyLike,
+  catalogFieldPolicyBehavior,
+  catalogFieldPolicyValue,
+  catalogReferenceLabel,
+} from '../catalogFieldPolicyDisplay';
 import { GLOBAL_TENANT_VALUE } from '../catalogItemDisplay';
 import { useCatalogItemResourceLookups } from '../catalogItemResourceLookups';
 import {
@@ -93,26 +98,6 @@ const GovernedDetailValue = ({ value, policy }: GovernedDetailValueProps) => {
   );
 };
 
-const policyValue = (policy: unknown): unknown => {
-  const behavior = (policy as { behavior?: { case?: string; value?: unknown } } | undefined)
-    ?.behavior;
-  if (behavior?.case === 'locked') {
-    return behavior.value;
-  }
-  if (behavior?.case === 'editable' && behavior.value && typeof behavior.value === 'object') {
-    return (behavior.value as { defaultValue?: unknown }).defaultValue;
-  }
-  return undefined;
-};
-
-const referenceLabel = (reference: unknown): string | undefined => {
-  if (!reference || typeof reference !== 'object') {
-    return undefined;
-  }
-  const value = reference as { id?: string; name?: string };
-  return value.name || '';
-};
-
 interface AdditionalDisk {
   sizeGib?: number;
   storageTier?: { id?: string; name?: string };
@@ -127,7 +112,7 @@ const additionalDisksFromPolicy = (value: unknown): AdditionalDisk[] => {
 };
 
 const displayReference = (reference: unknown, t: TFunction): string =>
-  referenceLabel(reference) ?? t('Not set');
+  catalogReferenceLabel(reference) ?? t('Not set');
 
 const VmCatalogItemDetailContent = ({ item }: VmCatalogItemDetailContentProps) => {
   const { t } = useTranslation();
@@ -141,8 +126,8 @@ const VmCatalogItemDetailContent = ({ item }: VmCatalogItemDetailContentProps) =
   );
   const diskImage = findDiskImageForReference(resourceLookups.diskImages, diskImageReference);
   const bootDiskSize = int32ValueFromPolicy(fields?.bootDisk?.sizeGib);
-  const storageTier = policyValue(fields?.bootDisk?.storageTier);
-  const templateName = referenceLabel(item.template);
+  const storageTier = catalogFieldPolicyValue(fields?.bootDisk?.storageTier);
+  const templateName = catalogReferenceLabel(item.template);
   const project = item.metadata?.project?.trim();
   const tenant = item.metadata?.tenant?.trim();
   const scopeLabel = project ? t('Project') : t('Visibility');
@@ -164,11 +149,13 @@ const VmCatalogItemDetailContent = ({ item }: VmCatalogItemDetailContentProps) =
   const memoryValue = formatComputeCatalogMemory(fields, instanceType, t) ?? t('Not set');
   const gpu = instanceType?.spec?.gpu;
   const bootDiskSizeValue = formatComputeCatalogStorage(fields, bootDiskSize, t) ?? t('Not set');
-  const additionalDisks = additionalDisksFromPolicy(policyValue(fields?.additionalDisks));
+  const additionalDisks = additionalDisksFromPolicy(
+    catalogFieldPolicyValue(fields?.additionalDisks),
+  );
   const additionalDiskRows: CatalogStorageTableRow[] = additionalDisks.map((disk, index) => ({
     id: `additional-disk-${index}`,
     size: disk.sizeGib === undefined ? t('Not set') : `${disk.sizeGib} GiB`,
-    storageTier: referenceLabel(disk.storageTier) ?? t('Not set'),
+    storageTier: catalogReferenceLabel(disk.storageTier) ?? t('Not set'),
   }));
 
   return (

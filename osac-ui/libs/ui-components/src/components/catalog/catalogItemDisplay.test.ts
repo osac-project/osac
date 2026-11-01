@@ -9,8 +9,8 @@ import type {
 import {
   catalogItemDetailsPath,
   catalogItemEditPath,
-  catalogItemKind,
   filterCatalogItemsBySearch,
+  getCatalogItemKind,
 } from './catalogItemDisplay';
 describe('filterCatalogItemsBySearch', () => {
   const items: ClusterCatalogItem[] = [
@@ -87,22 +87,22 @@ describe('catalogItemDetailsPath', () => {
   });
 });
 
-describe('catalogItemKind', () => {
+describe('getCatalogItemKind', () => {
   it('resolves the kind for each catalog item type', () => {
     expect(
-      catalogItemKind({
+      getCatalogItemKind({
         $typeName: 'osac.public.v1.ComputeInstanceCatalogItem',
         id: 'vm-1',
       } as ComputeInstanceCatalogItem),
     ).toBe('vm');
     expect(
-      catalogItemKind({
+      getCatalogItemKind({
         $typeName: 'osac.public.v1.BareMetalInstanceCatalogItem',
         id: 'bm-1',
       } as BareMetalInstanceCatalogItem),
     ).toBe('bm');
     expect(
-      catalogItemKind({
+      getCatalogItemKind({
         $typeName: 'osac.public.v1.ClusterCatalogItem',
         id: 'cluster-1',
       } as ClusterCatalogItem),

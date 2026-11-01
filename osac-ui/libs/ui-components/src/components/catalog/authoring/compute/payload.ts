@@ -4,10 +4,9 @@ import { type ComputeInstanceCatalogItem, ComputeInstanceCatalogItemSchema } fro
 
 import type { ComputeCatalogItemValues } from './values';
 import { type ResourceSelectValue } from '../../../Form/resourceSelectValue';
-import type { ProvisioningFieldValue } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
 import type { ComputeInstanceDiskValues } from '../../../vm/CreateWizard/fields';
 import { catalogGeneralItemPayload } from '../CatalogGeneralStep';
-import { policyFromCatalogValue } from '../catalogItemPolicy';
+import { catalogFieldPolicyFromValue } from '../catalogItemPolicy';
 import { catalogUserDataPolicyFromValues } from '../catalogUserData';
 
 type CatalogItemFieldsInit = NonNullable<
@@ -33,31 +32,12 @@ const toDiskListRef = (value: unknown) => ({
     })),
 });
 
-/**
- * Encodes a `{ value, locked }` field into a `*FieldPolicy` init shape via
- * `policyFromCatalogValue`. The cast is unavoidable: `policyFromCatalogValue` is
- * generic so the shared decode/encode contract in `catalogItemPolicy.ts` stays
- * untyped against any one generated message, and TypeScript cannot verify a fresh
- * object literal against an unconstrained type parameter.
- */
-const buildFieldPolicy = <T>(
-  field: ProvisioningFieldValue<unknown>,
-  isEmpty: (value: unknown) => boolean,
-  toValue: (value: unknown) => unknown,
-): T | undefined =>
-  policyFromCatalogValue<T>(
-    field,
-    isEmpty,
-    (value) => ({ behavior: { case: 'locked', value: toValue(value) } }) as T,
-    (value) => ({ behavior: { case: 'editable', value: { defaultValue: toValue(value) } } }) as T,
-  );
-
 const buildComputeCatalogItemFieldsPayload = (
   values: ComputeCatalogItemValues,
 ): CatalogItemFieldsInit => {
   const fields: CatalogItemFieldsInit = {};
 
-  const diskImage = buildFieldPolicy<FieldPolicyInit<'diskImage'>>(
+  const diskImage = catalogFieldPolicyFromValue<FieldPolicyInit<'diskImage'>>(
     values.diskImage,
     isEmptyResource,
     toResourceRef,
@@ -66,7 +46,7 @@ const buildComputeCatalogItemFieldsPayload = (
     fields.diskImage = diskImage;
   }
 
-  const instanceType = buildFieldPolicy<FieldPolicyInit<'instanceType'>>(
+  const instanceType = catalogFieldPolicyFromValue<FieldPolicyInit<'instanceType'>>(
     values.instanceType,
     isEmptyResource,
     toResourceRef,
@@ -80,16 +60,14 @@ const buildComputeCatalogItemFieldsPayload = (
     fields.userDataSource = userDataSource;
   }
 
-  const bootDiskSizeGib = buildFieldPolicy<NonNullable<BootDiskFieldsInit['sizeGib']>>(
+  const bootDiskSizeGib = catalogFieldPolicyFromValue<NonNullable<BootDiskFieldsInit['sizeGib']>>(
     values.bootDiskSizeGib,
     isEmptyString,
     (value) => Number(toTrimmedString(value)),
   );
-  const bootDiskStorageTier = buildFieldPolicy<NonNullable<BootDiskFieldsInit['storageTier']>>(
-    values.bootDiskStorageTier,
-    isEmptyResource,
-    toResourceRef,
-  );
+  const bootDiskStorageTier = catalogFieldPolicyFromValue<
+    NonNullable<BootDiskFieldsInit['storageTier']>
+  >(values.bootDiskStorageTier, isEmptyResource, toResourceRef);
   if (bootDiskSizeGib || bootDiskStorageTier) {
     fields.bootDisk = {
       ...(bootDiskSizeGib ? { sizeGib: bootDiskSizeGib } : {}),
@@ -97,7 +75,7 @@ const buildComputeCatalogItemFieldsPayload = (
     };
   }
 
-  const additionalDisks = buildFieldPolicy<FieldPolicyInit<'additionalDisks'>>(
+  const additionalDisks = catalogFieldPolicyFromValue<FieldPolicyInit<'additionalDisks'>>(
     values.additionalDisks,
     isEmptyDiskList,
     toDiskListRef,

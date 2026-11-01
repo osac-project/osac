@@ -8,7 +8,7 @@ import { useUpdateResource } from '../../../api/use-resource';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
 import { useToast } from '../../Toast/useToast';
-import type { CatalogItem } from '../catalogItemDisplay';
+import { type CatalogItem, selectCatalogItemValue } from '../catalogItemDisplay';
 
 interface SetCatalogItemPublishedResult {
   setPublished: (published: boolean) => void;
@@ -19,19 +19,14 @@ interface SetCatalogItemPublishedResult {
 export const useSetCatalogItemPublished = (item: CatalogItem): SetCatalogItemPublishedResult => {
   const { t } = useTranslation();
   const { addToast } = useToast();
-  const updateVm = useUpdateResource(ComputeInstanceCatalogItems);
-  const updateCluster = useUpdateResource(ClusterCatalogItems);
-  const updateBm = useUpdateResource(BareMetalInstanceCatalogItems);
+  const mutation = selectCatalogItemValue(item, {
+    vm: useUpdateResource(ComputeInstanceCatalogItems),
+    cluster: useUpdateResource(ClusterCatalogItems),
+    bm: useUpdateResource(BareMetalInstanceCatalogItems),
+  });
 
   const errorTitle = (published: boolean) =>
     published ? t('Failed to publish catalog item') : t('Failed to unpublish catalog item');
-
-  const mutation =
-    item.$typeName === 'osac.public.v1.ClusterCatalogItem'
-      ? updateCluster
-      : item.$typeName === 'osac.public.v1.BareMetalInstanceCatalogItem'
-        ? updateBm
-        : updateVm;
 
   return {
     isPending: mutation.isPending,

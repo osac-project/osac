@@ -42,6 +42,20 @@ export const getCatalogItemKind = (kind: CatalogItem): CatalogItemKind | undefin
   }
 };
 
+export const selectCatalogItemValue = <TVm, TBm, TCluster>(
+  item: CatalogItem,
+  values: { vm: TVm; bm: TBm; cluster: TCluster },
+): TVm | TBm | TCluster => {
+  switch (item.$typeName) {
+    case 'osac.public.v1.ComputeInstanceCatalogItem':
+      return values.vm;
+    case 'osac.public.v1.BareMetalInstanceCatalogItem':
+      return values.bm;
+    case 'osac.public.v1.ClusterCatalogItem':
+      return values.cluster;
+  }
+};
+
 export const catalogItemMetadataLabelEntries = (
   item: CatalogItem,
 ): Array<{ key: string; value: string }> => {
@@ -105,16 +119,7 @@ export const catalogItemDetailsPath = (item: CatalogItem): string => {
   }
 };
 
-export const catalogItemKind = (item: CatalogItem): CatalogItemKind => {
-  switch (item.$typeName) {
-    case 'osac.public.v1.ComputeInstanceCatalogItem':
-      return 'vm';
-    case 'osac.public.v1.BareMetalInstanceCatalogItem':
-      return 'bm';
-    case 'osac.public.v1.ClusterCatalogItem':
-      return 'cluster';
-  }
+export const catalogItemEditPath = (item: CatalogItem): string => {
+  const kind = getCatalogItemKind(item);
+  return kind ? `/catalog/${kind}/${item.id}/edit` : '#';
 };
-
-export const catalogItemEditPath = (item: CatalogItem): string =>
-  `/catalog/${catalogItemKind(item)}/${item.id}/edit`;

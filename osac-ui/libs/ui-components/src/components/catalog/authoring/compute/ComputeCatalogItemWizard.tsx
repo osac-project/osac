@@ -1,16 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  Button,
-  PageSection,
-  PageSectionTypes,
-  Title,
-  Wizard,
-  WizardStep,
-} from '@patternfly/react-core';
-import { Formik } from 'formik';
+import { WizardStep } from '@patternfly/react-core';
 
 import type { ComputeInstanceCatalogItem } from '@osac/types';
 import { ComputeInstanceCatalogItems, ComputeInstanceTemplates } from '@osac/types';
@@ -20,6 +10,7 @@ import ComputeCatalogConfigurationStep from './ComputeCatalogConfigurationStep';
 import ComputeCatalogReviewStep from './ComputeCatalogReviewStep';
 import ComputeCatalogStorageStep from './ComputeCatalogStorageStep';
 import ComputeCatalogWizardFooter from './ComputeCatalogWizardFooter';
+import CatalogItemWizardShell from '../CatalogItemWizardShell';
 import {
   buildComputeCatalogItemCreatePayload,
   buildComputeCatalogItemUpdatePayload,
@@ -33,8 +24,6 @@ import { type ComputeCatalogItemValues, getComputeCatalogItemInitialValues } fro
 import { useCreateResource, useUpdateResource } from '../../../../api/use-resource';
 import { useSession } from '../../../../hooks/use-session';
 import { useTranslation } from '../../../../hooks/useTranslation';
-import { FieldValidationProvider } from '../../../Form/FieldValidationContext';
-import LeaveFormConfirmation from '../../../Form/LeaveFormConfirmation';
 import CatalogGeneralStep from '../CatalogGeneralStep';
 
 interface ComputeCatalogItemWizardProps {
@@ -92,77 +81,47 @@ const ComputeCatalogItemWizard = ({ item }: ComputeCatalogItemWizardProps) => {
   };
 
   return (
-    <Formik<ComputeCatalogItemValues>
+    <CatalogItemWizardShell<ComputeCatalogItemValues, ComputeCatalogWizardStepId>
       initialValues={initialValues}
       validationSchema={validationSchema}
       onSubmit={onSubmit}
+      title={item ? t('Edit VM catalog item') : t('Create VM Catalog Item')}
+      wizardAriaLabel={t('Compute catalog item wizard')}
+      navAriaLabel={t('Create compute catalog item steps')}
+      onStepChange={setCurrentStep}
+      footer={
+        <ComputeCatalogWizardFooter
+          currentStep={currentStep}
+          onCancel={() => navigate('/catalog')}
+          stepHasErrors={computeCatalogStepHasErrors}
+          isEdit={!!item}
+          error={createErr || updateErr}
+          onErrorReset={handleErrorReset}
+        />
+      }
     >
-      <>
-        <PageSection hasBodyWrapper={false}>
-          <Breadcrumb>
-            <BreadcrumbItem>
-              <Button variant="link" isInline onClick={() => navigate('/catalog')}>
-                {t('Catalog')}
-              </Button>
-            </BreadcrumbItem>
-            <BreadcrumbItem isActive>
-              {item ? t('Edit VM catalog item') : t('Create VM Catalog Item')}
-            </BreadcrumbItem>
-          </Breadcrumb>
-          <Title headingLevel="h1" size="3xl">
-            {item ? t('Edit VM catalog item') : t('Create VM Catalog Item')}
-          </Title>
-        </PageSection>
-        <FieldValidationProvider>
-          <LeaveFormConfirmation />
-          <PageSection
-            hasBodyWrapper={false}
-            type={PageSectionTypes.wizard}
-            aria-label={t('Compute catalog item wizard')}
-          >
-            <Wizard
-              navAriaLabel={t('Create compute catalog item steps')}
-              isVisitRequired
-              footer={
-                <ComputeCatalogWizardFooter
-                  currentStep={currentStep}
-                  onCancel={() => navigate('/catalog')}
-                  stepHasErrors={computeCatalogStepHasErrors}
-                  isEdit={!!item}
-                  error={createErr || updateErr}
-                  onErrorReset={handleErrorReset}
-                />
-              }
-              onStepChange={(_, step) => {
-                setCurrentStep(step.id as ComputeCatalogWizardStepId);
-              }}
-            >
-              <WizardStep id="details" name={t('General')}>
-                {currentStep === 'details' && (
-                  <CatalogGeneralStep
-                    isEdit={!!item}
-                    templateService={ComputeInstanceTemplates}
-                    templateFieldId="compute-catalog-item-template"
-                  />
-                )}
-              </WizardStep>
-              <WizardStep id="configuration" name={t('Compute configuration')}>
-                {currentStep === 'configuration' && <ComputeCatalogConfigurationStep />}
-              </WizardStep>
-              <WizardStep id="storage" name={t('Storage')}>
-                {currentStep === 'storage' && <ComputeCatalogStorageStep />}
-              </WizardStep>
-              <WizardStep id="access-init" name={t('Access & Initial run')}>
-                {currentStep === 'access-init' && <ComputeCatalogAccessStep />}
-              </WizardStep>
-              <WizardStep id="review" name={t('Review')}>
-                {currentStep === 'review' && <ComputeCatalogReviewStep item={item} />}
-              </WizardStep>
-            </Wizard>
-          </PageSection>
-        </FieldValidationProvider>
-      </>
-    </Formik>
+      <WizardStep id="details" name={t('General')}>
+        {currentStep === 'details' && (
+          <CatalogGeneralStep
+            isEdit={!!item}
+            templateService={ComputeInstanceTemplates}
+            templateFieldId="compute-catalog-item-template"
+          />
+        )}
+      </WizardStep>
+      <WizardStep id="configuration" name={t('Compute configuration')}>
+        {currentStep === 'configuration' && <ComputeCatalogConfigurationStep />}
+      </WizardStep>
+      <WizardStep id="storage" name={t('Storage')}>
+        {currentStep === 'storage' && <ComputeCatalogStorageStep />}
+      </WizardStep>
+      <WizardStep id="access-init" name={t('Access & Initial run')}>
+        {currentStep === 'access-init' && <ComputeCatalogAccessStep />}
+      </WizardStep>
+      <WizardStep id="review" name={t('Review')}>
+        {currentStep === 'review' && <ComputeCatalogReviewStep item={item} />}
+      </WizardStep>
+    </CatalogItemWizardShell>
   );
 };
 

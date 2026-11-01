@@ -7,7 +7,7 @@ import {
 import { useDeleteResource } from '../../../api/use-resource';
 import { useTranslation } from '../../../hooks/useTranslation';
 import DeleteResourceModal from '../../Resource/DeleteResourceModal';
-import type { CatalogItem } from '../catalogItemDisplay';
+import { type CatalogItem, selectCatalogItemValue } from '../catalogItemDisplay';
 
 interface CatalogItemDeleteModalProps {
   item: CatalogItem;
@@ -17,16 +17,11 @@ interface CatalogItemDeleteModalProps {
 
 const CatalogItemDeleteModal = ({ item, onClose, onSuccess }: CatalogItemDeleteModalProps) => {
   const { t } = useTranslation();
-  const deleteVm = useDeleteResource(ComputeInstanceCatalogItems);
-  const deleteCluster = useDeleteResource(ClusterCatalogItems);
-  const deleteBm = useDeleteResource(BareMetalInstanceCatalogItems);
-
-  const mutation =
-    item.$typeName === 'osac.public.v1.ClusterCatalogItem'
-      ? deleteCluster
-      : item.$typeName === 'osac.public.v1.BareMetalInstanceCatalogItem'
-        ? deleteBm
-        : deleteVm;
+  const mutation = selectCatalogItemValue(item, {
+    vm: useDeleteResource(ComputeInstanceCatalogItems),
+    cluster: useDeleteResource(ClusterCatalogItems),
+    bm: useDeleteResource(BareMetalInstanceCatalogItems),
+  });
 
   return (
     <DeleteResourceModal

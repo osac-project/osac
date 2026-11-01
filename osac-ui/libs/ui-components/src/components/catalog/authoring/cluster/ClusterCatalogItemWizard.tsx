@@ -1,16 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  Button,
-  PageSection,
-  PageSectionTypes,
-  Title,
-  Wizard,
-  WizardStep,
-} from '@patternfly/react-core';
-import { Formik } from 'formik';
+import { WizardStep } from '@patternfly/react-core';
 
 import type { ClusterCatalogItem } from '@osac/types';
 import { ClusterCatalogItems, ClusterTemplates } from '@osac/types';
@@ -18,6 +8,7 @@ import { ClusterCatalogItems, ClusterTemplates } from '@osac/types';
 import ClusterCatalogConfigurationStep from './ClusterCatalogConfigurationStep';
 import ClusterCatalogNetworkingStep from './ClusterCatalogNetworkingStep';
 import ClusterCatalogReviewStep from './ClusterCatalogReviewStep';
+import CatalogItemWizardShell from '../CatalogItemWizardShell';
 import {
   buildClusterCatalogItemCreatePayload,
   buildClusterCatalogItemUpdatePayload,
@@ -31,8 +22,6 @@ import { type ClusterCatalogItemValues, getClusterCatalogItemInitialValues } fro
 import { useCreateResource, useUpdateResource } from '../../../../api/use-resource';
 import { useSession } from '../../../../hooks/use-session';
 import { useTranslation } from '../../../../hooks/useTranslation';
-import { FieldValidationProvider } from '../../../Form/FieldValidationContext';
-import LeaveFormConfirmation from '../../../Form/LeaveFormConfirmation';
 import { OSACWizardFooter } from '../../../Wizard/OSACWizardFooter';
 import CatalogGeneralStep from '../CatalogGeneralStep';
 
@@ -91,73 +80,43 @@ const ClusterCatalogItemWizard = ({ item }: ClusterCatalogItemWizardProps) => {
   };
 
   return (
-    <Formik<ClusterCatalogItemValues>
+    <CatalogItemWizardShell<ClusterCatalogItemValues, ClusterCatalogWizardStepId>
       initialValues={initialValues}
       validationSchema={validationSchema}
       onSubmit={onSubmit}
+      title={item ? t('Edit cluster catalog item') : t('Create cluster catalog item')}
+      wizardAriaLabel={t('Cluster catalog item wizard')}
+      navAriaLabel={t('Create cluster catalog item steps')}
+      onStepChange={setCurrentStep}
+      footer={
+        <OSACWizardFooter
+          onCancel={() => navigate('/catalog')}
+          stepHasErrors={clusterCatalogStepHasErrors}
+          isEdit={!!item}
+          error={createErr || updateErr}
+          onErrorReset={handleErrorReset}
+        />
+      }
     >
-      <>
-        <PageSection hasBodyWrapper={false}>
-          <Breadcrumb>
-            <BreadcrumbItem>
-              <Button variant="link" isInline onClick={() => navigate('/catalog')}>
-                {t('Catalog')}
-              </Button>
-            </BreadcrumbItem>
-            <BreadcrumbItem isActive>
-              {item ? t('Edit cluster catalog item') : t('Create cluster catalog item')}
-            </BreadcrumbItem>
-          </Breadcrumb>
-          <Title headingLevel="h1" size="3xl">
-            {item ? t('Edit cluster catalog item') : t('Create cluster catalog item')}
-          </Title>
-        </PageSection>
-        <FieldValidationProvider>
-          <LeaveFormConfirmation />
-          <PageSection
-            hasBodyWrapper={false}
-            type={PageSectionTypes.wizard}
-            aria-label={t('Cluster catalog item wizard')}
-          >
-            <Wizard
-              navAriaLabel={t('Create cluster catalog item steps')}
-              isVisitRequired
-              footer={
-                <OSACWizardFooter
-                  onCancel={() => navigate('/catalog')}
-                  stepHasErrors={clusterCatalogStepHasErrors}
-                  isEdit={!!item}
-                  error={createErr || updateErr}
-                  onErrorReset={handleErrorReset}
-                />
-              }
-              onStepChange={(_, step) => {
-                setCurrentStep(step.id as ClusterCatalogWizardStepId);
-              }}
-            >
-              <WizardStep id="general" name={t('General')}>
-                {currentStep === 'general' && (
-                  <CatalogGeneralStep
-                    isEdit={!!item}
-                    templateService={ClusterTemplates}
-                    templateFieldId="cluster-catalog-item-template"
-                  />
-                )}
-              </WizardStep>
-              <WizardStep id="configuration" name={t('Configuration')}>
-                {currentStep === 'configuration' && <ClusterCatalogConfigurationStep />}
-              </WizardStep>
-              <WizardStep id="networking" name={t('Networking')}>
-                {currentStep === 'networking' && <ClusterCatalogNetworkingStep />}
-              </WizardStep>
-              <WizardStep id="review" name={t('Review')}>
-                {currentStep === 'review' && <ClusterCatalogReviewStep />}
-              </WizardStep>
-            </Wizard>
-          </PageSection>
-        </FieldValidationProvider>
-      </>
-    </Formik>
+      <WizardStep id="general" name={t('General')}>
+        {currentStep === 'general' && (
+          <CatalogGeneralStep
+            isEdit={!!item}
+            templateService={ClusterTemplates}
+            templateFieldId="cluster-catalog-item-template"
+          />
+        )}
+      </WizardStep>
+      <WizardStep id="configuration" name={t('Configuration')}>
+        {currentStep === 'configuration' && <ClusterCatalogConfigurationStep />}
+      </WizardStep>
+      <WizardStep id="networking" name={t('Networking')}>
+        {currentStep === 'networking' && <ClusterCatalogNetworkingStep />}
+      </WizardStep>
+      <WizardStep id="review" name={t('Review')}>
+        {currentStep === 'review' && <ClusterCatalogReviewStep />}
+      </WizardStep>
+    </CatalogItemWizardShell>
   );
 };
 

@@ -31,6 +31,8 @@ import {
   type FieldPolicyLike,
   catalogFieldPolicyBehavior,
   catalogFieldPolicyIsConfigured,
+  catalogFieldPolicyValue,
+  catalogReferenceLabel,
 } from '../catalogFieldPolicyDisplay';
 import type { CatalogItem } from '../catalogItemDisplay';
 import type { CatalogItemResourceLookups } from '../catalogItemResourceLookups';
@@ -62,29 +64,9 @@ interface CatalogConfiguration {
   hasConfiguredField: boolean;
 }
 
-const policyValue = (policy: unknown): unknown => {
-  const behavior = (policy as { behavior?: { case?: string; value?: unknown } } | undefined)
-    ?.behavior;
-  if (behavior?.case === 'locked') {
-    return behavior.value;
-  }
-  if (behavior?.case === 'editable' && behavior.value && typeof behavior.value === 'object') {
-    return (behavior.value as { defaultValue?: unknown }).defaultValue;
-  }
-  return undefined;
-};
-
-const referenceLabel = (reference: unknown): string | undefined => {
-  if (!reference || typeof reference !== 'object') {
-    return undefined;
-  }
-  const value = reference as { id?: string; name?: string };
-  return value.name || '';
-};
-
 const policyDisplayValue = (value: unknown): string => {
   if (value && typeof value === 'object' && 'name' in value) {
-    return referenceLabel(value) ?? '—';
+    return catalogReferenceLabel(value) ?? '—';
   }
   return formatReviewScalar(value);
 };
@@ -137,7 +119,7 @@ const formatDiskList = (value: unknown): string | undefined => {
   return items
     .map((item) => {
       const size = item.sizeGib === undefined ? '—' : `${item.sizeGib} GiB`;
-      const tier = referenceLabel(item.storageTier);
+      const tier = catalogReferenceLabel(item.storageTier);
       return tier ? `${size} (${tier})` : size;
     })
     .join(', ');
@@ -157,9 +139,9 @@ const computeConfiguration = (
   );
   const diskImage = findDiskImageForReference(resourceLookups.diskImages, diskImageReference);
   const bootDisk = fields?.bootDisk;
-  const bootDiskSize = policyValue(bootDisk?.sizeGib);
-  const storageTier = policyValue(bootDisk?.storageTier);
-  const additionalDisks = policyValue(fields?.additionalDisks);
+  const bootDiskSize = catalogFieldPolicyValue(bootDisk?.sizeGib);
+  const storageTier = catalogFieldPolicyValue(bootDisk?.storageTier);
+  const additionalDisks = catalogFieldPolicyValue(fields?.additionalDisks);
 
   return {
     rows: (
@@ -237,12 +219,12 @@ const clusterConfiguration = (
         <CatalogNodeSets policy={nodeSetsPolicy} resourceLookups={resourceLookups} />
         <CatalogConfigurationRow
           label={t('Pod CIDR')}
-          value={policyValue(network?.podCidr)}
+          value={catalogFieldPolicyValue(network?.podCidr)}
           policy={network?.podCidr}
         />
         <CatalogConfigurationRow
           label={t('Service CIDR')}
-          value={policyValue(network?.serviceCidr)}
+          value={catalogFieldPolicyValue(network?.serviceCidr)}
           policy={network?.serviceCidr}
         />
       </>

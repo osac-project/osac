@@ -62,3 +62,17 @@ export const policyFromCatalogValue = <TPolicy>(
   }
   return toEditable(field.value);
 };
+
+/** Encodes the common locked/editable shape used by catalog field policies. */
+export const catalogFieldPolicyFromValue = <TPolicy>(
+  field: ProvisioningFieldValue<unknown>,
+  isEmpty: (value: unknown) => boolean,
+  toValue: (value: unknown) => unknown,
+): TPolicy | undefined =>
+  policyFromCatalogValue<TPolicy>(
+    field,
+    isEmpty,
+    (value) => ({ behavior: { case: 'locked', value: toValue(value) } }) as TPolicy,
+    (value) =>
+      ({ behavior: { case: 'editable', value: { defaultValue: toValue(value) } } }) as TPolicy,
+  );

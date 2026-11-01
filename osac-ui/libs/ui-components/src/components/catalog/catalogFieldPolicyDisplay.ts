@@ -22,6 +22,25 @@ export const catalogFieldPolicyIsConfigured = (policy: FieldPolicyLike): boolean
 export const catalogFieldPolicyLocked = (policy: FieldPolicyLike): boolean =>
   catalogFieldPolicyBehavior(policy) === 'locked';
 
+export const catalogFieldPolicyValue = (policy: FieldPolicyLike): unknown => {
+  const behavior = policy?.behavior;
+  if (behavior?.case === 'locked') {
+    return behavior.value;
+  }
+  if (behavior?.case === 'editable' && behavior.value && typeof behavior.value === 'object') {
+    return (behavior.value as { defaultValue?: unknown }).defaultValue;
+  }
+  return undefined;
+};
+
+export const catalogReferenceLabel = (reference: unknown): string | undefined => {
+  if (!reference || typeof reference !== 'object') {
+    return undefined;
+  }
+  const value = reference as { id?: string; name?: string };
+  return value.name || '';
+};
+
 export const CATALOG_RESOURCE_EMPTY_DISPLAY = '—';
 
 export const catalogResourceHasDisplayValue = (display: string): boolean =>

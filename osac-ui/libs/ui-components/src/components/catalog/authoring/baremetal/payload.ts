@@ -4,9 +4,8 @@ import { type BareMetalInstanceCatalogItem, BareMetalInstanceCatalogItemSchema }
 
 import type { BareMetalCatalogItemValues } from './values';
 import { type ResourceSelectValue } from '../../../Form/resourceSelectValue';
-import type { ProvisioningFieldValue } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
 import { catalogGeneralItemPayload } from '../CatalogGeneralStep';
-import { policyFromCatalogValue } from '../catalogItemPolicy';
+import { catalogFieldPolicyFromValue } from '../catalogItemPolicy';
 import { catalogUserDataPolicyFromValues } from '../catalogUserData';
 
 type CatalogItemFieldsInit = NonNullable<
@@ -26,24 +25,12 @@ const toDiskImageReference = (value: unknown) => ({
   id: (value as ResourceSelectValue).id.trim(),
 });
 
-const buildFieldPolicy = <T>(
-  field: ProvisioningFieldValue<unknown>,
-  isEmpty: (value: unknown) => boolean,
-  toValue: (value: unknown) => unknown,
-): T | undefined =>
-  policyFromCatalogValue<T>(
-    field,
-    isEmpty,
-    (value) => ({ behavior: { case: 'locked', value: toValue(value) } }) as T,
-    (value) => ({ behavior: { case: 'editable', value: { defaultValue: toValue(value) } } }) as T,
-  );
-
 const buildBareMetalCatalogItemFieldsPayload = (
   values: BareMetalCatalogItemValues,
 ): CatalogItemFieldsInit => {
   const fields: CatalogItemFieldsInit = {};
 
-  const instanceType = buildFieldPolicy<FieldPolicyInit<'instanceType'>>(
+  const instanceType = catalogFieldPolicyFromValue<FieldPolicyInit<'instanceType'>>(
     values.instanceType,
     isEmptyString,
     toInstanceTypeReference,
@@ -52,7 +39,7 @@ const buildBareMetalCatalogItemFieldsPayload = (
     fields.instanceType = instanceType;
   }
 
-  const diskImage = buildFieldPolicy<FieldPolicyInit<'diskImage'>>(
+  const diskImage = catalogFieldPolicyFromValue<FieldPolicyInit<'diskImage'>>(
     values.diskImage,
     isEmptyResource,
     toDiskImageReference,

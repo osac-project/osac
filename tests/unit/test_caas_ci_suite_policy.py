@@ -18,7 +18,9 @@ def _workflow(root: Path, filename: str) -> dict:
     return yaml.safe_load((root / ".github/workflows" / filename).read_text())
 
 
-def _selection(expression: str, event: str, suite: str = "", marker: str = "", pr: str = "") -> str:
+def _selection(
+    expression: str, event: str, suite: str = "", marker: str = "", pr: str = "", *, sha: str = "", tier: str = ""
+) -> str:
     # These selectors use only string comparisons and &&/|| short-circuiting.
     # Substitute contexts from the real YAML rather than reimplementing policy.
     values = {
@@ -26,6 +28,8 @@ def _selection(expression: str, event: str, suite: str = "", marker: str = "", p
         "inputs.test-suite": suite,
         "inputs.test-marker": marker,
         "inputs.pr-number": pr,
+        "inputs.sha": sha,
+        "inputs.tier": tier,
         "github.event.pull_request.labels.*.name": ["e2e-serial", "e2e-regression"],
     }
     code = expression.removeprefix("${{").removesuffix("}}").strip()
@@ -51,25 +55,39 @@ def _infra_root() -> Path:
 
 
 @pytest.mark.parametrize(
-    ("event", "suite", "marker"),
+    ("event", "sha", "suite", "marker"),
     [
-        ("pull_request", "caas/sanity", "sanity"),
-        ("merge_group", "caas/sanity", "sanity"),
-        ("schedule", "caas", FULL_MARKER),
-        ("workflow_dispatch", "caas/sanity", FULL_MARKER),
+        ("pull_request", "a" * 40, "caas/sanity", "sanity"),
+        ("merge_group", "b" * 40, "caas/sanity", "sanity"),
+        ("schedule", "", "caas", FULL_MARKER),
+        ("workflow_dispatch", "", "caas/sanity", FULL_MARKER),
     ],
 )
-def test_caller_trigger_policy(caller: dict, event: str, suite: str, marker: str) -> None:
+def test_caller_trigger_policy(caller: dict, event: str, sha: str, suite: str, marker: str) -> None:
     inputs = caller["jobs"]["e2e-caas-full-install"]["with"]
-    assert _selection(inputs["test-suite"], event) == suite
-    assert _selection(inputs.get("test-marker", "''"), event) == marker
+    assert _selection(inputs["test-suite"], event, sha=sha) == suite
+    assert _selection(inputs.get("test-marker", "''"), event, sha=sha) == marker
 
 
 @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
 def test_pr_events_ignore_overrides(caller: dict, event: str) -> None:
     inputs = caller["jobs"]["e2e-caas-full-install"]["with"]
-    assert _selection(inputs["test-suite"], event, "caas/regression") == "caas/sanity"
-    assert _selection(inputs["test-marker"], event, marker="regression") == "sanity"
+    assert _selection(inputs["test-suite"], event, "caas/regression", sha="a" * 40) == "caas/sanity"
+    assert _selection(inputs["test-marker"], event, marker="regression", sha="a" * 40) == "sanity"
+
+
+@pytest.mark.parametrize("event", ["pull_request", "merge_group", "workflow_dispatch"])
+@pytest.mark.parametrize("tier", ["", "full"])
+def test_osac_workflow_call_tier_policy(event: str, tier: str) -> None:
+    workflow = _workflow(ROOT, "e2e-caas-full-install.yml")
+    call_inputs = workflow[True]["workflow_call"]["inputs"]
+    assert call_inputs["sha"]["required"] is True
+    assert call_inputs["tier"]["default"] == ""
+    inputs = workflow["jobs"]["e2e-caas-full-install"]["with"]
+    expected_suite = "caas" if tier == "full" else "caas/sanity"
+    expected_marker = FULL_MARKER if tier == "full" else "sanity"
+    assert _selection(inputs["test-suite"], event, "caas/regression", sha="a" * 40, tier=tier) == expected_suite
+    assert _selection(inputs["test-marker"], event, marker="regression", sha="a" * 40, tier=tier) == expected_marker
 
 
 def test_dispatch_defaults(caller: dict) -> None:
@@ -144,3 +162,103 @@ def test_pr_selector_has_no_label_override() -> None:
     workflow = _workflow(_infra_root(), "e2e-caas-full-install-caller.yml")
     expression = workflow["jobs"]["e2e-caas-full-install"]["with"]["test-suite"]
     assert not re.search(r"labels.*(e2e-serial|e2e-regression)", expression)
+
+
+def test_full_regression_bmaas_backed_caas_prerequisites() -> None:
+    workflow = _workflow(_infra_root(), "e2e-full-regression.yml")
+    steps = workflow["jobs"]["e2e"]["steps"]
+    names = [step.get("name") for step in steps]
+    ordered = [
+        "Boot cluster clone",
+        "Setup virtual BareMetalHosts",
+        "Install infrastructure operators",
+        "Create BMF secrets",
+        "Install OSAC",
+        "Run E2E tests",
+        "Teardown",
+    ]
+    positions = [names.index(name) for name in ordered]
+    assert positions == sorted(positions)
+    assert "Setup CaaS agent" not in names
+    assert all("setup-caas-agents.sh" not in step.get("run", "") for step in steps)
+
+    by_name = {step.get("name"): step for step in steps}
+    bmh = by_name["Setup virtual BareMetalHosts"]
+    inventory = by_name["Create BMF secrets"]
+    runner = by_name["Run E2E tests"]
+    assert "if" not in bmh
+    assert bmh["run"].strip() == "bash .github/scripts/setup-virtual-bmh.sh"
+    assert bmh["env"]["KUBECONFIG"] == inventory["env"]["KUBECONFIG"] == "${{ runner.temp }}/kubeconfig"
+    assert bmh["env"]["BMH_NAMESPACE"] == inventory["env"]["BMH_NAMESPACE"] == "${{ inputs.bmh-namespace }}"
+    assert runner["env"]["OSAC_BMH_NAMESPACE"] == bmh["env"]["BMH_NAMESPACE"]
+    assert inventory["env"]["INSTALLER_NAMESPACE"] == runner["env"]["OSAC_NAMESPACE"] == "${{ inputs.namespace }}"
+    for fragment in (
+        "type: metal3",
+        "namespace: ${BMH_NAMESPACE}",
+        "--from-file=inventory.yaml=",
+        "--from-file=management.yaml=",
+        "oc create secret generic osac-inventory-config",
+        "oc create secret generic osac-management-config",
+    ):
+        assert fragment in inventory["run"]
+    infra = by_name["Install infrastructure operators"]["run"]
+    assert "${OVERLAY_DIR}/full-ci-infra.yaml" in infra
+    assert "${OVERLAY_DIR}/full-ci-instance.yaml" in infra
+    assert "make install-infra PLATFORM=openshift PROFILE=full-ci" in infra
+    assert "PLATFORM=openshift PROFILE=full-ci" in by_name["Install OSAC"]["run"]
+
+
+@pytest.mark.parametrize("test_filter", ["", "test_cluster_create"])
+def test_full_regression_runner_arguments(tmp_path: Path, test_filter: str) -> None:
+    workflow = _workflow(_infra_root(), "e2e-full-regression.yml")
+    step = next(step for step in workflow["jobs"]["e2e"]["steps"] if step.get("id") == "test")
+    recording = tmp_path / "podman-args"
+    script = 'podman() { printf "%s\\0" "$@" > "$RECORDED_ARGS"; }; ssh-keygen() { :; };\n' + step["run"]
+    subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script],
+        env={
+            **os.environ,
+            **step["env"],
+            "RUNNER_TEMP": str(tmp_path),
+            "RECORDED_ARGS": str(recording),
+            "TEST_FILTER": test_filter,
+        },
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    arguments = recording.read_text().removesuffix("\0").split("\0")
+    default_filter = (
+        "not test_cluster_provisioning_chain_by_name and not test_cross_tenant_cluster_template_reference "
+        "and not test_create_subnet_with_virtual_network_by_name"
+    )
+    expected_filter = f"({test_filter}) and {default_filter}" if test_filter else default_filter
+    assert arguments[:3] == ["run", "--rm", "--network=host"]
+    assert arguments[arguments.index("pytest") :] == [
+        "pytest",
+        "tests/e2e/vmaas/",
+        "tests/e2e/references/",
+        "tests/e2e/caas/",
+        "tests/e2e/bmaas/",
+        "--ignore=tests/e2e/vmaas/regression/external_ip",
+        "--ignore=tests/e2e/vmaas/test_disabled_services.py",
+        "-m",
+        "not requires_netris and not requires_stretched_networking",
+        "-k",
+        expected_filter,
+        "-n",
+        "0",
+        "--junitxml=/tmp/test-output/junit.xml",
+        "-v",
+    ]
+    for mount in (
+        "kubeconfig:/root/.kube/config:ro,Z",
+        "pull-secret.json:/root/pull-secret:ro,Z",
+        "aap-license.zip:/root/aap-license.zip:ro,Z",
+        "caas_ssh_key.pub:/root/.ssh/id_rsa.pub:ro,Z",
+        "test-output:/tmp/test-output:Z",
+    ):
+        assert f"{tmp_path}/{mount}" in arguments
+    assert f"OSAC_BMH_NAMESPACE={step['env']['OSAC_BMH_NAMESPACE']}" in arguments
+    assert f"OSAC_NAMESPACE={step['env']['OSAC_NAMESPACE']}" in arguments

@@ -12,15 +12,17 @@ from __future__ import annotations
 import logging
 from uuid import uuid4
 
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import wait_for_tenant_condition, wait_for_tenant_cr, wait_for_tenant_deletion
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
-from tests.e2e.storage.conftest import NAMESPACE_MANIFEST, TENANT_MANIFEST
 
 logger = logging.getLogger(__name__)
 
 
-def test_tenant_storage_lifecycle(k8s_hub_client: K8sClient, storage_config_namespace: str) -> None:
+def test_tenant_storage_lifecycle(
+    k8s_hub_client: K8sClient, private_grpc: GRPCClient, storage_config_namespace: str
+) -> None:
     """Verify the full tenant storage onboarding and teardown lifecycle.
 
     Creates a Tenant, waits for storage provisioning stages (StorageBackendReady
@@ -28,12 +30,10 @@ def test_tenant_storage_lifecycle(k8s_hub_client: K8sClient, storage_config_name
     verifies ordered teardown including tenant secret cleanup.
     """
     tenant_name: str = f"test-storage-{uuid4().hex[:8]}"
-    namespace: str = k8s_hub_client.namespace
-
-    k8s_hub_client.apply(manifest=NAMESPACE_MANIFEST.format(name=tenant_name))
-    k8s_hub_client.apply(manifest=TENANT_MANIFEST.format(name=tenant_name, namespace=namespace))
 
     try:
+        # OSAC-6286: exercise onboarding through the API, including namespace creation.
+        private_grpc.ensure_tenant(name=tenant_name)
         _verify_provisioning(
             k8s=k8s_hub_client, tenant_name=tenant_name, storage_config_namespace=storage_config_namespace
         )
@@ -45,7 +45,7 @@ def test_tenant_storage_lifecycle(k8s_hub_client: K8sClient, storage_config_name
         teardown_assertion_error: AssertionError | None = None
 
         try:
-            _trigger_teardown(k8s=k8s_hub_client, tenant_name=tenant_name)
+            _trigger_teardown(private_grpc=private_grpc, tenant_name=tenant_name)
         except Exception:
             logger.warning("Tenant teardown trigger failed for %s", tenant_name, exc_info=True)
 
@@ -58,18 +58,13 @@ def test_tenant_storage_lifecycle(k8s_hub_client: K8sClient, storage_config_name
         except Exception:
             logger.warning("Tenant teardown verification failed for %s", tenant_name, exc_info=True)
 
-        try:
-            k8s_hub_client.delete(resource="namespace", name=tenant_name, wait=False)
-        except Exception:
-            logger.warning("Namespace cleanup failed for %s", tenant_name, exc_info=True)
-
         if teardown_assertion_error is not None:
             raise teardown_assertion_error
 
 
 def _verify_provisioning(*, k8s: K8sClient, tenant_name: str, storage_config_namespace: str) -> None:
     """Verify storage provisioning stages: finalizer, backend ready, and storage classes."""
-    # --- Tenant CR exists (we created it directly) ---
+    # --- Tenant CR reconciled from the API ---
     wait_for_tenant_cr(k8s=k8s, name=tenant_name)
 
     # --- Storage finalizer set (requires Phase=Ready first, then storage controller reconcile) ---
@@ -114,9 +109,11 @@ def _verify_provisioning(*, k8s: K8sClient, tenant_name: str, storage_config_nam
         )
 
 
-def _trigger_teardown(*, k8s: K8sClient, tenant_name: str) -> None:
-    """Initiate tenant deletion to trigger storage teardown."""
-    k8s.delete(resource="tenant", name=tenant_name, wait=False)
+def _trigger_teardown(*, private_grpc: GRPCClient, tenant_name: str) -> None:
+    """Delete the API record so onboarding can remove the Tenant and namespace."""
+    tenant_id = private_grpc.find_tenant_id(name=tenant_name)
+    if tenant_id:
+        private_grpc.call(service=f"{PRIVATE_API}.Tenants/Delete", data={"id": tenant_id})
 
 
 def _verify_teardown(*, k8s: K8sClient, tenant_name: str, storage_config_namespace: str) -> None:

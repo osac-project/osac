@@ -104,7 +104,7 @@ func (b *PrivateClusterVersionsServerBuilder) Build() (*PrivateClusterVersionsSe
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc(b.filterDesc).
-		AddAllowedTenants(auth.SharedTenant).
+		SetAllowedTenants(auth.SharedTenant).
 		Build()
 	if err != nil {
 		return nil, err

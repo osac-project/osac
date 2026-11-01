@@ -21,6 +21,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/google/uuid"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc/codes"
@@ -172,6 +173,65 @@ func (s *PrivateServiceAccountsServer) Signal(ctx context.Context,
 	return
 }
 
+func (s *PrivateServiceAccountsServer) RegenerateSecret(ctx context.Context,
+	request *privatev1.ServiceAccountsRegenerateSecretRequest) (*privatev1.ServiceAccountsRegenerateSecretResponse, error) {
+	if request.GetId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "service-account ID is mandatory")
+	}
+	object := &privatev1.ServiceAccount{}
+	object.SetId(request.GetId())
+	updateRequest := privatev1.ServiceAccountsUpdateRequest_builder{
+		Object: object,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+			"status.secret_rotation_state", "status.secret_rotation_error", "status.secret_rotation_generation",
+		}},
+	}.Build()
+	var updateResponse *privatev1.ServiceAccountsUpdateResponse
+	err := s.generic.UpdateWithCandidatePreparation(ctx, updateRequest, &updateResponse,
+		func(_ context.Context, current, candidate *privatev1.ServiceAccount) error {
+			if current.GetMetadata().HasDeletionTimestamp() {
+				return status.Error(codes.FailedPrecondition, "service account is being deleted")
+			}
+			currentStatus := current.GetStatus()
+			rotationState := currentStatus.GetSecretRotationState()
+			if rotationState == privatev1.ServiceAccountSecretRotationState_SERVICE_ACCOUNT_SECRET_ROTATION_STATE_PENDING ||
+				rotationState == privatev1.ServiceAccountSecretRotationState_SERVICE_ACCOUNT_SECRET_ROTATION_STATE_ERROR {
+				if currentStatus.GetSecretRotationGeneration() == "" {
+					return status.Error(codes.Internal, "service-account rotation state is missing its generation")
+				}
+				candidateStatus := candidate.GetStatus()
+				if candidateStatus == nil {
+					candidateStatus = &privatev1.ServiceAccountStatus{}
+					candidate.SetStatus(candidateStatus)
+				}
+				candidateStatus.SetSecretRotationState(rotationState)
+				candidateStatus.SetSecretRotationError(currentStatus.GetSecretRotationError())
+				candidateStatus.SetSecretRotationGeneration(currentStatus.GetSecretRotationGeneration())
+				return nil
+			}
+			if currentStatus.GetState() != privatev1.ServiceAccountState_SERVICE_ACCOUNT_STATE_READY ||
+				currentStatus.GetKeycloakClientUuid() == "" || currentStatus.GetClientSecret() == nil {
+				return status.Error(codes.FailedPrecondition, "service account is not fully provisioned")
+			}
+			candidateStatus := candidate.GetStatus()
+			if candidateStatus == nil {
+				candidateStatus = &privatev1.ServiceAccountStatus{}
+				candidate.SetStatus(candidateStatus)
+			}
+			candidateStatus.SetSecretRotationState(
+				privatev1.ServiceAccountSecretRotationState_SERVICE_ACCOUNT_SECRET_ROTATION_STATE_PENDING)
+			candidateStatus.SetSecretRotationError("")
+			candidateStatus.SetSecretRotationGeneration(uuid.NewString())
+			return nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	response := &privatev1.ServiceAccountsRegenerateSecretResponse{}
+	response.SetObject(updateResponse.GetObject())
+	return response, nil
+}
+
 func (s *PrivateServiceAccountsServer) update(ctx context.Context, request *privatev1.ServiceAccountsUpdateRequest) (*privatev1.ServiceAccountsUpdateResponse, error) {
 	if request.GetObject().GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "object identifier is mandatory")
@@ -192,7 +252,8 @@ func (s *PrivateServiceAccountsServer) update(ctx context.Context, request *priv
 		switch path {
 		case "metadata.name", "metadata.labels":
 		case "status.keycloak_client_uuid", "status.client_secret",
-			"status.state", "status.message", "status.registration_secret":
+			"status.state", "status.message", "status.registration_secret",
+			"status.secret_rotation_state", "status.secret_rotation_error", "status.secret_rotation_generation":
 			// GenericServer rejects public status writes; keep these paths writable for private callers.
 		case "metadata.finalizers":
 			if isPublicAPIView(ctx) {

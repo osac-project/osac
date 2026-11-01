@@ -27,6 +27,8 @@ const RegistrationServiceAccountIDKey = "service_account_id"
 const PendingClientSecretKey = "client_secret"
 const PendingClientSecretRefIDKey = "client_secret_ref_id"
 const PendingClientSecretRefNameKey = "client_secret_ref_name"
+const PendingRotationSecretKey = "rotation_client_secret"
+const PendingRotationGenerationKey = "rotation_generation"
 const clientSecretPrefix = "osac-service-account-"
 
 // ClientID derives an immutable client identifier from validated tenant and account identities.

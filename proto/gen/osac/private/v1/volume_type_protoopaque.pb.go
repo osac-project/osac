@@ -110,7 +110,8 @@ const (
 	VolumeState_VOLUME_STATE_FAILED VolumeState = 3
 	// The volume is being deprovisioned from the storage backend.
 	VolumeState_VOLUME_STATE_DELETING VolumeState = 4
-	// The volume has been fully deprovisioned and the record is archived.
+	// The volume has been fully deprovisioned from the storage backend. The record may remain visible
+	// until finalizers are removed and it is archived.
 	VolumeState_VOLUME_STATE_DELETED VolumeState = 5
 )
 

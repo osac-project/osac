@@ -155,6 +155,11 @@ type ComputeInstanceSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="additionalDisks is immutable"
 	AdditionalDisks []DiskSpec `json:"additionalDisks,omitempty"`
 
+	// DiskVolumeIDs maps stable disk keys to their returned Fulfillment Volume IDs.
+	// Keys are boot and disk-N.
+	// +kubebuilder:validation:Optional
+	DiskVolumeIDs map[string]string `json:"diskVolumeIDs,omitempty"`
+
 	// Gpu defines GPU passthrough configuration resolved from the InstanceType.
 	// +kubebuilder:validation:Optional
 	Gpu *GpuSpec `json:"gpu,omitempty"`

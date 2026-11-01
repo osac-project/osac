@@ -1,32 +1,32 @@
 import { useMemo, useState } from 'react';
 import { Alert, MenuToggle, Select, SelectList, SelectOption } from '@patternfly/react-core';
 
-import { useDiskImages } from '@osac/ui-components/api/v1/disk-image';
+import { InstanceTypes } from '@osac/types';
+import { useListResource } from '@osac/ui-components/api/use-resource';
+import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
-
-import { useTranslation } from '../../../../hooks/useTranslation';
 
 const ALL_OPTION_VALUE = '__all__';
 
-interface BareMetalDiskImageFilterProps {
+interface VmInstanceTypeFilterProps {
   selected: string | undefined;
-  onChange: (diskImageId: string | undefined) => void;
+  onChange: (instanceTypeId: string | undefined) => void;
 }
 
-const BareMetalDiskImageFilter = ({ selected, onChange }: BareMetalDiskImageFilterProps) => {
+const VmInstanceTypeFilter = ({ selected, onChange }: VmInstanceTypeFilterProps) => {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
 
-  const { data: diskImages = [], error } = useDiskImages({});
+  const { data: instanceTypes, error } = useListResource(InstanceTypes);
 
-  const sortedDiskImages = useMemo(() => {
-    const names = diskImages
-      .map((diskImage) => diskImage.metadata?.name?.trim())
+  const sortedInstanceTypes = useMemo(() => {
+    const names = instanceTypes?.items
+      .map((instanceType) => instanceType.metadata?.name?.trim())
       .filter((name): name is string => name !== undefined);
     return [...new Set(names)].sort((left, right) => left.localeCompare(right));
-  }, [diskImages]);
+  }, [instanceTypes]);
 
-  const allLabel = t('All disk images');
+  const allLabel = t('All instance types');
   const selectedLabel = selected || allLabel;
 
   return (
@@ -45,14 +45,14 @@ const BareMetalDiskImageFilter = ({ selected, onChange }: BareMetalDiskImageFilt
           ref={toggleRef}
           onClick={() => setIsOpen((open) => !open)}
           isExpanded={isOpen}
-          aria-label={t('Filter bare metal by disk image')}
+          aria-label={t('Filter by instance type')}
         >
           {selectedLabel}
         </MenuToggle>
       )}
     >
       {error ? (
-        <Alert isInline variant="danger" title={t('Unable to load disk images')}>
+        <Alert isInline variant="danger" title={t('Unable to load instance types')}>
           {getErrorMessage(error)}
         </Alert>
       ) : (
@@ -60,10 +60,13 @@ const BareMetalDiskImageFilter = ({ selected, onChange }: BareMetalDiskImageFilt
           <SelectOption value={ALL_OPTION_VALUE} isSelected={!selected}>
             {allLabel}
           </SelectOption>
-
-          {sortedDiskImages.map((diskImage) => (
-            <SelectOption key={diskImage} value={diskImage} isSelected={selected === diskImage}>
-              {diskImage}
+          {sortedInstanceTypes.map((instanceType) => (
+            <SelectOption
+              key={instanceType}
+              value={instanceType}
+              isSelected={selected === instanceType}
+            >
+              {instanceType}
             </SelectOption>
           ))}
         </SelectList>
@@ -72,4 +75,4 @@ const BareMetalDiskImageFilter = ({ selected, onChange }: BareMetalDiskImageFilt
   );
 };
 
-export default BareMetalDiskImageFilter;
+export default VmInstanceTypeFilter;

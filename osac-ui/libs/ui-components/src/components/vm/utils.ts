@@ -1,4 +1,11 @@
-import { InstanceType, InstanceTypeState } from '@osac/types';
+import {
+  ComputeInstance,
+  ComputeInstanceState,
+  ExternalIPAttachment,
+  ExternalIPAttachmentState,
+  InstanceType,
+  InstanceTypeState,
+} from '@osac/types';
 import { resourceDisplayName } from '@osac/ui-components/api/v1/networking';
 
 export const isObsoleteInstanceType = (instanceType: InstanceType): boolean =>
@@ -51,4 +58,44 @@ export const formatInstanceTypeReviewLabelFromType = (
     return fallbackId?.trim() || '—';
   }
   return formatInstanceTypeOptionLabel(instanceType, deprecatedSuffix);
+};
+
+export const vmExternalIPStatus = (
+  vm: ComputeInstance,
+  externalIpAttachment: ExternalIPAttachment | undefined,
+  isFetchingExternalIpAttachments = false,
+  isLoadingExternalIpAttachments = false,
+  externalIpAttachmentsError?: unknown,
+) => {
+  const state = vm.status?.state;
+  const canAttachExternalIp =
+    state === ComputeInstanceState.RUNNING && !vm.status?.externalIpAddress;
+  const hasAttachedExternalIp = Boolean(vm.status?.externalIpAddress);
+  const isAttachingExternalIp =
+    externalIpAttachment?.status?.state ===
+      ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_PENDING ||
+    (isFetchingExternalIpAttachments && !isLoadingExternalIpAttachments && !hasAttachedExternalIp);
+  const isDetachingExternalIp =
+    externalIpAttachment?.status?.state ===
+    ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_DELETING;
+  const isExternalIpAttachmentFailed =
+    externalIpAttachment?.status?.state ===
+    ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_FAILED;
+  const showDetachExternalIp =
+    Boolean(externalIpAttachment) && (hasAttachedExternalIp || isExternalIpAttachmentFailed);
+  const externalIpAttachmentMissing =
+    hasAttachedExternalIp &&
+    !isLoadingExternalIpAttachments &&
+    !externalIpAttachmentsError &&
+    !externalIpAttachment;
+
+  return {
+    hasAttachedExternalIp,
+    externalIpAttachmentMissing,
+    isExternalIpAttachmentFailed,
+    showDetachExternalIp,
+    isAttachingExternalIp,
+    isDetachingExternalIp,
+    canAttachExternalIp,
+  };
 };

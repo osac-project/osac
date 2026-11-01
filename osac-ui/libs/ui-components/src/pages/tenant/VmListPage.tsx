@@ -1,103 +1,127 @@
 import { useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
-  Alert,
-  Flex,
-  FlexItem,
-  Label,
+  Button,
+  EmptyState,
+  EmptyStateBody,
+  Gallery,
+  GalleryItem,
   SearchInput,
   Stack,
   StackItem,
-  ToggleGroup,
-  ToggleGroupItem,
   Toolbar,
   ToolbarContent,
   ToolbarGroup,
   ToolbarItem,
 } from '@patternfly/react-core';
 
-import { ComputeInstance, ComputeInstanceState, ComputeInstances } from '@osac/types';
+import { ComputeInstances } from '@osac/types';
 import { useComputeInstances } from '@osac/ui-components/api/v1/compute-instance';
-import { useInstanceTypes } from '@osac/ui-components/api/v1/instance-types';
+import DiskImageFilter from '@osac/ui-components/components/DiskImage/DiskImageFilter';
 import ListPage from '@osac/ui-components/components/Page/ListPage';
 import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
+import ListPageToolbar from '@osac/ui-components/components/Page/ListPageToolbar';
 import ProjectFilter from '@osac/ui-components/components/Page/ProjectFilter';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
-import { SubtleContent } from '@osac/ui-components/components/SubtleContent/SubtleContent';
-import { VmTable } from '@osac/ui-components/components/vm/VmTable';
-import {
-  SEARCH_PARAM,
-  useArrayPageFilter,
-  usePageFilter,
-} from '@osac/ui-components/hooks/use-page-filter';
+import ViewSwitcher from '@osac/ui-components/components/Primitives/ViewSwitcher';
+import { buildVmListFilter } from '@osac/ui-components/components/vm/ListPage/vm-list-filter';
+import VmInstanceCard from '@osac/ui-components/components/vm/ListPage/VmInstanceCard';
+import VmInstanceTypeFilter from '@osac/ui-components/components/vm/ListPage/VmInstanceTypeFilter';
+import VmPowerStateFilter from '@osac/ui-components/components/vm/ListPage/VmPowerStateFilter';
+import { VmTable } from '@osac/ui-components/components/vm/ListPage/VmTable';
+import { isVmPowerStateFilter } from '@osac/ui-components/components/vm/vmInstanceDisplay';
+import { SEARCH_PARAM, usePageFilter } from '@osac/ui-components/hooks/use-page-filter';
+import { PROJECT_FILTER_PARAM, useSession } from '@osac/ui-components/hooks/use-session';
+import { useViewType } from '@osac/ui-components/hooks/use-view-type';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
-import { getErrorMessage } from '@osac/ui-components/utils/error';
 
-type VmStatusFilter = 'running' | 'stopped';
+const POWER_STATE_FILTER_PARAM = 'powerState';
+const INSTANCE_TYPE_FILTER_PARAM = 'instanceType';
+const DISK_IMAGE_FILTER_PARAM = 'diskImage';
 
-const STATUS_FILTER_PARAM = 'status';
-
-const isVmStatusFilter = (value: string): value is VmStatusFilter =>
-  value === 'running' || value === 'stopped';
-
-const vmMatchesStatusFilter = (vm: ComputeInstance, filter: VmStatusFilter): boolean => {
-  const state = vm.status?.state;
-  if (filter === 'running') {
-    return state === ComputeInstanceState.RUNNING;
-  }
-  return state === ComputeInstanceState.STOPPED;
-};
+const VM_LIST_VIEW_KEY = 'vm-list';
 
 export const VmListPage = () => {
   const { t } = useTranslation();
+  const [, setSearchParams] = useSearchParams();
+  const { projects, setProjects } = useSession();
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
-  const [statusFilters, setStatusFilters] = useArrayPageFilter(
-    STATUS_FILTER_PARAM,
-    isVmStatusFilter,
+  const [powerStateFilterParam, setPowerStateFilterParam] = usePageFilter(POWER_STATE_FILTER_PARAM);
+  const [instanceTypeFilterParam, setInstanceTypeFilterParam] = usePageFilter(
+    INSTANCE_TYPE_FILTER_PARAM,
+  );
+  const powerStateFilter = isVmPowerStateFilter(powerStateFilterParam)
+    ? powerStateFilterParam
+    : undefined;
+  const [diskImageFilterParam, setDiskImageFilterParam] = usePageFilter(DISK_IMAGE_FILTER_PARAM);
+  const diskImageFilter = diskImageFilterParam.trim() || undefined;
+  const instanceTypeFilter = instanceTypeFilterParam.trim() || undefined;
+  const [viewType] = useViewType(VM_LIST_VIEW_KEY);
+
+  const listFilter = useMemo(
+    () =>
+      buildVmListFilter({
+        search,
+        powerState: powerStateFilter,
+        instanceType: instanceTypeFilter,
+        diskImage: diskImageFilter,
+      }),
+    [diskImageFilter, instanceTypeFilter, powerStateFilter, search],
   );
 
-  const { data: vms = [], isLoading, error } = useComputeInstances();
-  const {
-    data: instanceTypes = [],
-    isLoading: isInstanceTypesLoading,
-    error: instanceTypesError,
-  } = useInstanceTypes();
+  const { vms, totalItems, isLoading, error } = useComputeInstances(listFilter);
 
-  const statusFilterOptions = useMemo<ReadonlyArray<{ value: VmStatusFilter; label: string }>>(
-    () => [
-      { value: 'running', label: t('Running') },
-      { value: 'stopped', label: t('Stopped') },
-    ],
-    [t],
+  const isFiltered = Boolean(
+    search || projects.length || powerStateFilter || instanceTypeFilter || diskImageFilter,
   );
+  const showEmptyState = !isLoading && !error && vms.length === 0;
 
-  const statusCounts = useMemo(
-    () => ({
-      running: vms.filter((vm) => vmMatchesStatusFilter(vm, 'running')).length,
-      stopped: vms.filter((vm) => vmMatchesStatusFilter(vm, 'stopped')).length,
-    }),
-    [vms],
-  );
-
-  const filteredVms = useMemo(() => {
-    const searchTerm = search.trim().toLowerCase();
-    if (statusFilters.length === 0 && !searchTerm) {
-      return vms;
-    }
-    return vms.filter((vm) => {
-      const name = vm.metadata?.name ?? '';
-      const matchesSearch = !searchTerm || name.toLowerCase().includes(searchTerm);
-      const matchesStatus =
-        !statusFilters.length || statusFilters.some((filter) => vmMatchesStatusFilter(vm, filter));
-      return matchesSearch && matchesStatus;
+  const clearAllFilters = () => {
+    setProjects([]);
+    requestAnimationFrame(() => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete(SEARCH_PARAM);
+          next.delete(PROJECT_FILTER_PARAM);
+          next.delete(POWER_STATE_FILTER_PARAM);
+          next.delete(INSTANCE_TYPE_FILTER_PARAM);
+          next.delete(DISK_IMAGE_FILTER_PARAM);
+          return next;
+        },
+        { replace: true },
+      );
     });
-  }, [search, statusFilters, vms]);
+  };
 
-  const showEmptyState = !isLoading && !error && filteredVms.length === 0;
+  const emptyState =
+    totalItems === 0 && !isFiltered ? (
+      <EmptyState titleText={t('No virtual machines found')} headingLevel="h2">
+        <EmptyStateBody>{t('No virtual machines are available yet.')}</EmptyStateBody>
+      </EmptyState>
+    ) : (
+      <EmptyState titleText={t('No virtual machines match your filters')} headingLevel="h2">
+        <EmptyStateBody>
+          {t('Try a different project, power state, instance type, disk image, or search term.')}{' '}
+          <Button variant="link" isInline onClick={clearAllFilters}>
+            {t('Clear all filters')}
+          </Button>
+        </EmptyStateBody>
+      </EmptyState>
+    );
+
+  const filteredText =
+    vms.length === totalItems
+      ? t('{{count}} virtual machine', { count: totalItems })
+      : t('{{shown}} of {{count}} virtual machine', {
+          shown: vms.length,
+          count: totalItems,
+        });
 
   return (
     <ListPage
       title={t('Virtual machines')}
-      description={t('View and filter your virtual machines.')}
+      description={t('Monitor and manage virtual machine instances across all projects.')}
       error={error}
       actions={
         <CreateButton service={ComputeInstances} to="/vms/create">
@@ -105,78 +129,72 @@ export const VmListPage = () => {
         </CreateButton>
       }
     >
-      <ListPageBody isLoading={isLoading} error={error}>
-        <Stack hasGutter>
-          <StackItem>
+      <Stack hasGutter>
+        <StackItem>
+          <ListPageToolbar
+            filteredText={!isLoading && !error && !showEmptyState ? filteredText : undefined}
+            isFiltered={isFiltered}
+            onClearAllFilters={clearAllFilters}
+          >
             <Toolbar>
               <ToolbarContent>
-                <ToolbarGroup>
-                  <ToolbarItem>
-                    <ProjectFilter />
-                  </ToolbarItem>
-                </ToolbarGroup>
                 <ToolbarItem>
-                  <ToggleGroup aria-label={t('Filter virtual machines by status')}>
-                    {statusFilterOptions.map((option) => (
-                      <ToggleGroupItem
-                        key={option.value}
-                        text={
-                          <Flex
-                            spaceItems={{ default: 'spaceItemsSm' }}
-                            flexWrap={{ default: 'nowrap' }}
-                          >
-                            <FlexItem>{option.label}</FlexItem>
-                            <FlexItem>
-                              <Label isCompact>{statusCounts[option.value]}</Label>
-                            </FlexItem>
-                          </Flex>
-                        }
-                        buttonId={`vm-filter-status-${option.value}`}
-                        isSelected={statusFilters.includes(option.value)}
-                        onChange={() => setStatusFilters(option.value)}
-                      />
-                    ))}
-                  </ToggleGroup>
+                  <ProjectFilter />
+                </ToolbarItem>
+                <ToolbarItem>
+                  <VmPowerStateFilter
+                    selected={powerStateFilter}
+                    onChange={(value) => setPowerStateFilterParam(value ?? '')}
+                  />
+                </ToolbarItem>
+                <ToolbarItem>
+                  <VmInstanceTypeFilter
+                    selected={instanceTypeFilter}
+                    onChange={(value) => setInstanceTypeFilterParam(value ?? '')}
+                  />
+                </ToolbarItem>
+                <ToolbarItem>
+                  <DiskImageFilter
+                    selected={diskImageFilterParam.trim()}
+                    onChange={(value) => setDiskImageFilterParam(value ?? '')}
+                  />
                 </ToolbarItem>
                 <ToolbarItem>
                   <SearchInput
-                    placeholder={t('Search VMs by name…')}
+                    placeholder={t('Search by name')}
                     value={search}
                     onChange={(_event, value) => setSearch(value)}
                     onClear={() => setSearch('')}
                     aria-label={t('Filter virtual machines by name')}
-                    isDisabled={isLoading || !!error}
                   />
                 </ToolbarItem>
+                <ToolbarGroup align={{ default: 'alignEnd' }}>
+                  <ToolbarItem>
+                    <ViewSwitcher pageKey={VM_LIST_VIEW_KEY} />
+                  </ToolbarItem>
+                </ToolbarGroup>
               </ToolbarContent>
             </Toolbar>
-          </StackItem>
-          {instanceTypesError ? (
-            <StackItem>
-              <Alert variant="danger" title={t('Could not load instance types')} isInline>
-                {getErrorMessage(instanceTypesError)}
-              </Alert>
-            </StackItem>
-          ) : null}
-          <StackItem>
+          </ListPageToolbar>
+        </StackItem>
+        <StackItem>
+          <ListPageBody isLoading={isLoading} error={error}>
             {showEmptyState ? (
-              <SubtleContent component="p">
-                {statusFilters.length === 0
-                  ? t('Choose one or more statuses above to filter virtual machines.')
-                  : vms?.length
-                    ? t('No virtual machines match your filters.')
-                    : t('No virtual machines yet. Create one to get started.')}
-              </SubtleContent>
+              emptyState
+            ) : viewType === 'cards' ? (
+              <Gallery hasGutter minWidths={{ default: '400px' }} maxWidths={{ default: '400px' }}>
+                {vms.map((vm) => (
+                  <GalleryItem key={vm.id}>
+                    <VmInstanceCard vm={vm} />
+                  </GalleryItem>
+                ))}
+              </Gallery>
             ) : (
-              <VmTable
-                vms={filteredVms}
-                instanceTypes={instanceTypes}
-                isInstanceTypesLoading={isInstanceTypesLoading}
-              />
+              <VmTable vms={vms} />
             )}
-          </StackItem>
-        </Stack>
-      </ListPageBody>
+          </ListPageBody>
+        </StackItem>
+      </Stack>
     </ListPage>
   );
 };

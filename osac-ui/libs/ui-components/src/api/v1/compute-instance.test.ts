@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { ComputeInstanceState, ComputeInstances } from '@osac/types';
 
-import { usePatchComputeInstance } from './compute-instance';
+import { invalidateComputeInstancesQueries, usePatchComputeInstance } from './compute-instance';
 import { ApiProvider } from '../api-context';
 
 const makeVm = (id: string, state: ComputeInstanceState) => ({
@@ -88,5 +88,25 @@ describe('usePatchComputeInstance', () => {
   it('resolves successfully after a stop action', async () => {
     const req = await mutateAndCapture('stop');
     expect(req).toBeDefined();
+  });
+});
+
+describe('invalidateComputeInstancesQueries', () => {
+  const asApiQueryClient = (qc: QueryClient) =>
+    ({
+      invalidateQueries: (filters) => qc.invalidateQueries(filters),
+      invalidateServiceQueries: (service) => qc.invalidateQueries({ queryKey: [service.typeName] }),
+    }) as Parameters<typeof invalidateComputeInstancesQueries>[0];
+
+  it('invalidates useListResource list queries and legacy get query keys', async () => {
+    const qc = new QueryClient();
+    const listKey = [ComputeInstances.typeName, 'list', {}] as const;
+    qc.setQueryData(listKey, { items: [] });
+    qc.setQueryData(['v1/compute_instances'], { items: [] });
+
+    await invalidateComputeInstancesQueries(asApiQueryClient(qc));
+
+    expect(qc.getQueryState(listKey)?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(['v1/compute_instances'])?.isInvalidated).toBe(true);
   });
 });

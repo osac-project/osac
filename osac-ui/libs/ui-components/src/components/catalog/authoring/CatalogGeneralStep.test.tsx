@@ -92,6 +92,14 @@ describe('CatalogGeneralStep', () => {
     ).toBeInTheDocument();
   });
 
+  it('auto-selects the provisioning template when only one is available', async () => {
+    renderStep(false, [], [makeTemplate('template-1', 'Template One')]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toHaveValue('Template One');
+    });
+  });
+
   describe('for a tenant-admin session', () => {
     it('does not show a project field or scope cards when creating', () => {
       renderStep(false);
